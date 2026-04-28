@@ -120,14 +120,14 @@ describe('buildStudioRoute', () => {
     ).toBe('/studio?focus=script%3Ascript-1&tab=scripts');
   });
 
-  it('keeps selected member routing separate from lifecycle steps', () => {
+  it('does not leak build focus into lifecycle routes when member authority is missing', () => {
     expect(
       buildStudioRoute({
         scopeId: 'scope-1',
         memberKey: 'workflow:workflow-1',
         step: 'bind',
       }),
-    ).toBe('/studio?scopeId=scope-1&member=workflow%3Aworkflow-1&step=bind');
+    ).toBe('/studio?scopeId=scope-1&step=bind');
   });
 
   it('builds dedicated workflow and script workspace routes', () => {
@@ -138,10 +138,10 @@ describe('buildStudioRoute', () => {
       buildStudioWorkflowWorkspaceRoute({
         scopeId: 'scope-a',
         scopeLabel: '团队 A',
-        memberId: 'service-alpha',
+        memberId: 'member-alpha',
         memberLabel: '默认成员',
       }),
-    ).toBe('/studio?scopeId=scope-a&member=member%3Aservice-alpha&tab=studio');
+    ).toBe('/studio?scopeId=scope-a&memberId=member-alpha&tab=studio');
     expect(
       buildStudioWorkflowEditorRoute({
         scopeId: 'scope-1',
@@ -154,7 +154,7 @@ describe('buildStudioRoute', () => {
         memberKey: 'workflow:workflow-1',
         workflowId: 'workflow-1',
       }),
-    ).toBe('/studio?scopeId=scope-1&member=workflow%3Aworkflow-1&tab=studio');
+    ).toBe('/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio');
     expect(
       buildStudioWorkflowEditorRoute({
         scopeId: 'scope-1',
@@ -165,7 +165,7 @@ describe('buildStudioRoute', () => {
         }),
         workflowId: 'default',
       }),
-    ).toBe('/studio?scopeId=scope-1&member=workflow%3Adraft2&tab=studio');
+    ).toBe('/studio?scopeId=scope-1&focus=workflow%3Adefault&tab=studio');
     expect(
       buildStudioScriptsWorkspaceRoute({
         scopeId: 'scope-1',
@@ -178,7 +178,7 @@ describe('buildStudioRoute', () => {
         memberKey: 'script:script-1',
         scriptId: 'script-1',
       }),
-    ).toBe('/studio?scopeId=scope-1&member=script%3Ascript-1&tab=scripts');
+    ).toBe('/studio?scopeId=scope-1&focus=script%3Ascript-1&tab=scripts');
   });
 
   it('infers the workflow editor when only a workflow id is provided', () => {
@@ -214,12 +214,12 @@ describe('buildStudioRoute', () => {
       buildStudioRoute({
         scopeId: 'scope-a',
         scopeLabel: '团队 A',
-        memberId: 'service-alpha',
+        memberId: 'member-alpha',
         memberLabel: '成员 Alpha',
         focus: 'workflow:workflow-1',
       }),
     ).toBe(
-      '/studio?scopeId=scope-a&member=member%3Aservice-alpha&focus=workflow%3Aworkflow-1&tab=studio',
+      '/studio?scopeId=scope-a&memberId=member-alpha&focus=workflow%3Aworkflow-1&tab=studio',
     );
   });
 });

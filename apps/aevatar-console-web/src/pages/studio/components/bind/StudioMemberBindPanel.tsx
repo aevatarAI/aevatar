@@ -374,7 +374,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
       scopeRuntimeApi.getServiceRevisions(scopeId, selectedService?.serviceId || ''),
   });
   const memberBindingStatusQuery = useQuery({
-    enabled: Boolean(scopeId && normalizedMemberId && selectedService?.serviceId),
+    enabled: Boolean(scopeId && normalizedMemberId),
     queryKey: ['studio-bind', 'member-binding', scopeId, normalizedMemberId],
     queryFn: () => studioApi.getMemberBinding(scopeId, normalizedMemberId),
   });
@@ -651,6 +651,59 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
     );
   }
 
+  const pendingBindPanel = pendingBindingCandidate ? (
+    <AevatarPanel
+      title={services.length ? 'Update current member binding' : 'Publish current member'}
+      titleHelp="Bind publishes the current revision first, then Studio reveals or refreshes the invoke URL, endpoint contract, and smoke-test entry for this member."
+    >
+      <div style={{ display: 'grid', gap: 12 }}>
+        <div style={parameterGridStyle}>
+          <div style={valueCardStyle}>
+            <Typography.Text type="secondary">Implementation kind</Typography.Text>
+            <Typography.Text strong>
+              {pendingBindingCandidate.kind === 'workflow'
+                ? 'Workflow'
+                : pendingBindingCandidate.kind === 'script'
+                  ? 'Script'
+                  : 'GAgent'}
+            </Typography.Text>
+          </div>
+          <div style={valueCardStyle}>
+            <Typography.Text type="secondary">Current member</Typography.Text>
+            <Typography.Text strong style={{ wordBreak: 'break-word' }}>
+              {pendingBindingCandidate.displayName}
+            </Typography.Text>
+          </div>
+          <div style={valueCardStyle}>
+            <Typography.Text type="secondary">Scope</Typography.Text>
+            <Typography.Text strong style={{ wordBreak: 'break-word' }}>
+              {scopeId}
+            </Typography.Text>
+          </div>
+        </div>
+        <Typography.Text type="secondary">
+          {pendingBindingCandidate.description}
+        </Typography.Text>
+        {pendingBindNotice ? (
+          <Alert
+            showIcon
+            message={pendingBindNotice.message}
+            type={pendingBindNotice.type}
+          />
+        ) : null}
+        <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+          <Button
+            loading={pendingBindBusy}
+            type="primary"
+            onClick={() => void handleBindPendingCandidate()}
+          >
+            {pendingBindingCandidate.actionLabel}
+          </Button>
+        </div>
+      </div>
+    </AevatarPanel>
+  ) : null;
+
   if (!services.length) {
     if (servicesLoading) {
       return (
@@ -674,56 +727,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
             description={pendingBindingCandidate.description}
             type="info"
           />
-          <AevatarPanel
-            title="Publish current member"
-            titleHelp="Bind publishes the current revision first, then Studio reveals the invoke URL, endpoint contract, and smoke-test entry for this member."
-          >
-            <div style={{ display: 'grid', gap: 12 }}>
-              <div style={parameterGridStyle}>
-                <div style={valueCardStyle}>
-                  <Typography.Text type="secondary">Implementation kind</Typography.Text>
-                  <Typography.Text strong>
-                    {pendingBindingCandidate.kind === 'workflow'
-                      ? 'Workflow'
-                      : pendingBindingCandidate.kind === 'script'
-                        ? 'Script'
-                        : 'GAgent'}
-                  </Typography.Text>
-                </div>
-                <div style={valueCardStyle}>
-                  <Typography.Text type="secondary">Current member</Typography.Text>
-                  <Typography.Text strong style={{ wordBreak: 'break-word' }}>
-                    {pendingBindingCandidate.displayName}
-                  </Typography.Text>
-                </div>
-                <div style={valueCardStyle}>
-                  <Typography.Text type="secondary">Scope</Typography.Text>
-                  <Typography.Text strong style={{ wordBreak: 'break-word' }}>
-                    {scopeId}
-                  </Typography.Text>
-                </div>
-              </div>
-              <Typography.Text type="secondary">
-                {pendingBindingCandidate.description}
-              </Typography.Text>
-              {pendingBindNotice ? (
-                <Alert
-                  showIcon
-                  message={pendingBindNotice.message}
-                  type={pendingBindNotice.type}
-                />
-              ) : null}
-              <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
-                <Button
-                  loading={pendingBindBusy}
-                  type="primary"
-                  onClick={() => void handleBindPendingCandidate()}
-                >
-                  {pendingBindingCandidate.actionLabel}
-                </Button>
-              </div>
-            </div>
-          </AevatarPanel>
+          {pendingBindPanel}
         </div>
       );
     }
@@ -743,6 +747,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
   return (
     <div data-testid="studio-bind-surface" style={rootStyle}>
       <div style={pageFlowStyle}>
+        {pendingBindPanel}
         <AevatarPanel
           layoutMode="document"
           padding={14}

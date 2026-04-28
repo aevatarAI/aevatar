@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { servicesApi } from "@/shared/api/servicesApi";
+import { ensureActiveAuthSession } from "@/shared/auth/client";
 import {
   clearStoredAuthSession,
   persistAuthSession,
@@ -22,6 +23,10 @@ jest.mock("@/shared/api/scopeRuntimeApi", () => ({
   },
 }));
 
+jest.mock("@/shared/auth/client", () => ({
+  ensureActiveAuthSession: jest.fn(async () => null),
+}));
+
 jest.mock("@/shared/studio/api", () => ({
   studioApi: {
     getAuthSession: jest.fn(),
@@ -37,7 +42,7 @@ const defaultMembers = [
     description: "负责处理用户问题",
     implementationKind: "workflow",
     lifecycleStage: "bind_ready",
-    publishedServiceId: "service-alpha",
+    publishedServiceId: "member-alpha",
     lastBoundRevisionId: "rev-2",
     createdAt: "2026-04-13T09:00:00Z",
     updatedAt: "2026-04-13T10:02:00Z",
@@ -46,11 +51,11 @@ const defaultMembers = [
 
 const defaultServices = [
   {
-    serviceKey: "scope-a:alpha",
+    serviceKey: "scope-a:member-alpha",
     tenantId: "scope-a",
     appId: "default",
     namespace: "default",
-    serviceId: "service-alpha",
+    serviceId: "member-alpha",
     displayName: "客服运行时",
     defaultServingRevisionId: "rev-2",
     activeServingRevisionId: "rev-2",
@@ -67,13 +72,13 @@ function buildMemberRunCatalog(memberId: string) {
   if (memberId === "member-alpha") {
     return {
       scopeId: "scope-a",
-      serviceId: "service-alpha",
-      serviceKey: "scope-a:alpha",
+      serviceId: "member-alpha",
+      serviceKey: "scope-a:member-alpha",
       displayName: "客服运行时",
       runs: [
         {
           scopeId: "scope-a",
-          serviceId: "service-alpha",
+          serviceId: "member-alpha",
           runId: "run-latest",
           actorId: "actor://workflow-alpha",
           definitionActorId: "definition://workflow-alpha",
@@ -100,8 +105,8 @@ function buildMemberRunCatalog(memberId: string) {
   if (memberId === "member-joker") {
     return {
       scopeId: "scope-a",
-      serviceId: "service-joker",
-      serviceKey: "scope-a:joker",
+      serviceId: "member-joker",
+      serviceKey: "scope-a:member-joker",
       displayName: "joker",
       runs: [],
     };
@@ -216,7 +221,7 @@ describe("TeamsHomePage", () => {
 
     const params = new URLSearchParams(window.location.search);
     expect(params.get("memberId")).toBe("member-alpha");
-    expect(params.get("serviceId")).toBe("service-alpha");
+    expect(params.get("serviceId")).toBe("member-alpha");
     expect(params.get("runId")).toBe("run-latest");
   });
 
@@ -265,7 +270,7 @@ describe("TeamsHomePage", () => {
           description: "讽刺评论成员",
           implementationKind: "workflow",
           lifecycleStage: "bind_ready",
-          publishedServiceId: "service-joker",
+          publishedServiceId: "member-joker",
           lastBoundRevisionId: "rev-joker",
           createdAt: "2026-04-13T09:10:00Z",
           updatedAt: "2026-04-13T10:10:00Z",
@@ -276,11 +281,11 @@ describe("TeamsHomePage", () => {
     (servicesApi.listServices as jest.Mock).mockResolvedValueOnce([
       ...defaultServices,
       {
-        serviceKey: "scope-a:joker",
+        serviceKey: "scope-a:member-joker",
         tenantId: "scope-a",
         appId: "default",
         namespace: "default",
-        serviceId: "service-joker",
+        serviceId: "member-joker",
         displayName: "joker",
         defaultServingRevisionId: "rev-joker",
         activeServingRevisionId: "rev-joker",
@@ -316,6 +321,90 @@ describe("TeamsHomePage", () => {
       ),
     ).toBeTruthy();
     expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
+  });
+
+  it("waits for auth recovery before loading the member roster", async () => {
+    let authLookupCount = 0;
+    (studioApi.getAuthSession as jest.Mock).mockImplementation(async () => {
+      authLookupCount += 1;
+      if (authLookupCount === 1) {
+        return {
+          enabled: true,
+          authenticated: false,
+          scopeId: null,
+          scopeSource: null,
+        };
+      }
+
+      return {
+        enabled: true,
+        authenticated: true,
+        scopeId: "scope-a",
+        scopeSource: "nyxid",
+      };
+    });
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(
+      await screen.findByText("正在恢复当前登录态并整理成员清单。"),
+    ).toBeTruthy();
+
+    expect(await screen.findByText("客服团队")).toBeTruthy();
+    expect(ensureActiveAuthSession).toHaveBeenCalledTimes(1);
+    expect(studioApi.listMembers).toHaveBeenCalledWith("scope-a");
+  });
+
+  it("keeps the roster query blocked when auth recovery still cannot authenticate", async () => {
+    (studioApi.getAuthSession as jest.Mock).mockImplementation(async () => ({
+      enabled: true,
+      authenticated: false,
+      scopeId: null,
+      scopeSource: null,
+    }));
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    await waitFor(() => {
+      expect(ensureActiveAuthSession).toHaveBeenCalledTimes(1);
+    });
+
+    expect(await screen.findByText("当前登录态尚未准备好")).toBeTruthy();
+    expect(studioApi.listMembers).not.toHaveBeenCalled();
+  });
+
+  it("reconciles a stale route scope to the authenticated scope before loading the roster", async () => {
+    window.history.replaceState({}, "", "/teams?scopeId=scope-stale");
+    (studioApi.getAuthSession as jest.Mock).mockResolvedValue({
+      enabled: true,
+      authenticated: true,
+      scopeId: "scope-a",
+      scopeSource: "claim:scope_id",
+    });
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get("scopeId")).toBe("scope-a");
+    });
+
+    expect(await screen.findByText("客服团队")).toBeTruthy();
+    expect(studioApi.listMembers).toHaveBeenCalledWith("scope-a");
+    expect(studioApi.listMembers).not.toHaveBeenCalledWith("scope-stale");
+  });
+
+  it("blocks the roster query when auth is present but no canonical scope is resolved", async () => {
+    (studioApi.getAuthSession as jest.Mock).mockResolvedValue({
+      enabled: true,
+      authenticated: true,
+      scopeId: null,
+      scopeSource: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(await screen.findByText("当前登录态缺少 Scope 绑定")).toBeTruthy();
+    expect(studioApi.listMembers).not.toHaveBeenCalled();
   });
 
   it("opens Studio from the empty member roster state", async () => {
