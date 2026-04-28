@@ -3,6 +3,7 @@ test/Aevatar.Foundation.Runtime.Hosting.Tests/DistributedClusterConsistencyInteg
 test/Aevatar.Integration.Tests/ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests.cs
 test/Aevatar.Integration.Tests/ScriptEvolutionIntegrationTestKit.cs
 test/Aevatar.Integration.Tests/ScriptReadModelVisibilityTestHelper.cs
+test/Aevatar.GAgentService.Integration.Tests/ScopeScriptSaveObservationRuntimeTests.cs
 test/Aevatar.Foundation.Runtime.Hosting.Tests/DistributedMixedVersionClusterIntegrationTests.cs
 test/Aevatar.Foundation.Runtime.Hosting.Tests/OrleansMassTransitRuntimeIntegrationTests.cs
 test/Aevatar.Foundation.Runtime.Hosting.Tests/OrleansKafkaProviderRuntimeIntegrationTests.cs
