@@ -27,7 +27,7 @@ namespace Aevatar.Studio.Hosting;
 /// InMemory is enabled based on <c>Projection:Document:Providers:*</c>
 /// configuration. Required by the actor-backed stores
 /// (<c>IRoleCatalogStore</c>, <c>IConnectorCatalogStore</c>,
-/// <c>IChatHistoryStore</c>, <c>IGAgentActorStore</c>,
+/// <c>IChatHistoryStore</c>, <c>IGAgentActorRegistryQueryPort</c>,
 /// <c>IUserMemoryStore</c>, <c>IStreamingProxyParticipantStore</c>) that read
 /// from these documents via <c>IProjectionDocumentReader</c>.
 /// </summary>
