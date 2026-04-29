@@ -246,7 +246,6 @@ public static class ScopeServiceEndpoints
             take.GetValueOrDefault(200),
             ct);
 
-
         return Results.Ok(services);
     }
 

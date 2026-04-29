@@ -268,6 +268,20 @@ public sealed class ScopeServiceEndpointsTests
     }
 
     [Fact]
+    public async Task ListScopeServicesEndpoint_ShouldUseExplicitAppId()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+
+        var response = await host.Client.GetAsync("/api/scopes/scope-a/services?appId=%20customApp%20");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        host.LifecycleQueryPort.LastListTenantId.Should().Be("scope-a");
+        host.LifecycleQueryPort.LastListAppId.Should().Be("customApp");
+        host.LifecycleQueryPort.LastListNamespace.Should().Be("default");
+        host.LifecycleQueryPort.LastListTake.Should().Be(200);
+    }
+
+    [Fact]
     public async Task ListScopeServicesEndpoint_ShouldRejectMismatchedAuthenticatedScope()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
