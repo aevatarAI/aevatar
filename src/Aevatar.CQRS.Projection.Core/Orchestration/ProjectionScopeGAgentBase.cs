@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -126,6 +127,31 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         {
             if (ProjectionObservationFailurePolicy.ShouldPropagate(ex))
             {
+                if (ex is EventStoreOptimisticConcurrencyException)
+                {
+                    try
+                    {
+                        _logger.LogInformation(
+                            "Projection scope attempting OCC self-heal via state replay. actorId={ActorId}",
+                            Id);
+                        var replayedState = await EventSourcing!.ReplayAsync(Id, CancellationToken.None);
+                        if (replayedState is not null)
+                            State = replayedState;
+                        await DispatchObservationAsync(envelope, CancellationToken.None);
+                        _logger.LogInformation(
+                            "Projection scope OCC self-heal succeeded. actorId={ActorId}",
+                            Id);
+                        return;
+                    }
+                    catch (Exception retryEx)
+                    {
+                        _logger.LogWarning(
+                            retryEx,
+                            "Projection scope OCC self-heal retry also failed. actorId={ActorId}",
+                            Id);
+                    }
+                }
+
                 _logger.LogWarning(
                     ex,
                     "Projection scope observation handling hit a retryable failure. actorId={ActorId} projectionKind={ProjectionKind} sessionId={SessionId}",
