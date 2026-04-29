@@ -126,12 +126,17 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         {
             if (ProjectionObservationFailurePolicy.ShouldPropagate(ex))
             {
+                // ShouldPropagate currently only returns true for OCC (direct or
+                // wrapped). Discard stale pending events so the grain can deactivate
+                // cleanly; state will rebuild from the event store on next activation.
+                if (ProjectionObservationFailurePolicy.ContainsOcc(ex))
+                    EventSourcing?.DiscardPendingEvents();
+
                 _logger.LogWarning(
                     ex,
-                    "Projection scope observation handling hit a retryable failure. actorId={ActorId} projectionKind={ProjectionKind} sessionId={SessionId}",
+                    "Projection scope observation handling hit a retryable failure; pending events discarded. actorId={ActorId} projectionKind={ProjectionKind}",
                     Id,
-                    State.ProjectionKind,
-                    State.SessionId);
+                    State.ProjectionKind);
                 throw;
             }
 

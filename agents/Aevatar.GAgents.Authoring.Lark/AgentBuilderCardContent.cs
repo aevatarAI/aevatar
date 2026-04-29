@@ -346,21 +346,16 @@ public static class AgentBuilderCardContent
             Text = string.Join('\n', descriptionLines),
         };
 
-        var content = BuildDailyReportForm(preferredGithubUsername: null, introCard: introCard);
-
-        // Plain-text fallback for channels that cannot render the card.
-        var fallbackLines = new List<string>
-        {
-            heading,
-            note,
-            $"Provider ID: {providerId}",
-        };
-        if (!string.IsNullOrWhiteSpace(url))
-            fallbackLines.Add($"Open: {url}");
-        fallbackLines.Add("Reply with `/daily <github_username>` — I'll save it and run the report immediately.");
-
-        content.Text = string.Join('\n', fallbackLines);
-        return content;
+        // Echo the username the user already submitted (e.g. `/daily eanzhao`) so it pre-fills
+        // the form on the auth-required re-prompt — otherwise users had to retype it after the
+        // OAuth round-trip. The card body alone carries the auth instructions; setting
+        // content.Text in addition would double-render in Lark form mode (LarkMessageComposer's
+        // BuildLeadingMarkdown concatenates Text and the first card body), which is the original
+        // duplicate "GitHub authorization required" block users were seeing.
+        var submittedGithubUsername = TryReadString(root, "github_username");
+        return BuildDailyReportForm(
+            preferredGithubUsername: submittedGithubUsername,
+            introCard: introCard);
     }
 
     private static ActionElement BuildTextInput(string actionId, string label, string placeholder) =>
