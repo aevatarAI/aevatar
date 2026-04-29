@@ -33,6 +33,17 @@ message SkillRunnerOutboundConfig {
   // Caller scope captured at create time. Replaces owner_nyx_user_id+platform
   // for new agents; the deprecated scattered fields remain for legacy state.
   OwnerScope owner_scope = 11;
+  // NyxID outbound proxy slug to use when delivering a failure-notification
+  // message after a primary outbound delivery has been rejected. Captured at
+  // agent-create time from the inbound channel-bot's slug — by definition
+  // the user can be reached through that bot, since they just messaged it
+  // (issue #423 §C). Empty when (a) the agent was created before this field
+  // existed, (b) the inbound slug equals the primary slug (no benefit), or
+  // (c) the inbound slug is not registered as a per-user UserService row
+  // and therefore cannot be added to the agent API key's allowed_service_ids.
+  // SkillRunnerGAgent.TrySendFailureAsync attempts the failure-notification
+  // slug FIRST when set, then falls back to the primary slug.
+  string failure_notification_provider_slug = 12;
 }
 
 message SkillRunnerState {

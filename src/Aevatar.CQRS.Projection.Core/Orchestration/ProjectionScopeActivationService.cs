@@ -1,4 +1,6 @@
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
@@ -17,9 +19,16 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
         IActorDispatchPort dispatchPort,
         Func<ProjectionScopeStartRequest, TContext> contextFactory,
         Func<ProjectionRuntimeScopeKey, TContext, TLease> leaseFactory,
-        IAgentTypeVerifier? agentTypeVerifier = null)
+        IAgentTypeVerifier? agentTypeVerifier = null,
+        IStreamPubSubMaintenance? streamPubSubMaintenance = null,
+        ILoggerFactory? loggerFactory = null)
     {
-        _scopeRuntime = new ProjectionScopeActorRuntime<TScopeAgent>(runtime, dispatchPort, agentTypeVerifier);
+        _scopeRuntime = new ProjectionScopeActorRuntime<TScopeAgent>(
+            runtime,
+            dispatchPort,
+            agentTypeVerifier,
+            streamPubSubMaintenance,
+            loggerFactory?.CreateLogger<ProjectionScopeActorRuntime<TScopeAgent>>());
         _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
         _leaseFactory = leaseFactory ?? throw new ArgumentNullException(nameof(leaseFactory));
     }

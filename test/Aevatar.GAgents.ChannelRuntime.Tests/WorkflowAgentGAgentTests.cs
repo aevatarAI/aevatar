@@ -71,6 +71,141 @@ public sealed class WorkflowAgentGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleInitializeAsync_ShouldAwaitUpsertDispatchBeforeFiringExecutionUpdate()
+    {
+        // Issue #440 regression — symmetric with SkillRunnerGAgentTests'
+        // HandleInitializeAsync_ShouldAwaitUpsertDispatchBeforeFiringExecutionUpdate.
+        // WorkflowAgent's UpsertRegistryAsync follows the same await-then-await pattern
+        // against the catalog and is vulnerable to the same race if dispatch ever
+        // regresses to fire-and-forget. Gate the Upsert dispatch on a
+        // TaskCompletionSource and assert ExecutionUpdate is not even dispatched until
+        // the gate releases.
+
+        var upsertGate = new TaskCompletionSource();
+        var upsertDispatchStarted = new TaskCompletionSource();
+        var executionDispatchStarted = new TaskCompletionSource();
+
+        var scheduler = Substitute.For<Foundation.Abstractions.Runtime.Callbacks.IActorRuntimeCallbackScheduler>();
+        scheduler
+            .ScheduleTimeoutAsync(
+                Arg.Any<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackTimeoutRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var req = call.Arg<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackTimeoutRequest>();
+                return Task.FromResult(new Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease(
+                    req.ActorId, req.CallbackId, 1L,
+                    Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackBackend.InMemory));
+            });
+        scheduler.CancelAsync(
+                Arg.Any<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var catalogProxy = Substitute.For<IActor>();
+        var runtime = Substitute.For<IActorRuntime>();
+        runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(catalogProxy));
+
+        UserAgentCatalogGAgent? catalog = null;
+        var dispatch = Substitute.For<IActorDispatchPort>();
+        dispatch.DispatchAsync(
+                UserAgentCatalogGAgent.WellKnownId,
+                Arg.Any<EventEnvelope>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call => DispatchGated(
+                call.Arg<EventEnvelope>(),
+                call.Arg<CancellationToken>(),
+                catalog!,
+                upsertGate,
+                upsertDispatchStarted,
+                executionDispatchStarted));
+
+        using var provider = BuildServiceProvider(
+            new CapturingWorkflowDispatchService(),
+            services =>
+            {
+                services.AddSingleton(runtime);
+                services.AddSingleton(dispatch);
+                services.AddSingleton(scheduler);
+            });
+
+        catalog = new UserAgentCatalogGAgent
+        {
+            Services = provider,
+            EventSourcingBehaviorFactory =
+                provider.GetRequiredService<IEventSourcingBehaviorFactory<UserAgentCatalogState>>(),
+        };
+        AssignActorId(catalog, UserAgentCatalogGAgent.WellKnownId);
+        await catalog.ActivateAsync();
+
+        var agent = new WorkflowAgentGAgent
+        {
+            Services = provider,
+            EventSourcingBehaviorFactory =
+                provider.GetRequiredService<IEventSourcingBehaviorFactory<WorkflowAgentState>>(),
+        };
+        AssignActorId(agent, "workflow-agent-440-regression");
+        await agent.ActivateAsync();
+
+        var initTask = agent.HandleInitializeAsync(new InitializeWorkflowAgentCommand
+        {
+            WorkflowId = "social-media-agent-1",
+            WorkflowName = "social_media_agent_1",
+            WorkflowActorId = "workflow-actor-1",
+            ExecutionPrompt = "Generate the scheduled social media draft for review.",
+            ScheduleCron = "0 9 * * *",
+            ScheduleTimezone = "UTC",
+            ConversationId = "oc_chat_1",
+            NyxProviderSlug = "api-lark-bot",
+            NyxApiKey = "nyx-api-key-1",
+            Enabled = true,
+            ScopeId = "scope-1",
+        });
+
+        await upsertDispatchStarted.Task;
+
+        executionDispatchStarted.Task.IsCompleted.Should().BeFalse(
+            "the WorkflowAgent must await Upsert's dispatch task before firing ExecutionUpdate; "
+            + "regressing to fire-and-forget would let ExecutionUpdate race ahead of Upsert "
+            + "and be dropped by the missing-entry guard in HandleExecutionUpdateAsync");
+
+        upsertGate.SetResult();
+        await initTask;
+
+        executionDispatchStarted.Task.IsCompleted.Should().BeTrue(
+            "ExecutionUpdate must dispatch after Upsert completes so /agent-status shows Next run");
+        catalog.State.Entries.Should().ContainSingle();
+        var entry = catalog.State.Entries[0];
+        entry.AgentId.Should().Be("workflow-agent-440-regression");
+        entry.Status.Should().Be(WorkflowAgentDefaults.StatusRunning);
+        entry.ScheduleCron.Should().Be("0 9 * * *");
+        entry.NextRunAt.Should().NotBeNull(
+            "init's post-Upsert ExecutionUpdate must land at the catalog so /agent-status shows Next run");
+    }
+
+    private static async Task DispatchGated(
+        EventEnvelope envelope,
+        CancellationToken ct,
+        UserAgentCatalogGAgent catalog,
+        TaskCompletionSource upsertGate,
+        TaskCompletionSource upsertDispatchStarted,
+        TaskCompletionSource executionDispatchStarted)
+    {
+        if (envelope.Payload.Is(UserAgentCatalogUpsertCommand.Descriptor))
+        {
+            upsertDispatchStarted.TrySetResult();
+            await upsertGate.Task;
+        }
+        else if (envelope.Payload.Is(UserAgentCatalogExecutionUpdateCommand.Descriptor))
+        {
+            executionDispatchStarted.TrySetResult();
+        }
+
+        await catalog.HandleEventAsync(envelope, ct);
+    }
+
+    [Fact]
     public async Task HandleInitializeAsync_ShouldDispatchCatalogCommandsThroughDispatchPort()
     {
         var catalogActor = Substitute.For<IActor>();

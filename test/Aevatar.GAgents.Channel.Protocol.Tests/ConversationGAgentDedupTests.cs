@@ -993,6 +993,13 @@ public sealed class ConversationGAgentDedupTests
         await agent.HandleLlmReplyReadyAsync(ready);
 
         runner.LlmReplyCount.ShouldBe(0);
+        // Streaming bypasses RunLlmReplyAsync (where the non-streaming swap lives), so the GAgent
+        // must invoke OnReplyDeliveredAsync explicitly to fire the runner's post-reply housekeeping
+        // (e.g. Lark Typing→DONE reaction swap). Without this, the most common production path
+        // would never swap reactions.
+        runner.OnReplyDeliveredCount.ShouldBe(1);
+        runner.LastOnReplyDeliveredActivity.ShouldNotBeNull();
+        runner.LastOnReplyDeliveredActivity!.Id.ShouldBe("act-stream-sc");
         var events = await store.GetEventsAsync(agent.Id);
         events.ShouldNotBeEmpty();
         events.Last().EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
@@ -1028,6 +1035,11 @@ public sealed class ConversationGAgentDedupTests
         await agent.HandleLlmReplyReadyAsync(ready);
 
         runner.LlmReplyCount.ShouldBe(1);
+        // The non-streaming fallback runs through RunLlmReplyAsync, where the production runner
+        // already fires the post-reply swap internally. The GAgent must NOT also call
+        // OnReplyDeliveredAsync on this path or the swap would run twice (extra Lark API calls,
+        // duplicate DONE reaction attempts).
+        runner.OnReplyDeliveredCount.ShouldBe(0);
         var events = await store.GetEventsAsync(agent.Id);
         events.Last().EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
     }
@@ -1374,6 +1386,16 @@ public sealed class ConversationGAgentDedupTests
                     currentPlatformMessageId ?? $"om_{chunk.CorrelationId}")
                 : StreamChunkResultFactory(chunk, currentPlatformMessageId);
             return Task.FromResult(result);
+        }
+
+        public int OnReplyDeliveredCount;
+        public ChatActivity? LastOnReplyDeliveredActivity { get; private set; }
+
+        public Task OnReplyDeliveredAsync(ChatActivity activity, CancellationToken ct)
+        {
+            Interlocked.Increment(ref OnReplyDeliveredCount);
+            LastOnReplyDeliveredActivity = activity;
+            return Task.CompletedTask;
         }
     }
 

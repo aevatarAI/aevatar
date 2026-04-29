@@ -112,7 +112,7 @@ public sealed class ChannelConversationTurnRunnerTests
         nyxHandler.Requests.Should().ContainSingle();
         nyxHandler.Requests[0].Path.Should().Be("/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_123/reactions");
         nyxHandler.Requests[0].Authorization.Should().Be("Bearer user-token-1");
-        nyxHandler.Requests[0].Body.Should().Contain("\"emoji_type\":\"OK\"");
+        nyxHandler.Requests[0].Body.Should().Contain("\"emoji_type\":\"Typing\"");
     }
 
     [Fact]
@@ -1106,6 +1106,373 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunLlmReplyAsync_ShouldSwapTypingReactionToDone_AfterSuccessfulRelayReply()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var relayHandler = new RecordingJsonHandler("""{"message_id":"reply-swap-1"}""");
+        // Expect 3 nyx calls fired by the post-reply swap: list Typing → delete bot's
+        // Typing reaction → add DONE. The list response carries one bot-owned reaction
+        // ("operator_type":"app") and one user-owned ("operator_type":"user") that the
+        // swap must leave alone.
+        var nyxHandler = new SequencedJsonHandler(
+            expectedCallCount: 3,
+            """{"code":0,"data":{"items":[{"reaction_id":"r-bot-1","operator":{"operator_type":"app","operator_id":"bot-1"},"reaction_type":{"emoji_type":"Typing"}},{"reaction_id":"r-user-1","operator":{"operator_type":"user","operator_id":"u-1"},"reaction_type":{"emoji_type":"Typing"}}],"has_more":false}}""",
+            """{"code":0,"data":{}}""",
+            """{"code":0,"data":{}}""");
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            relayHandler: relayHandler,
+            nyxHandler: nyxHandler);
+        var activity = BuildInboundActivity(
+            "hello",
+            "msg-relay-swap-1",
+            ConversationScope.Group,
+            "oc_group_chat_1",
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "relay-msg-swap-1",
+                CorrelationId = "corr-relay-swap-1",
+            },
+            new TransportExtras
+            {
+                NyxPlatform = "lark",
+                NyxUserAccessToken = "user-token-1",
+                NyxPlatformMessageId = "om_swap_1",
+            });
+
+        var result = await runner.RunLlmReplyAsync(
+            new LlmReplyReadyEvent
+            {
+                CorrelationId = "corr-relay-swap-1",
+                RegistrationId = "reg-1",
+                SourceActorId = "llm-worker-1",
+                Activity = activity,
+                Outbound = new MessageContent { Text = "relay reply" },
+                TerminalState = LlmReplyTerminalState.Completed,
+                ReadyAtUnixMs = 42,
+            },
+            RelayRuntimeContext("corr-relay-swap-1", replyMessageId: "relay-msg-swap-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        await nyxHandler.Completed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        nyxHandler.Requests.Should().HaveCount(3);
+        // 1. List the Typing reactions on the inbound message id.
+        nyxHandler.Requests[0].Method.Should().Be("GET");
+        nyxHandler.Requests[0].Path.Should().Be(
+            "/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_swap_1/reactions?reaction_type=Typing&page_size=50");
+        nyxHandler.Requests[0].Authorization.Should().Be("Bearer user-token-1");
+        // 2. Only the bot-owned reaction is deleted; the user-owned one is preserved.
+        nyxHandler.Requests[1].Method.Should().Be("DELETE");
+        nyxHandler.Requests[1].Path.Should().Be(
+            "/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_swap_1/reactions/r-bot-1");
+        // 3. DONE reaction is added on the same message.
+        nyxHandler.Requests[2].Method.Should().Be("POST");
+        nyxHandler.Requests[2].Path.Should().Be(
+            "/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_swap_1/reactions");
+        nyxHandler.Requests[2].Body.Should().Contain("\"emoji_type\":\"DONE\"");
+    }
+
+    [Fact]
+    public async Task OnReplyDeliveredAsync_ShouldRunSwap_WhenStreamingPathInvokesIt()
+    {
+        // The streaming completion path in ConversationGAgent finalizes the reply through
+        // RunStreamChunkAsync edits and never calls RunLlmReplyAsync, so the swap inside
+        // RunLlmReplyAsync would be skipped on the most common production path. The GAgent
+        // calls OnReplyDeliveredAsync to plug that gap; this test pins the runner end of the
+        // contract so a refactor that drops the implementation in favor of a no-op default
+        // would fail loudly here.
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var nyxHandler = new SequencedJsonHandler(
+            expectedCallCount: 3,
+            """{"code":0,"data":{"items":[{"reaction_id":"r-bot-stream","operator":{"operator_type":"app","operator_id":"bot-1"},"reaction_type":{"emoji_type":"Typing"}}],"has_more":false}}""",
+            """{"code":0,"data":{}}""",
+            """{"code":0,"data":{}}""");
+        var runner = CreateRunner(registrationQueryPort, adapter, nyxHandler: nyxHandler);
+        var activity = BuildInboundActivity(
+            "hello",
+            "msg-stream-swap-1",
+            transportExtras: new TransportExtras
+            {
+                NyxPlatform = "lark",
+                NyxUserAccessToken = "user-token-1",
+                NyxPlatformMessageId = "om_stream_swap_1",
+            });
+
+        await ((IConversationTurnRunner)runner).OnReplyDeliveredAsync(activity, CancellationToken.None);
+        await nyxHandler.Completed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        nyxHandler.Requests.Should().HaveCount(3);
+        nyxHandler.Requests[0].Method.Should().Be("GET");
+        nyxHandler.Requests[0].Path.Should().Be(
+            "/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_stream_swap_1/reactions?reaction_type=Typing&page_size=50");
+        nyxHandler.Requests[1].Method.Should().Be("DELETE");
+        nyxHandler.Requests[1].Path.Should().Be(
+            "/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_stream_swap_1/reactions/r-bot-stream");
+        nyxHandler.Requests[2].Method.Should().Be("POST");
+        nyxHandler.Requests[2].Body.Should().Contain("\"emoji_type\":\"DONE\"");
+    }
+
+    [Fact]
+    public async Task RunLlmReplyAsync_RelayPath_ShouldStillReplyAndSkipSwap_WhenRegistrationLookupThrows()
+    {
+        // Reviewer guard: the post-reply swap needs registration for NyxProviderSlug, but the
+        // relay reply itself uses the reply token and never touches the registration store. A
+        // transient registration-store exception must NOT abort the relay reply — it should
+        // degrade the swap to a no-op for that turn while the user-visible reply still lands.
+        var registrationQueryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        registrationQueryPort.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns<Task<ChannelBotRegistrationEntry?>>(_ => throw new InvalidOperationException("registration store unavailable"));
+        var adapter = new RecordingPlatformAdapter();
+        var relayHandler = new RecordingJsonHandler("""{"message_id":"reply-relay-no-reg"}""");
+        // If the swap were to fire, it'd hit nyxHandler. The assertion below confirms it does NOT.
+        var nyxHandler = new RecordingJsonHandler("""{"code":0,"data":{}}""");
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            relayHandler: relayHandler,
+            nyxHandler: nyxHandler);
+        var activity = BuildInboundActivity(
+            "hello",
+            "msg-relay-no-reg",
+            ConversationScope.Group,
+            "oc_group_chat_1",
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "relay-msg-no-reg",
+                CorrelationId = "corr-relay-no-reg",
+            },
+            new TransportExtras
+            {
+                NyxPlatform = "lark",
+                NyxUserAccessToken = "user-token-1",
+                NyxPlatformMessageId = "om_no_reg_1",
+            });
+
+        var result = await runner.RunLlmReplyAsync(
+            new LlmReplyReadyEvent
+            {
+                CorrelationId = "corr-relay-no-reg",
+                RegistrationId = "reg-1",
+                SourceActorId = "llm-worker-1",
+                Activity = activity,
+                Outbound = new MessageContent { Text = "relay reply still lands" },
+                TerminalState = LlmReplyTerminalState.Completed,
+                ReadyAtUnixMs = 42,
+            },
+            RelayRuntimeContext("corr-relay-no-reg", replyMessageId: "relay-msg-no-reg"),
+            CancellationToken.None);
+
+        // Reply delivered through the relay despite the registration store throwing.
+        result.Success.Should().BeTrue();
+        relayHandler.Requests.Should().ContainSingle();
+        relayHandler.Requests[0].Path.Should().Be("/api/v1/channel-relay/reply");
+        relayHandler.Requests[0].Body.Should().Contain("\"text\":\"relay reply still lands\"");
+        // Registration is required for the swap, so when lookup throws on the relay path the swap
+        // is degraded to a no-op for that turn (no list / delete / DONE calls).
+        nyxHandler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunLlmReplyAsync_ShouldPaginate_WhenTypingReactionListSpansMultiplePages()
+    {
+        // Lark's `list message reactions` is paginated. If the bot's own Typing reaction lands on
+        // a later page (chat with many users reacting Typing), the original single-page swap would
+        // miss it and leave Typing alongside DONE. The swap must walk pages until has_more=false.
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var relayHandler = new RecordingJsonHandler("""{"message_id":"reply-paginated"}""");
+        // 5 nyx calls expected: list page 1 (user only, has_more=true) → list page 2 (bot,
+        // has_more=false) → DELETE bot reaction → POST DONE. (No call between pages — the loop
+        // re-issues GET with page_token.)
+        var nyxHandler = new SequencedJsonHandler(
+            expectedCallCount: 4,
+            """{"code":0,"data":{"items":[{"reaction_id":"r-user-1","operator":{"operator_type":"user","operator_id":"u-1"},"reaction_type":{"emoji_type":"Typing"}}],"has_more":true,"page_token":"page-2-token"}}""",
+            """{"code":0,"data":{"items":[{"reaction_id":"r-bot-late","operator":{"operator_type":"app","operator_id":"bot-1"},"reaction_type":{"emoji_type":"Typing"}}],"has_more":false}}""",
+            """{"code":0,"data":{}}""",
+            """{"code":0,"data":{}}""");
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            relayHandler: relayHandler,
+            nyxHandler: nyxHandler);
+        var activity = BuildInboundActivity(
+            "hello",
+            "msg-relay-paginated",
+            ConversationScope.Group,
+            "oc_group_chat_1",
+            new OutboundDeliveryContext
+            {
+                ReplyMessageId = "relay-msg-paginated",
+                CorrelationId = "corr-relay-paginated",
+            },
+            new TransportExtras
+            {
+                NyxPlatform = "lark",
+                NyxUserAccessToken = "user-token-1",
+                NyxPlatformMessageId = "om_paginated_1",
+            });
+
+        var result = await runner.RunLlmReplyAsync(
+            new LlmReplyReadyEvent
+            {
+                CorrelationId = "corr-relay-paginated",
+                RegistrationId = "reg-1",
+                SourceActorId = "llm-worker-1",
+                Activity = activity,
+                Outbound = new MessageContent { Text = "paginated reply" },
+                TerminalState = LlmReplyTerminalState.Completed,
+                ReadyAtUnixMs = 42,
+            },
+            RelayRuntimeContext("corr-relay-paginated", replyMessageId: "relay-msg-paginated"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        await nyxHandler.Completed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        nyxHandler.Requests.Should().HaveCount(4);
+        // 1. List page 1 — no page_token query param.
+        nyxHandler.Requests[0].Method.Should().Be("GET");
+        nyxHandler.Requests[0].Path.Should().Be(
+            "/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_paginated_1/reactions?reaction_type=Typing&page_size=50");
+        // 2. List page 2 — same URL with page_token from page 1's response.
+        nyxHandler.Requests[1].Method.Should().Be("GET");
+        nyxHandler.Requests[1].Path.Should().Be(
+            "/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_paginated_1/reactions?reaction_type=Typing&page_size=50&page_token=page-2-token");
+        // 3. DELETE the bot-owned reaction discovered on page 2.
+        nyxHandler.Requests[2].Method.Should().Be("DELETE");
+        nyxHandler.Requests[2].Path.Should().Be(
+            "/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_paginated_1/reactions/r-bot-late");
+        // 4. POST DONE.
+        nyxHandler.Requests[3].Method.Should().Be("POST");
+        nyxHandler.Requests[3].Body.Should().Contain("\"emoji_type\":\"DONE\"");
+    }
+
+    [Fact]
+    public async Task OnReplyDeliveredAsync_ShouldNoOp_WhenActivityIsNotLark()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var nyxHandler = new RecordingJsonHandler("""{"code":0,"data":{}}""");
+        var runner = CreateRunner(registrationQueryPort, adapter, nyxHandler: nyxHandler);
+
+        // Missing NyxPlatformMessageId — the swap helper should short-circuit and never call nyx.
+        var activity = BuildInboundActivity("hello", "msg-no-platform-id");
+
+        await ((IConversationTurnRunner)runner).OnReplyDeliveredAsync(activity, CancellationToken.None);
+
+        nyxHandler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldAwaitTypingReactionBeforeSwap_ForDirectAgentBuilderReply()
+    {
+        // Direct-reply paths (e.g. /daily) can return faster than the typing POST takes to land
+        // in Lark. Without this guard the GET-list step of the swap would fire before the typing
+        // reaction is persisted, find nothing to delete, add DONE, and then the typing reaction
+        // would land orphaned alongside DONE. This test pins the ordering by blocking the typing
+        // POST until after the swap would have run; assertion is that the swap waited (issued no
+        // GET) until typing was released, then issued GET → DELETE → POST DONE.
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        // First nyx call is the typing POST (blocked); next 3 are the swap (list / delete / DONE).
+        var nyxHandler = new TypingReactionGateHandler(
+            expectedTotalCallCount: 4,
+            """{"code":0,"data":{"reaction_id":"r-bot-direct"}}""",
+            """{"code":0,"data":{"items":[{"reaction_id":"r-bot-direct","operator":{"operator_type":"app","operator_id":"bot-1"},"reaction_type":{"emoji_type":"Typing"}}],"has_more":false}}""",
+            """{"code":0,"data":{}}""",
+            """{"code":0,"data":{}}""");
+        var runner = CreateRunner(registrationQueryPort, adapter, nyxHandler: nyxHandler);
+
+        // /foobar is an unknown slash command — NyxRelayAgentBuilderFlow returns a DirectReply
+        // decision (no tool execution, no external NyxID calls), so the only nyx traffic on this
+        // turn is the typing POST + the three swap calls. That keeps the SequencedJsonHandler
+        // bodies aligned with the actual call order.
+        var activity = BuildInboundActivity(
+            "/foobar",
+            "msg-direct-typing-1",
+            ConversationScope.DirectMessage,
+            "oc_p2p_chat_1",
+            transportExtras: new TransportExtras
+            {
+                NyxPlatform = "lark",
+                NyxUserAccessToken = "user-token-1",
+                NyxPlatformMessageId = "om_direct_1",
+            });
+
+        var inboundTask = runner.RunInboundAsync(activity, CancellationToken.None);
+
+        // Wait for the runner to fire the typing POST and reach the swap's await — at that point
+        // the swap is parked on the typing TaskCompletionSource and has not yet issued the GET.
+        await nyxHandler.TypingPostStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var result = await inboundTask;
+        result.Success.Should().BeTrue();
+
+        // The handler records each request only AFTER its SendAsync returns — typing is parked
+        // before recording, so an empty Requests list here means the swap has not raced ahead
+        // with the GET while typing was still in-flight. If the guard regressed, a GET would
+        // already be recorded as Request[0] at this point.
+        nyxHandler.Requests.Should().BeEmpty();
+
+        nyxHandler.ReleaseTypingPost.TrySetResult();
+        await nyxHandler.Completed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        // After release: POST Typing landed first, then GET → DELETE → POST DONE in order.
+        nyxHandler.Requests.Should().HaveCount(4);
+        nyxHandler.Requests[0].Method.Should().Be("POST");
+        nyxHandler.Requests[0].Body.Should().Contain("\"emoji_type\":\"Typing\"");
+        nyxHandler.Requests[1].Method.Should().Be("GET");
+        nyxHandler.Requests[1].Path.Should().Contain("reaction_type=Typing");
+        nyxHandler.Requests[2].Method.Should().Be("DELETE");
+        nyxHandler.Requests[2].Path.Should().Contain("/reactions/r-bot-direct");
+        nyxHandler.Requests[3].Method.Should().Be("POST");
+        nyxHandler.Requests[3].Body.Should().Contain("\"emoji_type\":\"DONE\"");
+    }
+
+    [Fact]
+    public async Task RunLlmReplyAsync_ShouldNotSwapReaction_WhenReplyFails()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter
+        {
+            ReplyDeliveryResult = new PlatformReplyDeliveryResult(
+                false,
+                "recipient blocked bot",
+                PlatformReplyFailureKind.Permanent),
+        };
+        // Any nyx call here would be the post-reply swap firing. Fail early on it so
+        // the test still proves the swap was skipped — Requests.Should().BeEmpty() below
+        // makes the assertion explicit.
+        var nyxHandler = new RecordingJsonHandler("""{"code":0,"data":{}}""");
+        var runner = CreateRunner(registrationQueryPort, adapter, nyxHandler: nyxHandler);
+
+        var result = await runner.RunLlmReplyAsync(
+            new LlmReplyReadyEvent
+            {
+                CorrelationId = "corr-failed-reply",
+                RegistrationId = "reg-1",
+                Activity = BuildInboundActivity(
+                    "hello",
+                    "msg-failed-reply",
+                    transportExtras: new TransportExtras
+                    {
+                        NyxPlatform = "lark",
+                        NyxUserAccessToken = "user-token-1",
+                        NyxPlatformMessageId = "om_fail_1",
+                    }),
+                Outbound = new MessageContent { Text = "direct reply" },
+            },
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        nyxHandler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task RunLlmReplyAsync_ShouldDispatchInteractiveRelayReply_WhenOutboundContainsActions()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
@@ -1815,7 +2182,7 @@ public sealed class ChannelConversationTurnRunnerTests
         IServiceProvider? services = null,
         IChannelBotRegistrationQueryByNyxIdentityPort? registrationQueryByNyxIdentityPort = null,
         RecordingJsonHandler? relayHandler = null,
-        RecordingJsonHandler? nyxHandler = null,
+        HttpMessageHandler? nyxHandler = null,
         IInteractiveReplyDispatcher? interactiveReplyDispatcher = null)
     {
         services ??= new ServiceCollection().BuildServiceProvider();
@@ -2016,18 +2383,21 @@ public sealed class ChannelConversationTurnRunnerTests
 
     private class RecordingJsonHandler(string body) : HttpMessageHandler
     {
-        public List<(string Path, string? Authorization, string Body)> Requests { get; } = [];
+        public List<(string Path, string Method, string? Authorization, string Body)> Requests { get; } = [];
+
+        protected virtual string ResolveBody() => body;
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Requests.Add((
                 request.RequestUri?.PathAndQuery ?? string.Empty,
+                request.Method.Method,
                 request.Headers.Authorization?.ToString(),
                 request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken)));
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+                Content = new StringContent(ResolveBody(), Encoding.UTF8, "application/json"),
             };
         }
     }
@@ -2042,6 +2412,73 @@ public sealed class ChannelConversationTurnRunnerTests
             Started.TrySetResult();
             await Release.Task.WaitAsync(cancellationToken);
             return await base.SendAsync(request, cancellationToken);
+        }
+    }
+
+    // Parks the FIRST request (the typing POST that fires from RunInboundAsync) on a
+    // TaskCompletionSource until the test releases it. Used by the race test to confirm that
+    // the post-reply swap awaits the typing POST before issuing the GET-list — without the
+    // guard, the swap GET would run while typing is still parked here.
+    private sealed class TypingReactionGateHandler : RecordingJsonHandler
+    {
+        private readonly Queue<string> _bodies;
+        private readonly int _expectedTotalCallCount;
+        private int _callCount;
+
+        public TypingReactionGateHandler(int expectedTotalCallCount, params string[] bodies)
+            : base(bodies.Length > 0 ? bodies[0] : """{"code":0,"data":{}}""")
+        {
+            _expectedTotalCallCount = expectedTotalCallCount;
+            _bodies = new Queue<string>(bodies);
+        }
+
+        public TaskCompletionSource TypingPostStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseTypingPost { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Completed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override string ResolveBody() => _bodies.Count > 0 ? _bodies.Dequeue() : """{"code":0,"data":{}}""";
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var index = Interlocked.Increment(ref _callCount);
+            if (index == 1)
+            {
+                TypingPostStarted.TrySetResult();
+                await ReleaseTypingPost.Task.WaitAsync(cancellationToken);
+            }
+            var response = await base.SendAsync(request, cancellationToken);
+            if (Requests.Count >= _expectedTotalCallCount)
+                Completed.TrySetResult();
+            return response;
+        }
+    }
+
+    // Returns a different body for each successive call; signals Completed once expectedCallCount
+    // requests have been served. Extends RecordingJsonHandler which captures Path, Method,
+    // Authorization, and Body — the Method field lets swap tests assert GET/DELETE/POST ordering.
+    private sealed class SequencedJsonHandler : RecordingJsonHandler
+    {
+        private readonly Queue<string> _bodies;
+        private readonly int _expectedCallCount;
+
+        public SequencedJsonHandler(int expectedCallCount, params string[] bodies)
+            : base(bodies.Length > 0 ? bodies[0] : """{"code":0,"data":{}}""")
+        {
+            _expectedCallCount = expectedCallCount;
+            _bodies = new Queue<string>(bodies);
+        }
+
+        public TaskCompletionSource Completed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override string ResolveBody() => _bodies.Count > 0 ? _bodies.Dequeue() : """{"code":0,"data":{}}""";
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var response = await base.SendAsync(request, cancellationToken);
+            if (Requests.Count >= _expectedCallCount)
+                Completed.TrySetResult();
+            return response;
         }
     }
 }

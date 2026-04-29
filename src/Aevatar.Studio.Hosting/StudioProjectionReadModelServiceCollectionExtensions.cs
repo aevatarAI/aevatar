@@ -10,6 +10,7 @@ using Aevatar.GAgents.Registry;
 using Aevatar.GAgents.RoleCatalog;
 using Aevatar.GAgents.StreamingProxyParticipant;
 using Aevatar.GAgents.StudioMember;
+using Aevatar.GAgents.StudioTeam;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.GAgents.UserMemory;
 using Aevatar.Studio.Projection.ReadModels;
@@ -68,6 +69,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterElasticsearch<StreamingProxyParticipantCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<UserConfigCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<StudioMemberCurrentStateDocument>(services, configuration);
+            RegisterElasticsearch<StudioTeamCurrentStateDocument>(services, configuration);
         }
         else
         {
@@ -80,6 +82,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterInMemory<StreamingProxyParticipantCurrentStateDocument>(services);
             RegisterInMemory<UserConfigCurrentStateDocument>(services);
             RegisterInMemory<StudioMemberCurrentStateDocument>(services);
+            RegisterInMemory<StudioTeamCurrentStateDocument>(services);
         }
 
         return services;
@@ -128,7 +131,8 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
                && HasDocumentReaderForProvider<UserMemoryCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StreamingProxyParticipantCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<UserConfigCurrentStateDocument>(services, providerKind)
-               && HasDocumentReaderForProvider<StudioMemberCurrentStateDocument>(services, providerKind);
+               && HasDocumentReaderForProvider<StudioMemberCurrentStateDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<StudioTeamCurrentStateDocument>(services, providerKind);
     }
 
     private static bool HasAnyDocumentReader<TDoc>(IServiceCollection services)
@@ -211,7 +215,8 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             StreamingProxyParticipantGAgentState.Descriptor,
             ChatHistoryIndexState.Descriptor,
             ChatConversationState.Descriptor,
-            StudioMemberState.Descriptor);
+            StudioMemberState.Descriptor,
+            StudioTeamState.Descriptor);
     }
 
     private enum DocumentProviderKind
