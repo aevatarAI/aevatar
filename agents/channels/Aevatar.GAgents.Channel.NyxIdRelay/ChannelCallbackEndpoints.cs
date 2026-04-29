@@ -29,6 +29,7 @@ public static class ChannelCallbackEndpoints
         group.MapPost("/registrations", HandleRegisterAsync).RequireAuthorization();
         group.MapGet("/registrations", HandleListRegistrationsAsync).RequireAuthorization();
         group.MapPost("/registrations/rebuild", HandleRebuildRegistrationsAsync).RequireAuthorization();
+        group.MapPost("/registrations/repair-lark-mirror", HandleRepairLarkMirrorAsync).RequireAuthorization();
         group.MapDelete("/registrations/{registrationId}", HandleDeleteRegistrationAsync).RequireAuthorization();
 
         // Diagnostic: test reply path without going through full LLM chat
@@ -273,6 +274,91 @@ public static class ChannelCallbackEndpoints
         });
     }
 
+    /// <summary>
+    /// Repairs the local <c>channel-bot-registration-store</c> mirror for a Lark
+    /// bot whose Nyx-side resources (api-key, channel-bot, conversation-route)
+    /// already exist but whose local <see cref="ChannelBotRegistrationDocument"/>
+    /// is missing — typically after a namespace migration that destroyed the
+    /// authoritative actor and left no entry to project. Idempotent: re-running
+    /// against an already-mirrored registration returns <c>already_registered</c>
+    /// without dispatching another <c>ChannelBotRegisterCommand</c>.
+    ///
+    /// Direct HTTP equivalent of the LLM-tool path
+    /// <c>channel_registrations action=repair_lark_mirror</c>; see
+    /// <c>docs/operations/2026-04-29-lark-mirror-recovery-runbook.md</c>.
+    /// </summary>
+    private static async Task<IResult> HandleRepairLarkMirrorAsync(
+        HttpContext http,
+        [FromServices] INyxLarkProvisioningService provisioningService,
+        [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken ct)
+    {
+        var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Repair");
+
+        RepairLarkMirrorRequest? request;
+        try
+        {
+            request = await http.Request.ReadFromJsonAsync<RepairLarkMirrorRequest>(RegistrationJsonOptions, ct);
+        }
+        catch (JsonException ex)
+        {
+            logger.LogWarning(ex, "Invalid repair-lark-mirror request payload");
+            return Results.BadRequest(new { error = "Invalid JSON" });
+        }
+
+        if (request is null)
+            return Results.BadRequest(new { error = "request body is required" });
+
+        if (string.IsNullOrWhiteSpace(request.NyxChannelBotId))
+            return Results.BadRequest(new { error = "nyx_channel_bot_id is required" });
+        if (string.IsNullOrWhiteSpace(request.NyxAgentApiKeyId))
+            return Results.BadRequest(new { error = "nyx_agent_api_key_id is required" });
+        if (string.IsNullOrWhiteSpace(request.WebhookBaseUrl))
+            return Results.BadRequest(new { error = "webhook_base_url is required" });
+
+        var accessToken = ResolveBearerAccessToken(http);
+        if (string.IsNullOrWhiteSpace(accessToken))
+            return Results.Unauthorized();
+
+        var scopeResolution = ResolveScopeId(http, request.ScopeId, required: true);
+        if (scopeResolution.Error is not null)
+            return Results.BadRequest(new { error = scopeResolution.Error });
+
+        var result = await provisioningService.RepairLocalMirrorAsync(
+            new NyxLarkMirrorRepairRequest(
+                AccessToken: accessToken,
+                RequestedRegistrationId: request.RegistrationId?.Trim() ?? string.Empty,
+                ScopeId: scopeResolution.ScopeId!,
+                NyxProviderSlug: request.NyxProviderSlug?.Trim() ?? string.Empty,
+                WebhookBaseUrl: request.WebhookBaseUrl.Trim(),
+                NyxChannelBotId: request.NyxChannelBotId.Trim(),
+                NyxAgentApiKeyId: request.NyxAgentApiKeyId.Trim(),
+                NyxConversationRouteId: request.NyxConversationRouteId?.Trim() ?? string.Empty),
+            ct);
+
+        var payload = new
+        {
+            status = result.Status,
+            registration_id = result.RegistrationId ?? string.Empty,
+            nyx_channel_bot_id = result.NyxChannelBotId ?? string.Empty,
+            nyx_agent_api_key_id = result.NyxAgentApiKeyId ?? string.Empty,
+            nyx_conversation_route_id = result.NyxConversationRouteId ?? string.Empty,
+            webhook_url = result.WebhookUrl ?? string.Empty,
+            error = result.Error ?? string.Empty,
+            note = result.Note ?? string.Empty,
+        };
+
+        if (result.Succeeded)
+            return Results.Accepted(value: payload);
+
+        var statusCode = ResolveProvisioningFailureStatusCode(result.Error);
+        logger.LogWarning(
+            "Lark mirror repair rejected: statusCode={StatusCode}, error={Error}",
+            statusCode,
+            result.Error);
+        return Results.Json(payload, statusCode: statusCode);
+    }
+
     private static string? ResolveBearerAccessToken(HttpContext http)
     {
         var accessToken = http.Request.Headers.Authorization.ToString();
@@ -442,6 +528,15 @@ public static class ChannelCallbackEndpoints
         string? NyxAgentApiKeyId,
         string? Reason,
         bool Force);
+
+    private sealed record RepairLarkMirrorRequest(
+        string? RegistrationId,
+        string? ScopeId,
+        string? NyxProviderSlug,
+        string? WebhookBaseUrl,
+        string? NyxChannelBotId,
+        string? NyxAgentApiKeyId,
+        string? NyxConversationRouteId);
 
     private sealed record RegistrationRequest(
         string? Platform,

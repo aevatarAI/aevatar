@@ -579,6 +579,189 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
+    public async Task HandleRepairLarkMirrorAsync_DispatchesRepairAndReturnsAccepted()
+    {
+        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
+        provisioningService.RepairLocalMirrorAsync(
+                Arg.Any<NyxLarkMirrorRepairRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxLarkMirrorRepairResult(
+                Succeeded: true,
+                Status: "accepted",
+                RegistrationId: "reg-1",
+                NyxChannelBotId: "bot-1",
+                NyxAgentApiKeyId: "key-1",
+                NyxConversationRouteId: "route-1",
+                WebhookUrl: "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-1",
+                Note: "Existing Nyx relay resources were verified.")));
+
+        var http = CreateJsonHttpContext(
+            """
+            {
+              "registration_id":"reg-1",
+              "nyx_channel_bot_id":"bot-1",
+              "nyx_agent_api_key_id":"key-1",
+              "nyx_conversation_route_id":"route-1",
+              "webhook_base_url":"https://aevatar.example.com",
+              "nyx_provider_slug":"api-lark-bot"
+            }
+            """,
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleRepairLarkMirrorAsync",
+            http,
+            provisioningService,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Body.Should().Contain("\"registration_id\":\"reg-1\"");
+        response.Body.Should().Contain("\"nyx_agent_api_key_id\":\"key-1\"");
+        await provisioningService.Received(1).RepairLocalMirrorAsync(
+            Arg.Is<NyxLarkMirrorRepairRequest>(r =>
+                r.AccessToken == "test-token" &&
+                r.ScopeId == "scope-1" &&
+                r.RequestedRegistrationId == "reg-1" &&
+                r.NyxChannelBotId == "bot-1" &&
+                r.NyxAgentApiKeyId == "key-1" &&
+                r.NyxConversationRouteId == "route-1" &&
+                r.WebhookBaseUrl == "https://aevatar.example.com" &&
+                r.NyxProviderSlug == "api-lark-bot"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task HandleRepairLarkMirrorAsync_RejectsMissingNyxIdentity()
+    {
+        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
+
+        var http = CreateJsonHttpContext(
+            """{"webhook_base_url":"https://aevatar.example.com"}""",
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleRepairLarkMirrorAsync",
+            http,
+            provisioningService,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        response.Body.Should().Contain("nyx_channel_bot_id is required");
+        await provisioningService.DidNotReceive().RepairLocalMirrorAsync(
+            Arg.Any<NyxLarkMirrorRepairRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task HandleRepairLarkMirrorAsync_ReturnsUnauthorized_WhenAccessTokenMissing()
+    {
+        // Even though the route is RequireAuthorization, the handler also reads
+        // the bearer token to forward to Nyx for ownership verification — a
+        // missing/empty Authorization header must short-circuit before the
+        // provisioning service is touched.
+        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
+
+        var http = CreateJsonHttpContext(
+            """
+            {
+              "nyx_channel_bot_id":"bot-1",
+              "nyx_agent_api_key_id":"key-1",
+              "webhook_base_url":"https://aevatar.example.com"
+            }
+            """,
+            "scope-1");
+        // Authorization deliberately omitted.
+
+        var result = await InvokeAsync(
+            "HandleRepairLarkMirrorAsync",
+            http,
+            provisioningService,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        await provisioningService.DidNotReceive().RepairLocalMirrorAsync(
+            Arg.Any<NyxLarkMirrorRepairRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task HandleRepairLarkMirrorAsync_ReturnsBadGateway_WhenNyxFails()
+    {
+        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
+        provisioningService.RepairLocalMirrorAsync(
+                Arg.Any<NyxLarkMirrorRepairRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxLarkMirrorRepairResult(
+                Succeeded: false,
+                Status: "error",
+                Error: "channel_bot_lookup_failed nyx_status=404 body=channel_bot_not_found")));
+
+        var http = CreateJsonHttpContext(
+            """
+            {
+              "nyx_channel_bot_id":"bot-missing",
+              "nyx_agent_api_key_id":"key-1",
+              "webhook_base_url":"https://aevatar.example.com"
+            }
+            """,
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleRepairLarkMirrorAsync",
+            http,
+            provisioningService,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status502BadGateway);
+        response.Body.Should().Contain("\"status\":\"error\"");
+        response.Body.Should().Contain("channel_bot_not_found");
+    }
+
+    [Fact]
+    public async Task HandleRepairLarkMirrorAsync_RejectsScopeMismatch()
+    {
+        // Mirror of the existing register / rebuild scope-mismatch tests: the
+        // body's scope_id must equal the JWT's scope_id claim, otherwise
+        // a malicious caller could repair a registration into someone else's
+        // scope and intercept their relay traffic.
+        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
+
+        var http = CreateJsonHttpContext(
+            """
+            {
+              "scope_id":"scope-attacker",
+              "nyx_channel_bot_id":"bot-1",
+              "nyx_agent_api_key_id":"key-1",
+              "webhook_base_url":"https://aevatar.example.com"
+            }
+            """,
+            "scope-victim");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleRepairLarkMirrorAsync",
+            http,
+            provisioningService,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        response.Body.Should().Contain("scope_id does not match");
+        await provisioningService.DidNotReceive().RepairLocalMirrorAsync(
+            Arg.Any<NyxLarkMirrorRepairRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task HandleGetDiagnosticErrorsAsync_ExposesEntries()
     {
         var diagnostics = new InMemoryChannelRuntimeDiagnostics();

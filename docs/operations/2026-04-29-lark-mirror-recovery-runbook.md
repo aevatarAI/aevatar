@@ -145,11 +145,46 @@ chat works:
 aevatar-cli scopes use <scope_id>
 ```
 
-### 5. Trigger `repair_lark_mirror` via the NyxidChat agent
+### 5. Trigger the repair
 
-`repair_lark_mirror` is an LLM tool, not a direct HTTP endpoint. Open a chat
-conversation in the bound scope and ask the agent to call it with the IDs
-collected above:
+There are two equivalent ways to trigger `repair_lark_mirror`. Pick the
+direct HTTP endpoint when the silo is healthy enough to serve requests; fall
+back to the LLM tool path if it isn't (e.g. NyxidChat agent is the only
+known-working interface).
+
+#### 5a. Direct HTTP endpoint (preferred)
+
+`POST /api/channels/registrations/repair-lark-mirror` is the authenticated
+direct equivalent of the LLM tool. It validates Nyx-side resources and
+dispatches the local `ChannelBotRegisterCommand` exactly like the tool does,
+without needing a chat session or a scope-bound NyxidChat agent.
+
+```bash
+aevatar-cli api POST /api/channels/registrations/repair-lark-mirror --json '{
+  "registration_id": "<from step 3, optional>",
+  "scope_id": "<from step 4>",
+  "nyx_provider_slug": "api-lark-bot",
+  "webhook_base_url": "https://<aevatar-host>",
+  "nyx_channel_bot_id": "<from step 2>",
+  "nyx_agent_api_key_id": "<from step 2>",
+  "nyx_conversation_route_id": "<from step 2>"
+}'
+```
+
+Successful response is `202 Accepted` with the registration id and the IDs
+echoed back. Failures map to the same status codes used by `POST
+/api/channels/registrations`:
+
+- `400` — missing required field, scope mismatch, malformed JSON
+- `401` — no Authorization bearer token
+- `502` — Nyx-side resource lookup failed (api-key inactive, channel-bot
+  deleted, route mismatch)
+- `500` — `nyx_base_url_not_configured` (host misconfiguration, escalate)
+
+#### 5b. LLM-tool fallback (`channel_registrations action=repair_lark_mirror`)
+
+Same operation, routed through the `NyxidChat` agent's tool surface. Use
+this if the direct endpoint is unavailable on the deployed version.
 
 ```bash
 aevatar-cli chat new --title "repair-lark-mirror"
@@ -168,7 +203,9 @@ the resources. Just call repair_lark_mirror to rebuild the local mirror."
 
 The `aevatar-cli chat` rendering may print `[unknown frame: message]` lines
 while the SSE stream is in flight. That's a known cosmetic gap — the call
-still completes. Verify by re-querying the registrations list:
+still completes.
+
+#### Verify either path
 
 ```bash
 aevatar-cli api GET /api/channels/registrations
@@ -204,8 +241,11 @@ projection scope health (issue #502 territory).
 
 ## When to stop using this runbook
 
-Once issue #502's `EventSourcingBehavior` hardening is deployed AND a
-direct authenticated HTTP repair endpoint is added (proposed in #502),
-recovery becomes a single API call against `repair_lark_mirror` without
-needing a chat session or scope binding. Update or delete this runbook
-when that lands.
+The version-key drift symptoms covered in the "What is NOT this runbook"
+section are now self-healing in `EventSourcingBehavior` as of issue #502,
+so step 5 should rarely be preceded by a manual Garnet reset. Keep this
+runbook as long as the data-loss path through retired-actor cleanup is
+still possible — i.e. as long as `RetiredActorCleanupHostedService` can
+destroy `channel-bot-registration-store` and migrate to a new actor type
+without a parallel data-migration path. If that gap closes, this runbook
+becomes obsolete.
