@@ -86,7 +86,7 @@ describe("runtimeGAgentApi", () => {
     expect(input).toBe("/api/scopes/scope-1/gagent-actors");
   });
 
-  it("keeps compatibility with legacy saved actor arrays", async () => {
+  it("rejects legacy saved actor arrays", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -99,12 +99,9 @@ describe("runtimeGAgentApi", () => {
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
-    await expect(runtimeGAgentApi.listActors("scope-1")).resolves.toEqual([
-      {
-        gAgentType: "Tests.OrdersGAgent",
-        actorIds: ["orders-1"],
-      },
-    ]);
+    await expect(runtimeGAgentApi.listActors("scope-1")).rejects.toThrow(
+      /snapshot/i
+    );
   });
 
   it("does not expose direct actor registration", () => {

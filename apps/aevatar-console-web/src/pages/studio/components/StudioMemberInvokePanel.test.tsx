@@ -261,13 +261,15 @@ describe('StudioMemberInvokePanel', () => {
       },
     });
     fireEvent.change(
-      screen.getByPlaceholderText('如需类型化调用，请粘贴预编码的 protobuf payload。'),
+      screen.getByPlaceholderText('粘贴与 request type 对应的 protobuf payload base64。'),
       {
         target: {
           value: 'ZXhhbXBsZS1wYXlsb2Fk',
         },
       },
     );
+    expect(screen.getByLabelText('Typed invoke form')).toBeInTheDocument();
+    expect(screen.getByText(/SubmitResult/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '执行调用' }));
 

@@ -154,12 +154,14 @@ public sealed class NyxRelayAgentBuilderFlowTests
     }
 
     [Fact]
-    public void FormatToolResult_ShouldRenderListAgentsAsInteractiveCard()
+    public void FormatToolResult_ShouldRenderListAgents_AsSingleCardWithoutPerAgentButtons()
     {
-        // /agents now returns an interactive card so users can drill into per-agent status
-        // without retyping the long agent_id. Per-row "Status" buttons carry the full agent_id
-        // in their arguments so AgentBuilderCardFlow's existing card_action handler routes them
-        // back to the agent_status tool path.
+        // Issue #476: /agents used to render as one summary card + N per-agent cards + N
+        // "Status: …" per-agent buttons. In Lark that compiled into stacked markdown blocks plus
+        // a long button row, which users perceived as a text list mixed with a separate status
+        // card. The unified design surfaces ONE card with a structured agent list in the body,
+        // a small footer of global actions, and the per-agent operations as documented slash
+        // commands inline in the body.
         var decision = AgentBuilderFlowDecision.ToolCall("list_agents", """{"action":"list_agents"}""");
         var result = NyxRelayAgentBuilderFlow.FormatToolResult(
             decision,
@@ -172,25 +174,46 @@ public sealed class NyxRelayAgentBuilderFlowTests
                   "status": "running",
                   "next_scheduled_run": "2026-04-23T09:00:00Z",
                   "last_run_at": "2026-04-22T09:00:00Z"
+                },
+                {
+                  "agent_id": "skill-runner-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d",
+                  "template": "social_media",
+                  "status": "disabled",
+                  "next_scheduled_run": "pending"
                 }
               ]
             }
             """);
 
-        result.Cards.Should().NotBeEmpty();
-        // First card is the summary; subsequent cards are per-agent rows.
-        result.Cards[0].Title.Should().Be("Your agents");
-        result.Cards.Skip(1).Should().ContainSingle(card =>
-            card.BlockId == "agent_row:skill-runner-94d754dfdfbb416aa5a676cecd0d7a71");
+        // Single consolidated card — no per-agent CardBlock rows, no `agents_summary` extra block.
+        result.Cards.Should().ContainSingle();
+        var card = result.Cards.Single();
+        card.BlockId.Should().Be("agents_list");
+        card.Title.Should().Be("Your Agents (2)");
+        // Body lists every agent with its identifying fields in markdown.
+        card.Text.Should().Contain("daily_report");
+        card.Text.Should().Contain("skill-runner-94d754dfdfbb416aa5a676cecd0d7a71");
+        card.Text.Should().Contain("running");
+        card.Text.Should().Contain("social_media");
+        card.Text.Should().Contain("disabled");
+        // Per-agent commands live in the body so users do not have to remember them.
+        card.Text.Should().Contain("/agent-status <id>");
+        card.Text.Should().Contain("/run-agent <id>");
+        card.Text.Should().Contain("/delete-agent <id> confirm");
 
-        var statusButton = result.Actions.Should().Contain(a => a.ActionId == "agent_status").Subject;
-        statusButton.Arguments.Should().Contain(new KeyValuePair<string, string>(
-            "agent_builder_action", "agent_status"));
-        statusButton.Arguments.Should().Contain(new KeyValuePair<string, string>(
-            "agent_id", "skill-runner-94d754dfdfbb416aa5a676cecd0d7a71"));
+        // No per-agent buttons. Specifically no `agent_status` action with an agent_id argument
+        // — that was the source of the long "Status: …" row that read as a separate panel.
+        result.Actions.Should().NotContain(a => a.ActionId == "agent_status");
+        result.Actions.Should().NotContain(a => a.Arguments.ContainsKey("agent_id"));
 
-        result.Actions.Should().Contain(a => a.ActionId == "open_daily_report_form");
-        result.Actions.Should().Contain(a => a.ActionId == "open_social_media_form");
+        // Footer keeps four global discovery / creation buttons in a single row.
+        result.Actions.Select(a => a.ActionId).Should().BeEquivalentTo(new[]
+        {
+            "list_agents",
+            "list_templates",
+            "open_daily_report_form",
+            "open_social_media_form",
+        });
     }
 
     [Fact]
@@ -202,6 +225,7 @@ public sealed class NyxRelayAgentBuilderFlowTests
         result.Cards.Should().ContainSingle(card => card.BlockId == "agents_empty");
         result.Actions.Should().Contain(a => a.ActionId == "open_daily_report_form");
         result.Actions.Should().Contain(a => a.ActionId == "open_social_media_form");
+        result.Actions.Should().Contain(a => a.ActionId == "list_templates");
     }
 
     [Fact]
@@ -367,8 +391,11 @@ public sealed class NyxRelayAgentBuilderFlowTests
         result.Cards[0].Title.Should().Be("Create Daily Report Agent");
         result.Cards[0].Text.Should().Contain("GitHub credentials required");
         result.Cards[0].Text.Should().Contain("p-github");
-        result.Text.Should().NotBeEmpty();
-        result.Text.Should().Contain("GitHub credentials required");
+        // The auth body lives in the card only — content.Text must stay empty so Lark's form-mode
+        // composer (LarkMessageComposer.BuildLeadingMarkdown) doesn't double-render the same
+        // "GitHub credentials required" block once from Text and once from the card body. The
+        // earlier assertion that Text was non-empty was codifying the bug it has since fixed.
+        result.Text.Should().BeEmpty();
     }
 
     [Fact]

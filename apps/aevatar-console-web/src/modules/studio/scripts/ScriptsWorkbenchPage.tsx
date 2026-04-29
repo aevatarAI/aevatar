@@ -248,10 +248,6 @@ function createDraftKey(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${draftCounter.toString(36)}`;
 }
 
-function createRevisionSeed(): string {
-  return `draft-${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`;
-}
-
 function buildScopePageHref(
   path: string,
   scopeId: string,
@@ -291,11 +287,8 @@ function normalizeStudioId(value: string, fallbackPrefix: string): string {
     .slice(0, 14)}`;
 }
 
-function buildScopeScriptBindingRevisionId(
-  scriptId: string,
-  scriptRevision: string,
-): string {
-  return normalizeStudioId(`${scriptId}-${scriptRevision}`, 'rev');
+function trimOptional(value: string | null | undefined): string {
+  return String(value || '').trim();
 }
 
 function createStarterPackage(): ScriptPackage {
@@ -369,7 +362,7 @@ function createDraft(index: number, seed: Partial<ScriptDraft> = {}): ScriptDraf
   return {
     key: seed.key || createDraftKey('script_draft'),
     scriptId: seed.scriptId || `script-${index}`,
-    revision: seed.revision || createRevisionSeed(),
+    revision: seed.revision || '',
     baseRevision: seed.baseRevision || '',
     reason: seed.reason || '',
     input: seed.input || '',
@@ -427,7 +420,7 @@ function readStoredDrafts(): ScriptDraft[] {
       return {
         key: String(item.key || createDraftKey(`script_draft_${index + 1}`)),
         scriptId: String(item.scriptId || `script-${index + 1}`),
-        revision: String(item.revision || createRevisionSeed()),
+        revision: String(item.revision || ''),
         baseRevision: String(item.baseRevision || ''),
         reason: String(item.reason || ''),
         input: String(item.input || ''),
@@ -624,7 +617,7 @@ function hydrateDraftFromScopeDetail(
     detail.script?.activeRevision ||
     detail.source?.revision ||
     existing?.revision ||
-    createRevisionSeed();
+    '';
 
   return createDraft(index, {
     key: existing?.key,
@@ -1108,7 +1101,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
 
     return JSON.stringify({
       scriptId: selectedDraft.scriptId,
-      scriptRevision: selectedDraft.revision,
+      scriptRevision: selectedDraft.revision || undefined,
       source: serializePersistedSource(selectedDraft.package),
       package: selectedDraft.package,
     });
@@ -1130,7 +1123,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       try {
         const payload = JSON.parse(deferredValidationPayload) as {
           scriptId: string;
-          scriptRevision: string;
+          scriptRevision?: string;
           source: string;
           package: ScriptPackage;
         };
@@ -1568,7 +1561,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     try {
       const result = await scriptsApi.validateDraft({
         scriptId: selectedDraft.scriptId,
-        scriptRevision: selectedDraft.revision,
+        scriptRevision: selectedDraft.revision || undefined,
         source: serializePersistedSource(selectedDraft.package),
         package: selectedDraft.package,
       });
@@ -1607,7 +1600,6 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     const persistedSource = serializePersistedSource(selectedDraft.package);
     const accepted = await scriptsApi.saveScript(resolvedScopeId, {
       scriptId: normalizeStudioId(selectedDraft.scriptId, 'script'),
-      revisionId: normalizeStudioId(selectedDraft.revision, 'rev'),
       expectedBaseRevision: selectedDraft.baseRevision || undefined,
       sourceText: persistedSource,
     });
@@ -1615,6 +1607,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     updateSelectedDraft((draft) => ({
       ...draft,
       scriptId: accepted.acceptedScript.scriptId || draft.scriptId,
+      revision: accepted.acceptedScript.revisionId || draft.revision,
       definitionActorId:
         accepted.acceptedScript.definitionActorId || draft.definitionActorId,
       lastSourceHash: accepted.acceptedScript.sourceHash || draft.lastSourceHash,
@@ -1768,14 +1761,16 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     }
 
     const scriptId = normalizeStudioId(scopeScript.scriptId || selectedDraft.scriptId, 'script');
-    const scriptRevision = normalizeStudioId(
+    const scriptRevision = trimOptional(
       scopeScript.activeRevision || selectedDraft.revision,
-      'rev',
     );
-    const bindingRevisionId = buildScopeScriptBindingRevisionId(
-      scriptId,
-      scriptRevision,
-    );
+    if (!scriptRevision) {
+      setNotice({
+        type: 'warning',
+        message: 'Save the current script into the scope before binding it.',
+      });
+      return;
+    }
 
     setBindPending(true);
     setNotice(null);
@@ -1783,9 +1778,9 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       const result = await studioApi.bindScopeScript({
         scopeId: resolvedScopeId,
         displayName: bindDisplayNameDraft.trim() || scriptId,
+        serviceId: scriptId,
         scriptId,
         scriptRevision,
-        revisionId: bindingRevisionId,
       });
 
       setBindModalOpen(false);
@@ -1861,7 +1856,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       const result = await scriptsApi.runDraftScript({
         scopeId: resolvedScopeId,
         scriptId: normalizeStudioId(selectedDraft.scriptId, 'script'),
-        scriptRevision: normalizeStudioId(selectedDraft.revision, 'draft'),
+        scriptRevision: selectedDraft.revision.trim() || undefined,
         source: serializePersistedSource(selectedDraft.package),
         package: selectedDraft.package,
         input: runInputDraft,
@@ -1945,7 +1940,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       const scriptId = normalizeStudioId(selectedDraft.scriptId, 'script');
       const response = await scriptsApi.proposeEvolution(resolvedScopeId, scriptId, {
         baseRevision,
-        candidateRevision: normalizeStudioId(selectedDraft.revision, 'rev'),
+        candidateRevision: selectedDraft.revision.trim() || undefined,
         candidateSource: serializePersistedSource(selectedDraft.package),
         reason: promotionReasonDraft || selectedDraft.reason || undefined,
       });
@@ -2369,8 +2364,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     selectedDraft &&
       scopeBacked &&
       !savePending &&
-      selectedDraft.scriptId.trim() &&
-      selectedDraft.revision.trim(),
+      selectedDraft.scriptId.trim(),
   );
   const canRun = Boolean(
     selectedDraft &&
@@ -2387,8 +2381,15 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       (selectedDraft.scopeDetail?.script?.activeRevision || selectedDraft.baseRevision),
   );
   const scopeBindingScript = selectedDraft?.scopeDetail?.script || null;
+  const scopeBindingRevision = trimOptional(
+    scopeBindingScript?.activeRevision || selectedDraft?.revision,
+  );
   const canBindScope = Boolean(
-    selectedDraft && scopeBacked && scopeBindingScript && !bindPending,
+    selectedDraft &&
+      scopeBacked &&
+      scopeBindingScript &&
+      scopeBindingRevision &&
+      !bindPending,
   );
   const scopeSelectionId = selectedDraft?.scopeDetail?.script?.scriptId || '';
   const hasScopeChanges = isScopeDetailDirty(selectedDraft);
@@ -2420,7 +2421,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     : validationError ||
       visibleProblems[0]?.message ||
       'Clean';
-  const headerRevisionLabel = selectedDraft?.revision || 'draft revision';
+  const headerRevisionLabel = selectedDraft?.revision || 'not saved';
   const headerScopeLabel = scopeBacked
     ? `Scope ${compactHeaderValue(resolvedScopeId)}`
     : 'Local draft';
@@ -2979,12 +2980,6 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
             <div className="console-scripts-drawer-body">
               <ScriptsPackagePanel
                 selectedDraft={selectedDraft}
-                onRevisionChange={(value) =>
-                  updateSelectedDraft((draft) => ({
-                    ...draft,
-                    revision: normalizeStudioId(value, 'rev'),
-                  }))
-                }
                 onBaseRevisionChange={(value) =>
                   updateSelectedDraft((draft) => ({
                     ...draft,
@@ -3275,7 +3270,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
             <div className="console-scripts-eyebrow">Script</div>
             <div className="console-scripts-detail-copy">
               {scopeBindingScript?.scriptId || selectedDraft?.scriptId || '-'} ·{' '}
-              {scopeBindingScript?.activeRevision || selectedDraft?.revision || '-'}
+              {scopeBindingRevision || 'save required'}
             </div>
           </div>
           <div style={{ marginTop: 16 }}>

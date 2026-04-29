@@ -135,6 +135,19 @@ public sealed class NyxIdProxyTool : IAgentTool
         var userServicesJson = await _client.DiscoverProxyServicesAsync(userToken, ct);
         var orgServicesJson = await _client.DiscoverProxyServicesAsync(orgToken, ct);
 
+        // PR #471 reviewer concern: when both tokens fail discovery, both responses are
+        // NyxID error envelopes, neither has a `services` array, the merge below quietly
+        // synthesizes `[]`, and the SkillRunner safety net classifies an empty array as a
+        // successful call. Surface the user-token error verbatim instead so the middleware
+        // can classify it. A single-token failure stays masked: the healthy token's slugs
+        // still merge in and the call counts as a successful discovery.
+        if (LooksLikeErrorEnvelope(userServicesJson) && LooksLikeErrorEnvelope(orgServicesJson))
+        {
+            _logger.LogWarning(
+                "[nyxid_proxy] Both user and org discovery returned error envelopes; surfacing user envelope");
+            return userServicesJson;
+        }
+
         try
         {
             using var userDoc = System.Text.Json.JsonDocument.Parse(userServicesJson);
@@ -279,6 +292,39 @@ public sealed class NyxIdProxyTool : IAgentTool
     {
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(token));
         return Convert.ToHexString(bytes)[..16];
+    }
+
+    /// <summary>
+    /// Detect a NyxID error envelope by the truthy <c>error</c> property
+    /// <see cref="NyxIdApiClient.SendAsync"/> emits on every non-2xx and exception path.
+    /// Used by <see cref="DiscoverMergedServicesAsync"/> to short-circuit the dual-token
+    /// merge when neither call returned a real services list. Conservative on purpose —
+    /// only the explicit <c>error</c> marker counts; bare envelopes like
+    /// <c>{"code": 401}</c> are left to the regular merge path.
+    /// </summary>
+    internal static bool LooksLikeErrorEnvelope(string? response)
+    {
+        if (string.IsNullOrEmpty(response))
+            return false;
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(response);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object)
+                return false;
+            if (!doc.RootElement.TryGetProperty("error", out var errorProp))
+                return false;
+            return errorProp.ValueKind switch
+            {
+                System.Text.Json.JsonValueKind.False => false,
+                System.Text.Json.JsonValueKind.Null => false,
+                _ => true,
+            };
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return false;
+        }
     }
 
     /// <summary>

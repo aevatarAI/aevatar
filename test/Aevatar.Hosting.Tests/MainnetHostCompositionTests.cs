@@ -3,7 +3,11 @@ using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.Telegram;
 using Aevatar.Configuration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Device;
+using Aevatar.GAgents.Scheduled;
 using Aevatar.Mainnet.Host.Api.Hosting;
 using Aevatar.Scripting.Projection.ReadModels;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -102,6 +106,25 @@ public sealed class MainnetHostCompositionTests
             .WithMessage("*MissingMainnetDependency*");
     }
 
+    [Fact]
+    public void AddAevatarMainnetHost_ShouldRunRetiredActorCleanup_BeforeProjectionStartupServices()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        var cleanupIndex = HostedServiceIndex<RetiredActorCleanupHostedService>(builder.Services);
+
+        HostedServiceIndex<ChannelBotRegistrationStartupService>(builder.Services).Should().BeGreaterThan(cleanupIndex);
+        HostedServiceIndex<DeviceRegistrationStartupService>(builder.Services).Should().BeGreaterThan(cleanupIndex);
+        HostedServiceIndex<UserAgentCatalogStartupService>(builder.Services).Should().BeGreaterThan(cleanupIndex);
+    }
+
     private static WebApplicationBuilder CreateBuilder()
     {
         var options = new WebApplicationOptions
@@ -120,6 +143,21 @@ public sealed class MainnetHostCompositionTests
             ["Projection:Graph:Providers:Neo4j:Enabled"] = "false",
         });
         return builder;
+    }
+
+    private static int HostedServiceIndex<THostedService>(IServiceCollection services)
+        where THostedService : IHostedService
+    {
+        var index = services
+            .Select((descriptor, position) => new
+            {
+                descriptor,
+                position,
+            })
+            .Where(x => x.descriptor.ServiceType == typeof(IHostedService))
+            .Single(x => x.descriptor.ImplementationType == typeof(THostedService))
+            .position;
+        return index;
     }
 
     private sealed class BrokenMainnetService(MissingMainnetDependency dependency)

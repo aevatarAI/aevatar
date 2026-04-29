@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.AI.ToolProviders.Channel;
 using Aevatar.AI.ToolProviders.ChannelAdmin;
@@ -21,11 +22,13 @@ using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Platform.Telegram;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.StreamingProxy;
+using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Aevatar.Mainnet.Host.Api.Hosting;
 
@@ -73,10 +76,17 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddNyxIdChat(builder.Configuration);
         builder.Services.AddStreamingProxy(builder.Configuration);
         builder.Services.AddChatbotClassifier();
+        builder.Services.AddRetiredActorCleanup();
         builder.Services.AddChannelRuntime(builder.Configuration);
         builder.Services.AddChannelIdentity(builder.Configuration);
         builder.Services.AddDeviceRegistration(builder.Configuration);
         builder.Services.AddScheduledAgents(builder.Configuration);
+        // Bridge Studio's IUserConfigQueryPort onto the AI-layer IOwnerLlmConfigSource port so
+        // SkillRunner / WorkflowAgent / NyxidChat honor the bot owner's pre-configured LLM model
+        // + route (issue #509). The bridge lives here, not in any agent or AI package, so
+        // neither side has to depend on Studio.Application — the host is the natural composition
+        // layer between Studio and the AI/agent packages that consume the port.
+        builder.Services.TryAddSingleton<IOwnerLlmConfigSource, StudioUserConfigOwnerLlmConfigSource>();
         builder.Services.AddLarkAgentAuthoring();
         builder.Services.AddNyxIdRelayChannel();
         builder.Services.AddLarkPlatform();

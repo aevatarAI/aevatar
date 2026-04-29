@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Core.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
@@ -16,7 +17,13 @@ namespace Aevatar.GAgents.Scheduled;
 
 public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
 {
+    private readonly IOwnerLlmConfigSource? _ownerLlmConfigSource;
     private ChannelScheduleRunner? _scheduler;
+
+    public WorkflowAgentGAgent(IOwnerLlmConfigSource? ownerLlmConfigSource = null)
+    {
+        _ownerLlmConfigSource = ownerLlmConfigSource;
+    }
 
     private ChannelScheduleRunner Scheduler => _scheduler ??= new ChannelScheduleRunner(
         callbackId: WorkflowAgentDefaults.TriggerCallbackId,
@@ -57,7 +64,8 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
             return;
         }
 
-        await PersistDomainEventAsync(new WorkflowAgentInitializedEvent
+#pragma warning disable CS0612 // legacy fields populated for rollback compat during owner_scope migration
+        var initializedEvent = new WorkflowAgentInitializedEvent
         {
             WorkflowId = command.WorkflowId?.Trim() ?? string.Empty,
             WorkflowName = command.WorkflowName?.Trim() ?? string.Empty,
@@ -77,7 +85,13 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
             LarkReceiveIdType = command.LarkReceiveIdType?.Trim() ?? string.Empty,
             LarkReceiveIdFallback = command.LarkReceiveIdFallback?.Trim() ?? string.Empty,
             LarkReceiveIdTypeFallback = command.LarkReceiveIdTypeFallback?.Trim() ?? string.Empty,
-        });
+        };
+#pragma warning restore CS0612
+
+        if (command.OwnerScope is not null)
+            initializedEvent.OwnerScope = command.OwnerScope.Clone();
+
+        await PersistDomainEventAsync(initializedEvent);
 
         await Scheduler.ScheduleNextRunAsync(DateTimeOffset.UtcNow, CancellationToken.None);
         await UpsertRegistryAsync(State.Enabled ? WorkflowAgentDefaults.StatusRunning : WorkflowAgentDefaults.StatusDisabled, CancellationToken.None);
@@ -170,7 +184,7 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
             SessionId: null,
             InputParts: null,
             WorkflowYamls: null,
-            Metadata: BuildExecutionMetadata(),
+            Metadata: await BuildExecutionMetadataAsync(ct),
             ScopeId: State.ScopeId);
 
         var dispatch = await dispatchService.DispatchAsync(request, ct);
@@ -180,7 +194,7 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
         return dispatch.Receipt;
     }
 
-    private IReadOnlyDictionary<string, string> BuildExecutionMetadata()
+    private async Task<IReadOnlyDictionary<string, string>> BuildExecutionMetadataAsync(CancellationToken ct)
     {
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -189,6 +203,32 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
         };
         if (!string.IsNullOrWhiteSpace(State.ScopeId))
             metadata["scope_id"] = State.ScopeId;
+        // Propagate the outbound Lark delivery target so workflow modules that need to surface
+        // their own status messages back into the originating chat (e.g. TwitterPublishModule
+        // posting "已发布: <url>" or "Twitter OAuth 过期…") can do so via the same api-lark-bot
+        // proxy this agent already uses, without re-resolving the catalog at run time.
+        if (!string.IsNullOrWhiteSpace(State.LarkReceiveId))
+            metadata[ChannelMetadataKeys.LarkReceiveId] = State.LarkReceiveId;
+        if (!string.IsNullOrWhiteSpace(State.LarkReceiveIdType))
+            metadata[ChannelMetadataKeys.LarkReceiveIdType] = State.LarkReceiveIdType;
+        if (!string.IsNullOrWhiteSpace(State.NyxProviderSlug))
+            metadata[ChannelMetadataKeys.LarkOutboundProxySlug] = State.NyxProviderSlug;
+
+        // Mirror SkillRunnerGAgent.BuildExecutionMetadataAsync — same shared helper, same
+        // model/route/tool-cap pinning. Workflow-backed agents (e.g. social_media) need the
+        // same UserConfig discipline so their LLM steps don't fall through to gateway+gpt-5.4
+        // when the bot owner pre-configured a custom NyxID service like `chrono-llm`. The
+        // source is bound once via constructor injection at agent activation time; the
+        // per-execution Services.GetService<> fallback was dropped per codex's PR #509
+        // partial dissent on r3159047120.
+        await OwnerLlmConfigApplier.ApplyAsync(
+            metadata,
+            State.ScopeId,
+            _ownerLlmConfigSource,
+            Logger,
+            actorLabel: "Workflow agent",
+            actorId: Id,
+            ct);
         return metadata;
     }
 
@@ -213,14 +253,19 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
 
     private async Task UpsertRegistryAsync(string status, CancellationToken ct)
     {
+#pragma warning disable CS0612 // legacy field reads/writes during owner_scope migration (issue #466)
+        var legacyOwnerNyxUserId = State.OwnerNyxUserId ?? string.Empty;
+        var legacyPlatform = ResolvePlatform(State.Platform);
+        var ownerScope = State.OwnerScope ?? OwnerScope.FromLegacyFields(legacyOwnerNyxUserId, legacyPlatform);
+
         var command = new UserAgentCatalogUpsertCommand
         {
             AgentId = Id,
-            Platform = ResolvePlatform(State.Platform),
+            Platform = legacyPlatform,
             ConversationId = State.ConversationId ?? string.Empty,
             NyxProviderSlug = State.NyxProviderSlug ?? string.Empty,
             NyxApiKey = State.NyxApiKey ?? string.Empty,
-            OwnerNyxUserId = State.OwnerNyxUserId ?? string.Empty,
+            OwnerNyxUserId = legacyOwnerNyxUserId,
             AgentType = WorkflowAgentDefaults.AgentType,
             TemplateName = WorkflowAgentDefaults.TemplateName,
             ScopeId = State.ScopeId ?? string.Empty,
@@ -233,6 +278,10 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
             LarkReceiveIdFallback = State.LarkReceiveIdFallback ?? string.Empty,
             LarkReceiveIdTypeFallback = State.LarkReceiveIdTypeFallback ?? string.Empty,
         };
+#pragma warning restore CS0612
+
+        if (ownerScope is not null)
+            command.OwnerScope = ownerScope;
 
         await UserAgentCatalogStoreCommands.DispatchUpsertAsync(Services, Id, command, ct);
         await UpdateRegistryExecutionAsync(status, State.LastRunAt, State.NextRunAt, State.ErrorCount, State.LastError, ct);
@@ -263,15 +312,21 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
         next.ConversationId = evt.ConversationId ?? string.Empty;
         next.NyxProviderSlug = evt.NyxProviderSlug ?? string.Empty;
         next.NyxApiKey = evt.NyxApiKey ?? string.Empty;
+#pragma warning disable CS0612 // legacy fields preserved during owner_scope migration
         next.OwnerNyxUserId = evt.OwnerNyxUserId ?? string.Empty;
+#pragma warning restore CS0612
         next.ApiKeyId = evt.ApiKeyId ?? string.Empty;
         next.Enabled = evt.Enabled;
         next.ScopeId = evt.ScopeId ?? string.Empty;
+#pragma warning disable CS0612 // legacy field preserved during owner_scope migration
         next.Platform = evt.Platform ?? string.Empty;
+#pragma warning restore CS0612
         next.LarkReceiveId = evt.LarkReceiveId ?? string.Empty;
         next.LarkReceiveIdType = evt.LarkReceiveIdType ?? string.Empty;
         next.LarkReceiveIdFallback = evt.LarkReceiveIdFallback ?? string.Empty;
         next.LarkReceiveIdTypeFallback = evt.LarkReceiveIdTypeFallback ?? string.Empty;
+        if (evt.OwnerScope is not null)
+            next.OwnerScope = evt.OwnerScope.Clone();
         return next;
     }
 

@@ -31,6 +31,15 @@ public interface INyxIdBrokerCallbackClient
         string authorizationCode,
         string codeVerifier,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Revoke a specific NyxID-issued <paramref name="bindingId"/> by id.
+    /// Used by the callback handler to clean up an orphan binding when the
+    /// sender is already bound (race / replay) — without the subject lookup
+    /// the standard <c>RevokeBindingAsync</c> does. Best-effort; throws on
+    /// hard NyxID failures (5xx) but treats 404 / 410 as already-cleaned.
+    /// </summary>
+    Task RevokeBindingByIdAsync(string bindingId, CancellationToken ct = default);
 }
 
 /// <summary>

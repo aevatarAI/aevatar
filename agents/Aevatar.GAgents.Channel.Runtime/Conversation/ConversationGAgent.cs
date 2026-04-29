@@ -475,7 +475,16 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             DescribeReplyTokenSource(evt, runtimeContext));
 
         if (await TryCompleteStreamedReplyAsync(evt, commandId, referenceActivity, runtimeContext))
+        {
+            // Streaming path bypasses RunLlmReplyAsync entirely (the reply was already finalized via
+            // RunStreamChunkAsync edits), so the runner's post-reply housekeeping never fires from
+            // there. Trigger the hook explicitly so platform-specific cleanup (e.g. Lark
+            // "Typing"→"DONE" reaction swap) still runs on the most common production reply path.
+            var streamingActivity = referenceActivity ?? evt.Activity;
+            if (streamingActivity is not null)
+                _ = ResolveRunner().OnReplyDeliveredAsync(streamingActivity, CancellationToken.None);
             return;
+        }
 
         var runner = ResolveRunner();
         var result = await runner.RunLlmReplyAsync(

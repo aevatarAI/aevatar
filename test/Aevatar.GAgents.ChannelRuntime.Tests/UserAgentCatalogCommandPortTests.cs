@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using FluentAssertions;
 using NSubstitute;
@@ -17,6 +18,7 @@ public sealed class UserAgentCatalogCommandPortTests
     {
         var fixture = new Fixture();
         const string agentId = "agent-upsert-1";
+#pragma warning disable CS0612 // legacy fields kept on the command for rollback safety during owner_scope migration
         var command = new UserAgentCatalogUpsertCommand
         {
             AgentId = agentId,
@@ -25,19 +27,25 @@ public sealed class UserAgentCatalogCommandPortTests
             NyxProviderSlug = "api-lark-bot",
             NyxApiKey = "api-key-1",
         };
+#pragma warning restore CS0612
 
-        // Initial state-version is 0; after dispatch it advances to 1 and the entry materializes matching the command.
-        fixture.QueryPort.GetStateVersionAsync(agentId, Arg.Any<CancellationToken>())
-            .Returns(0L, 1L);
-        fixture.QueryPort.GetAsync(agentId, Arg.Any<CancellationToken>())
-            .Returns(new UserAgentCatalogEntry
-            {
-                AgentId = agentId,
-                Platform = "lark",
-                ConversationId = "oc_chat_1",
-                NyxProviderSlug = "api-lark-bot",
-                NyxApiKey = "api-key-1",
-            });
+        // Initial state: no document; after dispatch the document materializes at version 1
+        // matching the command. Issue #466: command port reads the projection document
+        // directly (not via the deleted runtime query port) since this is internal infra
+        // and not user-facing.
+        fixture.DocumentReader.GetAsync(agentId, Arg.Any<CancellationToken>())
+            .Returns(
+                Task.FromResult<UserAgentCatalogDocument?>(null),
+#pragma warning disable CS0612
+                Task.FromResult<UserAgentCatalogDocument?>(new UserAgentCatalogDocument
+                {
+                    Id = agentId,
+                    Platform = "lark",
+                    ConversationId = "oc_chat_1",
+                    NyxProviderSlug = "api-lark-bot",
+                    StateVersion = 1,
+                }));
+#pragma warning restore CS0612
 
         var result = await fixture.Port.UpsertAsync(command, CancellationToken.None);
 
@@ -58,6 +66,7 @@ public sealed class UserAgentCatalogCommandPortTests
     {
         var fixture = new Fixture(projectionWaitAttempts: 3);
         const string agentId = "agent-upsert-stuck";
+#pragma warning disable CS0612
         var command = new UserAgentCatalogUpsertCommand
         {
             AgentId = agentId,
@@ -66,10 +75,10 @@ public sealed class UserAgentCatalogCommandPortTests
             NyxProviderSlug = "api-lark-bot",
             NyxApiKey = "api-key-1",
         };
+#pragma warning restore CS0612
 
-        fixture.QueryPort.GetStateVersionAsync(agentId, Arg.Any<CancellationToken>()).Returns(0L);
-        fixture.QueryPort.GetAsync(agentId, Arg.Any<CancellationToken>())
-            .Returns((UserAgentCatalogEntry?)null);
+        fixture.DocumentReader.GetAsync(agentId, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogDocument?>(null));
 
         var result = await fixture.Port.UpsertAsync(command, CancellationToken.None);
 
@@ -101,8 +110,8 @@ public sealed class UserAgentCatalogCommandPortTests
     {
         var fixture = new Fixture();
         const string agentId = "agent-missing";
-        fixture.QueryPort.GetAsync(agentId, Arg.Any<CancellationToken>())
-            .Returns((UserAgentCatalogEntry?)null);
+        fixture.DocumentReader.GetAsync(agentId, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogDocument?>(null));
 
         var result = await fixture.Port.TombstoneAsync(agentId, CancellationToken.None);
 
@@ -112,17 +121,20 @@ public sealed class UserAgentCatalogCommandPortTests
     }
 
     [Fact]
-    public async Task TombstoneAsync_ReturnsObserved_WhenStateVersionAdvances_AndEntryVanishes()
+    public async Task TombstoneAsync_ReturnsObserved_WhenDocumentVanishes()
     {
         var fixture = new Fixture();
         const string agentId = "agent-tombstone-1";
 
-        var existing = new UserAgentCatalogEntry { AgentId = agentId, Platform = "lark" };
-        // First GetAsync (existence check) returns the entry; subsequent calls (after dispatch) return null.
-        fixture.QueryPort.GetAsync(agentId, Arg.Any<CancellationToken>())
-            .Returns(existing, (UserAgentCatalogEntry?)null);
-        fixture.QueryPort.GetStateVersionAsync(agentId, Arg.Any<CancellationToken>())
-            .Returns(5L, 6L);
+#pragma warning disable CS0612
+        var existing = new UserAgentCatalogDocument { Id = agentId, Platform = "lark", StateVersion = 5 };
+#pragma warning restore CS0612
+        // First GetAsync (existence check) returns the document; subsequent calls (after
+        // dispatch) return null — projector deleted the document on tombstone.
+        fixture.DocumentReader.GetAsync(agentId, Arg.Any<CancellationToken>())
+            .Returns(
+                Task.FromResult<UserAgentCatalogDocument?>(existing),
+                Task.FromResult<UserAgentCatalogDocument?>(null));
 
         var result = await fixture.Port.TombstoneAsync(agentId, CancellationToken.None);
 
@@ -136,16 +148,18 @@ public sealed class UserAgentCatalogCommandPortTests
     }
 
     [Fact]
-    public async Task TombstoneAsync_ReturnsObserved_WhenStateVersionGoesNull()
+    public async Task TombstoneAsync_ReturnsObserved_WhenDocumentTombstonedFlagSet()
     {
         var fixture = new Fixture();
-        const string agentId = "agent-tombstone-version-null";
-        var existing = new UserAgentCatalogEntry { AgentId = agentId, Platform = "lark" };
-        fixture.QueryPort.GetAsync(agentId, Arg.Any<CancellationToken>())
-            .Returns(existing);
-        // First call returns 5 (versionBefore); subsequent polls return null → tombstone observed via doc removal.
-        fixture.QueryPort.GetStateVersionAsync(agentId, Arg.Any<CancellationToken>())
-            .Returns(5L, (long?)null);
+        const string agentId = "agent-tombstone-flag";
+#pragma warning disable CS0612
+        var existing = new UserAgentCatalogDocument { Id = agentId, Platform = "lark", StateVersion = 5 };
+        var tombstoned = new UserAgentCatalogDocument { Id = agentId, Platform = "lark", StateVersion = 6, Tombstoned = true };
+#pragma warning restore CS0612
+        fixture.DocumentReader.GetAsync(agentId, Arg.Any<CancellationToken>())
+            .Returns(
+                Task.FromResult<UserAgentCatalogDocument?>(existing),
+                Task.FromResult<UserAgentCatalogDocument?>(tombstoned));
 
         var result = await fixture.Port.TombstoneAsync(agentId, CancellationToken.None);
 
@@ -157,12 +171,12 @@ public sealed class UserAgentCatalogCommandPortTests
     {
         var fixture = new Fixture(projectionWaitAttempts: 3);
         const string agentId = "agent-tombstone-stuck";
-        var existing = new UserAgentCatalogEntry { AgentId = agentId, Platform = "lark" };
-        // Existence check returns entry, subsequent polls keep returning entry (entry never vanishes).
-        fixture.QueryPort.GetAsync(agentId, Arg.Any<CancellationToken>())
-            .Returns(existing);
-        // Version stays at the same value → never advances, never observes.
-        fixture.QueryPort.GetStateVersionAsync(agentId, Arg.Any<CancellationToken>()).Returns(5L);
+#pragma warning disable CS0612
+        var existing = new UserAgentCatalogDocument { Id = agentId, Platform = "lark", StateVersion = 5 };
+#pragma warning restore CS0612
+        // Existence check returns the document, subsequent polls return the same (no advance, no tombstone).
+        fixture.DocumentReader.GetAsync(agentId, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogDocument?>(existing));
 
         var result = await fixture.Port.TombstoneAsync(agentId, CancellationToken.None);
 
@@ -188,7 +202,8 @@ public sealed class UserAgentCatalogCommandPortTests
         fixture.Runtime.GetAsync(CatalogActorId).Returns(Task.FromResult<IActor?>(null));
         fixture.Runtime.CreateAsync<UserAgentCatalogGAgent>(CatalogActorId, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(Substitute.For<IActor>()));
-        fixture.QueryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(0L);
+        fixture.DocumentReader.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogDocument?>(null));
 
         var command = new UserAgentCatalogUpsertCommand { AgentId = "agent-1" };
         await fixture.Port.UpsertAsync(command, CancellationToken.None);
@@ -198,7 +213,7 @@ public sealed class UserAgentCatalogCommandPortTests
 
     private sealed class Fixture
     {
-        public IUserAgentCatalogRuntimeQueryPort QueryPort { get; }
+        public IProjectionDocumentReader<UserAgentCatalogDocument, string> DocumentReader { get; }
         public UserAgentCatalogProjectionPort ProjectionPort { get; }
         public IActorRuntime Runtime { get; }
         public IActorDispatchPort Dispatch { get; }
@@ -207,7 +222,7 @@ public sealed class UserAgentCatalogCommandPortTests
 
         public Fixture(int projectionWaitAttempts = 3)
         {
-            QueryPort = Substitute.For<IUserAgentCatalogRuntimeQueryPort>();
+            DocumentReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogDocument, string>>();
             Runtime = Substitute.For<IActorRuntime>();
             Dispatch = Substitute.For<IActorDispatchPort>();
 
@@ -225,7 +240,7 @@ public sealed class UserAgentCatalogCommandPortTests
                 .Returns(Task.CompletedTask);
 
             Port = new UserAgentCatalogCommandPort(
-                QueryPort,
+                DocumentReader,
                 ProjectionPort,
                 Runtime,
                 Dispatch,

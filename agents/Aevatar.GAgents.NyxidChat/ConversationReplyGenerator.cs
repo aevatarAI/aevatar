@@ -128,18 +128,19 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
     {
         var effective = new Dictionary<string, string>(metadata, StringComparer.Ordinal);
 
-        if (_preferencesStore is not null)
+        // Issue #513 phase 3: prefs override chain is sender → bot-owner →
+        // provider default. The bot owner's prefs are already pinned upstream
+        // by OwnerLlmConfigApplier (channel inbound) or by direct
+        // INyxIdUserLlmPreferencesStore reads (Studio API / streaming proxy),
+        // so this generator only has to layer sender overrides on top when
+        // the inbound carries a binding-id. SetIfFilled is field-level, so a
+        // sender who set DefaultModel but not PreferredRoute still inherits
+        // the bot owner's route from the upstream-pinned metadata.
+        if (_preferencesStore is not null &&
+            metadata.TryGetValue(LLMRequestMetadataKeys.SenderBindingId, out var senderBindingId) &&
+            !string.IsNullOrWhiteSpace(senderBindingId))
         {
-            // Issue #513 phase 3: prefs override chain is sender → bot-owner →
-            // provider default. We materialize sender prefs first when the
-            // inbound carries a binding-id, then fill any unset fields from
-            // the bot-owner (ambient) scope. A field-level merge — not a
-            // record-level fall-through — so a sender who set DefaultModel but
-            // not PreferredRoute still inherits the bot owner's route.
-            metadata.TryGetValue(LLMRequestMetadataKeys.SenderBindingId, out var senderBindingId);
             await ApplyPreferencesAsync(senderBindingId, effective, ct);
-            if (!string.IsNullOrWhiteSpace(senderBindingId))
-                await ApplyPreferencesAsync(senderBindingId: null, effective, ct, additiveOnly: true);
         }
 
         if (_userMemoryStore is not null)
@@ -164,18 +165,15 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
     }
 
     /// <summary>
-    /// Read prefs for the requested binding (or ambient scope when null) and
-    /// project the non-empty fields into <paramref name="effective"/>. When
-    /// <paramref name="additiveOnly"/> is true, existing keys are not overwritten —
-    /// used by the override chain to fill bot-owner defaults without trampling
-    /// the sender's prior writes. User-config failures degrade to "no extra
-    /// metadata" rather than failing the LLM turn.
+    /// Read prefs for the bound sender and overwrite the matching metadata
+    /// keys. Field-level: empty fields on the sender's record are skipped so
+    /// the bot owner's value stays intact. User-config failures degrade to
+    /// "no sender override" rather than failing the LLM turn.
     /// </summary>
     private async Task ApplyPreferencesAsync(
-        string? senderBindingId,
+        string senderBindingId,
         Dictionary<string, string> effective,
-        CancellationToken ct,
-        bool additiveOnly = false)
+        CancellationToken ct)
     {
         if (_preferencesStore is null)
             return;
@@ -194,18 +192,17 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
             return;
         }
 
-        SetIfFilled(effective, LLMRequestMetadataKeys.ModelOverride, preferences.DefaultModel?.Trim(), additiveOnly);
-        SetIfFilled(effective, LLMRequestMetadataKeys.NyxIdRoutePreference, preferences.PreferredRoute?.Trim(), additiveOnly);
-        SetIfFilled(effective, LLMRequestMetadataKeys.MaxToolRoundsOverride,
-            preferences.MaxToolRounds > 0 ? preferences.MaxToolRounds.ToString() : null,
-            additiveOnly);
+        SetIfFilled(effective, LLMRequestMetadataKeys.ModelOverride, preferences.DefaultModel?.Trim());
+        SetIfFilled(effective, LLMRequestMetadataKeys.NyxIdRoutePreference, preferences.PreferredRoute?.Trim());
+        SetIfFilled(
+            effective,
+            LLMRequestMetadataKeys.MaxToolRoundsOverride,
+            preferences.MaxToolRounds > 0 ? preferences.MaxToolRounds.ToString() : null);
     }
 
-    private static void SetIfFilled(Dictionary<string, string> map, string key, string? value, bool additiveOnly)
+    private static void SetIfFilled(Dictionary<string, string> map, string key, string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
-            return;
-        if (additiveOnly && map.ContainsKey(key))
             return;
         map[key] = value;
     }

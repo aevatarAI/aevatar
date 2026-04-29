@@ -3,6 +3,7 @@ using System.Security.Claims;
 using System.Text;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StreamingProxy;
+using Aevatar.GAgents.StreamingProxy.Application.Rooms;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using FluentAssertions;
@@ -26,171 +27,72 @@ public sealed class StreamingProxyEndpointsCoverageTests
         ?? throw new InvalidOperationException("HandleListParticipantsAsync not found.");
 
     [Fact]
-    public async Task HandleCreateRoomAsync_ShouldRegisterAndInitializeRoomOnSuccess()
+    public async Task HandleCreateRoomAsync_ShouldDelegateRoomCreationToCommandService()
     {
-        var operations = new List<string>();
-        var actor = new RecordingActor("created-room", operations);
-        var actorStore = new RecordingGAgentActorStore(operations);
-        var runtime = new RecordingActorRuntime(operations, actor);
-        var loggerFactory = LoggerFactory.Create(_ => { });
+        var service = new RecordingRoomCommandService(
+            new StreamingProxyRoomCreateResult(
+                StreamingProxyRoomCreateStatus.Created,
+                "room-123",
+                "Daily Standup"));
 
         var result = await InvokeHandleCreateRoomAsync(
             CreateScopedHttpContext(),
             "scope-a",
             new StreamingProxyEndpoints.CreateRoomRequest("  Daily Standup  "),
-            actorStore,
-            runtime,
-            loggerFactory,
+            service,
             CancellationToken.None);
 
         var (statusCode, body) = await ExecuteResultAsync(result);
 
         statusCode.Should().Be(StatusCodes.Status200OK);
-        actorStore.AddedActors.Should().ContainSingle();
-        actorStore.AddedActors[0].ScopeId.Should().Be("scope-a");
-        var registeredActorId = actorStore.AddedActors[0].ActorId;
-        operations.Should().ContainInOrder(
-            $"runtime:create:{registeredActorId}",
-            $"actor:init:{registeredActorId}",
-            $"store:add:{registeredActorId}");
-        runtime.LastCreatedActor.Should().NotBeNull();
-        runtime.LastCreatedActor!.ReceivedEnvelopes.Should().ContainSingle();
-        runtime.LastCreatedActor.ReceivedEnvelopes[0].Payload.Unpack<GroupChatRoomInitializedEvent>().RoomName.Should().Be("Daily Standup");
-        body.Should().Contain(registeredActorId);
+        service.Commands.Should().ContainSingle();
+        service.Commands[0].Should().Be(new StreamingProxyRoomCreateCommand("scope-a", "  Daily Standup  "));
+        body.Should().Contain("room-123");
         body.Should().Contain("Daily Standup");
     }
 
     [Fact]
-    public async Task HandleCreateRoomAsync_ShouldRollbackRegistration_WhenActivationFails()
+    public async Task HandleCreateRoomAsync_ShouldMapAdmissionUnavailableToServiceUnavailable()
     {
-        var operations = new List<string>();
-        var actorStore = new RecordingGAgentActorStore(operations);
-        var runtime = new RecordingActorRuntime(
-            operations,
-            new RecordingActor("created-room"))
-        {
-            ThrowOnCreate = new InvalidOperationException("boom"),
-        };
-        var loggerFactory = LoggerFactory.Create(_ => { });
+        var service = new RecordingRoomCommandService(
+            new StreamingProxyRoomCreateResult(
+                StreamingProxyRoomCreateStatus.AdmissionUnavailable,
+                null,
+                "Incident Room"));
 
         var result = await InvokeHandleCreateRoomAsync(
             CreateScopedHttpContext(),
             "scope-a",
             new StreamingProxyEndpoints.CreateRoomRequest("Incident Room"),
-            actorStore,
-            runtime,
-            loggerFactory,
-            CancellationToken.None);
-
-        var (statusCode, body) = await ExecuteResultAsync(result);
-
-        statusCode.Should().Be(StatusCodes.Status500InternalServerError);
-        actorStore.AddedActors.Should().BeEmpty();
-        actorStore.RemovedActors.Should().BeEmpty();
-        runtime.DestroyedActorIds.Should().BeEmpty();
-        operations.Should().ContainSingle(operation => operation.StartsWith("runtime:create:", StringComparison.Ordinal));
-        body.Should().Contain("Failed to create room");
-    }
-
-    [Fact]
-    public async Task HandleCreateRoomAsync_ShouldRollbackCreatedRoom_WhenCreationIsCanceled()
-    {
-        var operations = new List<string>();
-        var actor = new RecordingActor("created-room", operations);
-        var actorStore = new RecordingGAgentActorStore(operations)
-        {
-            ThrowOnRegister = new OperationCanceledException("client disconnected before registry ack")
-        };
-        var runtime = new RecordingActorRuntime(operations, actor);
-        var loggerFactory = LoggerFactory.Create(_ => { });
-
-        var act = async () => await InvokeHandleCreateRoomAsync(
-            CreateScopedHttpContext(),
-            "scope-a",
-            new StreamingProxyEndpoints.CreateRoomRequest("Incident Room"),
-            actorStore,
-            runtime,
-            loggerFactory,
-            CancellationToken.None);
-
-        await act.Should().ThrowAsync<OperationCanceledException>();
-        runtime.DestroyedActorIds.Should().ContainSingle(actorStore.AddedActors.Single().ActorId);
-        actorStore.RemovedActors.Should().ContainSingle();
-        operations.Should().ContainInOrder(
-            $"runtime:create:{actorStore.AddedActors.Single().ActorId}",
-            $"actor:init:{actorStore.AddedActors.Single().ActorId}",
-            $"store:add:{actorStore.AddedActors.Single().ActorId}",
-            $"store:remove:{actorStore.AddedActors.Single().ActorId}",
-            $"runtime:destroy:{actorStore.AddedActors.Single().ActorId}");
-    }
-
-    [Fact]
-    public async Task HandleCreateRoomAsync_ShouldNotDestroyCreatedRoom_WhenRollbackUnregisterFails()
-    {
-        var operations = new List<string>();
-        var actor = new RecordingActor("created-room", operations);
-        var actorStore = new RecordingGAgentActorStore(operations)
-        {
-            ThrowOnRegister = new InvalidOperationException("registry unavailable"),
-            ThrowOnUnregister = new InvalidOperationException("registry unregister unavailable")
-        };
-        var runtime = new RecordingActorRuntime(operations, actor);
-        var loggerFactory = LoggerFactory.Create(_ => { });
-
-        var result = await InvokeHandleCreateRoomAsync(
-            CreateScopedHttpContext(),
-            "scope-a",
-            new StreamingProxyEndpoints.CreateRoomRequest("Incident Room"),
-            actorStore,
-            runtime,
-            loggerFactory,
-            CancellationToken.None);
-
-        var (statusCode, body) = await ExecuteResultAsync(result);
-
-        statusCode.Should().Be(StatusCodes.Status500InternalServerError);
-        body.Should().Contain("Failed to create room");
-        actorStore.RemovedActors.Should().ContainSingle();
-        runtime.DestroyedActorIds.Should().BeEmpty();
-        operations.Should().ContainInOrder(
-            $"runtime:create:{actorStore.AddedActors.Single().ActorId}",
-            $"actor:init:{actorStore.AddedActors.Single().ActorId}",
-            $"store:add:{actorStore.AddedActors.Single().ActorId}",
-            $"store:remove:{actorStore.AddedActors.Single().ActorId}");
-    }
-
-    [Fact]
-    public async Task HandleCreateRoomAsync_ShouldNotDestroyRoom_WhenRollbackCannotUnregister()
-    {
-        var operations = new List<string>();
-        var actor = new RecordingActor("created-room", operations);
-        var actorStore = new RecordingGAgentActorStore(operations)
-        {
-            RegisterStage = GAgentActorRegistryCommandStage.AcceptedForDispatch,
-            ThrowOnUnregister = new InvalidOperationException("registry unavailable")
-        };
-        var runtime = new RecordingActorRuntime(operations, actor);
-        var loggerFactory = LoggerFactory.Create(_ => { });
-
-        var result = await InvokeHandleCreateRoomAsync(
-            CreateScopedHttpContext(),
-            "scope-a",
-            new StreamingProxyEndpoints.CreateRoomRequest("Incident Room"),
-            actorStore,
-            runtime,
-            loggerFactory,
+            service,
             CancellationToken.None);
 
         var (statusCode, body) = await ExecuteResultAsync(result);
 
         statusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
         body.Should().Contain("Failed to create room");
-        runtime.DestroyedActorIds.Should().BeEmpty();
-        operations.Should().ContainInOrder(
-            $"runtime:create:{actorStore.AddedActors.Single().ActorId}",
-            $"actor:init:{actorStore.AddedActors.Single().ActorId}",
-            $"store:add:{actorStore.AddedActors.Single().ActorId}",
-            $"store:remove:{actorStore.AddedActors.Single().ActorId}");
+    }
+
+    [Fact]
+    public async Task HandleCreateRoomAsync_ShouldMapCommandFailureToServerError()
+    {
+        var service = new RecordingRoomCommandService(
+            new StreamingProxyRoomCreateResult(
+                StreamingProxyRoomCreateStatus.Failed,
+                null,
+                "Incident Room"));
+
+        var result = await InvokeHandleCreateRoomAsync(
+            CreateScopedHttpContext(),
+            "scope-a",
+            new StreamingProxyEndpoints.CreateRoomRequest("Incident Room"),
+            service,
+            CancellationToken.None);
+
+        var (statusCode, body) = await ExecuteResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status500InternalServerError);
+        body.Should().Contain("Failed to create room");
     }
 
     [Fact]
@@ -246,18 +148,17 @@ public sealed class StreamingProxyEndpointsCoverageTests
     [Fact]
     public async Task HandleCreateRoomAsync_ShouldRejectMismatchedAuthenticatedScope()
     {
-        var operations = new List<string>();
-        var actorStore = new RecordingGAgentActorStore(operations);
-        var runtime = new RecordingActorRuntime(operations, new RecordingActor("created-room"));
-        var loggerFactory = LoggerFactory.Create(_ => { });
+        var service = new RecordingRoomCommandService(
+            new StreamingProxyRoomCreateResult(
+                StreamingProxyRoomCreateStatus.Created,
+                "room-denied",
+                "Denied Room"));
 
         var result = await InvokeHandleCreateRoomAsync(
             CreateScopedHttpContext("scope-b"),
             "scope-a",
             new StreamingProxyEndpoints.CreateRoomRequest("Denied Room"),
-            actorStore,
-            runtime,
-            loggerFactory,
+            service,
             CancellationToken.None);
 
         var (statusCode, body) = await ExecuteResultAsync(result);
@@ -265,7 +166,7 @@ public sealed class StreamingProxyEndpointsCoverageTests
         statusCode.Should().Be(StatusCodes.Status403Forbidden);
         body.Should().Contain("SCOPE_ACCESS_DENIED");
         body.Should().Contain("Authenticated scope does not match requested scope.");
-        actorStore.AddedActors.Should().BeEmpty();
+        service.Commands.Should().BeEmpty();
     }
 
     [Fact]
@@ -293,14 +194,12 @@ public sealed class StreamingProxyEndpointsCoverageTests
         HttpContext context,
         string scopeId,
         StreamingProxyEndpoints.CreateRoomRequest? request,
-        IGAgentActorRegistryCommandPort actorStore,
-        IActorRuntime actorRuntime,
-        ILoggerFactory loggerFactory,
+        IStreamingProxyRoomCommandService roomCommandService,
         CancellationToken ct)
     {
         return await (Task<IResult>)HandleCreateRoomAsyncMethod.Invoke(
             null,
-            [context, scopeId, request, actorStore, actorRuntime, loggerFactory, ct])!;
+            [context, scopeId, request, roomCommandService, ct])!;
     }
 
     private static async Task<IResult> InvokeHandleListParticipantsAsync(
@@ -403,6 +302,21 @@ public sealed class StreamingProxyEndpointsCoverageTests
             ScopeResourceTarget target,
             CancellationToken cancellationToken = default)
             => Task.FromResult(ScopeResourceAdmissionResult.Allowed());
+    }
+
+    private sealed class RecordingRoomCommandService(StreamingProxyRoomCreateResult result)
+        : IStreamingProxyRoomCommandService
+    {
+        public List<StreamingProxyRoomCreateCommand> Commands { get; } = [];
+
+        public Task<StreamingProxyRoomCreateResult> CreateRoomAsync(
+            StreamingProxyRoomCreateCommand command,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Commands.Add(command);
+            return Task.FromResult(result);
+        }
     }
 
     private sealed class RecordingParticipantStore : IStreamingProxyParticipantStore

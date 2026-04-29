@@ -36,6 +36,27 @@ public sealed class ScopeScriptCommandApplicationServiceTests
     }
 
     [Fact]
+    public async Task UpsertAsync_ShouldActivateAuthorityReadModelsBeforeWritingDefinitionAndCatalog()
+    {
+        var executionLog = new List<string>();
+        var definitionPort = new RecordingDefinitionCommandPort(executionLog);
+        var catalogPort = new RecordingCatalogCommandPort(executionLog);
+        var activationPort = new RecordingScriptAuthorityReadModelActivationPort(executionLog);
+        var service = BuildService(definitionPort, catalogPort, activationPort);
+        var expectedDefinitionActorId = DefaultOptions.BuildDefinitionActorId("scope-1", "my-script", "rev-1");
+        var expectedCatalogActorId = DefaultOptions.BuildCatalogActorId("scope-1");
+
+        await service.UpsertAsync(new ScopeScriptUpsertRequest("scope-1", "my-script", "source", "rev-1"));
+
+        activationPort.Calls.Should().Equal(expectedDefinitionActorId, expectedCatalogActorId);
+        executionLog.Should().Equal(
+            $"authority-activate:{expectedDefinitionActorId}",
+            $"authority-activate:{expectedCatalogActorId}",
+            "definition-upsert",
+            "catalog-promote");
+    }
+
+    [Fact]
     public async Task UpsertAsync_ShouldComputeSourceHash()
     {
         var definitionPort = new RecordingDefinitionCommandPort();
@@ -121,14 +142,39 @@ public sealed class ScopeScriptCommandApplicationServiceTests
 
     private static ScopeScriptCommandApplicationService BuildService(
         IScriptDefinitionCommandPort definitionPort,
-        IScriptCatalogCommandPort catalogPort) =>
+        IScriptCatalogCommandPort catalogPort,
+        IScriptAuthorityReadModelActivationPort? authorityReadModelActivationPort = null) =>
         new(
             definitionPort,
             catalogPort,
+            authorityReadModelActivationPort ?? new RecordingScriptAuthorityReadModelActivationPort(),
             Options.Create(DefaultOptions));
+
+    private sealed class RecordingScriptAuthorityReadModelActivationPort : IScriptAuthorityReadModelActivationPort
+    {
+        private readonly List<string>? _executionLog;
+
+        public RecordingScriptAuthorityReadModelActivationPort(List<string>? executionLog = null) =>
+            _executionLog = executionLog;
+
+        public List<string> Calls { get; } = [];
+
+        public Task ActivateAsync(string actorId, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Calls.Add(actorId);
+            _executionLog?.Add($"authority-activate:{actorId}");
+            return Task.CompletedTask;
+        }
+    }
 
     private sealed class RecordingDefinitionCommandPort : IScriptDefinitionCommandPort
     {
+        private readonly List<string>? _executionLog;
+
+        public RecordingDefinitionCommandPort(List<string>? executionLog = null) =>
+            _executionLog = executionLog;
+
         public string ResultActorId { get; } = "def-actor-1";
 
         public List<(string scriptId, string scriptRevision, string sourceText, string sourceHash, string? definitionActorId, string? scopeId)> Calls { get; } = [];
@@ -141,6 +187,7 @@ public sealed class ScopeScriptCommandApplicationServiceTests
             string? definitionActorId,
             CancellationToken ct)
         {
+            _executionLog?.Add("definition-upsert");
             Calls.Add((scriptId, scriptRevision, sourceText, sourceHash, definitionActorId, null));
             return Task.FromResult(new ScriptDefinitionUpsertResult(
                 ResultActorId,
@@ -159,6 +206,7 @@ public sealed class ScopeScriptCommandApplicationServiceTests
             string? scopeId,
             CancellationToken ct)
         {
+            _executionLog?.Add("definition-upsert");
             Calls.Add((scriptId, scriptRevision, sourceText, sourceHash, definitionActorId, scopeId));
             return Task.FromResult(new ScriptDefinitionUpsertResult(
                 ResultActorId,
@@ -172,6 +220,11 @@ public sealed class ScopeScriptCommandApplicationServiceTests
 
     private sealed class RecordingCatalogCommandPort : IScriptCatalogCommandPort
     {
+        private readonly List<string>? _executionLog;
+
+        public RecordingCatalogCommandPort(List<string>? executionLog = null) =>
+            _executionLog = executionLog;
+
         public DateTimeOffset AcceptedAt { get; } = new(2026, 4, 13, 9, 0, 0, TimeSpan.Zero);
 
         public List<(string? catalogActorId, string scriptId, string expectedBaseRevision, string revision, string definitionActorId, string sourceHash, string proposalId, string? scopeId)> Calls { get; } = [];
@@ -186,6 +239,7 @@ public sealed class ScopeScriptCommandApplicationServiceTests
             string proposalId,
             CancellationToken ct)
         {
+            _executionLog?.Add("catalog-promote");
             Calls.Add((catalogActorId, scriptId, expectedBaseRevision, revision, definitionActorId, sourceHash, proposalId, null));
             return Task.FromResult(new ScriptingCommandAcceptedReceipt(
                 catalogActorId ?? "catalog-actor-1",
@@ -205,6 +259,7 @@ public sealed class ScopeScriptCommandApplicationServiceTests
             string? scopeId,
             CancellationToken ct)
         {
+            _executionLog?.Add("catalog-promote");
             Calls.Add((catalogActorId, scriptId, expectedBaseRevision, revision, definitionActorId, sourceHash, proposalId, scopeId));
             return Task.FromResult(new ScriptingCommandAcceptedReceipt(
                 catalogActorId ?? "catalog-actor-1",

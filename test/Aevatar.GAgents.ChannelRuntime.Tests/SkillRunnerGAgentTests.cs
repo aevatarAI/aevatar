@@ -2,6 +2,7 @@ using System.Net;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -87,6 +88,141 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         _agent.State.HasMaxTokens.Should().BeTrue();
         _agent.State.MaxTokens.Should().Be(0);
         _agent.EffectiveConfig.MaxTokens.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleInitializeAsync_ShouldAwaitUpsertDispatchBeforeFiringExecutionUpdate()
+    {
+        // Issue #440 regression: pre-PR #451 the SkillRunner reached the catalog via
+        // OrleansActor.HandleEventAsync, which produced to a stream (fire-and-forget).
+        // Two dispatches from the same SkillRunner turn (post-init Upsert + post-trigger
+        // ExecutionUpdate) could arrive at the catalog grain out of order; the
+        // ExecutionUpdate would land first, hit the missing-entry guard, and be silently
+        // dropped — leaving /agent-status reporting Last run / Next run as n/a.
+        //
+        // PR #451 wired dispatch through IActorDispatchPort.DispatchAsync, which awaits
+        // grain.HandleEnvelopeAsync. The contract that protects the catalog is: the
+        // SkillRunner must AWAIT each dispatch before firing the next so the catalog
+        // observes Upsert before ExecutionUpdate. To guard the contract (not the
+        // synchronous shortcut a fake might enable), this test hangs the Upsert dispatch
+        // on a TaskCompletionSource and asserts ExecutionUpdate is not even dispatched
+        // until the gate releases. A regression that drops the await — or anything that
+        // returns control before the catalog observes Upsert — would let ExecutionUpdate
+        // race ahead while Upsert is still hanging, and the assertion catches it.
+
+        var upsertGate = new TaskCompletionSource();
+        var upsertDispatchStarted = new TaskCompletionSource();
+        var executionDispatchStarted = new TaskCompletionSource();
+
+        var scheduler = Substitute.For<Foundation.Abstractions.Runtime.Callbacks.IActorRuntimeCallbackScheduler>();
+        scheduler
+            .ScheduleTimeoutAsync(
+                Arg.Any<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackTimeoutRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var req = call.Arg<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackTimeoutRequest>();
+                return Task.FromResult(new Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease(
+                    req.ActorId, req.CallbackId, 1L,
+                    Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackBackend.InMemory));
+            });
+        scheduler.CancelAsync(
+                Arg.Any<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var catalogProxy = Substitute.For<IActor>();
+        var runtime = Substitute.For<IActorRuntime>();
+        runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(catalogProxy));
+
+        UserAgentCatalogGAgent? catalog = null;
+        var dispatch = Substitute.For<IActorDispatchPort>();
+        dispatch.DispatchAsync(
+                UserAgentCatalogGAgent.WellKnownId,
+                Arg.Any<EventEnvelope>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call => DispatchGated(
+                call.Arg<EventEnvelope>(),
+                call.Arg<CancellationToken>(),
+                catalog!,
+                upsertGate,
+                upsertDispatchStarted,
+                executionDispatchStarted));
+
+        using var provider = BuildServiceProvider(
+            new InMemoryEventStore(),
+            services =>
+            {
+                services.AddSingleton(runtime);
+                services.AddSingleton(dispatch);
+                services.AddSingleton(scheduler);
+            });
+
+        catalog = new UserAgentCatalogGAgent
+        {
+            Services = provider,
+            EventSourcingBehaviorFactory =
+                provider.GetRequiredService<IEventSourcingBehaviorFactory<UserAgentCatalogState>>(),
+        };
+        AssignActorId(catalog, UserAgentCatalogGAgent.WellKnownId);
+        await catalog.ActivateAsync();
+
+        var agent = CreateAgent("skill-runner-440-regression", provider);
+        await agent.ActivateAsync();
+
+        var init = CreateInitializeCommand();
+        init.ScheduleCron = "0 9 * * *";
+        init.ScheduleTimezone = "UTC";
+
+        // Kick off init in the background. Upsert will hit the gate and yield; control
+        // returns to the test before ExecutionUpdate has a chance to dispatch.
+        var initTask = agent.HandleInitializeAsync(init);
+        await upsertDispatchStarted.Task;
+
+        // Critical assertion: while Upsert is hanging at the gate, ExecutionUpdate must
+        // not have been dispatched. If the SkillRunner regressed to fire-and-forget
+        // (`_ = DispatchAsync(...)` instead of `await DispatchAsync(...)`),
+        // executionDispatchStarted would already be completed here.
+        executionDispatchStarted.Task.IsCompleted.Should().BeFalse(
+            "the SkillRunner must await Upsert's dispatch task before firing ExecutionUpdate; "
+            + "regressing to fire-and-forget would let ExecutionUpdate race ahead of Upsert "
+            + "and be dropped by the missing-entry guard in HandleExecutionUpdateAsync");
+
+        // Release Upsert; ExecutionUpdate must now fire and the catalog must observe both.
+        upsertGate.SetResult();
+        await initTask;
+
+        executionDispatchStarted.Task.IsCompleted.Should().BeTrue(
+            "ExecutionUpdate must dispatch after Upsert completes so /agent-status shows Next run");
+        catalog.State.Entries.Should().ContainSingle();
+        var entry = catalog.State.Entries[0];
+        entry.AgentId.Should().Be("skill-runner-440-regression");
+        entry.Status.Should().Be(SkillRunnerDefaults.StatusRunning);
+        entry.ScheduleCron.Should().Be("0 9 * * *");
+        entry.NextRunAt.Should().NotBeNull(
+            "init's post-Upsert ExecutionUpdate must land at the catalog so /agent-status shows Next run");
+    }
+
+    private static async Task DispatchGated(
+        EventEnvelope envelope,
+        CancellationToken ct,
+        UserAgentCatalogGAgent catalog,
+        TaskCompletionSource upsertGate,
+        TaskCompletionSource upsertDispatchStarted,
+        TaskCompletionSource executionDispatchStarted)
+    {
+        if (envelope.Payload.Is(UserAgentCatalogUpsertCommand.Descriptor))
+        {
+            upsertDispatchStarted.TrySetResult();
+            await upsertGate.Task;
+        }
+        else if (envelope.Payload.Is(UserAgentCatalogExecutionUpdateCommand.Descriptor))
+        {
+            executionDispatchStarted.TrySetResult();
+        }
+
+        await catalog.HandleEventAsync(envelope, ct);
     }
 
     [Fact]
@@ -443,6 +579,278 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         assertion.WithMessage("*/daily*");
     }
 
+    [Fact]
+    public async Task TrySendFailureAsync_ShouldUseFailureNotificationSlug_WhenSetAndDistinctFromPrimary()
+    {
+        // Issue #423 §C: when a primary outbound delivery has just been rejected (e.g. cross-
+        // tenant 99992364), retrying the failure notification through the SAME slug also
+        // fails. The fix routes failure-notifications through the inbound channel-bot's slug
+        // captured at agent-create time — by definition reachable, since the user just
+        // messaged it. This test pins that the routing actually changes the proxy slug in
+        // the outbound URL while the receive_id, body, and api key stay identical.
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        {
+            ConversationId = "oc_dm_chat_1",
+            NyxProviderSlug = "api-lark-bot",
+            NyxApiKey = "nyx-api-key",
+            LarkReceiveId = "ou_user_1",
+            LarkReceiveIdType = "open_id",
+            FailureNotificationProviderSlug = "api-lark-bot-channel-loning",
+        };
+        await _agent.HandleInitializeAsync(initialize);
+
+        var handler = new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_failure"}}""");
+        AttachNyxIdApiClient(_agent, handler);
+
+        await InvokeTrySendFailureAsync(_agent, "Lark message delivery rejected (code=99992364): user id cross tenant.");
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot-channel-loning/open-apis/im/v1/messages?receive_id_type=open_id");
+        using var body = JsonDocument.Parse(handler.LastBody!);
+        body.RootElement.GetProperty("receive_id").GetString().Should().Be("ou_user_1");
+        // The failure-notification message itself should carry the original error so the user
+        // sees the actionable hint in chat, not just an unsubscribe ping.
+        var contentJson = body.RootElement.GetProperty("content").GetString();
+        contentJson.Should().Contain("99992364");
+        contentJson.Should().Contain("Skill runner failed");
+    }
+
+    [Fact]
+    public async Task TrySendFailureAsync_ShouldFallBackToPrimarySlug_WhenFailureNotificationSlugRejects()
+    {
+        // Defense-in-depth: the failure-notification slug MAY have been valid at create time
+        // (in user-services) but become inactive (token revoked, bot uninstalled, etc.) by
+        // the time the agent fires. If its send rejects, we still try the primary slug as
+        // a last-resort attempt — better than the user seeing nothing.
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        {
+            ConversationId = "oc_dm_chat_1",
+            NyxProviderSlug = "api-lark-bot",
+            NyxApiKey = "nyx-api-key",
+            LarkReceiveId = "ou_user_1",
+            LarkReceiveIdType = "open_id",
+            FailureNotificationProviderSlug = "api-lark-bot-channel-revoked",
+        };
+        await _agent.HandleInitializeAsync(initialize);
+
+        var handler = new SequencedHandler(
+            // Failure-notification slug rejects with a Nyx envelope error (e.g. 401 on the proxy)
+            """{"error":true,"message":"upstream auth failed"}""",
+            // Primary slug succeeds — best-effort recovery.
+            """{"code":0,"msg":"success","data":{"message_id":"om_primary_failure"}}""");
+        AttachNyxIdApiClient(_agent, handler);
+
+        await InvokeTrySendFailureAsync(_agent, "report rejected at primary");
+
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests[0].RequestUri!.ToString()
+            .Should().Contain("/proxy/s/api-lark-bot-channel-revoked/");
+        handler.Requests[1].RequestUri!.ToString()
+            .Should().Contain("/proxy/s/api-lark-bot/");
+    }
+
+    [Fact]
+    public async Task TrySendFailureAsync_ShouldSkipFailureSlug_WhenEqualToPrimary()
+    {
+        // No-op fallback: if the inbound slug equals the primary slug there is no recovery
+        // benefit — same proxy = same rejection mode. AgentBuilderTool leaves the field
+        // empty in this case, but pin the runtime guard too so a future
+        // mis-capture doesn't pay double-POST cost just to fail twice.
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        {
+            ConversationId = "oc_dm_chat_1",
+            NyxProviderSlug = "api-lark-bot",
+            NyxApiKey = "nyx-api-key",
+            LarkReceiveId = "ou_user_1",
+            LarkReceiveIdType = "open_id",
+            FailureNotificationProviderSlug = "api-lark-bot",
+        };
+        await _agent.HandleInitializeAsync(initialize);
+
+        var handler = new RecordingHandler("""{"code":0,"msg":"success"}""");
+        AttachNyxIdApiClient(_agent, handler);
+
+        await InvokeTrySendFailureAsync(_agent, "primary failed");
+
+        // Exactly one POST — no double-attempt against the same slug.
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Contain("/proxy/s/api-lark-bot/");
+    }
+
+    [Fact]
+    public async Task TrySendFailureAsync_ShouldUsePrimary_WhenFailureNotificationSlugIsEmpty()
+    {
+        // Backwards compat: agents created before #423 §C have an empty
+        // FailureNotificationProviderSlug. The runtime must transparently fall back to the
+        // existing single-attempt behavior — this test is the regression guard against the
+        // failure-notification fallback ever introducing a hidden dependency on the new
+        // field being populated.
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        {
+            ConversationId = "oc_dm_chat_1",
+            NyxProviderSlug = "api-lark-bot",
+            NyxApiKey = "nyx-api-key",
+            LarkReceiveId = "ou_user_1",
+            LarkReceiveIdType = "open_id",
+            // FailureNotificationProviderSlug intentionally not set (legacy state shape).
+        };
+        await _agent.HandleInitializeAsync(initialize);
+
+        var handler = new RecordingHandler("""{"code":0,"msg":"success"}""");
+        AttachNyxIdApiClient(_agent, handler);
+
+        await InvokeTrySendFailureAsync(_agent, "primary failed");
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Contain("/proxy/s/api-lark-bot/");
+    }
+
+    [Fact]
+    public async Task TrySendFailureAsync_ShouldSwallow_WhenBothSlugsReject()
+    {
+        // Final guarantee: TrySendFailureAsync MUST NOT throw, ever. HandleTriggerAsync is
+        // already in the failure-event-persist path; an exception here would mask the
+        // SkillRunnerExecutionFailedEvent persist (which surfaces last_error in
+        // /agent-status, the one path users have to recover regardless of Lark visibility).
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        {
+            ConversationId = "oc_dm_chat_1",
+            NyxProviderSlug = "api-lark-bot",
+            NyxApiKey = "nyx-api-key",
+            LarkReceiveId = "ou_user_1",
+            LarkReceiveIdType = "open_id",
+            FailureNotificationProviderSlug = "api-lark-bot-channel-loning",
+        };
+        await _agent.HandleInitializeAsync(initialize);
+
+        var handler = new SequencedHandler(
+            """{"error":true,"message":"failure-slug down"}""",
+            """{"code":99992364,"msg":"user id cross tenant"}""");
+        AttachNyxIdApiClient(_agent, handler);
+
+        // Should complete (not throw) even though both attempts fail.
+        Func<Task> act = () => InvokeTrySendFailureAsync(_agent, "both broken");
+
+        await act.Should().NotThrowAsync();
+        handler.Requests.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task BuildExecutionMetadata_ShouldPinOwnerLlmConfigOverrides_WhenSourceReturnsConfig()
+    {
+        // Regression for the "/daily failed: Provider 'openai' not connected" report:
+        // skill runners must honor the bot owner's pre-configured model + NyxID route + tool
+        // cap — same shape ChannelLlmReplyInboxRuntime applies for nyxid-chat. Without it,
+        // every scheduled run falls through to NyxIdLLMProvider's compile-time `gpt-5.4` +
+        // gateway default, which the gateway routes to OpenAI and 400s for bot owners who
+        // wired a custom NyxID service like `chrono-llm` at `/api/v1/proxy/s/chrono-llm`.
+        var source = new StubOwnerLlmConfigSource(new OwnerLlmConfig(
+            DefaultModel: "gpt-5.5",
+            PreferredLlmRoute: "/api/v1/proxy/s/chrono-llm",
+            MaxToolRounds: 7));
+
+        var agent = CreateAgent("skill-runner-userconfig", _serviceProvider, source);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateInitializeCommand());
+
+        var metadata = await InvokeBuildExecutionMetadataAsync(agent);
+
+        metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("gpt-5.5");
+        metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/api/v1/proxy/s/chrono-llm");
+        metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("7");
+        source.RequestedScopeIds.Should().ContainSingle().Which.Should().Be("scope-1");
+    }
+
+    [Fact]
+    public async Task BuildExecutionMetadata_ShouldOmitOverrides_WhenOwnerLlmConfigSourceIsAbsent()
+    {
+        // No host wiring (e.g. tests that don't compose Studio + the bridge): valid metadata
+        // still comes out, no override keys leak, NyxIdLLMProvider falls through to its
+        // compile-time defaults.
+        await _agent.HandleInitializeAsync(CreateInitializeCommand());
+
+        var metadata = await InvokeBuildExecutionMetadataAsync(_agent);
+
+        metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+        metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
+        metadata.Should().NotContainKey(LLMRequestMetadataKeys.MaxToolRoundsOverride);
+        metadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("nyx-api-key");
+    }
+
+    [Fact]
+    public async Task BuildExecutionMetadata_ShouldOmitOverrides_WhenOwnerLlmConfigFieldsAreEmpty()
+    {
+        // Bot owners who haven't saved any LLM preference get OwnerLlmConfig.Empty (or empty
+        // strings via the host adapter). The applier must NOT pin empty values onto metadata,
+        // because NyxIdLLMProvider treats a non-empty NyxIdRoutePreference of "" as a relative
+        // path against the authority and produces an invalid URL.
+        var source = new StubOwnerLlmConfigSource(OwnerLlmConfig.Empty);
+
+        var agent = CreateAgent("skill-runner-userconfig-empty", _serviceProvider, source);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateInitializeCommand());
+
+        var metadata = await InvokeBuildExecutionMetadataAsync(agent);
+
+        metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+        metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
+        metadata.Should().NotContainKey(LLMRequestMetadataKeys.MaxToolRoundsOverride);
+    }
+
+    [Fact]
+    public async Task BuildExecutionMetadata_ShouldFallBackQuietly_WhenOwnerLlmConfigSourceThrows()
+    {
+        // The source can throw on transient projection failures. The agent's execution turn
+        // must still proceed with provider defaults — the applier catches and logs the
+        // failure, never bubbles it up to the trigger handler.
+        var source = new ThrowingOwnerLlmConfigSource();
+
+        var agent = CreateAgent("skill-runner-userconfig-throws", _serviceProvider, source);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateInitializeCommand());
+
+        var metadata = await InvokeBuildExecutionMetadataAsync(agent);
+
+        metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+        metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
+    }
+
+    private static async Task<IReadOnlyDictionary<string, string>> InvokeBuildExecutionMetadataAsync(
+        SkillRunnerGAgent agent)
+    {
+        var method = typeof(SkillRunnerGAgent).GetMethod(
+            "BuildExecutionMetadataAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        method.Should().NotBeNull();
+        var task = (Task<IReadOnlyDictionary<string, string>>)method!.Invoke(agent, [CancellationToken.None])!;
+        return await task;
+    }
+
+    internal sealed class StubOwnerLlmConfigSource(OwnerLlmConfig config) : IOwnerLlmConfigSource
+    {
+        public List<string> RequestedScopeIds { get; } = new();
+
+        public Task<OwnerLlmConfig> GetForScopeAsync(string scopeId, CancellationToken ct = default)
+        {
+            RequestedScopeIds.Add(scopeId);
+            return Task.FromResult(config);
+        }
+    }
+
+    internal sealed class ThrowingOwnerLlmConfigSource : IOwnerLlmConfigSource
+    {
+        public Task<OwnerLlmConfig> GetForScopeAsync(string scopeId, CancellationToken ct = default) =>
+            throw new InvalidOperationException("projection unavailable");
+    }
+
     private static void AttachNyxIdApiClient(SkillRunnerGAgent agent, HttpMessageHandler handler)
     {
         var client = new NyxIdApiClient(
@@ -457,11 +865,27 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
 
     private static Task InvokeSendOutputAsync(SkillRunnerGAgent agent, string output)
     {
+        // Disambiguate against the 3-arg `SendOutputAsync(output, providerSlugOverride, ct)`
+        // overload introduced for the failure-notification fallback (#423 §C). The 2-arg
+        // overload still routes through the primary `NyxProviderSlug`, which is what every
+        // existing test exercises.
         var method = typeof(SkillRunnerGAgent).GetMethod(
             "SendOutputAsync",
-            BindingFlags.Instance | BindingFlags.NonPublic);
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            binder: null,
+            types: [typeof(string), typeof(CancellationToken)],
+            modifiers: null);
         method.Should().NotBeNull();
         return (Task)method!.Invoke(agent, [output, CancellationToken.None])!;
+    }
+
+    private static Task InvokeTrySendFailureAsync(SkillRunnerGAgent agent, string error)
+    {
+        var method = typeof(SkillRunnerGAgent).GetMethod(
+            "TrySendFailureAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        method.Should().NotBeNull();
+        return (Task)method!.Invoke(agent, [error, CancellationToken.None])!;
     }
 
     private sealed class RecordingHandler(string responseBody) : HttpMessageHandler
@@ -510,10 +934,13 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         }
     }
 
-    private SkillRunnerGAgent CreateAgent(string actorId, ServiceProvider? serviceProvider = null)
+    private SkillRunnerGAgent CreateAgent(
+        string actorId,
+        ServiceProvider? serviceProvider = null,
+        IOwnerLlmConfigSource? ownerLlmConfigSource = null)
     {
         var resolvedServices = serviceProvider ?? _serviceProvider;
-        var agent = new SkillRunnerGAgent
+        var agent = new SkillRunnerGAgent(ownerLlmConfigSource: ownerLlmConfigSource)
         {
             Services = resolvedServices,
             EventSourcingBehaviorFactory =

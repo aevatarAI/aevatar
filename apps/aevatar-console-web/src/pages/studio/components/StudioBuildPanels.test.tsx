@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import * as React from 'react';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
+import { scriptsApi } from '@/shared/studio/scriptsApi';
 import {
   applyStepInspectorDraft,
   connectStepToTarget,
@@ -14,7 +15,10 @@ import {
   buildStudioGraphElements,
   buildStudioWorkflowLayout,
 } from '@/shared/studio/graph';
-import { StudioWorkflowBuildPanel } from './StudioBuildPanels';
+import {
+  StudioScriptBuildPanel,
+  StudioWorkflowBuildPanel,
+} from './StudioBuildPanels';
 
 jest.mock('@/shared/api/runtimeRunsApi', () => ({
   runtimeRunsApi: {
@@ -24,6 +28,16 @@ jest.mock('@/shared/api/runtimeRunsApi', () => ({
 
 jest.mock('@/shared/agui/sseFrameNormalizer', () => ({
   parseBackendSSEStream: jest.fn(),
+}));
+
+jest.mock('@/shared/studio/scriptsApi', () => ({
+  scriptsApi: {
+    validateDraft: jest.fn(),
+    saveScript: jest.fn(),
+    observeSaveScript: jest.fn(),
+    runDraftScript: jest.fn(),
+    proposeEvolution: jest.fn(),
+  },
 }));
 
 jest.mock('@/shared/graphs/GraphCanvas', () => ({
@@ -63,17 +77,24 @@ jest.mock('@/shared/graphs/GraphCanvas', () => ({
 jest.mock('@/modules/studio/scripts/ScriptCodeEditor', () => ({
   __esModule: true,
   default: ({
+    focusTarget,
     value = '',
     onChange,
   }: {
+    readonly focusTarget?: { readonly filePath: string; readonly startLineNumber: number } | null;
     readonly value?: string;
     readonly onChange?: (nextValue: string) => void;
   }) => (
-    <textarea
-      aria-label="Mock script code editor"
-      value={value}
-      onChange={(event) => onChange?.(event.target.value)}
-    />
+    <div>
+      <textarea
+        aria-label="Mock script code editor"
+        value={value}
+        onChange={(event) => onChange?.(event.target.value)}
+      />
+      <div data-testid="mock-script-focus-target">
+        {focusTarget ? `${focusTarget.filePath}:${focusTarget.startLineNumber}` : ''}
+      </div>
+    </div>
   ),
 }));
 
@@ -81,6 +102,33 @@ const mockedRuntimeRunsApi = runtimeRunsApi as unknown as {
   streamDraftRun: jest.Mock;
 };
 const mockedParseBackendSSEStream = parseBackendSSEStream as jest.Mock;
+const mockedScriptsApi = scriptsApi as unknown as {
+  validateDraft: jest.Mock;
+  saveScript: jest.Mock;
+  observeSaveScript: jest.Mock;
+  runDraftScript: jest.Mock;
+  proposeEvolution: jest.Mock;
+};
+
+const scriptDetail = {
+  available: true,
+  scopeId: 'scope-1',
+  script: {
+    scopeId: 'scope-1',
+    scriptId: 'script-alpha',
+    catalogActorId: 'catalog-1',
+    definitionActorId: 'definition-1',
+    activeRevision: 'rev-1',
+    activeSourceHash: 'hash-1',
+    updatedAt: '2026-04-27T00:00:00Z',
+  },
+  source: {
+    sourceText: 'using System;',
+    definitionActorId: 'definition-1',
+    revision: 'rev-1',
+    sourceHash: 'hash-1',
+  },
+};
 
 const initialDocument = {
   name: 'workflow-demo',
@@ -354,6 +402,40 @@ describe('StudioWorkflowBuildPanel', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockedRuntimeRunsApi.streamDraftRun.mockResolvedValue({} as Response);
+    mockedScriptsApi.validateDraft.mockResolvedValue({
+      success: true,
+      errorCount: 0,
+      warningCount: 0,
+      diagnostics: [],
+    });
+    mockedScriptsApi.saveScript.mockResolvedValue({
+      acceptedScript: {
+        scriptId: 'script-alpha',
+        revisionId: 'rev-2',
+        definitionActorId: 'definition-1',
+        sourceHash: 'hash-2',
+        proposalId: 'proposal-1',
+        expectedBaseRevision: 'rev-1',
+        acceptedAt: '2026-04-27T00:00:00Z',
+      },
+    });
+    mockedScriptsApi.observeSaveScript.mockResolvedValue({
+      status: 'applied',
+    });
+    mockedScriptsApi.runDraftScript.mockResolvedValue({
+      ok: true,
+    });
+    mockedScriptsApi.proposeEvolution.mockResolvedValue({
+      accepted: true,
+      proposalId: 'proposal-1',
+      scriptId: 'script-alpha',
+      baseRevision: 'rev-1',
+      candidateRevision: 'rev-2',
+      status: 'accepted',
+      failureReason: '',
+      definitionActorId: 'definition-1',
+      catalogActorId: 'catalog-1',
+    });
     mockedParseBackendSSEStream.mockImplementation(async function* () {
       yield {
         type: AGUIEventType.RUN_STARTED,
@@ -365,6 +447,598 @@ describe('StudioWorkflowBuildPanel', () => {
         delta: 'workflow draft output',
       };
     });
+  });
+
+  it('keeps the Script bind CTA stable and uses the dry-run panel as the run entry', () => {
+    const handleContinueToBind = jest.fn();
+
+    render(
+      <StudioScriptBuildPanel
+        scopeId="scope-1"
+        scriptsQuery={{
+          data: [scriptDetail],
+          error: null,
+          isError: false,
+          isLoading: false,
+        }}
+        selectedScriptId="script-alpha"
+        onContinueToBind={handleContinueToBind}
+        onSelectScriptId={jest.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Ready to bind')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Dry-run' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Run' })).toHaveLength(1);
+
+    fireEvent.change(screen.getByLabelText('Mock script code editor'), {
+      target: {
+        value: 'using System;\n// changed',
+      },
+    });
+
+    expect(screen.getByText('Validate current source')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save script' })).toBeDisabled();
+  });
+
+  it('offers Add script from the empty Script build state', () => {
+    const handleCreateScriptDraft = jest.fn();
+
+    render(
+      <StudioScriptBuildPanel
+        scopeId="scope-1"
+        scriptsQuery={{
+          data: [],
+          error: null,
+          isError: false,
+          isLoading: false,
+        }}
+        selectedScriptId=""
+        onContinueToBind={jest.fn()}
+        onCreateScriptDraft={handleCreateScriptDraft}
+        onSelectScriptId={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add script' }));
+    expect(handleCreateScriptDraft).toHaveBeenCalled();
+  });
+
+  it('starts a named Script draft without a saved catalog script', async () => {
+    const handleDraftSaved = jest.fn();
+    mockedScriptsApi.saveScript.mockResolvedValueOnce({
+      acceptedScript: {
+        scriptId: 'orders-script',
+        revisionId: 'draft-1',
+        definitionActorId: 'definition-draft',
+        sourceHash: 'hash-draft',
+        proposalId: 'proposal-draft',
+        expectedBaseRevision: '',
+        acceptedAt: '2026-04-27T00:00:00Z',
+      },
+    });
+
+    render(
+      <StudioScriptBuildPanel
+        scopeId="scope-1"
+        scriptsQuery={{
+          data: [],
+          error: null,
+          isError: false,
+          isLoading: false,
+        }}
+        selectedScriptId="orders-script"
+        pendingScriptDraft={{
+          scriptId: 'orders-script',
+          displayName: 'Orders Script',
+        }}
+        onContinueToBind={jest.fn()}
+        onRefreshScripts={jest.fn()}
+        onScriptDraftSaved={handleDraftSaved}
+        onSelectScriptId={jest.fn()}
+      />,
+    );
+
+    expect(screen.getByText('orders-script (draft)')).toBeInTheDocument();
+    expect(
+      (screen.getByLabelText('Mock script code editor') as HTMLTextAreaElement).value,
+    ).toContain('DraftBehavior');
+    expect(screen.getByText('Validate current source')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save script' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
+
+    await waitFor(() => {
+      expect(mockedScriptsApi.validateDraft).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scriptId: 'orders-script',
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save script' })).toBeEnabled();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
+
+    await waitFor(() => {
+      expect(mockedScriptsApi.saveScript).toHaveBeenCalledWith(
+        'scope-1',
+        expect.objectContaining({
+          scriptId: 'orders-script',
+          expectedBaseRevision: undefined,
+        }),
+      );
+    });
+    expect(mockedScriptsApi.saveScript.mock.calls[0]?.[1]).not.toHaveProperty(
+      'revisionId',
+    );
+    await waitFor(() => {
+      expect(handleDraftSaved).toHaveBeenCalledWith('orders-script');
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeEnabled();
+    });
+    expect(screen.getByText('Ready to bind')).toBeInTheDocument();
+  });
+
+  it('renders validation diagnostics and focuses the selected problem', async () => {
+    mockedScriptsApi.validateDraft.mockResolvedValueOnce({
+      success: false,
+      scriptId: 'script-alpha',
+      scriptRevision: 'rev-1',
+      primarySourcePath: 'Behavior.cs',
+      errorCount: 1,
+      warningCount: 0,
+      diagnostics: [
+        {
+          severity: 'error',
+          code: 'CS1002',
+          message: '; expected',
+          filePath: 'Behavior.cs',
+          startLine: 12,
+          startColumn: 8,
+          endLine: 12,
+          endColumn: 9,
+          origin: 'compiler',
+        },
+      ],
+    });
+
+    render(
+      <StudioScriptBuildPanel
+        scopeId="scope-1"
+        scriptsQuery={{
+          data: [scriptDetail],
+          error: null,
+          isError: false,
+          isLoading: false,
+        }}
+        selectedScriptId="script-alpha"
+        onContinueToBind={jest.fn()}
+        onSelectScriptId={jest.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Mock script code editor'), {
+      target: {
+        value: 'using System;\n// changed',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
+
+    expect(await screen.findByText('; expected')).toBeInTheDocument();
+    expect(screen.getByText('Behavior.cs:12:8')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /CS1002/ }));
+
+    expect(screen.getByTestId('mock-script-focus-target')).toHaveTextContent(
+      'Behavior.cs:12',
+    );
+  });
+
+  it('shows structured dry-run facts after running a Script draft', async () => {
+    mockedScriptsApi.runDraftScript.mockResolvedValueOnce({
+      accepted: true,
+      scopeId: 'scope-1',
+      scriptId: 'script-alpha',
+      scriptRevision: 'rev-1',
+      definitionActorId: 'definition-run',
+      runtimeActorId: 'runtime-run',
+      runId: 'run-script-1',
+      sourceHash: 'hash-run',
+      commandTypeUrl: 'type.googleapis.com/AppScriptCommand',
+      readModelUrl: 'type.googleapis.com/AppScriptReadModel',
+    });
+
+    render(
+      <StudioScriptBuildPanel
+        scopeId="scope-1"
+        scriptsQuery={{
+          data: [scriptDetail],
+          error: null,
+          isError: false,
+          isLoading: false,
+        }}
+        selectedScriptId="script-alpha"
+        onContinueToBind={jest.fn()}
+        onSelectScriptId={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+
+    expect(await screen.findByLabelText('Script dry run facts')).toBeInTheDocument();
+    expect(screen.getByText('run-script-1')).toBeInTheDocument();
+    expect(screen.getByText('runtime-run')).toBeInTheDocument();
+    expect(screen.getByText('type.googleapis.com/AppScriptReadModel')).toBeInTheDocument();
+  });
+
+  it('keeps save observation pending honest and exposes catalog refresh', async () => {
+    mockedScriptsApi.saveScript.mockResolvedValueOnce({
+      acceptedScript: {
+        scriptId: 'orders-script',
+        revisionId: 'draft-1',
+        definitionActorId: 'definition-draft',
+        sourceHash: 'hash-draft',
+        proposalId: 'proposal-draft',
+        expectedBaseRevision: '',
+        acceptedAt: '2026-04-27T00:00:00Z',
+      },
+    });
+    mockedScriptsApi.observeSaveScript.mockResolvedValue({
+      scopeId: 'scope-1',
+      scriptId: 'orders-script',
+      status: 'pending',
+      message: 'pending',
+      currentScript: null,
+      isTerminal: false,
+    });
+    const handleRefreshScripts = jest.fn();
+
+    render(
+      <StudioScriptBuildPanel
+        scopeId="scope-1"
+        scriptsQuery={{
+          data: [],
+          error: null,
+          isError: false,
+          isLoading: false,
+        }}
+        selectedScriptId="orders-script"
+        pendingScriptDraft={{
+          scriptId: 'orders-script',
+          displayName: 'Orders Script',
+        }}
+        onContinueToBind={jest.fn()}
+        onRefreshScripts={handleRefreshScripts}
+        onSelectScriptId={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
+    await waitFor(
+      () => {
+        expect(screen.getByRole('button', { name: 'Save script' })).toBeEnabled();
+      },
+      { timeout: 3000 },
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
+
+    expect(await screen.findByText(/Waiting for catalog/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh catalog' }));
+    expect(handleRefreshScripts).toHaveBeenCalled();
+  });
+
+  it('surfaces rejected Script save observations and keeps Bind disabled', async () => {
+    mockedScriptsApi.saveScript.mockResolvedValueOnce({
+      acceptedScript: {
+        scriptId: 'orders-script',
+        revisionId: 'draft-1',
+        definitionActorId: 'definition-draft',
+        sourceHash: 'hash-draft',
+        proposalId: 'proposal-draft',
+        expectedBaseRevision: '',
+        acceptedAt: '2026-04-27T00:00:00Z',
+      },
+    });
+    mockedScriptsApi.observeSaveScript.mockResolvedValueOnce({
+      scopeId: 'scope-1',
+      scriptId: 'orders-script',
+      status: 'rejected',
+      message: 'Catalog rejected the revision.',
+      currentScript: null,
+      isTerminal: true,
+    });
+
+    render(
+      <StudioScriptBuildPanel
+        scopeId="scope-1"
+        scriptsQuery={{
+          data: [],
+          error: null,
+          isError: false,
+          isLoading: false,
+        }}
+        selectedScriptId="orders-script"
+        pendingScriptDraft={{
+          scriptId: 'orders-script',
+          displayName: 'Orders Script',
+        }}
+        onContinueToBind={jest.fn()}
+        onRefreshScripts={jest.fn()}
+        onSelectScriptId={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
+    await waitFor(
+      () => {
+        expect(screen.getByRole('button', { name: 'Save script' })).toBeEnabled();
+      },
+      { timeout: 3000 },
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
+
+    expect(await screen.findByText('Catalog rejected the revision.')).toBeInTheDocument();
+    expect(screen.getByText('Save needs attention')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeDisabled();
+  });
+
+  it('polls save observation until a pending Script save is applied', async () => {
+    const handleDraftSaved = jest.fn();
+    mockedScriptsApi.saveScript.mockResolvedValueOnce({
+      acceptedScript: {
+        scriptId: 'orders-script',
+        revisionId: 'draft-1',
+        definitionActorId: 'definition-draft',
+        sourceHash: 'hash-draft',
+        proposalId: 'proposal-draft',
+        expectedBaseRevision: '',
+        acceptedAt: '2026-04-27T00:00:00Z',
+      },
+    });
+    mockedScriptsApi.observeSaveScript
+      .mockResolvedValueOnce({
+        scopeId: 'scope-1',
+        scriptId: 'orders-script',
+        status: 'pending',
+        message: 'pending',
+        currentScript: null,
+        isTerminal: false,
+      })
+      .mockResolvedValueOnce({
+        scopeId: 'scope-1',
+        scriptId: 'orders-script',
+        status: 'applied',
+        message: 'applied',
+        currentScript: {
+          scopeId: 'scope-1',
+          scriptId: 'orders-script',
+          catalogActorId: 'catalog-1',
+          definitionActorId: 'definition-draft',
+          activeRevision: 'draft-1',
+          activeSourceHash: 'hash-draft',
+          updatedAt: '2026-04-27T00:00:01Z',
+        },
+        isTerminal: true,
+      });
+
+    render(
+      <StudioScriptBuildPanel
+        scopeId="scope-1"
+        scriptsQuery={{
+          data: [],
+          error: null,
+          isError: false,
+          isLoading: false,
+        }}
+        selectedScriptId="orders-script"
+        pendingScriptDraft={{
+          scriptId: 'orders-script',
+          displayName: 'Orders Script',
+        }}
+        onContinueToBind={jest.fn()}
+        onRefreshScripts={jest.fn()}
+        onScriptDraftSaved={handleDraftSaved}
+        onSelectScriptId={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
+    await waitFor(
+      () => {
+        expect(screen.getByRole('button', { name: 'Save script' })).toBeEnabled();
+      },
+      { timeout: 3000 },
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
+
+    expect(await screen.findByText(/checking again in 1s/)).toBeInTheDocument();
+    await waitFor(
+      () => {
+        expect(mockedScriptsApi.observeSaveScript).toHaveBeenCalledTimes(2);
+        expect(handleDraftSaved).toHaveBeenCalledWith('orders-script');
+        expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeEnabled();
+      },
+      { timeout: 2500 },
+    );
+  });
+
+  it('ignores a save observation that resolves after the source changes', async () => {
+    mockedScriptsApi.saveScript.mockResolvedValueOnce({
+      acceptedScript: {
+        scriptId: 'orders-script',
+        revisionId: 'draft-1',
+        definitionActorId: 'definition-draft',
+        sourceHash: 'hash-draft',
+        proposalId: 'proposal-draft',
+        expectedBaseRevision: '',
+        acceptedAt: '2026-04-27T00:00:00Z',
+      },
+    });
+    let resolveObservation: (value: {
+      scopeId: string;
+      scriptId: string;
+      status: 'applied';
+      message: string;
+      currentScript: {
+        scopeId: string;
+        scriptId: string;
+        catalogActorId: string;
+        definitionActorId: string;
+        activeRevision: string;
+        activeSourceHash: string;
+        updatedAt: string;
+      };
+      isTerminal: true;
+    }) => void = () => undefined;
+    mockedScriptsApi.observeSaveScript.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveObservation = resolve;
+      }),
+    );
+
+    render(
+      <StudioScriptBuildPanel
+        scopeId="scope-1"
+        scriptsQuery={{
+          data: [],
+          error: null,
+          isError: false,
+          isLoading: false,
+        }}
+        selectedScriptId="orders-script"
+        pendingScriptDraft={{
+          scriptId: 'orders-script',
+          displayName: 'Orders Script',
+        }}
+        onContinueToBind={jest.fn()}
+        onRefreshScripts={jest.fn()}
+        onSelectScriptId={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save script' })).toBeEnabled();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
+    await waitFor(() => {
+      expect(mockedScriptsApi.observeSaveScript).toHaveBeenCalled();
+    });
+
+    fireEvent.change(screen.getByLabelText('Mock script code editor'), {
+      target: {
+        value: 'using System;\n// edited while save is observing',
+      },
+    });
+    await act(async () => {
+      resolveObservation({
+        scopeId: 'scope-1',
+        scriptId: 'orders-script',
+        status: 'applied',
+        message: 'applied',
+        currentScript: {
+          scopeId: 'scope-1',
+          scriptId: 'orders-script',
+          catalogActorId: 'catalog-1',
+          definitionActorId: 'definition-draft',
+          activeRevision: 'draft-1',
+          activeSourceHash: 'hash-draft',
+          updatedAt: '2026-04-27T00:00:01Z',
+        },
+        isTerminal: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save script' })).toBeDisabled();
+    });
+    expect(screen.queryByText(/Save applied/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeDisabled();
+  });
+
+  it('edits a multi-file package and entry settings', () => {
+    const promptSpy = jest
+      .spyOn(window, 'prompt')
+      .mockReturnValueOnce('Support.cs')
+      .mockReturnValueOnce('SupportRenamed.cs');
+
+    render(
+      <StudioScriptBuildPanel
+        scopeId="scope-1"
+        scriptsQuery={{
+          data: [scriptDetail],
+          error: null,
+          isError: false,
+          isLoading: false,
+        }}
+        selectedScriptId="script-alpha"
+        onContinueToBind={jest.fn()}
+        onSelectScriptId={jest.fn()}
+      />,
+    );
+
+    expect(screen.getByLabelText('Script package tree')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Advanced package'));
+    fireEvent.click(screen.getByRole('button', { name: 'Add C#' }));
+    expect(screen.getByRole('button', { name: /Support\.cs/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+    expect(screen.getByRole('button', { name: /SupportRenamed\.cs/ })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Entry behavior type'), {
+      target: {
+        value: 'SupportBehavior',
+      },
+    });
+    expect(screen.getByText(/Behavior: SupportBehavior/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set entry source' }));
+    expect(screen.getByText(/Entry: SupportRenamed\.cs/)).toBeInTheDocument();
+    promptSpy.mockRestore();
+  });
+
+  it('records promotion decisions for the current Script revision', async () => {
+    render(
+      <StudioScriptBuildPanel
+        scopeId="scope-1"
+        scriptsQuery={{
+          data: [scriptDetail],
+          error: null,
+          isError: false,
+          isLoading: false,
+        }}
+        selectedScriptId="script-alpha"
+        onContinueToBind={jest.fn()}
+        onSelectScriptId={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Promotion'));
+    fireEvent.change(screen.getByLabelText('Promotion reason'), {
+      target: {
+        value: 'ready for binding',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Propose evolution' }));
+
+    await waitFor(() => {
+      expect(mockedScriptsApi.proposeEvolution).toHaveBeenCalledWith(
+        'scope-1',
+        'script-alpha',
+        expect.objectContaining({
+          baseRevision: 'rev-1',
+          reason: 'ready for binding',
+        }),
+      );
+    });
+    expect(await screen.findByText(/Promotion accepted/)).toBeInTheDocument();
+    expect(screen.getByText('Accepted')).toBeInTheDocument();
   });
 
   it('walks a complete workflow build loop', async () => {

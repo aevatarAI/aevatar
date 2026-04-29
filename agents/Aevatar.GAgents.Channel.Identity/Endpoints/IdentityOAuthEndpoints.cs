@@ -109,10 +109,11 @@ public static class IdentityOAuthEndpoints
         var actorId = subject.ToActorId();
         if (await queryPort.ResolveAsync(subject, ct).ConfigureAwait(false) is not null)
         {
-            // already-bound — best-effort revoke the orphan
-            logger.LogInformation(
-                "Sender already bound; revoking orphan binding_id={BindingId}",
-                exchange.BindingId);
+            // Concurrent /init protection: if the subject is already bound,
+            // the freshly-issued binding_id we just got from NyxID is an
+            // orphan. Best-effort revoke at NyxID before responding so the
+            // orphan does not accumulate at NyxID with no local reference.
+            await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
             return Results.Ok(new { status = "already_bound", detail = "已绑定 NyxID 账号,可以回到 Lark 继续对话" });
         }
 
@@ -325,6 +326,32 @@ public static class IdentityOAuthEndpoints
         {
             logger.LogError(ex, "Failed to activate ExternalIdentityBindingGAgent for actor={ActorId}", actorId);
             return null;
+        }
+    }
+
+    private static async Task TryRevokeOrphanBindingAsync(
+        INyxIdBrokerCallbackClient brokerCallback,
+        string bindingId,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(bindingId))
+            return;
+        try
+        {
+            await brokerCallback.RevokeBindingByIdAsync(bindingId, ct).ConfigureAwait(false);
+            logger.LogInformation(
+                "Revoked orphan binding_id={BindingId} after concurrent /init",
+                bindingId);
+        }
+        catch (Exception ex)
+        {
+            // Best-effort: leaving an orphan binding at NyxID is preferable
+            // to failing the user's already-bound response. NyxID's CAE
+            // sweeper eventually reclaims unused bindings.
+            logger.LogWarning(ex,
+                "Failed to revoke orphan binding_id={BindingId}; NyxID will eventually reap it",
+                bindingId);
         }
     }
 

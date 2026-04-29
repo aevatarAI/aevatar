@@ -7,6 +7,9 @@
     <RootNamespace>Aevatar.Mainnet.Host.Api</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Aevatar.Hosting.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
     <ProjectReference Include="..\Aevatar.Authentication.Hosting\Aevatar.Authentication.Hosting.csproj" />
     <ProjectReference Include="..\Aevatar.Authentication.Providers.NyxId\Aevatar.Authentication.Providers.NyxId.csproj" />

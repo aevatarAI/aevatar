@@ -1,7 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -18,15 +17,39 @@ namespace Aevatar.GAgents.Channel.Identity;
 /// at NyxID admin once per cluster (see /api/oauth/aevatar-client/status
 /// for the post-boot ops handoff).
 /// </summary>
+/// <remarks>
+/// Bootstrap runs as a non-blocking background task with retry: a transient
+/// NyxID/DCR outage during host startup must not leave the cluster
+/// permanently unprovisioned (PR #521 Codex P1). The retry loop continues
+/// until either provisioning succeeds, the host shuts down, or the back-off
+/// reaches the configured ceiling (~30 min); the status endpoint surfaces
+/// the gap to ops while the loop runs.
+/// </remarks>
 public sealed class AevatarOAuthClientBootstrapService : IHostedService
 {
     private const string ClientName = "aevatar";
+
+    /// <summary>
+    /// First retry delay after a failed provisioning attempt (5s). Doubles
+    /// on each failure up to <see cref="MaxRetryDelay"/>.
+    /// </summary>
+    internal static readonly TimeSpan InitialRetryDelay = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Upper bound on the back-off interval (30 min). At this point the
+    /// loop stops doubling and keeps retrying at this cadence — the cluster
+    /// is dead enough that ops attention is required, but we still self-heal
+    /// when NyxID returns.
+    /// </summary>
+    internal static readonly TimeSpan MaxRetryDelay = TimeSpan.FromMinutes(30);
 
     private readonly IServiceProvider _services;
     private readonly NyxIdDynamicClientRegistrationClient _registrar;
     private readonly IActorRuntime _actorRuntime;
     private readonly ILogger<AevatarOAuthClientBootstrapService> _logger;
     private readonly IConfiguration _configuration;
+    private readonly CancellationTokenSource _stoppingCts = new();
+    private Task? _bootstrapTask;
 
     public AevatarOAuthClientBootstrapService(
         IServiceProvider services,
@@ -42,30 +65,67 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken)
+    public Task StartAsync(CancellationToken cancellationToken)
     {
+        // Run the bootstrap as a background task so a transient NyxID
+        // outage does not block host startup, but DO retry indefinitely
+        // (capped backoff) so the cluster self-heals when NyxID returns.
+        _bootstrapTask = Task.Run(() => RunWithRetryAsync(_stoppingCts.Token), CancellationToken.None);
+        return Task.CompletedTask;
+    }
+
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await _stoppingCts.CancelAsync().ConfigureAwait(false);
+        if (_bootstrapTask is null)
+            return;
+
         try
         {
-            await EnsureProvisionedAsync(cancellationToken).ConfigureAwait(false);
+            await _bootstrapTask.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            // Bootstrap failure must not block the host startup — other
-            // surfaces (legacy bot-owner-shared mode) still work without a
-            // provisioned broker. Log loudly and move on; the status endpoint
-            // surfaces the gap to ops, and a subsequent /init exercises the
-            // path again.
-            _logger.LogError(
-                ex,
-                "Aevatar OAuth client bootstrap failed; broker mode will be unavailable until the next successful provisioning attempt");
+            // expected when host shutdown timeout fires
         }
     }
 
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    private async Task RunWithRetryAsync(CancellationToken ct)
+    {
+        var delay = InitialRetryDelay;
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await EnsureProvisionedAsync(ct).ConfigureAwait(false);
+                return;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "Aevatar OAuth client bootstrap failed; retrying in {DelaySeconds}s. Broker mode unavailable until the next successful attempt.",
+                    (int)delay.TotalSeconds);
+            }
+
+            try
+            {
+                await Task.Delay(delay, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            // Exponential backoff with a 30-minute ceiling. Stays self-healing
+            // forever without spamming the log on a long outage.
+            delay = TimeSpan.FromTicks(Math.Min(delay.Ticks * 2, MaxRetryDelay.Ticks));
+        }
+    }
 
     private async Task EnsureProvisionedAsync(CancellationToken ct)
     {
@@ -92,7 +152,10 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
             return;
         }
 
-        var redirectUri = ResolveRedirectUri();
+        // Use the shared resolver so DCR registers the same redirect URI the
+        // broker later sends to NyxID at authorize / token time. Diverging
+        // sources cause invalid_redirect_uri on every /init exchange.
+        var redirectUri = NyxIdRedirectUriResolver.Resolve(_configuration);
         var registration = await _registrar
             .RegisterPublicClientAsync(authority, ClientName, redirectUri, ct)
             .ConfigureAwait(false);
@@ -121,14 +184,5 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
             "Aevatar OAuth client provisioned at NyxID: client_id={ClientId}. " +
             "Production deployments must enable broker_capability_enabled on this client at NyxID admin (one-time per cluster).",
             registration.ClientId);
-    }
-
-    private string ResolveRedirectUri()
-    {
-        var serverUrls = _configuration[WebHostDefaults.ServerUrlsKey];
-        var firstUrl = serverUrls?.Split(';', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim();
-        if (string.IsNullOrWhiteSpace(firstUrl))
-            firstUrl = "http://127.0.0.1:5080";
-        return $"{firstUrl.TrimEnd('/')}/api/oauth/nyxid-callback";
     }
 }
