@@ -3219,7 +3219,7 @@ describe("StudioPage", () => {
     await waitFor(() => {
       const searchParams = new URLSearchParams(window.location.search);
       expect(searchParams.get("member")).toBeNull();
-      expect(searchParams.get("focus")).toBe("workflow:joker");
+      expect(searchParams.get("focus")).toBeNull();
       expect(searchParams.get("step")).toBe("build");
     });
   });
@@ -5302,7 +5302,7 @@ describe("StudioPage", () => {
     await waitFor(() => {
       const searchParams = new URLSearchParams(window.location.search);
       expect(window.location.pathname).toBe("/studio");
-      expect(searchParams.get("member")).toBeNull();
+      expect(searchParams.get("member")).toBe("workflow:workflow-1");
       expect(searchParams.get("focus")).toBeNull();
       expect(searchParams.get("teamMode")).toBeNull();
       expect(searchParams.get("teamName")).toBeNull();
@@ -5325,7 +5325,7 @@ describe("StudioPage", () => {
 
     await waitFor(() => {
       const searchParams = new URLSearchParams(window.location.search);
-      expect(searchParams.get("member")).toBeNull();
+      expect(searchParams.get("member")).toBe("workflow:workflow-2");
       expect(searchParams.get("focus")).toBeNull();
       expect(searchParams.get("teamMode")).toBeNull();
       expect(searchParams.get("teamName")).toBeNull();
@@ -5368,7 +5368,7 @@ describe("StudioPage", () => {
       draftExists: false,
     });
 
-    renderStudioPage("/studio?scopeId=scope-1&workflow=workflow-1&tab=studio");
+    renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
 
     const editor = await screen.findByLabelText("定义 YAML");
     fireEvent.change(editor, {

@@ -137,7 +137,7 @@ describe('ProjectFilesPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Open workflow' }));
 
     expect(pushSpy).toHaveBeenCalledWith(
-      '/studio?tab=studio',
+      '/studio?member=workflow%3Aworkflow-alpha&tab=studio',
     );
   });
 });

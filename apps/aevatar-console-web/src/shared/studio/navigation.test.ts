@@ -147,14 +147,14 @@ describe('buildStudioRoute', () => {
         scopeId: 'scope-1',
         workflowId: 'workflow-1',
       }),
-    ).toBe('/studio?scopeId=scope-1&tab=studio');
+    ).toBe('/studio?scopeId=scope-1&member=workflow%3Aworkflow-1&tab=studio');
     expect(
       buildStudioWorkflowEditorRoute({
         scopeId: 'scope-1',
         memberKey: 'workflow:workflow-1',
         workflowId: 'workflow-1',
       }),
-    ).toBe('/studio?scopeId=scope-1&tab=studio');
+    ).toBe('/studio?scopeId=scope-1&member=workflow%3Aworkflow-1&tab=studio');
     expect(
       buildStudioWorkflowEditorRoute({
         scopeId: 'scope-1',
@@ -165,20 +165,20 @@ describe('buildStudioRoute', () => {
         }),
         workflowId: 'default',
       }),
-    ).toBe('/studio?scopeId=scope-1&tab=studio');
+    ).toBe('/studio?scopeId=scope-1&member=workflow%3Adraft2&tab=studio');
     expect(
       buildStudioScriptsWorkspaceRoute({
         scopeId: 'scope-1',
         scriptId: 'script-1',
       }),
-    ).toBe('/studio?scopeId=scope-1&tab=scripts');
+    ).toBe('/studio?scopeId=scope-1&member=script%3Ascript-1&tab=scripts');
     expect(
       buildStudioScriptsWorkspaceRoute({
         scopeId: 'scope-1',
         memberKey: 'script:script-1',
         scriptId: 'script-1',
       }),
-    ).toBe('/studio?scopeId=scope-1&tab=scripts');
+    ).toBe('/studio?scopeId=scope-1&member=script%3Ascript-1&tab=scripts');
   });
 
   it('infers the workflow editor when only a workflow id is provided', () => {

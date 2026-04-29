@@ -3363,7 +3363,13 @@ const StudioPage: React.FC = () => {
       routeSelectedMemberImplementationRef?.workflowId,
     );
     if (directWorkflowId) {
-      return directWorkflowId;
+      return resolveWorkflowIdFromRouteValue(
+        directWorkflowId,
+        visibleWorkflowSummaries,
+        {
+          allowDirectIdFallback: !workflowsQuery.isLoading,
+        },
+      );
     }
 
     const routeSelectedMemberAuthority =
@@ -3424,6 +3430,7 @@ const StudioPage: React.FC = () => {
     routeSelectedMember.kind,
     visibleWorkflowSummaries,
     studioScopeMembers,
+    workflowsQuery.isLoading,
   ]);
   useEffect(() => {
     if (!isStudioLocation) {

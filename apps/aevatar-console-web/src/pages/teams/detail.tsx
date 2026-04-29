@@ -41,6 +41,7 @@ import {
 } from "@/shared/navigation/runtimeRoutes";
 import { saveObservedRunSessionPayload } from "@/shared/runs/draftRunSession";
 import { studioApi } from "@/shared/studio/api";
+import { findStudioMemberByServiceId } from "@/shared/studio/memberRuntime";
 import {
   buildStudioWorkflowMemberKey,
   buildStudioScriptsWorkspaceRoute,
@@ -1156,6 +1157,12 @@ const TeamDetailPage: React.FC = () => {
     queryKey: ["teams", "connector-catalog"],
     retry: false,
   });
+  const teamMembersQuery = useQuery({
+    enabled: scopeId.length > 0,
+    queryFn: () => studioApi.listMembers(scopeId),
+    queryKey: ["teams", "studio-members", scopeId],
+    retry: false,
+  });
 
   const fallbackWorkflowSummary = React.useMemo(() => {
     if (lens.activeRevision?.implementationKind !== "workflow") {
@@ -1367,6 +1374,16 @@ const TeamDetailPage: React.FC = () => {
     lens.currentService?.serviceId ||
     lens.currentRun?.serviceId ||
     undefined;
+  const contextualStudioMemberId = React.useMemo(
+    () =>
+      trimText(
+        findStudioMemberByServiceId(
+          teamMembersQuery.data?.members ?? [],
+          runtimeServiceId,
+        )?.memberId,
+      ),
+    [runtimeServiceId, teamMembersQuery.data?.members],
+  );
   const currentMemberId =
     trimText(preferredMemberSummary?.memberId) ||
     trimText(preferredMemberId);
@@ -1406,18 +1423,19 @@ const TeamDetailPage: React.FC = () => {
     }),
     [currentPlatformService?.appId, currentPlatformService?.namespace, currentPlatformService?.tenantId, runtimeServiceId, scopeId],
   );
-  const selectedStudioMemberId = currentMemberId;
+  const selectedStudioMemberId =
+    trimText(currentMemberId) || contextualStudioMemberId;
   const selectedStudioMemberKey =
-    trimText(activeWorkflowSummary?.workflowId).length > 0
+    selectedStudioMemberId
+      ? (`member:${selectedStudioMemberId}` as const)
+      : trimText(activeWorkflowSummary?.workflowId).length > 0
       ? buildStudioWorkflowMemberKey({
           workflowId: activeWorkflowSummary?.workflowId,
           workflowName:
             trimText(activeWorkflowSummary?.displayName) ||
             trimText(activeWorkflowSummary?.workflowName),
         })
-      : selectedStudioMemberId
-        ? `member:${selectedStudioMemberId}`
-        : undefined;
+      : undefined;
 
   const teamBuilderRoute =
     trimText(activeWorkflowSummary?.workflowId).length > 0

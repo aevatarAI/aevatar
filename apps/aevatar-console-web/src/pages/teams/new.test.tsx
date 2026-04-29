@@ -86,6 +86,7 @@ describe('TeamCreatePage', () => {
     expect(window.location.pathname).toBe('/studio');
     const params = new URLSearchParams(window.location.search);
     expect(params.get('tab')).toBe('studio');
+    expect(params.get('member')).toBeNull();
     expect(params.get('focus')).toBeNull();
     expect(params.get('teamMode')).toBeNull();
     expect(params.get('teamName')).toBeNull();

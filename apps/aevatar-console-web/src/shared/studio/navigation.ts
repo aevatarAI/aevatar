@@ -93,7 +93,11 @@ function normalizeStudioMemberKey(
   fallbackMemberId?: string | null | undefined,
 ): StudioMemberKey | undefined {
   const normalizedValue = trimOptional(value);
-  if (normalizedValue.startsWith('member:')) {
+  if (
+    normalizedValue.startsWith('member:') ||
+    normalizedValue.startsWith('workflow:') ||
+    normalizedValue.startsWith('script:')
+  ) {
     return normalizedValue as StudioMemberKey;
   }
 
@@ -170,12 +174,22 @@ export function buildStudioRoute(options?: StudioRouteOptions): string {
   if (options?.scopeId?.trim()) {
     params.set('scopeId', options.scopeId.trim());
   }
-  const memberId = resolveStableStudioMemberId(
+  const normalizedMemberKey = normalizeStudioMemberKey(
     options?.memberKey,
+    options?.memberId,
+  );
+  const memberId = resolveStableStudioMemberId(
+    normalizedMemberKey,
     options?.memberId,
   );
   if (memberId) {
     params.set('memberId', memberId);
+  } else if (
+    !lifecycleStep &&
+    normalizedMemberKey?.trim() &&
+    normalizedMemberKey !== `member:${memberId}`
+  ) {
+    params.set('member', normalizedMemberKey);
   }
   if (options?.step) {
     params.set('step', options.step);
@@ -229,8 +243,18 @@ export function buildStudioWorkflowEditorRoute(options?: {
   template?: string;
   prompt?: string;
 } & Record<string, unknown>): string {
+  const normalizedMemberKey = normalizeStudioMemberKey(
+    options?.memberKey,
+    options?.memberId,
+  );
+  const workflowMemberKey =
+    normalizedMemberKey ||
+    buildStudioWorkflowMemberKey({
+      workflowId: options?.workflowId ?? null,
+    });
   return buildStudioRoute({
     ...options,
+    memberKey: workflowMemberKey,
     tab: 'studio',
   });
 }
@@ -264,8 +288,18 @@ export function buildStudioScriptsWorkspaceRoute(options?: {
   memberKey?: StudioMemberKey | string;
   scriptId?: string;
 } & Record<string, unknown>): string {
+  const normalizedMemberKey = normalizeStudioMemberKey(
+    options?.memberKey,
+    options?.memberId,
+  );
+  const scriptMemberKey =
+    normalizedMemberKey ||
+    (trimOptional(options?.scriptId)
+      ? (`script:${trimOptional(options?.scriptId)}` as const)
+      : undefined);
   return buildStudioRoute({
     ...options,
+    memberKey: scriptMemberKey,
     tab: 'scripts',
   });
 }
