@@ -76,6 +76,7 @@ public static class ScopeServiceEndpoints
         group.MapPost("/{scopeId}/runs/{runId}:resume", HandleResumeDefaultRunAsync);
         group.MapPost("/{scopeId}/runs/{runId}:signal", HandleSignalDefaultRunAsync);
         group.MapPost("/{scopeId}/runs/{runId}:stop", HandleStopDefaultRunAsync);
+        group.MapGet("/{scopeId}/services", HandleListScopeServicesAsync);
         group.MapPost("/{scopeId}/services/{serviceId}/invoke/{endpointId}:stream", HandleInvokeStreamAsync);
         group.MapPost("/{scopeId}/services/{serviceId}/invoke/{endpointId}", HandleInvokeAsync);
         group.MapGet("/{scopeId}/services/{serviceId}/revisions", HandleGetServiceRevisionsAsync);
@@ -215,6 +216,38 @@ public static class ScopeServiceEndpoints
                 message = ex.Message,
             });
         }
+    }
+
+    private static async Task<IResult> HandleListScopeServicesAsync(
+        HttpContext http,
+        string scopeId,
+        string? appId,
+        int? take,
+        [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
+        var normalizedScopeId = ScopeWorkflowCapabilityOptions.NormalizeRequired(scopeId, nameof(scopeId));
+        var resolvedAppId = NormalizeOptional(appId)
+            ?? ScopeWorkflowCapabilityOptions.NormalizeRequired(
+                options.Value.ServiceAppId,
+                nameof(ScopeWorkflowCapabilityOptions.ServiceAppId));
+        var resolvedNamespace = ScopeWorkflowCapabilityOptions.NormalizeRequired(
+            options.Value.ServiceNamespace,
+            nameof(ScopeWorkflowCapabilityOptions.ServiceNamespace));
+
+        var services = await lifecycleQueryPort.ListServicesAsync(
+            normalizedScopeId,
+            resolvedAppId,
+            resolvedNamespace,
+            take.GetValueOrDefault(200),
+            ct);
+
+
+        return Results.Ok(services);
     }
 
     private static async Task<IResult> HandleGetBindingAsync(
