@@ -11,15 +11,18 @@ public sealed class ScopeScriptCommandApplicationService : IScopeScriptCommandPo
 {
     private readonly IScriptDefinitionCommandPort _definitionCommandPort;
     private readonly IScriptCatalogCommandPort _catalogCommandPort;
+    private readonly IScriptAuthorityReadModelActivationPort _authorityReadModelActivationPort;
     private readonly ScopeScriptCapabilityOptions _options;
 
     public ScopeScriptCommandApplicationService(
         IScriptDefinitionCommandPort definitionCommandPort,
         IScriptCatalogCommandPort catalogCommandPort,
+        IScriptAuthorityReadModelActivationPort authorityReadModelActivationPort,
         IOptions<ScopeScriptCapabilityOptions> options)
     {
         _definitionCommandPort = definitionCommandPort ?? throw new ArgumentNullException(nameof(definitionCommandPort));
         _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
+        _authorityReadModelActivationPort = authorityReadModelActivationPort ?? throw new ArgumentNullException(nameof(authorityReadModelActivationPort));
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value ?? throw new InvalidOperationException("Scope script capability options are required.");
     }
@@ -39,6 +42,9 @@ public sealed class ScopeScriptCommandApplicationService : IScopeScriptCommandPo
         var catalogActorId = _options.BuildCatalogActorId(normalizedScopeId);
         var sourceHash = ComputeSha256(sourceText);
         var proposalId = BuildProposalId(normalizedScopeId, normalizedScriptId, revisionId);
+
+        await _authorityReadModelActivationPort.ActivateAsync(definitionActorId, ct);
+        await _authorityReadModelActivationPort.ActivateAsync(catalogActorId, ct);
 
         var definitionUpsert = await _definitionCommandPort.UpsertDefinitionWithSnapshotAsync(
             normalizedScriptId,
