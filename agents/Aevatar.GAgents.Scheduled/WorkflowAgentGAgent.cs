@@ -177,7 +177,7 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
             SessionId: null,
             InputParts: null,
             WorkflowYamls: null,
-            Metadata: BuildExecutionMetadata(),
+            Metadata: await BuildExecutionMetadataAsync(ct),
             ScopeId: State.ScopeId);
 
         var dispatch = await dispatchService.DispatchAsync(request, ct);
@@ -187,7 +187,7 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
         return dispatch.Receipt;
     }
 
-    private IReadOnlyDictionary<string, string> BuildExecutionMetadata()
+    private async Task<IReadOnlyDictionary<string, string>> BuildExecutionMetadataAsync(CancellationToken ct)
     {
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -206,7 +206,49 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
             metadata[ChannelMetadataKeys.LarkReceiveIdType] = State.LarkReceiveIdType;
         if (!string.IsNullOrWhiteSpace(State.NyxProviderSlug))
             metadata[ChannelMetadataKeys.LarkOutboundProxySlug] = State.NyxProviderSlug;
+
+        // Mirror SkillRunnerGAgent.ApplyOwnerLlmConfigAsync so workflow-backed agents (e.g.
+        // social_media) honor the bot owner's UserConfig (DefaultModel + PreferredLlmRoute +
+        // MaxToolRounds) the same way nyxid-chat does. Without this, the workflow's LLM steps
+        // fall through to NyxIdLLMProvider's compile-time default route + model and 400 when
+        // the bot owner pre-configured a custom NyxID service like `chrono-llm` instead of
+        // OpenAI.
+        await ApplyOwnerLlmConfigAsync(metadata, ct);
         return metadata;
+    }
+
+    private async Task ApplyOwnerLlmConfigAsync(IDictionary<string, string> metadata, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(State.ScopeId))
+            return;
+
+        var queryPort = Services?.GetService<Aevatar.Studio.Application.Studio.Abstractions.IUserConfigQueryPort>();
+        if (queryPort is null)
+            return;
+
+        try
+        {
+            var config = await queryPort.GetAsync(State.ScopeId, ct);
+            if (!string.IsNullOrWhiteSpace(config.DefaultModel))
+                metadata[LLMRequestMetadataKeys.ModelOverride] = config.DefaultModel.Trim();
+            if (!string.IsNullOrWhiteSpace(config.PreferredLlmRoute))
+                metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = config.PreferredLlmRoute.Trim();
+            if (config.MaxToolRounds > 0)
+                metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride] =
+                    config.MaxToolRounds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(
+                ex,
+                "Workflow agent {ActorId}: failed to load owner UserConfig for scope {ScopeId}; falling back to provider defaults",
+                Id,
+                State.ScopeId);
+        }
     }
 
     private string BuildExecutionPrompt(string? reason, string? revisionFeedback)

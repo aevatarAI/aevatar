@@ -742,6 +742,160 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         handler.Requests.Should().HaveCount(2);
     }
 
+    [Fact]
+    public async Task BuildExecutionMetadata_ShouldApplyOwnerUserConfigOverrides_WhenScopedConfigExists()
+    {
+        // Regression for the "/daily failed: Provider 'openai' not connected" report:
+        // skill runners must honor the bot owner's UserConfig (DefaultModel +
+        // PreferredLlmRoute + MaxToolRounds) the same way ChannelLlmReplyInboxRuntime does
+        // for nyxid-chat. Without this, every scheduled run falls through to
+        // NyxIdLLMProvider's compile-time `gpt-5.4` + gateway default, which the gateway
+        // routes to OpenAI — failing for every bot owner who pre-configured a custom NyxID
+        // service like `chrono-llm` at `/api/v1/proxy/s/chrono-llm`.
+        var stubConfig = new Aevatar.Studio.Application.Studio.Abstractions.UserConfig(
+            DefaultModel: "gpt-5.5",
+            PreferredLlmRoute: "/api/v1/proxy/s/chrono-llm",
+            MaxToolRounds: 7);
+        var queryPort = new StubUserConfigQueryPort(stubConfig);
+
+        using var provider = BuildServiceProvider(
+            new InMemoryEventStore(),
+            services =>
+            {
+                services.AddSingleton<Aevatar.Studio.Application.Studio.Abstractions.IUserConfigQueryPort>(queryPort);
+            });
+
+        var agent = CreateAgent("skill-runner-userconfig", provider);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateInitializeCommand());
+
+        var metadata = await InvokeBuildExecutionMetadataAsync(agent);
+
+        metadata[Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.ModelOverride]
+            .Should().Be("gpt-5.5");
+        metadata[Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.NyxIdRoutePreference]
+            .Should().Be("/api/v1/proxy/s/chrono-llm");
+        metadata[Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.MaxToolRoundsOverride]
+            .Should().Be("7");
+        queryPort.RequestedScopeIds.Should().ContainSingle().Which.Should().Be("scope-1");
+    }
+
+    [Fact]
+    public async Task BuildExecutionMetadata_ShouldOmitOverrides_WhenUserConfigQueryPortIsAbsent()
+    {
+        // When the host doesn't register IUserConfigQueryPort (e.g. integration scenarios
+        // where the projection package isn't wired), the skill runner must still produce
+        // valid metadata and let NyxIdLLMProvider fall through to its compile-time defaults.
+        // No override keys leak into metadata.
+        await _agent.HandleInitializeAsync(CreateInitializeCommand());
+
+        var metadata = await InvokeBuildExecutionMetadataAsync(_agent);
+
+        metadata.Should().NotContainKey(Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.ModelOverride);
+        metadata.Should().NotContainKey(Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.NyxIdRoutePreference);
+        metadata.Should().NotContainKey(Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.MaxToolRoundsOverride);
+        metadata[Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.NyxIdAccessToken]
+            .Should().Be("nyx-api-key");
+    }
+
+    [Fact]
+    public async Task BuildExecutionMetadata_ShouldOmitOverrides_WhenUserConfigFieldsAreEmpty()
+    {
+        // The query-port contract returns a UserConfig with empty fields (not null) for
+        // bot owners who haven't saved any LLM preference. We must NOT override metadata
+        // with empty strings, because NyxIdLLMProvider treats a non-empty
+        // NyxIdRoutePreference of "" as a relative path against the authority and
+        // produces an invalid URL. Default + non-empty checks both happen here.
+        var stubConfig = new Aevatar.Studio.Application.Studio.Abstractions.UserConfig(
+            DefaultModel: string.Empty,
+            PreferredLlmRoute: string.Empty,
+            MaxToolRounds: 0);
+
+        using var provider = BuildServiceProvider(
+            new InMemoryEventStore(),
+            services =>
+            {
+                services.AddSingleton<Aevatar.Studio.Application.Studio.Abstractions.IUserConfigQueryPort>(
+                    new StubUserConfigQueryPort(stubConfig));
+            });
+
+        var agent = CreateAgent("skill-runner-userconfig-empty", provider);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateInitializeCommand());
+
+        var metadata = await InvokeBuildExecutionMetadataAsync(agent);
+
+        metadata.Should().NotContainKey(Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.ModelOverride);
+        metadata.Should().NotContainKey(Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.NyxIdRoutePreference);
+        metadata.Should().NotContainKey(Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.MaxToolRoundsOverride);
+    }
+
+    [Fact]
+    public async Task BuildExecutionMetadata_ShouldFallBackQuietly_WhenUserConfigQueryThrows()
+    {
+        // The query port can throw on transient projection failures. The skill runner
+        // execution must still proceed with provider defaults — ApplyOwnerLlmConfigAsync
+        // catches and logs, never bubbles up.
+        using var provider = BuildServiceProvider(
+            new InMemoryEventStore(),
+            services =>
+            {
+                services.AddSingleton<Aevatar.Studio.Application.Studio.Abstractions.IUserConfigQueryPort>(
+                    new ThrowingUserConfigQueryPort());
+            });
+
+        var agent = CreateAgent("skill-runner-userconfig-throws", provider);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateInitializeCommand());
+
+        var metadata = await InvokeBuildExecutionMetadataAsync(agent);
+
+        metadata.Should().NotContainKey(Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.ModelOverride);
+        metadata.Should().NotContainKey(Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.NyxIdRoutePreference);
+    }
+
+    private static async Task<IReadOnlyDictionary<string, string>> InvokeBuildExecutionMetadataAsync(
+        SkillRunnerGAgent agent)
+    {
+        var method = typeof(SkillRunnerGAgent).GetMethod(
+            "BuildExecutionMetadataAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        method.Should().NotBeNull();
+        var task = (Task<IReadOnlyDictionary<string, string>>)method!.Invoke(agent, [CancellationToken.None])!;
+        return await task;
+    }
+
+    private sealed class StubUserConfigQueryPort(
+        Aevatar.Studio.Application.Studio.Abstractions.UserConfig config)
+        : Aevatar.Studio.Application.Studio.Abstractions.IUserConfigQueryPort
+    {
+        public List<string?> RequestedScopeIds { get; } = new();
+
+        public Task<Aevatar.Studio.Application.Studio.Abstractions.UserConfig> GetAsync(CancellationToken ct = default)
+        {
+            RequestedScopeIds.Add(null);
+            return Task.FromResult(config);
+        }
+
+        public Task<Aevatar.Studio.Application.Studio.Abstractions.UserConfig> GetAsync(
+            string scopeId, CancellationToken ct = default)
+        {
+            RequestedScopeIds.Add(scopeId);
+            return Task.FromResult(config);
+        }
+    }
+
+    private sealed class ThrowingUserConfigQueryPort
+        : Aevatar.Studio.Application.Studio.Abstractions.IUserConfigQueryPort
+    {
+        public Task<Aevatar.Studio.Application.Studio.Abstractions.UserConfig> GetAsync(CancellationToken ct = default) =>
+            throw new InvalidOperationException("projection unavailable");
+
+        public Task<Aevatar.Studio.Application.Studio.Abstractions.UserConfig> GetAsync(
+            string scopeId, CancellationToken ct = default) =>
+            throw new InvalidOperationException("projection unavailable");
+    }
+
     private static void AttachNyxIdApiClient(SkillRunnerGAgent agent, HttpMessageHandler handler)
     {
         var client = new NyxIdApiClient(

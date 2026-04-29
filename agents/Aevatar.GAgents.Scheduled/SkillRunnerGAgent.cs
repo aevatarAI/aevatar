@@ -296,7 +296,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         _toolFailureCounter.Reset();
 
         var prompt = BuildExecutionPrompt(now, reason);
-        var metadata = BuildExecutionMetadata();
+        var metadata = await BuildExecutionMetadataAsync(ct);
         var requestId = Guid.NewGuid().ToString("N");
         var content = new StringBuilder();
 
@@ -685,7 +685,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         }
     }
 
-    private IReadOnlyDictionary<string, string> BuildExecutionMetadata()
+    private async Task<IReadOnlyDictionary<string, string>> BuildExecutionMetadataAsync(CancellationToken ct)
     {
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -694,7 +694,50 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         };
         if (!string.IsNullOrWhiteSpace(State.ScopeId))
             metadata["scope_id"] = State.ScopeId;
+
+        // Apply the bot owner's UserConfig (DefaultModel + PreferredLlmRoute + MaxToolRounds)
+        // exactly like ChannelLlmReplyInboxRuntime does for nyxid-chat. Without this, the
+        // skill runner falls through to NyxIdLLMProvider's compile-time defaults
+        // (`gpt-5.4` against `/api/v1/llm/gateway/v1/`), which the gateway routes to the
+        // OpenAI provider. Bot owners running their own LLM through a custom NyxID service
+        // (e.g. `chrono-llm` at `/api/v1/proxy/s/chrono-llm`) would see HTTP 400
+        // "Provider 'openai' not connected" because their gateway has no OpenAI grant.
+        await ApplyOwnerLlmConfigAsync(metadata, ct);
         return metadata;
+    }
+
+    private async Task ApplyOwnerLlmConfigAsync(IDictionary<string, string> metadata, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(State.ScopeId))
+            return;
+
+        var queryPort = Services?.GetService<Aevatar.Studio.Application.Studio.Abstractions.IUserConfigQueryPort>();
+        if (queryPort is null)
+            return;
+
+        try
+        {
+            var config = await queryPort.GetAsync(State.ScopeId, ct);
+            if (!string.IsNullOrWhiteSpace(config.DefaultModel))
+                metadata[LLMRequestMetadataKeys.ModelOverride] = config.DefaultModel.Trim();
+            if (!string.IsNullOrWhiteSpace(config.PreferredLlmRoute))
+                metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = config.PreferredLlmRoute.Trim();
+            if (config.MaxToolRounds > 0)
+                metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride] =
+                    config.MaxToolRounds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(
+                ex,
+                "Skill runner {ActorId}: failed to load owner UserConfig for scope {ScopeId}; falling back to provider defaults",
+                Id,
+                State.ScopeId);
+        }
     }
 
     private string BuildExecutionPrompt(DateTimeOffset now, string? reason)
