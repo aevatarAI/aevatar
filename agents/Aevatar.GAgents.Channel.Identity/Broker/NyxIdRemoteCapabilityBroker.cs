@@ -108,14 +108,26 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         using var request = new HttpRequestMessage(HttpMethod.Delete, $"{TrimAuthority()}{BindingsEndpoint}/{Uri.EscapeDataString(bindingId)}");
         ApplyClientSecretBasic(request);
         using var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
-        if ((int)response.StatusCode >= 500)
-        {
-            _logger.LogError(
-                "NyxID revoke binding failed: status={StatusCode}, binding_id={BindingId}",
-                (int)response.StatusCode,
-                bindingId);
-            response.EnsureSuccessStatusCode();
-        }
+
+        // 404 / 410 — binding already gone (NyxID-side revoke beat us, or
+        // the id was never persisted). DELETE is idempotent; treat as success.
+        if ((int)response.StatusCode is 404 or 410)
+            return;
+
+        if (response.IsSuccessStatusCode)
+            return;
+
+        // Anything else (401/403 client misauth, 422 validation, 5xx server
+        // outage, etc.) is a real error. Surface body context for diagnosis
+        // and throw so the caller can decide whether to retry / abort the
+        // unbind workflow rather than masking it as success.
+        var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        _logger.LogError(
+            "NyxID revoke binding failed: status={StatusCode}, binding_id={BindingId}, body={Body}",
+            (int)response.StatusCode,
+            bindingId,
+            Truncate(body, 256));
+        response.EnsureSuccessStatusCode();
     }
 
     public async Task<CapabilityHandle> IssueShortLivedAsync(

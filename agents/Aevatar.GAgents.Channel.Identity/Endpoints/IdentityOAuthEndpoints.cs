@@ -32,7 +32,6 @@ namespace Aevatar.GAgents.Channel.Identity.Endpoints;
 /// </summary>
 public static class IdentityOAuthEndpoints
 {
-    private const string ProjectionReadmodelId = "external-identity-binding";
     private static readonly TimeSpan ProjectionWaitTimeout = TimeSpan.FromSeconds(3);
 
     public static IEndpointRouteBuilder MapIdentityOAuthEndpoints(this IEndpointRouteBuilder app)
@@ -126,7 +125,7 @@ public static class IdentityOAuthEndpoints
         try
         {
             await projectionReadiness
-                .WaitForEventAsync(commitEnvelope.Id, actorId, ProjectionWaitTimeout, ct)
+                .WaitForBindingStateAsync(subject, exchange.BindingId, ProjectionWaitTimeout, ct)
                 .ConfigureAwait(false);
         }
         catch (TimeoutException)
@@ -136,9 +135,9 @@ public static class IdentityOAuthEndpoints
             // and resend rather than block longer (ADR-0017 §Implementation
             // Notes #3).
             logger.LogWarning(
-                "Projection readiness timed out for actor={ActorId}, event={EventId}; binding is committed but readmodel is lagging",
+                "Projection readiness timed out for actor={ActorId}, expected binding={BindingId}; binding is committed but readmodel is lagging",
                 actorId,
-                commitEnvelope.Id);
+                exchange.BindingId);
             return Results.Json(new
             {
                 status = "binding_pending_propagation",

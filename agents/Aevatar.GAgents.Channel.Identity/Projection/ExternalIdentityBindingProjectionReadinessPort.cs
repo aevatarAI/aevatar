@@ -1,11 +1,13 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 
 namespace Aevatar.GAgents.Channel.Identity;
 
 /// <summary>
-/// Polls the binding projection until the document for
-/// <paramref name="readmodelId"/> reports <c>LastEventId == eventId</c> or the
+/// Polls the binding projection until the document for the given external
+/// subject reports the expected state (active binding with the expected id,
+/// or post-revoke when <paramref name="expectedBindingId"/> is null) or the
 /// timeout elapses. Used by the OAuth callback handler on the write-side
 /// completion path so the next inbound message after binding is guaranteed
 /// to see the binding via <see cref="IExternalIdentityBindingQueryPort"/>.
@@ -26,28 +28,39 @@ public sealed class ExternalIdentityBindingProjectionReadinessPort : IProjection
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
-    public async Task WaitForEventAsync(
-        string eventId,
-        string readmodelId,
+    public async Task WaitForBindingStateAsync(
+        ExternalSubjectRef externalSubject,
+        string? expectedBindingId,
         TimeSpan timeout,
         CancellationToken ct = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(eventId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(readmodelId);
+        ExternalSubjectRefExtensions.EnsureValid(externalSubject);
 
+        var actorId = externalSubject.ToActorId();
         var deadline = _timeProvider.GetUtcNow() + timeout;
         while (true)
         {
             ct.ThrowIfCancellationRequested();
-            var document = await _reader.GetAsync(readmodelId, ct).ConfigureAwait(false);
-            if (document is not null && string.Equals(document.LastEventId, eventId, StringComparison.Ordinal))
+            var document = await _reader.GetAsync(actorId, ct).ConfigureAwait(false);
+            if (Matches(document, expectedBindingId))
                 return;
 
             if (_timeProvider.GetUtcNow() >= deadline)
                 throw new TimeoutException(
-                    $"Projection readmodel {readmodelId} did not catch up to event {eventId} within {timeout.TotalSeconds:F1}s.");
+                    expectedBindingId is null
+                        ? $"Binding readmodel for {actorId} did not observe the revoke within {timeout.TotalSeconds:F1}s."
+                        : $"Binding readmodel for {actorId} did not observe binding_id={expectedBindingId} within {timeout.TotalSeconds:F1}s.");
 
             await Task.Delay(PollInterval, ct).ConfigureAwait(false);
         }
+    }
+
+    private static bool Matches(ExternalIdentityBindingDocument? document, string? expectedBindingId)
+    {
+        if (document is null)
+            return false;
+        if (expectedBindingId is null)
+            return string.IsNullOrEmpty(document.BindingId);
+        return string.Equals(document.BindingId, expectedBindingId, StringComparison.Ordinal);
     }
 }

@@ -145,10 +145,31 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return null;
         }
 
+        // Tenant resolution priority (avoids cross-tenant identity collapse on
+        // multi-tenant platforms like Lark — see ADR-0017 §Actor Architecture):
+        //   1. Platform adapter populated `tenant` / `open_tenant_id` in
+        //      InboundMessage.Extra. Preferred — adapter knows its own scope.
+        //   2. Fall back to `registration.ScopeId` so the binding is at least
+        //      per-bot-scoped (each bot is registered to one tenant; same
+        //      sender across two bots in two tenants becomes two bindings).
+        //   3. As a last resort, refuse the slash command rather than commit
+        //      a tenant-collapsed binding — production deployments MUST
+        //      surface this as a configuration error.
+        var tenant = ResolveTenant(inbound, registration);
+        if (tenant is null)
+        {
+            _logger.LogWarning(
+                "Slash command rejected: cannot resolve tenant for platform={Platform}, sender={Sender}, registration={RegistrationId}",
+                inbound.Platform,
+                inbound.SenderId,
+                registration.Id);
+            return null;
+        }
+
         var subject = new ExternalSubjectRef
         {
             Platform = inbound.Platform.Trim().ToLowerInvariant(),
-            Tenant = string.Empty,
+            Tenant = tenant,
             ExternalUserId = inbound.SenderId.Trim(),
         };
 
@@ -198,6 +219,27 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             registration,
             runtimeContext,
             ct);
+    }
+
+    private static string? ResolveTenant(InboundMessage inbound, ChannelBotRegistrationEntry registration)
+    {
+        // Platform adapters set `open_tenant_id` (Lark) or `tenant` (generic)
+        // in InboundMessage.Extra when the inbound carries a typed tenant.
+        if (inbound.Extra.TryGetValue("open_tenant_id", out var openTenant) && !string.IsNullOrWhiteSpace(openTenant))
+            return openTenant.Trim();
+        if (inbound.Extra.TryGetValue("tenant", out var tenant) && !string.IsNullOrWhiteSpace(tenant))
+            return tenant.Trim();
+
+        // Fall back to the bot's registration scope id so bindings stay at
+        // least per-bot-scoped — each registration is bound to a single
+        // tenant on the NyxID side. This is a pragmatic safety net that
+        // avoids cross-bot collapse; production adapters should populate the
+        // typed tenant key above so the binding scope matches platform
+        // semantics exactly.
+        if (!string.IsNullOrWhiteSpace(registration.ScopeId))
+            return registration.ScopeId.Trim();
+
+        return null;
     }
 
     public async Task<ConversationTurnResult> RunLlmReplyAsync(
