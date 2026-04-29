@@ -1,0 +1,26 @@
+# Default fallback — any path with no other rule routes here
+*                                                       @loning
+
+# ─── Architecture canon & ADRs (CEO sign-off) ──────────────
+/CLAUDE.md                                              @loning
+/docs/canon/                                            @loning
+/docs/adr/                                              @loning
+
+# ─── Core actor / channel runtime (highest blast radius) ───
+/agents/Aevatar.GAgents.ChannelRuntime/                 @louis4li @loning
+/agents/channels/                                       @louis4li @loning
+/agents/Aevatar.GAgents.NyxidChat/                      @louis4li @loning
+/agents/Aevatar.GAgents.NyxIdRelay/                     @louis4li @loning
+**/*.proto                                              @louis4li @loning
+
+# ─── Platform internals (CQRS, projection, scripting) ──────
+/src/platform/                                          @louis4li
+/src/Aevatar.Studio.Application/                        @louis4li @loning
+
+# ─── Studio frontend (existing review pair) ────────────────
+/apps/aevatar-console-web/                              @AbigailDeng @potter-sun
+
+# ─── CI guards & engineering discipline ────────────────────
+/tools/ci/                                              @louis4li @loning
+/.github/workflows/                                     @louis4li @loning
+/.github/CODEOWNERS                                     @loning
