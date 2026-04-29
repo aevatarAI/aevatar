@@ -187,20 +187,15 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleEventAsync_AcceptsEnvelopeForKnownPayload()
+    public async Task HandleEventAsync_DispatchesCommitBindingThroughEnvelope()
     {
-        // Earlier rounds (mimo-v2.5-pro L37) flagged that the test suite
-        // never exercises the envelope -> [EventHandler] dispatch path,
-        // only the handler bodies. Direct-instantiated agents can call
-        // HandleEventAsync without the runtime — what we can verify here is
-        // that the framework accepts a well-formed envelope carrying a
-        // CommitBindingCommand without throwing.  The actor pipeline only
-        // resolves [EventHandler] methods when it has been bootstrapped via
-        // the Orleans cluster (so directly-instantiated agents see a
-        // narrower handler set), which is why state isn't asserted here —
-        // the deeper "envelope through the [EventHandler] reflection path"
-        // case lands in the Orleans-test-cluster follow-up tracked at the
-        // top of this file.
+        // Earlier rounds (mimo-v2.5-pro L37 / codex L50) flagged that the
+        // test suite did not exercise the envelope -> [EventHandler] dispatch
+        // path, only the handler bodies. This test packs a
+        // CommitBindingCommand into an EventEnvelope, drives it through
+        // HandleEventAsync, and asserts the resulting state mutation. If
+        // the [EventHandler] reflection / handler.CanHandle wiring drifts,
+        // this assertion fires.
         var subject = SampleSubject();
         var envelope = new EventEnvelope
         {
@@ -213,9 +208,10 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
             }),
         };
 
-        var act = () => _agent.HandleEventAsync(envelope, default);
+        await _agent.HandleEventAsync(envelope, default);
 
-        await act.Should().NotThrowAsync();
+        _agent.State.BindingId.Should().Be("bnd_dispatched");
+        _agent.State.BoundAt.Should().NotBeNull();
     }
 
     [Fact]

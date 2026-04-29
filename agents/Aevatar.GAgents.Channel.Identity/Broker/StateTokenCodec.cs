@@ -35,10 +35,34 @@ public sealed class StateTokenCodec
     }
 
     private NyxIdBrokerOptions _options => _optionsMonitor.CurrentValue;
+
+    // Cached HMAC key bytes invalidated by a key-string fingerprint. Encoding
+    // the UTF-8 key on every sign call is wasted work for a singleton codec
+    // (mimo-v2.5-pro L145 / L181); using an IOptionsMonitor still requires
+    // per-call freshness, so we re-encode only when the underlying key
+    // changes, keyed by the raw key string.
+    private string? _cachedKeySource;
+    private byte[] _cachedKeyBytes = Array.Empty<byte>();
+    private readonly object _keyCacheGate = new();
+
     private byte[] HmacKeyBytes()
     {
         var key = _options.StateTokenHmacKey;
-        return string.IsNullOrEmpty(key) ? Array.Empty<byte>() : Encoding.UTF8.GetBytes(key);
+        if (string.IsNullOrEmpty(key))
+            return Array.Empty<byte>();
+
+        if (ReferenceEquals(_cachedKeySource, key) || string.Equals(_cachedKeySource, key, StringComparison.Ordinal))
+            return _cachedKeyBytes;
+
+        lock (_keyCacheGate)
+        {
+            if (ReferenceEquals(_cachedKeySource, key) || string.Equals(_cachedKeySource, key, StringComparison.Ordinal))
+                return _cachedKeyBytes;
+
+            _cachedKeyBytes = Encoding.UTF8.GetBytes(key);
+            _cachedKeySource = key;
+            return _cachedKeyBytes;
+        }
     }
 
     public string Encode(string correlationId, ExternalSubjectRef externalSubject, string pkceVerifier)

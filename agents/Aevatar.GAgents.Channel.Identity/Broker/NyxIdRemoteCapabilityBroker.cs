@@ -34,22 +34,28 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
     };
 
     private readonly HttpClient _http;
-    private readonly NyxIdBrokerOptions _options;
+    private readonly Microsoft.Extensions.Options.IOptionsMonitor<NyxIdBrokerOptions> _optionsMonitor;
     private readonly StateTokenCodec _stateTokenCodec;
     private readonly IExternalIdentityBindingQueryPort _queryPort;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<NyxIdRemoteCapabilityBroker> _logger;
 
+    // Resolve options on each access so config reload (e.g. rotated
+    // client_secret, updated authority, refreshed redirect URI) is observed
+    // without a process restart (glm-5.1 L73). The codec already does the
+    // same; pinning the broker to IOptionsMonitor keeps the contract uniform.
+    private NyxIdBrokerOptions _options => _optionsMonitor.CurrentValue;
+
     public NyxIdRemoteCapabilityBroker(
         HttpClient http,
-        NyxIdBrokerOptions options,
+        Microsoft.Extensions.Options.IOptionsMonitor<NyxIdBrokerOptions> optionsMonitor,
         StateTokenCodec stateTokenCodec,
         IExternalIdentityBindingQueryPort queryPort,
         TimeProvider timeProvider,
         ILogger<NyxIdRemoteCapabilityBroker> logger)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
-        _options = options ?? throw new ArgumentNullException(nameof(options));
+        _optionsMonitor = optionsMonitor ?? throw new ArgumentNullException(nameof(optionsMonitor));
         _stateTokenCodec = stateTokenCodec ?? throw new ArgumentNullException(nameof(stateTokenCodec));
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));

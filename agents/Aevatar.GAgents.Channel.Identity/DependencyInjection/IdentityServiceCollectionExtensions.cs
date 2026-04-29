@@ -71,16 +71,21 @@ public static class IdentityServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        // AddOptions wires up the IOptionsMonitor<NyxIdBrokerOptions> machinery
+        // unconditionally so callers without an IConfiguration (e.g. tests
+        // that programmatically push options) still resolve the monitor.
+        services.AddOptions<NyxIdBrokerOptions>();
         if (configuration is not null)
         {
             services.Configure<NyxIdBrokerOptions>(configuration.GetSection("Aevatar:NyxIdBroker"));
         }
 
-        // Inject as IOptionsMonitor so config reload (e.g. rotating
-        // StateTokenHmacKey) is observed without a process restart.
-        // (glm-5.1 minor: previous IOptions snapshot froze on first resolve.)
-        services.TryAddSingleton(static sp =>
-            sp.GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<NyxIdBrokerOptions>>().CurrentValue);
+        // Both NyxIdRemoteCapabilityBroker and StateTokenCodec consume
+        // IOptionsMonitor<NyxIdBrokerOptions> directly so config reload is
+        // observed without a process restart (glm-5.1 L73). No snapshot
+        // registration of NyxIdBrokerOptions is needed — leaving it out
+        // also disambiguates ctor selection for StateTokenCodec, which has
+        // a snapshot-friendly convenience overload reserved for tests.
         services.TryAddSingleton(sp => TimeProvider.System);
         services.TryAddSingleton<StateTokenCodec>();
 
