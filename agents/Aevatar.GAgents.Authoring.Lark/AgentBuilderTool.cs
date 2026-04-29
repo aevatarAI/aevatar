@@ -266,9 +266,22 @@ public sealed class AgentBuilderTool : IAgentTool
             return gitHubAuthorizationResponse;
 
         var providerSlug = (args.Str("nyx_provider_slug") ?? "api-lark-bot").Trim();
-        var requiredServiceIds = await ResolveProxyServiceIdsAsync(nyxClient, token, templateSpec!.RequiredServiceSlugs, ct);
-        if (requiredServiceIds.errorJson != null)
-            return requiredServiceIds.errorJson;
+        var serviceResolution = await ResolveProxyServiceIdsAsync(nyxClient, token, templateSpec!.RequiredServiceSlugs, ct);
+        if (serviceResolution.ErrorJson != null)
+            return serviceResolution.ErrorJson;
+
+        // Issue #423 §C — capture the inbound channel-bot slug as a failure-notification
+        // fallback. By definition the user can be reached through the bot they just
+        // messaged, so when a primary outbound delivery is rejected (e.g. cross-tenant
+        // Lark `99992364`) the failure-notification message can still land if the agent's
+        // API key is allowed to route through the inbound bot. Optional: if the inbound
+        // slug is not registered as a per-user UserService row (or equals the primary,
+        // in which case the fallback would just hit the same proxy), we leave the field
+        // empty and TrySendFailureAsync degrades to the current single-attempt behavior.
+        var failureNotificationContext = ResolveFailureNotificationContext(
+            providerSlug,
+            serviceResolution.RequiredIds!,
+            serviceResolution.EligibleIdBySlug);
 
         var agentId = string.IsNullOrWhiteSpace(args.Str("agent_id"))
             ? SkillRunnerDefaults.GenerateActorId()
@@ -276,7 +289,7 @@ public sealed class AgentBuilderTool : IAgentTool
 
         var createKeyResponse = await nyxClient.CreateApiKeyAsync(
             token,
-            BuildCreateApiKeyPayload(agentId, requiredServiceIds.value!),
+            BuildCreateApiKeyPayload(agentId, failureNotificationContext.AllowedServiceIds),
             ct);
 
         if (IsErrorPayload(createKeyResponse))
@@ -295,7 +308,13 @@ public sealed class AgentBuilderTool : IAgentTool
         // each `/daily` retry doesn't leave another orphan proxy-scoped key behind in the
         // user's NyxID account. The revoke is best-effort cleanup, not a safety claim about
         // the key's correctness.
-        var preflight = await PreflightGitHubProxyAsync(nyxClient, apiKeyValue!, providerSlug, ct);
+        var preflight = await PreflightGitHubProxyAsync(
+            nyxClient,
+            apiKeyValue!,
+            githubUsernameResolution.GithubUsername ?? string.Empty,
+            templateSpec!.Repositories,
+            providerSlug,
+            ct);
         if (preflight is not null)
         {
             await BestEffortRevokeApiKeyAsync(nyxClient, token, apiKeyId!, "github_preflight_failed", ct);
@@ -322,6 +341,7 @@ public sealed class AgentBuilderTool : IAgentTool
             LarkReceiveIdFallback = deliveryTarget.Fallback?.ReceiveId ?? string.Empty,
             LarkReceiveIdTypeFallback = deliveryTarget.Fallback?.ReceiveIdType ?? string.Empty,
             OwnerScope = caller.Clone(),
+            FailureNotificationProviderSlug = failureNotificationContext.FailureSlug ?? string.Empty,
         };
 #pragma warning restore CS0612
 
@@ -439,17 +459,17 @@ public sealed class AgentBuilderTool : IAgentTool
         // hardcoded `[providerSlug, publishProviderSlug]` was fine for two slugs but would
         // drift if a third slug were ever added; route through the spec so the source of
         // truth lives next to the workflow YAML.
-        var requiredServiceIds = await ResolveProxyServiceIdsAsync(
+        var serviceResolution = await ResolveProxyServiceIdsAsync(
             nyxClient,
             token,
             templateSpec!.RequiredServiceSlugs,
             ct);
-        if (requiredServiceIds.errorJson != null)
-            return requiredServiceIds.errorJson;
+        if (serviceResolution.ErrorJson != null)
+            return serviceResolution.ErrorJson;
 
         var createKeyResponse = await nyxClient.CreateApiKeyAsync(
             token,
-            BuildCreateApiKeyPayload(agentId, requiredServiceIds.value!),
+            BuildCreateApiKeyPayload(agentId, serviceResolution.RequiredIds!),
             ct);
 
         if (IsErrorPayload(createKeyResponse))
@@ -1040,29 +1060,45 @@ public sealed class AgentBuilderTool : IAgentTool
     /// slug, and skip org-shared rows the caller cannot use as a proxy target — those would later
     /// surface as a less-actionable <c>org_role_insufficient</c> error.</para>
     /// </remarks>
-    private async Task<(IReadOnlyList<string>? value, string? errorJson)> ResolveProxyServiceIdsAsync(
+    /// <summary>
+    /// Result of <see cref="ResolveProxyServiceIdsAsync"/>. <see cref="RequiredIds"/> /
+    /// <see cref="ErrorJson"/> are mutually exclusive (success vs. blocking error). Even on
+    /// success, callers can use <see cref="EligibleIdBySlug"/> to look up <em>optional</em>
+    /// slugs that were not in <c>requiredSlugs</c> — e.g. the inbound channel-bot slug for
+    /// SkillRunner's failure-notification fallback (issue #423 §C). Optional lookups must
+    /// not block agent creation, so they go through this map instead of being added to
+    /// <c>requiredSlugs</c> (which would cause <see cref="ResolveProxyServiceIdsAsync"/> to
+    /// return a <c>service_not_connected</c> error if the slug is missing).
+    /// </summary>
+    private readonly record struct ProxyServiceResolutionResult(
+        IReadOnlyList<string>? RequiredIds,
+        string? ErrorJson,
+        IReadOnlyDictionary<string, string> EligibleIdBySlug);
+
+    private async Task<ProxyServiceResolutionResult> ResolveProxyServiceIdsAsync(
         NyxIdApiClient client,
         string token,
         IReadOnlyList<string> requiredSlugs,
         CancellationToken ct)
     {
+        var emptyEligible = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         if (requiredSlugs.Count == 0)
         {
-            return (null, JsonSerializer.Serialize(new
+            return new ProxyServiceResolutionResult(null, JsonSerializer.Serialize(new
             {
                 error = "no_required_slugs",
                 hint = "At least one required Nyx proxy service slug must be provided.",
-            }));
+            }), emptyEligible);
         }
 
         var response = await client.ListUserServicesAsync(token, ct);
         if (IsErrorPayload(response))
         {
-            return (null, JsonSerializer.Serialize(new
+            return new ProxyServiceResolutionResult(null, JsonSerializer.Serialize(new
             {
                 error = "user_services_unavailable",
                 hint = "Could not list connected Nyx user-services. Try again or check NyxID availability.",
-            }));
+            }), emptyEligible);
         }
 
         try
@@ -1120,17 +1156,29 @@ public sealed class AgentBuilderTool : IAgentTool
                 bestBySlug[slug] = candidate;
             }
 
+            // Snapshot the eligible (slug → id) map before the per-required-slug check so
+            // callers can look up optional slugs (e.g. inbound channel-bot for failure-
+            // notification fallback) without re-listing user-services. Ineligible rows are
+            // intentionally excluded — including them would let optional lookups silently
+            // pick up an inactive or org-viewer-only service the API key cannot route through.
+            var eligibleBySlug = bestBySlug
+                .Where(static pair => pair.Value.IsEligible)
+                .ToDictionary(
+                    pair => pair.Key,
+                    pair => pair.Value.Id,
+                    StringComparer.OrdinalIgnoreCase);
+
             var ids = new List<string>(requiredSlugs.Count);
             foreach (var slug in requiredSlugs.Distinct(StringComparer.OrdinalIgnoreCase))
             {
                 if (!bestBySlug.TryGetValue(slug, out var resolution))
                 {
-                    return (null, JsonSerializer.Serialize(new
+                    return new ProxyServiceResolutionResult(null, JsonSerializer.Serialize(new
                     {
                         error = "service_not_connected",
                         slug,
                         hint = $"NyxID has no connected user-service for slug `{slug}`. Connect the provider at NyxID before creating this agent.",
-                    }));
+                    }), emptyEligible);
                 }
 
                 if (resolution.IsEligible)
@@ -1142,32 +1190,35 @@ public sealed class AgentBuilderTool : IAgentTool
                 if (string.Equals(resolution.CredentialSourceType, "org", StringComparison.OrdinalIgnoreCase) &&
                     resolution.OrgAllowed != true)
                 {
-                    return (null, JsonSerializer.Serialize(new
+                    return new ProxyServiceResolutionResult(null, JsonSerializer.Serialize(new
                     {
                         error = "service_org_viewer_only",
                         slug,
                         hint = $"NyxID user-service for slug `{slug}` is shared by your org but your role does not permit using it as a proxy target. Ask an admin to widen the org role scope, or connect a personal credential.",
-                    }));
+                    }), emptyEligible);
                 }
 
                 // Remaining ineligible reason: !is_active.
-                return (null, JsonSerializer.Serialize(new
+                return new ProxyServiceResolutionResult(null, JsonSerializer.Serialize(new
                 {
                     error = "service_inactive",
                     slug,
                     hint = $"NyxID user-service for slug `{slug}` is inactive. Re-activate it at NyxID before creating this agent.",
-                }));
+                }), emptyEligible);
             }
 
-            return (ids.Distinct(StringComparer.Ordinal).ToArray(), null);
+            return new ProxyServiceResolutionResult(
+                ids.Distinct(StringComparer.Ordinal).ToArray(),
+                null,
+                eligibleBySlug);
         }
         catch (JsonException)
         {
-            return (null, JsonSerializer.Serialize(new
+            return new ProxyServiceResolutionResult(null, JsonSerializer.Serialize(new
             {
                 error = "user_services_parse_failed",
                 hint = "NyxID user-services response was not valid JSON.",
-            }));
+            }), emptyEligible);
         }
     }
 
@@ -1180,6 +1231,51 @@ public sealed class AgentBuilderTool : IAgentTool
         public bool IsEligible =>
             IsActive &&
             !(string.Equals(CredentialSourceType, "org", StringComparison.OrdinalIgnoreCase) && OrgAllowed != true);
+    }
+
+    /// <summary>
+    /// Result of resolving the inbound channel-bot fallback used by SkillRunner's
+    /// failure-notification path (issue #423 §C). When the inbound slug is reachable
+    /// (registered + eligible + distinct from the primary), <see cref="FailureSlug"/>
+    /// is set and its corresponding <c>UserService.id</c> is appended to
+    /// <see cref="AllowedServiceIds"/> so the agent's API key can route through it
+    /// at runtime. Otherwise <see cref="FailureSlug"/> is null and the agent
+    /// degrades to the existing single-attempt failure notification.
+    /// </summary>
+    private readonly record struct FailureNotificationContext(
+        string? FailureSlug,
+        IReadOnlyList<string> AllowedServiceIds);
+
+    private FailureNotificationContext ResolveFailureNotificationContext(
+        string primarySlug,
+        IReadOnlyList<string> requiredIds,
+        IReadOnlyDictionary<string, string> eligibleIdBySlug)
+    {
+        var inboundSlug = AgentToolRequestContext.TryGet(ChannelMetadataKeys.InboundChannelBotProxySlug)?.Trim();
+        if (string.IsNullOrWhiteSpace(inboundSlug))
+            return new FailureNotificationContext(null, requiredIds);
+
+        // Same-proxy fallback gives no recovery benefit — a primary rejection at
+        // `slug=X` would also fail at `slug=X`. Skip the capture so TrySendFailureAsync
+        // doesn't pay the wasted POST and doesn't double-log the same rejection.
+        if (string.Equals(inboundSlug, primarySlug, StringComparison.Ordinal))
+            return new FailureNotificationContext(null, requiredIds);
+
+        // Optional slug must be a connected, eligible user-service for the API key to
+        // route through it. If it's not, leaving the failure-notification field empty
+        // keeps the runtime on the existing single-attempt path — better than persisting
+        // a slug whose every send would 403 at proxy enforcement time.
+        if (!eligibleIdBySlug.TryGetValue(inboundSlug, out var inboundId))
+            return new FailureNotificationContext(null, requiredIds);
+
+        // Dedupe — if the inbound slug's UserService.id is already in requiredIds the
+        // expanded list is identical, but we still surface the slug on OutboundConfig so
+        // the runtime knows to use it for failure notifications.
+        var allowed = requiredIds.Contains(inboundId, StringComparer.Ordinal)
+            ? requiredIds
+            : requiredIds.Append(inboundId).ToArray();
+
+        return new FailureNotificationContext(inboundSlug, allowed);
     }
 
     private async Task<string?> BuildGitHubAuthorizationResponseAsync(
@@ -1708,32 +1804,42 @@ public sealed class AgentBuilderTool : IAgentTool
     /// relay surfaced <c>union_id</c> at agent-create time.
     /// </summary>
     /// <summary>
-    /// Preflights GitHub proxy access using the newly created agent API key against GitHub's
-    /// <c>/rate_limit</c> — a cheap read-only endpoint that returns 401/403 when NyxID's stored
-    /// OAuth token was revoked or had its scopes downgraded at GitHub between connect-time and
-    /// agent-create-time. Returns a structured error JSON suitable for returning verbatim from
-    /// the tool when access is denied; returns <c>null</c> on success or on probe shapes we
-    /// don't classify as "fundamentally broken" (rate limits, 5xx).
+    /// Preflights GitHub proxy access using the newly created agent API key. Three-step probe:
+    /// first <c>/rate_limit</c> (catches token-level OAuth-grant revocation as 401/403), then
+    /// global <c>/search/issues</c> + <c>/search/commits</c> with the bound github_username
+    /// (catches scope insufficiency for global search), then per-repo
+    /// <c>/search/{issues,commits}?q=repo:{owner}/{repo}+author:{username}</c> for every
+    /// repository in the configured allowlist (catches the case where global public search
+    /// works but a specific repo in the allowlist is private and the token lacks <c>repo</c>
+    /// scope — codex review PR #479 r3152148327).
+    ///
+    /// Returns a structured error JSON suitable for returning verbatim from the tool on
+    /// hard-fail shapes; returns <c>null</c> on success or on probe shapes we don't classify
+    /// as "fundamentally broken" (rate limits, 5xx).
     /// </summary>
     /// <remarks>
-    /// Issue aevatarAI/aevatar#411 added this preflight to fail fast on a misdiagnosed root
-    /// cause (we thought the api-key was missing a GitHub binding). Issue #417 fixed that real
-    /// cause — the api-key now carries the right per-user <c>UserService.id</c>s. The probe is
-    /// retained because the OAuth grant can still be revoked outside our control (user clicks
-    /// "Revoke access" in GitHub Settings → Applications, GitHub temp-bans the account, etc.),
-    /// and surfacing that at create-time avoids persisting a daily-report agent that would
-    /// produce empty output on every run. The freshly minted api-key is best-effort revoked at
-    /// the call site so retries don't accumulate orphan proxy-scoped keys.
+    /// Issue aevatarAI/aevatar#411 added the original <c>/rate_limit</c> step to fail fast on
+    /// a misdiagnosed root cause (we thought the api-key was missing a GitHub binding). Issue
+    /// #417 fixed that real cause — the api-key now carries the right per-user
+    /// <c>UserService.id</c>s. The probe was retained because the OAuth grant can still be
+    /// revoked outside our control. Issue #474 widens the probe surface to <c>/search/*</c>
+    /// because <c>/rate_limit</c> is scope-light (succeeds with any valid token) and never
+    /// caught the production failure mode where <c>/search/*</c> 422s every call — agents got
+    /// persisted but every scheduled run produced an empty report. The freshly minted api-key
+    /// is best-effort revoked at the call site on any preflight failure so retries don't
+    /// accumulate orphan proxy-scoped keys.
     /// </remarks>
     private async Task<string?> PreflightGitHubProxyAsync(
         NyxIdApiClient nyxClient,
         string apiKey,
+        string githubUsername,
+        IReadOnlyList<string> repositories,
         string nyxProviderSlug,
         CancellationToken ct)
     {
-        // Cheap read-only endpoint; succeeds even with a rate-limited token, fails with 401/403
-        // when the proxy can't resolve a bound GitHub credential.
-        var probe = await nyxClient.ProxyRequestAsync(
+        // Step 1: cheap read-only endpoint; succeeds even with a rate-limited token, fails with
+        // 401/403 when the proxy can't resolve a bound GitHub credential.
+        var rateLimitProbe = await nyxClient.ProxyRequestAsync(
             apiKey,
             "api-github",
             "/rate_limit",
@@ -1742,47 +1848,127 @@ public sealed class AgentBuilderTool : IAgentTool
             extraHeaders: null,
             ct);
 
+        var rateLimitFailure = ClassifyRateLimitProbeFailure(rateLimitProbe, nyxProviderSlug);
+        if (rateLimitFailure is not null)
+            return rateLimitFailure;
+
+        // Step 2: global search-API probes. /rate_limit is scope-light — it returns 200 even
+        // with a token that GitHub's search engine will reject. Issue #474: all of
+        // /search/issues and /search/commits return 422 "invalid user/permission" when the
+        // bound OAuth grant lacks public_repo/repo or the username is unreachable, and the
+        // daily report is useless if those endpoints don't work. Probe both with per_page=1 so
+        // we exercise the same auth surface the runtime will hit, without paying for full
+        // result pages. Skip when no username is bound — the rate_limit step is the only
+        // signal we have in that case (and CreateDailyReportAgentAsync rejects empty
+        // github_username earlier, so this guard is defensive only).
+        var normalizedUser = (githubUsername ?? string.Empty).Trim();
+        if (string.IsNullOrEmpty(normalizedUser))
+            return null;
+
+        var encodedUser = Uri.EscapeDataString(normalizedUser);
+        var globalSearchPaths = new (string Path, string Label)[]
+        {
+            ($"/search/issues?q=author:{encodedUser}&per_page=1", "/search/issues"),
+            ($"/search/commits?q=author:{encodedUser}&per_page=1", "/search/commits"),
+        };
+        foreach (var (path, label) in globalSearchPaths)
+        {
+            var searchProbe = await nyxClient.ProxyRequestAsync(
+                apiKey,
+                "api-github",
+                path,
+                "GET",
+                body: null,
+                extraHeaders: null,
+                ct);
+
+            var searchFailure = ClassifySearchProbeFailure(searchProbe, label, normalizedUser, nyxProviderSlug);
+            if (searchFailure is not null)
+                return searchFailure;
+        }
+
+        // Step 3: per-repo search-API probes when a repository allowlist is configured. The
+        // runtime daily report runs `repo:{owner}/{repo}+author:{username}` queries (see
+        // AgentBuilderTemplates.cs repo-mode URL list) — different auth surface from the
+        // global search above, because GitHub enforces per-repo visibility. A token with
+        // public_repo can pass global search yet 422 every repo-scoped call when one of the
+        // listed repos is private. Codex review PR #479 r3152148327: probing only global
+        // queries leaves that case persisting broken agents, so loop the repos here.
+        if (repositories is null || repositories.Count == 0)
+            return null;
+
+        foreach (var repoEntry in repositories)
+        {
+            var trimmedRepo = (repoEntry ?? string.Empty).Trim();
+            if (string.IsNullOrEmpty(trimmedRepo))
+                continue;
+
+            // GitHub usernames and repo names are restricted to [a-zA-Z0-9-._] per the
+            // github.com identifier rules — none of which need percent-encoding. The slash
+            // separator must be preserved literally (Uri.EscapeDataString would emit %2F,
+            // which GitHub's q= parser does not consistently accept). Pass repoEntry through
+            // unescaped; defense-in-depth escaping happens on the username segment.
+            var repoSearchPaths = new (string Path, string Label)[]
+            {
+                ($"/search/issues?q=repo:{trimmedRepo}+author:{encodedUser}&per_page=1", $"/search/issues (repo={trimmedRepo})"),
+                ($"/search/commits?q=repo:{trimmedRepo}+author:{encodedUser}&per_page=1", $"/search/commits (repo={trimmedRepo})"),
+            };
+            foreach (var (path, label) in repoSearchPaths)
+            {
+                var searchProbe = await nyxClient.ProxyRequestAsync(
+                    apiKey,
+                    "api-github",
+                    path,
+                    "GET",
+                    body: null,
+                    extraHeaders: null,
+                    ct);
+
+                var searchFailure = ClassifySearchProbeFailure(searchProbe, label, normalizedUser, nyxProviderSlug);
+                if (searchFailure is not null)
+                    return searchFailure;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Maps a <c>/rate_limit</c> probe response onto a fail-fast structured error or null.
+    /// Only 401/403 are fail-fast; all other shapes (200, 5xx, transient errors, malformed
+    /// JSON) flow through so creation can proceed and the operator can debug from logs.
+    /// </summary>
+    /// <remarks>
+    /// `NyxIdApiClient.SendAsync` (NyxIdApiClient.cs:710) wraps HTTP non-2xx as
+    /// <c>{"error": true, "status": &lt;http&gt;, "body": "&lt;raw downstream body&gt;"}</c> —
+    /// <c>status</c>, not <c>code</c>. Reviewer (PR #412 r3141699476): the previous parser only
+    /// read <c>code</c>, so for the actual #411 production failures (HTTP 403 from
+    /// <c>/api/v1/proxy/s/api-github/rate_limit</c>) it set status=0, returned null, and
+    /// persisted a daily_report agent that would fail at runtime. Read both <c>status</c> (the
+    /// SendAsync envelope) AND <c>code</c> (any future inverted-naming envelope or top-level
+    /// Lark code).
+    /// </remarks>
+    private static string? ClassifyRateLimitProbeFailure(string probe, string nyxProviderSlug)
+    {
         if (string.IsNullOrWhiteSpace(probe))
             return null;
 
-        // `NyxIdApiClient.SendAsync` (NyxIdApiClient.cs:680) wraps HTTP non-2xx as
-        // `{"error": true, "status": <http>, "body": "<raw downstream body>"}` — `status`,
-        // not `code`. Reviewer (PR #412 r3141699476): the previous parser only read `code`,
-        // so for the actual #411 production failures (HTTP 403 from /api/v1/proxy/s/api-github
-        // /rate_limit) it set status=0, returned null, and persisted a daily_report agent
-        // that would fail at runtime. Read both `status` (the SendAsync envelope) AND `code`
-        // (any future inverted-naming envelope or top-level Lark code). Treat 401/403 as the
-        // signal to fail-fast; let other shapes flow through (rate limits, 5xx etc are
-        // operational and not "agent fundamentally broken").
         try
         {
             using var doc = JsonDocument.Parse(probe);
             var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object)
+            // `envelopeMessage` is the proxy envelope's `message` field; named to avoid
+            // shadowing the anonymous-type `detail` property below (codex review PR #479).
+            if (!IsErrorEnvelope(root, out var status, out var envelopeMessage, out var body))
                 return null;
 
-            if (!root.TryGetProperty("error", out var errorProp))
-                return null;
-            if (errorProp.ValueKind != JsonValueKind.True && errorProp.ValueKind != JsonValueKind.String)
-                return null;
-
-            var status = TryReadInt32Property(root, "status")
-                         ?? TryReadInt32Property(root, "code")
-                         ?? 0;
             if (status != (int)HttpStatusCode.Unauthorized && status != (int)HttpStatusCode.Forbidden)
                 return null;
-
-            var detail = root.TryGetProperty("message", out var msgProp) && msgProp.ValueKind == JsonValueKind.String
-                ? msgProp.GetString()
-                : null;
-            var body = root.TryGetProperty("body", out var bodyProp) && bodyProp.ValueKind == JsonValueKind.String
-                ? bodyProp.GetString()
-                : null;
 
             return JsonSerializer.Serialize(new
             {
                 error = "github_proxy_access_denied",
-                detail = string.IsNullOrWhiteSpace(detail) ? "GitHub proxy returned 401/403 for the new agent API key." : detail,
+                detail = string.IsNullOrWhiteSpace(envelopeMessage) ? "GitHub proxy returned 401/403 for the new agent API key." : envelopeMessage,
                 http_status = status,
                 proxy_body = string.IsNullOrWhiteSpace(body) ? null : body,
                 hint = "GitHub returned 401/403 through the NyxID proxy. Common causes: (a) the OAuth grant for GitHub was revoked at github.com/settings/applications or its scopes were downgraded — re-authorize the GitHub provider at NyxID; (b) the request reached GitHub without a User-Agent header (NyxIdApiClient now sends a default; if you see this, check that the deployed binary includes that fix). The agent will not produce a useful daily report until proxy access succeeds.",
@@ -1793,6 +1979,70 @@ public sealed class AgentBuilderTool : IAgentTool
         {
             // Non-JSON probe response: don't pretend we know what's going on; let creation
             // proceed so the agent can at least be created (operator can debug from logs).
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Maps a <c>/search/{issues,commits}</c> probe response onto a fail-fast structured
+    /// error or null. Only 422 is fail-fast (the documented "invalid user/permission" /
+    /// "validation failed" surface); all other shapes (200 with empty results, 200 with
+    /// items, transient 5xx, secondary rate limits) flow through.
+    /// </summary>
+    /// <remarks>
+    /// Sub-reason classification reads the upstream GitHub error body, since GitHub does not
+    /// give different status codes for the four cases the user-facing report needs to
+    /// distinguish (issue #473's expected behavior): user-not-exist, scope-insufficient,
+    /// search rate-limited, query-invalid. The first two share a body
+    /// (<c>"...cannot be searched either because the resources do not exist or you do not
+    /// have permission to view them..."</c>), so we collapse them into one
+    /// <c>scope_insufficient_or_user_not_found</c> reason — they're both actionable in the
+    /// same way (re-authorize GitHub at NyxID with broader scope, then retry; if that still
+    /// fails, verify the username is reachable). Other 422 bodies fall through as
+    /// <c>validation_failed</c>.
+    /// </remarks>
+    private static string? ClassifySearchProbeFailure(
+        string probe,
+        string githubPath,
+        string githubUsername,
+        string nyxProviderSlug)
+    {
+        if (string.IsNullOrWhiteSpace(probe))
+            return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(probe);
+            var root = doc.RootElement;
+            // `envelopeMessage` is the proxy envelope's `message` field; named to avoid
+            // shadowing the anonymous-type `detail` property below (codex review PR #479).
+            if (!IsErrorEnvelope(root, out var status, out var envelopeMessage, out var body))
+                return null;
+
+            if (status != (int)HttpStatusCode.UnprocessableEntity)
+                return null;
+
+            var reason = ClassifyGitHubSearch422Body(body);
+            return JsonSerializer.Serialize(new
+            {
+                error = "github_search_unauthorized",
+                detail = string.IsNullOrWhiteSpace(envelopeMessage)
+                    ? $"GitHub {githubPath} returned 422 for github_username `{githubUsername}` with the new agent API key. The /rate_limit probe succeeded, so the api-key itself is valid; the failure is specific to GitHub's search API."
+                    : envelopeMessage,
+                http_status = status,
+                github_path = githubPath,
+                github_username = githubUsername,
+                reason_code = reason,
+                proxy_body = string.IsNullOrWhiteSpace(body) ? null : body,
+                // Hint references the `github_username` field above instead of inlining it
+                // a second time; codex review PR #479 caught a stray `{username}` literal in
+                // an earlier draft.
+                hint = "GitHub returned 422 from /search/* with the bound username. /search/commits and /search/issues enforce stricter scope than /rate_limit (which succeeded), so a token that passes /rate_limit can still fail every search call. Most common causes: (a) the OAuth grant for GitHub at NyxID is missing the scope GitHub's search engine requires (need `public_repo` to search public commits/issues, `repo` for private) — re-authorize the GitHub provider at NyxID with appropriate scopes; (b) the bound github_username (see field above) does not exist, was renamed, or has been restricted — verify it resolves at https://github.com/. The agent will not produce a useful daily report until /search/* succeeds.",
+                nyx_provider_slug = nyxProviderSlug,
+            });
+        }
+        catch (JsonException)
+        {
             return null;
         }
     }
@@ -1897,6 +2147,66 @@ public sealed class AgentBuilderTool : IAgentTool
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Reads the standard <c>NyxIdApiClient.SendAsync</c> error envelope shape. Returns
+    /// <c>true</c> when the response is an error envelope (with <c>error: true</c> or
+    /// <c>error: "..."</c>) and extracts <c>status</c> (or <c>code</c>), <c>message</c>, and
+    /// <c>body</c> for downstream classification. Used by both rate-limit and search probe
+    /// classifiers so they parse the envelope identically.
+    /// </summary>
+    private static bool IsErrorEnvelope(
+        JsonElement root,
+        out int status,
+        out string? detail,
+        out string? body)
+    {
+        status = 0;
+        detail = null;
+        body = null;
+
+        if (root.ValueKind != JsonValueKind.Object)
+            return false;
+
+        if (!root.TryGetProperty("error", out var errorProp))
+            return false;
+        if (errorProp.ValueKind != JsonValueKind.True && errorProp.ValueKind != JsonValueKind.String)
+            return false;
+
+        status = TryReadInt32Property(root, "status")
+                 ?? TryReadInt32Property(root, "code")
+                 ?? 0;
+        detail = root.TryGetProperty("message", out var msgProp) && msgProp.ValueKind == JsonValueKind.String
+            ? msgProp.GetString()
+            : null;
+        body = root.TryGetProperty("body", out var bodyProp) && bodyProp.ValueKind == JsonValueKind.String
+            ? bodyProp.GetString()
+            : null;
+        return true;
+    }
+
+    /// <summary>
+    /// Best-effort sub-reason classification for a GitHub 422 search response body. Returns a
+    /// short stable code so callers / operators can distinguish actionable cases without
+    /// regex'ing the body themselves. The detection is conservative — when the body doesn't
+    /// match a known pattern we fall through to <c>validation_failed</c> rather than guessing.
+    /// </summary>
+    private static string ClassifyGitHubSearch422Body(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+            return "validation_failed";
+
+        // GitHub returns the same body for "user does not exist" and "scope insufficient":
+        // the search engine refuses to enumerate the user's items in either case. Operators
+        // distinguish them by checking https://github.com/{username} out of band.
+        if (body.Contains("cannot be searched", StringComparison.OrdinalIgnoreCase) ||
+            body.Contains("do not have permission to view", StringComparison.OrdinalIgnoreCase))
+        {
+            return "scope_insufficient_or_user_not_found";
+        }
+
+        return "validation_failed";
     }
 
     private static int? TryReadInt32Property(JsonElement element, string propertyName)

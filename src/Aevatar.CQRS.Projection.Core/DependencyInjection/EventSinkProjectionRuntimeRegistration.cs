@@ -1,8 +1,10 @@
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.CQRS.Projection.Core.DependencyInjection;
 
@@ -40,7 +42,9 @@ public static class EventSinkProjectionRuntimeRegistration
                     ProjectionRuntimeMode.SessionObservation,
                     request.SessionId)),
                 (_, context) => leaseFactory(context),
-                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
+                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>(),
+                sp.GetService<IStreamPubSubMaintenance>(),
+                sp.GetService<ILoggerFactory>()));
         services.TryAddSingleton<IProjectionScopeReleaseService<TRuntimeLease>>(sp =>
             new ProjectionScopeReleaseService<
                 TRuntimeLease,

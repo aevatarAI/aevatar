@@ -20,6 +20,7 @@
     <Project Path="agents\Aevatar.GAgents.Device\Aevatar.GAgents.Device.csproj" />
     <Project Path="agents\Aevatar.GAgents.Household\Aevatar.GAgents.Household.csproj" />
     <Project Path="agents/Aevatar.GAgents.StudioMember/Aevatar.GAgents.StudioMember.csproj" />
+    <Project Path="agents/Aevatar.GAgents.StudioTeam/Aevatar.GAgents.StudioTeam.csproj" />
   </Folder>
   <Folder Name="/demos/">
     <Project Path="demos\Aevatar.Demos.Cli\Aevatar.Demos.Cli.csproj" />

@@ -595,6 +595,548 @@ public sealed class AgentBuilderToolTests
             handler.Requests.Should().Contain(r =>
                 r.Method == HttpMethod.Delete &&
                 r.Path == "/api/v1/api-keys/key-403");
+
+            // Issue #474 review (eanzhao on PR #479): /rate_limit failure must short-circuit
+            // ALL of step 2 (global /search/*) and step 3 (per-repo /search/*). Pinning that
+            // no /search/* call was made guards against a future regression where someone
+            // re-orders preflight steps or removes the early return on rate_limit failure —
+            // the 401/403 path is the cheapest fail-fast and should never wastefully fan out
+            // to scope-stricter endpoints.
+            handler.Requests.Should().NotContain(r =>
+                r.Path.Contains("/proxy/s/api-github/search/", StringComparison.Ordinal));
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_GithubSearchReturns422()
+    {
+        // Issue aevatarAI/aevatar#474: /rate_limit is scope-light — it returns 200 even when the
+        // bound OAuth grant lacks the scope GitHub's search engine requires (need public_repo
+        // for public commit/issue search). Pre-#474, that exact gap let agents persist with a
+        // healthy rate_limit probe, only to 422 every /search/* call at runtime so every
+        // scheduled run produced an empty daily report. Pin: when /rate_limit returns 200 but
+        // /search/issues 422s with the production "users... cannot be searched..." body,
+        // preflight returns the structured `github_search_unauthorized` error, the freshly
+        // minted api-key IS revoked, and the runner is NOT initialized.
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionForCallerAsync(Arg.Any<string>(), Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null));
+
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {"provider_id":"provider-github","provider_name":"GitHub","provider_slug":"github","provider_type":"oauth2","status":"active","connected_at":"2026-04-15T00:00:00Z"}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
+            {
+              "services": [
+                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-422","full_key":"full-key-422"}""");
+        // /rate_limit is the scope-light step that succeeded in prod — it cannot catch the
+        // search-API-only failure mode by design. Mirror that: 200 here, fail later on search.
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/rate_limit",
+            """{"resources":{"core":{"limit":5000,"remaining":4999}}}""");
+        // Production-shape GitHub 422 body for /search/*. Wrapped in NyxIdApiClient.SendAsync's
+        // standard `{"error":true,"status":<http>,"body":"<raw>"}` envelope (NyxIdApiClient.cs:710)
+        // so the parser is exercised against the runtime envelope, not a synthetic shape.
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/search/issues?q=author:Yuezh0127&per_page=1",
+            """{"error":true,"status":422,"body":"{\"message\":\"Validation Failed\",\"errors\":[{\"message\":\"The listed users, organizations or repositories cannot be searched either because the resources do not exist or you do not have permission to view them.\",\"resource\":\"Search\",\"field\":\"q\",\"code\":\"invalid\"}],\"documentation_url\":\"https://docs.github.com/v3/search/\"}"}""");
+        // Best-effort revoke must fire on preflight failure so /daily retries don't accumulate
+        // orphan proxy-scoped keys (same contract as the 403 case under #411 / PR #418).
+        handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-422", """{"deleted":true}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
+        services.AddSingleton(nyxClient);
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "agent_id": "skill-runner-search-422",
+                  "github_username": "Yuezh0127",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("error").GetString().Should().Be("github_search_unauthorized");
+            doc.RootElement.GetProperty("http_status").GetInt32().Should().Be(422);
+            doc.RootElement.GetProperty("github_path").GetString().Should().Be("/search/issues");
+            doc.RootElement.GetProperty("github_username").GetString().Should().Be("Yuezh0127");
+            // The body matches GitHub's documented "cannot be searched" surface, which collapses
+            // user-not-exist and scope-insufficient into one stable code (operators distinguish
+            // them out of band by checking https://github.com/{username}).
+            doc.RootElement.GetProperty("reason_code").GetString().Should().Be("scope_insufficient_or_user_not_found");
+            // Hint should mention the actionable next step (re-authorize at NyxID with broader
+            // scope) rather than misdirecting users to fix something else. Match a stable token
+            // case-insensitively so future copy edits don't snowball into test flips.
+            doc.RootElement.GetProperty("hint").GetString()!.ToLowerInvariant().Should().Contain("re-authorize");
+
+            // Hard rule: preflight must abort BEFORE any lifecycle dispatch — otherwise we'd
+            // leave a broken agent in the catalog that runs every cron tick to no effect.
+            await skillRunnerPort.DidNotReceive().InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+
+            // Best-effort revoke fires; mirrors the cleanup contract for the 403 case.
+            handler.Requests.Should().Contain(r =>
+                r.Method == HttpMethod.Delete &&
+                r.Path == "/api/v1/api-keys/key-422");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_GithubSearchCommitsReturn422_ButIssuesSucceed()
+    {
+        // Issue aevatarAI/aevatar#474: production reproduction (issue #473) reported that
+        // /search/commits failed with the same 422 surface even when other queries returned
+        // results, and the LLM degraded the section to "unrelated global results, not
+        // attributable to {user}". Pin: preflight must probe BOTH /search/issues AND
+        // /search/commits — failing fast on the first one alone leaves the commits-only
+        // failure undetected at create-time.
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionForCallerAsync(Arg.Any<string>(), Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null));
+
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {"provider_id":"provider-github","provider_name":"GitHub","provider_slug":"github","provider_type":"oauth2","status":"active","connected_at":"2026-04-15T00:00:00Z"}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
+            {
+              "services": [
+                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-422c","full_key":"full-key-422c"}""");
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/rate_limit",
+            """{"resources":{"core":{"limit":5000,"remaining":4999}}}""");
+        // /search/issues happy: the issues surface returns an empty result, so this probe
+        // passes through. The commits surface still 422s — exercise the second probe.
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/search/issues?q=author:alice&per_page=1",
+            """{"total_count":0,"incomplete_results":false,"items":[]}""");
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/search/commits?q=author:alice&per_page=1",
+            """{"error":true,"status":422,"body":"{\"message\":\"Validation Failed\",\"errors\":[{\"message\":\"The listed users, organizations or repositories cannot be searched either because the resources do not exist or you do not have permission to view them.\",\"resource\":\"Search\",\"field\":\"q\",\"code\":\"invalid\"}]}"}""");
+        handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-422c", """{"deleted":true}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
+        services.AddSingleton(nyxClient);
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "agent_id": "skill-runner-search-422-commits",
+                  "github_username": "alice",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("error").GetString().Should().Be("github_search_unauthorized");
+            doc.RootElement.GetProperty("github_path").GetString().Should().Be("/search/commits");
+            doc.RootElement.GetProperty("reason_code").GetString().Should().Be("scope_insufficient_or_user_not_found");
+
+            await skillRunnerPort.DidNotReceive().InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+
+            handler.Requests.Should().Contain(r =>
+                r.Method == HttpMethod.Delete &&
+                r.Path == "/api/v1/api-keys/key-422c");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_Succeeds_When_GithubSearchReturnsEmpty200()
+    {
+        // Issue aevatarAI/aevatar#474: the new /search/* preflight probes must NOT fail-fast on
+        // a genuinely empty result — that's the legitimate "user has no recent activity" case
+        // and is the steady-state for many real users between reports. Pin: when /rate_limit,
+        // /search/issues, and /search/commits all return 200 (with empty arrays), creation
+        // proceeds normally and no api-key is revoked. Adding this case alongside the 422
+        // tests guards against an over-eager classifier that would treat any non-content
+        // response as failure.
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionForCallerAsync("skill-runner-search-empty", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
+        queryPort.GetForCallerAsync("skill-runner-search-empty", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            {
+                AgentId = "skill-runner-search-empty",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "daily_report",
+                Status = SkillRunnerDefaults.StatusRunning,
+            }));
+
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {"provider_id":"provider-github","provider_name":"GitHub","provider_slug":"github","provider_type":"oauth2","status":"active","connected_at":"2026-04-15T00:00:00Z"}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
+            {
+              "services": [
+                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-empty","full_key":"full-key-empty"}""");
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/rate_limit",
+            """{"resources":{"core":{"limit":5000,"remaining":4999}}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/search/issues?q=author:alice&per_page=1",
+            """{"total_count":0,"incomplete_results":false,"items":[]}""");
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/search/commits?q=author:alice&per_page=1",
+            """{"total_count":0,"incomplete_results":false,"items":[]}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
+        services.AddSingleton(nyxClient);
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "agent_id": "skill-runner-search-empty",
+                  "github_username": "alice",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("created");
+
+            // No DELETE on the api-key — empty results are not a preflight failure, and
+            // revoking would leave the just-persisted agent stranded with a dead key.
+            handler.Requests.Should().NotContain(r =>
+                r.Method == HttpMethod.Delete &&
+                r.Path.StartsWith("/api/v1/api-keys/", StringComparison.Ordinal));
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_GithubSearchReturns422_WithUnknown422Body()
+    {
+        // Issue #474 review (eanzhao on PR #479): only `scope_insufficient_or_user_not_found`
+        // was exercised; pin that a 422 body that does NOT match the "cannot be searched"
+        // surface (e.g. a malformed query) collapses to the conservative `validation_failed`
+        // code so callers can still distinguish actionable cases without regex'ing the body
+        // themselves. This protects the fall-through branch in
+        // `ClassifyGitHubSearch422Body` from regression: any future heuristic change that
+        // routes unknown 422 bodies to a more specific code by guessing would fail this.
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionForCallerAsync(Arg.Any<string>(), Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null));
+
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {"provider_id":"provider-github","provider_name":"GitHub","provider_slug":"github","provider_type":"oauth2","status":"active","connected_at":"2026-04-15T00:00:00Z"}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
+            {
+              "services": [
+                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-422-q","full_key":"full-key-422-q"}""");
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/rate_limit",
+            """{"resources":{"core":{"limit":5000,"remaining":4999}}}""");
+        // 422 body without the "cannot be searched" / "permission" markers — represents the
+        // query-malformed case (e.g. illegal qualifier, exceeded query length). The conservative
+        // fall-through is `validation_failed`.
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/search/issues?q=author:alice&per_page=1",
+            """{"error":true,"status":422,"body":"{\"message\":\"Validation Failed\",\"errors\":[{\"resource\":\"Search\",\"field\":\"q\",\"code\":\"invalid\"}],\"documentation_url\":\"https://docs.github.com/v3/search/\"}"}""");
+        handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-422-q", """{"deleted":true}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
+        services.AddSingleton(nyxClient);
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "agent_id": "skill-runner-search-422-q",
+                  "github_username": "alice",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("error").GetString().Should().Be("github_search_unauthorized");
+            doc.RootElement.GetProperty("http_status").GetInt32().Should().Be(422);
+            // Conservative fall-through — no specific marker matched.
+            doc.RootElement.GetProperty("reason_code").GetString().Should().Be("validation_failed");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_RepoScopedSearchReturns422()
+    {
+        // Codex review (PR #479 r3152148327, P1): a token can pass the global /search/*
+        // probes (public_repo lets you search public commits/issues globally) yet 422 every
+        // repo-qualified call when the configured allowlist contains a private repo the
+        // token cannot see. Pre-this-fix, the daily-report runtime ran `repo:{owner}/{repo}+
+        // author:{username}` queries (per AgentBuilderTemplates.cs repo-mode URLs) and 422'd
+        // every one, persisting a broken agent. Pin: when global /search/issues and
+        // /search/commits return 200 but a repo-qualified probe 422s, preflight fails fast
+        // with `github_search_unauthorized`, the github_path label includes the failing
+        // repo, and the api-key is revoked.
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionForCallerAsync(Arg.Any<string>(), Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null));
+
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {"provider_id":"provider-github","provider_name":"GitHub","provider_slug":"github","provider_type":"oauth2","status":"active","connected_at":"2026-04-15T00:00:00Z"}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
+            {
+              "services": [
+                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-422-repo","full_key":"full-key-422-repo"}""");
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/rate_limit",
+            """{"resources":{"core":{"limit":5000,"remaining":4999}}}""");
+        // Global probes succeed — token has public_repo scope, can search public globally.
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/search/issues?q=author:alice&per_page=1",
+            """{"total_count":0,"incomplete_results":false,"items":[]}""");
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/search/commits?q=author:alice&per_page=1",
+            """{"total_count":0,"incomplete_results":false,"items":[]}""");
+        // Repo-qualified probe 422s — the configured allowlist points at a private repo the
+        // token cannot see. This is the new failure mode that global probes don't catch.
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/search/issues?q=repo:acme/private-svc+author:alice&per_page=1",
+            """{"error":true,"status":422,"body":"{\"message\":\"Validation Failed\",\"errors\":[{\"message\":\"The listed users, organizations or repositories cannot be searched either because the resources do not exist or you do not have permission to view them.\",\"resource\":\"Search\",\"field\":\"q\",\"code\":\"invalid\"}]}"}""");
+        handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-422-repo", """{"deleted":true}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(workflowAgentPort);
+        services.AddSingleton(catalogCommandPort);
+        services.AddSingleton(nyxClient);
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = new AgentBuilderTool(services.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
+            ["scope_id"] = "scope-1",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "agent_id": "skill-runner-search-422-repo",
+                  "github_username": "alice",
+                  "repositories": "acme/private-svc",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("error").GetString().Should().Be("github_search_unauthorized");
+            doc.RootElement.GetProperty("http_status").GetInt32().Should().Be(422);
+            // The label carries the failing repo so operators can distinguish "global search
+            // is broken" from "this specific repo can't be reached" without rerunning.
+            doc.RootElement.GetProperty("github_path").GetString()!.Should().Contain("acme/private-svc");
+            doc.RootElement.GetProperty("reason_code").GetString().Should().Be("scope_insufficient_or_user_not_found");
+
+            await skillRunnerPort.DidNotReceive().InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+
+            handler.Requests.Should().Contain(r =>
+                r.Method == HttpMethod.Delete &&
+                r.Path == "/api/v1/api-keys/key-422-repo");
         }
         finally
         {
@@ -1699,6 +2241,347 @@ public sealed class AgentBuilderToolTests
                 .ToArray();
             allowed.Should().BeEquivalentTo(["user-svc-github-instance", "user-svc-lark-instance"]);
             allowed.Should().NotContain("catalog-github").And.NotContain("catalog-lark");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_CapturesFailureNotificationSlug_FromInboundChannelBot()
+    {
+        // Issue #423 §C: capture the inbound channel-bot's NyxID provider slug at agent-create
+        // time so SkillRunner.TrySendFailureAsync can route the failure-notification message
+        // through it after a primary outbound rejection (e.g. cross-tenant 99992364). This
+        // test pins:
+        //   - the captured slug ends up on OutboundConfig.FailureNotificationProviderSlug
+        //   - the inbound bot's per-user UserService.id is appended to the API key's
+        //     allowed_service_ids so proxy enforcement (#418) actually permits routing
+        //     through it at runtime
+        //   - the primary outbound slug stays unchanged (failure-notification fallback is a
+        //     separate routing path, not a re-route of the main report)
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionForCallerAsync("skill-runner-fnf", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
+        queryPort.GetForCallerAsync("skill-runner-fnf", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            {
+                AgentId = "skill-runner-fnf",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "daily_report",
+                Status = SkillRunnerDefaults.StatusRunning,
+            }));
+
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {"provider_id":"provider-github","provider_name":"GitHub","provider_slug":"github","provider_type":"oauth2","status":"active","connected_at":"2026-04-15T00:00:00Z"}
+              ]
+            }
+            """);
+        // The inbound channel-bot's slug (api-lark-bot-channel-loning) is registered as a
+        // separate UserService row alongside the global api-lark-bot used for outbound.
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
+            {
+              "services": [
+                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-lark-global","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-lark-channel-loning","slug":"api-lark-bot-channel-loning","is_active":true,"credential_source":{"type":"personal"}}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-fnf","full_key":"full-key-fnf"}""");
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/rate_limit",
+            """{"resources":{"core":{"limit":5000,"remaining":4999}}}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var servicesCollection = new ServiceCollection();
+        servicesCollection.AddSingleton(queryPort);
+        servicesCollection.AddSingleton(skillRunnerPort);
+        servicesCollection.AddSingleton(workflowAgentPort);
+        servicesCollection.AddSingleton(catalogCommandPort);
+        servicesCollection.AddSingleton(nyxClient);
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        servicesCollection.AddSingleton(callerScopeResolver);
+        var tool = new AgentBuilderTool(servicesCollection.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
+            ["scope_id"] = "scope-1",
+            // The inbound channel-bot the user just messaged. Distinct from the outbound
+            // default (`api-lark-bot`), simulating the cross-tenant scenario.
+            [ChannelMetadataKeys.InboundChannelBotProxySlug] = "api-lark-bot-channel-loning",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "agent_id": "skill-runner-fnf",
+                  "github_username": "alice",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("created");
+
+            await skillRunnerPort.Received(1).InitializeAsync(
+                "skill-runner-fnf",
+                Arg.Is<InitializeSkillRunnerCommand>(c =>
+                    // Primary slug stays on the caller-provided default — failure-notification
+                    // is a separate routing path, not a re-route of the main report.
+                    c.OutboundConfig.NyxProviderSlug == "api-lark-bot" &&
+                    c.OutboundConfig.FailureNotificationProviderSlug == "api-lark-bot-channel-loning"),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+
+            var apiKeyRequest = handler.Requests.Should()
+                .ContainSingle(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys")
+                .Subject;
+            using var apiKeyDoc = JsonDocument.Parse(apiKeyRequest.Body!);
+            var allowed = apiKeyDoc.RootElement.GetProperty("allowed_service_ids").EnumerateArray()
+                .Select(static item => item.GetString())
+                .ToArray();
+            // The inbound bot's svc-id MUST be in allowed_service_ids; without it the
+            // runtime POST through the failure-notification slug would 403 at proxy
+            // enforcement (#418) and the user still wouldn't see the failure message.
+            allowed.Should().Contain("svc-lark-channel-loning");
+            allowed.Should().Contain("svc-github");
+            allowed.Should().Contain("svc-lark-global");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_LeavesFailureNotificationSlugEmpty_When_InboundEqualsPrimary()
+    {
+        // Same-proxy fallback gives no recovery benefit — primary rejection at slug X would
+        // also fail at slug X. Pin that AgentBuilderTool detects this and leaves the field
+        // empty so SkillRunner.TrySendFailureAsync skips the redundant double-POST.
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionForCallerAsync("skill-runner-same", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
+        queryPort.GetForCallerAsync("skill-runner-same", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            {
+                AgentId = "skill-runner-same",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "daily_report",
+                Status = SkillRunnerDefaults.StatusRunning,
+            }));
+
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {"provider_id":"provider-github","provider_name":"GitHub","provider_slug":"github","provider_type":"oauth2","status":"active","connected_at":"2026-04-15T00:00:00Z"}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
+            {
+              "services": [
+                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-same","full_key":"full-key-same"}""");
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/rate_limit",
+            """{"resources":{"core":{"limit":5000,"remaining":4999}}}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var servicesCollection = new ServiceCollection();
+        servicesCollection.AddSingleton(queryPort);
+        servicesCollection.AddSingleton(skillRunnerPort);
+        servicesCollection.AddSingleton(workflowAgentPort);
+        servicesCollection.AddSingleton(catalogCommandPort);
+        servicesCollection.AddSingleton(nyxClient);
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        servicesCollection.AddSingleton(callerScopeResolver);
+        var tool = new AgentBuilderTool(servicesCollection.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
+            ["scope_id"] = "scope-1",
+            // Inbound slug equals the default primary slug.
+            [ChannelMetadataKeys.InboundChannelBotProxySlug] = "api-lark-bot",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "agent_id": "skill-runner-same",
+                  "github_username": "alice",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("created");
+
+            await skillRunnerPort.Received(1).InitializeAsync(
+                "skill-runner-same",
+                Arg.Is<InitializeSkillRunnerCommand>(c =>
+                    c.OutboundConfig.NyxProviderSlug == "api-lark-bot" &&
+                    string.IsNullOrEmpty(c.OutboundConfig.FailureNotificationProviderSlug)),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateAgent_DailyReport_LeavesFailureNotificationSlugEmpty_When_InboundSlugMissingFromUserServices()
+    {
+        // Defense-in-depth: if the inbound slug isn't a registered user-service (e.g. an
+        // unusual relay setup, or an inbound bot that was disconnected between webhook arrival
+        // and agent-create), we cannot grant proxy access at API-key creation time. Including
+        // it would either fail the create with `service_not_connected` (regression) OR pass
+        // creation but 403 at runtime when SkillRunner tries to use it. Both are worse than
+        // leaving the failure-notification slug empty and degrading to single-attempt failure
+        // notification (current behavior). Pin the latter.
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetStateVersionForCallerAsync("skill-runner-missing", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
+        queryPort.GetForCallerAsync("skill-runner-missing", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            {
+                AgentId = "skill-runner-missing",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "daily_report",
+                Status = SkillRunnerDefaults.StatusRunning,
+            }));
+
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/providers/my-tokens", """
+            {
+              "tokens": [
+                {"provider_id":"provider-github","provider_name":"GitHub","provider_slug":"github","provider_type":"oauth2","status":"active","connected_at":"2026-04-15T00:00:00Z"}
+              ]
+            }
+            """);
+        // The inbound slug is NOT among the user's registered services.
+        handler.Add(HttpMethod.Get, "/api/v1/user-services", """
+            {
+              "services": [
+                {"id":"svc-github","slug":"api-github","is_active":true,"credential_source":{"type":"personal"}},
+                {"id":"svc-lark","slug":"api-lark-bot","is_active":true,"credential_source":{"type":"personal"}}
+              ]
+            }
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-missing","full_key":"full-key-missing"}""");
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/api-github/rate_limit",
+            """{"resources":{"core":{"limit":5000,"remaining":4999}}}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var servicesCollection = new ServiceCollection();
+        servicesCollection.AddSingleton(queryPort);
+        servicesCollection.AddSingleton(skillRunnerPort);
+        servicesCollection.AddSingleton(workflowAgentPort);
+        servicesCollection.AddSingleton(catalogCommandPort);
+        servicesCollection.AddSingleton(nyxClient);
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        servicesCollection.AddSingleton(callerScopeResolver);
+        var tool = new AgentBuilderTool(servicesCollection.BuildServiceProvider());
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            [ChannelMetadataKeys.ChatType] = "p2p",
+            [ChannelMetadataKeys.ConversationId] = "oc_chat_1",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
+            ["scope_id"] = "scope-1",
+            // Inbound slug points at a bot that isn't in the user's user-services list.
+            [ChannelMetadataKeys.InboundChannelBotProxySlug] = "api-lark-bot-channel-disconnected",
+        };
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create_agent",
+                  "template": "daily_report",
+                  "agent_id": "skill-runner-missing",
+                  "github_username": "alice",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            // Creation must NOT fail just because an optional fallback slug isn't connected.
+            doc.RootElement.GetProperty("status").GetString().Should().Be("created");
+
+            await skillRunnerPort.Received(1).InitializeAsync(
+                "skill-runner-missing",
+                Arg.Is<InitializeSkillRunnerCommand>(c =>
+                    string.IsNullOrEmpty(c.OutboundConfig.FailureNotificationProviderSlug)),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+
+            // The disconnected slug must not leak into allowed_service_ids — that would
+            // create a permanent runtime 403 on the failure-notification path AND silently
+            // expand the agent's proxy reach beyond what the spec requires.
+            var apiKeyRequest = handler.Requests.Should()
+                .ContainSingle(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys")
+                .Subject;
+            using var apiKeyDoc = JsonDocument.Parse(apiKeyRequest.Body!);
+            var allowed = apiKeyDoc.RootElement.GetProperty("allowed_service_ids").EnumerateArray()
+                .Select(static item => item.GetString())
+                .ToArray();
+            allowed.Should().BeEquivalentTo(["svc-github", "svc-lark"]);
         }
         finally
         {
