@@ -130,14 +130,39 @@ message ChannelCapabilities {
   TransportMode transport = 17;
 }
 
+// Platform-level identity reference for an external chat-platform user.
+// Keying domain for the per-user NyxID binding actor — independent of any
+// specific bot. The same Lark user holds one NyxID identity across all bots
+// they talk to. See ADR-0018 §Actor Architecture. Owned by Channel.Abstractions
+// because Identity is a consumer of channel concepts, not their owner.
+message ExternalSubjectRef {
+  // Platform name (lower-case ASCII): "lark", "telegram", "discord", "slack".
+  string platform = 1;
+  // Tenant identifier scoped by platform (e.g. Lark open_tenant_id,
+  // Discord guild_id). Empty allowed only for platforms without tenant scope.
+  string tenant = 2;
+  // External user identifier scoped by (platform, tenant) (e.g. Lark
+  // open_user_id, Telegram user_id, Discord user.id).
+  string external_user_id = 3;
+}
+
 // Carries the explicit auth choice for proactive outbound operations.
 message AuthContext {
   // The principal kind selected by the caller.
   PrincipalKind kind = 1;
-  // The delegated user credential reference when sending on behalf of a user.
+  // Legacy per-bot credential reference, retained for non-broker callers.
+  // Broker outbound MUST use external_subject (field 4) — see ADR-0018
+  // §Outbound Send. Deprecation window aligned with the next channel-runtime
+  // proto break.
   string user_credential_ref = 2;
   // The channel-native user identifier that the delegated send should represent.
   string on_behalf_of_user_id = 3;
+  // Platform-level external subject reference for broker-mode outbound. The
+  // outbound adapter resolves this via IExternalIdentityBindingQueryPort and
+  // mints a short-lived access token via INyxIdCapabilityBroker.IssueShortLivedAsync
+  // per send (no caching). Set by callers in broker mode; user_credential_ref
+  // is left empty.
+  ExternalSubjectRef external_subject = 4;
 }
 
 // Represents one sequenced streaming delta emitted by caller-controlled streaming logic.
