@@ -2008,7 +2008,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
     () =>
       activeScript?.source?.revision ||
       activeScript?.script?.activeRevision ||
-      'draft-1',
+      '',
     [activeScript?.script?.activeRevision, activeScript?.source?.revision],
   );
   const selectedPackageEntry = React.useMemo(
@@ -2165,12 +2165,12 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
         : isDirty && validationStatus !== 'valid'
           ? 'Validate current source'
           : isDirty
-            ? 'Save revision'
+            ? 'Save script'
         : effectiveSaveStatus === 'accepted'
           ? 'Waiting for catalog'
           : scriptReadyToBind
             ? 'Ready to bind'
-            : 'Save revision';
+            : 'Save script';
   const saveObservationInFlight =
     saveObservationStatus === 'accepted' || saveObservationStatus === 'pending';
   const saveNoticeType =
@@ -2273,7 +2273,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
     try {
       const result = await scriptsApi.validateDraft({
         scriptId: activeScript.script.scriptId,
-        scriptRevision: currentRevision,
+        scriptRevision: currentRevision || undefined,
         source: serializePersistedSource(scriptPackage),
         package: scriptPackage,
       });
@@ -2420,7 +2420,6 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
     try {
       const accepted = await scriptsApi.saveScript(scopeId, {
         scriptId: savingScriptId,
-        revisionId: currentRevision,
         expectedBaseRevision: activeScriptIsDraft
           ? undefined
           : activeScript.script.activeRevision || undefined,
@@ -2448,7 +2447,6 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
     activeScript?.script?.scriptId,
     activeScriptIsDraft,
     cancelSaveObservationPoll,
-    currentRevision,
     pollSaveObservation,
     scopeId,
     scriptPackage,
@@ -2526,7 +2524,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
         activeScript.script.scriptId,
         {
           baseRevision: activeScript.script.activeRevision || undefined,
-          candidateRevision: currentRevision,
+          candidateRevision: currentRevision || undefined,
           candidateSource: serializePersistedSource(scriptPackage),
           reason: promotionReason.trim() || undefined,
         },
@@ -2562,7 +2560,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
       const result = await scriptsApi.runDraftScript({
         scopeId,
         scriptId: activeScript.script.scriptId,
-        scriptRevision: currentRevision,
+        scriptRevision: currentRevision || undefined,
         source: serializePersistedSource(scriptPackage),
         input: runInput,
         definitionActorId:
@@ -2682,7 +2680,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                 loading={savePending}
                 onClick={() => void handleSave()}
               >
-                Save revision
+                Save script
               </Button>
             </Space>
           </div>
@@ -2719,7 +2717,8 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
             >
               <Typography.Text type="secondary">
                 {activeScript?.script?.scriptId || '-'} · {lifecycleStatus} · validation{' '}
-                {validationStatus} · save {saveObservationStatus} · rev {currentRevision}
+                {validationStatus} · save {saveObservationStatus} · rev{' '}
+                {currentRevision || 'generated on save'}
               </Typography.Text>
             </div>
           ) : null}
