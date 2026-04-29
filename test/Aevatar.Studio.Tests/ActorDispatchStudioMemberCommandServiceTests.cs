@@ -232,6 +232,70 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
     }
 
     [Fact]
+    public async Task RequestBindingAsync_ShouldDispatchScriptBindingSpecToExistingActor()
+    {
+        var bootstrap = new RecordingBootstrap();
+        bootstrap.ExistingActorIds.Add("studio-member:scope-1:m-1");
+        var dispatch = new RecordingDispatchPort();
+        var service = new ActorDispatchStudioMemberCommandService(bootstrap, dispatch);
+
+        await service.RequestBindingAsync(
+            ScopeId,
+            "m-1",
+            new UpdateStudioMemberBindingRequest(
+                RevisionId: "rev-request",
+                Script: new Aevatar.Studio.Application.Studio.Contracts.StudioMemberScriptBindingSpec(
+                    ScriptId: "script-1",
+                    ScriptRevision: "draft-1")),
+            CancellationToken.None);
+
+        var command = dispatch.Dispatches.Single().Envelope.Payload.Unpack<StudioMemberBindingRequestedCommand>();
+        command.Request.RevisionId.Should().Be("rev-request");
+        command.Request.Script.ScriptId.Should().Be("script-1");
+        command.Request.Script.ScriptRevision.Should().Be("draft-1");
+        command.Request.Workflow.Should().BeNull();
+        command.Request.Gagent.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RequestBindingAsync_ShouldDispatchGAgentBindingSpecToExistingActor()
+    {
+        var bootstrap = new RecordingBootstrap();
+        bootstrap.ExistingActorIds.Add("studio-member:scope-1:m-1");
+        var dispatch = new RecordingDispatchPort();
+        var service = new ActorDispatchStudioMemberCommandService(bootstrap, dispatch);
+
+        await service.RequestBindingAsync(
+            ScopeId,
+            "m-1",
+            new UpdateStudioMemberBindingRequest(
+                GAgent: new Aevatar.Studio.Application.Studio.Contracts.StudioMemberGAgentBindingSpec(
+                    ActorTypeName: "DemoAgent",
+                    Endpoints:
+                    [
+                        new Aevatar.Studio.Application.Studio.Contracts.StudioMemberGAgentEndpointSpec(
+                            EndpointId: "chat",
+                            DisplayName: "Chat",
+                            Kind: "chat",
+                            RequestTypeUrl: "type.googleapis.com/demo.Chat",
+                            ResponseTypeUrl: "type.googleapis.com/demo.ChatResult",
+                            Description: "chat endpoint"),
+                    ])),
+            CancellationToken.None);
+
+        var command = dispatch.Dispatches.Single().Envelope.Payload.Unpack<StudioMemberBindingRequestedCommand>();
+        command.Request.Gagent.ActorTypeName.Should().Be("DemoAgent");
+        command.Request.Gagent.Endpoints.Should().ContainSingle();
+        var endpoint = command.Request.Gagent.Endpoints[0];
+        endpoint.EndpointId.Should().Be("chat");
+        endpoint.DisplayName.Should().Be("Chat");
+        endpoint.Kind.Should().Be("chat");
+        endpoint.Description.Should().Be("chat endpoint");
+        command.Request.Workflow.Should().BeNull();
+        command.Request.Script.Should().BeNull();
+    }
+
+    [Fact]
     public async Task RequestBindingAsync_ShouldNotCreateMissingActor()
     {
         var bootstrap = new RecordingBootstrap();
@@ -280,6 +344,51 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
     }
 
     [Fact]
+    public async Task CompleteBindingAsync_ShouldDispatchWithoutResolvedRef_WhenCompletionHasNoRef()
+    {
+        var bootstrap = new RecordingBootstrap();
+        bootstrap.ExistingActorIds.Add("studio-member:scope-1:m-1");
+        var dispatch = new RecordingDispatchPort();
+        var service = new ActorDispatchStudioMemberCommandService(bootstrap, dispatch);
+
+        await service.CompleteBindingAsync(
+            ScopeId,
+            "m-1",
+            new StudioMemberBindingCompletionRequest(
+                BindingId: "bind-1",
+                RevisionId: "rev-1",
+                ExpectedActorId: "actor-1",
+                ResolvedImplementationRef: null,
+                CompletedAt: DateTimeOffset.UtcNow),
+            CancellationToken.None);
+
+        var evt = dispatch.Dispatches.Single().Envelope.Payload.Unpack<StudioMemberBindingCompletedEvent>();
+        evt.ResolvedImplementationRef.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CompleteBindingAsync_ShouldRejectUnknownResolvedImplementationKind()
+    {
+        var bootstrap = new RecordingBootstrap();
+        bootstrap.ExistingActorIds.Add("studio-member:scope-1:m-1");
+        var service = new ActorDispatchStudioMemberCommandService(bootstrap, new RecordingDispatchPort());
+
+        var act = () => service.CompleteBindingAsync(
+            ScopeId,
+            "m-1",
+            new StudioMemberBindingCompletionRequest(
+                BindingId: "bind-1",
+                RevisionId: "rev-1",
+                ExpectedActorId: "actor-1",
+                ResolvedImplementationRef: new StudioMemberImplementationRefResponse("worker"),
+                CompletedAt: DateTimeOffset.UtcNow),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Unknown implementationKind*");
+    }
+
+    [Fact]
     public async Task FailBindingAsync_ShouldDispatchFailedEventToExistingActor()
     {
         var bootstrap = new RecordingBootstrap();
@@ -303,6 +412,27 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
         evt.BindingId.Should().Be("bind-1");
         evt.FailureCode.Should().Be("scope_binding_failed");
         evt.Retryable.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task FailBindingAsync_ShouldThrowNotFound_WhenActorMissing()
+    {
+        var service = new ActorDispatchStudioMemberCommandService(
+            new RecordingBootstrap(),
+            new RecordingDispatchPort());
+
+        var act = () => service.FailBindingAsync(
+            ScopeId,
+            "m-missing",
+            new StudioMemberBindingFailureRequest(
+                BindingId: "bind-1",
+                FailureCode: "scope_binding_failed",
+                FailureSummary: "scope binding failed",
+                Retryable: true,
+                FailedAt: DateTimeOffset.UtcNow),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<StudioMemberNotFoundException>();
     }
 
 

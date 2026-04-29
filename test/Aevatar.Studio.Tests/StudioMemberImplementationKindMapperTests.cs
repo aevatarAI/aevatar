@@ -46,6 +46,14 @@ public sealed class StudioMemberImplementationKindMapperTests
         MemberImplementationKindMapper.ToWireName(kind).Should().Be(expected);
     }
 
+    [Fact]
+    public void ToWireName_ImplementationKind_ShouldReturnEmpty_ForUnspecified()
+    {
+        MemberImplementationKindMapper
+            .ToWireName(StudioMemberImplementationKind.Unspecified)
+            .Should().BeEmpty();
+    }
+
     [Theory]
     [InlineData(StudioMemberLifecycleStage.Created, "created")]
     [InlineData(StudioMemberLifecycleStage.BuildReady, "build_ready")]
@@ -63,6 +71,24 @@ public sealed class StudioMemberImplementationKindMapperTests
         // this silently mapped to "created", which lied to callers.
         MemberImplementationKindMapper
             .ToWireName(StudioMemberLifecycleStage.Unspecified)
+            .Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(StudioMemberBindingStatus.Pending, "pending")]
+    [InlineData(StudioMemberBindingStatus.Completed, "completed")]
+    [InlineData(StudioMemberBindingStatus.Failed, "failed")]
+    public void ToWireName_BindingStatus_ShouldMapToWireName(
+        StudioMemberBindingStatus status, string expected)
+    {
+        MemberImplementationKindMapper.ToWireName(status).Should().Be(expected);
+    }
+
+    [Fact]
+    public void ToWireName_BindingStatus_ShouldReturnEmpty_ForUnspecified()
+    {
+        MemberImplementationKindMapper
+            .ToWireName(StudioMemberBindingStatus.Unspecified)
             .Should().BeEmpty();
     }
 }

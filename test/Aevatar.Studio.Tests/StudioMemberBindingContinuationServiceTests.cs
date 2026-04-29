@@ -61,6 +61,142 @@ public sealed class StudioMemberBindingContinuationServiceTests
     }
 
     [Fact]
+    public async Task HandleRequestedAsync_ShouldMapScriptBindingAndCompleteWithScriptRef()
+    {
+        var scopeBinding = new RecordingScopeBindingPort();
+        var memberCommand = new RecordingMemberCommandPort();
+        var service = NewService(scopeBinding, memberCommand);
+
+        await service.HandleRequestedAsync(new StudioMemberBindingRequestedEvent
+        {
+            BindingId = "bind-script",
+            ScopeId = "scope-1",
+            MemberId = "m-1",
+            PublishedServiceId = "member-m-1",
+            ImplementationKind = StudioMemberImplementationKind.Script,
+            DisplayName = "Script Member",
+            Request = new StudioMemberBindingSpec
+            {
+                RevisionId = "script-rev-request",
+                Script = new Aevatar.GAgents.StudioMember.StudioMemberScriptBindingSpec
+                {
+                    ScriptId = "script-1",
+                    ScriptRevision = "draft-2",
+                },
+            },
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+
+        scopeBinding.LastRequest.Should().NotBeNull();
+        scopeBinding.LastRequest!.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Scripting);
+        scopeBinding.LastRequest.RevisionId.Should().Be("script-rev-request");
+        scopeBinding.LastRequest.Script.Should().BeEquivalentTo(
+            new ScopeBindingScriptSpec("script-1", "draft-2"));
+
+        var completed = memberCommand.Completed.Should().ContainSingle().Subject;
+        completed.Request.ResolvedImplementationRef.Should().NotBeNull();
+        completed.Request.ResolvedImplementationRef!.ImplementationKind
+            .Should().Be(MemberImplementationKindNames.Script);
+        completed.Request.ResolvedImplementationRef.ScriptId.Should().Be("script-1");
+        completed.Request.ResolvedImplementationRef.ScriptRevision.Should().Be("script-result-rev");
+        memberCommand.Failed.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleRequestedAsync_ShouldMapGAgentBindingAndEndpointKinds()
+    {
+        var scopeBinding = new RecordingScopeBindingPort();
+        var memberCommand = new RecordingMemberCommandPort();
+        var service = NewService(scopeBinding, memberCommand);
+
+        await service.HandleRequestedAsync(new StudioMemberBindingRequestedEvent
+        {
+            BindingId = "bind-gagent",
+            ScopeId = "scope-1",
+            MemberId = "m-1",
+            PublishedServiceId = "member-m-1",
+            ImplementationKind = StudioMemberImplementationKind.Gagent,
+            DisplayName = "GAgent Member",
+            Request = new StudioMemberBindingSpec
+            {
+                Gagent = new Aevatar.GAgents.StudioMember.StudioMemberGAgentBindingSpec
+                {
+                    ActorTypeName = "DemoAgent",
+                    Endpoints =
+                    {
+                        new Aevatar.GAgents.StudioMember.StudioMemberGAgentEndpointSpec
+                        {
+                            EndpointId = "cmd",
+                            DisplayName = "Command",
+                            Kind = "command",
+                            RequestTypeUrl = "type.googleapis.com/demo.Command",
+                            ResponseTypeUrl = "type.googleapis.com/demo.CommandResult",
+                            Description = "command endpoint",
+                        },
+                        new Aevatar.GAgents.StudioMember.StudioMemberGAgentEndpointSpec
+                        {
+                            EndpointId = "chat",
+                            DisplayName = "Chat",
+                            Kind = "CHAT",
+                            RequestTypeUrl = "type.googleapis.com/demo.Chat",
+                            ResponseTypeUrl = "type.googleapis.com/demo.ChatResult",
+                        },
+                        new Aevatar.GAgents.StudioMember.StudioMemberGAgentEndpointSpec
+                        {
+                            EndpointId = "custom",
+                            DisplayName = "Custom",
+                            Kind = "custom",
+                            RequestTypeUrl = "type.googleapis.com/demo.Custom",
+                            ResponseTypeUrl = "type.googleapis.com/demo.CustomResult",
+                        },
+                    },
+                },
+            },
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+
+        scopeBinding.LastRequest.Should().NotBeNull();
+        scopeBinding.LastRequest!.ImplementationKind.Should().Be(ScopeBindingImplementationKind.GAgent);
+        scopeBinding.LastRequest.GAgent.Should().NotBeNull();
+        scopeBinding.LastRequest.GAgent!.ActorTypeName.Should().Be("DemoAgent");
+        scopeBinding.LastRequest.GAgent.Endpoints.Select(endpoint => endpoint.Kind)
+            .Should().Equal(ServiceEndpointKind.Command, ServiceEndpointKind.Chat, ServiceEndpointKind.Unspecified);
+
+        var completed = memberCommand.Completed.Should().ContainSingle().Subject;
+        completed.Request.ResolvedImplementationRef.Should().NotBeNull();
+        completed.Request.ResolvedImplementationRef!.ImplementationKind
+            .Should().Be(MemberImplementationKindNames.GAgent);
+        completed.Request.ResolvedImplementationRef.ActorTypeName.Should().Be("DemoAgent");
+        memberCommand.Failed.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleRequestedAsync_ShouldFailRun_WhenImplementationKindCannotBuildScopeRequest()
+    {
+        var scopeBinding = new RecordingScopeBindingPort();
+        var memberCommand = new RecordingMemberCommandPort();
+        var service = NewService(scopeBinding, memberCommand);
+
+        await service.HandleRequestedAsync(new StudioMemberBindingRequestedEvent
+        {
+            BindingId = "bind-weird",
+            ScopeId = "scope-1",
+            MemberId = "m-1",
+            PublishedServiceId = "member-m-1",
+            ImplementationKind = (StudioMemberImplementationKind)999,
+            Request = new StudioMemberBindingSpec(),
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+
+        scopeBinding.LastRequest.Should().BeNull();
+        memberCommand.Completed.Should().BeEmpty();
+        var failed = memberCommand.Failed.Should().ContainSingle().Subject;
+        failed.Request.BindingId.Should().Be("bind-weird");
+        failed.Request.FailureCode.Should().Be("scope_binding_failed");
+        failed.Request.FailureSummary.Should().Contain("Unsupported StudioMember implementationKind");
+    }
+
+    [Fact]
     public async Task HandleRequestedAsync_ShouldPropagateCompletionFailure_WithoutFailingRun()
     {
         var scopeBinding = new RecordingScopeBindingPort();
@@ -158,16 +294,39 @@ public sealed class StudioMemberBindingContinuationServiceTests
                 throw Exception;
 
             LastRequest = request;
-            return Task.FromResult(new ScopeBindingUpsertResult(
-                ScopeId: request.ScopeId,
-                ServiceId: request.ServiceId ?? string.Empty,
-                DisplayName: request.DisplayName ?? string.Empty,
-                RevisionId: "rev-1",
-                ImplementationKind: request.ImplementationKind,
-                ExpectedActorId: "actor-1",
-                Workflow: new ScopeBindingWorkflowResult(
-                    WorkflowName: $"wf-{request.ServiceId}",
-                    DefinitionActorIdPrefix: $"def-{request.ServiceId}")));
+            return Task.FromResult(request.ImplementationKind switch
+            {
+                ScopeBindingImplementationKind.Scripting => new ScopeBindingUpsertResult(
+                    ScopeId: request.ScopeId,
+                    ServiceId: request.ServiceId ?? string.Empty,
+                    DisplayName: request.DisplayName ?? string.Empty,
+                    RevisionId: "rev-1",
+                    ImplementationKind: request.ImplementationKind,
+                    ExpectedActorId: "script-actor-1",
+                    Script: new ScopeBindingScriptResult(
+                        ScriptId: request.Script?.ScriptId ?? string.Empty,
+                        ScriptRevision: "script-result-rev",
+                        DefinitionActorId: "script-definition-1")),
+                ScopeBindingImplementationKind.GAgent => new ScopeBindingUpsertResult(
+                    ScopeId: request.ScopeId,
+                    ServiceId: request.ServiceId ?? string.Empty,
+                    DisplayName: request.DisplayName ?? string.Empty,
+                    RevisionId: "rev-1",
+                    ImplementationKind: request.ImplementationKind,
+                    ExpectedActorId: "gagent-actor-1",
+                    GAgent: new ScopeBindingGAgentResult(
+                        ActorTypeName: request.GAgent?.ActorTypeName ?? string.Empty)),
+                _ => new ScopeBindingUpsertResult(
+                    ScopeId: request.ScopeId,
+                    ServiceId: request.ServiceId ?? string.Empty,
+                    DisplayName: request.DisplayName ?? string.Empty,
+                    RevisionId: "rev-1",
+                    ImplementationKind: request.ImplementationKind,
+                    ExpectedActorId: "actor-1",
+                    Workflow: new ScopeBindingWorkflowResult(
+                        WorkflowName: $"wf-{request.ServiceId}",
+                        DefinitionActorIdPrefix: $"def-{request.ServiceId}")),
+            });
         }
     }
 
