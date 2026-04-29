@@ -803,7 +803,6 @@ describe('studioApi host-session requests', () => {
     const result = await studioApi.bindMemberWorkflow({
       scopeId: 'scope-1',
       memberId: 'joker',
-      displayName: 'joker',
       workflowYamls: ['name: joker\nsteps: []\n'],
       revisionId: 'rev-1',
     });
@@ -823,8 +822,6 @@ describe('studioApi host-session requests', () => {
     expect(input).toBe('/api/scopes/scope-1/members/joker/binding');
     expect(init?.method).toBe('PUT');
     expect(JSON.parse(String(init?.body))).toEqual({
-      implementationKind: 'workflow',
-      displayName: 'joker',
       workflow: {
         workflowYamls: ['name: joker\nsteps: []\n'],
       },

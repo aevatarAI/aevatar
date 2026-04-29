@@ -1257,6 +1257,8 @@ public class NyxIdChatEndpointsCoverageTests
             call.Type == typeof(ConversationGAgent) &&
             call.Id == expectedActorId);
         expectedActorId.Should().NotContain(":scope:");
+        expectedActorId.Should().NotContain("slack:");
+        expectedActorId.Should().NotContain("room-1");
         runtime.CreateCalls.Should().NotContain(call => call.Id == scopedActorId);
         runtime.Actors.Should().ContainKey(expectedActorId);
         var actor = (StubActor)runtime.Actors[expectedActorId];
@@ -2088,9 +2090,10 @@ public class NyxIdChatEndpointsCoverageTests
 
     private static string BuildRelayConversationActorId(string relayIdentity, string canonicalKey)
     {
-        var relayHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(relayIdentity.Trim())))
+        var actorKey = $"{relayIdentity.Trim()}\n{canonicalKey.Trim()}";
+        var relayHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(actorKey)))
             .ToLowerInvariant();
-        return $"channel-conversation:{canonicalKey}:relay:{relayHash}";
+        return $"channel-conversation:relay:{relayHash}";
     }
 
     private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)

@@ -1616,7 +1616,6 @@ export const studioApi = {
   bindMemberWorkflow(input: {
     scopeId: string;
     memberId: string;
-    displayName?: string | null;
     workflowYamls: readonly string[];
     revisionId?: string | null;
   }): Promise<StudioMemberBindingAcceptedResult> {
@@ -1628,8 +1627,6 @@ export const studioApi = {
         headers: JSON_HEADERS,
         body: JSON.stringify(
           compactObject({
-            implementationKind: "workflow",
-            displayName: trimOptional(input.displayName),
             workflow: {
               workflowYamls: input.workflowYamls,
             },
@@ -1643,7 +1640,6 @@ export const studioApi = {
   bindMemberScript(input: {
     scopeId: string;
     memberId: string;
-    displayName?: string | null;
     scriptId: string;
     scriptRevision: string;
     revisionId?: string | null;
@@ -1656,8 +1652,6 @@ export const studioApi = {
         headers: JSON_HEADERS,
         body: JSON.stringify(
           compactObject({
-            implementationKind: "script",
-            displayName: trimOptional(input.displayName),
             script: compactObject({
               scriptId: input.scriptId.trim(),
               scriptRevision: input.scriptRevision.trim(),
@@ -1672,7 +1666,6 @@ export const studioApi = {
   bindMemberGAgent(input: {
     scopeId: string;
     memberId: string;
-    displayName?: string | null;
     actorTypeName: string;
     endpoints: StudioScopeGAgentBindingInput["endpoints"];
     revisionId?: string | null;
@@ -1685,8 +1678,6 @@ export const studioApi = {
         headers: JSON_HEADERS,
         body: JSON.stringify(
           compactObject({
-            implementationKind: "gagent",
-            displayName: trimOptional(input.displayName),
             gagent: compactObject({
               actorTypeName: input.actorTypeName.trim(),
               endpoints: input.endpoints.map((endpoint) =>

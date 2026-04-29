@@ -305,6 +305,7 @@ let mockParsedDocument = mockCloneValue(mockWorkflowDocument);
 let mockWorkflowFile: any;
 let mockWorkflowSummaries: any[];
 let mockStudioMembers: any[];
+let mockLatestMemberBindingId: string;
 let mockConnectorCatalog: any;
 let mockConnectorDraftResponse: any;
 let mockRoleCatalog: any;
@@ -397,6 +398,7 @@ function resetMockState(): void {
   mockParsedDocument = mockCloneValue(mockWorkflowDocument);
   mockWorkflowSummaries = mockCreateDefaultWorkflowSummaries();
   mockStudioMembers = mockCreateDefaultStudioMembers();
+  mockLatestMemberBindingId = "bind-initial";
   mockWorkflowFile = {
     workflowId: "workflow-1",
     name: "workspace-demo",
@@ -717,6 +719,34 @@ jest.mock("@/shared/studio/api", () => ({
               boundAt: matchedMember.updatedAt,
             }
           : null,
+        latestBindingRun: null,
+      };
+    }),
+    getMemberBinding: jest.fn(async (_scopeId: string, memberId: string) => {
+      const matchedMember =
+        mockStudioMembers.find((member) => member.memberId === memberId) ??
+        null;
+      return {
+        lastBinding: matchedMember?.lastBoundRevisionId
+          ? {
+              publishedServiceId: matchedMember.publishedServiceId,
+              revisionId: matchedMember.lastBoundRevisionId,
+              implementationKind: matchedMember.implementationKind,
+              boundAt: matchedMember.updatedAt,
+            }
+          : null,
+        latestBindingRun: {
+          bindingId: mockLatestMemberBindingId,
+          status: matchedMember?.lastBoundRevisionId ? "completed" : "pending",
+          requestedAt: "2026-04-27T08:14:00Z",
+          completedAt: matchedMember?.lastBoundRevisionId
+            ? matchedMember.updatedAt
+            : null,
+          failedAt: null,
+          failureCode: null,
+          failureSummary: null,
+          retryable: false,
+        },
       };
     }),
     createMember: jest.fn(
@@ -1043,9 +1073,9 @@ jest.mock("@/shared/studio/api", () => ({
     bindMemberWorkflow: jest.fn(async (input: {
       scopeId: string;
       memberId: string;
-      displayName?: string;
       workflowYamls: string[];
     }) => {
+      mockLatestMemberBindingId = "bind-1";
       mockStudioMembers = mockStudioMembers.map((member) =>
         member.memberId === input.memberId
           ? {
@@ -1059,14 +1089,10 @@ jest.mock("@/shared/studio/api", () => ({
 
       return {
         scopeId: input.scopeId,
-        serviceId: "default",
-        displayName: input.displayName || "workspace-demo",
-        targetKind: "workflow",
-        targetName: input.displayName || "workspace-demo",
-        revisionId: "rev-2",
-        workflowName: input.displayName || "workspace-demo",
-        definitionActorIdPrefix: "scope-workflow:scope-1:default",
-        expectedActorId: "scope-workflow:scope-1:default:dep-1",
+        memberId: input.memberId,
+        bindingId: mockLatestMemberBindingId,
+        status: "accepted",
+        acceptedAt: "2026-04-27T08:14:00Z",
       };
     }),
     bindScopeGAgent: jest.fn(async (input: {
@@ -3819,7 +3845,6 @@ describe("StudioPage", () => {
         expect.objectContaining({
           scopeId: "scope-1",
           memberId: "workspace-demo",
-          displayName: "workspace-demo",
           workflowYamls: expect.arrayContaining([expect.stringContaining("name: workspace-demo")]),
         }),
       );

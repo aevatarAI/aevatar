@@ -202,9 +202,10 @@ public static partial class NyxIdChatEndpoints
         ArgumentException.ThrowIfNullOrWhiteSpace(relayIdentity);
         ArgumentException.ThrowIfNullOrWhiteSpace(canonicalKey);
 
-        var relayHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(relayIdentity.Trim())))
+        var actorKey = $"{relayIdentity.Trim()}\n{canonicalKey.Trim()}";
+        var relayHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(actorKey)))
             .ToLowerInvariant();
-        return $"{ConversationGAgent.BuildActorId(canonicalKey)}:relay:{relayHash}";
+        return $"channel-conversation:relay:{relayHash}";
     }
 
     private static string? NormalizeOptional(string? value)

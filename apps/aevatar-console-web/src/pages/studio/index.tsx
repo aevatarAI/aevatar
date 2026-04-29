@@ -110,6 +110,8 @@ import type { ServiceCatalogSnapshot } from '@/shared/models/services';
 import type {
   StudioExecutionDetail,
   StudioExecutionSummary,
+  StudioMemberBindingAcceptedResult,
+  StudioMemberBindingView,
   StudioMemberSummary,
   StudioValidationFinding,
   StudioWorkflowDocument,
@@ -466,6 +468,47 @@ function trimOptional(value: string | null | undefined): string {
 
 function normalizeComparableText(value: string | null | undefined): string {
   return trimOptional(value).toLowerCase();
+}
+
+const MEMBER_BIND_COMPLETION_POLL_INTERVAL_MS = 1000;
+const MEMBER_BIND_COMPLETION_POLL_ATTEMPTS = 60;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function normalizeBindingRunStatus(status: string | null | undefined): string {
+  return trimOptional(status).toLowerCase();
+}
+
+async function waitForMemberBindingCompletion(
+  accepted: StudioMemberBindingAcceptedResult,
+): Promise<StudioMemberBindingView> {
+  let latestView: StudioMemberBindingView | null = null;
+  for (let attempt = 0; attempt < MEMBER_BIND_COMPLETION_POLL_ATTEMPTS; attempt += 1) {
+    latestView = await studioApi.getMemberBinding(accepted.scopeId, accepted.memberId);
+    const run = latestView.latestBindingRun;
+    if (run?.bindingId === accepted.bindingId) {
+      const status = normalizeBindingRunStatus(run.status);
+      if (status === 'completed') {
+        return latestView;
+      }
+      if (status === 'failed') {
+        throw new Error(
+          trimOptional(run.failureSummary) ||
+            `Member binding '${accepted.bindingId}' failed.`,
+        );
+      }
+    }
+
+    await delay(MEMBER_BIND_COMPLETION_POLL_INTERVAL_MS);
+  }
+
+  throw new Error(
+    `Member binding '${accepted.bindingId}' was accepted but did not complete before the local timeout.`,
+  );
 }
 
 function findWorkflowSummaryByLookupValue(
@@ -3677,15 +3720,17 @@ const StudioPage: React.FC = () => {
       const accepted = await studioApi.bindMemberWorkflow({
         scopeId: resolvedStudioScopeId,
         memberId: resolvedBuildMemberId,
-        displayName: buildPendingBindCandidate.displayName,
         workflowYamls: await buildWorkflowYamlBundle(),
       });
+      const bindingView = await waitForMemberBindingCompletion(accepted);
       boundServiceCandidates = [
+        bindingView.lastBinding?.publishedServiceId,
         buildPendingMemberSummary?.publishedServiceId,
         buildPendingBindCandidate.displayName,
         accepted.memberId,
       ];
       optimisticBoundServiceId =
+        trimOptional(bindingView.lastBinding?.publishedServiceId) ||
         trimOptional(buildPendingMemberSummary?.publishedServiceId) ||
         trimOptional(buildPendingBindCandidate.displayName) ||
         trimOptional(accepted.memberId);

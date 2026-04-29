@@ -359,6 +359,57 @@ public sealed class StudioMemberGAgentStateTests
         failed.LastBinding.Should().BeNull();
     }
 
+    [Fact]
+    public void BindingRequested_ShouldReplacePreviousTerminalRun()
+    {
+        var pending = _agent.Apply(NewCreatedState(), new StudioMemberBindingRequestedEvent
+        {
+            BindingId = "bind-1",
+            ScopeId = "scope-1",
+            MemberId = "m-1",
+            PublishedServiceId = "member-m-1",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            DisplayName = "Original",
+            Request = new StudioMemberBindingSpec
+            {
+                Workflow = new StudioMemberWorkflowBindingSpec
+                {
+                    WorkflowYamls = { "workflow: first" },
+                },
+            },
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        var completed = _agent.Apply(pending, new StudioMemberBindingCompletedEvent
+        {
+            BindingId = "bind-1",
+            RevisionId = "rev-1",
+            ExpectedActorId = "actor-1",
+            CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+        });
+
+        var nextPending = _agent.Apply(completed, new StudioMemberBindingRequestedEvent
+        {
+            BindingId = "bind-2",
+            ScopeId = "scope-1",
+            MemberId = "m-1",
+            PublishedServiceId = "member-m-1",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            DisplayName = "Original",
+            Request = new StudioMemberBindingSpec
+            {
+                Workflow = new StudioMemberWorkflowBindingSpec
+                {
+                    WorkflowYamls = { "workflow: second" },
+                },
+            },
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(2)),
+        });
+
+        nextPending.BindingRuns.Should().ContainSingle();
+        nextPending.BindingRuns[0].BindingId.Should().Be("bind-2");
+        nextPending.BindingRuns[0].Request.Workflow.WorkflowYamls.Should().ContainSingle("workflow: second");
+    }
+
     private StudioMemberState NewCreatedState() =>
         _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
         {

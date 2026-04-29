@@ -357,6 +357,7 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         StudioMemberState state, StudioMemberBindingRequestedEvent evt)
     {
         var next = state.Clone();
+        next.BindingRuns.Clear();
         next.BindingRuns.Add(new StudioMemberBindingRun
         {
             BindingId = evt.BindingId,
