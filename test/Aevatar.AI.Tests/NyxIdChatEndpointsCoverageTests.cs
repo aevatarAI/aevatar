@@ -1281,6 +1281,61 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldDispatchRelayInboundThroughDispatchPort()
+    {
+        var relay = CreateRelayInvocationDependencies(relayApiKeyId: "nyx-key-dispatch");
+        var payload = """
+            {
+              "message_id":"msg-dispatch",
+              "correlation_id":"corr-dispatch",
+              "platform":"slack",
+              "agent":{"api_key_id":"nyx-key-dispatch"},
+              "conversation":{"platform_id":"room-dispatch","type":"group"},
+              "content":{"text":"hello"}
+            }
+            """;
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .BuildServiceProvider(),
+        };
+        context.Request.ContentType = "application/json";
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+        AttachRelayHeaders(context, relay, payload, "msg-dispatch", scopeId: "scope-dispatch");
+
+        var runtime = new StubActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var result = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            context,
+            runtime,
+            dispatchPort,
+            relay.Transport,
+            relay.Validator,
+            relay.Options,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+
+        var expectedActorId = BuildRelayConversationActorId("nyx-key-dispatch", "slack:group:room-dispatch");
+        runtime.CreateCalls.Should().ContainSingle(call =>
+            call.Type == typeof(ConversationGAgent) &&
+            call.Id == expectedActorId);
+        dispatchPort.Dispatches.Should().ContainSingle(entry =>
+            entry.ActorId == expectedActorId &&
+            entry.Envelope.Payload != null &&
+            entry.Envelope.Payload.Is(NyxRelayInboundActivity.Descriptor));
+        var actor = (StubActor)runtime.Actors[expectedActorId];
+        actor.HandledEnvelopes.Should().BeEmpty();
+
+        var relayInbound = dispatchPort.Dispatches.Single().Envelope.Payload.Unpack<NyxRelayInboundActivity>();
+        relayInbound.Activity.TransportExtras.ValidatedScopeId.Should().Be("scope-dispatch");
+    }
+
+    [Fact]
     public async Task HandleRelayWebhookAsync_ShouldDispatchLarkPrivateDailySlashCommand_WithReplyToken()
     {
         var relay = CreateRelayInvocationDependencies(relayApiKeyId: "scope-daily");
@@ -1995,6 +2050,7 @@ public class NyxIdChatEndpointsCoverageTests
     {
         EnsureEndpointContextServices(args);
         var method = EndpointsType.GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static)!;
+        args = NormalizeEndpointArguments(method, args);
         var result = method.Invoke(null, args);
         return result switch
         {
@@ -2002,6 +2058,25 @@ public class NyxIdChatEndpointsCoverageTests
             ValueTask<IResult> valueTask => await valueTask,
             _ => throw new InvalidOperationException($"Unexpected return type: {result?.GetType().FullName}"),
         };
+    }
+
+    private static object[] NormalizeEndpointArguments(MethodInfo method, object[] args)
+    {
+        var parameters = method.GetParameters();
+        if (string.Equals(method.Name, "HandleRelayWebhookAsync", StringComparison.Ordinal) &&
+            parameters.Length == args.Length + 1 &&
+            parameters.Length > 2 &&
+            parameters[2].ParameterType == typeof(IActorDispatchPort) &&
+            args.Length > 1 &&
+            args[1] is StubActorRuntime runtime)
+        {
+            return args[..2]
+                .Append(new ForwardingActorDispatchPort(runtime))
+                .Concat(args[2..])
+                .ToArray();
+        }
+
+        return args;
     }
 
     private static async Task InvokeTaskAsync(string methodName, params object[] args)
@@ -2337,6 +2412,28 @@ public class NyxIdChatEndpointsCoverageTests
         public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<System.Type>>([]);
         public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingActorDispatchPort : IActorDispatchPort
+    {
+        public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            Dispatches.Add((actorId, envelope));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ForwardingActorDispatchPort(StubActorRuntime runtime) : IActorDispatchPort
+    {
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            if (runtime.Actors.TryGetValue(actorId, out var actor))
+                return actor.HandleEventAsync(envelope, ct);
+
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class StubNyxIdRelayScopeResolver : INyxIdRelayScopeResolver

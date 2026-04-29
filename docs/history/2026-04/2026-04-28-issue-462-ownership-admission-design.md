@@ -57,6 +57,7 @@ Phase 1 tightens NyxID relay admission:
 3. `NyxIdRelayScopeResolver` is removed from the security-sensitive webhook path.
 4. Relay conversation actor ids become opaque conversation addresses built from relay identity and conversation key, not from `scope_id`.
 5. Scope ownership for relay execution comes from the verified token/admission context carried in typed command payloads.
+6. The webhook may use `IActorRuntime` only to ensure the relay conversation actor lifecycle; the inbound command must be delivered through `IActorDispatchPort`.
 
 Phase 2 converts Studio member bind into an actor-owned binding run:
 
@@ -258,6 +259,7 @@ Relay tests:
 - webhook rejects callbacks whose validated principal has no scope;
 - webhook does not resolve missing scope through `INyxIdRelayScopeResolver`;
 - relay actor id builder does not include `scope_id` or a scope hash;
+- webhook dispatches relay inbound activity through `IActorDispatchPort`, not by directly invoking the actor instance;
 - two scopes using the same relay conversation key do not rely on actor id scope suffix for authorization;
 - optional LLM configuration uses the verified scope when security-sensitive.
 

@@ -28,6 +28,7 @@ public static partial class NyxIdChatEndpoints
     private static async Task<IResult> HandleRelayWebhookAsync(
         HttpContext http,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IActorDispatchPort dispatchPort,
         [FromServices] NyxIdRelayTransport relayTransport,
         [FromServices] NyxIdRelayAuthValidator relayAuthValidator,
         [FromServices] Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions relayOptions,
@@ -129,7 +130,8 @@ public static partial class NyxIdChatEndpoints
             };
 
             var actorId = BuildRelayConversationActorId(relayIdentity, activity.Conversation.CanonicalKey);
-            var actor = await actorRuntime.CreateAsync<ConversationGAgent>(actorId, ct);
+            var actor = await actorRuntime.GetAsync(actorId)
+                ?? await actorRuntime.CreateAsync<ConversationGAgent>(actorId, ct);
             var command = new EventEnvelope
             {
                 Id = Guid.NewGuid().ToString("N"),
@@ -137,16 +139,16 @@ public static partial class NyxIdChatEndpoints
                 Payload = Any.Pack(relayInbound),
                 Route = new EnvelopeRoute
                 {
-                    Direct = new DirectRoute { TargetActorId = actorId },
+                    Direct = new DirectRoute { TargetActorId = actor.Id },
                 },
             };
 
-            await actor.HandleEventAsync(command, ct);
+            await dispatchPort.DispatchAsync(actor.Id, command, ct);
 
             logger.LogInformation(
                 "Accepted relay callback into channel conversation backbone: message={MessageId}, actor={ActorId}, platform={Platform}, activity={ActivityType}",
                 activity.Id,
-                actorId,
+                actor.Id,
                 activity.ChannelId?.Value,
                 activity.Type);
 
@@ -154,7 +156,7 @@ public static partial class NyxIdChatEndpoints
             {
                 status = "accepted",
                 message_id = activity.Id,
-                actor_id = actorId,
+                actor_id = actor.Id,
             });
         }
         catch (OperationCanceledException)
