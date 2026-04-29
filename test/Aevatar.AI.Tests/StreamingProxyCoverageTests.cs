@@ -17,6 +17,7 @@ using Google.Protobuf;
 using Any = Google.Protobuf.WellKnownTypes.Any;
 using Google.Protobuf.WellKnownTypes;
 using Aevatar.GAgents.StreamingProxy;
+using Aevatar.GAgents.StreamingProxy.Application.Rooms;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -45,6 +46,8 @@ public class StreamingProxyCoverageTests
             d.ServiceType == typeof(IStreamingProxyRoomSessionProjectionPort));
         var terminalQueryDescriptor = services.FirstOrDefault(d =>
             d.ServiceType == typeof(IStreamingProxyChatSessionTerminalQueryPort));
+        var roomCommandDescriptor = services.FirstOrDefault(d =>
+            d.ServiceType == typeof(IStreamingProxyRoomCommandService));
 
         coordinatorDescriptor.Should().NotBeNull();
         coordinatorDescriptor!.Lifetime.Should().Be(ServiceLifetime.Singleton);
@@ -52,6 +55,8 @@ public class StreamingProxyCoverageTests
         projectionDescriptor!.Lifetime.Should().Be(ServiceLifetime.Singleton);
         terminalQueryDescriptor.Should().NotBeNull();
         terminalQueryDescriptor!.Lifetime.Should().Be(ServiceLifetime.Singleton);
+        roomCommandDescriptor.Should().NotBeNull();
+        roomCommandDescriptor!.Lifetime.Should().Be(ServiceLifetime.Singleton);
     }
 
     [Fact]
@@ -82,8 +87,11 @@ public class StreamingProxyCoverageTests
     [Fact]
     public async Task HandleCreateRoomAsync_ShouldCreateRoomAndInitActor()
     {
-        var actorStore = new StubGAgentActorStore();
-        var runtime = new StubActorRuntime();
+        var roomCommandService = new StubRoomCommandService(
+            new StreamingProxyRoomCreateResult(
+                StreamingProxyRoomCreateStatus.Created,
+                "room-project-x",
+                "Project X"));
         var request = new CreateRoomRequest("Project X");
 
         var result = await InvokeResultAsync(
@@ -91,19 +99,15 @@ public class StreamingProxyCoverageTests
             CreateScopedHttpContext(),
             "scope-a",
             request,
-            actorStore,
-            runtime,
-            NullLoggerFactory.Instance,
+            roomCommandService,
             CancellationToken.None);
 
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         response.Body.Should().Contain("roomName");
-        actorStore.AddedActors.Should().ContainSingle(x =>
-            x.scopeId == "scope-a" &&
-            x.gagentType == StreamingProxyDefaults.GAgentTypeName);
-        runtime.CreateCalls.Should().ContainSingle();
-        runtime.CreateCalls[0].agentType.Should().Be(typeof(StreamingProxyGAgent));
+        response.Body.Should().Contain("room-project-x");
+        roomCommandService.Commands.Should().ContainSingle();
+        roomCommandService.Commands[0].Should().Be(new StreamingProxyRoomCreateCommand("scope-a", "Project X"));
     }
 
     [Fact]
@@ -1508,6 +1512,21 @@ public class StreamingProxyCoverageTests
             ScopeResourceTarget target,
             CancellationToken cancellationToken = default)
             => Task.FromResult(ScopeResourceAdmissionResult.Allowed());
+    }
+
+    private sealed class StubRoomCommandService(StreamingProxyRoomCreateResult result)
+        : IStreamingProxyRoomCommandService
+    {
+        public List<StreamingProxyRoomCreateCommand> Commands { get; } = [];
+
+        public Task<StreamingProxyRoomCreateResult> CreateRoomAsync(
+            StreamingProxyRoomCreateCommand command,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Commands.Add(command);
+            return Task.FromResult(result);
+        }
     }
 
     private sealed class StubParticipantStore : IStreamingProxyParticipantStore
