@@ -1,7 +1,9 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.NyxidChat.Slash;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -45,6 +47,12 @@ public static class ServiceCollectionExtensions
         // AI / Workflow dependencies. ChannelCardActionRouting (workflow resume binding)
         // is in this package for the same reason.
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ILLMCallMiddleware, ChannelContextMiddleware>());
+
+        // ─── /model slash command (issue #513 phase 5) ───
+        // Registered here (not in Channel.Identity) because the handler depends
+        // on Studio.Application UserConfig ports; Channel.Identity intentionally
+        // does not pull Studio dependencies.
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelSlashCommandHandler, ModelChannelSlashCommandHandler>());
 
         return services;
     }
