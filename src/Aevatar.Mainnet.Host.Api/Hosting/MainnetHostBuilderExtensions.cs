@@ -106,6 +106,7 @@ public static class MainnetHostBuilderExtensions
             o.BaseUrl = builder.Configuration["Aevatar:NyxId:Authority"]
                         ?? builder.Configuration["Cli:App:NyxId:Authority"]
                         ?? builder.Configuration["Aevatar:Authentication:Authority"];
+            o.SpecFetchToken = builder.Configuration["Aevatar:NyxId:SpecFetchToken"];
         });
         builder.Services.AddLarkTools(o =>
         {
