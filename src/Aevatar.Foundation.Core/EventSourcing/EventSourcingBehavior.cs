@@ -109,18 +109,49 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
             // wedging the actor until it deactivates. Update to the store's
             // version so the next ConfirmEventsAsync (typically driven by the
             // runtime envelope retry policy) recomputes versions and commits
-            // cleanly. Pending events are left intact: they have not yet been
-            // accepted, and the next attempt will re-stamp them with versions
-            // computed from the refreshed _currentVersion.
-            _logger.LogWarning(
-                ex,
-                "Event sourcing commit hit optimistic concurrency conflict; refreshing _currentVersion so the next retry can recover. agentId={AgentId} eventType={EventType} expectedVersion={ExpectedVersion} actualVersion={ActualVersion} elapsedMs={ElapsedMs}",
-                _agentId,
-                eventType,
-                ex.ExpectedVersion,
-                ex.ActualVersion,
-                Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
-            _currentVersion = ex.ActualVersion;
+            // cleanly.
+            //
+            // Pending events are left intact: this catch path assumes the
+            // store implementation guarantees full-batch atomicity on conflict
+            // (Garnet via the AppendScript Lua transaction; InMemoryEventStore
+            // via its lock-and-check). Under that contract no events from this
+            // batch made it to the store, so the next attempt safely re-stamps
+            // _pending with versions computed from the refreshed
+            // _currentVersion. A future store with partial-commit semantics
+            // would need to extend this catch to drop the already-committed
+            // prefix from _pending, otherwise the retry would duplicate
+            // domain events.
+            //
+            // Guard against a malformed exception that reports an
+            // ActualVersion behind the in-memory _currentVersion: silently
+            // accepting it would rewind the actor and likely corrupt the
+            // event sequence on the next commit. Keep _currentVersion as the
+            // higher of the two values and log loudly so the underlying
+            // contract violation surfaces.
+            var refreshed = Math.Max(_currentVersion, ex.ActualVersion);
+            if (refreshed != ex.ActualVersion)
+            {
+                _logger.LogError(
+                    ex,
+                    "Event sourcing commit hit optimistic concurrency conflict reporting an ActualVersion below in-memory _currentVersion. Keeping the larger value to avoid rewinding state. agentId={AgentId} eventType={EventType} expectedVersion={ExpectedVersion} actualVersion={ActualVersion} currentVersion={CurrentVersion}",
+                    _agentId,
+                    eventType,
+                    ex.ExpectedVersion,
+                    ex.ActualVersion,
+                    _currentVersion);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Event sourcing commit hit optimistic concurrency conflict; refreshing _currentVersion so the next retry can recover. agentId={AgentId} eventType={EventType} expectedVersion={ExpectedVersion} actualVersion={ActualVersion} elapsedMs={ElapsedMs}",
+                    _agentId,
+                    eventType,
+                    ex.ExpectedVersion,
+                    ex.ActualVersion,
+                    Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
+            }
+            _currentVersion = refreshed;
             throw;
         }
         catch (Exception ex)
@@ -189,6 +220,16 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
         // permanently. State may be slightly stale (transitions for missing
         // events are not applied), but commits make forward progress and
         // ConfirmEventsAsync's catch path can refresh further on conflict.
+        //
+        // The version-key probe is unconditional rather than gated behind
+        // events.Count == 0. Partial compaction can leave the events sorted
+        // set with valid (but trailing) entries while the version key is
+        // ahead — events[^1].Version < storeVersion is a real shape, not
+        // just the empty-events case. Skipping the probe in the
+        // events.Count > 0 branch would miss it. The cost is one extra
+        // store read per activation; for Garnet that's a single Redis GET
+        // co-located with the events query, which is negligible relative
+        // to the actor activation envelope.
         var storeVersion = await _eventStore.GetVersionAsync(agentId, ct);
 
         if (events.Count == 0)

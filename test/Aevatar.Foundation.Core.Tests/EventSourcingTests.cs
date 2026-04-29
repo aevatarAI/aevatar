@@ -266,6 +266,36 @@ public class EventSourcingBehaviorTests
     }
 
     [Fact]
+    public async Task ConfirmEventsAsync_WhenConflictReportsLowerActualVersion_ShouldNotRewindCurrentVersion()
+    {
+        // Defensive guard: a store implementation that reports a malformed
+        // EventStoreOptimisticConcurrencyException (ActualVersion < the actor's
+        // in-memory _currentVersion) must not silently rewind the actor.
+        // Rewinding would cause the next commit to assign duplicate event
+        // versions and corrupt the stream. The catch path keeps the larger of
+        // the two values so the next retry still surfaces a conflict (which is
+        // the correct outcome — the underlying store is broken).
+        var store = new MalformedConflictEventStore(reportedActualVersion: 1);
+        var behavior = new CounterEventSourcingBehavior(store, "agent-malformed");
+
+        // Seed _currentVersion=5 via a successful commit on the inner store
+        // before we engage the malformed-conflict mode.
+        for (var i = 1; i <= 5; i++)
+            behavior.RaiseEvent(new IncrementEvent { Amount = i });
+        await behavior.ConfirmEventsAsync();
+        behavior.CurrentVersion.ShouldBe(5);
+
+        store.NextAppendThrowsConflict = true;
+        behavior.RaiseEvent(new IncrementEvent { Amount = 6 });
+
+        await Should.ThrowAsync<EventStoreOptimisticConcurrencyException>(
+            () => behavior.ConfirmEventsAsync());
+
+        // _currentVersion must NOT regress to the malformed ActualVersion=1.
+        behavior.CurrentVersion.ShouldBe(5);
+    }
+
+    [Fact]
     public async Task ReplayAsync_WhenStoreVersionIsAheadOfEvents_ShouldUseStoreVersionAsAuthority()
     {
         // The exact production failure mode behind issue #502: after a partial
@@ -472,6 +502,51 @@ public class EventSourcingBehaviorTests
             _ = ct;
             throw new InvalidOperationException("snapshot-store-failure");
         }
+    }
+
+    private sealed class MalformedConflictEventStore : IEventStore
+    {
+        private readonly InMemoryEventStore _inner = new();
+        private readonly long _reportedActualVersion;
+
+        public MalformedConflictEventStore(long reportedActualVersion)
+        {
+            _reportedActualVersion = reportedActualVersion;
+        }
+
+        public bool NextAppendThrowsConflict { get; set; }
+
+        public Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default)
+        {
+            if (NextAppendThrowsConflict)
+            {
+                NextAppendThrowsConflict = false;
+                throw new EventStoreOptimisticConcurrencyException(
+                    agentId,
+                    expectedVersion,
+                    _reportedActualVersion);
+            }
+            return _inner.AppendAsync(agentId, events, expectedVersion, ct);
+        }
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId,
+            long? fromVersion = null,
+            CancellationToken ct = default) =>
+            _inner.GetEventsAsync(agentId, fromVersion, ct);
+
+        public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+            _inner.GetVersionAsync(agentId, ct);
+
+        public Task<long> DeleteEventsUpToAsync(
+            string agentId,
+            long toVersion,
+            CancellationToken ct = default) =>
+            _inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
     }
 
     private sealed class ReentrantAppendEventStore : IEventStore
