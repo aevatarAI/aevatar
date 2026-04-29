@@ -221,6 +221,304 @@ public class EventSourcingBehaviorTests
     }
 
     [Fact]
+    public async Task ConfirmEventsAsync_WhenStoreVersionIsAhead_ShouldRefreshCurrentVersionAndAllowRetryViaHandlerReExecution()
+    {
+        // Reproduces the prod incident behind issue #502: a previous activation
+        // committed up to v=N in the store, but this behavior's in-memory
+        // _currentVersion is behind. Without the catch-path refresh + pending
+        // cleanup, the runtime envelope retry would either (a) wedge on the
+        // same conflict forever, or (b) succeed but with duplicate events.
+        // Models the real runtime envelope retry shape: handler runs, raises
+        // event, ConfirmEventsAsync conflicts, handler runs AGAIN (envelope
+        // redelivery), raises the same event, ConfirmEventsAsync succeeds —
+        // exactly one logical event is committed at the refreshed version.
+        var store = new InMemoryEventStore();
+        var behavior = new CounterEventSourcingBehavior(store, "agent-conflict");
+
+        // Out-of-band commits that leave the store ahead of behavior's view.
+        await store.AppendAsync(
+            "agent-conflict",
+            [BuildEvent(version: 1, amount: 10)],
+            expectedVersion: 0);
+        await store.AppendAsync(
+            "agent-conflict",
+            [BuildEvent(version: 2, amount: 20)],
+            expectedVersion: 1);
+
+        // First handler invocation: raises event, attempts commit, conflicts.
+        behavior.RaiseEvent(new IncrementEvent { Amount = 30 });
+
+        await Should.ThrowAsync<EventStoreOptimisticConcurrencyException>(
+            () => behavior.ConfirmEventsAsync());
+
+        behavior.CurrentVersion.ShouldBe(2);
+
+        // Envelope redelivery → handler runs again → raises the same event.
+        // Without _pending cleanup in the catch path, this would commit two
+        // copies of IncrementEvent { Amount = 30 } at v=3 and v=4.
+        behavior.RaiseEvent(new IncrementEvent { Amount = 30 });
+        await behavior.ConfirmEventsAsync();
+
+        behavior.CurrentVersion.ShouldBe(3);
+        var version = await store.GetVersionAsync("agent-conflict");
+        version.ShouldBe(3);
+        var events = await store.GetEventsAsync("agent-conflict");
+        events.Count.ShouldBe(3);
+        events[^1].Version.ShouldBe(3);
+        events[^1].EventData.Unpack<IncrementEvent>().Amount.ShouldBe(30);
+        // Critical assertion: only ONE Amount=30 event in the stream, not two.
+        events.Count(evt => evt.EventData.Unpack<IncrementEvent>().Amount == 30).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task ConfirmEventsAsync_OnConflict_DropsRejectedBatchFromPendingSoEnvelopeRetryDoesNotDuplicate()
+    {
+        // Direct regression for the duplicate-events-on-conflict-retry bug
+        // raised in PR #503 review (comment 3158219396): leaving _pending
+        // intact across the conflict, then relying on Orleans envelope
+        // redelivery to re-execute the handler, produced two copies of one
+        // logical event in the stream. Asserting the catch path actively
+        // clears the rejected batch keeps the contract honest.
+        var store = new InMemoryEventStore();
+        var behavior = new CounterEventSourcingBehavior(store, "agent-pending-cleanup");
+
+        await store.AppendAsync(
+            "agent-pending-cleanup",
+            [BuildEvent(version: 1, amount: 7)],
+            expectedVersion: 0);
+
+        behavior.RaiseEvent(new IncrementEvent { Amount = 99 });
+
+        await Should.ThrowAsync<EventStoreOptimisticConcurrencyException>(
+            () => behavior.ConfirmEventsAsync());
+
+        // After conflict, _pending should be empty — calling ConfirmEventsAsync
+        // again without re-raising must be a no-op (no events to commit).
+        var noop = await behavior.ConfirmEventsAsync();
+        noop.LatestVersion.ShouldBe(1);
+        var afterNoop = await store.GetEventsAsync("agent-pending-cleanup");
+        afterNoop.Count.ShouldBe(1);
+        afterNoop[0].EventData.Unpack<IncrementEvent>().Amount.ShouldBe(7);
+    }
+
+    [Fact]
+    public async Task ConfirmEventsAsync_WhenConflictReportsLowerActualVersion_ShouldNotRewindCurrentVersion()
+    {
+        // Defensive guard: a store implementation that reports a malformed
+        // EventStoreOptimisticConcurrencyException (ActualVersion < the actor's
+        // in-memory _currentVersion) must not silently rewind the actor.
+        // Rewinding would cause the next commit to assign duplicate event
+        // versions and corrupt the stream. The catch path keeps the larger of
+        // the two values so the next retry still surfaces a conflict (which is
+        // the correct outcome — the underlying store is broken).
+        var store = new MalformedConflictEventStore(reportedActualVersion: 1);
+        var behavior = new CounterEventSourcingBehavior(store, "agent-malformed");
+
+        // Seed _currentVersion=5 via a successful commit on the inner store
+        // before we engage the malformed-conflict mode.
+        for (var i = 1; i <= 5; i++)
+            behavior.RaiseEvent(new IncrementEvent { Amount = i });
+        await behavior.ConfirmEventsAsync();
+        behavior.CurrentVersion.ShouldBe(5);
+
+        store.NextAppendThrowsConflict = true;
+        behavior.RaiseEvent(new IncrementEvent { Amount = 6 });
+
+        await Should.ThrowAsync<EventStoreOptimisticConcurrencyException>(
+            () => behavior.ConfirmEventsAsync());
+
+        // _currentVersion must NOT regress to the malformed ActualVersion=1.
+        behavior.CurrentVersion.ShouldBe(5);
+    }
+
+    [Fact]
+    public async Task ReplayAsync_WhenStoreVersionIsAheadOfEvents_AndRecoveryDisabled_ShouldThrowDriftException()
+    {
+        // PR #503 review (comment 3158223163): silently advancing
+        // _currentVersion past missing committed events is unsafe for
+        // arbitrary domain GAgents because it builds new authoritative state
+        // on top of facts that were never applied. Default behavior must
+        // surface the drift so an operator decides; the projection-scope
+        // recovery path is opt-in via RecoverFromVersionDriftOnReplay.
+        var store = new InMemoryEventStore();
+        var behavior = new CounterEventSourcingBehavior(store, "agent-version-drift");
+
+        behavior.RaiseEvent(new IncrementEvent { Amount = 1 });
+        behavior.RaiseEvent(new IncrementEvent { Amount = 2 });
+        behavior.RaiseEvent(new IncrementEvent { Amount = 3 });
+        behavior.RaiseEvent(new IncrementEvent { Amount = 4 });
+        await behavior.ConfirmEventsAsync();
+
+        await store.DeleteEventsUpToAsync("agent-version-drift", 4);
+
+        var freshBehavior = new CounterEventSourcingBehavior(store, "agent-version-drift");
+
+        var ex = await Should.ThrowAsync<EventStoreVersionDriftException>(
+            () => freshBehavior.ReplayAsync("agent-version-drift"));
+        ex.AgentId.ShouldBe("agent-version-drift");
+        ex.ReplayedVersion.ShouldBe(0);
+        ex.StoreVersion.ShouldBe(4);
+    }
+
+    [Fact]
+    public async Task ReplayAsync_WhenStoreVersionIsAheadOfEvents_AndRecoveryEnabled_ShouldUseStoreVersionAsAuthority()
+    {
+        // The exact production failure mode behind issue #502: after a partial
+        // compaction (events sorted set wiped, version key intact) the actor
+        // reactivates with no events to replay but the store's version key
+        // ahead of the in-memory _currentVersion. With opt-in recovery enabled
+        // (e.g. for projection scope actors), ReplayAsync reconciles
+        // _currentVersion to the store-authoritative version so the first
+        // AppendAsync doesn't conflict permanently.
+        var store = new InMemoryEventStore();
+        var behavior = new CounterEventSourcingBehavior(store, "agent-version-drift");
+
+        behavior.RaiseEvent(new IncrementEvent { Amount = 1 });
+        behavior.RaiseEvent(new IncrementEvent { Amount = 2 });
+        behavior.RaiseEvent(new IncrementEvent { Amount = 3 });
+        behavior.RaiseEvent(new IncrementEvent { Amount = 4 });
+        await behavior.ConfirmEventsAsync();
+
+        // Simulate compaction that drained the events sorted set without
+        // rewinding the version key — InMemoryEventStore.DeleteEventsUpToAsync
+        // mirrors the Garnet semantics exactly.
+        await store.DeleteEventsUpToAsync("agent-version-drift", 4);
+
+        var versionKey = await store.GetVersionAsync("agent-version-drift");
+        versionKey.ShouldBe(4);
+        (await store.GetEventsAsync("agent-version-drift")).Count.ShouldBe(0);
+
+        var freshBehavior = new CounterEventSourcingBehavior(
+            store,
+            "agent-version-drift",
+            recoverFromVersionDriftOnReplay: true);
+        var replayed = await freshBehavior.ReplayAsync("agent-version-drift");
+
+        replayed.ShouldBeNull();
+        freshBehavior.CurrentVersion.ShouldBe(4);
+
+        // And subsequent commits proceed from the floor instead of conflicting.
+        freshBehavior.RaiseEvent(new IncrementEvent { Amount = 5 });
+        await freshBehavior.ConfirmEventsAsync();
+        freshBehavior.CurrentVersion.ShouldBe(5);
+        (await store.GetVersionAsync("agent-version-drift")).ShouldBe(5);
+    }
+
+    [Fact]
+    public async Task ReplayAsync_WhenSnapshotPresentAndStoreVersionAhead_AndRecoveryDisabled_ShouldThrowDriftException()
+    {
+        // Mirror of the no-snapshot drift case with a snapshot present: by
+        // default the actor refuses to activate at the store version because
+        // events between the snapshot and the store version represent
+        // unrecoverable history for non-idempotent transitions.
+        var store = new InMemoryEventStore();
+        var snapshotStore = new InMemoryEventSourcingSnapshotStore<CounterState>();
+
+        await snapshotStore.SaveAsync(
+            "agent-snapshot-drift",
+            new EventSourcingSnapshot<CounterState>(
+                new CounterState { Count = 6, Name = "snap" },
+                Version: 2));
+
+        await store.AppendAsync(
+            "agent-snapshot-drift",
+            [BuildEvent(version: 1, amount: 1), BuildEvent(version: 2, amount: 2), BuildEvent(version: 3, amount: 3)],
+            expectedVersion: 0);
+        await store.DeleteEventsUpToAsync("agent-snapshot-drift", 3);
+
+        var behavior = new CounterEventSourcingBehavior(
+            store,
+            "agent-snapshot-drift",
+            snapshotStore: snapshotStore);
+
+        var ex = await Should.ThrowAsync<EventStoreVersionDriftException>(
+            () => behavior.ReplayAsync("agent-snapshot-drift"));
+        ex.ReplayedVersion.ShouldBe(2);
+        ex.StoreVersion.ShouldBe(3);
+    }
+
+    [Fact]
+    public async Task DefaultEventSourcingBehaviorFactory_AppliesPerAgentRecoveryPredicate()
+    {
+        // Per-actor opt-in (EventSourcingRuntimeOptions.ShouldRecoverFromVersionDriftOnReplay)
+        // is the production wiring point for projection scope actors: they
+        // get drift recovery while domain GAgents keep the safe default.
+        var store = new InMemoryEventStore();
+        var options = new EventSourcingRuntimeOptions
+        {
+            EnableSnapshots = false,
+            EnableEventCompaction = false,
+            ShouldRecoverFromVersionDriftOnReplay = id => id.StartsWith("recoverable:", StringComparison.Ordinal),
+        };
+        var factory = new DefaultEventSourcingBehaviorFactory<CounterState>(store, options);
+
+        await store.AppendAsync(
+            "recoverable:agent-1",
+            [BuildEvent(version: 1, amount: 5)],
+            expectedVersion: 0);
+        await store.DeleteEventsUpToAsync("recoverable:agent-1", 1);
+
+        var recoverable = factory.Create("recoverable:agent-1", static (state, _) => state);
+        var recovered = await recoverable.ReplayAsync("recoverable:agent-1");
+        recovered.ShouldBeNull();
+        recoverable.CurrentVersion.ShouldBe(1);
+
+        await store.AppendAsync(
+            "strict:agent-2",
+            [BuildEvent(version: 1, amount: 7)],
+            expectedVersion: 0);
+        await store.DeleteEventsUpToAsync("strict:agent-2", 1);
+
+        var strict = factory.Create("strict:agent-2", static (state, _) => state);
+        await Should.ThrowAsync<EventStoreVersionDriftException>(
+            () => strict.ReplayAsync("strict:agent-2"));
+    }
+
+    [Fact]
+    public async Task ReplayAsync_WhenSnapshotPresentAndStoreVersionAhead_AndRecoveryEnabled_ShouldUseStoreVersionAsFloor()
+    {
+        // Same drift shape but with opt-in recovery: the actor activates at
+        // the snapshot state with _currentVersion floored to the store
+        // version, so the first AppendAsync proceeds without conflict.
+        var store = new InMemoryEventStore();
+        var snapshotStore = new InMemoryEventSourcingSnapshotStore<CounterState>();
+
+        await snapshotStore.SaveAsync(
+            "agent-snapshot-drift",
+            new EventSourcingSnapshot<CounterState>(
+                new CounterState { Count = 6, Name = "snap" },
+                Version: 2));
+
+        await store.AppendAsync(
+            "agent-snapshot-drift",
+            [BuildEvent(version: 1, amount: 1), BuildEvent(version: 2, amount: 2), BuildEvent(version: 3, amount: 3)],
+            expectedVersion: 0);
+        await store.DeleteEventsUpToAsync("agent-snapshot-drift", 3);
+
+        var behavior = new CounterEventSourcingBehavior(
+            store,
+            "agent-snapshot-drift",
+            snapshotStore: snapshotStore,
+            recoverFromVersionDriftOnReplay: true);
+
+        var replayed = await behavior.ReplayAsync("agent-snapshot-drift");
+
+        replayed.ShouldNotBeNull();
+        replayed!.Count.ShouldBe(6);
+        behavior.CurrentVersion.ShouldBe(3);
+    }
+
+    private static StateEvent BuildEvent(long version, int amount) => new()
+    {
+        EventId = $"e-{version}",
+        Timestamp = TimestampHelper.Now(),
+        Version = version,
+        EventType = typeof(IncrementEvent).FullName ?? nameof(IncrementEvent),
+        EventData = Any.Pack(new IncrementEvent { Amount = amount }),
+        AgentId = "agent-conflict",
+    };
+
+    [Fact]
     public async Task ReplayAsync_WhenSnapshotExists_ShouldReplayOnlyDeltaEvents()
     {
         var store = new InMemoryEventStore();
@@ -279,7 +577,8 @@ public class EventSourcingBehaviorTests
             ISnapshotStrategy? snapshotStrategy = null,
             bool enableEventCompaction = false,
             int retainedEventsAfterSnapshot = 0,
-            IEventStoreCompactionScheduler? compactionScheduler = null)
+            IEventStoreCompactionScheduler? compactionScheduler = null,
+            bool recoverFromVersionDriftOnReplay = false)
             : base(
                 eventStore,
                 agentId,
@@ -287,7 +586,8 @@ public class EventSourcingBehaviorTests
                 snapshotStrategy,
                 enableEventCompaction: enableEventCompaction,
                 retainedEventsAfterSnapshot: retainedEventsAfterSnapshot,
-                compactionScheduler: compactionScheduler) { }
+                compactionScheduler: compactionScheduler,
+                recoverFromVersionDriftOnReplay: recoverFromVersionDriftOnReplay) { }
 
         public override CounterState TransitionState(CounterState current, IMessage evt)
             => StateTransitionMatcher
@@ -342,6 +642,51 @@ public class EventSourcingBehaviorTests
             _ = ct;
             throw new InvalidOperationException("snapshot-store-failure");
         }
+    }
+
+    private sealed class MalformedConflictEventStore : IEventStore
+    {
+        private readonly InMemoryEventStore _inner = new();
+        private readonly long _reportedActualVersion;
+
+        public MalformedConflictEventStore(long reportedActualVersion)
+        {
+            _reportedActualVersion = reportedActualVersion;
+        }
+
+        public bool NextAppendThrowsConflict { get; set; }
+
+        public Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default)
+        {
+            if (NextAppendThrowsConflict)
+            {
+                NextAppendThrowsConflict = false;
+                throw new EventStoreOptimisticConcurrencyException(
+                    agentId,
+                    expectedVersion,
+                    _reportedActualVersion);
+            }
+            return _inner.AppendAsync(agentId, events, expectedVersion, ct);
+        }
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId,
+            long? fromVersion = null,
+            CancellationToken ct = default) =>
+            _inner.GetEventsAsync(agentId, fromVersion, ct);
+
+        public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+            _inner.GetVersionAsync(agentId, ct);
+
+        public Task<long> DeleteEventsUpToAsync(
+            string agentId,
+            long toVersion,
+            CancellationToken ct = default) =>
+            _inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
     }
 
     private sealed class ReentrantAppendEventStore : IEventStore
