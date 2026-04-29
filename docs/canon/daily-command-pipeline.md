@@ -113,7 +113,7 @@ Lark User      Lark App     NyxID Relay     aevatar(webhook)    SkillRunnerGAgen
 ```
 
 注意几个时间窗：
-- **webhook 返回窗口**：当前 `HandleRelayWebhookAsync` 会等待 `ConversationGAgent.HandleEventAsync` 返回。对 `/daily run_immediately=true` 来说，创建 agent、GitHub preflight、首次 SkillRunner 执行和创建确认回复都在这条调用链里完成；因此“webhook 必须 ≤3 秒返回”是目标约束，不是当前代码已经保证的行为。
+- **webhook 返回窗口**：当前 `HandleRelayWebhookAsync` 会等待 relay inbound envelope 通过 `IActorDispatchPort` 投递到 `ConversationGAgent`。对 `/daily run_immediately=true` 来说，创建 agent、GitHub preflight、首次 SkillRunner 执行和创建确认回复仍可能在这条调度链路后续推进；因此“webhook 必须 ≤3 秒返回”是目标约束，不是当前代码已经保证的行为。
 - **✓ reaction**：`TrySendImmediateLarkReactionAsync()` 是 fire-and-forget，`RunInboundAsync` 不等待它完成；它可以独立失败，也不能证明后续 agent 创建成功。它还有静默 gate：只对 `ActivityType.Message`、`lark/feishu` 平台、存在 `NyxUserAccessToken` 与 `NyxProviderSlug`、且 `NyxPlatformMessageId` 以 `om_` 开头的消息尝试发送。
 - **首次执行延迟**：现网首次执行通常由 LLM 推理 + GitHub 多次 search 主导，约几十秒。当前创建确认回复可能在首次报告之后才到达。
 - **下一次定时执行**：UTC `0 9 * * *`（默认 09:00 UTC，可改 `schedule_time` / `schedule_timezone`）。
@@ -148,9 +148,9 @@ QA 关注点：
 - 校验 audience / issuer / expiry / nonce
 - 把 `Principal` 注入 `http.User`，并提取 `ScopeId`、`UserAccessToken`
 
-**Scope 解析**：`ResolveRelayScopeIdAsync(validation.ScopeId, payload, …)`
-- 优先用 JWT 里的 `scope_id`
-- 缺失时用 `payload.Agent.ApiKeyId` 反查
+**Scope 解析**：`ResolveRelayScopeId(validation.ScopeId)`
+- 只接受 JWT 里的已验证 `scope_id`
+- 缺失时直接 `401`，不得用 `payload.Agent.ApiKeyId` 反查 projection/read model 作为准入或租户路由依据
 
 **响应码语义**（handler 永远只回 `202` / `400` / `401` / `499` / `500`，**不返回 `200`**——成功与忽略路径都是 `202`，靠 body 里的 `status` 字段区分；见 [NyxIdChatEndpoints.Relay.cs:87,147](../../agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.Relay.cs)）：
 
@@ -164,7 +164,7 @@ QA 关注点：
 | `499` | — | 客户端取消 | — |
 | `500 Internal Server Error` | — | handler 未捕获异常 | 日志含 `Relay handler unexpected error` |
 
-**派发**：成功后构造 `NyxRelayInboundActivity`（含 reply token、user access token、normalized `ChatActivity`），包装成 `EventEnvelope` 后直接调用 `ConversationGAgent.HandleEventAsync`（actor id 由 conversation canonical key 推出）。
+**派发**：成功后构造 `NyxRelayInboundActivity`（含 reply token、user access token、normalized `ChatActivity`、validated scope），包装成 `EventEnvelope` 后通过 `IActorDispatchPort.DispatchAsync` 投递到 `ConversationGAgent` inbox。`IActorRuntime` 只负责 lookup/create；actor id 由 relay identity + conversation canonical key 生成 opaque hash，不承载 scope ownership。
 
 ### 阶段 ③ aevatar 内部业务路由
 
