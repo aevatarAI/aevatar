@@ -2307,7 +2307,12 @@ public sealed class ChannelConversationTurnRunnerTests
                 }),
             relayOutboundPort,
             interactiveReplyDispatcher,
-            NullLogger<ChannelConversationTurnRunner>.Instance);
+            NullLogger<ChannelConversationTurnRunner>.Instance,
+            // Production wires IOwnerLlmConfigSource via DI (ActivatorUtilities fills the
+            // optional ctor param). Tests build their own ServiceProvider; pull the registered
+            // source out of the test-supplied container so the existing tests that AddSingleton
+            // a stub still resolve correctly without re-introducing a per-execution GetService.
+            ownerLlmConfigSource: services.GetService<IOwnerLlmConfigSource>());
     }
 
     private static ConversationTurnRuntimeContext RelayRuntimeContext(

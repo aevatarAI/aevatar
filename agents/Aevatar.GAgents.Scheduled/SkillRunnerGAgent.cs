@@ -706,12 +706,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         // nyxid-chat. Without this, scheduled runs fall through to NyxIdLLMProvider's
         // compile-time defaults (`gpt-5.4` against `/api/v1/llm/gateway/v1/`), which the
         // gateway routes to the OpenAI provider — failing for bot owners who pre-configured
-        // a custom NyxID service like `chrono-llm` at `/api/v1/proxy/s/chrono-llm`.
-        var source = _ownerLlmConfigSource ?? Services?.GetService<IOwnerLlmConfigSource>();
+        // a custom NyxID service like `chrono-llm` at `/api/v1/proxy/s/chrono-llm`. The
+        // source is bound once via constructor injection (LocalActorRuntime activates agents
+        // through ActivatorUtilities so DI fills the optional ctor param at activation
+        // time); a per-execution `Services.GetService<>` lookup would be redundant and was
+        // dropped per codex's PR #509 partial dissent on r3159047120.
         await OwnerLlmConfigApplier.ApplyAsync(
             metadata,
             State.ScopeId,
-            source,
+            _ownerLlmConfigSource,
             Logger,
             actorLabel: "Skill runner",
             actorId: Id,

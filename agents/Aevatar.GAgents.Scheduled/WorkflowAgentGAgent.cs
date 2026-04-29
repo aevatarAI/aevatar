@@ -217,12 +217,14 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
         // Mirror SkillRunnerGAgent.BuildExecutionMetadataAsync — same shared helper, same
         // model/route/tool-cap pinning. Workflow-backed agents (e.g. social_media) need the
         // same UserConfig discipline so their LLM steps don't fall through to gateway+gpt-5.4
-        // when the bot owner pre-configured a custom NyxID service like `chrono-llm`.
-        var source = _ownerLlmConfigSource ?? Services?.GetService<IOwnerLlmConfigSource>();
+        // when the bot owner pre-configured a custom NyxID service like `chrono-llm`. The
+        // source is bound once via constructor injection at agent activation time; the
+        // per-execution Services.GetService<> fallback was dropped per codex's PR #509
+        // partial dissent on r3159047120.
         await OwnerLlmConfigApplier.ApplyAsync(
             metadata,
             State.ScopeId,
-            source,
+            _ownerLlmConfigSource,
             Logger,
             actorLabel: "Workflow agent",
             actorId: Id,

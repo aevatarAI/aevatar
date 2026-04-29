@@ -27,6 +27,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private readonly NyxIdApiClient _nyxClient;
     private readonly NyxIdRelayOutboundPort _relayOutboundPort;
     private readonly IInteractiveReplyDispatcher? _interactiveReplyDispatcher;
+    private readonly IOwnerLlmConfigSource? _ownerLlmConfigSource;
     private readonly ILogger<ChannelConversationTurnRunner> _logger;
 
     public ChannelConversationTurnRunner(
@@ -37,7 +38,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         NyxIdApiClient nyxClient,
         NyxIdRelayOutboundPort relayOutboundPort,
         IInteractiveReplyDispatcher? interactiveReplyDispatcher,
-        ILogger<ChannelConversationTurnRunner> logger)
+        ILogger<ChannelConversationTurnRunner> logger,
+        IOwnerLlmConfigSource? ownerLlmConfigSource = null)
     {
         _services = services ?? throw new ArgumentNullException(nameof(services));
         _registrationQueryPort = registrationQueryPort ?? throw new ArgumentNullException(nameof(registrationQueryPort));
@@ -46,6 +48,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _nyxClient = nyxClient ?? throw new ArgumentNullException(nameof(nyxClient));
         _relayOutboundPort = relayOutboundPort ?? throw new ArgumentNullException(nameof(relayOutboundPort));
         _interactiveReplyDispatcher = interactiveReplyDispatcher;
+        _ownerLlmConfigSource = ownerLlmConfigSource;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -780,11 +783,13 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         // (DefaultModel + PreferredLlmRoute + MaxToolRounds) onto outbound LLM metadata so the
         // channel inbound → LLM path honors the same per-owner LLM routing the scheduled agents
         // do. Without this, channel-bot LLM turns fall through to NyxIdLLMProvider's compile-time
-        // defaults and 400 against a bot owner who pre-configured a custom NyxID service.
+        // defaults and 400 against a bot owner who pre-configured a custom NyxID service. Source
+        // is bound once via constructor injection — no per-execution Services.GetService<>
+        // lookup, per codex's PR #509 partial dissent on r3159047120.
         await OwnerLlmConfigApplier.ApplyAsync(
             metadata,
             inboundEvent.RegistrationScopeId,
-            _services.GetService<IOwnerLlmConfigSource>(),
+            _ownerLlmConfigSource,
             _logger,
             actorLabel: "Channel turn runner",
             actorId: inboundEvent.MessageId,
