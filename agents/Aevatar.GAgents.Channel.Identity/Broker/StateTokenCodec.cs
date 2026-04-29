@@ -25,7 +25,6 @@ namespace Aevatar.GAgents.Channel.Identity.Broker;
 /// </remarks>
 public sealed class StateTokenCodec
 {
-    private const string DefaultKid = "v1";
     private static readonly TimeSpan FallbackStateTokenLifetime = TimeSpan.FromMinutes(5);
 
     private readonly IAevatarOAuthClientProvider _clientProvider;
@@ -52,9 +51,7 @@ public sealed class StateTokenCodec
         if (snapshot.HmacKey.Length == 0)
             throw new InvalidOperationException("Aevatar OAuth client HMAC key is not provisioned.");
 
-        var lifetime = _options.StateTokenLifetime > TimeSpan.Zero
-            ? _options.StateTokenLifetime
-            : FallbackStateTokenLifetime;
+        var lifetime = ResolveStateTokenLifetime();
         var expiresAt = _timeProvider.GetUtcNow().Add(lifetime);
         var payload = new StateTokenPayload
         {
@@ -64,7 +61,13 @@ public sealed class StateTokenCodec
             ExpiresAt = Timestamp.FromDateTimeOffset(expiresAt),
         };
 
-        var kidBytes = Encoding.UTF8.GetBytes(DefaultKid);
+        // Encode with the snapshot's current kid (defaults to v1 on first
+        // provision). Verifiers below may also accept the previous kid
+        // during the rotation grace window.
+        var encodingKid = string.IsNullOrEmpty(snapshot.HmacKid)
+            ? AevatarOAuthClientGAgent.InitialHmacKid
+            : snapshot.HmacKid;
+        var kidBytes = Encoding.UTF8.GetBytes(encodingKid);
         var payloadBytes = SerializeDeterministically(payload);
         var signed = Combine(kidBytes, payloadBytes);
         var hmac = HMACSHA256.HashData(snapshot.HmacKey, signed);
@@ -95,10 +98,6 @@ public sealed class StateTokenCodec
             return DecodeResult.Failed("state_malformed");
         }
 
-        var presentedKid = Encoding.UTF8.GetString(kidBytes);
-        if (!string.Equals(presentedKid, DefaultKid, StringComparison.Ordinal))
-            return DecodeResult.Failed("state_kid_unknown");
-
         AevatarOAuthClientSnapshot snapshot;
         try
         {
@@ -111,7 +110,12 @@ public sealed class StateTokenCodec
         if (snapshot.HmacKey.Length == 0)
             return DecodeResult.Failed("state_signature_invalid");
 
-        var expectedHmac = HMACSHA256.HashData(snapshot.HmacKey, Combine(kidBytes, payloadBytes));
+        var presentedKid = Encoding.UTF8.GetString(kidBytes);
+        var keyToVerify = ResolveVerificationKey(snapshot, presentedKid);
+        if (keyToVerify is null)
+            return DecodeResult.Failed("state_kid_unknown");
+
+        var expectedHmac = HMACSHA256.HashData(keyToVerify, Combine(kidBytes, payloadBytes));
         if (!CryptographicOperations.FixedTimeEquals(expectedHmac, hmacBytes))
             return DecodeResult.Failed("state_signature_invalid");
 
@@ -129,6 +133,40 @@ public sealed class StateTokenCodec
             return DecodeResult.Failed("state_expired");
 
         return DecodeResult.Ok(parsed);
+    }
+
+    private TimeSpan ResolveStateTokenLifetime() =>
+        _options.StateTokenLifetime > TimeSpan.Zero ? _options.StateTokenLifetime : FallbackStateTokenLifetime;
+
+    /// <summary>
+    /// Pick the verification key for <paramref name="presentedKid"/>:
+    ///   - matches snapshot's current kid → current key
+    ///   - matches snapshot's previous kid AND demoted_at + lifetime is still
+    ///     in the future → previous key (rotation grace window)
+    ///   - otherwise: null (unknown / expired kid → caller returns
+    ///     <c>state_kid_unknown</c>)
+    /// </summary>
+    private byte[]? ResolveVerificationKey(AevatarOAuthClientSnapshot snapshot, string presentedKid)
+    {
+        var currentKid = string.IsNullOrEmpty(snapshot.HmacKid)
+            ? AevatarOAuthClientGAgent.InitialHmacKid
+            : snapshot.HmacKid;
+        if (string.Equals(presentedKid, currentKid, StringComparison.Ordinal))
+            return snapshot.HmacKey;
+
+        if (snapshot.PreviousHmacKey is { Length: > 0 }
+            && !string.IsNullOrEmpty(snapshot.PreviousHmacKid)
+            && string.Equals(presentedKid, snapshot.PreviousHmacKid, StringComparison.Ordinal))
+        {
+            // Grace window expires once the longest-lived in-flight token
+            // signed with the previous key would itself have expired.
+            var demotedAt = snapshot.PreviousHmacDemotedAt ?? DateTimeOffset.MinValue;
+            var graceUntil = demotedAt + ResolveStateTokenLifetime();
+            if (_timeProvider.GetUtcNow() <= graceUntil)
+                return snapshot.PreviousHmacKey;
+        }
+
+        return null;
     }
 
     private static byte[] SerializeDeterministically(StateTokenPayload payload)

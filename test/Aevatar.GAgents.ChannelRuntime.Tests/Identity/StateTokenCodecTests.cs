@@ -18,9 +18,10 @@ public class StateTokenCodecTests
     private static readonly byte[] HmacKey =
         Convert.FromHexString("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
 
-    private static AevatarOAuthClientSnapshot Snapshot(byte[]? hmacKey = null) => new(
+    private static AevatarOAuthClientSnapshot Snapshot(byte[]? hmacKey = null, string hmacKid = "v1") => new(
         ClientId: "aevatar-channel-binding",
         ClientIdIssuedAt: DateTimeOffset.Parse("2026-04-29T09:00:00Z"),
+        HmacKid: hmacKid,
         HmacKey: hmacKey ?? HmacKey,
         HmacKeyRotatedAt: DateTimeOffset.Parse("2026-04-29T09:00:00Z"),
         NyxIdAuthority: "https://nyxid.test",
@@ -116,6 +117,47 @@ public class StateTokenCodecTests
         result.Succeeded.Should().BeFalse();
         result.Payload.Should().BeNull();
         result.ErrorCode.Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
+    public async Task TryDecode_AcceptsPreviousKidWithinGraceWindow()
+    {
+        // Issue #521 review v4-pro: HMAC key rotation must not invalidate
+        // in-flight state tokens. State signed with the previous (demoted)
+        // key still verifies for the configured StateTokenLifetime after
+        // rotation; outside that window the previous key is rejected.
+        var clock = new FakeTimeProvider(DateTimeOffset.Parse("2026-04-29T10:00:00Z"));
+        var oldKey = HmacKey;
+        var newKey = Convert.FromHexString("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".Replace("0", "9"));
+
+        // Encode a state token with the OLD key + kid "v1".
+        var oldSnapshot = Snapshot(hmacKey: oldKey, hmacKid: "v1");
+        var oldCodec = new StateTokenCodec(new FakeOAuthClientProvider(oldSnapshot), options: null, clock);
+        var token = await oldCodec.EncodeAsync("corr-1", SampleSubject(), "verifier-abc");
+
+        // Rotate: new snapshot has v2 current and v1 demoted just now.
+        var rotatedSnapshot = oldSnapshot with
+        {
+            HmacKid = "v2",
+            HmacKey = newKey,
+            HmacKeyRotatedAt = clock.GetUtcNow(),
+            PreviousHmacKid = "v1",
+            PreviousHmacKey = oldKey,
+            PreviousHmacDemotedAt = clock.GetUtcNow(),
+        };
+        var rotatedCodec = new StateTokenCodec(new FakeOAuthClientProvider(rotatedSnapshot), options: null, clock);
+
+        // Token from before the rotation must still verify (within grace).
+        var withinGrace = await rotatedCodec.TryDecodeAsync(token);
+        withinGrace.Succeeded.Should().BeTrue();
+
+        // Advance past the lifetime → previous-key window closes, decode fails.
+        clock.Advance(TimeSpan.FromMinutes(6));
+        var afterGrace = await rotatedCodec.TryDecodeAsync(token);
+        afterGrace.Succeeded.Should().BeFalse();
+        // After-grace can either be expired (state_expired since lifetime passed)
+        // or kid_unknown (key rejected); either is acceptable — both block.
+        afterGrace.ErrorCode.Should().BeOneOf("state_expired", "state_kid_unknown");
     }
 
     private sealed class FakeOAuthClientProvider : IAevatarOAuthClientProvider

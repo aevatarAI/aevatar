@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+
 namespace Aevatar.GAgents.Channel.Identity;
 
 /// <summary>
@@ -20,12 +22,40 @@ public static class NyxIdAuthorityResolver
 
     /// <summary>
     /// Returns the runtime NyxID authority. Trims trailing slash so
-    /// callers can concatenate paths uniformly.
+    /// callers can concatenate paths uniformly. When the env var is unset
+    /// AND <c>ASPNETCORE_ENVIRONMENT</c> indicates a non-Development
+    /// environment, logs a warning so a staging / dev cluster that forgot
+    /// to override does not silently register clients against production
+    /// NyxID (PR #521 review mimo-v2.5-pro).
     /// </summary>
-    public static string Resolve()
+    public static string Resolve(ILogger? logger = null)
     {
         var raw = Environment.GetEnvironmentVariable(OverrideEnvVar);
-        var authority = string.IsNullOrWhiteSpace(raw) ? DefaultAuthority : raw.Trim();
-        return authority.TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            var environmentName = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")
+                ?? Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT")
+                ?? string.Empty;
+            // "Development" is the .NET stock convention; treat anything
+            // that is empty or starts with "dev" as developer-machine intent
+            // and skip the warning. Production / Staging / QA see the warning.
+            var looksLikeDev = string.IsNullOrEmpty(environmentName)
+                || environmentName.StartsWith("dev", StringComparison.OrdinalIgnoreCase)
+                || environmentName.StartsWith("local", StringComparison.OrdinalIgnoreCase);
+            if (!looksLikeDev)
+            {
+                logger?.LogWarning(
+                    "NyxID authority falling back to hardcoded production default '{Default}' " +
+                    "because {EnvVar} is unset; environment={Environment}. Staging / dev clusters " +
+                    "MUST set {EnvVar} or they will register OAuth clients against the production NyxID.",
+                    DefaultAuthority,
+                    OverrideEnvVar,
+                    environmentName,
+                    OverrideEnvVar);
+            }
+            return DefaultAuthority.TrimEnd('/');
+        }
+
+        return raw.Trim().TrimEnd('/');
     }
 }

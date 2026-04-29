@@ -185,7 +185,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleRotateHmacKey_ReplacesKeyButKeepsClientId()
+    public async Task HandleRotateHmacKey_DemotesPreviousKeyToGraceWindow()
     {
         await _agent.HandleProvision(new ProvisionAevatarOAuthClientCommand
         {
@@ -193,12 +193,39 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
             NyxidAuthority = "https://nyxid.test",
         });
         var seededKey = _agent.State.HmacKey;
+        var seededKid = _agent.State.HmacKid;
+        seededKid.Should().Be(AevatarOAuthClientGAgent.InitialHmacKid);
 
         await _agent.HandleRotateHmacKey(new RotateAevatarOAuthClientHmacKeyCommand());
 
         _agent.State.HmacKey.Should().NotBeEquivalentTo(seededKey);
         _agent.State.HmacKey.Length.Should().Be(32);
         _agent.State.ClientId.Should().Be("client-x");
+        // Kid increments deterministically (v1 → v2) so verifiers can route
+        // signed tokens to the right key.
+        _agent.State.HmacKid.Should().Be("v2");
+        // Previous key must be carried for the grace window so in-flight
+        // state tokens signed with the old key still verify.
+        _agent.State.PreviousHmacKid.Should().Be(seededKid);
+        _agent.State.PreviousHmacKey.Should().BeEquivalentTo(seededKey);
+        _agent.State.PreviousHmacDemotedAtUnix.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task HandleProvision_FirstSeed_DoesNotCarryPreviousKey()
+    {
+        // Initial seed has no prior key — the previous-key fields stay
+        // empty so verifiers don't accidentally accept tokens signed with
+        // never-issued material.
+        await _agent.HandleProvision(new ProvisionAevatarOAuthClientCommand
+        {
+            ClientId = "client-x",
+            NyxidAuthority = "https://nyxid.test",
+        });
+
+        _agent.State.HmacKid.Should().Be(AevatarOAuthClientGAgent.InitialHmacKid);
+        _agent.State.PreviousHmacKey.Length.Should().Be(0);
+        _agent.State.PreviousHmacKid.Should().BeNullOrEmpty();
     }
 
     private sealed class RecordingDcrClient

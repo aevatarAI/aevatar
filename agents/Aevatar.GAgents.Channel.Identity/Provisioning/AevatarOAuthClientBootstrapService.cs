@@ -126,7 +126,7 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
 
     private async Task EnsureProvisionedAsync(CancellationToken ct)
     {
-        var authority = NyxIdAuthorityResolver.Resolve();
+        var authority = NyxIdAuthorityResolver.Resolve(_logger);
         AevatarOAuthClientSnapshot? cached = null;
         try
         {

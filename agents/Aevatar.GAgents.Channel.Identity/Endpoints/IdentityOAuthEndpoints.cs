@@ -120,6 +120,12 @@ public static class IdentityOAuthEndpoints
         var actor = await TryActivateActorAsync(actorRuntime, actorId, logger, ct).ConfigureAwait(false);
         if (actor is null)
         {
+            // Actor activation failed — the binding_id we just got from NyxID
+            // would otherwise leak (no local actor will ever commit it). Best-
+            // effort revoke at NyxID before responding so the orphan does not
+            // accumulate. Same cleanup pattern as the already-bound branch
+            // above (PR #521 codex/glm review).
+            await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
             return Results.Json(new
             {
                 error = "actor_activation_failed",

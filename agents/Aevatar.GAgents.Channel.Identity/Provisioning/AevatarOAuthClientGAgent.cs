@@ -25,6 +25,13 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
     public const string WellKnownId = "aevatar-oauth-client";
 
     private const int HmacKeyBytes = 32; // 256-bit
+    /// <summary>
+    /// Initial kid assigned on first HMAC key seed. Subsequent rotations
+    /// produce <c>"v2"</c>, <c>"v3"</c>, etc. — the integer suffix is parsed
+    /// + incremented from the current kid; if parsing fails the rotation
+    /// falls back to <c>"v{rotated_at_unix}"</c>.
+    /// </summary>
+    public const string InitialHmacKid = "v1";
 
     /// <inheritdoc />
     protected override AevatarOAuthClientState TransitionState(AevatarOAuthClientState current, IMessage evt)
@@ -201,17 +208,45 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         Logger.LogInformation("Observed broker_capability_enabled on aevatar OAuth client");
     }
 
-    private static AevatarOAuthClientHmacKeyRotatedEvent BuildHmacKeyRotatedEvent()
+    private AevatarOAuthClientHmacKeyRotatedEvent BuildHmacKeyRotatedEvent()
     {
         var keyBytes = new byte[HmacKeyBytes];
         RandomNumberGenerator.Fill(keyBytes);
         var now = DateTimeOffset.UtcNow;
+        var nextKid = NextKid(State.HmacKid, now);
+
+        // Demote the current key to the grace-window slot so any state token
+        // signed with it (TTL ≤ 5 min) keeps verifying. Initial seed has no
+        // current key yet, so the demoted fields stay empty.
+        var demotingExisting = State.HmacKey.Length > 0;
         return new AevatarOAuthClientHmacKeyRotatedEvent
         {
             HmacKey = ByteString.CopyFrom(keyBytes),
+            HmacKid = nextKid,
             RotatedAtUnix = now.ToUnixTimeSeconds(),
             PersistedAt = Timestamp.FromDateTimeOffset(now),
+            PreviousHmacKey = demotingExisting ? State.HmacKey : ByteString.Empty,
+            PreviousHmacKid = demotingExisting ? State.HmacKid : string.Empty,
+            PreviousHmacDemotedAtUnix = demotingExisting ? now.ToUnixTimeSeconds() : 0,
         };
+    }
+
+    private static string NextKid(string? currentKid, DateTimeOffset now)
+    {
+        if (string.IsNullOrEmpty(currentKid))
+            return InitialHmacKid;
+
+        // Kid format "vN" where N is the rotation counter. Parse + increment.
+        if (currentKid.Length > 1
+            && currentKid[0] == 'v'
+            && int.TryParse(currentKid.AsSpan(1), out var current))
+        {
+            return $"v{current + 1}";
+        }
+
+        // Fall back to a timestamp-derived kid so rotation still uniquely
+        // labels the new key even if state has been hand-edited or migrated.
+        return $"v{now.ToUnixTimeSeconds()}";
     }
 
     // ─── State transitions ───
@@ -238,6 +273,10 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         var next = current.Clone();
         next.HmacKey = evt.HmacKey ?? ByteString.Empty;
         next.HmacKeyRotatedAtUnix = evt.RotatedAtUnix;
+        next.HmacKid = string.IsNullOrEmpty(evt.HmacKid) ? InitialHmacKid : evt.HmacKid;
+        next.PreviousHmacKey = evt.PreviousHmacKey ?? ByteString.Empty;
+        next.PreviousHmacKid = evt.PreviousHmacKid ?? string.Empty;
+        next.PreviousHmacDemotedAtUnix = evt.PreviousHmacDemotedAtUnix;
         return next;
     }
 

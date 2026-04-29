@@ -78,7 +78,12 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddChatbotClassifier();
         builder.Services.AddRetiredActorCleanup();
         builder.Services.AddChannelRuntime(builder.Configuration);
+        // Composition root owns the ES vs InMemory store choice for the
+        // Identity module: AddChannelIdentity registers actors / projector /
+        // broker / slash-commands and AddChannelIdentityProjectionStores
+        // wires the document store. Tests / demos can mix and match.
         builder.Services.AddChannelIdentity(builder.Configuration);
+        builder.Services.AddChannelIdentityProjectionStores(builder.Configuration);
         builder.Services.AddDeviceRegistration(builder.Configuration);
         builder.Services.AddScheduledAgents(builder.Configuration);
         // Bridge Studio's IUserConfigQueryPort onto the AI-layer IOwnerLlmConfigSource port so

@@ -16,19 +16,24 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace Aevatar.GAgents.Channel.Identity.DependencyInjection;
 
 /// <summary>
-/// DI extensions for the Channel.Identity module. The cluster-singleton
-/// OAuth client provisioning, broker, and projection chain are wired via
-/// <see cref="AddChannelIdentity"/>; the broker is self-bootstrapping (no
-/// appsettings dependency).
+/// DI extensions for the Channel.Identity module. Split into two methods
+/// so the host composition root owns the document-store wiring (ES vs
+/// InMemory) and the agent module only registers actors / projectors /
+/// broker / slash-commands (PR #521 review glm-5.1 on the agent-level
+/// projection-provider coupling).
 /// </summary>
 public static class IdentityServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers the full Channel.Identity stack: per-binding projection +
+    /// Registers the Channel.Identity stack: per-binding projection +
     /// query / readiness ports, the cluster-singleton OAuth client
-    /// projection + provider, the production NyxID broker, and the OAuth
-    /// client bootstrap service. Caller must additionally call
-    /// <c>MapIdentityOAuthEndpoints</c> on the endpoint route builder.
+    /// projection + provider, the production NyxID broker, the OAuth
+    /// client bootstrap service, and the slash-command handlers.
+    /// Document stores are NOT wired here — the host composition root
+    /// chooses ES vs InMemory and calls
+    /// <see cref="AddChannelIdentityProjectionStores"/> alongside this
+    /// method (or wires its own custom store). Caller must additionally
+    /// call <c>MapIdentityOAuthEndpoints</c> on the endpoint route builder.
     /// </summary>
     public static IServiceCollection AddChannelIdentity(
         this IServiceCollection services,
@@ -40,10 +45,6 @@ public static class IdentityServiceCollectionExtensions
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton(sp => TimeProvider.System);
-
-        var useElasticsearch = ElasticsearchProjectionConfiguration.IsEnabled(
-            configuration,
-            storeName: "ChannelIdentity");
 
         // ─── Per-binding projection (one document per ExternalSubjectRef) ───
         services.AddProjectionMaterializationRuntimeCore<
@@ -84,28 +85,6 @@ public static class IdentityServiceCollectionExtensions
             AevatarOAuthClientDocumentMetadataProvider>();
         services.TryAddSingleton<IAevatarOAuthClientProvider, AevatarOAuthClientProjectionProvider>();
 
-        // ─── Document stores (ES vs InMemory) ───
-        if (useElasticsearch)
-        {
-            services.AddElasticsearchDocumentProjectionStore<ExternalIdentityBindingDocument, string>(
-                optionsFactory: _ => ElasticsearchProjectionConfiguration.BindOptions(configuration!),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ExternalIdentityBindingDocument>>().Metadata,
-                keySelector: static doc => doc.Id,
-                keyFormatter: static key => key);
-            services.AddElasticsearchDocumentProjectionStore<AevatarOAuthClientDocument, string>(
-                optionsFactory: _ => ElasticsearchProjectionConfiguration.BindOptions(configuration!),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<AevatarOAuthClientDocument>>().Metadata,
-                keySelector: static doc => doc.Id,
-                keyFormatter: static key => key);
-        }
-        else
-        {
-            services.AddInMemoryDocumentProjectionStore<ExternalIdentityBindingDocument, string>(
-                static doc => doc.Id, static key => key);
-            services.AddInMemoryDocumentProjectionStore<AevatarOAuthClientDocument, string>(
-                static doc => doc.Id, static key => key);
-        }
-
         // ─── Broker (self-bootstrapping, no appsettings dependency) ───
         services.AddOptions<NyxIdBrokerOptions>();
         services.TryAddSingleton<StateTokenCodec>();
@@ -131,6 +110,54 @@ public static class IdentityServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelSlashCommandHandler, UnbindChannelSlashCommandHandler>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelSlashCommandHandler, WhoamiChannelSlashCommandHandler>());
         services.TryAddSingleton<ChannelSlashCommandRegistry>();
+
+        return services;
+    }
+
+    /// <summary>
+    /// Wires the per-binding + cluster-singleton projection document stores
+    /// for Channel.Identity. Picks Elasticsearch when configuration enables
+    /// it under the <c>ChannelIdentity</c> store name, else falls back to
+    /// in-memory (suitable for tests / single-host dev). Hosts that want a
+    /// custom store implementation skip this method and register their own
+    /// <see cref="IProjectionDocumentStore{TDocument,TKey}"/> directly.
+    /// </summary>
+    /// <remarks>
+    /// Lives in this same project as <see cref="AddChannelIdentity"/> for
+    /// discoverability, but split out so the host (Mainnet, demo, CLI) is
+    /// the explicit owner of the ES vs InMemory choice — the agent module
+    /// never makes that decision on the host's behalf.
+    /// </remarks>
+    public static IServiceCollection AddChannelIdentityProjectionStores(
+        this IServiceCollection services,
+        IConfiguration? configuration = null)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        var useElasticsearch = ElasticsearchProjectionConfiguration.IsEnabled(
+            configuration,
+            storeName: "ChannelIdentity");
+
+        if (useElasticsearch)
+        {
+            services.AddElasticsearchDocumentProjectionStore<ExternalIdentityBindingDocument, string>(
+                optionsFactory: _ => ElasticsearchProjectionConfiguration.BindOptions(configuration!),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ExternalIdentityBindingDocument>>().Metadata,
+                keySelector: static doc => doc.Id,
+                keyFormatter: static key => key);
+            services.AddElasticsearchDocumentProjectionStore<AevatarOAuthClientDocument, string>(
+                optionsFactory: _ => ElasticsearchProjectionConfiguration.BindOptions(configuration!),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<AevatarOAuthClientDocument>>().Metadata,
+                keySelector: static doc => doc.Id,
+                keyFormatter: static key => key);
+        }
+        else
+        {
+            services.AddInMemoryDocumentProjectionStore<ExternalIdentityBindingDocument, string>(
+                static doc => doc.Id, static key => key);
+            services.AddInMemoryDocumentProjectionStore<AevatarOAuthClientDocument, string>(
+                static doc => doc.Id, static key => key);
+        }
 
         return services;
     }
