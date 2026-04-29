@@ -25,14 +25,6 @@ public static class MemberLifecycleStageNames
     public const string BindReady = "bind_ready";
 }
 
-public static class StudioMemberBindingStatusNames
-{
-    public const string Accepted = "accepted";
-    public const string Pending = "pending";
-    public const string Completed = "completed";
-    public const string Failed = "failed";
-}
-
 /// <summary>
 /// Wire-format status values returned in
 /// <see cref="StudioMemberBindingRevisionActionResponse.Status"/>. Centralizing
@@ -83,24 +75,13 @@ public sealed record StudioMemberSummaryResponse(
 public sealed record StudioMemberDetailResponse(
     StudioMemberSummaryResponse Summary,
     StudioMemberImplementationRefResponse? ImplementationRef,
-    StudioMemberBindingContractResponse? LastBinding,
-    StudioMemberBindingRunResponse? LatestBindingRun = null);
+    StudioMemberBindingContractResponse? LastBinding);
 
 public sealed record StudioMemberBindingContractResponse(
     string PublishedServiceId,
     string RevisionId,
     string ImplementationKind,
     DateTimeOffset BoundAt);
-
-public sealed record StudioMemberBindingRunResponse(
-    string BindingId,
-    string Status,
-    DateTimeOffset? RequestedAt,
-    DateTimeOffset? CompletedAt,
-    DateTimeOffset? FailedAt,
-    string? FailureCode = null,
-    string? FailureSummary = null,
-    bool Retryable = false);
 
 /// <summary>
 /// Wrapper returned from <c>GET /members/{memberId}/binding</c> so the
@@ -109,8 +90,7 @@ public sealed record StudioMemberBindingRunResponse(
 /// "member missing" (typed 404 STUDIO_MEMBER_NOT_FOUND).
 /// </summary>
 public sealed record StudioMemberBindingViewResponse(
-    StudioMemberBindingContractResponse? LastBinding,
-    StudioMemberBindingRunResponse? LatestBindingRun = null);
+    StudioMemberBindingContractResponse? LastBinding);
 
 public sealed record StudioMemberRosterResponse(
     string ScopeId,
@@ -182,26 +162,13 @@ public sealed record StudioMemberGAgentBindingSpec(
     string ActorTypeName,
     IReadOnlyList<StudioMemberGAgentEndpointSpec>? Endpoints = null);
 
-public sealed record StudioMemberBindingAcceptedResponse(
-    string ScopeId,
+public sealed record StudioMemberBindingResponse(
     string MemberId,
-    string BindingId,
-    string Status,
-    DateTimeOffset AcceptedAt);
-
-public sealed record StudioMemberBindingCompletionRequest(
-    string BindingId,
+    string PublishedServiceId,
     string RevisionId,
-    string ExpectedActorId,
-    StudioMemberImplementationRefResponse? ResolvedImplementationRef,
-    DateTimeOffset CompletedAt);
-
-public sealed record StudioMemberBindingFailureRequest(
-    string BindingId,
-    string FailureCode,
-    string FailureSummary,
-    bool Retryable,
-    DateTimeOffset FailedAt);
+    string ImplementationKind,
+    string ScopeId,
+    string ExpectedActorId);
 
 /// <summary>
 /// Member-first endpoint contract. Mirrors the existing scope-default

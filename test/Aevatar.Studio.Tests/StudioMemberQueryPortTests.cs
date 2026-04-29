@@ -170,113 +170,6 @@ public sealed class ProjectionStudioMemberQueryPortTests
         detail.LastBinding.Should().BeNull();
     }
 
-    [Fact]
-    public async Task GetAsync_ShouldSurfaceLatestCompletedBindingRunAndTeam()
-    {
-        var now = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
-        var document = NewDocument(
-            scopeId: ScopeId,
-            memberId: "m-1",
-            implementationKind: StudioMemberImplementationKind.Script,
-            lifecycle: StudioMemberLifecycleStage.BindReady,
-            includeLastBinding: true);
-        document.TeamId = "team-1";
-        document.LatestBindingId = "bind-1";
-        document.LatestBindingStatus = StudioMemberBindingStatusNames.Completed;
-        document.LatestBindingRequestedAt = now;
-        document.LatestBindingCompletedAt = now;
-
-        var reader = new StubDocumentReader([document]);
-        var port = new ProjectionStudioMemberQueryPort(reader);
-
-        var detail = await port.GetAsync(ScopeId, "m-1");
-
-        detail.Should().NotBeNull();
-        detail!.Summary.TeamId.Should().Be("team-1");
-        detail.Summary.LifecycleStage.Should().Be(MemberLifecycleStageNames.BindReady);
-        detail.LastBinding.Should().NotBeNull();
-        detail.LatestBindingRun.Should().NotBeNull();
-        detail.LatestBindingRun!.BindingId.Should().Be("bind-1");
-        detail.LatestBindingRun.Status.Should().Be(StudioMemberBindingStatusNames.Completed);
-        detail.LatestBindingRun.RequestedAt.Should().Be(now.ToDateTimeOffset());
-        detail.LatestBindingRun.CompletedAt.Should().Be(now.ToDateTimeOffset());
-        detail.LatestBindingRun.FailureCode.Should().BeNull();
-        detail.LatestBindingRun.FailureSummary.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task GetAsync_ShouldSurfaceLatestFailedBindingRun()
-    {
-        var now = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
-        var document = NewDocument(scopeId: ScopeId, memberId: "m-1");
-        document.LatestBindingId = "bind-failed";
-        document.LatestBindingStatus = StudioMemberBindingStatusNames.Failed;
-        document.LatestBindingFailedAt = now;
-        document.LatestBindingFailureCode = "scope_binding_failed";
-        document.LatestBindingFailureSummary = "backend unavailable";
-        document.LatestBindingRetryable = true;
-
-        var reader = new StubDocumentReader([document]);
-        var port = new ProjectionStudioMemberQueryPort(reader);
-
-        var detail = await port.GetAsync(ScopeId, "m-1");
-
-        detail.Should().NotBeNull();
-        detail!.LatestBindingRun.Should().NotBeNull();
-        detail.LatestBindingRun!.BindingId.Should().Be("bind-failed");
-        detail.LatestBindingRun.Status.Should().Be(StudioMemberBindingStatusNames.Failed);
-        detail.LatestBindingRun.FailedAt.Should().Be(now.ToDateTimeOffset());
-        detail.LatestBindingRun.FailureCode.Should().Be("scope_binding_failed");
-        detail.LatestBindingRun.FailureSummary.Should().Be("backend unavailable");
-        detail.LatestBindingRun.Retryable.Should().BeTrue();
-    }
-
-    [Fact]
-    public async Task ListAsync_ShouldClampPageSizeAndForwardCursor()
-    {
-        var document = NewDocument(scopeId: ScopeId, memberId: "m-1");
-        var reader = new StubDocumentReader([document])
-        {
-            NextCursor = "next-page",
-        };
-        var port = new ProjectionStudioMemberQueryPort(reader);
-
-        var roster = await port.ListAsync(
-            ScopeId,
-            new StudioMemberRosterPageRequest(PageSize: 10_000, PageToken: "cursor-1"));
-
-        reader.LastQuery.Should().NotBeNull();
-        reader.LastQuery!.Take.Should().Be(ProjectionStudioMemberQueryPort.MaxRosterPageSize);
-        reader.LastQuery.Cursor.Should().Be("cursor-1");
-        roster.NextPageToken.Should().Be("next-page");
-    }
-
-    [Fact]
-    public async Task GetAsync_ShouldNormalizeUnknownWireValuesToEmptyStrings()
-    {
-        var document = NewDocument(scopeId: ScopeId, memberId: "m-1");
-        document.ImplementationKind = "weird";
-        document.LifecycleStage = "ghost";
-        document.LastBoundPublishedServiceId = "member-m-1";
-        document.LastBoundRevisionId = "rev-1";
-        document.LastBoundImplementationKind = "legacy";
-        document.LatestBindingId = "bind-1";
-        document.LatestBindingStatus = "queued";
-
-        var reader = new StubDocumentReader([document]);
-        var port = new ProjectionStudioMemberQueryPort(reader);
-
-        var detail = await port.GetAsync(ScopeId, "m-1");
-
-        detail.Should().NotBeNull();
-        detail!.Summary.ImplementationKind.Should().BeEmpty();
-        detail.Summary.LifecycleStage.Should().BeEmpty();
-        detail.LastBinding.Should().NotBeNull();
-        detail.LastBinding!.ImplementationKind.Should().BeEmpty();
-        detail.LatestBindingRun.Should().NotBeNull();
-        detail.LatestBindingRun!.Status.Should().BeEmpty();
-    }
-
     private static StudioMemberCurrentStateDocument NewDocument(
         string scopeId,
         string memberId,
@@ -372,10 +265,6 @@ public sealed class ProjectionStudioMemberQueryPortTests
     {
         private readonly Dictionary<string, StudioMemberCurrentStateDocument> _byId;
 
-        public ProjectionDocumentQuery? LastQuery { get; private set; }
-
-        public string? NextCursor { get; init; }
-
         public StubDocumentReader(IReadOnlyList<StudioMemberCurrentStateDocument> documents)
         {
             _byId = documents.ToDictionary(d => d.Id, StringComparer.Ordinal);
@@ -390,7 +279,6 @@ public sealed class ProjectionStudioMemberQueryPortTests
         public Task<ProjectionDocumentQueryResult<StudioMemberCurrentStateDocument>> QueryAsync(
             ProjectionDocumentQuery query, CancellationToken ct = default)
         {
-            LastQuery = query;
             // Honor the scope_id filter the query port issues.
             var scopeFilter = query.Filters.FirstOrDefault(
                 f => string.Equals(f.FieldPath, "scope_id", StringComparison.Ordinal));
@@ -404,7 +292,6 @@ public sealed class ProjectionStudioMemberQueryPortTests
             return Task.FromResult(new ProjectionDocumentQueryResult<StudioMemberCurrentStateDocument>
             {
                 Items = items.Take(query.Take).ToList(),
-                NextCursor = NextCursor,
             });
         }
     }

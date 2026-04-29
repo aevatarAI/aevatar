@@ -152,16 +152,6 @@ message StudioMemberCurrentStateDocument {
   // Optional. Absence = unassigned; empty string is not a valid serialized
   // value (the application layer rejects empty `teamId` on the wire).
   optional string team_id = 50;
-
-  // ── Latest binding run status (denormalized) ──
-  string latest_binding_id = 60;
-  string latest_binding_status = 61; // "pending" | "completed" | "failed" | ""
-  string latest_binding_failure_code = 62;
-  string latest_binding_failure_summary = 63;
-  bool latest_binding_retryable = 64;
-  google.protobuf.Timestamp latest_binding_requested_at = 65;
-  google.protobuf.Timestamp latest_binding_completed_at = 66;
-  google.protobuf.Timestamp latest_binding_failed_at = 67;
 }
 
 // ─── StudioTeam Current State ReadModel ───

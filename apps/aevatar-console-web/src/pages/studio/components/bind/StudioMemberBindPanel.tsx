@@ -576,9 +576,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
   const bindingCatalog: ScopeServiceBindingCatalogSnapshot | undefined = bindingsQuery.data;
   const bindingList = bindingCatalog?.bindings ?? [];
   const hasMultiplePublishedServices = services.length > 1;
-  const revisionList = normalizedMemberId
-    ? []
-    : revisionsQuery.data?.revisions ?? [];
+  const revisionList = revisionCatalogQuery.data?.revisions ?? [];
   const bindSurfaceIdentity = useMemo(() => {
     const pendingCandidateIdentity = pendingBindingCandidate
       ? `candidate:${scopeId}:${pendingBindingCandidate.kind}:${pendingBindingCandidate.displayName}`
@@ -625,7 +623,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
         return;
       }
       setPendingBindNotice({
-        message: `${pendingBindingCandidate.displayName} binding is ready. Review the invoke contract below.`,
+        message: `${pendingBindingCandidate.displayName} is now bound. Review the invoke contract below.`,
         type: 'success',
       });
     } catch (error) {

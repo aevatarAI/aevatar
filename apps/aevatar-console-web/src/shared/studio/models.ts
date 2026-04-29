@@ -271,14 +271,6 @@ export interface StudioScopeBindingResult {
   } | null;
 }
 
-export interface StudioMemberBindingAcceptedResult {
-  readonly scopeId: string;
-  readonly memberId: string;
-  readonly bindingId: string;
-  readonly status: 'accepted' | string;
-  readonly acceptedAt: string;
-}
-
 export interface StudioScopeBindingRevision {
   readonly revisionId: string;
   readonly implementationKind: StudioScopeBindingImplementationKind;
@@ -319,7 +311,6 @@ export interface StudioScopeBindingStatus {
   readonly primaryActorId: string;
   readonly updatedAt: string | null;
   readonly revisions: readonly StudioScopeBindingRevision[];
-  readonly latestBindingRun?: StudioMemberBindingRun | null;
 }
 
 export interface StudioScopeBindingActivationResult {
@@ -469,27 +460,10 @@ export interface StudioMemberBindingContract {
   readonly boundAt: string;
 }
 
-export interface StudioMemberBindingRun {
-  readonly bindingId: string;
-  readonly status: 'pending' | 'completed' | 'failed' | string;
-  readonly requestedAt?: string | null;
-  readonly completedAt?: string | null;
-  readonly failedAt?: string | null;
-  readonly failureCode?: string | null;
-  readonly failureSummary?: string | null;
-  readonly retryable: boolean;
-}
-
-export interface StudioMemberBindingView {
-  readonly lastBinding?: StudioMemberBindingContract | null;
-  readonly latestBindingRun?: StudioMemberBindingRun | null;
-}
-
 export interface StudioMemberDetail {
   readonly summary: StudioMemberSummary;
   readonly implementationRef?: StudioMemberImplementationRef | null;
   readonly lastBinding?: StudioMemberBindingContract | null;
-  readonly latestBindingRun?: StudioMemberBindingRun | null;
 }
 
 export interface StudioMemberRoster {
@@ -501,7 +475,7 @@ export interface StudioMemberRoster {
 export type StudioMemberBindingTargetKind = StudioScopeBindingTargetKind;
 export type StudioMemberBindingResult = StudioScopeBindingResult;
 export type StudioMemberBindingRevision = StudioScopeBindingRevision;
-export type StudioMemberBindingStatus = StudioMemberBindingView;
+export type StudioMemberBindingStatus = StudioScopeBindingStatus;
 export type StudioMemberBindingActivationResult =
   StudioScopeBindingActivationResult;
 export type StudioMemberBindingRetirementResult =
@@ -514,41 +488,8 @@ export const describeStudioMemberBindingRevisionTarget =
   describeStudioScopeBindingRevisionTarget;
 export const describeStudioMemberBindingRevisionContext =
   describeStudioScopeBindingRevisionContext;
-export function getStudioMemberBindingCurrentRevision(
-  view: StudioMemberBindingView | null | undefined,
-): StudioMemberBindingRevision | null {
-  const binding = view?.lastBinding;
-  if (!binding) {
-    return null;
-  }
-
-  return {
-    revisionId: binding.revisionId,
-    implementationKind: binding.implementationKind,
-    status: "published",
-    artifactHash: "",
-    failureReason: "",
-    isDefaultServing: true,
-    isActiveServing: true,
-    isServingTarget: true,
-    allocationWeight: 100,
-    servingState: "active",
-    deploymentId: "",
-    primaryActorId: "",
-    createdAt: null,
-    preparedAt: null,
-    publishedAt: binding.boundAt,
-    retiredAt: null,
-    workflowName: "",
-    workflowDefinitionActorId: "",
-    inlineWorkflowCount: 0,
-    scriptId: "",
-    scriptRevision: "",
-    scriptDefinitionActorId: "",
-    scriptSourceHash: "",
-    staticActorTypeName: "",
-  };
-}
+export const getStudioMemberBindingCurrentRevision =
+  getStudioScopeBindingCurrentRevision;
 
 export type StudioDefaultRouteTargetRevision = StudioScopeBindingRevision;
 export type StudioDefaultRouteTargetStatus = StudioScopeBindingStatus;

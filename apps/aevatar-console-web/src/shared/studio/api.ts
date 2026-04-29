@@ -14,9 +14,6 @@ import type {
   StudioExecutionDetail,
   StudioExecutionSummary,
   StudioMemberBindingContract,
-  StudioMemberBindingAcceptedResult,
-  StudioMemberBindingRun,
-  StudioMemberBindingView,
   StudioMemberDetail,
   StudioMemberImplementationKind,
   StudioMemberImplementationRef,
@@ -858,39 +855,6 @@ function decodeStudioScopeBindingResult(
   };
 }
 
-function decodeStudioMemberBindingAcceptedResult(
-  value: unknown
-): StudioMemberBindingAcceptedResult {
-  const record = expectRecord(value, "StudioMemberBindingAcceptedResult");
-  return {
-    scopeId: readString(
-      record,
-      ["scopeId", "ScopeId"],
-      "StudioMemberBindingAcceptedResult.scopeId"
-    ),
-    memberId: readString(
-      record,
-      ["memberId", "MemberId"],
-      "StudioMemberBindingAcceptedResult.memberId"
-    ),
-    bindingId: readString(
-      record,
-      ["bindingId", "BindingId"],
-      "StudioMemberBindingAcceptedResult.bindingId"
-    ),
-    status: readString(
-      record,
-      ["status", "Status"],
-      "StudioMemberBindingAcceptedResult.status"
-    ),
-    acceptedAt: readString(
-      record,
-      ["acceptedAt", "AcceptedAt"],
-      "StudioMemberBindingAcceptedResult.acceptedAt"
-    ),
-  };
-}
-
 function decodeStudioScopeBindingStatus(
   value: unknown
 ): StudioScopeBindingStatus {
@@ -966,76 +930,6 @@ function decodeStudioScopeBindingStatus(
       "StudioScopeBindingStatus.revisions",
       decodeStudioScopeBindingRevision
     ),
-    latestBindingRun:
-      record.latestBindingRun == null && record.LatestBindingRun == null
-        ? null
-        : decodeStudioMemberBindingRun(
-            record.latestBindingRun ?? record.LatestBindingRun
-          ),
-  };
-}
-
-function decodeStudioMemberBindingRun(value: unknown): StudioMemberBindingRun {
-  const record = expectRecord(value, "StudioMemberBindingRun");
-  return {
-    bindingId: readString(
-      record,
-      ["bindingId", "BindingId"],
-      "StudioMemberBindingRun.bindingId"
-    ),
-    status: readString(
-      record,
-      ["status", "Status"],
-      "StudioMemberBindingRun.status"
-    ),
-    requestedAt:
-      readNullableString(
-        record,
-        ["requestedAt", "RequestedAt"],
-        "StudioMemberBindingRun.requestedAt"
-      ) ?? null,
-    completedAt:
-      readNullableString(
-        record,
-        ["completedAt", "CompletedAt"],
-        "StudioMemberBindingRun.completedAt"
-      ) ?? null,
-    failedAt:
-      readNullableString(
-        record,
-        ["failedAt", "FailedAt"],
-        "StudioMemberBindingRun.failedAt"
-      ) ?? null,
-    failureCode:
-      readNullableString(
-        record,
-        ["failureCode", "FailureCode"],
-        "StudioMemberBindingRun.failureCode"
-      ) ?? null,
-    failureSummary:
-      readNullableString(
-        record,
-        ["failureSummary", "FailureSummary"],
-        "StudioMemberBindingRun.failureSummary"
-      ) ?? null,
-    retryable:
-      readOptionalBoolean(record.retryable ?? record.Retryable) ?? false,
-  };
-}
-
-function decodeStudioMemberBindingView(
-  value: unknown
-): StudioMemberBindingView {
-  const record = expectRecord(value, "StudioMemberBindingView");
-  return {
-    lastBinding:
-      record.lastBinding == null && record.LastBinding == null
-        ? null
-        : decodeStudioMemberBindingContract(record.lastBinding ?? record.LastBinding),
-    latestBindingRun:
-      record.latestBindingRun == null && record.LatestBindingRun == null
-        ? null
-        : decodeStudioMemberBindingRun(record.latestBindingRun ?? record.LatestBindingRun),
   };
 }
 
@@ -1221,12 +1115,6 @@ function decodeStudioMemberDetail(value: unknown): StudioMemberDetail {
         ? null
         : decodeStudioMemberBindingContract(
             record.lastBinding ?? record.LastBinding
-          ),
-    latestBindingRun:
-      record.latestBindingRun == null && record.LatestBindingRun == null
-        ? null
-        : decodeStudioMemberBindingRun(
-            record.latestBindingRun ?? record.LatestBindingRun
           ),
   };
 }
@@ -1616,17 +1504,20 @@ export const studioApi = {
   bindMemberWorkflow(input: {
     scopeId: string;
     memberId: string;
+    displayName?: string | null;
     workflowYamls: readonly string[];
     revisionId?: string | null;
-  }): Promise<StudioMemberBindingAcceptedResult> {
+  }): Promise<StudioScopeBindingResult> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}/binding`,
-      decodeStudioMemberBindingAcceptedResult,
+      decodeStudioScopeBindingResult,
       {
         method: "PUT",
         headers: JSON_HEADERS,
         body: JSON.stringify(
           compactObject({
+            implementationKind: "workflow",
+            displayName: trimOptional(input.displayName),
             workflow: {
               workflowYamls: input.workflowYamls,
             },
@@ -1640,18 +1531,21 @@ export const studioApi = {
   bindMemberScript(input: {
     scopeId: string;
     memberId: string;
+    displayName?: string | null;
     scriptId: string;
     scriptRevision: string;
     revisionId?: string | null;
-  }): Promise<StudioMemberBindingAcceptedResult> {
+  }): Promise<StudioScopeScriptBindingResult> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}/binding`,
-      decodeStudioMemberBindingAcceptedResult,
+      decodeStudioScopeBindingResult,
       {
         method: "PUT",
         headers: JSON_HEADERS,
         body: JSON.stringify(
           compactObject({
+            implementationKind: "script",
+            displayName: trimOptional(input.displayName),
             script: compactObject({
               scriptId: input.scriptId.trim(),
               scriptRevision: input.scriptRevision.trim(),
@@ -1666,18 +1560,21 @@ export const studioApi = {
   bindMemberGAgent(input: {
     scopeId: string;
     memberId: string;
+    displayName?: string | null;
     actorTypeName: string;
     endpoints: StudioScopeGAgentBindingInput["endpoints"];
     revisionId?: string | null;
-  }): Promise<StudioMemberBindingAcceptedResult> {
+  }): Promise<StudioScopeGAgentBindingResult> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}/binding`,
-      decodeStudioMemberBindingAcceptedResult,
+      decodeStudioScopeBindingResult,
       {
         method: "PUT",
         headers: JSON_HEADERS,
         body: JSON.stringify(
           compactObject({
+            implementationKind: "gagent",
+            displayName: trimOptional(input.displayName),
             gagent: compactObject({
               actorTypeName: input.actorTypeName.trim(),
               endpoints: input.endpoints.map((endpoint) =>
@@ -1703,10 +1600,10 @@ export const studioApi = {
   getMemberBinding(
     scopeId: string,
     memberId: string
-  ): Promise<StudioMemberBindingView> {
+  ): Promise<StudioScopeBindingStatus> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/members/${encodeURIComponent(memberId.trim())}/binding`,
-      decodeStudioMemberBindingView
+      decodeStudioScopeBindingStatus
     );
   },
 

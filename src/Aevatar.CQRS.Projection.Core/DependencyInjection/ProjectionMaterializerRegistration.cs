@@ -31,5 +31,4 @@ public static class ProjectionMaterializerRegistration
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IProjectionArtifactMaterializer<TContext>, TMaterializer>());
         return services;
     }
-
 }

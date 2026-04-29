@@ -252,13 +252,13 @@ public sealed class StudioMemberPRReviewFixesTests
         public Task<StudioMemberRosterResponse> ListAsync(
             string scopeId, StudioMemberRosterPageRequest? page = null, CancellationToken ct = default) => throw _ex;
 
-        public Task<StudioMemberDetailResponse> GetAsync(
+        public Task<StudioMemberDetailResponse?> GetAsync(
             string scopeId, string memberId, CancellationToken ct = default) => throw _ex;
 
-        public Task<StudioMemberBindingAcceptedResponse> BindAsync(
+        public Task<StudioMemberBindingResponse> BindAsync(
             string scopeId, string memberId, UpdateStudioMemberBindingRequest request, CancellationToken ct = default) => throw _ex;
 
-        public Task<StudioMemberBindingViewResponse> GetBindingAsync(
+        public Task<StudioMemberBindingContractResponse?> GetBindingAsync(
             string scopeId, string memberId, CancellationToken ct = default) => throw _ex;
 
         public Task<StudioMemberEndpointContractResponse?> GetEndpointContractAsync(

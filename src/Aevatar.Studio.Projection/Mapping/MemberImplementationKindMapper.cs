@@ -45,12 +45,4 @@ public static class MemberImplementationKindMapper
         StudioMemberLifecycleStage.BindReady => MemberLifecycleStageNames.BindReady,
         _ => string.Empty,
     };
-
-    public static string ToWireName(StudioMemberBindingStatus status) => status switch
-    {
-        StudioMemberBindingStatus.Pending => StudioMemberBindingStatusNames.Pending,
-        StudioMemberBindingStatus.Completed => StudioMemberBindingStatusNames.Completed,
-        StudioMemberBindingStatus.Failed => StudioMemberBindingStatusNames.Failed,
-        _ => string.Empty,
-    };
 }

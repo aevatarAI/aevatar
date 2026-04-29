@@ -56,16 +56,6 @@ public sealed class StudioMemberCurrentStateProjectorTests
                 ImplementationKind = StudioMemberImplementationKind.Workflow,
                 BoundAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
             },
-            BindingRuns =
-            {
-                new StudioMemberBindingRun
-                {
-                    BindingId = "bind-1",
-                    Status = StudioMemberBindingStatus.Completed,
-                    RequestedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow.AddMinutes(-1)),
-                    CompletedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
-                },
-            },
         };
 
         var envelope = WrapCommitted(
@@ -105,11 +95,6 @@ public sealed class StudioMemberCurrentStateProjectorTests
         written.LastBoundRevisionId.Should().Be("rev-9");
         written.LastBoundImplementationKind.Should().Be(MemberImplementationKindNames.Workflow);
         written.LastBoundAt.Should().NotBeNull();
-
-        // latest binding run denormalized for async completion polling.
-        written.LatestBindingId.Should().Be("bind-1");
-        written.LatestBindingStatus.Should().Be(StudioMemberBindingStatusNames.Completed);
-        written.LatestBindingCompletedAt.Should().NotBeNull();
     }
 
     [Fact]

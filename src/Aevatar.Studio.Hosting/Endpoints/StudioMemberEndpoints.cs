@@ -148,9 +148,7 @@ internal static class StudioMemberEndpoints
 
         try
         {
-            return Results.Accepted(
-                $"/api/scopes/{Uri.EscapeDataString(scopeId)}/members/{Uri.EscapeDataString(memberId)}/binding",
-                await memberService.BindAsync(scopeId, memberId, request, ct));
+            return Results.Ok(await memberService.BindAsync(scopeId, memberId, request, ct));
         }
         catch (StudioMemberNotFoundException ex)
         {
@@ -181,7 +179,8 @@ internal static class StudioMemberEndpoints
             // Bare `404 NotFound` for the "exists but never bound" case used
             // to overload 404 with two different meanings; the wrapper keeps
             // the response always a JSON object with a single nullable field.
-            return Results.Ok(await memberService.GetBindingAsync(scopeId, memberId, ct));
+            var binding = await memberService.GetBindingAsync(scopeId, memberId, ct);
+            return Results.Ok(new StudioMemberBindingViewResponse(binding));
         }
         catch (StudioMemberNotFoundException ex)
         {

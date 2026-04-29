@@ -178,14 +178,6 @@ public sealed class ActorDispatchStudioTeamCommandServiceTests
             EnsuredActorIds.Add(actorId);
             return Task.FromResult<IActor>(new StubActor(actorId));
         }
-
-        public Task<IActor?> GetExistingAsync<TAgent>(string actorId, CancellationToken ct = default)
-            where TAgent : IAgent, IProjectedActor =>
-            Task.FromResult<IActor?>(new StubActor(actorId));
-
-        public Task<IActor?> GetExistingActorAsync<TAgent>(string actorId, CancellationToken ct = default)
-            where TAgent : IAgent, IProjectedActor =>
-            Task.FromResult<IActor?>(new StubActor(actorId));
     }
 
     private sealed class StubActor(string id) : IActor

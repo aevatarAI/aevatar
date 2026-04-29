@@ -291,14 +291,6 @@ public sealed class ActorBackedStoreAdapterTests
             return existing ?? await _runtime.CreateAsync<TAgent>(actorId, ct);
         }
 
-        public Task<IActor?> GetExistingAsync<TAgent>(string actorId, CancellationToken ct = default)
-            where TAgent : IAgent, IProjectedActor =>
-            _runtime.GetAsync(actorId);
-
-        public Task<IActor?> GetExistingActorAsync<TAgent>(string actorId, CancellationToken ct = default)
-            where TAgent : IAgent, IProjectedActor =>
-            _runtime.GetAsync(actorId);
-
         public int EnsureCalls { get; private set; }
 
         public bool ThrowOnEnsure { get; set; }

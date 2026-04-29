@@ -157,6 +157,7 @@ public sealed class StudioMemberServiceTeamTests
             commandPort ?? new RecordingMemberCommandPort(),
             memberQueryPort ?? new InMemoryMemberQueryPort(NewDetail()),
             teamQueryPort ?? new InMemoryTeamQueryPort(NewTeamSummary()),
+            new ThrowingScopeBindingPort(),
             new ThrowingServiceLifecycleQueryPort(),
             new ThrowingServiceCommandPort());
 
@@ -257,10 +258,6 @@ public sealed class StudioMemberServiceTeamTests
                 UpdatedAt: DateTimeOffset.UtcNow));
         }
 
-        public Task<StudioMemberBindingAcceptedResponse> RequestBindingAsync(
-            string scopeId, string memberId, UpdateStudioMemberBindingRequest request, CancellationToken ct = default) =>
-            throw new NotImplementedException();
-
         public Task UpdateImplementationAsync(
             string scopeId, string memberId,
             StudioMemberImplementationRefResponse implementation, CancellationToken ct = default) =>
@@ -280,14 +277,13 @@ public sealed class StudioMemberServiceTeamTests
             LastToTeamId = toTeamId;
             return Task.CompletedTask;
         }
+    }
 
-        public Task CompleteBindingAsync(
-            string scopeId, string memberId, StudioMemberBindingCompletionRequest request, CancellationToken ct = default) =>
-            throw new NotImplementedException();
-
-        public Task FailBindingAsync(
-            string scopeId, string memberId, StudioMemberBindingFailureRequest request, CancellationToken ct = default) =>
-            throw new NotImplementedException();
+    private sealed class ThrowingScopeBindingPort : IScopeBindingCommandPort
+    {
+        public Task<ScopeBindingUpsertResult> UpsertAsync(
+            ScopeBindingUpsertRequest request, CancellationToken ct = default) =>
+            throw new InvalidOperationException("scope binding should not be called in team tests.");
     }
 
     private sealed class ThrowingServiceLifecycleQueryPort : IServiceLifecycleQueryPort

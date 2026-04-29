@@ -53,5 +53,4 @@
 - durable materializer 必须显式区分：
   - `ICurrentStateProjectionMaterializer<TContext>`：actor-scoped current-state replica，不能依赖回读旧文档
   - `IProjectionArtifactMaterializer<TContext>`：derived durable artifact，不再伪装成 canonical readmodel
-- durable materialization turn 不承载业务 continuation；需要由 committed fact 推进业务协议时，必须在业务模块内建模独立 observer/continuation actor，并通过标准 dispatch port 派发 command
 - session 只负责发布 session event stream，不再把 live sink 当作生命周期事实

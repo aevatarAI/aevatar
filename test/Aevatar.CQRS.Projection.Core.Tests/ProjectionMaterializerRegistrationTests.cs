@@ -64,5 +64,4 @@ public sealed class ProjectionMaterializerRegistrationTests
             return ValueTask.CompletedTask;
         }
     }
-
 }

@@ -10,6 +10,8 @@ Date: 2026-04-28
 
 > Non-authoritative design snapshot. The durable rule for registry ownership lives in [GAgent Registry Ownership](../../canon/gagent-registry-ownership.md). This document records the proposed direction for issue 462 follow-ups around StudioMember binding and NyxID relay admission.
 
+> 2026-04-29 scope note: the current implementation branch keeps the Relay admission cleanup small. The StudioMember async binding protocol below remains a design proposal only and should not be implemented without a separate plan/review because it changes the Studio binding lifecycle and orchestration boundary.
+
 ## Context
 
 Issue 462 tracks three remaining ownership/admission paths adjacent to the registry ownership cleanup from issue 348:

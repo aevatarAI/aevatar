@@ -5,7 +5,6 @@ using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Projection.CommandServices;
-using Aevatar.Studio.Projection.Continuations;
 using Aevatar.Studio.Projection.Metadata;
 using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.Projectors;
@@ -147,10 +146,6 @@ public static class ServiceCollectionExtensions
         // Command services (write side)
         services.TryAddSingleton<IUserConfigCommandService, ActorDispatchUserConfigCommandService>();
         services.TryAddSingleton<IStudioMemberCommandPort, ActorDispatchStudioMemberCommandService>();
-        services.TryAddSingleton<StudioMemberBindingContinuationService>();
-        services.TryAddSingleton<StudioMemberBindingObservationHandler>();
-        services.TryAddSingleton<IStudioMemberBindingObservationPort, StudioMemberBindingObservationPort>();
-        services.TryAddSingleton<IStudioMemberBindingContinuationDispatcher, StudioMemberBindingContinuationDispatcher>();
         services.TryAddSingleton<IStudioTeamCommandPort, ActorDispatchStudioTeamCommandService>();
 
         return services;

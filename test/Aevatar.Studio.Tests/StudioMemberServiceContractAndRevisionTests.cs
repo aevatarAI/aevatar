@@ -70,6 +70,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             new InertMemberCommandPort(),
             queryPort,
             new InertTeamQueryPort(),
+            new InertScopeBindingCommandPort(),
             lifecycle,
             commandPort);
 
@@ -107,6 +108,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             new InertMemberCommandPort(),
             queryPort,
             new InertTeamQueryPort(),
+            new InertScopeBindingCommandPort(),
             lifecycle,
             new RecordingServiceCommandPort());
 
@@ -123,6 +125,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             new InertMemberCommandPort(),
             queryPort,
             new InertTeamQueryPort(),
+            new InertScopeBindingCommandPort(),
             new InMemoryServiceLifecycleQueryPort(),
             new RecordingServiceCommandPort());
 
@@ -144,6 +147,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             new InertMemberCommandPort(),
             queryPort,
             new InertTeamQueryPort(),
+            new InertScopeBindingCommandPort(),
             lifecycle,
             new RecordingServiceCommandPort());
 
@@ -173,6 +177,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             new InertMemberCommandPort(),
             queryPort,
             new InertTeamQueryPort(),
+            new InertScopeBindingCommandPort(),
             lifecycle,
             commandPort);
 
@@ -217,6 +222,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             new InertMemberCommandPort(),
             queryPort,
             new InertTeamQueryPort(),
+            new InertScopeBindingCommandPort(),
             lifecycle,
             commandPort);
 
@@ -248,6 +254,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             new InertMemberCommandPort(),
             queryPort,
             new InertTeamQueryPort(),
+            new InertScopeBindingCommandPort(),
             lifecycle,
             commandPort);
 
@@ -277,6 +284,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             new InertMemberCommandPort(),
             queryPort,
             new InertTeamQueryPort(),
+            new InertScopeBindingCommandPort(),
             lifecycle,
             commandPort);
 
@@ -313,6 +321,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             new InertMemberCommandPort(),
             queryPort,
             new InertTeamQueryPort(),
+            new InertScopeBindingCommandPort(),
             lifecycle,
             commandPort);
 
@@ -411,10 +420,6 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             string scopeId, CreateStudioMemberRequest request, CancellationToken ct = default) =>
             throw new InvalidOperationException("contract/activate/retire flows must not write to the member command port.");
 
-        public Task<StudioMemberBindingAcceptedResponse> RequestBindingAsync(
-            string scopeId, string memberId, UpdateStudioMemberBindingRequest request, CancellationToken ct = default) =>
-            throw new InvalidOperationException("contract/activate/retire flows must not request member bindings.");
-
         public Task UpdateImplementationAsync(
             string scopeId, string memberId,
             StudioMemberImplementationRefResponse implementation, CancellationToken ct = default) =>
@@ -429,14 +434,6 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             string scopeId, string memberId, string? fromTeamId, string? toTeamId,
             CancellationToken ct = default) =>
             throw new InvalidOperationException("contract/activate/retire flows must not reassign teams.");
-
-        public Task CompleteBindingAsync(
-            string scopeId, string memberId, StudioMemberBindingCompletionRequest request, CancellationToken ct = default) =>
-            throw new InvalidOperationException("contract/activate/retire flows must not complete binding runs.");
-
-        public Task FailBindingAsync(
-            string scopeId, string memberId, StudioMemberBindingFailureRequest request, CancellationToken ct = default) =>
-            throw new InvalidOperationException("contract/activate/retire flows must not fail binding runs.");
     }
 
     private sealed class InertTeamQueryPort : IStudioTeamQueryPort
@@ -448,6 +445,13 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         public Task<StudioTeamSummaryResponse?> GetAsync(
             string scopeId, string teamId, CancellationToken ct = default) =>
             Task.FromResult<StudioTeamSummaryResponse?>(null);
+    }
+
+    private sealed class InertScopeBindingCommandPort : IScopeBindingCommandPort
+    {
+        public Task<ScopeBindingUpsertResult> UpsertAsync(
+            ScopeBindingUpsertRequest request, CancellationToken ct = default) =>
+            throw new InvalidOperationException("contract/activate/retire flows must not invoke the scope binding port.");
     }
 
     private sealed class InMemoryServiceLifecycleQueryPort : IServiceLifecycleQueryPort
