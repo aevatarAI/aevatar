@@ -391,8 +391,11 @@ public sealed class NyxRelayAgentBuilderFlowTests
         result.Cards[0].Title.Should().Be("Create Daily Report Agent");
         result.Cards[0].Text.Should().Contain("GitHub credentials required");
         result.Cards[0].Text.Should().Contain("p-github");
-        result.Text.Should().NotBeEmpty();
-        result.Text.Should().Contain("GitHub credentials required");
+        // The auth body lives in the card only — content.Text must stay empty so Lark's form-mode
+        // composer (LarkMessageComposer.BuildLeadingMarkdown) doesn't double-render the same
+        // "GitHub credentials required" block once from Text and once from the card body. The
+        // earlier assertion that Text was non-empty was codifying the bug it has since fixed.
+        result.Text.Should().BeEmpty();
     }
 
     [Fact]

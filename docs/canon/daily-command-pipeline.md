@@ -11,6 +11,8 @@ owner: eanzhao
 > 读者假设：熟悉 Lark 自定义机器人、HTTP webhook、cron 表达式；不假设熟悉 aevatar 内部 actor / projection 模型——文档会把进入这些层时的"输入 / 输出 / 副作用"显式列出。
 >
 > 涉及外部系统（Lark Open Platform、NyxID、GitHub）的部分，重点描述 **aevatar 与它们交互的边界契约**，而不是它们各自的实现。
+>
+> 操作侧（NyxID provider 配置、GitHub OAuth App 注册、单用户 OAuth 连接、`pending_auth` 故障排查）见 [`docs/operations/2026-04-29-daily-card-github-oauth-setup.md`](../operations/2026-04-29-daily-card-github-oauth-setup.md)。
 
 ---
 

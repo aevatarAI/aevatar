@@ -1,4 +1,5 @@
 using System.Reflection;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -258,6 +259,98 @@ public sealed class WorkflowAgentGAgentTests : IAsyncLifetime
             envelope.Route.Direct.TargetActorId == UserAgentCatalogGAgent.WellKnownId);
         await catalogActor.DidNotReceive()
             .HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task HandleTriggerAsync_ShouldPinOwnerLlmConfigOverridesOnDispatchedMetadata()
+    {
+        // Symmetric with SkillRunnerGAgentTests'
+        // BuildExecutionMetadata_ShouldPinOwnerLlmConfigOverrides_WhenSourceReturnsConfig:
+        // workflow-backed agents (e.g. social_media) honor the bot owner's pre-configured
+        // model + NyxID route + tool cap exactly the same way. Without this, the workflow's
+        // LLM steps fall through to NyxIdLLMProvider's compile-time `gpt-5.4` + gateway
+        // default and 400 when the bot owner pre-configured `chrono-llm` instead of OpenAI.
+        var source = new SkillRunnerGAgentTests.StubOwnerLlmConfigSource(new OwnerLlmConfig(
+            DefaultModel: "gpt-5.5",
+            PreferredLlmRoute: "/api/v1/proxy/s/chrono-llm",
+            MaxToolRounds: 7));
+
+        var dispatchService = new CapturingWorkflowDispatchService();
+        using var provider = BuildServiceProvider(dispatchService);
+        var agent = new WorkflowAgentGAgent(ownerLlmConfigSource: source)
+        {
+            Services = provider,
+            EventSourcingBehaviorFactory =
+                provider.GetRequiredService<IEventSourcingBehaviorFactory<WorkflowAgentState>>(),
+        };
+        AssignActorId(agent, "workflow-agent-userconfig");
+        await agent.ActivateAsync();
+
+        await agent.HandleInitializeAsync(new InitializeWorkflowAgentCommand
+        {
+            WorkflowId = "social-media-agent-1",
+            WorkflowName = "social_media_agent_1",
+            WorkflowActorId = "workflow-actor-1",
+            ExecutionPrompt = "Generate the scheduled social media draft for review.",
+            ConversationId = "oc_chat_1",
+            NyxProviderSlug = "api-lark-bot",
+            NyxApiKey = "nyx-api-key-1",
+            Enabled = true,
+            ScopeId = "scope-1",
+        });
+
+        await agent.HandleTriggerAsync(new TriggerWorkflowAgentExecutionCommand { Reason = "schedule" });
+
+        dispatchService.LastCommand.Should().NotBeNull();
+        var metadata = dispatchService.LastCommand!.Metadata;
+        metadata.Should().NotBeNull();
+        metadata![Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.ModelOverride]
+            .Should().Be("gpt-5.5");
+        metadata[Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.NyxIdRoutePreference]
+            .Should().Be("/api/v1/proxy/s/chrono-llm");
+        metadata[Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.MaxToolRoundsOverride]
+            .Should().Be("7");
+        source.RequestedScopeIds.Should().ContainSingle().Which.Should().Be("scope-1");
+    }
+
+    [Fact]
+    public async Task HandleTriggerAsync_ShouldOmitOwnerLlmOverrides_WhenSourceIsAbsent()
+    {
+        // Hosts that don't wire IOwnerLlmConfigSource (e.g. the existing test suite, or a
+        // host without Studio.Application composed in) must still produce a valid dispatched
+        // metadata bag with no override keys leaking — provider defaults take over.
+        var dispatchService = new CapturingWorkflowDispatchService();
+        using var provider = BuildServiceProvider(dispatchService);
+        var agent = new WorkflowAgentGAgent
+        {
+            Services = provider,
+            EventSourcingBehaviorFactory =
+                provider.GetRequiredService<IEventSourcingBehaviorFactory<WorkflowAgentState>>(),
+        };
+        AssignActorId(agent, "workflow-agent-no-source");
+        await agent.ActivateAsync();
+
+        await agent.HandleInitializeAsync(new InitializeWorkflowAgentCommand
+        {
+            WorkflowId = "social-media-agent-2",
+            WorkflowName = "social_media_agent_2",
+            WorkflowActorId = "workflow-actor-2",
+            ExecutionPrompt = "Generate the scheduled social media draft for review.",
+            ConversationId = "oc_chat_2",
+            NyxProviderSlug = "api-lark-bot",
+            NyxApiKey = "nyx-api-key-2",
+            Enabled = true,
+            ScopeId = "scope-2",
+        });
+
+        await agent.HandleTriggerAsync(new TriggerWorkflowAgentExecutionCommand { Reason = "schedule" });
+
+        dispatchService.LastCommand.Should().NotBeNull();
+        var metadata = dispatchService.LastCommand!.Metadata;
+        metadata.Should().NotBeNull();
+        metadata!.Should().NotContainKey(Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.ModelOverride);
+        metadata.Should().NotContainKey(Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.NyxIdRoutePreference);
+        metadata.Should().NotContainKey(Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.MaxToolRoundsOverride);
     }
 
     private sealed class CapturingWorkflowDispatchService
