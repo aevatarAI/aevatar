@@ -228,6 +228,53 @@ NyxID#549 已同步追加 comment 提议 align 到 RFC 8693 token-exchange。两
 - aevatar grain state / projection / log / metric span attribute 不出现 user secret material;arch test 守此边界,扫描所有 grain state proto 字段树
 - 生产实现等 NyxID #549 ready 后才合并到生产路径;在此之前 aevatar 现有 bot owner-shared 模式继续运行(不 regression)
 
+## Implementation Notes
+
+ADR 核心决策已 lock。以下是边界细节,reviewer 在 final review 提出后纳入,避免 implementation PR 阶段重新决策破坏 zero-secret / source-of-truth 不变量。
+
+### 1. HMAC `state_token` 细节
+
+- **载荷序列化**:payload 用 Protobuf message,并使用 deterministic serialization 生成 `payload_proto_bytes`;禁 JSON / `ToString()` / 自定义 join,对齐 CLAUDE.md "统一 Protobuf"
+- **kid + rotation**:state_token header 携带 `kid` 标识签名 key 版本;HMAC service key 由 KMS / config 管理,rotation grace period 内按 `kid` 接受旧 key + 新 key 验签;grace period 必须严格 > `exp`(即 ≥10 分钟,因 `exp ≤ 5min`),保证 rotation 不打断在飞 binding
+- **token 结构**:`base64url(kid_bytes) + "." + base64url(payload_proto_bytes) + "." + base64url(hmac_bytes)`(三段式);HMAC signing input 是前两段的 ASCII bytes(`base64url(kid_bytes) + "." + base64url(payload_proto_bytes)`),避免原始 bytes 拼接歧义
+
+### 2. `/init` 并发幂等
+
+用户快速连发两条 `/init`、projection 还未水位达成,两个 OAuth 流程并行:
+
+- `ExternalIdentityBindingGAgent` 是单线程 actor,在 commit `ExternalIdentityBoundEvent` 时做**幂等检查**:同一 `ExternalSubjectRef` 已存在 active binding 时,拒绝后到的 event,actor 不变更状态;callback 返回"已绑定"
+- 后到 callback 已经从 NyxID 拿到的新 `binding_id` 属于未采纳资源;callback handler 对该 rejected `binding_id` 做 best-effort `DELETE /oauth/bindings/{binding_id}` cleanup。cleanup 失败只记 metric / audit,不影响 actor 内已存在的 active binding
+- aevatar **不要求** NyxID 端做 `(client_id, external_subject)` unique 约束(简化 NyxID 实现)
+- 剩余 orphan binding 只可能来自 cleanup 失败或 callback 中断。aevatar 侧 ADR 不假设 NyxID reaper 行为;NyxID#549 SHOULD 自行处理 orphan binding(超时自动 revoke 或定期 reap),但不构成 aevatar 实现依赖
+
+### 3. Callback Handler 错误 UX
+
+| 错误类型 | HTTP 响应 | 用户可见文案 |
+|---|---|---|
+| `state_token` 过期 / HMAC 校验失败 | 400 | "绑定链接已过期或无效,请回到 Lark 重新发送 `/init`" |
+| `/oauth/token`(authorization_code 兑换)失败 | 502 | "NyxID 绑定失败,稍后重试 `/init`" |
+| projection 等待超时(已落 event 但 readmodel 未水位) | 200 | "绑定已写入,稍后重发消息即可生效" |
+| 其他未分类 | 500 | "绑定遇到问题,请重试 `/init`" |
+
+`exp ≤5min` 给用户留足登录时间;实际 P99 远小于 5min,不期望成为常见 fail mode。
+
+### 4. `IssueShortLivedAsync` 失败处理
+
+NyxID 不可用 / 5xx / timeout / connect refuse 时:
+
+- **outbound 路径**:整次 outbound 失败,**不 fallback 到 bot owner token,不 fallback 到任何缓存 token / 旧 access_token**(zero-secret 不变量不接受任何"备用身份")。错误向上传递给调用方,记 metric / trace 但不静默吞掉
+- **turn 路径**:同上,turn 失败,sender 收到通用错误回复(e.g. "服务暂时不可用,稍后再试");broker 健康通过 `IssueShortLivedAsync` p99 latency / error rate / `invalid_grant` rate 三个 metric 监控
+- **rate limit 单一权威**:rate limit 由 NyxID#549 契约约定,aevatar **不做** client-side rate limit / per-binding semaphore;NyxID 是流控单一权威,接入方观察到 429 即冷却
+
+### 5. `/unbind` → `/init` 时序保障
+
+`/unbind` 成功后,`ResolveAsync`(走 projection)在 readmodel 物化前可能仍返回旧 `binding_id`,导致下一条 `/init` 误判"已绑定":
+
+- `/unbind` handler 在 commit `ExternalIdentityBindingRevokedEvent` 后,**同步等 projection 水位**(复用 `IProjectionReadinessPort.WaitForEventAsync`),再返回成功响应给 sender
+- 等待超时(配置上限,e.g. 3s)时,handler 返回"解绑已写入,读副本仍在传播,稍后重试 `/init`";不读取 actor 直接态,也不做 query-time priming
+- 这跟 OAuth callback 的写侧预挂接同源(均属 write-side completion path,不违反 query-time priming 禁令)
+- 不采"`/init` 幂等检查读 actor 直接态"备选方案 — 会把 turn 路径的"已绑定"判定拆成两条查询源(actor 直读 + projection),违反单一查询源原则
+
 ## Related
 
 - aevatar Discussion `#400` — Per-sender NyxID binding for channel bots
