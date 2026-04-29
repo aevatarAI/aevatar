@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package aevatar.gagents.channel.identity;
+
+option csharp_namespace = "Aevatar.GAgents.Channel.Identity";
+
+import "google/protobuf/timestamp.proto";
+import "identity_contracts.proto";
+
+// Per-(platform, tenant, external_user_id) actor state holding the opaque
+// NyxID-side binding pointer. Holds NO refresh_token or any user secret —
+// see ADR-0017 §Storage Boundary. binding_id is empty when no active binding;
+// revoked_at is set when the most recent binding was revoked.
+message ExternalIdentityBindingState {
+  aevatar.gagents.channel.identity.abstractions.ExternalSubjectRef external_subject = 1;
+  // Opaque pointer issued by NyxID broker. Empty when no active binding
+  // (initial state, or after revoke). Source of truth lives in NyxID.
+  string binding_id = 2;
+  google.protobuf.Timestamp bound_at = 3;
+  google.protobuf.Timestamp revoked_at = 4;
+}
+
+// Issued by the OAuth callback handler after exchanging the authorization code
+// for a binding_id. Idempotent at the actor: discarded when state already
+// holds an active binding_id (concurrent /init protection,
+// ADR-0017 §Implementation Notes #2).
+message CommitBindingCommand {
+  aevatar.gagents.channel.identity.abstractions.ExternalSubjectRef external_subject = 1;
+  string binding_id = 2;
+}
+
+// Issued by the /unbind handler after a successful NyxID DELETE call, or by
+// the turn path on `invalid_grant` from token-exchange. NO-OP at the actor
+// when state has no active binding.
+message RevokeBindingCommand {
+  aevatar.gagents.channel.identity.abstractions.ExternalSubjectRef external_subject = 1;
+  // Free-form reason for audit (e.g. "user_unbind", "nyx_invalid_grant",
+  // "admin_revoke"). Intended for audit log only — not surfaced to senders.
+  string reason = 2;
+}
+
+// Persisted when CommitBindingCommand is accepted by the actor.
+message ExternalIdentityBoundEvent {
+  aevatar.gagents.channel.identity.abstractions.ExternalSubjectRef external_subject = 1;
+  string binding_id = 2;
+  google.protobuf.Timestamp bound_at = 3;
+}
+
+// Persisted when RevokeBindingCommand is accepted by the actor.
+message ExternalIdentityBindingRevokedEvent {
+  aevatar.gagents.channel.identity.abstractions.ExternalSubjectRef external_subject = 1;
+  google.protobuf.Timestamp revoked_at = 2;
+  string reason = 3;
+}
