@@ -25,6 +25,7 @@ using Aevatar.Workflow.Extensions.Hosting;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Aevatar.Mainnet.Host.Api.Hosting;
 
@@ -76,6 +77,12 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddChannelRuntime(builder.Configuration);
         builder.Services.AddDeviceRegistration(builder.Configuration);
         builder.Services.AddScheduledAgents(builder.Configuration);
+        // Bridge Studio's IUserConfigQueryPort onto Scheduled's narrow IOwnerLlmConfigSource port
+        // so SkillRunner / WorkflowAgent honor the bot owner's pre-configured LLM model + route
+        // (issue #509). The bridge lives here, not in Scheduled, so Scheduled doesn't need to
+        // reference the full Studio.Application package — the host is the natural composition
+        // layer between Studio and the agent packages.
+        builder.Services.TryAddSingleton<IOwnerLlmConfigSource, StudioUserConfigOwnerLlmConfigSource>();
         builder.Services.AddLarkAgentAuthoring();
         builder.Services.AddNyxIdRelayChannel();
         builder.Services.AddLarkPlatform();

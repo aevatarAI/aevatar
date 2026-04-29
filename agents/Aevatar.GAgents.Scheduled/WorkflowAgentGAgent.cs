@@ -16,7 +16,13 @@ namespace Aevatar.GAgents.Scheduled;
 
 public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
 {
+    private readonly IOwnerLlmConfigSource? _ownerLlmConfigSource;
     private ChannelScheduleRunner? _scheduler;
+
+    public WorkflowAgentGAgent(IOwnerLlmConfigSource? ownerLlmConfigSource = null)
+    {
+        _ownerLlmConfigSource = ownerLlmConfigSource;
+    }
 
     private ChannelScheduleRunner Scheduler => _scheduler ??= new ChannelScheduleRunner(
         callbackId: WorkflowAgentDefaults.TriggerCallbackId,
@@ -207,48 +213,20 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
         if (!string.IsNullOrWhiteSpace(State.NyxProviderSlug))
             metadata[ChannelMetadataKeys.LarkOutboundProxySlug] = State.NyxProviderSlug;
 
-        // Mirror SkillRunnerGAgent.ApplyOwnerLlmConfigAsync so workflow-backed agents (e.g.
-        // social_media) honor the bot owner's UserConfig (DefaultModel + PreferredLlmRoute +
-        // MaxToolRounds) the same way nyxid-chat does. Without this, the workflow's LLM steps
-        // fall through to NyxIdLLMProvider's compile-time default route + model and 400 when
-        // the bot owner pre-configured a custom NyxID service like `chrono-llm` instead of
-        // OpenAI.
-        await ApplyOwnerLlmConfigAsync(metadata, ct);
+        // Mirror SkillRunnerGAgent.BuildExecutionMetadataAsync — same shared helper, same
+        // model/route/tool-cap pinning. Workflow-backed agents (e.g. social_media) need the
+        // same UserConfig discipline so their LLM steps don't fall through to gateway+gpt-5.4
+        // when the bot owner pre-configured a custom NyxID service like `chrono-llm`.
+        var source = _ownerLlmConfigSource ?? Services?.GetService<IOwnerLlmConfigSource>();
+        await OwnerLlmConfigApplier.ApplyAsync(
+            metadata,
+            State.ScopeId,
+            source,
+            Logger,
+            actorLabel: "Workflow agent",
+            actorId: Id,
+            ct);
         return metadata;
-    }
-
-    private async Task ApplyOwnerLlmConfigAsync(IDictionary<string, string> metadata, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(State.ScopeId))
-            return;
-
-        var queryPort = Services?.GetService<Aevatar.Studio.Application.Studio.Abstractions.IUserConfigQueryPort>();
-        if (queryPort is null)
-            return;
-
-        try
-        {
-            var config = await queryPort.GetAsync(State.ScopeId, ct);
-            if (!string.IsNullOrWhiteSpace(config.DefaultModel))
-                metadata[LLMRequestMetadataKeys.ModelOverride] = config.DefaultModel.Trim();
-            if (!string.IsNullOrWhiteSpace(config.PreferredLlmRoute))
-                metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = config.PreferredLlmRoute.Trim();
-            if (config.MaxToolRounds > 0)
-                metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride] =
-                    config.MaxToolRounds.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(
-                ex,
-                "Workflow agent {ActorId}: failed to load owner UserConfig for scope {ScopeId}; falling back to provider defaults",
-                Id,
-                State.ScopeId);
-        }
     }
 
     private string BuildExecutionPrompt(string? reason, string? revisionFeedback)

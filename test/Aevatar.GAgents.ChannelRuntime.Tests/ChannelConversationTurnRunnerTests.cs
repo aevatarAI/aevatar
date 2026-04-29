@@ -13,7 +13,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Xunit;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgents.Scheduled;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -86,6 +88,98 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest!.Metadata[ChannelMetadataKeys.PlatformMessageId].Should().Be("om_123");
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkUnionId].Should().Be("on_union_1");
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkChatId].Should().Be("oc_chat_1");
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldApplyOwnerUserConfigOverridesToLlmMetadata_WhenSourceRegistered()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var ownerSource = new StubOwnerLlmConfigSource(
+            new OwnerLlmConfig(
+                DefaultModel: "gpt-5.5",
+                PreferredLlmRoute: "/api/v1/proxy/s/chrono-llm",
+                MaxToolRounds: 12));
+        var services = new ServiceCollection()
+            .AddSingleton<IOwnerLlmConfigSource>(ownerSource)
+            .BuildServiceProvider();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity("hello", "msg-owner-cfg-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("gpt-5.5");
+        result.LlmReplyRequest.Metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/api/v1/proxy/s/chrono-llm");
+        result.LlmReplyRequest.Metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("12");
+        ownerSource.Calls.Should().ContainSingle();
+        ownerSource.Calls[0].Should().Be("scope-1");
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldFallThroughToProviderDefaults_WhenOwnerLlmConfigSourceNotRegistered()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity("hello", "msg-owner-cfg-2"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+        result.LlmReplyRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
+        result.LlmReplyRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.MaxToolRoundsOverride);
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldFallThroughOnOwnerConfigLookupFailure_WithoutFailingTurn()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var ownerSource = new StubOwnerLlmConfigSource(throwOnGet: true);
+        var services = new ServiceCollection()
+            .AddSingleton<IOwnerLlmConfigSource>(ownerSource)
+            .BuildServiceProvider();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity("hello", "msg-owner-cfg-3"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldSkipOwnerConfigOverrides_WhenSpecificFieldsEmpty()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var ownerSource = new StubOwnerLlmConfigSource(
+            new OwnerLlmConfig(
+                DefaultModel: null,
+                PreferredLlmRoute: "/api/v1/proxy/s/chrono-llm",
+                MaxToolRounds: 0));
+        var services = new ServiceCollection()
+            .AddSingleton<IOwnerLlmConfigSource>(ownerSource)
+            .BuildServiceProvider();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity("hello", "msg-owner-cfg-4"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+        result.LlmReplyRequest.Metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/api/v1/proxy/s/chrono-llm");
+        result.LlmReplyRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.MaxToolRoundsOverride);
     }
 
     [Fact]
@@ -2479,6 +2573,28 @@ public sealed class ChannelConversationTurnRunnerTests
             if (Requests.Count >= _expectedCallCount)
                 Completed.TrySetResult();
             return response;
+        }
+    }
+
+    private sealed class StubOwnerLlmConfigSource : IOwnerLlmConfigSource
+    {
+        private readonly OwnerLlmConfig _config;
+        private readonly bool _throwOnGet;
+
+        public StubOwnerLlmConfigSource(OwnerLlmConfig? config = null, bool throwOnGet = false)
+        {
+            _config = config ?? OwnerLlmConfig.Empty;
+            _throwOnGet = throwOnGet;
+        }
+
+        public List<string> Calls { get; } = [];
+
+        public Task<OwnerLlmConfig> GetForScopeAsync(string scopeId, CancellationToken ct = default)
+        {
+            Calls.Add(scopeId);
+            if (_throwOnGet)
+                throw new InvalidOperationException("simulated owner-config lookup failure");
+            return Task.FromResult(_config);
         }
     }
 }

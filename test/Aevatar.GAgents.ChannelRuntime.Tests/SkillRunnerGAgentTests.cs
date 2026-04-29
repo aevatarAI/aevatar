@@ -2,6 +2,7 @@ using System.Net;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -743,115 +744,83 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task BuildExecutionMetadata_ShouldApplyOwnerUserConfigOverrides_WhenScopedConfigExists()
+    public async Task BuildExecutionMetadata_ShouldPinOwnerLlmConfigOverrides_WhenSourceReturnsConfig()
     {
         // Regression for the "/daily failed: Provider 'openai' not connected" report:
-        // skill runners must honor the bot owner's UserConfig (DefaultModel +
-        // PreferredLlmRoute + MaxToolRounds) the same way ChannelLlmReplyInboxRuntime does
-        // for nyxid-chat. Without this, every scheduled run falls through to
-        // NyxIdLLMProvider's compile-time `gpt-5.4` + gateway default, which the gateway
-        // routes to OpenAI — failing for every bot owner who pre-configured a custom NyxID
-        // service like `chrono-llm` at `/api/v1/proxy/s/chrono-llm`.
-        var stubConfig = new Aevatar.Studio.Application.Studio.Abstractions.UserConfig(
+        // skill runners must honor the bot owner's pre-configured model + NyxID route + tool
+        // cap — same shape ChannelLlmReplyInboxRuntime applies for nyxid-chat. Without it,
+        // every scheduled run falls through to NyxIdLLMProvider's compile-time `gpt-5.4` +
+        // gateway default, which the gateway routes to OpenAI and 400s for bot owners who
+        // wired a custom NyxID service like `chrono-llm` at `/api/v1/proxy/s/chrono-llm`.
+        var source = new StubOwnerLlmConfigSource(new OwnerLlmConfig(
             DefaultModel: "gpt-5.5",
             PreferredLlmRoute: "/api/v1/proxy/s/chrono-llm",
-            MaxToolRounds: 7);
-        var queryPort = new StubUserConfigQueryPort(stubConfig);
+            MaxToolRounds: 7));
 
-        using var provider = BuildServiceProvider(
-            new InMemoryEventStore(),
-            services =>
-            {
-                services.AddSingleton<Aevatar.Studio.Application.Studio.Abstractions.IUserConfigQueryPort>(queryPort);
-            });
-
-        var agent = CreateAgent("skill-runner-userconfig", provider);
+        var agent = CreateAgent("skill-runner-userconfig", _serviceProvider, source);
         await agent.ActivateAsync();
         await agent.HandleInitializeAsync(CreateInitializeCommand());
 
         var metadata = await InvokeBuildExecutionMetadataAsync(agent);
 
-        metadata[Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.ModelOverride]
-            .Should().Be("gpt-5.5");
-        metadata[Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.NyxIdRoutePreference]
-            .Should().Be("/api/v1/proxy/s/chrono-llm");
-        metadata[Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.MaxToolRoundsOverride]
-            .Should().Be("7");
-        queryPort.RequestedScopeIds.Should().ContainSingle().Which.Should().Be("scope-1");
+        metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("gpt-5.5");
+        metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/api/v1/proxy/s/chrono-llm");
+        metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("7");
+        source.RequestedScopeIds.Should().ContainSingle().Which.Should().Be("scope-1");
     }
 
     [Fact]
-    public async Task BuildExecutionMetadata_ShouldOmitOverrides_WhenUserConfigQueryPortIsAbsent()
+    public async Task BuildExecutionMetadata_ShouldOmitOverrides_WhenOwnerLlmConfigSourceIsAbsent()
     {
-        // When the host doesn't register IUserConfigQueryPort (e.g. integration scenarios
-        // where the projection package isn't wired), the skill runner must still produce
-        // valid metadata and let NyxIdLLMProvider fall through to its compile-time defaults.
-        // No override keys leak into metadata.
+        // No host wiring (e.g. tests that don't compose Studio + the bridge): valid metadata
+        // still comes out, no override keys leak, NyxIdLLMProvider falls through to its
+        // compile-time defaults.
         await _agent.HandleInitializeAsync(CreateInitializeCommand());
 
         var metadata = await InvokeBuildExecutionMetadataAsync(_agent);
 
-        metadata.Should().NotContainKey(Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.ModelOverride);
-        metadata.Should().NotContainKey(Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.NyxIdRoutePreference);
-        metadata.Should().NotContainKey(Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.MaxToolRoundsOverride);
-        metadata[Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.NyxIdAccessToken]
-            .Should().Be("nyx-api-key");
+        metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+        metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
+        metadata.Should().NotContainKey(LLMRequestMetadataKeys.MaxToolRoundsOverride);
+        metadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("nyx-api-key");
     }
 
     [Fact]
-    public async Task BuildExecutionMetadata_ShouldOmitOverrides_WhenUserConfigFieldsAreEmpty()
+    public async Task BuildExecutionMetadata_ShouldOmitOverrides_WhenOwnerLlmConfigFieldsAreEmpty()
     {
-        // The query-port contract returns a UserConfig with empty fields (not null) for
-        // bot owners who haven't saved any LLM preference. We must NOT override metadata
-        // with empty strings, because NyxIdLLMProvider treats a non-empty
-        // NyxIdRoutePreference of "" as a relative path against the authority and
-        // produces an invalid URL. Default + non-empty checks both happen here.
-        var stubConfig = new Aevatar.Studio.Application.Studio.Abstractions.UserConfig(
-            DefaultModel: string.Empty,
-            PreferredLlmRoute: string.Empty,
-            MaxToolRounds: 0);
+        // Bot owners who haven't saved any LLM preference get OwnerLlmConfig.Empty (or empty
+        // strings via the host adapter). The applier must NOT pin empty values onto metadata,
+        // because NyxIdLLMProvider treats a non-empty NyxIdRoutePreference of "" as a relative
+        // path against the authority and produces an invalid URL.
+        var source = new StubOwnerLlmConfigSource(OwnerLlmConfig.Empty);
 
-        using var provider = BuildServiceProvider(
-            new InMemoryEventStore(),
-            services =>
-            {
-                services.AddSingleton<Aevatar.Studio.Application.Studio.Abstractions.IUserConfigQueryPort>(
-                    new StubUserConfigQueryPort(stubConfig));
-            });
-
-        var agent = CreateAgent("skill-runner-userconfig-empty", provider);
+        var agent = CreateAgent("skill-runner-userconfig-empty", _serviceProvider, source);
         await agent.ActivateAsync();
         await agent.HandleInitializeAsync(CreateInitializeCommand());
 
         var metadata = await InvokeBuildExecutionMetadataAsync(agent);
 
-        metadata.Should().NotContainKey(Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.ModelOverride);
-        metadata.Should().NotContainKey(Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.NyxIdRoutePreference);
-        metadata.Should().NotContainKey(Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.MaxToolRoundsOverride);
+        metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+        metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
+        metadata.Should().NotContainKey(LLMRequestMetadataKeys.MaxToolRoundsOverride);
     }
 
     [Fact]
-    public async Task BuildExecutionMetadata_ShouldFallBackQuietly_WhenUserConfigQueryThrows()
+    public async Task BuildExecutionMetadata_ShouldFallBackQuietly_WhenOwnerLlmConfigSourceThrows()
     {
-        // The query port can throw on transient projection failures. The skill runner
-        // execution must still proceed with provider defaults — ApplyOwnerLlmConfigAsync
-        // catches and logs, never bubbles up.
-        using var provider = BuildServiceProvider(
-            new InMemoryEventStore(),
-            services =>
-            {
-                services.AddSingleton<Aevatar.Studio.Application.Studio.Abstractions.IUserConfigQueryPort>(
-                    new ThrowingUserConfigQueryPort());
-            });
+        // The source can throw on transient projection failures. The agent's execution turn
+        // must still proceed with provider defaults — the applier catches and logs the
+        // failure, never bubbles it up to the trigger handler.
+        var source = new ThrowingOwnerLlmConfigSource();
 
-        var agent = CreateAgent("skill-runner-userconfig-throws", provider);
+        var agent = CreateAgent("skill-runner-userconfig-throws", _serviceProvider, source);
         await agent.ActivateAsync();
         await agent.HandleInitializeAsync(CreateInitializeCommand());
 
         var metadata = await InvokeBuildExecutionMetadataAsync(agent);
 
-        metadata.Should().NotContainKey(Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.ModelOverride);
-        metadata.Should().NotContainKey(Aevatar.AI.Abstractions.LLMProviders.LLMRequestMetadataKeys.NyxIdRoutePreference);
+        metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+        metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
     }
 
     private static async Task<IReadOnlyDictionary<string, string>> InvokeBuildExecutionMetadataAsync(
@@ -865,34 +834,20 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         return await task;
     }
 
-    private sealed class StubUserConfigQueryPort(
-        Aevatar.Studio.Application.Studio.Abstractions.UserConfig config)
-        : Aevatar.Studio.Application.Studio.Abstractions.IUserConfigQueryPort
+    internal sealed class StubOwnerLlmConfigSource(OwnerLlmConfig config) : IOwnerLlmConfigSource
     {
-        public List<string?> RequestedScopeIds { get; } = new();
+        public List<string> RequestedScopeIds { get; } = new();
 
-        public Task<Aevatar.Studio.Application.Studio.Abstractions.UserConfig> GetAsync(CancellationToken ct = default)
-        {
-            RequestedScopeIds.Add(null);
-            return Task.FromResult(config);
-        }
-
-        public Task<Aevatar.Studio.Application.Studio.Abstractions.UserConfig> GetAsync(
-            string scopeId, CancellationToken ct = default)
+        public Task<OwnerLlmConfig> GetForScopeAsync(string scopeId, CancellationToken ct = default)
         {
             RequestedScopeIds.Add(scopeId);
             return Task.FromResult(config);
         }
     }
 
-    private sealed class ThrowingUserConfigQueryPort
-        : Aevatar.Studio.Application.Studio.Abstractions.IUserConfigQueryPort
+    internal sealed class ThrowingOwnerLlmConfigSource : IOwnerLlmConfigSource
     {
-        public Task<Aevatar.Studio.Application.Studio.Abstractions.UserConfig> GetAsync(CancellationToken ct = default) =>
-            throw new InvalidOperationException("projection unavailable");
-
-        public Task<Aevatar.Studio.Application.Studio.Abstractions.UserConfig> GetAsync(
-            string scopeId, CancellationToken ct = default) =>
+        public Task<OwnerLlmConfig> GetForScopeAsync(string scopeId, CancellationToken ct = default) =>
             throw new InvalidOperationException("projection unavailable");
     }
 
@@ -979,10 +934,13 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         }
     }
 
-    private SkillRunnerGAgent CreateAgent(string actorId, ServiceProvider? serviceProvider = null)
+    private SkillRunnerGAgent CreateAgent(
+        string actorId,
+        ServiceProvider? serviceProvider = null,
+        IOwnerLlmConfigSource? ownerLlmConfigSource = null)
     {
         var resolvedServices = serviceProvider ?? _serviceProvider;
-        var agent = new SkillRunnerGAgent
+        var agent = new SkillRunnerGAgent(ownerLlmConfigSource: ownerLlmConfigSource)
         {
             Services = resolvedServices,
             EventSourcingBehaviorFactory =
