@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package aevatar.gagents.channel.identity;
+
+option csharp_namespace = "Aevatar.GAgents.Channel.Identity";
+
+import "google/protobuf/timestamp.proto";
+import "channel_contracts.proto";
+
+// Per-(platform, tenant, external_user_id) actor state holding the opaque
+// NyxID-side binding pointer. Holds NO refresh_token or any user secret —
+// see ADR-0018 §Storage Boundary. binding_id is empty when no active binding;
+// revoked_at is set when the most recent binding was revoked.
+message ExternalIdentityBindingState {
+  // Redundant with the actor's deterministic key derived from the same triple
+  // via ExternalSubjectRefExtensions.ToActorId. Kept here for projection
+  // ergonomics so the readmodel does not need to parse the actor id back into
+  // a typed ExternalSubjectRef. ApplyBound only sets this on the first bind
+  // and never overwrites it (ADR-0018 L58 review: actor identity invariant).
+  aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;
+  // Opaque pointer issued by NyxID broker. Empty when no active binding
+  // (initial state, or after revoke). Source of truth lives in NyxID.
+  string binding_id = 2;
+  google.protobuf.Timestamp bound_at = 3;
+  google.protobuf.Timestamp revoked_at = 4;
+}
+
+// Issued by the OAuth callback handler after exchanging the authorization code
+// for a binding_id. Idempotent at the actor: discarded when state already
+// holds an active binding_id (concurrent /init protection,
+// ADR-0018 §Implementation Notes #2).
+message CommitBindingCommand {
+  aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;
+  string binding_id = 2;
+}
+
+// Issued by the /unbind handler after a successful NyxID DELETE call, or by
+// the turn path on `invalid_grant` from token-exchange. NO-OP at the actor
+// when state has no active binding.
+message RevokeBindingCommand {
+  aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;
+  // Free-form reason for audit (e.g. "user_unbind", "nyx_invalid_grant",
+  // "admin_revoke"). Intended for audit log only — not surfaced to senders.
+  string reason = 2;
+}
+
+// Persisted when CommitBindingCommand is accepted by the actor.
+message ExternalIdentityBoundEvent {
+  aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;
+  string binding_id = 2;
+  google.protobuf.Timestamp bound_at = 3;
+}
+
+// Persisted when RevokeBindingCommand is accepted by the actor.
+message ExternalIdentityBindingRevokedEvent {
+  aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;
+  google.protobuf.Timestamp revoked_at = 2;
+  string reason = 3;
+}
+
+// Stateless OAuth `state` token payload (HMAC-sealed, never in grain state).
+// Carries the correlation id, the originating external subject, the PKCE
+// verifier, and the absolute expiry. See ADR-0018 §Implementation Notes #1.
+message StateTokenPayload {
+  string correlation_id = 1;
+  aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 2;
+  string pkce_verifier = 3;
+  google.protobuf.Timestamp expires_at = 4;
+}
+
+// Read model: one document per actor (= per ExternalSubjectRef). Backs
+// IExternalIdentityBindingQueryPort.ResolveAsync. The id field equals the
+// actor id (ExternalSubjectRefExtensions.ToActorId), so resolving from a
+// subject is a direct primary-key lookup. revoked_at_utc_value is set when
+// the binding has been revoked; an "active" binding has binding_id non-empty
+// and revoked_at_utc_value unset.
+message ExternalIdentityBindingDocument {
+  // Actor id (= ExternalSubjectRef.ToActorId). Primary key.
+  string id = 1;
+  int64 state_version = 2;
+  string last_event_id = 3;
+  google.protobuf.Timestamp updated_at_utc_value = 4;
+  // Stored as the typed subject so consumers can read fields without parsing
+  // the actor id.
+  aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 5;
+  // Empty when no active binding (initial state, or after revoke).
+  string binding_id = 6;
+  google.protobuf.Timestamp bound_at_utc_value = 7;
+  google.protobuf.Timestamp revoked_at_utc_value = 8;
+}
