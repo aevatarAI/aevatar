@@ -7,9 +7,13 @@ public sealed class NyxIdToolOptions
     public string? BaseUrl { get; set; }
 
     /// <summary>
-    /// Optional token for fetching the OpenAPI spec from NyxID.
-    /// Used by NyxIdSpecCatalog when the spec endpoint requires auth.
-    /// If null, the spec fetch is attempted without auth (public endpoint).
+    /// Bearer token used by <see cref="NyxIdSpecCatalog"/> to fetch
+    /// <c>{BaseUrl}/api/v1/docs/openapi.json</c>. NyxID enforces this endpoint
+    /// as human-only (rejects service-account and delegated tokens), so this
+    /// must be a real user's API key or access token. When unset the catalog
+    /// stays empty and the background refresh is skipped — generic capability
+    /// discovery (<c>nyxid_search_capabilities</c>, <c>nyxid_proxy</c>) is
+    /// unavailable but specialized NyxID tools continue to work.
     /// </summary>
     public string? SpecFetchToken { get; set; }
 }

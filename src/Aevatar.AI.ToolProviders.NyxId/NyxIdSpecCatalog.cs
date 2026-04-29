@@ -22,12 +22,21 @@ public sealed class NyxIdSpecCatalog : IDisposable
         _http = httpClient ?? new HttpClient();
         _logger = logger ?? NullLogger<NyxIdSpecCatalog>.Instance;
 
-        if (!string.IsNullOrWhiteSpace(_options.BaseUrl))
+        if (string.IsNullOrWhiteSpace(_options.BaseUrl))
+            return;
+
+        if (string.IsNullOrWhiteSpace(_options.SpecFetchToken))
         {
-            _ = InitialFetchAsync();
-            _refreshTimer = new Timer(_ => _ = RefreshAsync(), null,
-                TimeSpan.FromMinutes(30), TimeSpan.FromMinutes(30));
+            // NyxID's /api/v1/docs/openapi.json is human-only; without a token
+            // every fetch returns 401. Skip the timer to avoid 30-min noise.
+            _logger.LogInformation(
+                "NyxIdSpecCatalog: SpecFetchToken not configured; skipping background refresh, catalog will remain empty");
+            return;
         }
+
+        _ = InitialFetchAsync();
+        _refreshTimer = new Timer(_ => _ = RefreshAsync(), null,
+            TimeSpan.FromMinutes(30), TimeSpan.FromMinutes(30));
     }
 
     public OperationCard[] Operations => Volatile.Read(ref _catalog);
@@ -109,9 +118,7 @@ public sealed class NyxIdSpecCatalog : IDisposable
         var url = $"{baseUrl}/api/v1/docs/openapi.json";
 
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        var specToken = _options.SpecFetchToken;
-        if (!string.IsNullOrWhiteSpace(specToken))
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", specToken);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.SpecFetchToken!);
 
         using var response = await _http.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
