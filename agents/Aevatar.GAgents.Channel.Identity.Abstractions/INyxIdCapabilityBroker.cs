@@ -1,7 +1,11 @@
 namespace Aevatar.GAgents.Channel.Identity.Abstractions;
 
 /// <summary>
-/// Capability layer seam between channel runtime and NyxID broker.
+/// Capability layer seam between channel runtime and NyxID broker. **Write-side
+/// only**: starting bindings, revoking bindings, and issuing short-lived
+/// tokens. Read-side queries (resolve external subject -> binding) live on
+/// <see cref="IExternalIdentityBindingQueryPort"/>; broker callers MUST go
+/// through that port for reads so the read/write seams stay distinct.
 /// Production implementation issues no long-lived user secret material into
 /// aevatar grain state; aevatar holds only the opaque <see cref="BindingId"/>.
 /// See ADR-0017 §INyxIdCapabilityBroker.
@@ -19,17 +23,9 @@ public interface INyxIdCapabilityBroker
         CancellationToken ct = default);
 
     /// <summary>
-    /// Resolves the active binding pointer for the given external subject.
-    /// Returns <c>null</c> when no active binding exists. Reads the local
-    /// projection only — does not call NyxID.
-    /// </summary>
-    Task<BindingId?> ResolveBindingAsync(
-        ExternalSubjectRef externalSubject,
-        CancellationToken ct = default);
-
-    /// <summary>
     /// Revokes the binding both at NyxID (source of truth) and locally.
-    /// NyxID failures abort the local revoke to avoid source-of-truth divergence.
+    /// NyxID failures abort the local revoke to avoid source-of-truth divergence
+    /// — see ADR-0017 §Decision (`/unbind` behaviour).
     /// </summary>
     Task RevokeBindingAsync(
         ExternalSubjectRef externalSubject,
@@ -37,11 +33,17 @@ public interface INyxIdCapabilityBroker
 
     /// <summary>
     /// Issues a short-lived access token for the resolved binding via RFC 8693
-    /// token-exchange. Throws <see cref="BindingRevokedException"/> when NyxID
-    /// reports <c>invalid_grant</c> (binding revoked); callers should
-    /// event-source revoke the local binding actor and prompt the sender to
-    /// re-run <c>/init</c>.
+    /// token-exchange. Throws <see cref="BindingNotFoundException"/> when no
+    /// active binding exists for <paramref name="externalSubject"/>; throws
+    /// <see cref="BindingRevokedException"/> when NyxID reports
+    /// <c>invalid_grant</c> on a previously-bound subject. Callers MUST
+    /// event-source revoke the local binding actor on the latter and prompt
+    /// the sender to re-run <c>/init</c>.
     /// </summary>
+    /// <exception cref="BindingNotFoundException">
+    /// No active binding exists for the subject (never bound, or readmodel
+    /// has not yet observed the bind).
+    /// </exception>
     /// <exception cref="BindingRevokedException">
     /// NyxID reports the binding as revoked (HTTP 400 <c>invalid_grant</c>).
     /// </exception>

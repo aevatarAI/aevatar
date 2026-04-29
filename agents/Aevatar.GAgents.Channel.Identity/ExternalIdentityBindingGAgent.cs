@@ -33,6 +33,13 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
     /// (concurrent /init protection — see ADR-0017 §Implementation Notes #2).
     /// The orphan binding on the NyxID side is left for NyxID's own reaper.
     /// </summary>
+    /// <remarks>
+    /// Single-actor turn ordering plus the event store's optimistic concurrency
+    /// (it is the cluster event store, not raw memory) give the
+    /// "discard duplicate commit" guarantee end-to-end. The in-handler check
+    /// here is the per-turn fast path; OCC at append-time covers the
+    /// pathological case of two turns racing past the State load.
+    /// </remarks>
     [EventHandler]
     public async Task HandleCommitBinding(CommitBindingCommand cmd)
     {
@@ -44,7 +51,10 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(cmd.BindingId))
+        if (!IsCommandSubjectMatchingActor(cmd.ExternalSubject))
+            return;
+
+        if (string.IsNullOrEmpty(cmd.BindingId))
         {
             Logger.LogWarning(
                 "CommitBinding rejected: binding_id is required for {Platform}:{Tenant}:{User}",
@@ -99,6 +109,9 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
             return;
         }
 
+        if (!IsCommandSubjectMatchingActor(cmd.ExternalSubject))
+            return;
+
         if (string.IsNullOrEmpty(State.BindingId))
         {
             Logger.LogInformation(
@@ -124,7 +137,30 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
             cmd.ExternalSubject.Tenant,
             cmd.ExternalSubject.ExternalUserId,
             revokedBindingId,
-            string.IsNullOrWhiteSpace(cmd.Reason) ? "unspecified" : cmd.Reason);
+            string.IsNullOrEmpty(cmd.Reason) ? "unspecified" : cmd.Reason);
+    }
+
+    // ─── Identity guard ───
+
+    // Defensive routing check: when the runtime has set this actor's Id (always
+    // true in production), reject commands carrying a different external
+    // subject. Empty Id (test scenarios where the actor is instantiated
+    // directly without runtime activation) skips the guard so unit tests can
+    // exercise the handlers without pre-wiring the actor key.
+    private bool IsCommandSubjectMatchingActor(ExternalSubjectRef commandSubject)
+    {
+        if (string.IsNullOrEmpty(Id))
+            return true;
+
+        var expected = commandSubject.ToActorId();
+        if (string.Equals(expected, Id, StringComparison.Ordinal))
+            return true;
+
+        Logger.LogWarning(
+            "Command rejected: external_subject mismatch (cmd={CommandActorId}, actor={ActorId})",
+            expected,
+            Id);
+        return false;
     }
 
     // ─── State transitions ───
@@ -134,7 +170,11 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
         ExternalIdentityBoundEvent evt)
     {
         var next = current.Clone();
-        next.ExternalSubject = evt.ExternalSubject?.Clone();
+        // ExternalSubject is an actor-identity invariant — set once on the
+        // first bind and never overwritten by subsequent events. ADR-0017 L58
+        // review: an event with a mismatched subject should not silently
+        // rewrite the actor's identity field.
+        next.ExternalSubject ??= evt.ExternalSubject?.Clone();
         next.BindingId = evt.BindingId ?? string.Empty;
         next.BoundAt = evt.BoundAt;
         next.RevokedAt = null;

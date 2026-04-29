@@ -12,6 +12,11 @@ import "identity_contracts.proto";
 // see ADR-0017 §Storage Boundary. binding_id is empty when no active binding;
 // revoked_at is set when the most recent binding was revoked.
 message ExternalIdentityBindingState {
+  // Redundant with the actor's deterministic key derived from the same triple
+  // via ExternalSubjectRefExtensions.ToActorId. Kept here for projection
+  // ergonomics so the readmodel does not need to parse the actor id back into
+  // a typed ExternalSubjectRef. ApplyBound only sets this on the first bind
+  // and never overwrites it (ADR-0017 L58 review: actor identity invariant).
   aevatar.gagents.channel.identity.abstractions.ExternalSubjectRef external_subject = 1;
   // Opaque pointer issued by NyxID broker. Empty when no active binding
   // (initial state, or after revoke). Source of truth lives in NyxID.

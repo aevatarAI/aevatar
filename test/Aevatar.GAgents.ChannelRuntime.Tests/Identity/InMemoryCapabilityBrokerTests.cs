@@ -19,23 +19,26 @@ public class InMemoryCapabilityBrokerTests
     };
 
     [Fact]
-    public async Task ResolveBindingAsync_ReturnsNullForUnboundSubject()
+    public async Task QueryPort_ResolveAsync_ReturnsNullForUnboundSubject()
     {
-        var broker = new InMemoryCapabilityBroker();
+        IExternalIdentityBindingQueryPort broker = new InMemoryCapabilityBroker();
 
-        var result = await broker.ResolveBindingAsync(SampleSubject());
+        var result = await broker.ResolveAsync(SampleSubject());
 
         result.Should().BeNull();
     }
 
     [Fact]
-    public async Task ResolveBindingAsync_ReturnsSeededBinding()
+    public async Task QueryPort_ResolveAsync_ReturnsSeededBinding()
     {
-        var broker = new InMemoryCapabilityBroker();
+        var fake = new InMemoryCapabilityBroker();
         var subject = SampleSubject();
-        broker.SeedBinding(subject, new BindingId { Value = "bnd_x" });
+        fake.SeedBinding(subject, new BindingId { Value = "bnd_x" });
 
-        var result = await broker.ResolveBindingAsync(subject);
+        // Read through the query-port seam — broker no longer exposes a
+        // resolve method (ADR-0017 §INyxIdCapabilityBroker is write-only).
+        IExternalIdentityBindingQueryPort port = fake;
+        var result = await port.ResolveAsync(subject);
 
         result.Should().NotBeNull();
         result!.Value.Should().Be("bnd_x");
@@ -57,15 +60,17 @@ public class InMemoryCapabilityBrokerTests
     }
 
     [Fact]
-    public async Task IssueShortLivedAsync_ThrowsBindingRevokedWhenUnbound()
+    public async Task IssueShortLivedAsync_ThrowsBindingNotFoundWhenUnbound()
     {
+        // Distinct from BindingRevokedException — "never bound" is a different
+        // semantic than "previously bound, NyxID revoked it".
         var broker = new InMemoryCapabilityBroker();
 
         var act = () => broker.IssueShortLivedAsync(
             SampleSubject(),
             new CapabilityScope { Value = "openid" });
 
-        await act.Should().ThrowAsync<BindingRevokedException>();
+        await act.Should().ThrowAsync<BindingNotFoundException>();
     }
 
     [Fact]
@@ -88,13 +93,15 @@ public class InMemoryCapabilityBrokerTests
     [Fact]
     public async Task RevokeBindingAsync_RemovesBinding()
     {
-        var broker = new InMemoryCapabilityBroker();
+        var fake = new InMemoryCapabilityBroker();
         var subject = SampleSubject();
-        broker.SeedBinding(subject, new BindingId { Value = "bnd_x" });
+        fake.SeedBinding(subject, new BindingId { Value = "bnd_x" });
 
+        INyxIdCapabilityBroker broker = fake;
         await broker.RevokeBindingAsync(subject);
 
-        var result = await broker.ResolveBindingAsync(subject);
+        IExternalIdentityBindingQueryPort port = fake;
+        var result = await port.ResolveAsync(subject);
         result.Should().BeNull();
     }
 }

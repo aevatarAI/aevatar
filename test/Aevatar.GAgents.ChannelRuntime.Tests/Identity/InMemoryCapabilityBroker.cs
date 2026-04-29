@@ -4,17 +4,21 @@ using Aevatar.GAgents.Channel.Identity.Abstractions;
 namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 
 /// <summary>
-/// In-process test fake for <see cref="INyxIdCapabilityBroker"/>. Holds binding
-/// state in a process-local dictionary; suitable only for unit and integration
-/// tests. Production wiring uses <c>NyxIdRemoteCapabilityBroker</c> (added in
-/// a follow-up PR once ChronoAIProject/NyxID#549 ships).
+/// In-process test fake for both <see cref="INyxIdCapabilityBroker"/> (write-
+/// side) and <see cref="IExternalIdentityBindingQueryPort"/> (read-side).
+/// Combining the two seams in a single fake keeps test wiring tight: the
+/// in-memory dictionary is the single source of truth that the broker writes
+/// to and the query port reads from. Production wiring uses
+/// <c>NyxIdRemoteCapabilityBroker</c> for the broker seam plus a
+/// projection-backed query port — added in a follow-up PR once
+/// ChronoAIProject/NyxID#549 is consumed end-to-end.
 /// </summary>
-internal sealed class InMemoryCapabilityBroker : INyxIdCapabilityBroker
+internal sealed class InMemoryCapabilityBroker : INyxIdCapabilityBroker, IExternalIdentityBindingQueryPort
 {
     private readonly ConcurrentDictionary<string, BindingId> _bindings = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, byte> _revokedBindings = new(StringComparer.Ordinal);
     private readonly Func<ExternalSubjectRef, BindingChallenge> _challengeFactory;
     private readonly Func<ExternalSubjectRef, BindingId, CapabilityScope, CapabilityHandle> _handleFactory;
-    private readonly HashSet<string> _revokedBindings = new(StringComparer.Ordinal);
 
     public InMemoryCapabilityBroker(
         Func<ExternalSubjectRef, BindingChallenge>? challengeFactory = null,
@@ -41,7 +45,7 @@ internal sealed class InMemoryCapabilityBroker : INyxIdCapabilityBroker
     public void MarkRevokedOnNyxId(BindingId bindingId)
     {
         ArgumentNullException.ThrowIfNull(bindingId);
-        _revokedBindings.Add(bindingId.Value);
+        _revokedBindings.TryAdd(bindingId.Value, 0);
     }
 
     public Task<BindingChallenge> StartExternalBindingAsync(
@@ -52,7 +56,7 @@ internal sealed class InMemoryCapabilityBroker : INyxIdCapabilityBroker
         return Task.FromResult(_challengeFactory(externalSubject));
     }
 
-    public Task<BindingId?> ResolveBindingAsync(
+    public Task<BindingId?> ResolveAsync(
         ExternalSubjectRef externalSubject,
         CancellationToken ct = default)
     {
@@ -67,7 +71,7 @@ internal sealed class InMemoryCapabilityBroker : INyxIdCapabilityBroker
     {
         ExternalSubjectRefExtensions.EnsureValid(externalSubject);
         if (_bindings.TryRemove(externalSubject.ToActorId(), out var removed))
-            _revokedBindings.Add(removed.Value);
+            _revokedBindings.TryAdd(removed.Value, 0);
         return Task.CompletedTask;
     }
 
@@ -80,9 +84,9 @@ internal sealed class InMemoryCapabilityBroker : INyxIdCapabilityBroker
         ArgumentNullException.ThrowIfNull(scope);
 
         if (!_bindings.TryGetValue(externalSubject.ToActorId(), out var bindingId))
-            throw new BindingRevokedException(externalSubject, "No active binding for the given external subject.");
+            throw new BindingNotFoundException(externalSubject);
 
-        if (_revokedBindings.Contains(bindingId.Value))
+        if (_revokedBindings.ContainsKey(bindingId.Value))
             throw new BindingRevokedException(externalSubject, "Binding revoked at NyxID.");
 
         return Task.FromResult(_handleFactory(externalSubject, bindingId, scope));

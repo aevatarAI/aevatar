@@ -107,6 +107,39 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleCommitBinding_IgnoresNullExternalSubject()
+    {
+        await _agent.HandleCommitBinding(new CommitBindingCommand
+        {
+            ExternalSubject = null,
+            BindingId = "bnd_x",
+        });
+
+        _agent.State.BindingId.Should().BeEmpty();
+        _agent.State.ExternalSubject.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleRevokeBinding_IgnoresNullExternalSubject()
+    {
+        // Seed an existing binding first so we can verify revoke is a no-op.
+        await _agent.HandleCommitBinding(new CommitBindingCommand
+        {
+            ExternalSubject = SampleSubject(),
+            BindingId = "bnd_first",
+        });
+
+        await _agent.HandleRevokeBinding(new RevokeBindingCommand
+        {
+            ExternalSubject = null,
+            Reason = "stray",
+        });
+
+        _agent.State.BindingId.Should().Be("bnd_first");
+        _agent.State.RevokedAt.Should().BeNull();
+    }
+
+    [Fact]
     public async Task HandleRevokeBinding_ClearsBindingId()
     {
         var subject = SampleSubject();
