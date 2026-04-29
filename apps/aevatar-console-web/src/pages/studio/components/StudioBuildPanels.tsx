@@ -1960,6 +1960,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
   const [lastRunResult, setLastRunResult] = React.useState<DraftRunResult | null>(null);
   const [leaveDialogOpen, setLeaveDialogOpen] = React.useState(false);
   const leaveResolverRef = React.useRef<((value: boolean) => void) | null>(null);
+  const isDirtyRef = React.useRef(false);
   const saveObservationTimerRef = React.useRef<number | null>(null);
   const saveObservationTokenRef = React.useRef(0);
   const activeScriptIdRef = React.useRef('');
@@ -2027,6 +2028,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
     () => serializePersistedSource(scriptPackage) !== persistedSource,
     [persistedSource, scriptPackage],
   );
+  isDirtyRef.current = isDirty;
 
   React.useEffect(() => {
     if (!activeScript) {
@@ -2093,7 +2095,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
     onRegisterLeaveGuard?.(
       async () =>
         new Promise<boolean>((resolve) => {
-          if (!isDirty) {
+          if (!isDirtyRef.current) {
             resolve(true);
             return;
           }
@@ -2104,9 +2106,10 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
     );
 
     return () => {
+      leaveResolverRef.current = null;
       onRegisterLeaveGuard?.(null);
     };
-  }, [isDirty, onRegisterLeaveGuard]);
+  }, [onRegisterLeaveGuard]);
 
   const validationStatus: StudioScriptBuildState['validationStatus'] =
     validationResult

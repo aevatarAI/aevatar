@@ -6,6 +6,11 @@ import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { servicesApi } from "@/shared/api/servicesApi";
 import { studioApi } from "@/shared/studio/api";
+import {
+  findStudioMemberByServiceId,
+  findStudioMemberServiceIdInCatalog,
+  resolveStudioMemberRuntimeServiceId,
+} from "@/shared/studio/memberRuntime";
 import { getScopeServiceCurrentRevision } from "@/shared/models/runtime/scopeServices";
 import { deriveTeamRuntimeLens, selectTeamCompareRuns } from "./teamRuntimeLens";
 
@@ -114,12 +119,7 @@ export function useTeamRuntimeLens(
       }
 
       if (preferredServiceId.length > 0) {
-        return (
-          members.find(
-            (member) =>
-              trimOptional(member.publishedServiceId) === preferredServiceId,
-          ) ?? null
-        );
+        return findStudioMemberByServiceId(members, preferredServiceId);
       }
 
       return null;
@@ -127,7 +127,9 @@ export function useTeamRuntimeLens(
     [membersQuery.data?.members, preferredMemberId, preferredServiceId],
   );
   const preferredServiceHint =
-    preferredServiceId || trimOptional(preferredMemberSummary?.publishedServiceId);
+    preferredServiceId ||
+    findStudioMemberServiceIdInCatalog(preferredMemberSummary, services) ||
+    resolveStudioMemberRuntimeServiceId(preferredMemberSummary, services);
   const serviceId = preferredServiceHint
     ? services.find((service) => service.serviceId === preferredServiceHint)?.serviceId ||
       preferredServiceHint
