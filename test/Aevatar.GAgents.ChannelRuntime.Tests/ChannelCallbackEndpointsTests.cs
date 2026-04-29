@@ -595,6 +595,10 @@ public sealed class ChannelCallbackEndpointsTests
                 WebhookUrl: "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-1",
                 Note: "Existing Nyx relay resources were verified.")));
 
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>([]));
+
         var http = CreateJsonHttpContext(
             """
             {
@@ -613,6 +617,7 @@ public sealed class ChannelCallbackEndpointsTests
             "HandleRepairLarkMirrorAsync",
             http,
             provisioningService,
+            queryPort,
             NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
@@ -637,6 +642,7 @@ public sealed class ChannelCallbackEndpointsTests
     public async Task HandleRepairLarkMirrorAsync_RejectsMissingNyxIdentity()
     {
         var provisioningService = Substitute.For<INyxLarkProvisioningService>();
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
 
         var http = CreateJsonHttpContext(
             """{"webhook_base_url":"https://aevatar.example.com"}""",
@@ -647,6 +653,7 @@ public sealed class ChannelCallbackEndpointsTests
             "HandleRepairLarkMirrorAsync",
             http,
             provisioningService,
+            queryPort,
             NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
@@ -665,6 +672,7 @@ public sealed class ChannelCallbackEndpointsTests
         // missing/empty Authorization header must short-circuit before the
         // provisioning service is touched.
         var provisioningService = Substitute.For<INyxLarkProvisioningService>();
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
 
         var http = CreateJsonHttpContext(
             """
@@ -681,6 +689,7 @@ public sealed class ChannelCallbackEndpointsTests
             "HandleRepairLarkMirrorAsync",
             http,
             provisioningService,
+            queryPort,
             NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
@@ -702,6 +711,10 @@ public sealed class ChannelCallbackEndpointsTests
                 Status: "error",
                 Error: "channel_bot_lookup_failed nyx_status=404 body=channel_bot_not_found")));
 
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>([]));
+
         var http = CreateJsonHttpContext(
             """
             {
@@ -717,6 +730,7 @@ public sealed class ChannelCallbackEndpointsTests
             "HandleRepairLarkMirrorAsync",
             http,
             provisioningService,
+            queryPort,
             NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
@@ -734,6 +748,7 @@ public sealed class ChannelCallbackEndpointsTests
         // a malicious caller could repair a registration into someone else's
         // scope and intercept their relay traffic.
         var provisioningService = Substitute.For<INyxLarkProvisioningService>();
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
 
         var http = CreateJsonHttpContext(
             """
@@ -751,6 +766,7 @@ public sealed class ChannelCallbackEndpointsTests
             "HandleRepairLarkMirrorAsync",
             http,
             provisioningService,
+            queryPort,
             NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
@@ -758,6 +774,230 @@ public sealed class ChannelCallbackEndpointsTests
         response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
         response.Body.Should().Contain("scope_id does not match");
         await provisioningService.DidNotReceive().RepairLocalMirrorAsync(
+            Arg.Any<NyxLarkMirrorRepairRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task HandleRepairLarkMirrorAsync_ShortCircuits_WhenSameScopeMirrorAlreadyExists()
+    {
+        // PR #503 review (comment 3158220132): without preflight, repeated
+        // calls without a registration_id mint a fresh id every time. A
+        // matching same-scope mirror must short-circuit with
+        // already_registered and NOT redispatch ChannelBotRegisterCommand.
+        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(
+            [
+                new ChannelBotRegistrationEntry
+                {
+                    Id = "reg-existing",
+                    Platform = "lark",
+                    NyxProviderSlug = "api-lark-bot",
+                    ScopeId = "scope-1",
+                    WebhookUrl = "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-1",
+                    NyxChannelBotId = "bot-1",
+                    NyxAgentApiKeyId = "key-1",
+                    NyxConversationRouteId = "route-1",
+                },
+            ]));
+
+        var http = CreateJsonHttpContext(
+            """
+            {
+              "nyx_channel_bot_id":"bot-1",
+              "nyx_agent_api_key_id":"key-1",
+              "nyx_conversation_route_id":"route-1",
+              "webhook_base_url":"https://aevatar.example.com"
+            }
+            """,
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleRepairLarkMirrorAsync",
+            http,
+            provisioningService,
+            queryPort,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.Body.Should().Contain("\"status\":\"already_registered\"");
+        response.Body.Should().Contain("\"registration_id\":\"reg-existing\"");
+        await provisioningService.DidNotReceive().RepairLocalMirrorAsync(
+            Arg.Any<NyxLarkMirrorRepairRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task HandleRepairLarkMirrorAsync_RejectsCrossScopeMatch()
+    {
+        // PR #503 review (comment 3158220132): an api-key whose existing
+        // mirror lives in scope A must not be re-pointed to scope B — a
+        // successful repair routes all subsequent relay traffic for the
+        // api-key into the requested scope, so a cross-scope repair is
+        // effectively a hijack vector even when the body and JWT scope
+        // agree.
+        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(
+            [
+                new ChannelBotRegistrationEntry
+                {
+                    Id = "reg-other-scope",
+                    Platform = "lark",
+                    NyxProviderSlug = "api-lark-bot",
+                    ScopeId = "scope-other",
+                    WebhookUrl = "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-1",
+                    NyxChannelBotId = "bot-1",
+                    NyxAgentApiKeyId = "key-1",
+                    NyxConversationRouteId = "route-1",
+                },
+            ]));
+
+        var http = CreateJsonHttpContext(
+            """
+            {
+              "nyx_channel_bot_id":"bot-1",
+              "nyx_agent_api_key_id":"key-1",
+              "nyx_conversation_route_id":"route-1",
+              "webhook_base_url":"https://aevatar.example.com"
+            }
+            """,
+            "scope-attacker");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleRepairLarkMirrorAsync",
+            http,
+            provisioningService,
+            queryPort,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        response.Body.Should().Contain("matching local Aevatar mirror belongs to a different scope_id");
+        await provisioningService.DidNotReceive().RepairLocalMirrorAsync(
+            Arg.Any<NyxLarkMirrorRepairRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task HandleRepairLarkMirrorAsync_ReusesEmptyScopeRegistrationId()
+    {
+        // PR #503 review (comment 3158220132): legacy mirrors with empty
+        // ScopeId (from before scope was tracked) must be reused so the
+        // backfill path attaches a scope. Without this, the dispatch would
+        // mint a new id and leave the empty-scope entry orphaned.
+        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
+        provisioningService.RepairLocalMirrorAsync(
+                Arg.Any<NyxLarkMirrorRepairRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxLarkMirrorRepairResult(
+                Succeeded: true,
+                Status: "accepted",
+                RegistrationId: "reg-empty-scope",
+                NyxChannelBotId: "bot-1",
+                NyxAgentApiKeyId: "key-1",
+                NyxConversationRouteId: "route-1",
+                WebhookUrl: "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-1")));
+
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(
+            [
+                new ChannelBotRegistrationEntry
+                {
+                    Id = "reg-empty-scope",
+                    Platform = "lark",
+                    NyxProviderSlug = "api-lark-bot",
+                    ScopeId = string.Empty,
+                    WebhookUrl = "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-1",
+                    NyxChannelBotId = "bot-1",
+                    NyxAgentApiKeyId = "key-1",
+                    NyxConversationRouteId = "route-1",
+                },
+            ]));
+
+        var http = CreateJsonHttpContext(
+            """
+            {
+              "nyx_channel_bot_id":"bot-1",
+              "nyx_agent_api_key_id":"key-1",
+              "nyx_conversation_route_id":"route-1",
+              "webhook_base_url":"https://aevatar.example.com"
+            }
+            """,
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleRepairLarkMirrorAsync",
+            http,
+            provisioningService,
+            queryPort,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        await provisioningService.Received(1).RepairLocalMirrorAsync(
+            Arg.Is<NyxLarkMirrorRepairRequest>(r =>
+                r.RequestedRegistrationId == "reg-empty-scope" &&
+                r.ScopeId == "scope-1"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task HandleRepairLarkMirrorAsync_FallsThroughToDispatch_WhenQuerySideIsUnavailable()
+    {
+        // Mirror of the LLM-tool's "still repairs when query side is
+        // unavailable" contract: a degraded read model must not block the
+        // operational repair path.
+        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
+        provisioningService.RepairLocalMirrorAsync(
+                Arg.Any<NyxLarkMirrorRepairRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxLarkMirrorRepairResult(
+                Succeeded: true,
+                Status: "accepted",
+                RegistrationId: "reg-1",
+                NyxChannelBotId: "bot-1",
+                NyxAgentApiKeyId: "key-1",
+                NyxConversationRouteId: "route-1",
+                WebhookUrl: "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-1")));
+
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<ChannelBotRegistrationEntry>>(
+                new InvalidOperationException("projection reader unavailable")));
+
+        var http = CreateJsonHttpContext(
+            """
+            {
+              "registration_id":"reg-1",
+              "nyx_channel_bot_id":"bot-1",
+              "nyx_agent_api_key_id":"key-1",
+              "nyx_conversation_route_id":"route-1",
+              "webhook_base_url":"https://aevatar.example.com"
+            }
+            """,
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleRepairLarkMirrorAsync",
+            http,
+            provisioningService,
+            queryPort,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        await provisioningService.Received(1).RepairLocalMirrorAsync(
             Arg.Any<NyxLarkMirrorRepairRequest>(), Arg.Any<CancellationToken>());
     }
 
