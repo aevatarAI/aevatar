@@ -29,6 +29,7 @@ public static class ChannelCallbackEndpoints
         group.MapPost("/registrations", HandleRegisterAsync).RequireAuthorization();
         group.MapGet("/registrations", HandleListRegistrationsAsync).RequireAuthorization();
         group.MapPost("/registrations/rebuild", HandleRebuildRegistrationsAsync).RequireAuthorization();
+        group.MapPost("/registrations/repair-lark-mirror", HandleRepairLarkMirrorAsync).RequireAuthorization();
         group.MapDelete("/registrations/{registrationId}", HandleDeleteRegistrationAsync).RequireAuthorization();
 
         // Diagnostic: test reply path without going through full LLM chat
@@ -273,6 +274,194 @@ public static class ChannelCallbackEndpoints
         });
     }
 
+    /// <summary>
+    /// Repairs the local <c>channel-bot-registration-store</c> mirror for a Lark
+    /// bot whose Nyx-side resources (api-key, channel-bot, conversation-route)
+    /// already exist but whose local <see cref="ChannelBotRegistrationDocument"/>
+    /// is missing — typically after a namespace migration that destroyed the
+    /// authoritative actor and left no entry to project. Idempotent: re-running
+    /// against an already-mirrored registration returns <c>already_registered</c>
+    /// without dispatching another <c>ChannelBotRegisterCommand</c>.
+    ///
+    /// Direct HTTP equivalent of the LLM-tool path
+    /// <c>channel_registrations action=repair_lark_mirror</c>; see
+    /// <c>docs/operations/2026-04-29-lark-mirror-recovery-runbook.md</c>. The
+    /// preflight (<c>already_registered</c> short-circuit, scope-mismatch
+    /// reject, empty-scope id reuse) MUST mirror the LLM-tool path —
+    /// otherwise repeated calls without a <c>registration_id</c> mint a fresh
+    /// id every time, and the resolver will later see multiple distinct
+    /// scope ids for one Nyx api-key and refuse to route relay traffic.
+    /// </summary>
+    private static async Task<IResult> HandleRepairLarkMirrorAsync(
+        HttpContext http,
+        [FromServices] INyxLarkProvisioningService provisioningService,
+        [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken ct)
+    {
+        var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Repair");
+
+        RepairLarkMirrorRequest? request;
+        try
+        {
+            request = await http.Request.ReadFromJsonAsync<RepairLarkMirrorRequest>(RegistrationJsonOptions, ct);
+        }
+        catch (JsonException ex)
+        {
+            logger.LogWarning(ex, "Invalid repair-lark-mirror request payload");
+            return Results.BadRequest(new { error = "Invalid JSON" });
+        }
+
+        if (request is null)
+            return Results.BadRequest(new { error = "request body is required" });
+
+        if (string.IsNullOrWhiteSpace(request.NyxChannelBotId))
+            return Results.BadRequest(new { error = "nyx_channel_bot_id is required" });
+        if (string.IsNullOrWhiteSpace(request.NyxAgentApiKeyId))
+            return Results.BadRequest(new { error = "nyx_agent_api_key_id is required" });
+        if (string.IsNullOrWhiteSpace(request.WebhookBaseUrl))
+            return Results.BadRequest(new { error = "webhook_base_url is required" });
+
+        var accessToken = ResolveBearerAccessToken(http);
+        if (string.IsNullOrWhiteSpace(accessToken))
+            return Results.Unauthorized();
+
+        var scopeResolution = ResolveScopeId(http, request.ScopeId, required: true);
+        if (scopeResolution.Error is not null)
+            return Results.BadRequest(new { error = scopeResolution.Error });
+
+        var nyxChannelBotId = request.NyxChannelBotId.Trim();
+        var nyxAgentApiKeyId = request.NyxAgentApiKeyId.Trim();
+        var nyxConversationRouteId = request.NyxConversationRouteId?.Trim() ?? string.Empty;
+        var requestedRegistrationId = request.RegistrationId?.Trim() ?? string.Empty;
+
+        // Preflight against the local mirror so repeated calls converge on the
+        // same registration id instead of minting a fresh one each time. Any
+        // existing same-scope mirror short-circuits; cross-scope matches are
+        // rejected to prevent api-key hijack via repair; empty-scope mirrors
+        // (legacy entries from before scope was tracked) get reused so the
+        // backfill path attaches a scope rather than diverging.
+        ChannelBotRegistrationEntry? existing = null;
+        try
+        {
+            var registrations = await queryPort.QueryAllAsync(ct);
+            existing = registrations.FirstOrDefault(entry =>
+                string.Equals(entry.Platform, "lark", StringComparison.OrdinalIgnoreCase) &&
+                MatchesNyxIdentity(entry, nyxChannelBotId, nyxAgentApiKeyId, nyxConversationRouteId));
+            if (existing is not null)
+            {
+                var existingScopeId = NormalizeOptional(existing.ScopeId);
+                if (existingScopeId is not null)
+                {
+                    if (!string.Equals(existingScopeId, scopeResolution.ScopeId, StringComparison.Ordinal))
+                    {
+                        logger.LogWarning(
+                            "Lark mirror repair rejected: matching mirror belongs to a different scope. registrationId={RegistrationId} existingScopeId={ExistingScopeId} requestedScopeId={RequestedScopeId}",
+                            existing.Id,
+                            existingScopeId,
+                            scopeResolution.ScopeId);
+                        return Results.BadRequest(new
+                        {
+                            error = "matching local Aevatar mirror belongs to a different scope_id",
+                            registration_id = existing.Id,
+                        });
+                    }
+
+                    return Results.Ok(new
+                    {
+                        status = "already_registered",
+                        registration_id = existing.Id,
+                        nyx_channel_bot_id = existing.NyxChannelBotId,
+                        nyx_agent_api_key_id = existing.NyxAgentApiKeyId,
+                        nyx_conversation_route_id = existing.NyxConversationRouteId,
+                        webhook_url = existing.WebhookUrl,
+                        nyx_provider_slug = string.IsNullOrWhiteSpace(existing.NyxProviderSlug)
+                            ? "api-lark-bot"
+                            : existing.NyxProviderSlug,
+                        note = "Matching local Aevatar mirror already exists.",
+                    });
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // Repair must remain usable when the read side is degraded —
+            // logging only, falling through to the dispatch path.
+            logger.LogWarning(
+                ex,
+                "Lark mirror repair preflight failed; falling through to dispatch without short-circuit. nyxChannelBotId={NyxChannelBotId}",
+                nyxChannelBotId);
+        }
+
+        // Reuse the existing registration id when an empty-scope mirror exists
+        // and the caller did not supply one, so the backfill path attaches a
+        // scope instead of producing a parallel registration.
+        if (string.IsNullOrWhiteSpace(requestedRegistrationId) && existing is not null)
+            requestedRegistrationId = existing.Id;
+
+        var result = await provisioningService.RepairLocalMirrorAsync(
+            new NyxLarkMirrorRepairRequest(
+                AccessToken: accessToken,
+                RequestedRegistrationId: requestedRegistrationId,
+                ScopeId: scopeResolution.ScopeId!,
+                NyxProviderSlug: request.NyxProviderSlug?.Trim() ?? string.Empty,
+                WebhookBaseUrl: request.WebhookBaseUrl.Trim(),
+                NyxChannelBotId: nyxChannelBotId,
+                NyxAgentApiKeyId: nyxAgentApiKeyId,
+                NyxConversationRouteId: nyxConversationRouteId),
+            ct);
+
+        var payload = new
+        {
+            status = result.Status,
+            registration_id = result.RegistrationId ?? string.Empty,
+            nyx_channel_bot_id = result.NyxChannelBotId ?? string.Empty,
+            nyx_agent_api_key_id = result.NyxAgentApiKeyId ?? string.Empty,
+            nyx_conversation_route_id = result.NyxConversationRouteId ?? string.Empty,
+            webhook_url = result.WebhookUrl ?? string.Empty,
+            error = result.Error ?? string.Empty,
+            note = result.Note ?? string.Empty,
+        };
+
+        if (result.Succeeded)
+            return Results.Accepted(value: payload);
+
+        var statusCode = ResolveProvisioningFailureStatusCode(result.Error);
+        logger.LogWarning(
+            "Lark mirror repair rejected: statusCode={StatusCode}, error={Error}",
+            statusCode,
+            result.Error);
+        return Results.Json(payload, statusCode: statusCode);
+    }
+
+    private static bool MatchesNyxIdentity(
+        ChannelBotRegistrationEntry entry,
+        string nyxChannelBotId,
+        string nyxAgentApiKeyId,
+        string nyxConversationRouteId)
+    {
+        var hasConstraint = false;
+
+        if (!MatchesIfProvided(entry.NyxChannelBotId, nyxChannelBotId, ref hasConstraint))
+            return false;
+        if (!MatchesIfProvided(entry.NyxAgentApiKeyId, nyxAgentApiKeyId, ref hasConstraint))
+            return false;
+        if (!MatchesIfProvided(entry.NyxConversationRouteId, nyxConversationRouteId, ref hasConstraint))
+            return false;
+
+        return hasConstraint;
+    }
+
+    private static bool MatchesIfProvided(string actual, string expected, ref bool hasConstraint)
+    {
+        if (string.IsNullOrWhiteSpace(expected))
+            return true;
+
+        hasConstraint = true;
+        return !string.IsNullOrWhiteSpace(actual) &&
+               string.Equals(actual, expected, StringComparison.Ordinal);
+    }
+
     private static string? ResolveBearerAccessToken(HttpContext http)
     {
         var accessToken = http.Request.Headers.Authorization.ToString();
@@ -442,6 +631,15 @@ public static class ChannelCallbackEndpoints
         string? NyxAgentApiKeyId,
         string? Reason,
         bool Force);
+
+    private sealed record RepairLarkMirrorRequest(
+        string? RegistrationId,
+        string? ScopeId,
+        string? NyxProviderSlug,
+        string? WebhookBaseUrl,
+        string? NyxChannelBotId,
+        string? NyxAgentApiKeyId,
+        string? NyxConversationRouteId);
 
     private sealed record RegistrationRequest(
         string? Platform,

@@ -22,6 +22,7 @@ internal static class StudioMemberCreateRequestValidator
         ValidateDisplayName(request.DisplayName);
         ValidateDescription(request.Description);
         ValidateMemberId(request.MemberId);
+        ValidateTeamId(request.TeamId);
     }
 
     private static void ValidateDisplayName(string? displayName)
@@ -70,6 +71,45 @@ internal static class StudioMemberCreateRequestValidator
         {
             throw new InvalidOperationException(
                 "memberId must match ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ " +
+                "(alphanumeric, dash, underscore; starts with alphanumeric).");
+        }
+    }
+
+    private static void ValidateTeamId(string? rawTeamId)
+    {
+        if (rawTeamId == null)
+        {
+            // Absent / null = "do not assign". This is the typical case — a
+            // member can be created without joining any team.
+            return;
+        }
+
+        // Empty string is rejected (ADR-0017 §Q6). The wire layer should
+        // already have caught it; defending here so a hand-crafted client
+        // cannot silently bypass the rule via the application port.
+        if (rawTeamId.Length == 0)
+        {
+            throw new InvalidOperationException(
+                "teamId must not be empty when present (use null / absent to mean 'do not assign').");
+        }
+
+        var trimmed = rawTeamId.Trim();
+        if (string.IsNullOrEmpty(trimmed))
+        {
+            throw new InvalidOperationException(
+                "teamId must not be whitespace when present.");
+        }
+
+        if (trimmed.Length > StudioTeamInputLimits.MaxTeamIdLength)
+        {
+            throw new InvalidOperationException(
+                $"teamId must be at most {StudioTeamInputLimits.MaxTeamIdLength} characters.");
+        }
+
+        if (!StudioTeamInputLimits.TeamIdPattern.IsMatch(trimmed))
+        {
+            throw new InvalidOperationException(
+                "teamId must match ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ " +
                 "(alphanumeric, dash, underscore; starts with alphanumeric).");
         }
     }

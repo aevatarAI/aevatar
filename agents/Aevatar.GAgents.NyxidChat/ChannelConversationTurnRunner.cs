@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -59,7 +60,14 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (registration is null)
             return ConversationTurnResult.PermanentFailure("registration_not_found", "Channel registration not found.");
 
-        _ = TrySendImmediateLarkReactionAsync(activity, registration, ct);
+        // Capture the typing-reaction Task instead of `_ =`-discarding it. The direct-reply
+        // AgentBuilder path can complete fast enough that the swap fires before Lark has
+        // persisted the typing reaction; the swap GET would then find nothing to delete and
+        // leave both Typing + DONE on the message. Threading the task to the swap site lets
+        // the swap await-with-timeout the typing POST first. The deferred-LLM and streaming
+        // paths don't get this task (different invocation), but their natural latency is
+        // orders of magnitude greater than the typing POST so the race cannot fire.
+        var typingReactionTask = TrySendImmediateLarkReactionAsync(activity, registration, ct);
 
         var inbound = ToInboundMessage(activity);
         // Workflow resume is the structured-payload path (card_action etc) and
@@ -82,7 +90,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         var inboundEvent = ToInboundEvent(activity, registration, inbound, ResolveUserAccessToken(activity));
 
-        if (await TryHandleAgentBuilderAsync(activity, inboundEvent, registration, runtimeContext, ct) is { } agentBuilderResult)
+        if (await TryHandleAgentBuilderAsync(activity, inboundEvent, registration, runtimeContext, typingReactionTask, ct) is { } agentBuilderResult)
             return agentBuilderResult;
 
         if (activity.Type == ActivityType.CardAction)
@@ -399,8 +407,32 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
 
         var inbound = ToInboundMessage(reply.Activity);
-        ChannelBotRegistrationEntry? registration = null;
-        if (!HasRelayDelivery(inbound))
+        // Direct path requires registration to actually send the reply; relay path only wants it
+        // for the post-reply reaction swap (relay sends use the reply token, not registration).
+        // So lookup is mandatory on the direct path and best-effort on the relay path — a
+        // transient registration-store error on the relay path must not drop an otherwise valid
+        // reply, only degrade the swap to a no-op for that turn.
+        ChannelBotRegistrationEntry? registration;
+        if (HasRelayDelivery(inbound))
+        {
+            try
+            {
+                registration = await ResolveRegistrationForReplyAsync(reply, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Registration lookup failed on relay reply path; reply will proceed but post-reply reaction swap will be skipped. correlation={CorrelationId}",
+                    reply.CorrelationId);
+                registration = null;
+            }
+        }
+        else
         {
             registration = await ResolveRegistrationForReplyAsync(reply, ct);
             if (registration is null)
@@ -414,7 +446,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var sentSeed = string.IsNullOrWhiteSpace(reply.CorrelationId)
             ? reply.Activity.Id
             : reply.CorrelationId;
-        return await SendReplyAsync(
+        var result = await SendReplyAsync(
             outboundIntent,
             sentSeed,
             reply.Activity.Conversation,
@@ -422,6 +454,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             registration,
             runtimeContext,
             ct);
+        if (result.Success)
+            _ = TrySwapTypingReactionToDoneAsync(inbound, registration, ct);
+        return result;
     }
 
     public Task<ConversationTurnResult> RunLlmReplyAsync(LlmReplyReadyEvent reply, CancellationToken ct) =>
@@ -467,6 +502,23 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             registration,
             ConversationTurnRuntimeContext.Empty,
             ct);
+    }
+
+    public async Task OnReplyDeliveredAsync(ChatActivity activity, CancellationToken ct)
+    {
+        // Streaming-completion path in ConversationGAgent calls this hook because it finalizes
+        // the reply without going through RunLlmReplyAsync (which is where the non-streaming swap
+        // lives). For non-Lark platforms or activities missing the platform message id, the swap
+        // helper short-circuits in ShouldSwapTypingReaction.
+        if (activity is null)
+            return;
+
+        var registration = await ResolveRegistrationAsync(activity, ct);
+        if (registration is null)
+            return;
+
+        var inbound = ToInboundMessage(activity);
+        await TrySwapTypingReactionToDoneAsync(inbound, registration, ct);
     }
 
     public async Task<ConversationStreamChunkResult> RunStreamChunkAsync(
@@ -551,6 +603,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ChannelInboundEvent inboundEvent,
         ChannelBotRegistrationEntry registration,
         ConversationTurnRuntimeContext runtimeContext,
+        Task typingReactionTask,
         CancellationToken ct)
     {
         AgentBuilderFlowDecision? decision = null;
@@ -589,14 +642,17 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             }
         }
 
+        var inbound = ToInboundMessage(activity);
         var result = await SendReplyAsync(
             replyContent,
             activity.Id,
             activity.Conversation,
-            ToInboundMessage(activity),
+            inbound,
             registration,
             runtimeContext,
             ct);
+        if (result.Success)
+            _ = AwaitTypingReactionThenSwapAsync(typingReactionTask, inbound, registration, ct);
         return result.Success
             ? ConversationTurnResult.Sent(
                 sentActivityId: $"direct-reply:{activity.Id}",
@@ -969,6 +1025,13 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             [ChannelMetadataKeys.ChatType] = inboundEvent.ChatType,
         };
 
+        // Inbound channel-bot's NyxID provider slug. SkillRunner agent-builder captures this on
+        // SkillRunnerOutboundConfig.FailureNotificationProviderSlug so a failed outbound delivery
+        // (e.g. cross-tenant Lark 99992364) can still notify the user via the bot they just
+        // successfully messaged. See issue #423 §C and ChannelMetadataKeys.InboundChannelBotProxySlug.
+        if (!string.IsNullOrWhiteSpace(inboundEvent.NyxProviderSlug))
+            metadata[ChannelMetadataKeys.InboundChannelBotProxySlug] = inboundEvent.NyxProviderSlug;
+
         var platformMessageId = NormalizeOptional(activity?.TransportExtras?.NyxPlatformMessageId);
         if (!string.IsNullOrWhiteSpace(platformMessageId))
             metadata[ChannelMetadataKeys.PlatformMessageId] = platformMessageId;
@@ -1212,6 +1275,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         } &&
         string.Equals(NormalizeOptional(activity.Bot?.Value), nyxAgentApiKeyId, StringComparison.Ordinal);
 
+    // Lark reaction emoji_type for "hands typing on keyboard" — added immediately on inbound
+    // so the user sees the bot is working before the LLM reply lands. Swapped to DoneReactionEmojiType
+    // after the reply succeeds so the same message ends up with a single completion reaction.
+    private const string TypingReactionEmojiType = "Typing";
+    private const string DoneReactionEmojiType = "DONE";
+
     private async Task TrySendImmediateLarkReactionAsync(
         ChatActivity activity,
         ChannelBotRegistrationEntry registration,
@@ -1227,7 +1296,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 providerSlug!,
                 $"/open-apis/im/v1/messages/{Uri.EscapeDataString(platformMessageId!)}/reactions",
                 "POST",
-                """{"reaction_type":{"emoji_type":"OK"}}""",
+                $$$"""{"reaction_type":{"emoji_type":"{{{TypingReactionEmojiType}}}"}}""",
                 null,
                 ct);
 
@@ -1241,7 +1310,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     // it stays discoverable when the channel is opted into
                     // verbose logging without spamming Warnings on every turn.
                     _logger.LogDebug(
-                        "Immediate Lark acknowledgment reaction skipped (missing reaction scope): provider={ProviderSlug}, message={MessageId}, detail={Detail}",
+                        "Immediate Lark typing reaction skipped (missing reaction scope): provider={ProviderSlug}, message={MessageId}, detail={Detail}",
                         providerSlug,
                         platformMessageId,
                         detail);
@@ -1253,7 +1322,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     // etc.) — is a real signal that should stay at Warning so
                     // we notice when Lark behavior changes.
                     _logger.LogWarning(
-                        "Immediate Lark acknowledgment reaction failed: provider={ProviderSlug}, message={MessageId}, larkCode={LarkCode}, detail={Detail}",
+                        "Immediate Lark typing reaction failed: provider={ProviderSlug}, message={MessageId}, larkCode={LarkCode}, detail={Detail}",
                         providerSlug,
                         platformMessageId,
                         larkCode,
@@ -1269,10 +1338,301 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             _logger.LogWarning(
                 ex,
-                "Immediate Lark acknowledgment reaction threw: provider={ProviderSlug}, message={MessageId}",
+                "Immediate Lark typing reaction threw: provider={ProviderSlug}, message={MessageId}",
                 providerSlug,
                 platformMessageId);
         }
+    }
+
+    // Direct-reply paths (TryHandleAgentBuilderAsync) can complete a slash-command reply faster
+    // than the typing POST takes to land in Lark, leaving the swap GET to find no Typing reaction
+    // to delete and the orphaned typing reaction to materialize after DONE was already added —
+    // both reactions on the same message. Awaiting (with a short cap) the typing task before the
+    // GET closes that race. The cap protects against a hung POST stalling the swap forever; if it
+    // expires the swap still proceeds — Lark will at worst end up with both reactions, same as
+    // before this guard. The deferred-LLM and streaming paths skip this guard because their reply
+    // latency dwarfs the typing POST and so cannot race.
+    private async Task AwaitTypingReactionThenSwapAsync(
+        Task typingReactionTask,
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        CancellationToken ct)
+    {
+        try
+        {
+            await typingReactionTask.WaitAsync(TimeSpan.FromSeconds(2), ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (TimeoutException)
+        {
+            _logger.LogDebug(
+                "Lark typing reaction task did not complete within timeout before swap; proceeding anyway");
+        }
+        catch (Exception)
+        {
+            // The typing task already logged its own exception — proceed with the swap so the
+            // user-visible message still ends up with a DONE reaction whenever possible.
+        }
+
+        await TrySwapTypingReactionToDoneAsync(inbound, registration, ct);
+    }
+
+    // After a successful reply, replace the bot's "Typing" reaction with a "DONE" reaction so the
+    // same message ends with a single completion marker. Uses list-based discovery (filter by
+    // emoji_type=Typing AND operator_type=app) instead of caching the immediate reaction's
+    // reaction_id locally — the runner is a singleton and cross-turn state on it would violate the
+    // "中间层进程内缓存作为事实源" rule. Filtering on operator_type=app avoids deleting any user
+    // who happened to add the same Typing reaction.
+    private async Task TrySwapTypingReactionToDoneAsync(
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry? registration,
+        CancellationToken ct)
+    {
+        if (registration is null)
+            return;
+
+        if (!ShouldSwapTypingReaction(inbound, registration, out var accessToken, out var providerSlug, out var platformMessageId))
+            return;
+
+        try
+        {
+            var reactionIds = new List<string>();
+            string? pageToken = null;
+            // Bound the iteration so a misbehaving Lark response (e.g. always-true `has_more`)
+            // can't loop the swap forever. 10 pages × 50 per page = 500 Typing reactions on a
+            // single message — orders of magnitude more than realistic, since this list is
+            // already scoped to one emoji_type and the bot only adds Typing once per inbound.
+            const int MaxListPages = 10;
+            for (var page = 0; page < MaxListPages; page++)
+            {
+                var pathQuery = $"/open-apis/im/v1/messages/{Uri.EscapeDataString(platformMessageId!)}/reactions?reaction_type={TypingReactionEmojiType}&page_size=50";
+                if (pageToken is not null)
+                    pathQuery += $"&page_token={Uri.EscapeDataString(pageToken)}";
+
+                var listResponse = await _nyxClient.ProxyRequestAsync(
+                    accessToken!,
+                    providerSlug!,
+                    pathQuery,
+                    "GET",
+                    body: null,
+                    extraHeaders: null,
+                    ct);
+
+                if (LarkProxyResponse.TryGetError(listResponse, out var listCode, out var listDetail))
+                {
+                    _logger.LogDebug(
+                        "Lark typing reaction list failed; skipping swap: provider={ProviderSlug}, message={MessageId}, page={Page}, larkCode={LarkCode}, detail={Detail}",
+                        providerSlug,
+                        platformMessageId,
+                        page,
+                        listCode,
+                        listDetail);
+                    return;
+                }
+
+                var (idsOnPage, nextPageToken) = ParseAppReactionsPage(listResponse);
+                reactionIds.AddRange(idsOnPage);
+                if (string.IsNullOrWhiteSpace(nextPageToken))
+                {
+                    pageToken = null;
+                    break;
+                }
+                pageToken = nextPageToken;
+            }
+
+            foreach (var reactionId in reactionIds)
+            {
+                try
+                {
+                    var deleteResponse = await _nyxClient.ProxyRequestAsync(
+                        accessToken!,
+                        providerSlug!,
+                        $"/open-apis/im/v1/messages/{Uri.EscapeDataString(platformMessageId!)}/reactions/{Uri.EscapeDataString(reactionId)}",
+                        "DELETE",
+                        body: null,
+                        extraHeaders: null,
+                        ct);
+
+                    if (LarkProxyResponse.TryGetError(deleteResponse, out var deleteCode, out var deleteDetail))
+                    {
+                        _logger.LogDebug(
+                            "Lark typing reaction delete failed: provider={ProviderSlug}, message={MessageId}, reaction={ReactionId}, larkCode={LarkCode}, detail={Detail}",
+                            providerSlug,
+                            platformMessageId,
+                            reactionId,
+                            deleteCode,
+                            deleteDetail);
+                    }
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(
+                        ex,
+                        "Lark typing reaction delete threw: provider={ProviderSlug}, message={MessageId}, reaction={ReactionId}",
+                        providerSlug,
+                        platformMessageId,
+                        reactionId);
+                }
+            }
+
+            var addResponse = await _nyxClient.ProxyRequestAsync(
+                accessToken!,
+                providerSlug!,
+                $"/open-apis/im/v1/messages/{Uri.EscapeDataString(platformMessageId!)}/reactions",
+                "POST",
+                $$$"""{"reaction_type":{"emoji_type":"{{{DoneReactionEmojiType}}}"}}""",
+                null,
+                ct);
+
+            if (LarkProxyResponse.TryGetError(addResponse, out var addCode, out var addDetail))
+            {
+                if (addCode == LarkBotErrorCodes.NoPermissionToReact)
+                {
+                    _logger.LogDebug(
+                        "Lark done reaction skipped (missing reaction scope): provider={ProviderSlug}, message={MessageId}, detail={Detail}",
+                        providerSlug,
+                        platformMessageId,
+                        addDetail);
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "Lark done reaction failed: provider={ProviderSlug}, message={MessageId}, larkCode={LarkCode}, detail={Detail}",
+                        providerSlug,
+                        platformMessageId,
+                        addCode,
+                        addDetail);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Lark typing→done reaction swap threw: provider={ProviderSlug}, message={MessageId}",
+                providerSlug,
+                platformMessageId);
+        }
+    }
+
+    private static (IReadOnlyList<string> AppReactionIds, string? NextPageToken) ParseAppReactionsPage(string? response)
+    {
+        if (string.IsNullOrWhiteSpace(response))
+            return (Array.Empty<string>(), null);
+
+        try
+        {
+            return ExtractAppReactionsPage(response);
+        }
+        catch (JsonException)
+        {
+            return (Array.Empty<string>(), null);
+        }
+    }
+
+    private static (List<string> AppReactionIds, string? NextPageToken) ExtractAppReactionsPage(string response)
+    {
+        var ids = new List<string>();
+        string? nextPageToken = null;
+
+        using var document = JsonDocument.Parse(response);
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
+            return (ids, null);
+
+        if (!root.TryGetProperty("data", out var dataProp) || dataProp.ValueKind != JsonValueKind.Object)
+            return (ids, null);
+
+        // Pin pagination to has_more=true. Following page_token unconditionally would let a Lark
+        // response that returns a stale token alongside has_more=false re-fetch the same page
+        // until the safety cap fires.
+        var hasMore = dataProp.TryGetProperty("has_more", out var hasMoreProp) &&
+                      hasMoreProp.ValueKind == JsonValueKind.True;
+        if (hasMore &&
+            dataProp.TryGetProperty("page_token", out var pageTokenProp) &&
+            pageTokenProp.ValueKind == JsonValueKind.String)
+        {
+            var token = pageTokenProp.GetString();
+            if (!string.IsNullOrWhiteSpace(token))
+                nextPageToken = token;
+        }
+
+        if (!dataProp.TryGetProperty("items", out var itemsProp) || itemsProp.ValueKind != JsonValueKind.Array)
+            return (ids, nextPageToken);
+
+        foreach (var item in itemsProp.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                continue;
+
+            // Only delete reactions added by the bot itself (operator_type=app); leave any
+            // user-added Typing reactions alone so the swap doesn't accidentally erase them.
+            if (!item.TryGetProperty("operator", out var operatorProp) ||
+                operatorProp.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            if (!operatorProp.TryGetProperty("operator_type", out var operatorTypeProp) ||
+                operatorTypeProp.ValueKind != JsonValueKind.String ||
+                !string.Equals(operatorTypeProp.GetString(), "app", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!item.TryGetProperty("reaction_id", out var reactionIdProp) ||
+                reactionIdProp.ValueKind != JsonValueKind.String)
+            {
+                continue;
+            }
+
+            var reactionId = reactionIdProp.GetString();
+            if (!string.IsNullOrWhiteSpace(reactionId))
+                ids.Add(reactionId);
+        }
+
+        return (ids, nextPageToken);
+    }
+
+    private static bool ShouldSwapTypingReaction(
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        out string? accessToken,
+        out string? providerSlug,
+        out string? platformMessageId)
+    {
+        accessToken = null;
+        providerSlug = null;
+        platformMessageId = null;
+
+        var platform = NormalizeOptional(inbound.TransportExtras?.NyxPlatform) ??
+                       NormalizeOptional(registration.Platform) ??
+                       NormalizeOptional(inbound.Platform);
+        if (!string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        accessToken = NormalizeOptional(inbound.TransportExtras?.NyxUserAccessToken);
+        providerSlug = NormalizeOptional(registration.NyxProviderSlug);
+        platformMessageId = NormalizeOptional(inbound.TransportExtras?.NyxPlatformMessageId);
+
+        return !string.IsNullOrWhiteSpace(accessToken) &&
+               !string.IsNullOrWhiteSpace(providerSlug) &&
+               !string.IsNullOrWhiteSpace(platformMessageId) &&
+               platformMessageId.StartsWith("om_", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool ShouldSendImmediateLarkReaction(

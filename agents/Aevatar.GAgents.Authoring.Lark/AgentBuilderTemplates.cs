@@ -52,7 +52,8 @@ public static class AgentBuilderTemplates
             "daily_report",
             skillPrompt,
             executionPrompt,
-            ["api-github", "api-lark-bot"]);
+            ["api-github", "api-lark-bot"],
+            repoList);
         return true;
     }
 
@@ -61,6 +62,8 @@ public static class AgentBuilderTemplates
         string topic,
         string? audience,
         string? style,
+        string? deliveryProviderSlug,
+        string? publishProviderSlug,
         out SocialMediaTemplateSpec? spec,
         out string? error)
     {
@@ -83,6 +86,8 @@ public static class AgentBuilderTemplates
 
         var normalizedAudience = NormalizeOptional(audience) ?? "general followers";
         var normalizedStyle = NormalizeOptional(style) ?? "clear, concise, and professional";
+        var normalizedDeliverySlug = NormalizeOptional(deliveryProviderSlug) ?? "api-lark-bot";
+        var normalizedPublishSlug = NormalizeOptional(publishProviderSlug) ?? "api-twitter";
         var workflowId = BuildSocialMediaWorkflowId(normalizedAgentId);
         var workflowName = BuildSocialMediaWorkflowName(normalizedAgentId);
         var displayName = $"Social Media Approval {normalizedAgentId}";
@@ -97,8 +102,10 @@ public static class AgentBuilderTemplates
                 normalizedAgentId,
                 normalizedTopic,
                 normalizedAudience,
-                normalizedStyle),
-            ExecutionPrompt: executionPrompt);
+                normalizedStyle,
+                normalizedPublishSlug),
+            ExecutionPrompt: executionPrompt,
+            RequiredServiceSlugs: [normalizedDeliverySlug, normalizedPublishSlug]);
         return true;
     }
 
@@ -194,11 +201,12 @@ public static class AgentBuilderTemplates
         string deliveryTargetId,
         string topic,
         string audience,
-        string style)
+        string style,
+        string publishProviderSlug)
     {
         return $$"""
             name: {{workflowName}}
-            description: Generate a social media draft and request human approval in Feishu.
+            description: Generate a social media draft, request human approval in Feishu, and publish the approved post to Twitter (X).
 
             roles:
               - id: writer
@@ -231,8 +239,18 @@ public static class AgentBuilderTemplates
                   delivery_target_id: "{{EscapeDoubleQuoted(deliveryTargetId)}}"
                   on_reject: skip
                 branches:
-                  "true": done
+                  "true": publish_to_twitter
                   "false": done
+
+              - id: publish_to_twitter
+                type: twitter_publish
+                parameters:
+                  publish_provider_slug: "{{EscapeDoubleQuoted(publishProviderSlug)}}"
+                  delivery_target_id: "{{EscapeDoubleQuoted(deliveryTargetId)}}"
+                on_error:
+                  strategy: skip
+                  default_output: "twitter_publish_failed"
+                next: done
 
               - id: done
                 type: assign
@@ -284,11 +302,13 @@ public sealed record DailyReportTemplateSpec(
     string SkillName,
     string SkillContent,
     string ExecutionPrompt,
-    IReadOnlyList<string> RequiredServiceSlugs);
+    IReadOnlyList<string> RequiredServiceSlugs,
+    IReadOnlyList<string> Repositories);
 
 public sealed record SocialMediaTemplateSpec(
     string WorkflowId,
     string WorkflowName,
     string DisplayName,
     string WorkflowYaml,
-    string ExecutionPrompt);
+    string ExecutionPrompt,
+    IReadOnlyList<string> RequiredServiceSlugs);

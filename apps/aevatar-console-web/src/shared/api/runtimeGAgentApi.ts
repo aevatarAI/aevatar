@@ -72,16 +72,8 @@ function decodeGAgentActorGroup(
 }
 
 function decodeGAgentActorGroupsResponse(value: unknown): RuntimeGAgentActorGroup[] {
-  if (Array.isArray(value)) {
-    return expectArray(
-      value,
-      "RuntimeGAgentActorGroup[]",
-      decodeGAgentActorGroup
-    );
-  }
-
   const record = expectRecord(value, "RuntimeGAgentActorSnapshot");
-  const groups = record.groups ?? record.Groups;
+  const groups = record.groups;
   return expectArray(
     groups,
     "RuntimeGAgentActorSnapshot.groups",

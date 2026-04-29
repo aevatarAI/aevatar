@@ -178,6 +178,55 @@ public class FileEventStoreTests
         }
     }
 
+    [Fact]
+    public async Task ResetStreamAsync_ShouldDeleteStreamFileAndResetVersion()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var store = new FileEventStore(new FileEventStoreOptions { RootDirectory = root });
+            await store.AppendAsync("agent-1",
+            [
+                new StateEvent
+                {
+                    EventId = "e1",
+                    Timestamp = TimestampHelper.Now(),
+                    Version = 1,
+                    EventType = "evt",
+                    AgentId = "agent-1",
+                },
+            ],
+            expectedVersion: 0);
+
+            var reset = await store.ResetStreamAsync("agent-1");
+
+            reset.ShouldBeTrue();
+            (await store.GetVersionAsync("agent-1")).ShouldBe(0);
+            (await store.GetEventsAsync("agent-1")).ShouldBeEmpty();
+
+            await store.AppendAsync("agent-1",
+            [
+                new StateEvent
+                {
+                    EventId = "e2",
+                    Timestamp = TimestampHelper.Now(),
+                    Version = 1,
+                    EventType = "evt",
+                    AgentId = "agent-1",
+                },
+            ],
+            expectedVersion: 0);
+
+            var store2 = new FileEventStore(new FileEventStoreOptions { RootDirectory = root });
+            (await store2.GetVersionAsync("agent-1")).ShouldBe(1);
+            (await store2.GetEventsAsync("agent-1")).ShouldHaveSingleItem().EventId.ShouldBe("e2");
+        }
+        finally
+        {
+            SafeDelete(root);
+        }
+    }
+
     private static string CreateTempRoot() =>
         Path.Combine(Path.GetTempPath(), "aevatar-eventstore-tests", Guid.NewGuid().ToString("N"));
 
