@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.GAgents.StreamingProxy.Application.Rooms;
 using Aevatar.Hosting;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
@@ -50,64 +51,30 @@ public static class StreamingProxyEndpoints
         HttpContext http,
         string scopeId,
         [FromBody] CreateRoomRequest? request,
-        [FromServices] IGAgentActorRegistryCommandPort registryCommandPort,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] ILoggerFactory loggerFactory,
+        [FromServices] IStreamingProxyRoomCommandService roomCommandService,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return denied;
 
-        var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
-        var roomName = request?.RoomName?.Trim();
-        if (string.IsNullOrWhiteSpace(roomName))
-            roomName = "Group Chat";
+        var result = await roomCommandService.CreateRoomAsync(
+            new StreamingProxyRoomCreateCommand(scopeId, request?.RoomName),
+            ct);
 
-        var roomId = StreamingProxyDefaults.GenerateRoomId();
-        var targetCreated = false;
-        try
+        return result.Status switch
         {
-            var actor = await actorRuntime.CreateAsync<StreamingProxyGAgent>(roomId, ct);
-            targetCreated = true;
-
-            var initEvent = new GroupChatRoomInitializedEvent { RoomName = roomName };
-            var envelope = new EventEnvelope
+            StreamingProxyRoomCreateStatus.Created => Results.Ok(new
             {
-                Id = Guid.NewGuid().ToString("N"),
-                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                Payload = Any.Pack(initEvent),
-                Route = new EnvelopeRoute { Direct = new DirectRoute { TargetActorId = actor.Id } },
-            };
-            await actor.HandleEventAsync(envelope, ct);
-
-            var receipt = await registryCommandPort.RegisterActorAsync(
-                new GAgentActorRegistration(scopeId, StreamingProxyDefaults.GAgentTypeName, roomId),
-                ct);
-            if (!receipt.IsAdmissionVisible)
-            {
-                await TryRollbackRoomCreationAsync(scopeId, roomId, registryCommandPort, actorRuntime, logger);
-                return Results.Json(
-                    new { error = "Failed to create room" },
-                    statusCode: StatusCodes.Status503ServiceUnavailable);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            if (targetCreated)
-                await TryRollbackRoomCreationAsync(scopeId, roomId, registryCommandPort, actorRuntime, logger);
-            throw;
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Failed to create room {RoomId}", roomId);
-            if (targetCreated)
-                await TryRollbackRoomCreationAsync(scopeId, roomId, registryCommandPort, actorRuntime, logger);
-            return Results.Json(
+                roomId = result.RoomId,
+                roomName = result.RoomName,
+            }),
+            StreamingProxyRoomCreateStatus.AdmissionUnavailable => Results.Json(
                 new { error = "Failed to create room" },
-                statusCode: StatusCodes.Status500InternalServerError);
-        }
-
-        return Results.Ok(new { roomId, roomName });
+                statusCode: StatusCodes.Status503ServiceUnavailable),
+            _ => Results.Json(
+                new { error = "Failed to create room" },
+                statusCode: StatusCodes.Status500InternalServerError),
+        };
     }
 
     private static async Task<IResult> HandleListRoomsAsync(
@@ -935,38 +902,6 @@ public static class StreamingProxyEndpoints
         }
 
         return false;
-    }
-
-    private static async Task TryRollbackRoomCreationAsync(
-        string scopeId,
-        string roomId,
-        IGAgentActorRegistryCommandPort registryCommandPort,
-        IActorRuntime actorRuntime,
-        ILogger logger)
-    {
-        try
-        {
-            await registryCommandPort.UnregisterActorAsync(
-                new GAgentActorRegistration(
-                    scopeId,
-                    StreamingProxyDefaults.GAgentTypeName,
-                    roomId),
-                CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Failed to unregister room {RoomId} from registry during rollback", roomId);
-            return;
-        }
-
-        try
-        {
-            await actorRuntime.DestroyAsync(roomId, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Failed to destroy room actor {RoomId} during rollback", roomId);
-        }
     }
 
     private static async Task<IResult?> AuthorizeRoomAsync(
