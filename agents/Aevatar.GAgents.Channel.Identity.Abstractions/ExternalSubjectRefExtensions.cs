@@ -24,7 +24,7 @@ public static class ExternalSubjectRefExtensions
     {
         ArgumentNullException.ThrowIfNull(externalSubject);
         EnsureValid(externalSubject);
-        return $"{ActorIdPrefix}:{externalSubject.Platform}:{externalSubject.Tenant}:{externalSubject.ExternalUserId}";
+        return $"{ActorIdPrefix}:{externalSubject.Platform}:{externalSubject.Tenant ?? string.Empty}:{externalSubject.ExternalUserId}";
     }
 
     /// <summary>
@@ -39,8 +39,13 @@ public static class ExternalSubjectRefExtensions
         if (string.IsNullOrWhiteSpace(externalSubject.ExternalUserId))
             throw new ArgumentException("ExternalSubjectRef.external_user_id is required.", nameof(externalSubject));
 
+        // Tenant is allowed to be null/empty (some platforms have no tenant
+        // scope) but the colon-separator invariant still applies when set.
+        // Coalesce defensively so manually-constructed protos with a null
+        // Tenant don't NRE here.
+        var tenant = externalSubject.Tenant ?? string.Empty;
         if (externalSubject.Platform.Contains(':', StringComparison.Ordinal)
-            || externalSubject.Tenant.Contains(':', StringComparison.Ordinal)
+            || tenant.Contains(':', StringComparison.Ordinal)
             || externalSubject.ExternalUserId.Contains(':', StringComparison.Ordinal))
         {
             throw new ArgumentException(

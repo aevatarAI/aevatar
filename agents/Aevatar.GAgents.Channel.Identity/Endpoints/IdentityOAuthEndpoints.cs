@@ -34,6 +34,12 @@ public static class IdentityOAuthEndpoints
 {
     private static readonly TimeSpan ProjectionWaitTimeout = TimeSpan.FromSeconds(3);
 
+    // Webhook payloads from NyxID's CAE channel are small structured JSON
+    // notifications; cap the read so a malicious or misconfigured caller
+    // cannot exhaust memory by streaming an unbounded body. (deepseek-v4-pro
+    // L219 security)
+    private const int MaxWebhookBodyBytes = 64 * 1024;
+
     public static IEndpointRouteBuilder MapIdentityOAuthEndpoints(this IEndpointRouteBuilder app)
     {
         ArgumentNullException.ThrowIfNull(app);
@@ -56,6 +62,7 @@ public static class IdentityOAuthEndpoints
         [FromQuery] string? state,
         [FromQuery] string? error,
         [FromServices] INyxIdBrokerCallbackClient brokerCallback,
+        [FromServices] IExternalIdentityBindingQueryPort queryPort,
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] IProjectionReadinessPort projectionReadiness,
         [FromServices] ILoggerFactory loggerFactory,
@@ -105,7 +112,32 @@ public static class IdentityOAuthEndpoints
         }
 
         var actorId = subject.ToActorId();
-        var actor = await actorRuntime.CreateAsync<ExternalIdentityBindingGAgent>(actorId, ct).ConfigureAwait(false);
+
+        // Concurrent /init protection at the callback layer: if the subject
+        // is already bound, the freshly-issued binding_id we just got from
+        // NyxID is an orphan. Best-effort revoke at NyxID before responding
+        // so the orphan does not accumulate. (codex L68 MAJOR — actor-side
+        // also discards the duplicate; this layer cleans up the remote.)
+        if (await queryPort.ResolveAsync(subject, ct).ConfigureAwait(false) is not null)
+        {
+            await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+            return Results.Ok(new
+            {
+                status = "already_bound",
+                detail = "已绑定 NyxID 账号,可以回到 Lark 继续对话",
+            });
+        }
+
+        var actor = await TryActivateActorAsync(actorRuntime, actorId, logger, ct).ConfigureAwait(false);
+        if (actor is null)
+        {
+            await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+            return Results.Json(new
+            {
+                error = "actor_activation_failed",
+                detail = "NyxID 绑定失败,稍后重试 /init",
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
         var commitEnvelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
@@ -192,6 +224,48 @@ public static class IdentityOAuthEndpoints
         return null;
     }
 
+    private static async Task<Aevatar.Foundation.Abstractions.IActor?> TryActivateActorAsync(
+        IActorRuntime runtime,
+        string actorId,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await runtime.CreateAsync<ExternalIdentityBindingGAgent>(actorId, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to activate ExternalIdentityBindingGAgent for actor={ActorId}", actorId);
+            return null;
+        }
+    }
+
+    private static async Task TryRevokeOrphanBindingAsync(
+        INyxIdBrokerCallbackClient broker,
+        string bindingId,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        if (broker is not Aevatar.GAgents.Channel.Identity.Broker.NyxIdRemoteCapabilityBroker remote)
+        {
+            logger.LogDebug("Skipping orphan binding revoke: broker callback client is not the production broker");
+            return;
+        }
+
+        try
+        {
+            await remote.RevokeBindingByIdAsync(bindingId, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Best-effort cleanup; do not block the user response. NyxID's
+            // own reaper is expected to clear stale bindings (per ADR-0017
+            // §Implementation Notes #2).
+            logger.LogWarning(ex, "Best-effort revoke of orphan binding {BindingId} failed", bindingId);
+        }
+    }
+
     private static byte[] Base64UrlDecode(string value)
     {
         var padded = value.Replace('-', '+').Replace('_', '/');
@@ -217,7 +291,22 @@ public static class IdentityOAuthEndpoints
         byte[] bodyBytes;
         await using (var ms = new MemoryStream())
         {
-            await http.Request.Body.CopyToAsync(ms, ct).ConfigureAwait(false);
+            // Cap the read at MaxWebhookBodyBytes so a misconfigured caller
+            // cannot exhaust memory (deepseek-v4-pro L219 security). Reject
+            // anything larger as malformed — CAE webhook payloads are small.
+            var buffer = new byte[8 * 1024];
+            int read;
+            while ((read = await http.Request.Body.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+            {
+                if (ms.Length + read > MaxWebhookBodyBytes)
+                {
+                    logger.LogWarning(
+                        "Broker revocation webhook body exceeds {MaxBytes} bytes; rejecting",
+                        MaxWebhookBodyBytes);
+                    return Results.BadRequest(new { error = "body_too_large" });
+                }
+                await ms.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+            }
             bodyBytes = ms.ToArray();
         }
 
@@ -238,24 +327,38 @@ public static class IdentityOAuthEndpoints
         }
 
         var actorId = notification.ExternalSubject.ToActorId();
-        var actor = await actorRuntime.CreateAsync<ExternalIdentityBindingGAgent>(actorId, ct).ConfigureAwait(false);
-        var revokeEnvelope = new EventEnvelope
+        try
         {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(new RevokeBindingCommand
+            var actor = await actorRuntime.CreateAsync<ExternalIdentityBindingGAgent>(actorId, ct).ConfigureAwait(false);
+            var revokeEnvelope = new EventEnvelope
             {
-                ExternalSubject = notification.ExternalSubject.Clone(),
-                Reason = string.IsNullOrWhiteSpace(notification.Reason)
-                    ? "nyxid_cae_revocation"
-                    : notification.Reason,
-            }),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actorId },
-            },
-        };
-        await actor.HandleEventAsync(revokeEnvelope, ct).ConfigureAwait(false);
+                Id = Guid.NewGuid().ToString("N"),
+                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                Payload = Any.Pack(new RevokeBindingCommand
+                {
+                    ExternalSubject = notification.ExternalSubject.Clone(),
+                    Reason = string.IsNullOrWhiteSpace(notification.Reason)
+                        ? "nyxid_cae_revocation"
+                        : notification.Reason,
+                }),
+                Route = new EnvelopeRoute
+                {
+                    Direct = new DirectRoute { TargetActorId = actorId },
+                },
+            };
+            await actor.HandleEventAsync(revokeEnvelope, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Don't leak actor / runtime exception details into the webhook
+            // response that NyxID will surface in its logs (mimo-v2.5-pro L194).
+            // Log internally and return a generic 500 so NyxID can retry per
+            // its CAE retry policy.
+            logger.LogError(ex, "Failed to event-source CAE revocation for actor={ActorId}", actorId);
+            return Results.Problem(
+                statusCode: StatusCodes.Status500InternalServerError,
+                title: "Failed to process broker revocation notification.");
+        }
 
         logger.LogInformation(
             "Revoked external identity binding via NyxID CAE: {Platform}:{Tenant}:{User}",

@@ -24,7 +24,14 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
     public const string TokenExchangeGrantType = "urn:ietf:params:oauth:grant-type:token-exchange";
     public const string BindingIdSubjectTokenType = "urn:nyxid:params:oauth:token-type:binding-id";
 
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    // NyxID returns OAuth-standard snake_case fields (`access_token`,
+    // `binding_id`, `id_token`, `expires_in`, `token_type`, `scope`).
+    // JsonSerializerDefaults.Web maps PascalCase->camelCase, which silently
+    // drops every field — so explicit snake_case naming is required (codex L346).
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+    };
 
     private readonly HttpClient _http;
     private readonly NyxIdBrokerOptions _options;

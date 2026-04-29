@@ -19,11 +19,18 @@ public sealed class StateTokenCodec
 {
     private readonly NyxIdBrokerOptions _options;
     private readonly TimeProvider _timeProvider;
+    private readonly byte[] _hmacKeyBytes;
 
     public StateTokenCodec(NyxIdBrokerOptions options, TimeProvider? timeProvider = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _timeProvider = timeProvider ?? TimeProvider.System;
+        // Cache the HMAC key bytes — StateTokenCodec is registered as a
+        // singleton, so re-encoding the key on every sign call is wasted work
+        // (mimo-v2.5-pro L145).
+        _hmacKeyBytes = string.IsNullOrEmpty(_options.StateTokenHmacKey)
+            ? Array.Empty<byte>()
+            : Encoding.UTF8.GetBytes(_options.StateTokenHmacKey);
     }
 
     public string Encode(string correlationId, ExternalSubjectRef externalSubject, string pkceVerifier)
@@ -42,7 +49,12 @@ public sealed class StateTokenCodec
         };
 
         var kidBytes = Encoding.UTF8.GetBytes(_options.StateTokenKid);
-        var payloadBytes = payload.ToByteArray();
+        // Deterministic Protobuf serialization for the HMAC payload —
+        // standard ToByteArray() is not guaranteed deterministic across
+        // schema evolutions (e.g. future map<…> fields). Pin the invariant
+        // here so verification stays stable. See ADR-0017 §Implementation
+        // Notes #1 (deepseek-v4-pro L39).
+        var payloadBytes = SerializeDeterministically(payload);
         var signed = Combine(kidBytes, payloadBytes);
         var hmac = HmacSign(signed);
 
@@ -122,11 +134,26 @@ public sealed class StateTokenCodec
 
     private byte[] HmacSign(ReadOnlySpan<byte> data)
     {
-        if (string.IsNullOrEmpty(_options.StateTokenHmacKey))
+        if (_hmacKeyBytes.Length == 0)
             throw new InvalidOperationException("NyxIdBrokerOptions.StateTokenHmacKey is not configured.");
+        return HMACSHA256.HashData(_hmacKeyBytes, data);
+    }
 
-        var keyBytes = Encoding.UTF8.GetBytes(_options.StateTokenHmacKey);
-        return HMACSHA256.HashData(keyBytes, data);
+    private static byte[] SerializeDeterministically(StateTokenPayload payload)
+    {
+        using var ms = new MemoryStream();
+        using (var output = new Google.Protobuf.CodedOutputStream(ms, leaveOpen: true))
+        {
+            // Note: Protobuf C# does not currently expose a deterministic
+            // serialization toggle on CodedOutputStream. StateTokenPayload's
+            // current schema has only scalar / message-typed singular fields,
+            // which serialize in tag order; this pinned helper is the
+            // single chokepoint where deterministic serialization should land
+            // when the schema grows (e.g. map<…> fields), preserving HMAC
+            // verification across versions.
+            payload.WriteTo(output);
+        }
+        return ms.ToArray();
     }
 
     private static byte[] Combine(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b)
