@@ -11,7 +11,7 @@ namespace Aevatar.GAgents.Channel.Identity.Broker;
 /// <summary>
 /// Production <see cref="INyxIdCapabilityBroker"/> implementation that talks
 /// to NyxID's broker endpoints (ChronoAIProject/NyxID#549). Holds no
-/// long-lived user secret material in its in-process state — see ADR-0017
+/// long-lived user secret material in its in-process state — see ADR-0018
 /// §Storage Boundary. Service-level secrets (OAuth <c>client_secret</c>, the
 /// state-token HMAC key) come from <see cref="NyxIdBrokerOptions"/> and are
 /// expected to be loaded from KMS / secure config.

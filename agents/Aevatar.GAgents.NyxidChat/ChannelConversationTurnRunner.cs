@@ -73,7 +73,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         // Pre-LLM binding gate: when broker mode is wired, an unbound sender
         // MUST be prompted to /init rather than served by the bot owner's
-        // credentials (codex L65 security: ADR-0017 §Decision "未绑定 sender
+        // credentials (codex L65 security: ADR-0018 §Decision "未绑定 sender
         // 一律强制 /init,不回落到 bot owner"). Falls through transparently
         // when identity ports are not registered (legacy bot-owner-shared
         // deployments).
@@ -117,7 +117,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
     // ─── Identity slash commands (/init, /unbind) ───
     //
-    // ADR-0017 §Decision: when per-user binding is enabled, /init and /unbind
+    // ADR-0018 §Decision: when per-user binding is enabled, /init and /unbind
     // are routed before the LLM so the bot owner's bot-shared mode is bypassed
     // for unbound senders. Identity ports are resolved lazily through the
     // service provider so deployments that have not enabled binding fall
@@ -158,7 +158,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
 
         // Tenant resolution priority (avoids cross-tenant identity collapse on
-        // multi-tenant platforms like Lark — see ADR-0017 §Actor Architecture):
+        // multi-tenant platforms like Lark — see ADR-0018 §Actor Architecture):
         //   1. Platform adapter populated `tenant` / `open_tenant_id` in
         //      InboundMessage.Extra. Preferred — adapter knows its own scope.
         //   2. Fall back to `registration.ScopeId` so the binding is at least
@@ -197,7 +197,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 }
                 else if (!IsPrivateChat(inbound))
                 {
-                    // ADR-0017 §Decision: authorize URL only via private DM.
+                    // ADR-0018 §Decision: authorize URL only via private DM.
                     // Returning the URL in a group chat would expose the
                     // sealed `state` token to all participants, enabling the
                     // OAuth state-hijack scenario the ADR explicitly forbids
@@ -220,7 +220,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 }
                 else
                 {
-                    // 1) Revoke at NyxID (source of truth — see ADR-0017
+                    // 1) Revoke at NyxID (source of truth — see ADR-0018
                     //    §Decision /unbind behaviour).
                     await broker.RevokeBindingAsync(subject, ct);
 
@@ -253,7 +253,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     }
 
     // Pre-LLM binding gate: when identity is wired, refuse to serve unbound
-    // senders with the bot owner's credentials (ADR-0017 §Decision). Returns
+    // senders with the bot owner's credentials (ADR-0018 §Decision). Returns
     // null when binding is not enabled OR sender is bound — both cases let
     // the existing flow continue.
     private async Task<ConversationTurnResult?> TryEnforceBindingGateAsync(

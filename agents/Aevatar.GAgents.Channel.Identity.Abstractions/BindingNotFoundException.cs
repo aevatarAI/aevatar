@@ -14,7 +14,7 @@ namespace Aevatar.GAgents.Channel.Identity.Abstractions;
 /// <list type="bullet">
 ///   <item>Outbound / turn path: prompt the sender to run <c>/init</c>.</item>
 ///   <item>Do NOT fall back to bot-owner credentials or any cached token
-///   (ADR-0017 §Implementation Notes #4).</item>
+///   (ADR-0018 §Implementation Notes #4).</item>
 /// </list>
 /// </remarks>
 public sealed class BindingNotFoundException : Exception

@@ -7,7 +7,7 @@ namespace Aevatar.GAgents.Channel.Identity.Broker;
 /// binding flow. Distinct from <c>INyxIdCapabilityBroker</c> (which is the
 /// per-turn write-side seam used by <c>ChannelConversationTurnRunner</c>);
 /// the callback handler depends on this narrower contract so the seam is
-/// obvious in the dependency graph. See ADR-0017 §Decision (`/init` flow).
+/// obvious in the dependency graph. See ADR-0018 §Decision (`/init` flow).
 /// </summary>
 public interface INyxIdBrokerCallbackClient
 {
@@ -16,7 +16,7 @@ public interface INyxIdBrokerCallbackClient
     /// <c>true</c> with the carried correlation/subject/verifier when the
     /// HMAC + expiry are valid; otherwise <c>false</c> with an
     /// <paramref name="errorCode"/> identifying the failure mode (see
-    /// ADR-0017 §Implementation Notes #3 for the user-facing UX classes:
+    /// ADR-0018 §Implementation Notes #3 for the user-facing UX classes:
     /// <c>state_expired</c>, <c>state_signature_invalid</c>,
     /// <c>state_payload_invalid</c>, <c>state_malformed</c>,
     /// <c>state_kid_unknown</c>, <c>state_missing</c>).
@@ -46,7 +46,7 @@ public interface INyxIdBrokerCallbackClient
 /// is the opaque handle the broker hands back to aevatar; <see cref="IdToken"/>
 /// is the OIDC ID token (carries the <c>sub</c>/<c>name</c> claims so the
 /// callback handler can render an "已绑定 &lt;name&gt;" message without a
-/// separate <c>/oauth/userinfo</c> round-trip — see ADR-0017 §Decision).
+/// separate <c>/oauth/userinfo</c> round-trip — see ADR-0018 §Decision).
 /// Both tokens are one-shot; the callback handler MUST NOT persist them.
 /// </summary>
 public sealed record BrokerAuthorizationCodeResult(string BindingId, string? IdToken, string? AccessToken);

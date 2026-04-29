@@ -9,14 +9,14 @@ import "channel_contracts.proto";
 
 // Per-(platform, tenant, external_user_id) actor state holding the opaque
 // NyxID-side binding pointer. Holds NO refresh_token or any user secret —
-// see ADR-0017 §Storage Boundary. binding_id is empty when no active binding;
+// see ADR-0018 §Storage Boundary. binding_id is empty when no active binding;
 // revoked_at is set when the most recent binding was revoked.
 message ExternalIdentityBindingState {
   // Redundant with the actor's deterministic key derived from the same triple
   // via ExternalSubjectRefExtensions.ToActorId. Kept here for projection
   // ergonomics so the readmodel does not need to parse the actor id back into
   // a typed ExternalSubjectRef. ApplyBound only sets this on the first bind
-  // and never overwrites it (ADR-0017 L58 review: actor identity invariant).
+  // and never overwrites it (ADR-0018 L58 review: actor identity invariant).
   aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;
   // Opaque pointer issued by NyxID broker. Empty when no active binding
   // (initial state, or after revoke). Source of truth lives in NyxID.
@@ -28,7 +28,7 @@ message ExternalIdentityBindingState {
 // Issued by the OAuth callback handler after exchanging the authorization code
 // for a binding_id. Idempotent at the actor: discarded when state already
 // holds an active binding_id (concurrent /init protection,
-// ADR-0017 §Implementation Notes #2).
+// ADR-0018 §Implementation Notes #2).
 message CommitBindingCommand {
   aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;
   string binding_id = 2;
@@ -60,7 +60,7 @@ message ExternalIdentityBindingRevokedEvent {
 
 // Stateless OAuth `state` token payload (HMAC-sealed, never in grain state).
 // Carries the correlation id, the originating external subject, the PKCE
-// verifier, and the absolute expiry. See ADR-0017 §Implementation Notes #1.
+// verifier, and the absolute expiry. See ADR-0018 §Implementation Notes #1.
 message StateTokenPayload {
   string correlation_id = 1;
   aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 2;

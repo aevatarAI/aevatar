@@ -6,7 +6,7 @@ namespace Aevatar.GAgents.Channel.Identity.Abstractions;
 /// Read-side port for resolving an external subject to its active binding.
 /// Reads the projection (current-state readmodel) only — no event-store replay,
 /// no actor state mirror, no query-time priming (CLAUDE.md).
-/// See ADR-0017 §Projection Readiness.
+/// See ADR-0018 §Projection Readiness.
 /// </summary>
 public interface IExternalIdentityBindingQueryPort
 {

@@ -5,13 +5,13 @@ package aevatar.gagents.channel.identity.abstractions;
 option csharp_namespace = "Aevatar.GAgents.Channel.Identity.Abstractions";
 
 // ExternalSubjectRef lives in Channel.Abstractions (channel_contracts.proto)
-// because Identity is a consumer of channel concepts — see ADR-0017 §Actor
+// because Identity is a consumer of channel concepts — see ADR-0018 §Actor
 // Architecture. C# callers reach it via the `Aevatar.GAgents.Channel.Abstractions`
 // namespace; proto files reach it via `aevatar.gagents.channel.abstractions.ExternalSubjectRef`.
 
 // Opaque pointer issued by NyxID broker on successful binding completion.
 // aevatar holds binding_id in ExternalIdentityBindingGAgent state; the
-// underlying refresh_token never leaves NyxID. See ADR-0017 §Storage Boundary.
+// underlying refresh_token never leaves NyxID. See ADR-0018 §Storage Boundary.
 message BindingId {
   // Opaque identifier. Format owned by NyxID#549 (suggested prefix "bnd_").
   string value = 1;
@@ -28,7 +28,7 @@ message CapabilityScope {
 
 // Short-lived access token + expiry returned by IssueShortLivedAsync.
 // Lives only in per-turn AsyncLocal context (see AgentToolRequestContext);
-// never persisted. See ADR-0017 §Storage Boundary.
+// never persisted. See ADR-0018 §Storage Boundary.
 message CapabilityHandle {
   // Bearer access token for downstream LLM / tool calls.
   string access_token = 1;

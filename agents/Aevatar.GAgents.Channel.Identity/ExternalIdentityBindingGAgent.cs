@@ -13,8 +13,8 @@ namespace Aevatar.GAgents.Channel.Identity;
 /// Per-(platform, tenant, external_user_id) actor that holds the opaque NyxID
 /// binding pointer for one external chat-platform user. Single-threaded
 /// commit-time idempotency rejects concurrent /init callbacks for the same
-/// external subject (ADR-0017 §Implementation Notes #2). State holds no
-/// refresh_token or any user secret material (ADR-0017 §Storage Boundary).
+/// external subject (ADR-0018 §Implementation Notes #2). State holds no
+/// refresh_token or any user secret material (ADR-0018 §Storage Boundary).
 /// </summary>
 public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalIdentityBindingState>
 {
@@ -46,7 +46,7 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
     /// <summary>
     /// Commits a binding from NyxID's authorization-code exchange. Idempotent:
     /// when state already holds an active binding_id, the command is discarded
-    /// (concurrent /init protection — see ADR-0017 §Implementation Notes #2).
+    /// (concurrent /init protection — see ADR-0018 §Implementation Notes #2).
     /// The orphan binding on the NyxID side is left for NyxID's own reaper.
     /// </summary>
     /// <remarks>
@@ -140,11 +140,19 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
 
         var revokedBindingId = State.BindingId;
 
+        // Use the explicit "unspecified" sentinel so the persisted audit
+        // trail distinguishes "caller did not supply a reason" from a
+        // missing/empty value. The event Reason field is non-nullable in
+        // proto3 (defaults to ""), so the sentinel substitution lives at
+        // the boundary here rather than relying on per-call interpretation
+        // (kimi-k2p6 L109 / L124 5/5 consensus).
+        var reason = string.IsNullOrWhiteSpace(cmd.Reason) ? "unspecified" : cmd.Reason;
+
         await PersistDomainEventAsync(new ExternalIdentityBindingRevokedEvent
         {
             ExternalSubject = cmd.ExternalSubject.Clone(),
             RevokedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Reason = cmd.Reason ?? string.Empty,
+            Reason = reason,
         });
 
         Logger.LogInformation(
@@ -153,7 +161,7 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
             cmd.ExternalSubject.Tenant,
             cmd.ExternalSubject.ExternalUserId,
             revokedBindingId,
-            string.IsNullOrEmpty(cmd.Reason) ? "unspecified" : cmd.Reason);
+            reason);
     }
 
     // ─── Identity guard ───
@@ -187,7 +195,7 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
     {
         var next = current.Clone();
         // ExternalSubject is an actor-identity invariant — set once on the
-        // first bind and never overwritten by subsequent events. ADR-0017 L58
+        // first bind and never overwritten by subsequent events. ADR-0018 L58
         // review: an event with a mismatched subject should not silently
         // rewrite the actor's identity field.
         next.ExternalSubject ??= evt.ExternalSubject?.Clone();

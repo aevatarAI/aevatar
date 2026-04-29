@@ -13,7 +13,7 @@ namespace Aevatar.GAgents.Channel.Identity.Broker;
 /// subject, the PKCE code verifier, and an absolute expiry (UNIX seconds).
 /// Token shape: <c>base64url(kid) "." base64url(payload_proto) "." base64url(hmac)</c>.
 /// HMAC is over the literal bytes <c>kid_bytes "." payload_proto_bytes</c>
-/// — see ADR-0017 §Implementation Notes #1.
+/// — see ADR-0018 §Implementation Notes #1.
 /// </summary>
 public sealed class StateTokenCodec
 {
@@ -60,7 +60,7 @@ public sealed class StateTokenCodec
         // Deterministic Protobuf serialization for the HMAC payload —
         // standard ToByteArray() is not guaranteed deterministic across
         // schema evolutions (e.g. future map<…> fields). Pin the invariant
-        // here so verification stays stable. See ADR-0017 §Implementation
+        // here so verification stays stable. See ADR-0018 §Implementation
         // Notes #1 (deepseek-v4-pro L39).
         var payloadBytes = SerializeDeterministically(payload);
         var signed = Combine(kidBytes, payloadBytes);
@@ -104,7 +104,7 @@ public sealed class StateTokenCodec
 
         // Verify the kid matches an accepted version. Today we only accept the
         // current key; rotation can extend this to also accept the previous kid
-        // during a grace window — see ADR-0017 §Implementation Notes #1.
+        // during a grace window — see ADR-0018 §Implementation Notes #1.
         var presentedKid = Encoding.UTF8.GetString(kidBytes);
         if (!string.Equals(presentedKid, _options.StateTokenKid, StringComparison.Ordinal))
         {

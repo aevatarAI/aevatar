@@ -3,7 +3,7 @@ namespace Aevatar.GAgents.Channel.Identity.Broker;
 /// <summary>
 /// Configuration for <see cref="NyxIdRemoteCapabilityBroker"/>: NyxID base URL,
 /// OAuth client credentials, redirect URI, and the HMAC key used to seal the
-/// stateless OAuth <c>state</c> token. ADR-0017 §Implementation Notes #1
+/// stateless OAuth <c>state</c> token. ADR-0018 §Implementation Notes #1
 /// requires the HMAC key to live behind KMS / config (basal infrastructure
 /// secret), not in grain state. Keep the secret-bearing fields out of logs.
 /// </summary>
@@ -45,7 +45,7 @@ public sealed class NyxIdBrokerOptions
     /// HMAC secret key used by <see cref="StateTokenCodec"/> to seal the
     /// stateless <c>state</c> token. PKCE verifier travels inside this token
     /// (never in grain state). Rotate by adding a new key version while
-    /// accepting the old one for the rotation grace period (ADR-0017
+    /// accepting the old one for the rotation grace period (ADR-0018
     /// §Implementation Notes #1: grace > <c>exp</c>, e.g. ≥ 10 minutes).
     /// </summary>
     public string StateTokenHmacKey { get; set; } = string.Empty;
@@ -60,7 +60,7 @@ public sealed class NyxIdBrokerOptions
     /// <summary>
     /// Lifetime of the stateless <c>state</c> token. Bounds how long a user
     /// can sit on the OAuth authorize URL before completing login. Maximum
-    /// 5 minutes per ADR-0017 §Implementation Notes #1.
+    /// 5 minutes per ADR-0018 §Implementation Notes #1.
     /// </summary>
     public TimeSpan StateTokenLifetime { get; set; } = TimeSpan.FromMinutes(5);
 }

@@ -16,7 +16,7 @@ public sealed partial class AuthContext
     /// <summary>
     /// Creates one delegated user auth context (legacy per-bot credential
     /// reference). Broker-mode callers should use
-    /// <see cref="OnBehalfOfExternalSubject"/> instead — see ADR-0017
+    /// <see cref="OnBehalfOfExternalSubject"/> instead — see ADR-0018
     /// §Outbound Send.
     /// </summary>
     public static AuthContext OnBehalfOfUser(string userCredentialRef, string onBehalfOfUserId) => new()

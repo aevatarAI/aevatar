@@ -10,7 +10,7 @@ namespace Aevatar.GAgents.Channel.Identity.Abstractions;
 /// through that port for reads so the read/write seams stay distinct.
 /// Production implementation issues no long-lived user secret material into
 /// aevatar grain state; aevatar holds only the opaque <see cref="BindingId"/>.
-/// See ADR-0017 §INyxIdCapabilityBroker.
+/// See ADR-0018 §INyxIdCapabilityBroker.
 /// </summary>
 public interface INyxIdCapabilityBroker
 {
@@ -27,7 +27,7 @@ public interface INyxIdCapabilityBroker
     /// <summary>
     /// Revokes the binding both at NyxID (source of truth) and locally.
     /// NyxID failures abort the local revoke to avoid source-of-truth divergence
-    /// — see ADR-0017 §Decision (`/unbind` behaviour).
+    /// — see ADR-0018 §Decision (`/unbind` behaviour).
     /// </summary>
     Task RevokeBindingAsync(
         ExternalSubjectRef externalSubject,

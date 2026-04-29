@@ -8,7 +8,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 /// <summary>
 /// Behaviour pinning for <see cref="InMemoryCapabilityBroker"/> so the test
 /// fake stays a faithful stand-in for the production broker contract pinned
-/// in ADR-0017 §INyxIdCapabilityBroker.
+/// in ADR-0018 §INyxIdCapabilityBroker.
 /// </summary>
 public class InMemoryCapabilityBrokerTests
 {
@@ -37,7 +37,7 @@ public class InMemoryCapabilityBrokerTests
         fake.SeedBinding(subject, new BindingId { Value = "bnd_x" });
 
         // Read through the query-port seam — broker no longer exposes a
-        // resolve method (ADR-0017 §INyxIdCapabilityBroker is write-only).
+        // resolve method (ADR-0018 §INyxIdCapabilityBroker is write-only).
         IExternalIdentityBindingQueryPort port = fake;
         var result = await port.ResolveAsync(subject);
 

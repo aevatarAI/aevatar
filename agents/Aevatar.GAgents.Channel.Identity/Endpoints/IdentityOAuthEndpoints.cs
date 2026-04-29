@@ -26,7 +26,7 @@ namespace Aevatar.GAgents.Channel.Identity.Endpoints;
 ///   <item>
 ///     <c>POST /api/webhooks/nyxid-broker-revocation</c> — receives NyxID's
 ///     Continuous Access Evaluation webhook on user-side revoke and
-///     event-sources the local binding actor revoke (see ADR-0017 §Decision).
+///     event-sources the local binding actor revoke (see ADR-0018 §Decision).
 ///   </item>
 /// </list>
 /// </summary>
@@ -164,7 +164,7 @@ public static class IdentityOAuthEndpoints
         {
             // Binding has been written to the actor's event store; the
             // readmodel is still propagating. Tell the user to wait a moment
-            // and resend rather than block longer (ADR-0017 §Implementation
+            // and resend rather than block longer (ADR-0018 §Implementation
             // Notes #3).
             logger.LogWarning(
                 "Projection readiness timed out for actor={ActorId}, expected binding={BindingId}; binding is committed but readmodel is lagging",
@@ -260,7 +260,7 @@ public static class IdentityOAuthEndpoints
         catch (Exception ex)
         {
             // Best-effort cleanup; do not block the user response. NyxID's
-            // own reaper is expected to clear stale bindings (per ADR-0017
+            // own reaper is expected to clear stale bindings (per ADR-0018
             // §Implementation Notes #2).
             logger.LogWarning(ex, "Best-effort revoke of orphan binding {BindingId} failed", bindingId);
         }

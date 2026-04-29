@@ -14,7 +14,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 /// <summary>
 /// Behavior tests for <see cref="ExternalIdentityBindingGAgent"/>: state
 /// transitions, idempotent commit under concurrent /init, and revoke as
-/// no-op when no binding exists. Pinned by ADR-0017 §Implementation Notes #2.
+/// no-op when no binding exists. Pinned by ADR-0018 §Implementation Notes #2.
 ///
 /// FOLLOW-UP: most tests instantiate the agent directly with a hand-rolled
 /// <c>IEventStore</c> + <c>IEventSourcingBehaviorFactory</c>. This pins the
@@ -98,7 +98,7 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
 
         // Second concurrent /init wins the race after the first one already
         // committed. The actor MUST keep the existing binding_id and discard
-        // the second one (ADR-0017 §Implementation Notes #2).
+        // the second one (ADR-0018 §Implementation Notes #2).
         await _agent.HandleCommitBinding(new CommitBindingCommand
         {
             ExternalSubject = subject,

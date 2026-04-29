@@ -13,7 +13,7 @@ namespace Aevatar.GAgents.Channel.Identity.DependencyInjection;
 /// <see cref="ExternalIdentityBindingGAgent"/> projection chain and the
 /// production NyxID broker client. Slash-command routing in the turn runner
 /// and the OAuth callback / CAE-webhook endpoints layer on top in their own
-/// composition roots. See ADR-0017 §Dependencies.
+/// composition roots. See ADR-0018 §Dependencies.
 /// </summary>
 public static class IdentityServiceCollectionExtensions
 {

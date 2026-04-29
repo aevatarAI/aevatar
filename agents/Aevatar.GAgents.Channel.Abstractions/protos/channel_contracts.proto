@@ -133,7 +133,7 @@ message ChannelCapabilities {
 // Platform-level identity reference for an external chat-platform user.
 // Keying domain for the per-user NyxID binding actor — independent of any
 // specific bot. The same Lark user holds one NyxID identity across all bots
-// they talk to. See ADR-0017 §Actor Architecture. Owned by Channel.Abstractions
+// they talk to. See ADR-0018 §Actor Architecture. Owned by Channel.Abstractions
 // because Identity is a consumer of channel concepts, not their owner.
 message ExternalSubjectRef {
   // Platform name (lower-case ASCII): "lark", "telegram", "discord", "slack".
@@ -151,7 +151,7 @@ message AuthContext {
   // The principal kind selected by the caller.
   PrincipalKind kind = 1;
   // Legacy per-bot credential reference, retained for non-broker callers.
-  // Broker outbound MUST use external_subject (field 4) — see ADR-0017
+  // Broker outbound MUST use external_subject (field 4) — see ADR-0018
   // §Outbound Send. Deprecation window aligned with the next channel-runtime
   // proto break.
   string user_credential_ref = 2;

@@ -11,7 +11,7 @@ namespace Aevatar.GAgents.Channel.Identity;
 /// timeout elapses. Used by the OAuth callback handler on the write-side
 /// completion path so the next inbound message after binding is guaranteed
 /// to see the binding via <see cref="IExternalIdentityBindingQueryPort"/>.
-/// See ADR-0017 §Projection Readiness.
+/// See ADR-0018 §Projection Readiness.
 /// </summary>
 public sealed class ExternalIdentityBindingProjectionReadinessPort : IProjectionReadinessPort
 {

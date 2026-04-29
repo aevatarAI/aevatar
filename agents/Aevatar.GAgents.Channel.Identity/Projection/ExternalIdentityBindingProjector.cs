@@ -12,7 +12,7 @@ namespace Aevatar.GAgents.Channel.Identity;
 /// <c>WorkflowExecutionCurrentStateProjector</c> pattern: unpack the
 /// committed-state envelope, copy the typed state fields, upsert via
 /// the write dispatcher. Read side (`IExternalIdentityBindingQueryPort`)
-/// reads the same documents — see ADR-0017 §Projection Readiness.
+/// reads the same documents — see ADR-0018 §Projection Readiness.
 /// </summary>
 public sealed class ExternalIdentityBindingProjector
     : ICurrentStateProjectionMaterializer<ExternalIdentityBindingMaterializationContext>

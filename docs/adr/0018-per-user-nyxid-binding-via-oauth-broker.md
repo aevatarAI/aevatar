@@ -4,7 +4,7 @@ status: accepted
 owner: eanzhao
 ---
 
-# ADR-0017: Per-User NyxID Binding via OAuth Broker
+# ADR-0018: Per-User NyxID Binding via OAuth Broker
 
 ## Context
 

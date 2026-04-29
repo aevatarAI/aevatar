@@ -8,7 +8,7 @@ namespace Aevatar.GAgents.Channel.Identity.Abstractions;
 /// before returning to the caller. This is NOT a query-time priming hook
 /// (CLAUDE.md prohibits query-time priming on QueryPort/QueryService); it is
 /// invoked only on the write-side completion path. See
-/// ADR-0017 §Projection Readiness.
+/// ADR-0018 §Projection Readiness.
 /// </summary>
 /// <remarks>
 /// The interface intentionally describes the binding semantics directly

@@ -6,7 +6,7 @@ namespace Aevatar.GAgents.Channel.Identity.Abstractions;
 /// Thrown by <see cref="INyxIdCapabilityBroker.IssueShortLivedAsync"/> when
 /// NyxID reports the binding as revoked (HTTP 400 <c>invalid_grant</c>).
 /// Callers MUST event-source revoke the local binding actor and prompt the
-/// sender to run <c>/init</c> again. See ADR-0017 Decision §invalid_grant.
+/// sender to run <c>/init</c> again. See ADR-0018 Decision §invalid_grant.
 /// </summary>
 public sealed class BindingRevokedException : Exception
 {
