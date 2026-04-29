@@ -76,11 +76,11 @@ public static class IdentityServiceCollectionExtensions
             services.Configure<NyxIdBrokerOptions>(configuration.GetSection("Aevatar:NyxIdBroker"));
         }
 
+        // Inject as IOptionsMonitor so config reload (e.g. rotating
+        // StateTokenHmacKey) is observed without a process restart.
+        // (glm-5.1 minor: previous IOptions snapshot froze on first resolve.)
         services.TryAddSingleton(static sp =>
-        {
-            var snapshot = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<NyxIdBrokerOptions>>().Value;
-            return snapshot;
-        });
+            sp.GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<NyxIdBrokerOptions>>().CurrentValue);
         services.TryAddSingleton(sp => TimeProvider.System);
         services.TryAddSingleton<StateTokenCodec>();
 

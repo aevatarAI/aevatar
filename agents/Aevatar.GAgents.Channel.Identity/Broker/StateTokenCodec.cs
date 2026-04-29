@@ -17,20 +17,28 @@ namespace Aevatar.GAgents.Channel.Identity.Broker;
 /// </summary>
 public sealed class StateTokenCodec
 {
-    private readonly NyxIdBrokerOptions _options;
+    private readonly Microsoft.Extensions.Options.IOptionsMonitor<NyxIdBrokerOptions> _optionsMonitor;
     private readonly TimeProvider _timeProvider;
-    private readonly byte[] _hmacKeyBytes;
 
-    public StateTokenCodec(NyxIdBrokerOptions options, TimeProvider? timeProvider = null)
+    public StateTokenCodec(
+        Microsoft.Extensions.Options.IOptionsMonitor<NyxIdBrokerOptions> optionsMonitor,
+        TimeProvider? timeProvider = null)
     {
-        _options = options ?? throw new ArgumentNullException(nameof(options));
+        _optionsMonitor = optionsMonitor ?? throw new ArgumentNullException(nameof(optionsMonitor));
         _timeProvider = timeProvider ?? TimeProvider.System;
-        // Cache the HMAC key bytes — StateTokenCodec is registered as a
-        // singleton, so re-encoding the key on every sign call is wasted work
-        // (mimo-v2.5-pro L145).
-        _hmacKeyBytes = string.IsNullOrEmpty(_options.StateTokenHmacKey)
-            ? Array.Empty<byte>()
-            : Encoding.UTF8.GetBytes(_options.StateTokenHmacKey);
+    }
+
+    // Convenience overload for tests / scenarios that already have a snapshot.
+    public StateTokenCodec(NyxIdBrokerOptions options, TimeProvider? timeProvider = null)
+        : this(StaticOptionsMonitor.Of(options ?? throw new ArgumentNullException(nameof(options))), timeProvider)
+    {
+    }
+
+    private NyxIdBrokerOptions _options => _optionsMonitor.CurrentValue;
+    private byte[] HmacKeyBytes()
+    {
+        var key = _options.StateTokenHmacKey;
+        return string.IsNullOrEmpty(key) ? Array.Empty<byte>() : Encoding.UTF8.GetBytes(key);
     }
 
     public string Encode(string correlationId, ExternalSubjectRef externalSubject, string pkceVerifier)
@@ -134,9 +142,10 @@ public sealed class StateTokenCodec
 
     private byte[] HmacSign(ReadOnlySpan<byte> data)
     {
-        if (_hmacKeyBytes.Length == 0)
+        var keyBytes = HmacKeyBytes();
+        if (keyBytes.Length == 0)
             throw new InvalidOperationException("NyxIdBrokerOptions.StateTokenHmacKey is not configured.");
-        return HMACSHA256.HashData(_hmacKeyBytes, data);
+        return HMACSHA256.HashData(keyBytes, data);
     }
 
     private static byte[] SerializeDeterministically(StateTokenPayload payload)
@@ -177,5 +186,19 @@ public sealed class StateTokenCodec
             case 3: padded += "="; break;
         }
         return Convert.FromBase64String(padded);
+    }
+
+    // Adapter so the legacy snapshot-based constructor can wrap a fixed
+    // NyxIdBrokerOptions into the IOptionsMonitor surface. Used by tests
+    // and other callers that don't go through DI options.
+    private sealed class StaticOptionsMonitor : Microsoft.Extensions.Options.IOptionsMonitor<NyxIdBrokerOptions>
+    {
+        private readonly NyxIdBrokerOptions _value;
+        public StaticOptionsMonitor(NyxIdBrokerOptions value) { _value = value; }
+        public static Microsoft.Extensions.Options.IOptionsMonitor<NyxIdBrokerOptions> Of(NyxIdBrokerOptions v) =>
+            new StaticOptionsMonitor(v);
+        public NyxIdBrokerOptions CurrentValue => _value;
+        public NyxIdBrokerOptions Get(string? name) => _value;
+        public IDisposable? OnChange(Action<NyxIdBrokerOptions, string?> listener) => null;
     }
 }

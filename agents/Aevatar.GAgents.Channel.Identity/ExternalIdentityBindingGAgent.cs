@@ -19,12 +19,27 @@ namespace Aevatar.GAgents.Channel.Identity;
 public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalIdentityBindingState>
 {
     /// <inheritdoc />
-    protected override ExternalIdentityBindingState TransitionState(ExternalIdentityBindingState current, IMessage evt) =>
-        StateTransitionMatcher
+    protected override ExternalIdentityBindingState TransitionState(ExternalIdentityBindingState current, IMessage evt)
+    {
+        // Log unrecognised event types so a proto schema drift (or stale
+        // event store entry from a removed event type) surfaces in operator
+        // dashboards rather than silently being dropped via OrCurrent().
+        // Production deployments should treat these as a regression signal.
+        if (evt is not null
+            && evt is not ExternalIdentityBoundEvent
+            && evt is not ExternalIdentityBindingRevokedEvent)
+        {
+            Logger.LogWarning(
+                "ExternalIdentityBindingGAgent received unrecognised event type {EventType}; state unchanged",
+                evt.GetType().FullName);
+        }
+
+        return StateTransitionMatcher
             .Match(current, evt)
             .On<ExternalIdentityBoundEvent>(ApplyBound)
             .On<ExternalIdentityBindingRevokedEvent>(ApplyRevoked)
             .OrCurrent();
+    }
 
     // ─── Commands ───
 
