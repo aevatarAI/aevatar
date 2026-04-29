@@ -291,19 +291,13 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
     private IChannelSlashCommandHandler? ResolveSlashCommandHandler(string commandName)
     {
-        var handlers = _services.GetServices<IChannelSlashCommandHandler>();
-        foreach (var handler in handlers)
-        {
-            if (string.Equals(handler.Name, commandName, StringComparison.OrdinalIgnoreCase))
-                return handler;
-
-            foreach (var alias in handler.Aliases)
-            {
-                if (string.Equals(alias, commandName, StringComparison.OrdinalIgnoreCase))
-                    return handler;
-            }
-        }
-        return null;
+        // Registry is registered as a singleton; constructing it validates
+        // there are no duplicate Name/Aliases registrations and throws fail-
+        // fast at startup. Resolving here keeps the turn runner backwards-
+        // compatible with deployments that didn't AddChannelIdentity / AddNyxIdChat
+        // (the registry will be absent and slash commands silently fall through).
+        var registry = _services.GetService<ChannelSlashCommandRegistry>();
+        return registry?.Find(commandName);
     }
 
     private async Task<ConversationTurnResult> SendBindingPromptAsync(

@@ -216,14 +216,52 @@ public sealed class ConversationReplyGeneratorTests
         prefsStore.Lookups.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task GenerateReplyAsync_FallsBackToOwnerPrefsWhenSenderStoreThrows()
+    {
+        // Pin graceful-degradation: a transient sender-config projection
+        // outage must not corrupt the LLM request — the upstream-pinned
+        // owner prefs survive (PR #521 review glm-5.1).
+        var providerFactory = new RecordingProviderFactory();
+        var prefsStore = new ScopedStubPreferencesStore { ThrowOnLookup = true };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, preferencesStore: prefsStore);
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-3",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>
+            {
+                [LLMRequestMetadataKeys.ModelOverride] = "owner-fallback-model",
+                [LLMRequestMetadataKeys.NyxIdRoutePreference] = "owner-route",
+                [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "5",
+                [LLMRequestMetadataKeys.SenderBindingId] = "bnd_sender",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        request.Metadata.Should().NotBeNull();
+        var metadata = request.Metadata!;
+        metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("owner-fallback-model");
+        metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("owner-route");
+        metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("5");
+    }
+
     private sealed class ScopedStubPreferencesStore : INyxIdUserLlmPreferencesStore
     {
         public Dictionary<string, NyxIdUserLlmPreferences> ByBinding { get; } = new(StringComparer.Ordinal);
         public List<string?> Lookups { get; } = new();
+        public bool ThrowOnLookup { get; set; }
 
         public Task<NyxIdUserLlmPreferences> GetAsync(string? senderBindingId, CancellationToken cancellationToken = default)
         {
             Lookups.Add(senderBindingId);
+            if (ThrowOnLookup)
+                throw new InvalidOperationException("simulated projection outage");
             if (string.IsNullOrEmpty(senderBindingId))
                 return Task.FromResult(new NyxIdUserLlmPreferences(string.Empty, string.Empty));
             return Task.FromResult(ByBinding.TryGetValue(senderBindingId, out var prefs)

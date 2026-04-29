@@ -11,7 +11,7 @@ namespace Aevatar.GAgents.Channel.Identity;
 /// Unauthenticated; NyxID accepts open self-registration with
 /// <c>token_endpoint_auth_method=none</c> for public clients.
 /// </summary>
-public sealed class NyxIdDynamicClientRegistrationClient
+public class NyxIdDynamicClientRegistrationClient
 {
     public const string RegisterEndpoint = "/oauth/register";
 
@@ -38,7 +38,7 @@ public sealed class NyxIdDynamicClientRegistrationClient
     /// registration call fails (HTTP non-success, malformed body, missing
     /// client_id) so the bootstrap caller can decide whether to retry.
     /// </summary>
-    public async Task<RegistrationResult> RegisterPublicClientAsync(
+    public virtual async Task<RegistrationResult> RegisterPublicClientAsync(
         string authority,
         string clientName,
         string redirectUri,

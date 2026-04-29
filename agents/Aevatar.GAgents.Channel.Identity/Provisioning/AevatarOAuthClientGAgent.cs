@@ -4,6 +4,7 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Channel.Identity;
@@ -49,11 +50,82 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
     // ─── Commands ───
 
     /// <summary>
-    /// Persists a new client_id from NyxID DCR. Called by the bootstrap
-    /// service on first cluster startup, or after the runtime
-    /// <c>nyxid_authority</c> changes (rare).  Idempotent: re-issuing the
-    /// same triple is a no-op.  Always seeds a fresh HMAC key when the
-    /// state has none — bootstrap and provisioning are single-step.
+    /// Bootstrap entry-point. Cold-boot in a multi-silo cluster: every silo
+    /// sends this command to the well-known actor; the actor's single-
+    /// threaded handler turns the broadcast into exactly one DCR call (the
+    /// first command serialized) and a no-op for the rest. This serializes
+    /// the external side-effect at NyxID and prevents the orphan-clients
+    /// race that earlier versions exhibited (PR #521 review consensus).
+    /// </summary>
+    [EventHandler]
+    public async Task HandleEnsureProvisioned(EnsureAevatarOAuthClientProvisionedCommand cmd)
+    {
+        ArgumentNullException.ThrowIfNull(cmd);
+        if (string.IsNullOrWhiteSpace(cmd.NyxidAuthority))
+        {
+            Logger.LogWarning("EnsureProvisioned rejected: nyxid_authority is required");
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(cmd.RedirectUri))
+        {
+            Logger.LogWarning("EnsureProvisioned rejected: redirect_uri is required");
+            return;
+        }
+
+        var alreadyProvisioned = !string.IsNullOrEmpty(State.ClientId)
+            && string.Equals(State.NyxidAuthority, cmd.NyxidAuthority, StringComparison.Ordinal);
+        if (alreadyProvisioned)
+        {
+            // Seed HMAC key on first activation against an existing client_id
+            // (defence-in-depth against partial state loaded from snapshots).
+            if (State.HmacKey.Length == 0)
+            {
+                await PersistDomainEventAsync(BuildHmacKeyRotatedEvent());
+                Logger.LogInformation("Seeded HMAC key for aevatar OAuth client (existing client_id)");
+            }
+            return;
+        }
+
+        var registrar = Services.GetService<NyxIdDynamicClientRegistrationClient>();
+        if (registrar is null)
+        {
+            Logger.LogError(
+                "EnsureProvisioned cannot resolve NyxIdDynamicClientRegistrationClient; DI is missing the registrar");
+            return;
+        }
+
+        var clientName = string.IsNullOrWhiteSpace(cmd.ClientName) ? "aevatar" : cmd.ClientName;
+        var registration = await registrar
+            .RegisterPublicClientAsync(cmd.NyxidAuthority, clientName, cmd.RedirectUri, CancellationToken.None)
+            .ConfigureAwait(false);
+
+        await PersistDomainEventAsync(new AevatarOAuthClientProvisionedEvent
+        {
+            ClientId = registration.ClientId,
+            ClientIdIssuedAtUnix = registration.IssuedAt.ToUnixTimeSeconds(),
+            NyxidAuthority = cmd.NyxidAuthority,
+            PersistedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        Logger.LogInformation(
+            "Provisioned aevatar OAuth client via DCR: client_id={ClientId}, authority={Authority}",
+            registration.ClientId,
+            cmd.NyxidAuthority);
+
+        if (State.HmacKey.Length == 0)
+        {
+            await PersistDomainEventAsync(BuildHmacKeyRotatedEvent());
+            Logger.LogInformation("Seeded HMAC key for aevatar OAuth client");
+        }
+    }
+
+    /// <summary>
+    /// Manual override path: persists a caller-supplied client_id without
+    /// calling NyxID DCR. Tests + manual operator scripts use this; the
+    /// production bootstrap path uses
+    /// <see cref="HandleEnsureProvisioned"/> instead so the actor (not the
+    /// caller) mediates the DCR call. Idempotent: re-issuing the same
+    /// triple is a no-op. Always seeds a fresh HMAC key when the state has
+    /// none — bootstrap and provisioning are single-step.
     /// </summary>
     [EventHandler]
     public async Task HandleProvision(ProvisionAevatarOAuthClientCommand cmd)

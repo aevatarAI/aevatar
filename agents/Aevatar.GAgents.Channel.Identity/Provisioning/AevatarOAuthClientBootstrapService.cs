@@ -44,7 +44,6 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
     internal static readonly TimeSpan MaxRetryDelay = TimeSpan.FromMinutes(30);
 
     private readonly IServiceProvider _services;
-    private readonly NyxIdDynamicClientRegistrationClient _registrar;
     private readonly IActorRuntime _actorRuntime;
     private readonly ILogger<AevatarOAuthClientBootstrapService> _logger;
     private readonly IConfiguration _configuration;
@@ -53,13 +52,11 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
 
     public AevatarOAuthClientBootstrapService(
         IServiceProvider services,
-        NyxIdDynamicClientRegistrationClient registrar,
         IActorRuntime actorRuntime,
         IConfiguration configuration,
         ILogger<AevatarOAuthClientBootstrapService> logger)
     {
         _services = services ?? throw new ArgumentNullException(nameof(services));
-        _registrar = registrar ?? throw new ArgumentNullException(nameof(registrar));
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -152,14 +149,14 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
             return;
         }
 
-        // Use the shared resolver so DCR registers the same redirect URI the
-        // broker later sends to NyxID at authorize / token time. Diverging
-        // sources cause invalid_redirect_uri on every /init exchange.
+        // Cold-boot DCR is mediated by the well-known actor (PR #521 review):
+        // every silo broadcasts EnsureAevatarOAuthClientProvisionedCommand,
+        // and the actor's single-threaded handler turns the broadcast into
+        // exactly one DCR HTTP call. Without this seam the bootstrap path
+        // races on the projection readmodel and creates orphan OAuth clients
+        // at NyxID. The redirect URI must match what the broker sends at
+        // authorize / token time — both call sites use NyxIdRedirectUriResolver.
         var redirectUri = NyxIdRedirectUriResolver.Resolve(_configuration);
-        var registration = await _registrar
-            .RegisterPublicClientAsync(authority, ClientName, redirectUri, ct)
-            .ConfigureAwait(false);
-
         var actor = await _actorRuntime
             .CreateAsync<AevatarOAuthClientGAgent>(AevatarOAuthClientGAgent.WellKnownId, ct)
             .ConfigureAwait(false);
@@ -167,11 +164,11 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(new ProvisionAevatarOAuthClientCommand
+            Payload = Any.Pack(new EnsureAevatarOAuthClientProvisionedCommand
             {
-                ClientId = registration.ClientId,
-                ClientIdIssuedAtUnix = registration.IssuedAt.ToUnixTimeSeconds(),
                 NyxidAuthority = authority,
+                RedirectUri = redirectUri,
+                ClientName = ClientName,
             }),
             Route = new EnvelopeRoute
             {
@@ -181,8 +178,9 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
         await actor.HandleEventAsync(envelope, ct).ConfigureAwait(false);
 
         _logger.LogInformation(
-            "Aevatar OAuth client provisioned at NyxID: client_id={ClientId}. " +
+            "Aevatar OAuth client EnsureProvisioned dispatched to {ActorId} (authority={Authority}). " +
             "Production deployments must enable broker_capability_enabled on this client at NyxID admin (one-time per cluster).",
-            registration.ClientId);
+            AevatarOAuthClientGAgent.WellKnownId,
+            authority);
     }
 }

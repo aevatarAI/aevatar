@@ -4,6 +4,7 @@ using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgents.Channel.Identity.Broker;
 
@@ -25,16 +26,19 @@ namespace Aevatar.GAgents.Channel.Identity.Broker;
 public sealed class StateTokenCodec
 {
     private const string DefaultKid = "v1";
-    private static readonly TimeSpan DefaultStateTokenLifetime = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan FallbackStateTokenLifetime = TimeSpan.FromMinutes(5);
 
     private readonly IAevatarOAuthClientProvider _clientProvider;
     private readonly TimeProvider _timeProvider;
+    private readonly NyxIdBrokerOptions _options;
 
     public StateTokenCodec(
         IAevatarOAuthClientProvider clientProvider,
+        IOptions<NyxIdBrokerOptions>? options = null,
         TimeProvider? timeProvider = null)
     {
         _clientProvider = clientProvider ?? throw new ArgumentNullException(nameof(clientProvider));
+        _options = options?.Value ?? new NyxIdBrokerOptions();
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
@@ -48,7 +52,10 @@ public sealed class StateTokenCodec
         if (snapshot.HmacKey.Length == 0)
             throw new InvalidOperationException("Aevatar OAuth client HMAC key is not provisioned.");
 
-        var expiresAt = _timeProvider.GetUtcNow().Add(DefaultStateTokenLifetime);
+        var lifetime = _options.StateTokenLifetime > TimeSpan.Zero
+            ? _options.StateTokenLifetime
+            : FallbackStateTokenLifetime;
+        var expiresAt = _timeProvider.GetUtcNow().Add(lifetime);
         var payload = new StateTokenPayload
         {
             CorrelationId = correlationId,

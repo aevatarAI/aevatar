@@ -35,8 +35,22 @@ message AevatarOAuthClientState {
   int64 broker_capability_observed_at_unix = 7;
 }
 
-// Issued by the bootstrap startup service when the cluster has no cached
-// registration, or when nyxid_authority has changed.
+// Issued by the bootstrap startup service from every silo on cluster cold-
+// boot. The actor's single-threaded handler turns the command into one DCR
+// call (or a no-op when already provisioned) so racing silos cannot create
+// duplicate OAuth clients at NyxID — see PR #521 review (codex/k2p6/v4-pro
+// consensus on the cold-boot race).
+message EnsureAevatarOAuthClientProvisionedCommand {
+  string nyxid_authority = 1;
+  string redirect_uri = 2;
+  // Optional override for the DCR <c>client_name</c>; bootstrap leaves blank.
+  string client_name = 3;
+}
+
+// Issued by tests / manual operator scripts that already hold a client_id
+// (e.g. seeded fixture, post-rotation retag). Bootstrap NEVER uses this —
+// it always sends EnsureAevatarOAuthClientProvisionedCommand instead so the
+// actor mediates the DCR call.
 message ProvisionAevatarOAuthClientCommand {
   string client_id = 1;
   int64 client_id_issued_at_unix = 2;

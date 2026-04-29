@@ -54,38 +54,58 @@ public sealed class UnbindChannelSlashCommandHandler : IChannelSlashCommandHandl
         }
 
         // 2) Event-source local revoke so the projection flips to inactive
-        //    independently of any subsequent NyxID CAE webhook.
+        //    independently of any subsequent NyxID CAE webhook. Retry once
+        //    on a transient failure before giving up — without it a one-off
+        //    dispatch hiccup leaves the user thinking they're unbound while
+        //    the readmodel still says they're bound, blocking re-/init for
+        //    however long the CAE webhook takes (PR #521 review v4-pro).
         var actorId = context.Subject.ToActorId();
-        try
+        Exception? localDispatchError = null;
+        for (var attempt = 1; attempt <= 2; attempt++)
         {
-            var actor = await _actorRuntime
-                .CreateAsync<ExternalIdentityBindingGAgent>(actorId, ct)
-                .ConfigureAwait(false);
-            var envelope = new EventEnvelope
+            try
             {
-                Id = Guid.NewGuid().ToString("N"),
-                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                Payload = Any.Pack(new RevokeBindingCommand
+                var actor = await _actorRuntime
+                    .CreateAsync<ExternalIdentityBindingGAgent>(actorId, ct)
+                    .ConfigureAwait(false);
+                var envelope = new EventEnvelope
                 {
-                    ExternalSubject = context.Subject.Clone(),
-                    Reason = "user_unbind",
-                }),
-                Route = new EnvelopeRoute
-                {
-                    Direct = new DirectRoute { TargetActorId = actorId },
-                },
-            };
-            await actor.HandleEventAsync(envelope, ct).ConfigureAwait(false);
+                    Id = Guid.NewGuid().ToString("N"),
+                    Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    Payload = Any.Pack(new RevokeBindingCommand
+                    {
+                        ExternalSubject = context.Subject.Clone(),
+                        Reason = "user_unbind",
+                    }),
+                    Route = new EnvelopeRoute
+                    {
+                        Direct = new DirectRoute { TargetActorId = actorId },
+                    },
+                };
+                await actor.HandleEventAsync(envelope, ct).ConfigureAwait(false);
+                localDispatchError = null;
+                break;
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                localDispatchError = ex;
+                _logger.LogWarning(ex,
+                    "/unbind: local actor revoke dispatch failed on attempt {Attempt}/2 for actor={ActorId}",
+                    attempt,
+                    actorId);
+            }
         }
-        catch (Exception ex)
+
+        if (localDispatchError is not null)
         {
-            // NyxID has already revoked — the local projection will resync
-            // when the CAE webhook fires. Log but don't fail the user-facing
-            // reply.
-            _logger.LogWarning(ex,
-                "/unbind: NyxID revoke succeeded but local actor revoke dispatch failed; " +
-                "projection will sync on next CAE webhook. actor={ActorId}",
-                actorId);
+            // NyxID has the truth (revoked); the local projection is stale.
+            // Surface the partial state so the user knows the binding may
+            // appear active for a few minutes and they may need to /unbind
+            // again if the CAE webhook does not arrive.
+            return new MessageContent
+            {
+                Text = "已在 NyxID 取消绑定,但本地状态同步失败。如几分钟后仍未生效,请重试 /unbind。",
+            };
         }
 
         return new MessageContent { Text = "已解绑 NyxID 账号。如需重新绑定,发送 /init。" };

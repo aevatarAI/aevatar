@@ -123,10 +123,14 @@ public static class IdentityServiceCollectionExtensions
         // ─── Slash command handlers (issue #513 phases 1, 4, 6) ───
         // Identity owns /init, /unbind, /whoami; other modules can register
         // additional handlers (e.g. NyxidChat for /model) by adding their own
-        // IChannelSlashCommandHandler implementations to DI.
+        // IChannelSlashCommandHandler implementations to DI. The registry
+        // validates uniqueness at first resolution and throws fail-fast on
+        // duplicate Name/Aliases so a future module can't silently shadow an
+        // existing command.
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelSlashCommandHandler, InitChannelSlashCommandHandler>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelSlashCommandHandler, UnbindChannelSlashCommandHandler>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelSlashCommandHandler, WhoamiChannelSlashCommandHandler>());
+        services.TryAddSingleton<ChannelSlashCommandRegistry>();
 
         return services;
     }

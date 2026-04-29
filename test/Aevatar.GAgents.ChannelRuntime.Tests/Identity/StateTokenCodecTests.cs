@@ -39,7 +39,7 @@ public class StateTokenCodecTests
     {
         var clock = new FakeTimeProvider(DateTimeOffset.Parse("2026-04-29T10:00:00Z"));
         var provider = new FakeOAuthClientProvider(Snapshot());
-        var codec = new StateTokenCodec(provider, clock);
+        var codec = new StateTokenCodec(provider, options: null, clock);
 
         var token = await codec.EncodeAsync("corr-1", SampleSubject(), "verifier-abc");
         var result = await codec.TryDecodeAsync(token);
@@ -57,7 +57,7 @@ public class StateTokenCodecTests
     {
         var clock = new FakeTimeProvider(DateTimeOffset.Parse("2026-04-29T10:00:00Z"));
         var provider = new FakeOAuthClientProvider(Snapshot());
-        var codec = new StateTokenCodec(provider, clock);
+        var codec = new StateTokenCodec(provider, options: null, clock);
         var token = await codec.EncodeAsync("corr-1", SampleSubject(), "verifier-abc");
 
         clock.Advance(TimeSpan.FromMinutes(6));
@@ -73,7 +73,7 @@ public class StateTokenCodecTests
     public async Task TryDecode_RejectsTamperedSignature()
     {
         var provider = new FakeOAuthClientProvider(Snapshot());
-        var codec = new StateTokenCodec(provider, new FakeTimeProvider(DateTimeOffset.UtcNow));
+        var codec = new StateTokenCodec(provider, options: null, new FakeTimeProvider(DateTimeOffset.UtcNow));
         var token = await codec.EncodeAsync("corr-1", SampleSubject(), "verifier-abc");
 
         // Flip a byte in the HMAC segment by replacing the last char.
@@ -91,11 +91,11 @@ public class StateTokenCodecTests
     public async Task TryDecode_FailsWhenHmacKeyUnprovisioned()
     {
         var clock = new FakeTimeProvider(DateTimeOffset.UtcNow);
-        var encoder = new StateTokenCodec(new FakeOAuthClientProvider(Snapshot()), clock);
+        var encoder = new StateTokenCodec(new FakeOAuthClientProvider(Snapshot()), options: null, clock);
         var token = await encoder.EncodeAsync("corr-1", SampleSubject(), "verifier-abc");
 
         // Verifier has no client provisioned yet.
-        var verifier = new StateTokenCodec(new FakeOAuthClientProvider(snapshot: null), clock);
+        var verifier = new StateTokenCodec(new FakeOAuthClientProvider(snapshot: null), options: null, clock);
         var result = await verifier.TryDecodeAsync(token);
 
         result.Succeeded.Should().BeFalse();
@@ -109,7 +109,7 @@ public class StateTokenCodecTests
     public async Task TryDecode_RejectsMalformedTokens(string raw)
     {
         var provider = new FakeOAuthClientProvider(Snapshot());
-        var codec = new StateTokenCodec(provider, new FakeTimeProvider(DateTimeOffset.UtcNow));
+        var codec = new StateTokenCodec(provider, options: null, new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var result = await codec.TryDecodeAsync(raw);
 
