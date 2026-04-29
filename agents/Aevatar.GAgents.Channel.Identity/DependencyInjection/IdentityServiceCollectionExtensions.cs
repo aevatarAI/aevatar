@@ -5,8 +5,10 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
+using Aevatar.GAgents.Channel.Identity.Slash;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -117,6 +119,14 @@ public static class IdentityServiceCollectionExtensions
 
         // ─── Webhook validators ───
         services.TryAddSingleton<Endpoints.BrokerRevocationWebhookValidator>();
+
+        // ─── Slash command handlers (issue #513 phases 1, 4, 6) ───
+        // Identity owns /init, /unbind, /whoami; other modules can register
+        // additional handlers (e.g. NyxidChat for /model) by adding their own
+        // IChannelSlashCommandHandler implementations to DI.
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelSlashCommandHandler, InitChannelSlashCommandHandler>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelSlashCommandHandler, UnbindChannelSlashCommandHandler>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelSlashCommandHandler, WhoamiChannelSlashCommandHandler>());
 
         return services;
     }
