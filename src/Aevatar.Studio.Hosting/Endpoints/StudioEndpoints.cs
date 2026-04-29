@@ -1180,7 +1180,10 @@ internal static class StudioEndpoints
         {
             try
             {
-                var preferences = await llmPreferencesStore.GetAsync(ct);
+                // Studio endpoint reads the bot owner's ambient prefs — the
+                // channel inbound path is the only caller that overrides
+                // with a sender-specific binding-id.
+                var preferences = await llmPreferencesStore.GetAsync(senderBindingId: null, ct);
                 if (!string.IsNullOrWhiteSpace(preferences.DefaultModel))
                     metadata[LLMRequestMetadataKeys.ModelOverride] = preferences.DefaultModel.Trim();
                 if (!string.IsNullOrWhiteSpace(preferences.PreferredRoute))

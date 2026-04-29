@@ -77,8 +77,11 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         // credentials (codex L65 security: ADR-0018 §Decision "未绑定 sender
         // 一律强制 /init,不回落到 bot owner"). Falls through transparently
         // when identity ports are not registered (legacy bot-owner-shared
-        // deployments).
-        if (await TryEnforceBindingGateAsync(activity, inbound, registration, runtimeContext, ct) is { } bindingGateResult)
+        // deployments). The gate also returns the resolved binding-id so the
+        // LLM dispatch can apply the sender prefs override chain (issue #513
+        // phase 3) without paying for a second projection lookup.
+        var (bindingGateResult, senderBindingId) = await TryEnforceBindingGateAsync(activity, inbound, registration, runtimeContext, ct).ConfigureAwait(false);
+        if (bindingGateResult is not null)
             return bindingGateResult;
 
         var inboundEvent = ToInboundEvent(activity, registration, inbound, ResolveUserAccessToken(activity));
@@ -110,7 +113,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
 
         return ConversationTurnResult.LlmReplyRequested(
-            BuildLlmReplyRequest(activity, registration, inboundEvent, runtimeContext));
+            BuildLlmReplyRequest(activity, registration, inboundEvent, runtimeContext, senderBindingId));
     }
 
     public Task<ConversationTurnResult> RunInboundAsync(ChatActivity activity, CancellationToken ct) =>
@@ -314,9 +317,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
     // Pre-LLM binding gate: when identity is wired, refuse to serve unbound
     // senders with the bot owner's credentials (ADR-0018 §Decision). Returns
-    // null when binding is not enabled OR sender is bound — both cases let
-    // the existing flow continue.
-    private async Task<ConversationTurnResult?> TryEnforceBindingGateAsync(
+    // (null, null) when binding is not enabled (legacy mode); returns
+    // (prompt, null) for unbound senders so the caller short-circuits with
+    // the /init hint; returns (null, bindingId) for bound senders so the LLM
+    // dispatch can carry the binding-id forward into metadata for the issue
+    // #513 phase 3 prefs override chain.
+    private async Task<(ConversationTurnResult? Blocking, string? SenderBindingId)> TryEnforceBindingGateAsync(
         ChatActivity activity,
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
@@ -325,14 +331,14 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     {
         var queryPort = _services.GetService<IExternalIdentityBindingQueryPort>();
         if (queryPort is null)
-            return null;
+            return (null, null);
 
         if (string.IsNullOrWhiteSpace(inbound.SenderId) || string.IsNullOrWhiteSpace(inbound.Platform))
-            return null;
+            return (null, null);
 
         var tenant = ResolveTenant(inbound, registration);
         if (tenant is null)
-            return null;
+            return (null, null);
 
         var subject = new ExternalSubjectRef
         {
@@ -356,9 +362,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
 
         if (existing is not null)
-            return null; // bound — continue normal flow
+            return (null, existing.Value); // bound — continue with sender binding-id
 
-        return await SendBindingPromptAsync(activity, inbound, registration, runtimeContext, ct).ConfigureAwait(false);
+        var prompt = await SendBindingPromptAsync(activity, inbound, registration, runtimeContext, ct).ConfigureAwait(false);
+        return (prompt, null);
     }
 
     // Lark-aware private-chat detection. Other platforms map their direct-
@@ -1092,7 +1099,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ChatActivity activity,
         ChannelBotRegistrationEntry registration,
         ChannelInboundEvent inboundEvent,
-        ConversationTurnRuntimeContext runtimeContext)
+        ConversationTurnRuntimeContext runtimeContext,
+        string? senderBindingId = null)
     {
         var request = new NeedsLlmReplyEvent
         {
@@ -1117,6 +1125,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         foreach (var pair in BuildReplyMetadata(inboundEvent, activity))
             request.Metadata[pair.Key] = pair.Value;
+
+        // Issue #513 phase 3: tag the request with the sender's binding-id so
+        // the downstream reply generator can apply the prefs override chain
+        // (sender → bot owner → provider default).
+        if (!string.IsNullOrWhiteSpace(senderBindingId))
+            request.Metadata[LLMRequestMetadataKeys.SenderBindingId] = senderBindingId;
 
         return request;
     }

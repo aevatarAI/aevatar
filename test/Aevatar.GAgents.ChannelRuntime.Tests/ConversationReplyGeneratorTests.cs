@@ -130,6 +130,98 @@ public sealed class ConversationReplyGeneratorTests
         reply.Should().Be("ok");
     }
 
+    [Fact]
+    public async Task GenerateReplyAsync_AppliesSenderPrefsOverChainOwnerDefault()
+    {
+        // Issue #513 phase 3: when the inbound carries a sender binding-id,
+        // sender prefs override bot-owner prefs field-by-field. This pins the
+        // override behaviour so bot-owner falls back to "fill empty fields"
+        // rather than overwriting the sender's choice.
+        var providerFactory = new RecordingProviderFactory();
+        var prefsStore = new ScopedStubPreferencesStore
+        {
+            // Sender (binding-id) has chosen a model but left route blank.
+            ByBinding =
+            {
+                ["bnd_sender"] = new NyxIdUserLlmPreferences("sender-model", string.Empty, MaxToolRounds: 0),
+            },
+            // Bot owner (ambient null scope) has chosen route + max rounds.
+            Ambient = new NyxIdUserLlmPreferences(
+                DefaultModel: "owner-model",
+                PreferredRoute: "/api/v1/proxy/s/owner",
+                MaxToolRounds: 9),
+        };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, preferencesStore: prefsStore);
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-1",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>
+            {
+                [LLMRequestMetadataKeys.SenderBindingId] = "bnd_sender",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        request.Metadata.Should().NotBeNull();
+        var metadata = request.Metadata!;
+        // Sender's model wins (non-empty).
+        metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("sender-model");
+        // Sender left route blank → owner's route fills.
+        metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/api/v1/proxy/s/owner");
+        // Sender left max-rounds at 0 → owner's value fills.
+        metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("9");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_FallsBackToOwnerPrefsWhenNoSenderBinding()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var prefsStore = new ScopedStubPreferencesStore
+        {
+            Ambient = new NyxIdUserLlmPreferences("owner-only-model", "owner-route", 4),
+        };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, preferencesStore: prefsStore);
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-2",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        request.Metadata.Should().NotBeNull();
+        var metadata = request.Metadata!;
+        metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("owner-only-model");
+        metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("owner-route");
+        metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("4");
+    }
+
+    private sealed class ScopedStubPreferencesStore : INyxIdUserLlmPreferencesStore
+    {
+        public Dictionary<string, NyxIdUserLlmPreferences> ByBinding { get; } = new(StringComparer.Ordinal);
+        public NyxIdUserLlmPreferences Ambient { get; set; } = new(string.Empty, string.Empty);
+
+        public Task<NyxIdUserLlmPreferences> GetAsync(string? senderBindingId, CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrEmpty(senderBindingId))
+                return Task.FromResult(Ambient);
+            return Task.FromResult(ByBinding.TryGetValue(senderBindingId, out var prefs)
+                ? prefs
+                : new NyxIdUserLlmPreferences(string.Empty, string.Empty));
+        }
+    }
+
     private sealed class RecordingStreamingSink : IStreamingReplySink
     {
         public List<string> Emissions { get; } = [];

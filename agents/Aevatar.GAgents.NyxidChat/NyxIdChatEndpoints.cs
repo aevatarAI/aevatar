@@ -300,7 +300,9 @@ public static partial class NyxIdChatEndpoints
 
         try
         {
-            var preferences = await preferencesStore.GetAsync(ct);
+            // Studio chat endpoint always uses the ambient (bot owner) scope —
+            // the channel inbound path passes the sender binding-id explicitly.
+            var preferences = await preferencesStore.GetAsync(senderBindingId: null, ct);
             logger?.LogInformation(
                 "User config loaded: model={Model}, route={Route}, maxToolRounds={MaxToolRounds}",
                 preferences.DefaultModel ?? "<empty>",

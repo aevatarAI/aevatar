@@ -2255,7 +2255,7 @@ public class NyxIdChatEndpointsCoverageTests
 
     private sealed class StubPreferencesStore(string model, string route, int maxToolRounds) : INyxIdUserLlmPreferencesStore
     {
-        public Task<NyxIdUserLlmPreferences> GetAsync(CancellationToken cancellationToken = default) =>
+        public Task<NyxIdUserLlmPreferences> GetAsync(string? senderBindingId, CancellationToken cancellationToken = default) =>
             Task.FromResult(new NyxIdUserLlmPreferences(model, route, maxToolRounds));
     }
 

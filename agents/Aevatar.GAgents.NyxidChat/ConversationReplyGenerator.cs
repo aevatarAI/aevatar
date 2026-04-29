@@ -130,24 +130,16 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
 
         if (_preferencesStore is not null)
         {
-            try
-            {
-                var preferences = await _preferencesStore.GetAsync(ct);
-                if (!string.IsNullOrWhiteSpace(preferences.DefaultModel))
-                    effective[LLMRequestMetadataKeys.ModelOverride] = preferences.DefaultModel.Trim();
-                if (!string.IsNullOrWhiteSpace(preferences.PreferredRoute))
-                    effective[LLMRequestMetadataKeys.NyxIdRoutePreference] = preferences.PreferredRoute.Trim();
-                if (preferences.MaxToolRounds > 0)
-                    effective[LLMRequestMetadataKeys.MaxToolRoundsOverride] = preferences.MaxToolRounds.ToString();
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch
-            {
-                // User config is additive only; channel runtime falls back to server defaults on failure.
-            }
+            // Issue #513 phase 3: prefs override chain is sender → bot-owner →
+            // provider default. We materialize sender prefs first when the
+            // inbound carries a binding-id, then fill any unset fields from
+            // the bot-owner (ambient) scope. A field-level merge — not a
+            // record-level fall-through — so a sender who set DefaultModel but
+            // not PreferredRoute still inherits the bot owner's route.
+            metadata.TryGetValue(LLMRequestMetadataKeys.SenderBindingId, out var senderBindingId);
+            await ApplyPreferencesAsync(senderBindingId, effective, ct);
+            if (!string.IsNullOrWhiteSpace(senderBindingId))
+                await ApplyPreferencesAsync(senderBindingId: null, effective, ct, additiveOnly: true);
         }
 
         if (_userMemoryStore is not null)
@@ -169,6 +161,53 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         }
 
         return effective;
+    }
+
+    /// <summary>
+    /// Read prefs for the requested binding (or ambient scope when null) and
+    /// project the non-empty fields into <paramref name="effective"/>. When
+    /// <paramref name="additiveOnly"/> is true, existing keys are not overwritten —
+    /// used by the override chain to fill bot-owner defaults without trampling
+    /// the sender's prior writes. User-config failures degrade to "no extra
+    /// metadata" rather than failing the LLM turn.
+    /// </summary>
+    private async Task ApplyPreferencesAsync(
+        string? senderBindingId,
+        Dictionary<string, string> effective,
+        CancellationToken ct,
+        bool additiveOnly = false)
+    {
+        if (_preferencesStore is null)
+            return;
+
+        NyxIdUserLlmPreferences preferences;
+        try
+        {
+            preferences = await _preferencesStore.GetAsync(senderBindingId, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return;
+        }
+
+        SetIfFilled(effective, LLMRequestMetadataKeys.ModelOverride, preferences.DefaultModel?.Trim(), additiveOnly);
+        SetIfFilled(effective, LLMRequestMetadataKeys.NyxIdRoutePreference, preferences.PreferredRoute?.Trim(), additiveOnly);
+        SetIfFilled(effective, LLMRequestMetadataKeys.MaxToolRoundsOverride,
+            preferences.MaxToolRounds > 0 ? preferences.MaxToolRounds.ToString() : null,
+            additiveOnly);
+    }
+
+    private static void SetIfFilled(Dictionary<string, string> map, string key, string? value, bool additiveOnly)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return;
+        if (additiveOnly && map.ContainsKey(key))
+            return;
+        map[key] = value;
     }
 
     private async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct)

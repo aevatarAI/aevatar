@@ -369,7 +369,7 @@ public sealed class ActorBackedStoreAdapterTests
 
         var store = new ActorBackedNyxIdUserLlmPreferencesStore(stubConfigStore);
 
-        var prefs = await store.GetAsync();
+        var prefs = await store.GetAsync(senderBindingId: null);
 
         prefs.DefaultModel.Should().Be("claude-opus");
         prefs.PreferredRoute.Should().Be("/api/v1/proxy/s/anthropic");
@@ -385,7 +385,7 @@ public sealed class ActorBackedStoreAdapterTests
 
         var store = new ActorBackedNyxIdUserLlmPreferencesStore(stubConfigStore);
 
-        var prefs = await store.GetAsync();
+        var prefs = await store.GetAsync(senderBindingId: null);
 
         prefs.PreferredRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway,
             "gateway should normalize to empty string");
@@ -399,7 +399,7 @@ public sealed class ActorBackedStoreAdapterTests
 
         var store = new ActorBackedNyxIdUserLlmPreferencesStore(stubConfigStore);
 
-        var prefs = await store.GetAsync();
+        var prefs = await store.GetAsync(senderBindingId: null);
 
         prefs.DefaultModel.Should().BeEmpty();
         prefs.PreferredRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
