@@ -172,6 +172,10 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 ct);
             routeId = await CreateDefaultRouteAsync(request.AccessToken, channelBotId, apiKeyId, ct);
 
+            // Best-effort: connect the api-lark-bot NyxID proxy service so typing
+            // reactions can call the Lark API. Intentionally NOT in the rollback chain
+            // because the service is reusable across registrations; a 409 on re-provision
+            // is the expected idempotent case, not an orphan to clean up.
             await TryConnectLarkBotProxyServiceAsync(
                 request.AccessToken,
                 request.AppId.Trim(),
