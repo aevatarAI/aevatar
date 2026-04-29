@@ -16,6 +16,7 @@ import type {
   StudioMemberBindingContract,
   StudioMemberBindingAcceptedResult,
   StudioMemberBindingRun,
+  StudioMemberBindingView,
   StudioMemberDetail,
   StudioMemberImplementationKind,
   StudioMemberImplementationRef,
@@ -1022,82 +1023,19 @@ function decodeStudioMemberBindingRun(value: unknown): StudioMemberBindingRun {
   };
 }
 
-function decodeStudioMemberBindingStatus(
+function decodeStudioMemberBindingView(
   value: unknown
-): StudioScopeBindingStatus {
+): StudioMemberBindingView {
   const record = expectRecord(value, "StudioMemberBindingView");
-  if (record.available !== undefined || record.Available !== undefined) {
-    return decodeStudioScopeBindingStatus(record);
-  }
-
-  const lastBinding =
-    record.lastBinding == null && record.LastBinding == null
-      ? null
-      : decodeStudioMemberBindingContract(record.lastBinding ?? record.LastBinding);
-  const latestBindingRun =
-    record.latestBindingRun == null && record.LatestBindingRun == null
-      ? null
-      : decodeStudioMemberBindingRun(record.latestBindingRun ?? record.LatestBindingRun);
-
-  if (!lastBinding) {
-    return {
-      available: false,
-      scopeId: "",
-      serviceId: "",
-      displayName: "",
-      serviceKey: "",
-      defaultServingRevisionId: "",
-      activeServingRevisionId: "",
-      deploymentId: "",
-      deploymentStatus: "",
-      primaryActorId: "",
-      updatedAt: null,
-      revisions: [],
-      latestBindingRun,
-    };
-  }
-
-  const revision: StudioScopeBindingRevision = {
-    revisionId: lastBinding.revisionId,
-    implementationKind: lastBinding.implementationKind,
-    status: "Published",
-    artifactHash: "",
-    failureReason: "",
-    isDefaultServing: true,
-    isActiveServing: true,
-    isServingTarget: true,
-    allocationWeight: 100,
-    servingState: "Active",
-    deploymentId: "",
-    primaryActorId: "",
-    createdAt: null,
-    preparedAt: null,
-    publishedAt: lastBinding.boundAt,
-    retiredAt: null,
-    workflowName: "",
-    workflowDefinitionActorId: "",
-    inlineWorkflowCount: 0,
-    scriptId: "",
-    scriptRevision: "",
-    scriptDefinitionActorId: "",
-    scriptSourceHash: "",
-    staticActorTypeName: "",
-  };
-
   return {
-    available: true,
-    scopeId: "",
-    serviceId: lastBinding.publishedServiceId,
-    displayName: lastBinding.publishedServiceId,
-    serviceKey: lastBinding.publishedServiceId,
-    defaultServingRevisionId: lastBinding.revisionId,
-    activeServingRevisionId: lastBinding.revisionId,
-    deploymentId: "",
-    deploymentStatus: "",
-    primaryActorId: "",
-    updatedAt: lastBinding.boundAt,
-    revisions: [revision],
-    latestBindingRun,
+    lastBinding:
+      record.lastBinding == null && record.LastBinding == null
+        ? null
+        : decodeStudioMemberBindingContract(record.lastBinding ?? record.LastBinding),
+    latestBindingRun:
+      record.latestBindingRun == null && record.LatestBindingRun == null
+        ? null
+        : decodeStudioMemberBindingRun(record.latestBindingRun ?? record.LatestBindingRun),
   };
 }
 
@@ -1774,10 +1712,10 @@ export const studioApi = {
   getMemberBinding(
     scopeId: string,
     memberId: string
-  ): Promise<StudioScopeBindingStatus> {
+  ): Promise<StudioMemberBindingView> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/members/${encodeURIComponent(memberId.trim())}/binding`,
-      decodeStudioMemberBindingStatus
+      decodeStudioMemberBindingView
     );
   },
 

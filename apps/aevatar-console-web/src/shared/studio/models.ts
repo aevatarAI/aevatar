@@ -480,6 +480,11 @@ export interface StudioMemberBindingRun {
   readonly retryable: boolean;
 }
 
+export interface StudioMemberBindingView {
+  readonly lastBinding?: StudioMemberBindingContract | null;
+  readonly latestBindingRun?: StudioMemberBindingRun | null;
+}
+
 export interface StudioMemberDetail {
   readonly summary: StudioMemberSummary;
   readonly implementationRef?: StudioMemberImplementationRef | null;
@@ -496,7 +501,7 @@ export interface StudioMemberRoster {
 export type StudioMemberBindingTargetKind = StudioScopeBindingTargetKind;
 export type StudioMemberBindingResult = StudioScopeBindingResult;
 export type StudioMemberBindingRevision = StudioScopeBindingRevision;
-export type StudioMemberBindingStatus = StudioScopeBindingStatus;
+export type StudioMemberBindingStatus = StudioMemberBindingView;
 export type StudioMemberBindingActivationResult =
   StudioScopeBindingActivationResult;
 export type StudioMemberBindingRetirementResult =
@@ -509,8 +514,41 @@ export const describeStudioMemberBindingRevisionTarget =
   describeStudioScopeBindingRevisionTarget;
 export const describeStudioMemberBindingRevisionContext =
   describeStudioScopeBindingRevisionContext;
-export const getStudioMemberBindingCurrentRevision =
-  getStudioScopeBindingCurrentRevision;
+export function getStudioMemberBindingCurrentRevision(
+  view: StudioMemberBindingView | null | undefined,
+): StudioMemberBindingRevision | null {
+  const binding = view?.lastBinding;
+  if (!binding) {
+    return null;
+  }
+
+  return {
+    revisionId: binding.revisionId,
+    implementationKind: binding.implementationKind,
+    status: "published",
+    artifactHash: "",
+    failureReason: "",
+    isDefaultServing: true,
+    isActiveServing: true,
+    isServingTarget: true,
+    allocationWeight: 100,
+    servingState: "active",
+    deploymentId: "",
+    primaryActorId: "",
+    createdAt: null,
+    preparedAt: null,
+    publishedAt: binding.boundAt,
+    retiredAt: null,
+    workflowName: "",
+    workflowDefinitionActorId: "",
+    inlineWorkflowCount: 0,
+    scriptId: "",
+    scriptRevision: "",
+    scriptDefinitionActorId: "",
+    scriptSourceHash: "",
+    staticActorTypeName: "",
+  };
+}
 
 export type StudioDefaultRouteTargetRevision = StudioScopeBindingRevision;
 export type StudioDefaultRouteTargetStatus = StudioScopeBindingStatus;

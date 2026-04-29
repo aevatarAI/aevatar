@@ -1011,9 +1011,11 @@ describe('studioApi host-session requests', () => {
 
     await expect(studioApi.getMemberBinding('scope-1', 'joker')).resolves.toEqual(
       expect.objectContaining({
-        serviceId: 'joker',
-        serviceKey: 'joker',
-        displayName: 'joker',
+        lastBinding: expect.objectContaining({
+          publishedServiceId: 'joker',
+          revisionId: 'rev-2',
+          implementationKind: 'workflow',
+        }),
         latestBindingRun: expect.objectContaining({
           bindingId: 'bind-1',
           status: 'completed',

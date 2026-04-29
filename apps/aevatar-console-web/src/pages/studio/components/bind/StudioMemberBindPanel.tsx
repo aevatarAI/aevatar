@@ -576,7 +576,9 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
   const bindingCatalog: ScopeServiceBindingCatalogSnapshot | undefined = bindingsQuery.data;
   const bindingList = bindingCatalog?.bindings ?? [];
   const hasMultiplePublishedServices = services.length > 1;
-  const revisionList = revisionCatalogQuery.data?.revisions ?? [];
+  const revisionList = normalizedMemberId
+    ? []
+    : revisionsQuery.data?.revisions ?? [];
   const bindSurfaceIdentity = useMemo(() => {
     const pendingCandidateIdentity = pendingBindingCandidate
       ? `candidate:${scopeId}:${pendingBindingCandidate.kind}:${pendingBindingCandidate.displayName}`
