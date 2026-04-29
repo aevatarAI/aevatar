@@ -1190,7 +1190,7 @@ describe("TeamDetailPage", () => {
     expect(params.get("scopeId")).toBe("scope-1");
     expect(params.get("member")).toBeNull();
     expect(params.get("memberId")).toBeNull();
-    expect(params.get("focus")).toBe("workflow:workflow-1");
+    expect(params.get("focus")).toBeNull();
     expect(params.get("tab")).toBe("studio");
   });
 
@@ -1207,7 +1207,7 @@ describe("TeamDetailPage", () => {
       expect(window.location.pathname).toBe("/studio");
     });
     expect(window.location.search).toContain("scopeId=scope-1");
-    expect(window.location.search).toContain("focus=workflow%3Aworkflow-1");
+    expect(window.location.search).not.toContain("focus=");
     expect(window.location.search).not.toContain("member=workflow%3Aworkflow-1");
 
     cleanup();
@@ -1221,7 +1221,7 @@ describe("TeamDetailPage", () => {
       expect(window.location.pathname).toBe("/studio");
     });
     expect(window.location.search).toContain("scopeId=scope-1");
-    expect(window.location.search).toContain("focus=script%3Ascript-1");
+    expect(window.location.search).not.toContain("focus=");
     expect(window.location.search).not.toContain("member=script%3Ascript-1");
     expect(window.location.search).toContain("tab=scripts");
   });

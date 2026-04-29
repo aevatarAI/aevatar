@@ -3098,7 +3098,7 @@ describe("StudioPage", () => {
     expect(searchParams.get("memberId")).toBe("member-alpha");
     expect(searchParams.get("scopeLabel")).toBeNull();
     expect(searchParams.get("memberLabel")).toBeNull();
-    expect(searchParams.get("focus")).toBe("workflow:workflow-1");
+    expect(searchParams.get("focus")).toBeNull();
     expect(searchParams.get("tab")).toBe("studio");
   });
 
@@ -3135,7 +3135,7 @@ describe("StudioPage", () => {
     expect(searchParams.get("memberId")).toBe("member-beta");
     expect(searchParams.get("scopeLabel")).toBeNull();
     expect(searchParams.get("memberLabel")).toBeNull();
-    expect(searchParams.get("focus")).toBe("workflow:workflow-1");
+    expect(searchParams.get("focus")).toBeNull();
     expect(searchParams.get("tab")).toBe("studio");
   });
 
@@ -3232,7 +3232,7 @@ describe("StudioPage", () => {
       const searchParams = new URLSearchParams(window.location.search);
       expect(searchParams.get("tab")).toBe("studio");
       expect(searchParams.get("member")).toBeNull();
-      expect(searchParams.get("focus")).toBe("workflow:workflow-1");
+      expect(searchParams.get("focus")).toBeNull();
     });
   });
 
@@ -3331,7 +3331,7 @@ describe("StudioPage", () => {
       const searchParams = new URLSearchParams(window.location.search);
       expect(searchParams.get("tab")).toBe("studio");
       expect(searchParams.get("member")).toBeNull();
-      expect(searchParams.get("focus")).toBe("workflow:workflow-1");
+      expect(searchParams.get("focus")).toBeNull();
       expect(searchParams.get("prompt")).toBe("Continue this workflow in Studio");
     });
   });
@@ -3372,7 +3372,7 @@ describe("StudioPage", () => {
       const searchParams = new URLSearchParams(window.location.search);
       expect(searchParams.get("tab")).toBe("studio");
       expect(searchParams.get("member")).toBeNull();
-      expect(searchParams.get("focus")).toBe("workflow:workflow-1");
+      expect(searchParams.get("focus")).toBeNull();
       expect(searchParams.get("execution")).toBeNull();
     });
   });
@@ -4425,7 +4425,7 @@ describe("StudioPage", () => {
     await waitFor(() => {
       const searchParams = new URLSearchParams(window.location.search);
       expect(searchParams.get("memberId")).toBe("draft2");
-      expect(searchParams.get("focus")).toBe("workflow:workflow-1");
+      expect(searchParams.get("focus")).toBeNull();
       expect(continueToBindButton).toBeEnabled();
     });
     fireEvent.click(continueToBindButton);
@@ -5303,7 +5303,7 @@ describe("StudioPage", () => {
       const searchParams = new URLSearchParams(window.location.search);
       expect(window.location.pathname).toBe("/studio");
       expect(searchParams.get("member")).toBeNull();
-      expect(searchParams.get("focus")).toBe("workflow:workflow-1");
+      expect(searchParams.get("focus")).toBeNull();
       expect(searchParams.get("teamMode")).toBeNull();
       expect(searchParams.get("teamName")).toBeNull();
       expect(searchParams.get("entryName")).toBeNull();
@@ -5326,7 +5326,7 @@ describe("StudioPage", () => {
     await waitFor(() => {
       const searchParams = new URLSearchParams(window.location.search);
       expect(searchParams.get("member")).toBeNull();
-      expect(searchParams.get("focus")).toBe("workflow:workflow-2");
+      expect(searchParams.get("focus")).toBeNull();
       expect(searchParams.get("teamMode")).toBeNull();
       expect(searchParams.get("teamName")).toBeNull();
       expect(searchParams.get("entryName")).toBeNull();
@@ -5440,7 +5440,7 @@ describe("StudioPage", () => {
       const searchParams = new URLSearchParams(window.location.search);
       expect(searchParams.get("draft")).toBeNull();
       expect(searchParams.get("member")).toBeNull();
-      expect(searchParams.get("focus")).toBe("workflow:workflow-1");
+      expect(searchParams.get("focus")).toBeNull();
     });
   });
 
@@ -5513,7 +5513,7 @@ describe("StudioPage", () => {
       expect(searchParams.get("legacy")).toBeNull();
       expect(searchParams.get("draft")).toBeNull();
       expect(searchParams.get("member")).toBeNull();
-      expect(searchParams.get("focus")).toBe("workflow:workflow-1");
+      expect(searchParams.get("focus")).toBeNull();
     });
   });
 
@@ -5595,7 +5595,7 @@ describe("StudioPage", () => {
       const searchParams = new URLSearchParams(window.location.search);
       expect(searchParams.get("member")).toBeNull();
       expect(searchParams.get("memberId")).toBe("workspace-demo");
-      expect(searchParams.get("focus")).toBe("workflow:workflow-1");
+      expect(searchParams.get("focus")).toBeNull();
       expect(searchParams.get("tab")).toBe("studio");
     });
   });
@@ -5675,7 +5675,7 @@ describe("StudioPage", () => {
     expect(workspaceButtonAfter).toBeTruthy();
     expect(workspaceButtonsAfter).toHaveLength(1);
     const searchParams = new URLSearchParams(window.location.search);
-    expect(searchParams.get("focus")).toContain("workflow:");
+    expect(searchParams.get("focus")).toBeNull();
   });
 
   it("highlights the newly selected workflow instead of keeping the previous service selected", async () => {
@@ -6557,7 +6557,7 @@ describe("StudioPage", () => {
     await waitFor(() => {
       const searchParams = new URLSearchParams(window.location.search);
       expect(searchParams.get("memberId")).toBe("workspace-demo");
-      expect(searchParams.get("focus")).toBe("workflow:workflow-1");
+      expect(searchParams.get("focus")).toBeNull();
       expect(continueToBindButton).toBeEnabled();
     });
     fireEvent.click(continueToBindButton);

@@ -116,7 +116,7 @@ describe('TeamCreatePage', () => {
     expect(window.location.pathname).toBe('/studio');
     const params = new URLSearchParams(window.location.search);
     expect(params.get('tab')).toBe('studio');
-    expect(params.get('focus')).toBe('workflow:workflow-7');
+    expect(params.get('focus')).toBeNull();
     expect(params.get('teamMode')).toBeNull();
     expect(params.get('teamName')).toBeNull();
     expect(params.get('entryName')).toBeNull();

@@ -156,7 +156,7 @@ describe("WorkflowsPage", () => {
 
     await waitFor(() => {
       expect(window.location.pathname).toBe("/studio");
-      expect(window.location.search).toBe("?focus=workflow%3Ademo_flow&tab=studio");
+      expect(window.location.search).toBe("?tab=studio");
     });
   });
 });

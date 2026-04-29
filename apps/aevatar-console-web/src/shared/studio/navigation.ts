@@ -118,6 +118,15 @@ function resolveStableStudioMemberId(
     : '';
 }
 
+function hasLegacyCreateTeamDraftPointer(
+  options?: StudioRouteOptions,
+): boolean {
+  return Boolean(
+    trimOptional(options?.teamDraftWorkflowId as string | null | undefined) ||
+      trimOptional(options?.teamDraftWorkflowName as string | null | undefined),
+  );
+}
+
 function resolveStudioTab(options?: StudioRouteOptions): StudioTab | undefined {
   if (options?.tab?.trim()) {
     return options.tab.trim() as StudioTab;
@@ -133,6 +142,10 @@ function resolveStudioTab(options?: StudioRouteOptions): StudioTab | undefined {
 
   if (options?.executionId?.trim()) {
     return 'executions';
+  }
+
+  if (hasLegacyCreateTeamDraftPointer(options)) {
+    return 'studio';
   }
 
   const focus = normalizeStudioBuildFocus(options?.focus);
@@ -167,12 +180,12 @@ export function buildStudioRoute(options?: StudioRouteOptions): string {
   if (options?.step) {
     params.set('step', options.step);
   }
-  const legacyMemberFocus = !lifecycleStep && !memberId
-    ? normalizeStudioBuildFocus(options?.memberKey)
-    : undefined;
   const focus =
-    (!lifecycleStep ? normalizeStudioBuildFocus(options?.focus) : undefined) ||
-    legacyMemberFocus;
+    !memberId &&
+    !lifecycleStep &&
+    !hasLegacyCreateTeamDraftPointer(options)
+      ? normalizeStudioBuildFocus(options?.focus)
+      : undefined;
   if (focus) {
     params.set('focus', focus);
   }
@@ -216,25 +229,8 @@ export function buildStudioWorkflowEditorRoute(options?: {
   template?: string;
   prompt?: string;
 } & Record<string, unknown>): string {
-  const workflowId = trimOptional(options?.workflowId);
-  const template = trimOptional(options?.template);
-  const memberKey = normalizeStudioMemberKey(
-    options?.memberKey,
-    options?.memberId,
-  );
-  const workflowFocus = workflowId
-    ? (`workflow:${workflowId}` as const)
-    : undefined;
   return buildStudioRoute({
     ...options,
-    focus:
-      workflowFocus &&
-      workflowFocus !== memberKey &&
-      workflowFocus !== template
-        ? workflowFocus
-        : template
-        ? `template:${template}`
-        : undefined,
     tab: 'studio',
   });
 }
@@ -268,15 +264,8 @@ export function buildStudioScriptsWorkspaceRoute(options?: {
   memberKey?: StudioMemberKey | string;
   scriptId?: string;
 } & Record<string, unknown>): string {
-  const scriptId = trimOptional(options?.scriptId);
-  const memberKey = normalizeStudioMemberKey(
-    options?.memberKey,
-    options?.memberId,
-  );
-  const scriptFocus = scriptId ? (`script:${scriptId}` as const) : undefined;
   return buildStudioRoute({
     ...options,
-    focus: scriptFocus && scriptFocus !== memberKey ? scriptFocus : undefined,
     tab: 'scripts',
   });
 }
