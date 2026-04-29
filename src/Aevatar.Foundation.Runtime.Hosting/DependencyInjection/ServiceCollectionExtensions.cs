@@ -143,6 +143,18 @@ public static class ServiceCollectionExtensions
             $"Unsupported Orleans stream backend '{options.OrleansStreamBackend}'.");
     }
 
+    // Projection scope actor IDs use these well-known prefixes (durable
+    // materialization scopes and ephemeral session scopes). The actors
+    // observe committed facts and re-converge on replay, so it is safe for
+    // them to recover from version-key/sorted-set drift by activating at the
+    // store version with stale state — production incident #502 hit this
+    // exact wedge. Domain GAgents are NOT in this set: they keep the safe
+    // default of throwing EventStoreVersionDriftException so the divergence
+    // surfaces to operators instead of silently building new authoritative
+    // state on incomplete history.
+    private const string ProjectionDurableScopeActorIdPrefix = "projection.durable.scope:";
+    private const string ProjectionSessionScopeActorIdPrefix = "projection.session.scope:";
+
     private static void AddAevatarRuntimeWithEventSourcingOptions(
         IServiceCollection services,
         AevatarActorRuntimeOptions options)
@@ -153,6 +165,9 @@ public static class ServiceCollectionExtensions
             eventSourcingOptions.SnapshotInterval = options.EventSourcingSnapshotInterval;
             eventSourcingOptions.EnableEventCompaction = options.EventSourcingEnableEventCompaction;
             eventSourcingOptions.RetainedEventsAfterSnapshot = options.EventSourcingRetainedEventsAfterSnapshot;
+            eventSourcingOptions.ShouldRecoverFromVersionDriftOnReplay = static agentId =>
+                agentId.StartsWith(ProjectionDurableScopeActorIdPrefix, StringComparison.Ordinal)
+                || agentId.StartsWith(ProjectionSessionScopeActorIdPrefix, StringComparison.Ordinal);
         });
     }
 

@@ -26,6 +26,7 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
     private readonly IEventStoreCompactionScheduler? _compactionScheduler;
     private readonly bool _enableEventCompaction;
     private readonly int _retainedEventsAfterSnapshot;
+    private readonly bool _recoverFromVersionDriftOnReplay;
     private readonly ILogger<EventSourcingBehavior<TState>> _logger;
     private readonly List<IMessage> _pending = [];
     private readonly string _agentId;
@@ -39,7 +40,8 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
         ILogger<EventSourcingBehavior<TState>>? logger = null,
         bool enableEventCompaction = false,
         int retainedEventsAfterSnapshot = 0,
-        IEventStoreCompactionScheduler? compactionScheduler = null)
+        IEventStoreCompactionScheduler? compactionScheduler = null,
+        bool recoverFromVersionDriftOnReplay = false)
     {
         _eventStore = eventStore;
         _agentId = agentId;
@@ -48,6 +50,7 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
         _compactionScheduler = compactionScheduler;
         _enableEventCompaction = enableEventCompaction;
         _retainedEventsAfterSnapshot = Math.Max(0, retainedEventsAfterSnapshot);
+        _recoverFromVersionDriftOnReplay = recoverFromVersionDriftOnReplay;
         _logger = logger ?? NullLogger<EventSourcingBehavior<TState>>.Instance;
     }
 
@@ -111,16 +114,23 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
             // runtime envelope retry policy) recomputes versions and commits
             // cleanly.
             //
-            // Pending events are left intact: this catch path assumes the
-            // store implementation guarantees full-batch atomicity on conflict
-            // (Garnet via the AppendScript Lua transaction; InMemoryEventStore
-            // via its lock-and-check). Under that contract no events from this
-            // batch made it to the store, so the next attempt safely re-stamps
-            // _pending with versions computed from the refreshed
-            // _currentVersion. A future store with partial-commit semantics
-            // would need to extend this catch to drop the already-committed
-            // prefix from _pending, otherwise the retry would duplicate
-            // domain events.
+            // Drop the prefix that was supposed to commit in this batch from
+            // _pending. The runtime envelope retry replays the same envelope,
+            // which re-executes the handler — the handler will call
+            // RaiseEvent again for the same logical events, so leaving the
+            // committed-prefix in _pending would duplicate them on the next
+            // commit. The suffix raised mid-flight (existing
+            // ConfirmEventsAsync_WhenNewEventIsRaisedDuringAppend contract)
+            // is preserved.
+            //
+            // This trims based on the assumption that the store guarantees
+            // full-batch atomicity on conflict (Garnet's AppendScript Lua
+            // transaction; InMemoryEventStore's lock-and-check) — no events
+            // from this batch made it to the store, and the entire prefix
+            // will be re-raised by the handler on retry. A future store with
+            // partial-commit semantics would need to compute the actual
+            // committed-prefix length (e.g. ex.ActualVersion - fromVersion)
+            // and trim only that many entries.
             //
             // Guard against a malformed exception that reports an
             // ActualVersion behind the in-memory _currentVersion: silently
@@ -144,14 +154,16 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
             {
                 _logger.LogWarning(
                     ex,
-                    "Event sourcing commit hit optimistic concurrency conflict; refreshing _currentVersion so the next retry can recover. agentId={AgentId} eventType={EventType} expectedVersion={ExpectedVersion} actualVersion={ActualVersion} elapsedMs={ElapsedMs}",
+                    "Event sourcing commit hit optimistic concurrency conflict; refreshing _currentVersion and dropping the rejected batch from _pending so handler re-execution can replay it. agentId={AgentId} eventType={EventType} expectedVersion={ExpectedVersion} actualVersion={ActualVersion} droppedFromPending={DroppedFromPending} elapsedMs={ElapsedMs}",
                     _agentId,
                     eventType,
                     ex.ExpectedVersion,
                     ex.ActualVersion,
+                    pendingEvents.Length,
                     Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
             }
             _currentVersion = refreshed;
+            RemoveCommittedPendingPrefix(pendingEvents.Length);
             throw;
         }
         catch (Exception ex)
@@ -210,39 +222,16 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
         long? fromVersion = snapshot?.Version;
         var events = await _eventStore.GetEventsAsync(agentId, fromVersion, ct);
 
-        // Use the store's authoritative version key as a floor for
-        // _currentVersion. The events sequence and the version key can drift
-        // (interrupted Lua append in Garnet, snapshot+compaction that wiped
-        // events but left the version key, externally-seeded store, etc.) — if
-        // we trust events[^1].Version alone, the actor reactivates with a
-        // _currentVersion that's behind the store and every subsequent
-        // AppendAsync hits EventStoreOptimisticConcurrencyException
-        // permanently. State may be slightly stale (transitions for missing
-        // events are not applied), but commits make forward progress and
-        // ConfirmEventsAsync's catch path can refresh further on conflict.
-        //
-        // The version-key probe is unconditional rather than gated behind
-        // events.Count == 0. Partial compaction can leave the events sorted
-        // set with valid (but trailing) entries while the version key is
-        // ahead — events[^1].Version < storeVersion is a real shape, not
-        // just the empty-events case. Skipping the probe in the
-        // events.Count > 0 branch would miss it. The cost is one extra
-        // store read per activation; for Garnet that's a single Redis GET
-        // co-located with the events query, which is negligible relative
-        // to the actor activation envelope.
+        // Always probe the store's authoritative version key. Partial
+        // compaction can leave the events sorted set with valid (but
+        // trailing) entries while the version key is ahead —
+        // events[^1].Version < storeVersion is a real shape, not just the
+        // empty-events case. Skipping the probe in the events.Count > 0
+        // branch would miss it. The cost is one extra store read per
+        // activation; for Garnet that's a single Redis GET co-located with
+        // the events query, which is negligible relative to the actor
+        // activation envelope.
         var storeVersion = await _eventStore.GetVersionAsync(agentId, ct);
-
-        if (events.Count == 0)
-        {
-            if (snapshot == null)
-            {
-                _currentVersion = storeVersion;
-                return null;
-            }
-
-            _currentVersion = Math.Max(snapshot.Version, storeVersion);
-            return snapshot.State;
-        }
 
         var state = snapshot?.State ?? new TState();
         foreach (var stateEvent in events)
@@ -251,8 +240,47 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
                 state = TransitionState(state, stateEvent.EventData);
         }
 
-        _currentVersion = Math.Max(events[^1].Version, storeVersion);
-        return state;
+        var replayedVersion = events.Count > 0
+            ? events[^1].Version
+            : (snapshot?.Version ?? 0);
+
+        if (storeVersion > replayedVersion)
+        {
+            // Drift: trailing committed events are missing from the events
+            // sequence (interrupted Lua append, partial compaction that
+            // wiped events but left the version key, externally-seeded
+            // store, etc.). Activating at replayedVersion would
+            // permanently conflict on every AppendAsync; activating at
+            // storeVersion would silently build new authoritative state on
+            // top of facts that were never applied. Default to throwing so
+            // the operator decides; only recover automatically when the
+            // host has opted into RecoverFromVersionDriftOnReplay (see
+            // EventSourcingRuntimeOptions for the safety contract).
+            if (!_recoverFromVersionDriftOnReplay)
+            {
+                _logger.LogError(
+                    "Event sourcing replay detected version drift and recovery is disabled. agentId={AgentId} replayedVersion={ReplayedVersion} storeVersion={StoreVersion} eventsCount={EventsCount} hasSnapshot={HasSnapshot}",
+                    agentId,
+                    replayedVersion,
+                    storeVersion,
+                    events.Count,
+                    snapshot != null);
+                throw new EventStoreVersionDriftException(agentId, replayedVersion, storeVersion);
+            }
+
+            _logger.LogWarning(
+                "Event sourcing replay recovering from version drift; activating at the store version with stale state. agentId={AgentId} replayedVersion={ReplayedVersion} storeVersion={StoreVersion} eventsCount={EventsCount} hasSnapshot={HasSnapshot}",
+                agentId,
+                replayedVersion,
+                storeVersion,
+                events.Count,
+                snapshot != null);
+            _currentVersion = storeVersion;
+            return events.Count == 0 && snapshot == null ? null : state;
+        }
+
+        _currentVersion = replayedVersion;
+        return events.Count == 0 && snapshot == null ? null : state;
     }
 
     /// <summary>

@@ -35,13 +35,23 @@ If both lines hold, this runbook is the right one.
   `projection.durable.scope:*` actor — that's the Orleans pub/sub stale-state
   issue covered by PR #501.
 - `EventStoreOptimisticConcurrencyException: expected N, actual N+1` — that's
-  the version-key drift issue covered by issue #502 (and is now self-healing
-  in `EventSourcingBehavior` after that PR lands).
+  the version-key drift issue covered by issue #502. After PR #503 lands,
+  `EventSourcingBehavior.ConfirmEventsAsync` self-heals on conflict by
+  refreshing `_currentVersion` and dropping the rejected batch from
+  `_pending` (handler re-execution replays it on the runtime envelope retry,
+  no duplicates). On replay, drift is fatal by default (throws
+  `EventStoreVersionDriftException`); projection scope actors opt in via
+  `EventSourcingRuntimeOptions.ShouldRecoverFromVersionDriftOnReplay` (wired
+  in `Aevatar.Foundation.Runtime.Hosting` to recover only
+  `projection.{durable,session}.scope:*` ids). Domain GAgents still throw —
+  see the runbook for #502 for the manual repair procedure if you hit drift
+  on a non-projection actor.
 - `Optimistic concurrency conflict` followed by relay 401 in the SAME silo
-  start — that's a chained failure where the projection scope is stuck. Run
-  the version-key drift recovery first (delete the three Garnet keys for the
-  scope actor, restart the silo), THEN come back here if registrations are
-  still `[]`.
+  start — that's a chained failure where the projection scope is stuck.
+  Projection scope drift is now self-recovered on activation; if it still
+  wedges, capture the `EventStoreVersionDriftException` (or the
+  `Event sourcing replay recovering from version drift` warning) for triage,
+  then come back here if registrations are still `[]`.
 
 ## Why the data went missing
 
@@ -242,10 +252,18 @@ projection scope health (issue #502 territory).
 ## When to stop using this runbook
 
 The version-key drift symptoms covered in the "What is NOT this runbook"
-section are now self-healing in `EventSourcingBehavior` as of issue #502,
-so step 5 should rarely be preceded by a manual Garnet reset. Keep this
-runbook as long as the data-loss path through retired-actor cleanup is
-still possible — i.e. as long as `RetiredActorCleanupHostedService` can
-destroy `channel-bot-registration-store` and migrate to a new actor type
-without a parallel data-migration path. If that gap closes, this runbook
-becomes obsolete.
+section are now self-healing for projection scope actors only:
+`EventSourcingBehavior.ConfirmEventsAsync` recovers from the conflict loop
+universally, while `ReplayAsync` recovers from drift only for actor ids
+matching the `projection.{durable,session}.scope:` prefixes (see
+`Aevatar.Foundation.Runtime.Hosting`'s
+`ShouldRecoverFromVersionDriftOnReplay` wiring). Step 5 should rarely be
+preceded by a manual Garnet reset for projection scope actors; for any
+other actor that hits drift, the activation throws
+`EventStoreVersionDriftException` and the operator must repair the store
+manually. Keep this runbook as long as the data-loss path through
+retired-actor cleanup is still possible — i.e. as long as
+`RetiredActorCleanupHostedService` can destroy
+`channel-bot-registration-store` and migrate to a new actor type without a
+parallel data-migration path. If that gap closes, this runbook becomes
+obsolete.
