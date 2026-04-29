@@ -70,7 +70,7 @@ public class NyxIdSpecCatalogTests
 
         using var catalog = new NyxIdSpecCatalog(options, http);
 
-        await handler.FirstRequestReceived.Task;
+        await handler.FirstRequestReceived.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         handler.LastRequestUri.Should().Be("https://nyx.test/api/v1/docs/openapi.json");
         handler.LastAuthHeader.Should().Be("Bearer user-api-key-xyz");
