@@ -771,6 +771,67 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
     );
   });
 
+  it('blocks scope binding when the saved script has no applied revision', async () => {
+    window.localStorage.setItem(
+      'aevatar:console:scripts-studio:v1',
+      JSON.stringify([
+        {
+          key: 'script-without-revision',
+          scriptId: 'script-1',
+          revision: '',
+          baseRevision: '',
+          input: '',
+          package: {
+            csharpSources: [
+              {
+                path: 'Behavior.cs',
+                content: 'public sealed class DemoScript {}',
+              },
+            ],
+            protoFiles: [],
+            entryBehaviorTypeName: 'DraftBehavior',
+            entrySourcePath: 'Behavior.cs',
+          },
+          selectedFilePath: 'Behavior.cs',
+          definitionActorId: 'definition-1',
+          runtimeActorId: 'runtime-1',
+          updatedAtUtc: '2026-03-24T00:00:00Z',
+          lastSourceHash: 'hash-1',
+          scopeDetail: {
+            available: true,
+            scopeId: 'scope-1',
+            script: {
+              scopeId: 'scope-1',
+              scriptId: 'script-1',
+              catalogActorId: 'catalog-1',
+              definitionActorId: 'definition-1',
+              activeRevision: '',
+              activeSourceHash: 'hash-1',
+              updatedAt: '2026-03-24T00:00:00Z',
+            },
+            source: {
+              sourceText: 'public sealed class DemoScript {}',
+              definitionActorId: 'definition-1',
+              revision: '',
+              sourceHash: 'hash-1',
+            },
+          },
+        },
+      ]),
+    );
+
+    renderPage({
+      mode: 'embedded',
+      scopeId: 'scope-1',
+    });
+
+    const bindButton = await screen.findByRole('button', {
+      name: 'Update default route',
+    });
+    expect(bindButton).toBeDisabled();
+    expect(mockedStudioApi.bindScopeScript).not.toHaveBeenCalled();
+  });
+
   it('runs the current script draft without rebinding the scope service', async () => {
     renderPage({
       mode: 'embedded',

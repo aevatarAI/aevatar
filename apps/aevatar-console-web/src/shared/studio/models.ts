@@ -506,7 +506,6 @@ export interface StudioScopeScriptBindingInput {
   readonly serviceId?: string | null;
   readonly scriptId: string;
   readonly scriptRevision: string;
-  readonly revisionId?: string | null;
 }
 
 export type StudioScopeScriptBindingResult = StudioScopeBindingResult;

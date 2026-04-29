@@ -2649,10 +2649,13 @@ const StudioPage: React.FC = () => {
       return;
     }
 
-    const scriptId = trimOptional(routeMember?.publishedServiceId)
-      ? ''
-      : trimOptional(routeMember?.displayName);
+    const scriptId =
+      trimOptional(routeMember?.publishedServiceId) ||
+      trimOptional(routeMember?.displayName);
     if (!scriptId) {
+      return;
+    }
+    if (selectedScriptId === scriptId) {
       return;
     }
 
@@ -3779,7 +3782,6 @@ const StudioPage: React.FC = () => {
           scriptRevision:
             trimOptional(effectiveScriptState.scriptRevision) ||
             trimOptional(effectiveScriptState.revisionId),
-          revisionId: null,
         };
       }
     }
@@ -6443,6 +6445,17 @@ const StudioPage: React.FC = () => {
         return matchedService;
       }
 
+      if (
+        process.env.NODE_ENV !== 'production' &&
+        process.env.NODE_ENV !== 'test'
+      ) {
+        console.warn(
+          '[Studio] Using temporary chat endpoint fallback while scope service endpoint discovery is pending (#511).',
+          {
+            serviceId: invokeTargetServiceId,
+          },
+        );
+      }
       return createEndpointDiscoveryPendingInvokeService({
         label: currentMemberLabel,
         serviceId: invokeTargetServiceId,

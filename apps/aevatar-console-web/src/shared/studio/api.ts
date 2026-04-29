@@ -1452,7 +1452,6 @@ export const studioApi = {
               scriptId: input.scriptId.trim(),
               scriptRevision: input.scriptRevision.trim(),
             }),
-            revisionId: trimOptional(input.revisionId),
           })
         ),
       }

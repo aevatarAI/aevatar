@@ -743,7 +743,6 @@ describe('studioApi host-session requests', () => {
       serviceId: 'script-1',
       scriptId: 'script-1',
       scriptRevision: 'rev-1',
-      revisionId: 'rev-1',
     });
 
     expect(result.implementationKind).toBe('script');
@@ -772,7 +771,6 @@ describe('studioApi host-session requests', () => {
         scriptId: 'script-1',
         scriptRevision: 'rev-1',
       },
-      revisionId: 'rev-1',
     });
   });
 

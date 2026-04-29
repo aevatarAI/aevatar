@@ -1062,14 +1062,13 @@ jest.mock("@/shared/studio/api", () => ({
       displayName?: string;
       scriptId: string;
       scriptRevision: string;
-      revisionId?: string;
     }) => ({
       scopeId: input.scopeId,
       serviceId: input.scriptId,
       displayName: input.displayName || input.scriptId,
       targetKind: "script",
       targetName: input.scriptId,
-      revisionId: input.revisionId || "rev-script-binding",
+      revisionId: "rev-script-binding",
       script: {
         scriptId: input.scriptId,
         scriptRevision: input.scriptRevision,

@@ -287,6 +287,10 @@ function normalizeStudioId(value: string, fallbackPrefix: string): string {
     .slice(0, 14)}`;
 }
 
+function trimOptional(value: string | null | undefined): string {
+  return String(value || '').trim();
+}
+
 function createStarterPackage(): ScriptPackage {
   return createSingleSourcePackage(STARTER_SOURCE);
 }
@@ -1757,10 +1761,16 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     }
 
     const scriptId = normalizeStudioId(scopeScript.scriptId || selectedDraft.scriptId, 'script');
-    const scriptRevision = normalizeStudioId(
+    const scriptRevision = trimOptional(
       scopeScript.activeRevision || selectedDraft.revision,
-      'rev',
     );
+    if (!scriptRevision) {
+      setNotice({
+        type: 'warning',
+        message: 'Save the current script into the scope before binding it.',
+      });
+      return;
+    }
 
     setBindPending(true);
     setNotice(null);
@@ -2371,8 +2381,15 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       (selectedDraft.scopeDetail?.script?.activeRevision || selectedDraft.baseRevision),
   );
   const scopeBindingScript = selectedDraft?.scopeDetail?.script || null;
+  const scopeBindingRevision = trimOptional(
+    scopeBindingScript?.activeRevision || selectedDraft?.revision,
+  );
   const canBindScope = Boolean(
-    selectedDraft && scopeBacked && scopeBindingScript && !bindPending,
+    selectedDraft &&
+      scopeBacked &&
+      scopeBindingScript &&
+      scopeBindingRevision &&
+      !bindPending,
   );
   const scopeSelectionId = selectedDraft?.scopeDetail?.script?.scriptId || '';
   const hasScopeChanges = isScopeDetailDirty(selectedDraft);
@@ -3253,7 +3270,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
             <div className="console-scripts-eyebrow">Script</div>
             <div className="console-scripts-detail-copy">
               {scopeBindingScript?.scriptId || selectedDraft?.scriptId || '-'} ·{' '}
-              {scopeBindingScript?.activeRevision || selectedDraft?.revision || '-'}
+              {scopeBindingRevision || 'save required'}
             </div>
           </div>
           <div style={{ marginTop: 16 }}>
