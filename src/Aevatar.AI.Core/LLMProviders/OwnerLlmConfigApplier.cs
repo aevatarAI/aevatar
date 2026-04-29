@@ -2,14 +2,14 @@ using System.Globalization;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Microsoft.Extensions.Logging;
 
-namespace Aevatar.GAgents.Scheduled;
+namespace Aevatar.AI.Core.LLMProviders;
 
 /// <summary>
 /// Single source of truth for "given the bot owner's UserConfig, what should the outbound LLM
-/// metadata look like?". <see cref="SkillRunnerGAgent"/>, <see cref="WorkflowAgentGAgent"/>, and
-/// the channel inbound runner (NyxidChat) all delegate here so the metadata-key list, scope-id
-/// guard, and swallow-and-log policy can never drift. Adding another scheduled or channel-bot
-/// callsite is a one-line call.
+/// metadata look like?". Scheduled agents (SkillRunnerGAgent, WorkflowAgentGAgent) and
+/// channel-bot turn runners (NyxidChat) all delegate here so the metadata-key list, scope-id
+/// guard, and swallow-and-log policy can never drift. Adding another agent or runner callsite
+/// is a one-line call.
 /// </summary>
 public static class OwnerLlmConfigApplier
 {

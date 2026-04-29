@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.AI.ToolProviders.Channel;
 using Aevatar.AI.ToolProviders.ChannelAdmin;
@@ -77,11 +78,11 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddChannelRuntime(builder.Configuration);
         builder.Services.AddDeviceRegistration(builder.Configuration);
         builder.Services.AddScheduledAgents(builder.Configuration);
-        // Bridge Studio's IUserConfigQueryPort onto Scheduled's narrow IOwnerLlmConfigSource port
-        // so SkillRunner / WorkflowAgent honor the bot owner's pre-configured LLM model + route
-        // (issue #509). The bridge lives here, not in Scheduled, so Scheduled doesn't need to
-        // reference the full Studio.Application package — the host is the natural composition
-        // layer between Studio and the agent packages.
+        // Bridge Studio's IUserConfigQueryPort onto the AI-layer IOwnerLlmConfigSource port so
+        // SkillRunner / WorkflowAgent / NyxidChat honor the bot owner's pre-configured LLM model
+        // + route (issue #509). The bridge lives here, not in any agent or AI package, so
+        // neither side has to depend on Studio.Application — the host is the natural composition
+        // layer between Studio and the AI/agent packages that consume the port.
         builder.Services.TryAddSingleton<IOwnerLlmConfigSource, StudioUserConfigOwnerLlmConfigSource>();
         builder.Services.AddLarkAgentAuthoring();
         builder.Services.AddNyxIdRelayChannel();
