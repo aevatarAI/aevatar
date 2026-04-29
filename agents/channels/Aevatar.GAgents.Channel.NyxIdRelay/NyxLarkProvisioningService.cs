@@ -172,6 +172,16 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 ct);
             routeId = await CreateDefaultRouteAsync(request.AccessToken, channelBotId, apiKeyId, ct);
 
+            // Best-effort: connect the api-lark-bot NyxID proxy service so typing
+            // reactions can call the Lark API. Intentionally NOT in the rollback chain
+            // because the service is reusable across registrations; a 409 on re-provision
+            // is the expected idempotent case, not an orphan to clean up.
+            await TryConnectLarkBotProxyServiceAsync(
+                request.AccessToken,
+                request.AppId.Trim(),
+                request.AppSecret.Trim(),
+                ct);
+
             var webhookUrl = $"{nyxBaseUrl}/api/v1/webhooks/channel/lark/{Uri.EscapeDataString(channelBotId)}";
             await RegisterLocalMirrorAsync(
                 registrationId,
@@ -383,6 +393,30 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
             ct);
 
         return NyxApiResponseHelper.ExtractRequiredId(response, "channel_route_id");
+    }
+
+    private async Task TryConnectLarkBotProxyServiceAsync(
+        string accessToken,
+        string appId,
+        string appSecret,
+        CancellationToken ct)
+    {
+        try
+        {
+            var credential = JsonSerializer.Serialize(new { app_id = appId, app_secret = appSecret });
+            var body = JsonSerializer.Serialize(new { service_slug = DefaultNyxProviderSlug, credential, label = $"Lark App {appId}" });
+            await _nyxClient.CreateServiceAsync(accessToken, body, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Best-effort: 409 conflict (service already exists) or any other error is
+            // non-fatal. The core relay path works without this; only typing reactions
+            // are degraded when the proxy service is not connected.
+            _logger.LogWarning(
+                ex,
+                "Best-effort api-lark-bot proxy service connection failed (non-fatal). appId={AppId}",
+                appId);
+        }
     }
 
     private async Task RegisterLocalMirrorAsync(

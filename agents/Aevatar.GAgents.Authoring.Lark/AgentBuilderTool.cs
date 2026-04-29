@@ -261,7 +261,11 @@ public sealed class AgentBuilderTool : IAgentTool
 
         var ownerNyxUserId = caller.NyxUserId;
 
-        var gitHubAuthorizationResponse = await BuildGitHubAuthorizationResponseAsync(nyxClient, token, ct);
+        var gitHubAuthorizationResponse = await BuildGitHubAuthorizationResponseAsync(
+            nyxClient,
+            token,
+            ct,
+            submittedGithubUsername: githubUsernameResolution.GithubUsername);
         if (!string.IsNullOrWhiteSpace(gitHubAuthorizationResponse))
             return gitHubAuthorizationResponse;
 
@@ -1282,7 +1286,8 @@ public sealed class AgentBuilderTool : IAgentTool
         NyxIdApiClient client,
         string token,
         CancellationToken ct,
-        bool preferCredentialsRequiredStatus = false)
+        bool preferCredentialsRequiredStatus = false,
+        string? submittedGithubUsername = null)
     {
         var providerTokensResponse = await client.ListProviderTokensAsync(token, ct);
         if (IsErrorPayload(providerTokensResponse))
@@ -1340,6 +1345,7 @@ public sealed class AgentBuilderTool : IAgentTool
                     provider = "GitHub",
                     provider_id = providerId,
                     documentation_url = documentationUrl,
+                    github_username = submittedGithubUsername,
                     note = "GitHub in NyxID uses user-managed OAuth app credentials. Set your GitHub OAuth app client_id/client_secret in NyxID first, then submit the daily report form again.",
                 });
             }
@@ -1365,6 +1371,7 @@ public sealed class AgentBuilderTool : IAgentTool
             provider_id = providerId,
             authorization_url = authorizationUrl,
             documentation_url = documentationUrl,
+            github_username = submittedGithubUsername,
             note = preferCredentialsRequiredStatus
                 ? "Connect GitHub in NyxID, then run /daily again."
                 : "Connect GitHub in NyxID, then return to Feishu and submit the daily report form again.",

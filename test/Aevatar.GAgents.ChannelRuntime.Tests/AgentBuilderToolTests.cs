@@ -2769,6 +2769,9 @@ public sealed class AgentBuilderToolTests
             doc.RootElement.GetProperty("provider").GetString().Should().Be("GitHub");
             doc.RootElement.GetProperty("provider_id").GetString().Should().Be("provider-github");
             doc.RootElement.GetProperty("authorization_url").GetString().Should().Be("https://github.example.com/oauth/start");
+            // Echo the username the user already submitted so the Lark re-prompt card can pre-fill
+            // the GitHub Username form field instead of forcing the user to retype after OAuth.
+            doc.RootElement.GetProperty("github_username").GetString().Should().Be("alice");
 
             await skillRunnerPort.DidNotReceive().InitializeAsync(
                 Arg.Any<string>(),
@@ -2852,6 +2855,8 @@ public sealed class AgentBuilderToolTests
             doc.RootElement.GetProperty("provider").GetString().Should().Be("GitHub");
             doc.RootElement.GetProperty("provider_id").GetString().Should().Be("provider-github");
             doc.RootElement.GetProperty("documentation_url").GetString().Should().Be("https://docs.github.com/en/apps/oauth-apps");
+            // Same username echo as the oauth_required branch so the re-prompt form pre-fills.
+            doc.RootElement.GetProperty("github_username").GetString().Should().Be("alice");
 
             handler.Requests.Should().NotContain(x => x.Path == "/api/v1/providers/provider-github/connect/oauth");
             handler.Requests.Should().NotContain(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys");
