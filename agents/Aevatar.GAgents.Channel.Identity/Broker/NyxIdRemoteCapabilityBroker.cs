@@ -1,20 +1,20 @@
-using System.Net.Http.Headers;
 using System.Net.Http.Json;
-using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgents.Channel.Identity.Broker;
 
 /// <summary>
 /// Production <see cref="INyxIdCapabilityBroker"/> implementation that talks
-/// to NyxID's broker endpoints (ChronoAIProject/NyxID#549). Holds no
-/// long-lived user secret material in its in-process state — see ADR-0018
-/// §Storage Boundary. Service-level secrets (OAuth <c>client_secret</c>, the
-/// state-token HMAC key) come from <see cref="NyxIdBrokerOptions"/> and are
-/// expected to be loaded from KMS / secure config.
+/// to NyxID's broker endpoints (ChronoAIProject/NyxID#549). Reads the
+/// cluster-shared OAuth <c>client_id</c> + HMAC key from
+/// <see cref="IAevatarOAuthClientProvider"/> (cluster singleton actor) so
+/// production deploys need zero broker-specific appsettings — the bootstrap
+/// service self-registers the client at NyxID DCR on first startup.
 /// </summary>
 public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxIdBrokerCallbackClient
 {
@@ -24,64 +24,67 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
     public const string TokenExchangeGrantType = "urn:ietf:params:oauth:grant-type:token-exchange";
     public const string BindingIdSubjectTokenType = "urn:nyxid:params:oauth:token-type:binding-id";
 
-    // NyxID returns OAuth-standard snake_case fields (`access_token`,
-    // `binding_id`, `id_token`, `expires_in`, `token_type`, `scope`).
-    // JsonSerializerDefaults.Web maps PascalCase->camelCase, which silently
-    // drops every field — so explicit snake_case naming is required (codex L346).
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
     };
 
     private readonly HttpClient _http;
-    private readonly Microsoft.Extensions.Options.IOptionsMonitor<NyxIdBrokerOptions> _optionsMonitor;
+    private readonly IAevatarOAuthClientProvider _clientProvider;
+    private readonly NyxIdBrokerOptions _options;
     private readonly StateTokenCodec _stateTokenCodec;
     private readonly IExternalIdentityBindingQueryPort _queryPort;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<NyxIdRemoteCapabilityBroker> _logger;
 
-    // Resolve options on each access so config reload (e.g. rotated
-    // client_secret, updated authority, refreshed redirect URI) is observed
-    // without a process restart (glm-5.1 L73). The codec already does the
-    // same; pinning the broker to IOptionsMonitor keeps the contract uniform.
-    private NyxIdBrokerOptions _options => _optionsMonitor.CurrentValue;
-
     public NyxIdRemoteCapabilityBroker(
         HttpClient http,
-        Microsoft.Extensions.Options.IOptionsMonitor<NyxIdBrokerOptions> optionsMonitor,
+        IAevatarOAuthClientProvider clientProvider,
+        IOptions<NyxIdBrokerOptions> options,
         StateTokenCodec stateTokenCodec,
         IExternalIdentityBindingQueryPort queryPort,
         TimeProvider timeProvider,
         ILogger<NyxIdRemoteCapabilityBroker> logger)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
-        _optionsMonitor = optionsMonitor ?? throw new ArgumentNullException(nameof(optionsMonitor));
+        _clientProvider = clientProvider ?? throw new ArgumentNullException(nameof(clientProvider));
+        _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
         _stateTokenCodec = stateTokenCodec ?? throw new ArgumentNullException(nameof(stateTokenCodec));
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    // ─── INyxIdCapabilityBroker ───
+    private static string ResolveRedirectUri()
+    {
+        var serverUrls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS")
+            ?? Environment.GetEnvironmentVariable("AEVATAR_SERVER_URLS");
+        var firstUrl = serverUrls?.Split(';', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim();
+        if (string.IsNullOrWhiteSpace(firstUrl))
+            firstUrl = "http://127.0.0.1:5080";
+        return $"{firstUrl.TrimEnd('/')}/api/oauth/nyxid-callback";
+    }
 
-    public Task<BindingChallenge> StartExternalBindingAsync(
+    public async Task<BindingChallenge> StartExternalBindingAsync(
         ExternalSubjectRef externalSubject,
         CancellationToken ct = default)
     {
         ExternalSubjectRefExtensions.EnsureValid(externalSubject);
-        EnsureConfigured();
 
+        var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
         var pkce = PkceHelper.GeneratePair();
         var correlationId = Guid.NewGuid().ToString("N");
-        var stateToken = _stateTokenCodec.Encode(correlationId, externalSubject, pkce.CodeVerifier);
+        var stateToken = await _stateTokenCodec
+            .EncodeAsync(correlationId, externalSubject, pkce.CodeVerifier, ct)
+            .ConfigureAwait(false);
 
-        var url = BuildAuthorizeUrl(stateToken, pkce.CodeChallenge);
+        var url = BuildAuthorizeUrl(snapshot, stateToken, pkce.CodeChallenge);
         var expiresAt = _timeProvider.GetUtcNow().Add(_options.StateTokenLifetime).ToUnixTimeSeconds();
-        return Task.FromResult(new BindingChallenge
+        return new BindingChallenge
         {
             AuthorizeUrl = url,
             ExpiresAtUnix = expiresAt,
-        });
+        };
     }
 
     public async Task RevokeBindingAsync(
@@ -89,14 +92,10 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         CancellationToken ct = default)
     {
         ExternalSubjectRefExtensions.EnsureValid(externalSubject);
-        EnsureConfigured();
 
         var bindingId = await _queryPort.ResolveAsync(externalSubject, ct).ConfigureAwait(false);
         if (bindingId is null)
         {
-            // Idempotent: already revoked or never bound. NyxID's source-of-
-            // truth role lives in the contract — local lack of binding means
-            // the caller has nothing to do here.
             _logger.LogInformation(
                 "Revoke skipped: no active binding for {Platform}:{Tenant}:{User}",
                 externalSubject.Platform,
@@ -108,32 +107,21 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         await RevokeBindingByIdAsync(bindingId.Value, ct).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Revokes a binding directly by its opaque id. Maps NyxID 4xx responses
-    /// to silent success (already-revoked is idempotent) and 5xx to an
-    /// exception so callers can retry / surface the failure.
-    /// </summary>
     public async Task RevokeBindingByIdAsync(string bindingId, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(bindingId);
-        EnsureConfigured();
 
-        using var request = new HttpRequestMessage(HttpMethod.Delete, $"{TrimAuthority()}{BindingsEndpoint}/{Uri.EscapeDataString(bindingId)}");
-        ApplyClientSecretBasic(request);
+        var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Delete,
+            $"{snapshot.NyxIdAuthority.TrimEnd('/')}{BindingsEndpoint}/{Uri.EscapeDataString(bindingId)}");
         using var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
 
-        // 404 / 410 — binding already gone (NyxID-side revoke beat us, or
-        // the id was never persisted). DELETE is idempotent; treat as success.
         if ((int)response.StatusCode is 404 or 410)
             return;
-
         if (response.IsSuccessStatusCode)
             return;
 
-        // Anything else (401/403 client misauth, 422 validation, 5xx server
-        // outage, etc.) is a real error. Surface body context for diagnosis
-        // and throw so the caller can decide whether to retry / abort the
-        // unbind workflow rather than masking it as success.
         var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         _logger.LogError(
             "NyxID revoke binding failed: status={StatusCode}, binding_id={BindingId}, body={Body}",
@@ -150,7 +138,6 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
     {
         ExternalSubjectRefExtensions.EnsureValid(externalSubject);
         ArgumentNullException.ThrowIfNull(scope);
-        EnsureConfigured();
 
         var bindingId = await _queryPort.ResolveAsync(externalSubject, ct).ConfigureAwait(false);
         if (bindingId is null)
@@ -159,11 +146,6 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         return await IssueShortLivedByBindingIdAsync(externalSubject, bindingId.Value, scope, ct).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Issues a short-lived access token for a known <paramref name="bindingId"/>
-    /// via RFC 8693 token-exchange. Throws <see cref="BindingRevokedException"/>
-    /// when NyxID reports <c>invalid_grant</c> on the binding.
-    /// </summary>
     public async Task<CapabilityHandle> IssueShortLivedByBindingIdAsync(
         ExternalSubjectRef externalSubject,
         string bindingId,
@@ -173,37 +155,32 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         ExternalSubjectRefExtensions.EnsureValid(externalSubject);
         ArgumentException.ThrowIfNullOrWhiteSpace(bindingId);
         ArgumentNullException.ThrowIfNull(scope);
-        EnsureConfigured();
+
+        var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
 
         var form = new List<KeyValuePair<string, string>>
         {
             new("grant_type", TokenExchangeGrantType),
             new("subject_token", bindingId),
             new("subject_token_type", BindingIdSubjectTokenType),
+            new("client_id", snapshot.ClientId),
         };
         if (!string.IsNullOrWhiteSpace(scope.Value))
             form.Add(new KeyValuePair<string, string>("scope", scope.Value));
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{TrimAuthority()}{TokenEndpoint}")
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"{snapshot.NyxIdAuthority.TrimEnd('/')}{TokenEndpoint}")
         {
             Content = new FormUrlEncodedContent(form),
         };
-        ApplyClientSecretBasic(request);
 
         using var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             if ((int)response.StatusCode == 400 && IsInvalidGrant(body))
-            {
-                _logger.LogInformation(
-                    "Binding revoked by NyxID for {Platform}:{Tenant}:{User}",
-                    externalSubject.Platform,
-                    externalSubject.Tenant,
-                    externalSubject.ExternalUserId);
                 throw new BindingRevokedException(externalSubject, "NyxID returned invalid_grant on token-exchange.");
-            }
-
             _logger.LogError(
                 "NyxID token-exchange failed: status={StatusCode}, body={Body}",
                 (int)response.StatusCode,
@@ -211,7 +188,9 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             response.EnsureSuccessStatusCode();
         }
 
-        var payload = await response.Content.ReadFromJsonAsync<TokenResponse>(JsonOptions, ct).ConfigureAwait(false)
+        var payload = await response.Content
+            .ReadFromJsonAsync<TokenResponse>(JsonOptions, ct)
+            .ConfigureAwait(false)
             ?? throw new InvalidOperationException("NyxID returned an empty token-exchange response.");
 
         return new CapabilityHandle
@@ -226,23 +205,15 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
 
     // ─── INyxIdBrokerCallbackClient ───
 
-    public bool TryDecodeStateToken(
-        string stateToken,
-        out string correlationId,
-        out ExternalSubjectRef? externalSubject,
-        out string pkceVerifier,
-        out string? errorCode)
+    public async Task<CallbackStateDecode> TryDecodeStateTokenAsync(string stateToken, CancellationToken ct = default)
     {
-        correlationId = string.Empty;
-        externalSubject = null;
-        pkceVerifier = string.Empty;
-        if (!_stateTokenCodec.TryDecode(stateToken, out var payload, out errorCode) || payload is null)
-            return false;
-
-        correlationId = payload.CorrelationId;
-        externalSubject = payload.ExternalSubject?.Clone();
-        pkceVerifier = payload.PkceVerifier;
-        return true;
+        var result = await _stateTokenCodec.TryDecodeAsync(stateToken, ct).ConfigureAwait(false);
+        if (!result.Succeeded || result.Payload is null)
+            return CallbackStateDecode.Failed(result.ErrorCode ?? "state_unknown");
+        return CallbackStateDecode.Ok(
+            result.Payload.CorrelationId,
+            result.Payload.ExternalSubject?.Clone(),
+            result.Payload.PkceVerifier);
     }
 
     public async Task<BrokerAuthorizationCodeResult> ExchangeAuthorizationCodeAsync(
@@ -252,22 +223,25 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(authorizationCode);
         ArgumentException.ThrowIfNullOrWhiteSpace(codeVerifier);
-        EnsureConfigured();
+
+        var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
+        var redirectUri = ResolveRedirectUri();
 
         var form = new List<KeyValuePair<string, string>>
         {
             new("grant_type", "authorization_code"),
             new("code", authorizationCode),
             new("code_verifier", codeVerifier),
-            new("redirect_uri", _options.RedirectUri),
-            new("client_id", _options.ClientId),
+            new("redirect_uri", redirectUri),
+            new("client_id", snapshot.ClientId),
         };
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{TrimAuthority()}{TokenEndpoint}")
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"{snapshot.NyxIdAuthority.TrimEnd('/')}{TokenEndpoint}")
         {
             Content = new FormUrlEncodedContent(form),
         };
-        ApplyClientSecretBasic(request);
 
         using var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
@@ -280,70 +254,43 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             response.EnsureSuccessStatusCode();
         }
 
-        var payload = await response.Content.ReadFromJsonAsync<TokenResponse>(JsonOptions, ct).ConfigureAwait(false)
+        var payload = await response.Content
+            .ReadFromJsonAsync<TokenResponse>(JsonOptions, ct)
+            .ConfigureAwait(false)
             ?? throw new InvalidOperationException("NyxID returned an empty authorization-code response.");
 
-        if (string.IsNullOrWhiteSpace(payload.BindingId))
-        {
-            // The NyxID#549 contract requires `binding_id` in the response when
-            // the broker scope is requested. A missing value implies the client
-            // is misconfigured (likely missing the broker scope) — surface
-            // loudly so deploys catch it.
-            throw new InvalidOperationException(
-                "NyxID authorization-code response did not include binding_id; verify the client has urn:nyxid:scope:broker_binding scope.");
-        }
-
+        // binding_id is null when broker_capability_enabled=false on this
+        // client at NyxID. We surface the gap to the caller (callback handler)
+        // rather than throwing — the user-visible error message guides ops to
+        // toggle the flag at NyxID admin (one-time per cluster).
         return new BrokerAuthorizationCodeResult(payload.BindingId, payload.IdToken, payload.AccessToken);
     }
 
-    // ─── Internals ───
-
-    private string BuildAuthorizeUrl(string stateToken, string codeChallenge)
+    private string BuildAuthorizeUrl(AevatarOAuthClientSnapshot snapshot, string stateToken, string codeChallenge)
     {
+        var redirectUri = ResolveRedirectUri();
         var queryParts = new List<string>
         {
-            $"response_type=code",
-            $"client_id={Uri.EscapeDataString(_options.ClientId)}",
-            $"redirect_uri={Uri.EscapeDataString(_options.RedirectUri)}",
+            "response_type=code",
+            $"client_id={Uri.EscapeDataString(snapshot.ClientId)}",
+            $"redirect_uri={Uri.EscapeDataString(redirectUri)}",
             $"scope={Uri.EscapeDataString(_options.Scope)}",
             $"state={Uri.EscapeDataString(stateToken)}",
             $"code_challenge={Uri.EscapeDataString(codeChallenge)}",
-            $"code_challenge_method=S256",
+            "code_challenge_method=S256",
         };
-        return $"{TrimAuthority()}{AuthorizeEndpoint}?{string.Join("&", queryParts)}";
+        return $"{snapshot.NyxIdAuthority.TrimEnd('/')}{AuthorizeEndpoint}?{string.Join("&", queryParts)}";
     }
-
-    private void ApplyClientSecretBasic(HttpRequestMessage request)
-    {
-        var raw = $"{_options.ClientId}:{_options.ClientSecret}";
-        var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(raw));
-        request.Headers.Authorization = new AuthenticationHeaderValue("Basic", encoded);
-    }
-
-    private void EnsureConfigured()
-    {
-        if (string.IsNullOrWhiteSpace(_options.Authority))
-            throw new InvalidOperationException("NyxIdBrokerOptions.Authority is not configured.");
-        if (string.IsNullOrWhiteSpace(_options.ClientId))
-            throw new InvalidOperationException("NyxIdBrokerOptions.ClientId is not configured.");
-        if (string.IsNullOrWhiteSpace(_options.ClientSecret))
-            throw new InvalidOperationException("NyxIdBrokerOptions.ClientSecret is not configured.");
-        if (string.IsNullOrWhiteSpace(_options.RedirectUri))
-            throw new InvalidOperationException("NyxIdBrokerOptions.RedirectUri is not configured.");
-    }
-
-    private string TrimAuthority() => _options.Authority.TrimEnd('/');
 
     private static bool IsInvalidGrant(string body)
     {
-        if (string.IsNullOrWhiteSpace(body))
-            return false;
+        if (string.IsNullOrWhiteSpace(body)) return false;
         try
         {
             using var document = JsonDocument.Parse(body);
-            return document.RootElement.TryGetProperty("error", out var errorElement)
-                && errorElement.ValueKind == JsonValueKind.String
-                && string.Equals(errorElement.GetString(), "invalid_grant", StringComparison.Ordinal);
+            return document.RootElement.TryGetProperty("error", out var element)
+                && element.ValueKind == JsonValueKind.String
+                && string.Equals(element.GetString(), "invalid_grant", StringComparison.Ordinal);
         }
         catch (JsonException)
         {
@@ -363,4 +310,16 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         public string? TokenType { get; init; }
         public int? ExpiresIn { get; init; }
     }
+}
+
+/// <summary>
+/// Result of a state-token decode call on the callback side.
+/// </summary>
+public sealed record CallbackStateDecode(bool Succeeded, string? CorrelationId, ExternalSubjectRef? ExternalSubject, string? PkceVerifier, string? ErrorCode)
+{
+    public static CallbackStateDecode Ok(string correlationId, ExternalSubjectRef? subject, string verifier) =>
+        new(true, correlationId, subject, verifier, null);
+
+    public static CallbackStateDecode Failed(string errorCode) =>
+        new(false, null, null, null, errorCode);
 }

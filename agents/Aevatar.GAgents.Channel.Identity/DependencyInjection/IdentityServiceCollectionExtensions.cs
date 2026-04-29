@@ -1,4 +1,9 @@
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
+using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
+using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
+using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
@@ -9,89 +14,109 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace Aevatar.GAgents.Channel.Identity.DependencyInjection;
 
 /// <summary>
-/// DI extensions for the Channel.Identity module. Wires the
-/// <see cref="ExternalIdentityBindingGAgent"/> projection chain and the
-/// production NyxID broker client. Slash-command routing in the turn runner
-/// and the OAuth callback / CAE-webhook endpoints layer on top in their own
-/// composition roots. See ADR-0018 §Dependencies.
+/// DI extensions for the Channel.Identity module. The cluster-singleton
+/// OAuth client provisioning, broker, and projection chain are wired via
+/// <see cref="AddChannelIdentity"/>; the broker is self-bootstrapping (no
+/// appsettings dependency).
 /// </summary>
 public static class IdentityServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers the projection chain for the per-user binding actor:
-    /// projector, materialization-context kind, metadata provider, and the
-    /// projection-backed <see cref="IExternalIdentityBindingQueryPort"/>.
-    /// Caller still needs to register a projection document store (e.g.
-    /// <c>AddInMemoryDocumentProjectionStore</c> for tests, or the
-    /// Elasticsearch provider for production).
+    /// Registers the full Channel.Identity stack: per-binding projection +
+    /// query / readiness ports, the cluster-singleton OAuth client
+    /// projection + provider, the production NyxID broker, and the OAuth
+    /// client bootstrap service. Caller must additionally call
+    /// <c>MapIdentityOAuthEndpoints</c> on the endpoint route builder.
     /// </summary>
-    public static IServiceCollection AddChannelIdentityProjection(this IServiceCollection services)
-    {
-        ArgumentNullException.ThrowIfNull(services);
-
-        services.AddCurrentStateProjectionMaterializer<
-            ExternalIdentityBindingMaterializationContext,
-            ExternalIdentityBindingProjector>();
-
-        services.TryAddSingleton<
-            IProjectionDocumentMetadataProvider<ExternalIdentityBindingDocument>,
-            ExternalIdentityBindingDocumentMetadataProvider>();
-
-        services.TryAddSingleton<
-            IExternalIdentityBindingQueryPort,
-            ExternalIdentityBindingProjectionQueryPort>();
-        services.TryAddSingleton<
-            IProjectionReadinessPort,
-            ExternalIdentityBindingProjectionReadinessPort>();
-
-        return services;
-    }
-
-    /// <summary>
-    /// Registers the broker revocation webhook validator. Registered separately
-    /// from the broker client so test harnesses can swap the validator without
-    /// pulling the full HTTP client.
-    /// </summary>
-    public static IServiceCollection AddChannelIdentityWebhookValidators(this IServiceCollection services)
-    {
-        ArgumentNullException.ThrowIfNull(services);
-        services.TryAddSingleton<Endpoints.BrokerRevocationWebhookValidator>();
-        return services;
-    }
-
-    /// <summary>
-    /// Registers the production NyxID broker client
-    /// (<see cref="NyxIdRemoteCapabilityBroker"/>) plus its supporting
-    /// <see cref="StateTokenCodec"/>. Configuration binds the
-    /// <c>Aevatar:NyxIdBroker</c> section into <see cref="NyxIdBrokerOptions"/>.
-    /// </summary>
-    public static IServiceCollection AddNyxIdRemoteCapabilityBroker(
+    public static IServiceCollection AddChannelIdentity(
         this IServiceCollection services,
         IConfiguration? configuration = null)
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        // AddOptions wires up the IOptionsMonitor<NyxIdBrokerOptions> machinery
-        // unconditionally so callers without an IConfiguration (e.g. tests
-        // that programmatically push options) still resolve the monitor.
-        services.AddOptions<NyxIdBrokerOptions>();
-        if (configuration is not null)
+        // ─── Shared projection runtime infrastructure ───
+        services.AddProjectionReadModelRuntime();
+        services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
+        services.TryAddSingleton(sp => TimeProvider.System);
+
+        var useElasticsearch = ElasticsearchProjectionConfiguration.IsEnabled(
+            configuration,
+            storeName: "ChannelIdentity");
+
+        // ─── Per-binding projection (one document per ExternalSubjectRef) ───
+        services.AddProjectionMaterializationRuntimeCore<
+            ExternalIdentityBindingMaterializationContext,
+            ExternalIdentityBindingMaterializationRuntimeLease,
+            ProjectionMaterializationScopeGAgent<ExternalIdentityBindingMaterializationContext>>(
+            static scopeKey => new ExternalIdentityBindingMaterializationContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new ExternalIdentityBindingMaterializationRuntimeLease(context));
+        services.AddCurrentStateProjectionMaterializer<
+            ExternalIdentityBindingMaterializationContext,
+            ExternalIdentityBindingProjector>();
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<ExternalIdentityBindingDocument>,
+            ExternalIdentityBindingDocumentMetadataProvider>();
+        services.TryAddSingleton<IExternalIdentityBindingQueryPort, ExternalIdentityBindingProjectionQueryPort>();
+        services.TryAddSingleton<IProjectionReadinessPort, ExternalIdentityBindingProjectionReadinessPort>();
+
+        // ─── Cluster-singleton OAuth client projection ───
+        services.AddProjectionMaterializationRuntimeCore<
+            AevatarOAuthClientMaterializationContext,
+            AevatarOAuthClientMaterializationRuntimeLease,
+            ProjectionMaterializationScopeGAgent<AevatarOAuthClientMaterializationContext>>(
+            static scopeKey => new AevatarOAuthClientMaterializationContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new AevatarOAuthClientMaterializationRuntimeLease(context));
+        services.AddCurrentStateProjectionMaterializer<
+            AevatarOAuthClientMaterializationContext,
+            AevatarOAuthClientProjector>();
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<AevatarOAuthClientDocument>,
+            AevatarOAuthClientDocumentMetadataProvider>();
+        services.TryAddSingleton<IAevatarOAuthClientProvider, AevatarOAuthClientProjectionProvider>();
+
+        // ─── Document stores (ES vs InMemory) ───
+        if (useElasticsearch)
         {
-            services.Configure<NyxIdBrokerOptions>(configuration.GetSection("Aevatar:NyxIdBroker"));
+            services.AddElasticsearchDocumentProjectionStore<ExternalIdentityBindingDocument, string>(
+                optionsFactory: _ => ElasticsearchProjectionConfiguration.BindOptions(configuration!),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ExternalIdentityBindingDocument>>().Metadata,
+                keySelector: static doc => doc.Id,
+                keyFormatter: static key => key);
+            services.AddElasticsearchDocumentProjectionStore<AevatarOAuthClientDocument, string>(
+                optionsFactory: _ => ElasticsearchProjectionConfiguration.BindOptions(configuration!),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<AevatarOAuthClientDocument>>().Metadata,
+                keySelector: static doc => doc.Id,
+                keyFormatter: static key => key);
+        }
+        else
+        {
+            services.AddInMemoryDocumentProjectionStore<ExternalIdentityBindingDocument, string>(
+                static doc => doc.Id, static key => key);
+            services.AddInMemoryDocumentProjectionStore<AevatarOAuthClientDocument, string>(
+                static doc => doc.Id, static key => key);
         }
 
-        // Both NyxIdRemoteCapabilityBroker and StateTokenCodec consume
-        // IOptionsMonitor<NyxIdBrokerOptions> directly so config reload is
-        // observed without a process restart (glm-5.1 L73). No snapshot
-        // registration of NyxIdBrokerOptions is needed — leaving it out
-        // also disambiguates ctor selection for StateTokenCodec, which has
-        // a snapshot-friendly convenience overload reserved for tests.
-        services.TryAddSingleton(sp => TimeProvider.System);
+        // ─── Broker (self-bootstrapping, no appsettings dependency) ───
+        services.AddOptions<NyxIdBrokerOptions>();
         services.TryAddSingleton<StateTokenCodec>();
-
         services.AddHttpClient<NyxIdRemoteCapabilityBroker>();
         services.TryAddSingleton<INyxIdCapabilityBroker>(sp => sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
         services.TryAddSingleton<INyxIdBrokerCallbackClient>(sp => sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
+
+        // ─── OAuth client bootstrap (self-registration via NyxID DCR) ───
+        services.AddHttpClient<NyxIdDynamicClientRegistrationClient>();
+        services.AddHostedService<AevatarOAuthClientBootstrapService>();
+
+        // ─── Webhook validators ───
+        services.TryAddSingleton<Endpoints.BrokerRevocationWebhookValidator>();
 
         return services;
     }

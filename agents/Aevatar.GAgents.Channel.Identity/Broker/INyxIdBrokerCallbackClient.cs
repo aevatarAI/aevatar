@@ -7,33 +7,25 @@ namespace Aevatar.GAgents.Channel.Identity.Broker;
 /// binding flow. Distinct from <c>INyxIdCapabilityBroker</c> (which is the
 /// per-turn write-side seam used by <c>ChannelConversationTurnRunner</c>);
 /// the callback handler depends on this narrower contract so the seam is
-/// obvious in the dependency graph. See ADR-0018 §Decision (`/init` flow).
+/// obvious in the dependency graph. See ADR-0017 §Decision (`/init` flow).
 /// </summary>
 public interface INyxIdBrokerCallbackClient
 {
     /// <summary>
-    /// Validates and decodes the incoming <c>state</c> token. Returns
-    /// <c>true</c> with the carried correlation/subject/verifier when the
-    /// HMAC + expiry are valid; otherwise <c>false</c> with an
-    /// <paramref name="errorCode"/> identifying the failure mode (see
-    /// ADR-0018 §Implementation Notes #3 for the user-facing UX classes:
-    /// <c>state_expired</c>, <c>state_signature_invalid</c>,
-    /// <c>state_payload_invalid</c>, <c>state_malformed</c>,
-    /// <c>state_kid_unknown</c>, <c>state_missing</c>).
+    /// Validates and decodes the incoming <c>state</c> token. Async because
+    /// the HMAC key lives behind <c>IAevatarOAuthClientProvider</c>
+    /// (cluster-singleton actor).
     /// </summary>
-    bool TryDecodeStateToken(
-        string stateToken,
-        out string correlationId,
-        out ExternalSubjectRef? externalSubject,
-        out string pkceVerifier,
-        out string? errorCode);
+    Task<CallbackStateDecode> TryDecodeStateTokenAsync(string stateToken, CancellationToken ct = default);
 
     /// <summary>
     /// Exchanges the OAuth authorization code for a binding handle via
     /// <c>POST /oauth/token</c> with <c>grant_type=authorization_code</c>.
     /// Under the broker scope (<c>urn:nyxid:scope:broker_binding</c>), NyxID
-    /// returns <c>binding_id</c> instead of <c>refresh_token</c>; aevatar
-    /// holds the binding pointer only.
+    /// returns <c>binding_id</c> instead of <c>refresh_token</c> when
+    /// <c>broker_capability_enabled=true</c>; if the flag is off,
+    /// <c>BindingId</c> is null and the callback handler surfaces the gap to
+    /// ops (one-time NyxID-admin step).
     /// </summary>
     Task<BrokerAuthorizationCodeResult> ExchangeAuthorizationCodeAsync(
         string authorizationCode,
@@ -43,10 +35,7 @@ public interface INyxIdBrokerCallbackClient
 
 /// <summary>
 /// Result of an authorization-code -> binding-id exchange. <see cref="BindingId"/>
-/// is the opaque handle the broker hands back to aevatar; <see cref="IdToken"/>
-/// is the OIDC ID token (carries the <c>sub</c>/<c>name</c> claims so the
-/// callback handler can render an "已绑定 &lt;name&gt;" message without a
-/// separate <c>/oauth/userinfo</c> round-trip — see ADR-0018 §Decision).
-/// Both tokens are one-shot; the callback handler MUST NOT persist them.
+/// may be null when NyxID has not yet enabled <c>broker_capability_enabled</c>
+/// on this client (see ADR-0017 §Decision).
 /// </summary>
-public sealed record BrokerAuthorizationCodeResult(string BindingId, string? IdToken, string? AccessToken);
+public sealed record BrokerAuthorizationCodeResult(string? BindingId, string? IdToken, string? AccessToken);

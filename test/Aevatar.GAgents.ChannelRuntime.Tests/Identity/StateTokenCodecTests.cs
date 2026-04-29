@@ -1,4 +1,5 @@
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
 using FluentAssertions;
 using Microsoft.Extensions.Time.Testing;
@@ -14,16 +15,17 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 /// </summary>
 public class StateTokenCodecTests
 {
-    private static NyxIdBrokerOptions Options() => new()
-    {
-        Authority = "https://nyxid.test",
-        ClientId = "aevatar-channel-binding",
-        ClientSecret = "client-secret",
-        RedirectUri = "https://aevatar/api/oauth/nyxid-callback",
-        StateTokenHmacKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        StateTokenKid = "v1",
-        StateTokenLifetime = TimeSpan.FromMinutes(5),
-    };
+    private static readonly byte[] HmacKey =
+        Convert.FromHexString("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+
+    private static AevatarOAuthClientSnapshot Snapshot(byte[]? hmacKey = null) => new(
+        ClientId: "aevatar-channel-binding",
+        ClientIdIssuedAt: DateTimeOffset.Parse("2026-04-29T09:00:00Z"),
+        HmacKey: hmacKey ?? HmacKey,
+        HmacKeyRotatedAt: DateTimeOffset.Parse("2026-04-29T09:00:00Z"),
+        NyxIdAuthority: "https://nyxid.test",
+        BrokerCapabilityObserved: true,
+        BrokerCapabilityObservedAt: DateTimeOffset.Parse("2026-04-29T09:00:00Z"));
 
     private static ExternalSubjectRef SampleSubject() => new()
     {
@@ -33,91 +35,103 @@ public class StateTokenCodecTests
     };
 
     [Fact]
-    public void Encode_DecodeRoundTrip_PreservesPayload()
+    public async Task Encode_DecodeRoundTrip_PreservesPayload()
     {
         var clock = new FakeTimeProvider(DateTimeOffset.Parse("2026-04-29T10:00:00Z"));
-        var codec = new StateTokenCodec(Options(), clock);
+        var provider = new FakeOAuthClientProvider(Snapshot());
+        var codec = new StateTokenCodec(provider, clock);
 
-        var token = codec.Encode("corr-1", SampleSubject(), "verifier-abc");
-        var ok = codec.TryDecode(token, out var payload, out var errorCode);
+        var token = await codec.EncodeAsync("corr-1", SampleSubject(), "verifier-abc");
+        var result = await codec.TryDecodeAsync(token);
 
-        ok.Should().BeTrue();
-        errorCode.Should().BeNull();
-        payload.Should().NotBeNull();
-        payload!.CorrelationId.Should().Be("corr-1");
-        payload.PkceVerifier.Should().Be("verifier-abc");
-        payload.ExternalSubject.ExternalUserId.Should().Be("ou_user_y");
+        result.Succeeded.Should().BeTrue();
+        result.ErrorCode.Should().BeNull();
+        result.Payload.Should().NotBeNull();
+        result.Payload!.CorrelationId.Should().Be("corr-1");
+        result.Payload.PkceVerifier.Should().Be("verifier-abc");
+        result.Payload.ExternalSubject.ExternalUserId.Should().Be("ou_user_y");
     }
 
     [Fact]
-    public void TryDecode_ReturnsExpiredAfterLifetime()
+    public async Task TryDecode_ReturnsExpiredAfterLifetime()
     {
         var clock = new FakeTimeProvider(DateTimeOffset.Parse("2026-04-29T10:00:00Z"));
-        var codec = new StateTokenCodec(Options(), clock);
-        var token = codec.Encode("corr-1", SampleSubject(), "verifier-abc");
+        var provider = new FakeOAuthClientProvider(Snapshot());
+        var codec = new StateTokenCodec(provider, clock);
+        var token = await codec.EncodeAsync("corr-1", SampleSubject(), "verifier-abc");
 
         clock.Advance(TimeSpan.FromMinutes(6));
 
-        var ok = codec.TryDecode(token, out var payload, out var errorCode);
+        var result = await codec.TryDecodeAsync(token);
 
-        ok.Should().BeFalse();
-        payload.Should().BeNull();
-        errorCode.Should().Be("state_expired");
+        result.Succeeded.Should().BeFalse();
+        result.Payload.Should().BeNull();
+        result.ErrorCode.Should().Be("state_expired");
     }
 
     [Fact]
-    public void TryDecode_RejectsTamperedSignature()
+    public async Task TryDecode_RejectsTamperedSignature()
     {
-        var codec = new StateTokenCodec(Options(), new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var token = codec.Encode("corr-1", SampleSubject(), "verifier-abc");
+        var provider = new FakeOAuthClientProvider(Snapshot());
+        var codec = new StateTokenCodec(provider, new FakeTimeProvider(DateTimeOffset.UtcNow));
+        var token = await codec.EncodeAsync("corr-1", SampleSubject(), "verifier-abc");
 
         // Flip a byte in the HMAC segment by replacing the last char.
         var lastDot = token.LastIndexOf('.');
         var tampered = token[..(lastDot + 1)] + "xxxxxxxx";
 
-        var ok = codec.TryDecode(tampered, out var payload, out var errorCode);
+        var result = await codec.TryDecodeAsync(tampered);
 
-        ok.Should().BeFalse();
-        payload.Should().BeNull();
-        errorCode.Should().Be("state_signature_invalid");
+        result.Succeeded.Should().BeFalse();
+        result.Payload.Should().BeNull();
+        result.ErrorCode.Should().Be("state_signature_invalid");
     }
 
     [Fact]
-    public void TryDecode_RejectsUnknownKid()
+    public async Task TryDecode_FailsWhenHmacKeyUnprovisioned()
     {
         var clock = new FakeTimeProvider(DateTimeOffset.UtcNow);
-        var encoder = new StateTokenCodec(Options(), clock);
-        var verifier = new StateTokenCodec(
-            new NyxIdBrokerOptions
-            {
-                Authority = "https://nyxid.test",
-                ClientId = "aevatar-channel-binding",
-                ClientSecret = "client-secret",
-                RedirectUri = "https://aevatar/api/oauth/nyxid-callback",
-                StateTokenHmacKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                StateTokenKid = "v2",
-            },
-            clock);
+        var encoder = new StateTokenCodec(new FakeOAuthClientProvider(Snapshot()), clock);
+        var token = await encoder.EncodeAsync("corr-1", SampleSubject(), "verifier-abc");
 
-        var token = encoder.Encode("corr-1", SampleSubject(), "verifier-abc");
-        var ok = verifier.TryDecode(token, out _, out var errorCode);
+        // Verifier has no client provisioned yet.
+        var verifier = new StateTokenCodec(new FakeOAuthClientProvider(snapshot: null), clock);
+        var result = await verifier.TryDecodeAsync(token);
 
-        ok.Should().BeFalse();
-        errorCode.Should().Be("state_kid_unknown");
+        result.Succeeded.Should().BeFalse();
+        result.ErrorCode.Should().Be("state_signature_invalid");
     }
 
     [Theory]
     [InlineData("")]
     [InlineData("not-a-state-token")]
     [InlineData("a.b")]
-    public void TryDecode_RejectsMalformedTokens(string raw)
+    public async Task TryDecode_RejectsMalformedTokens(string raw)
     {
-        var codec = new StateTokenCodec(Options(), new FakeTimeProvider(DateTimeOffset.UtcNow));
+        var provider = new FakeOAuthClientProvider(Snapshot());
+        var codec = new StateTokenCodec(provider, new FakeTimeProvider(DateTimeOffset.UtcNow));
 
-        var ok = codec.TryDecode(raw, out var payload, out var errorCode);
+        var result = await codec.TryDecodeAsync(raw);
 
-        ok.Should().BeFalse();
-        payload.Should().BeNull();
-        errorCode.Should().NotBeNullOrEmpty();
+        result.Succeeded.Should().BeFalse();
+        result.Payload.Should().BeNull();
+        result.ErrorCode.Should().NotBeNullOrEmpty();
+    }
+
+    private sealed class FakeOAuthClientProvider : IAevatarOAuthClientProvider
+    {
+        private readonly AevatarOAuthClientSnapshot? _snapshot;
+
+        public FakeOAuthClientProvider(AevatarOAuthClientSnapshot? snapshot)
+        {
+            _snapshot = snapshot;
+        }
+
+        public Task<AevatarOAuthClientSnapshot> GetAsync(CancellationToken ct = default)
+        {
+            if (_snapshot is null)
+                throw new AevatarOAuthClientNotProvisionedException();
+            return Task.FromResult(_snapshot);
+        }
     }
 }

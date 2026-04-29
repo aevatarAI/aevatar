@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -13,65 +14,41 @@ namespace Aevatar.GAgents.Channel.Identity.Broker;
 /// subject, the PKCE code verifier, and an absolute expiry (UNIX seconds).
 /// Token shape: <c>base64url(kid) "." base64url(payload_proto) "." base64url(hmac)</c>.
 /// HMAC is over the literal bytes <c>kid_bytes "." payload_proto_bytes</c>
-/// — see ADR-0018 §Implementation Notes #1.
+/// — see ADR-0017 §Implementation Notes #1.
 /// </summary>
+/// <remarks>
+/// Reads its HMAC key from <see cref="IAevatarOAuthClientProvider"/> (cluster-
+/// singleton actor) so the key is provisioned automatically with the OAuth
+/// client and rotates as a side effect of the actor's rotation command. No
+/// appsettings / secrets-store dependency.
+/// </remarks>
 public sealed class StateTokenCodec
 {
-    private readonly Microsoft.Extensions.Options.IOptionsMonitor<NyxIdBrokerOptions> _optionsMonitor;
+    private const string DefaultKid = "v1";
+    private static readonly TimeSpan DefaultStateTokenLifetime = TimeSpan.FromMinutes(5);
+
+    private readonly IAevatarOAuthClientProvider _clientProvider;
     private readonly TimeProvider _timeProvider;
 
     public StateTokenCodec(
-        Microsoft.Extensions.Options.IOptionsMonitor<NyxIdBrokerOptions> optionsMonitor,
+        IAevatarOAuthClientProvider clientProvider,
         TimeProvider? timeProvider = null)
     {
-        _optionsMonitor = optionsMonitor ?? throw new ArgumentNullException(nameof(optionsMonitor));
+        _clientProvider = clientProvider ?? throw new ArgumentNullException(nameof(clientProvider));
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
-    // Convenience overload for tests / scenarios that already have a snapshot.
-    public StateTokenCodec(NyxIdBrokerOptions options, TimeProvider? timeProvider = null)
-        : this(StaticOptionsMonitor.Of(options ?? throw new ArgumentNullException(nameof(options))), timeProvider)
-    {
-    }
-
-    private NyxIdBrokerOptions _options => _optionsMonitor.CurrentValue;
-
-    // Cached HMAC key bytes invalidated by a key-string fingerprint. Encoding
-    // the UTF-8 key on every sign call is wasted work for a singleton codec
-    // (mimo-v2.5-pro L145 / L181); using an IOptionsMonitor still requires
-    // per-call freshness, so we re-encode only when the underlying key
-    // changes, keyed by the raw key string.
-    private string? _cachedKeySource;
-    private byte[] _cachedKeyBytes = Array.Empty<byte>();
-    private readonly object _keyCacheGate = new();
-
-    private byte[] HmacKeyBytes()
-    {
-        var key = _options.StateTokenHmacKey;
-        if (string.IsNullOrEmpty(key))
-            return Array.Empty<byte>();
-
-        if (ReferenceEquals(_cachedKeySource, key) || string.Equals(_cachedKeySource, key, StringComparison.Ordinal))
-            return _cachedKeyBytes;
-
-        lock (_keyCacheGate)
-        {
-            if (ReferenceEquals(_cachedKeySource, key) || string.Equals(_cachedKeySource, key, StringComparison.Ordinal))
-                return _cachedKeyBytes;
-
-            _cachedKeyBytes = Encoding.UTF8.GetBytes(key);
-            _cachedKeySource = key;
-            return _cachedKeyBytes;
-        }
-    }
-
-    public string Encode(string correlationId, ExternalSubjectRef externalSubject, string pkceVerifier)
+    public async Task<string> EncodeAsync(string correlationId, ExternalSubjectRef externalSubject, string pkceVerifier, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(correlationId);
         ArgumentException.ThrowIfNullOrWhiteSpace(pkceVerifier);
         ArgumentNullException.ThrowIfNull(externalSubject);
 
-        var expiresAt = _timeProvider.GetUtcNow().Add(_options.StateTokenLifetime);
+        var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
+        if (snapshot.HmacKey.Length == 0)
+            throw new InvalidOperationException("Aevatar OAuth client HMAC key is not provisioned.");
+
+        var expiresAt = _timeProvider.GetUtcNow().Add(DefaultStateTokenLifetime);
         var payload = new StateTokenPayload
         {
             CorrelationId = correlationId,
@@ -80,36 +57,22 @@ public sealed class StateTokenCodec
             ExpiresAt = Timestamp.FromDateTimeOffset(expiresAt),
         };
 
-        var kidBytes = Encoding.UTF8.GetBytes(_options.StateTokenKid);
-        // Deterministic Protobuf serialization for the HMAC payload —
-        // standard ToByteArray() is not guaranteed deterministic across
-        // schema evolutions (e.g. future map<…> fields). Pin the invariant
-        // here so verification stays stable. See ADR-0018 §Implementation
-        // Notes #1 (deepseek-v4-pro L39).
+        var kidBytes = Encoding.UTF8.GetBytes(DefaultKid);
         var payloadBytes = SerializeDeterministically(payload);
         var signed = Combine(kidBytes, payloadBytes);
-        var hmac = HmacSign(signed);
+        var hmac = HMACSHA256.HashData(snapshot.HmacKey, signed);
 
         return $"{Base64UrlEncode(kidBytes)}.{Base64UrlEncode(payloadBytes)}.{Base64UrlEncode(hmac)}";
     }
 
-    public bool TryDecode(string stateToken, out StateTokenPayload? payload, out string? errorCode)
+    public async Task<DecodeResult> TryDecodeAsync(string stateToken, CancellationToken ct = default)
     {
-        payload = null;
-        errorCode = null;
-
         if (string.IsNullOrWhiteSpace(stateToken))
-        {
-            errorCode = "state_missing";
-            return false;
-        }
+            return DecodeResult.Failed("state_missing");
 
         var parts = stateToken.Split('.');
         if (parts.Length != 3)
-        {
-            errorCode = "state_malformed";
-            return false;
-        }
+            return DecodeResult.Failed("state_malformed");
 
         byte[] kidBytes;
         byte[] payloadBytes;
@@ -122,26 +85,28 @@ public sealed class StateTokenCodec
         }
         catch (FormatException)
         {
-            errorCode = "state_malformed";
-            return false;
+            return DecodeResult.Failed("state_malformed");
         }
 
-        // Verify the kid matches an accepted version. Today we only accept the
-        // current key; rotation can extend this to also accept the previous kid
-        // during a grace window — see ADR-0018 §Implementation Notes #1.
         var presentedKid = Encoding.UTF8.GetString(kidBytes);
-        if (!string.Equals(presentedKid, _options.StateTokenKid, StringComparison.Ordinal))
-        {
-            errorCode = "state_kid_unknown";
-            return false;
-        }
+        if (!string.Equals(presentedKid, DefaultKid, StringComparison.Ordinal))
+            return DecodeResult.Failed("state_kid_unknown");
 
-        var expectedHmac = HmacSign(Combine(kidBytes, payloadBytes));
-        if (!CryptographicOperations.FixedTimeEquals(expectedHmac, hmacBytes))
+        AevatarOAuthClientSnapshot snapshot;
+        try
         {
-            errorCode = "state_signature_invalid";
-            return false;
+            snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
         }
+        catch (AevatarOAuthClientNotProvisionedException)
+        {
+            return DecodeResult.Failed("state_signature_invalid");
+        }
+        if (snapshot.HmacKey.Length == 0)
+            return DecodeResult.Failed("state_signature_invalid");
+
+        var expectedHmac = HMACSHA256.HashData(snapshot.HmacKey, Combine(kidBytes, payloadBytes));
+        if (!CryptographicOperations.FixedTimeEquals(expectedHmac, hmacBytes))
+            return DecodeResult.Failed("state_signature_invalid");
 
         StateTokenPayload parsed;
         try
@@ -150,40 +115,20 @@ public sealed class StateTokenCodec
         }
         catch (InvalidProtocolBufferException)
         {
-            errorCode = "state_payload_invalid";
-            return false;
+            return DecodeResult.Failed("state_payload_invalid");
         }
 
         if (parsed.ExpiresAt is null || parsed.ExpiresAt.ToDateTimeOffset() < _timeProvider.GetUtcNow())
-        {
-            errorCode = "state_expired";
-            return false;
-        }
+            return DecodeResult.Failed("state_expired");
 
-        payload = parsed;
-        return true;
-    }
-
-    private byte[] HmacSign(ReadOnlySpan<byte> data)
-    {
-        var keyBytes = HmacKeyBytes();
-        if (keyBytes.Length == 0)
-            throw new InvalidOperationException("NyxIdBrokerOptions.StateTokenHmacKey is not configured.");
-        return HMACSHA256.HashData(keyBytes, data);
+        return DecodeResult.Ok(parsed);
     }
 
     private static byte[] SerializeDeterministically(StateTokenPayload payload)
     {
         using var ms = new MemoryStream();
-        using (var output = new Google.Protobuf.CodedOutputStream(ms, leaveOpen: true))
+        using (var output = new CodedOutputStream(ms, leaveOpen: true))
         {
-            // Note: Protobuf C# does not currently expose a deterministic
-            // serialization toggle on CodedOutputStream. StateTokenPayload's
-            // current schema has only scalar / message-typed singular fields,
-            // which serialize in tag order; this pinned helper is the
-            // single chokepoint where deterministic serialization should land
-            // when the schema grows (e.g. map<…> fields), preserving HMAC
-            // verification across versions.
             payload.WriteTo(output);
         }
         return ms.ToArray();
@@ -212,17 +157,9 @@ public sealed class StateTokenCodec
         return Convert.FromBase64String(padded);
     }
 
-    // Adapter so the legacy snapshot-based constructor can wrap a fixed
-    // NyxIdBrokerOptions into the IOptionsMonitor surface. Used by tests
-    // and other callers that don't go through DI options.
-    private sealed class StaticOptionsMonitor : Microsoft.Extensions.Options.IOptionsMonitor<NyxIdBrokerOptions>
+    public sealed record DecodeResult(bool Succeeded, StateTokenPayload? Payload, string? ErrorCode)
     {
-        private readonly NyxIdBrokerOptions _value;
-        public StaticOptionsMonitor(NyxIdBrokerOptions value) { _value = value; }
-        public static Microsoft.Extensions.Options.IOptionsMonitor<NyxIdBrokerOptions> Of(NyxIdBrokerOptions v) =>
-            new StaticOptionsMonitor(v);
-        public NyxIdBrokerOptions CurrentValue => _value;
-        public NyxIdBrokerOptions Get(string? name) => _value;
-        public IDisposable? OnChange(Action<NyxIdBrokerOptions, string?> listener) => null;
+        public static DecodeResult Ok(StateTokenPayload payload) => new(true, payload, null);
+        public static DecodeResult Failed(string errorCode) => new(false, null, errorCode);
     }
 }

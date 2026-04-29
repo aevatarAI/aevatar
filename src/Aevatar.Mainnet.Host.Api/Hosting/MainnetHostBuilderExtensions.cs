@@ -10,6 +10,8 @@ using Aevatar.Authentication.Providers.NyxId;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.GAgents.Authoring.Lark;
+using Aevatar.GAgents.Channel.Identity.DependencyInjection;
+using Aevatar.GAgents.Channel.Identity.Endpoints;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.ChatbotClassifier;
@@ -72,6 +74,7 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddStreamingProxy(builder.Configuration);
         builder.Services.AddChatbotClassifier();
         builder.Services.AddChannelRuntime(builder.Configuration);
+        builder.Services.AddChannelIdentity(builder.Configuration);
         builder.Services.AddDeviceRegistration(builder.Configuration);
         builder.Services.AddScheduledAgents(builder.Configuration);
         builder.Services.AddLarkAgentAuthoring();
@@ -116,6 +119,7 @@ public static class MainnetHostBuilderExtensions
         app.MapStreamingProxyEndpoints();
         app.MapChannelCallbackEndpoints();
         app.MapDeviceEventEndpoints();
+        app.MapIdentityOAuthEndpoints();
 
         return app;
     }
