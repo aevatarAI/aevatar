@@ -151,12 +151,12 @@ The request command carries the binding intent as strong typed fields, not a met
    - typed binding spec
    - `requested_at_utc`
 5. The synchronous API response returns an accepted receipt containing `binding_id`, `scope_id`, `member_id`, and a status such as `accepted`.
-6. A continuation processor registered as `ICommittedObservationContinuation<StudioMaterializationContext>` observes the committed `StudioMemberBindingRequestedEvent` through the durable projection runtime. It does not register as a materializer, does not materialize read models, and does not run inside a query call stack; it performs the scope binding upsert through explicit command ports.
+6. A dedicated StudioMember binding observation actor observes the committed `StudioMemberBindingRequestedEvent` outside the projection materializer pipeline. It does not register as a materializer, does not materialize read models, and does not run inside a query call stack; it dispatches a task-scoped continuation actor through the standard dispatch port.
 7. The continuation dispatches `StudioMemberBindingCompletedEvent` or `StudioMemberBindingFailedEvent` back to the same `StudioMemberGAgent`.
 8. The actor validates `binding_id` against active state, ignores stale completions, and persists final lifecycle changes.
 9. Query endpoints read the projected StudioMember current-state read model to show binding status, last binding, and failure details.
 
-The continuation processor may be implemented as a task-scoped actor or an application-level event handler backed by durable event delivery, but it must not use a process-local dictionary as the source of binding run truth. It must also not be implemented as a projector or `IProjectionMaterializer`; projection materializers remain responsible for read models/artifacts, while committed-observation continuations are responsible for cross-actor business side effects.
+The continuation processor must be modeled as actor-owned observation/continuation state, not as a process-local dictionary or a projection materializer. Projection materializers remain responsible for read models/artifacts; Studio binding observation is a separate committed-event-to-command pipeline.
 
 ### Missing Member Admission
 
@@ -293,7 +293,7 @@ Stage 2: Studio binding command protocol.
 - Extend StudioMember protobuf messages.
 - Update actor state transitions and tests.
 - Change application bind command surface to return accepted receipt.
-- Add `ICommittedObservationContinuation` processing and completion/failure dispatch.
+- Add dedicated StudioMember binding observation and continuation actors with completion/failure dispatch.
 - Update Studio read model and endpoint tests.
 
 Stage 3: Documentation and guard cleanup.

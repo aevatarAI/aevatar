@@ -47,11 +47,6 @@ public abstract class ProjectionMaterializationScopeGAgentBase<TContext>
                 context,
                 envelope,
                 ct);
-            await ProjectionScopeDispatchExecutor.ExecuteContinuationsAsync(
-                ResolveContinuations(),
-                context,
-                envelope,
-                ct);
             return ProjectionScopeDispatchResult.Success(observedVersion, eventType);
         }
         catch (Exception ex)
@@ -69,7 +64,4 @@ public abstract class ProjectionMaterializationScopeGAgentBase<TContext>
 
     private IEnumerable<IProjectionMaterializer<TContext>> ResolveMaterializers() =>
         Services.GetServices<IProjectionMaterializer<TContext>>();
-
-    private IEnumerable<ICommittedObservationContinuation<TContext>> ResolveContinuations() =>
-        Services.GetServices<ICommittedObservationContinuation<TContext>>();
 }

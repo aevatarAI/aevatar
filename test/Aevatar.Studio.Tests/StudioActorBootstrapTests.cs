@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StudioMember;
+using Aevatar.Studio.Projection.Continuations;
 using Aevatar.Studio.Projection.Orchestration;
 using FluentAssertions;
 
@@ -13,9 +14,11 @@ public sealed class StudioActorBootstrapTests
     {
         var runtime = new RecordingRuntime();
         var activation = new RecordingActivationService();
+        var observation = new RecordingBindingObservationPort();
         var bootstrap = new StudioActorBootstrap(
             runtime,
-            new StudioProjectionPort(activation));
+            new StudioProjectionPort(activation),
+            observation);
 
         var actor = await bootstrap.EnsureAsync<StudioMemberGAgent>(
             "studio-member:scope-1:m-1",
@@ -30,6 +33,8 @@ public sealed class StudioActorBootstrapTests
         activation.Requests[0].RootActorId.Should().Be("studio-member:scope-1:m-1");
         activation.Requests[0].ProjectionKind.Should().Be(StudioMemberGAgent.ProjectionKind);
         activation.Requests[0].Mode.Should().Be(ProjectionRuntimeMode.DurableMaterialization);
+        observation.RootActorIds.Should().ContainSingle()
+            .Which.Should().Be("studio-member:scope-1:m-1");
     }
 
     [Fact]
@@ -38,9 +43,11 @@ public sealed class StudioActorBootstrapTests
         var runtime = new RecordingRuntime();
         runtime.Actors["studio-member:scope-1:m-1"] = new StubActor("studio-member:scope-1:m-1");
         var activation = new RecordingActivationService();
+        var observation = new RecordingBindingObservationPort();
         var bootstrap = new StudioActorBootstrap(
             runtime,
-            new StudioProjectionPort(activation));
+            new StudioProjectionPort(activation),
+            observation);
 
         var actor = await bootstrap.EnsureAsync<StudioMemberGAgent>(
             "studio-member:scope-1:m-1",
@@ -49,6 +56,8 @@ public sealed class StudioActorBootstrapTests
         actor.Id.Should().Be("studio-member:scope-1:m-1");
         runtime.CreateActorIds.Should().BeEmpty();
         activation.Requests.Should().ContainSingle();
+        observation.RootActorIds.Should().ContainSingle()
+            .Which.Should().Be("studio-member:scope-1:m-1");
     }
 
     [Fact]
@@ -56,9 +65,11 @@ public sealed class StudioActorBootstrapTests
     {
         var runtime = new RecordingRuntime();
         var activation = new RecordingActivationService();
+        var observation = new RecordingBindingObservationPort();
         var bootstrap = new StudioActorBootstrap(
             runtime,
-            new StudioProjectionPort(activation));
+            new StudioProjectionPort(activation),
+            observation);
 
         var actor = await bootstrap.GetExistingAsync<StudioMemberGAgent>(
             "studio-member:scope-1:m-1",
@@ -66,6 +77,7 @@ public sealed class StudioActorBootstrapTests
 
         actor.Should().BeNull();
         activation.Requests.Should().BeEmpty();
+        observation.RootActorIds.Should().BeEmpty();
     }
 
     [Fact]
@@ -74,9 +86,11 @@ public sealed class StudioActorBootstrapTests
         var runtime = new RecordingRuntime();
         runtime.Actors["studio-member:scope-1:m-1"] = new StubActor("studio-member:scope-1:m-1");
         var activation = new RecordingActivationService();
+        var observation = new RecordingBindingObservationPort();
         var bootstrap = new StudioActorBootstrap(
             runtime,
-            new StudioProjectionPort(activation));
+            new StudioProjectionPort(activation),
+            observation);
 
         var actor = await bootstrap.GetExistingActorAsync<StudioMemberGAgent>(
             "studio-member:scope-1:m-1",
@@ -84,6 +98,18 @@ public sealed class StudioActorBootstrapTests
 
         actor.Should().NotBeNull();
         activation.Requests.Should().BeEmpty();
+        observation.RootActorIds.Should().BeEmpty();
+    }
+
+    private sealed class RecordingBindingObservationPort : IStudioMemberBindingObservationPort
+    {
+        public List<string> RootActorIds { get; } = [];
+
+        public Task EnsureObservationAsync(string rootActorId, CancellationToken ct = default)
+        {
+            RootActorIds.Add(rootActorId);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecordingActivationService

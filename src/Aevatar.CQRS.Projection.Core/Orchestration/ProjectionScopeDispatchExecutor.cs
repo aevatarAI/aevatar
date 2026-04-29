@@ -19,23 +19,6 @@ internal static class ProjectionScopeDispatchExecutor
             ct);
     }
 
-    public static async Task ExecuteContinuationsAsync<TContext>(
-        IEnumerable<ICommittedObservationContinuation<TContext>> continuations,
-        TContext context,
-        EventEnvelope envelope,
-        CancellationToken ct = default)
-        where TContext : class, IProjectionMaterializationContext
-    {
-        ArgumentNullException.ThrowIfNull(continuations);
-        await ExecuteCoreAsync(
-            continuations,
-            context,
-            envelope,
-            static (continuation, innerContext, innerEnvelope, innerCt) =>
-                continuation.ContinueAsync(innerContext, innerEnvelope, innerCt),
-            ct);
-    }
-
     public static async Task ExecuteProjectorsAsync<TContext>(
         IEnumerable<IProjectionProjector<TContext>> projectors,
         TContext context,

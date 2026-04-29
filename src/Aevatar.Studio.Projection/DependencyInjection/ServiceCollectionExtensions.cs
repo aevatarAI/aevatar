@@ -83,10 +83,6 @@ public static class ServiceCollectionExtensions
             StudioMaterializationContext,
             StudioMemberCurrentStateProjector>();
 
-        services.AddCommittedObservationContinuation<
-            StudioMaterializationContext,
-            StudioMemberBindingContinuationHandler>();
-
         services.AddCurrentStateProjectionMaterializer<
             StudioMaterializationContext,
             StudioTeamCurrentStateProjector>();
@@ -152,6 +148,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IUserConfigCommandService, ActorDispatchUserConfigCommandService>();
         services.TryAddSingleton<IStudioMemberCommandPort, ActorDispatchStudioMemberCommandService>();
         services.TryAddSingleton<StudioMemberBindingContinuationService>();
+        services.TryAddSingleton<StudioMemberBindingObservationHandler>();
+        services.TryAddSingleton<IStudioMemberBindingObservationPort, StudioMemberBindingObservationPort>();
         services.TryAddSingleton<IStudioMemberBindingContinuationDispatcher, StudioMemberBindingContinuationDispatcher>();
         services.TryAddSingleton<IStudioTeamCommandPort, ActorDispatchStudioTeamCommandService>();
 

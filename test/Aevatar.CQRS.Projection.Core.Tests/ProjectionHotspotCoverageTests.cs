@@ -175,54 +175,6 @@ public sealed class ProjectionHotspotCoverageTests
     }
 
     [Fact]
-    public async Task ProjectionScopeDispatchExecutor_ShouldDispatchCommittedObservationContinuationsSeparately()
-    {
-        var executorType = typeof(ProjectionFailureReplayService).Assembly
-            .GetType("Aevatar.CQRS.Projection.Core.Orchestration.ProjectionScopeDispatchExecutor");
-        executorType.Should().NotBeNull();
-
-        var executeMethod = executorType!.GetMethod(
-            "ExecuteContinuationsAsync",
-            BindingFlags.Public | BindingFlags.Static);
-        executeMethod.Should().NotBeNull();
-
-        var invoked = new List<string>();
-        var context = new TestMaterializationContext
-        {
-            RootActorId = "actor-1",
-            ProjectionKind = "projection-a",
-        };
-        var envelope = new EventEnvelope { Id = "evt-1" };
-
-        var dispatchTask = (Task)executeMethod!
-            .MakeGenericMethod(typeof(TestMaterializationContext))
-            .Invoke(
-                null,
-                [
-                    new ICommittedObservationContinuation<TestMaterializationContext>[]
-                    {
-                        new TestContinuation((_, _, _) =>
-                        {
-                            invoked.Add("first");
-                            return ValueTask.CompletedTask;
-                        }),
-                        new TestContinuation((_, _, _) =>
-                        {
-                            invoked.Add("second");
-                            return ValueTask.CompletedTask;
-                        }),
-                    },
-                    context,
-                    envelope,
-                    CancellationToken.None,
-                ])!;
-
-        await dispatchTask;
-
-        invoked.Should().Equal("first", "second");
-    }
-
-    [Fact]
     public void ProjectionHelpers_ShouldCoverTimestampAggregateAndWriteEvaluatorBranches()
     {
         var fallback = DateTimeOffset.Parse("2026-03-17T07:31:00+00:00");
@@ -506,19 +458,6 @@ public sealed class ProjectionHotspotCoverageTests
 
         public ValueTask ProjectAsync(TestMaterializationContext context, EventEnvelope envelope, CancellationToken ct = default) =>
             _projectAsync(context, envelope, ct);
-    }
-
-    private sealed class TestContinuation : ICommittedObservationContinuation<TestMaterializationContext>
-    {
-        private readonly Func<TestMaterializationContext, EventEnvelope, CancellationToken, ValueTask> _continueAsync;
-
-        public TestContinuation(Func<TestMaterializationContext, EventEnvelope, CancellationToken, ValueTask> continueAsync)
-        {
-            _continueAsync = continueAsync;
-        }
-
-        public ValueTask ContinueAsync(TestMaterializationContext context, EventEnvelope envelope, CancellationToken ct = default) =>
-            _continueAsync(context, envelope, ct);
     }
 
     private sealed class TestReadModel : IProjectionReadModel

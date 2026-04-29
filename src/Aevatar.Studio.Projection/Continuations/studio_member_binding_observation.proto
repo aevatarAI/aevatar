@@ -1,0 +1,25 @@
+syntax = "proto3";
+package aevatar.studio.projection.continuations;
+option csharp_namespace = "Aevatar.Studio.Projection.Continuations";
+
+import "google/protobuf/timestamp.proto";
+
+message StudioMemberBindingObservationState {
+  string root_actor_id = 1;
+  bool active = 2;
+  bool observation_attached = 3;
+}
+
+message EnsureStudioMemberBindingObservationCommand {
+  string root_actor_id = 1;
+}
+
+message StudioMemberBindingObservationStartedEvent {
+  string root_actor_id = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
+}
+
+message StudioMemberBindingObservationAttachmentUpdatedEvent {
+  bool attached = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
+}

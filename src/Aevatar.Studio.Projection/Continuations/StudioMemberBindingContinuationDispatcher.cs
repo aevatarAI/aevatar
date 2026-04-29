@@ -12,14 +12,14 @@ internal sealed class StudioMemberBindingContinuationDispatcher : IStudioMemberB
     private const string DirectRoute = "aevatar.studio.projection.studio-member-binding-continuation";
 
     private readonly IActorRuntime _actorRuntime;
-    private readonly IStreamProvider _streamProvider;
+    private readonly IActorDispatchPort _dispatchPort;
 
     public StudioMemberBindingContinuationDispatcher(
         IActorRuntime actorRuntime,
-        IStreamProvider streamProvider)
+        IActorDispatchPort dispatchPort)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
-        _streamProvider = streamProvider ?? throw new ArgumentNullException(nameof(streamProvider));
+        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
     }
 
     public async Task DispatchAsync(StudioMemberBindingRequestedEvent request, CancellationToken ct = default)
@@ -41,7 +41,7 @@ internal sealed class StudioMemberBindingContinuationDispatcher : IStudioMemberB
             Route = EnvelopeRouteSemantics.CreateDirect(DirectRoute, actor.Id),
         };
 
-        await _streamProvider.GetStream(actor.Id).ProduceAsync(envelope, ct);
+        await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
     }
 
     internal static string BuildActorId(StudioMemberBindingRequestedEvent request)

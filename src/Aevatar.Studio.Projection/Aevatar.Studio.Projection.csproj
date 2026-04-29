@@ -36,6 +36,7 @@
 
   <ItemGroup>
     <Protobuf Include="ReadModels/studio_projection_readmodels.proto" GrpcServices="None" />
+    <Protobuf Include="Continuations/studio_member_binding_observation.proto" GrpcServices="None" />
   </ItemGroup>
 
   <ItemGroup>
