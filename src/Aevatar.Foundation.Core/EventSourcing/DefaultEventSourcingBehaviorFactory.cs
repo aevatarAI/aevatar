@@ -44,6 +44,9 @@ public sealed class DefaultEventSourcingBehaviorFactory<TState>
             ? new IntervalSnapshotStrategy(_options.SnapshotInterval)
             : NeverSnapshotStrategy.Instance;
 
+        var recoverFromVersionDrift = _options.RecoverFromVersionDriftOnReplay
+            || (_options.ShouldRecoverFromVersionDriftOnReplay?.Invoke(agentId) ?? false);
+
         return new DelegatingEventSourcingBehavior(
             _eventStore,
             agentId,
@@ -53,7 +56,8 @@ public sealed class DefaultEventSourcingBehaviorFactory<TState>
             _logger,
             _options.EnableEventCompaction,
             _options.RetainedEventsAfterSnapshot,
-            _compactionScheduler);
+            _compactionScheduler,
+            recoverFromVersionDrift);
     }
 
     private sealed class DelegatingEventSourcingBehavior : EventSourcingBehavior<TState>
@@ -69,7 +73,8 @@ public sealed class DefaultEventSourcingBehaviorFactory<TState>
             ILogger<EventSourcingBehavior<TState>>? logger,
             bool enableEventCompaction,
             int retainedEventsAfterSnapshot,
-            IEventStoreCompactionScheduler? compactionScheduler)
+            IEventStoreCompactionScheduler? compactionScheduler,
+            bool recoverFromVersionDriftOnReplay)
             : base(
                 eventStore,
                 agentId,
@@ -78,7 +83,8 @@ public sealed class DefaultEventSourcingBehaviorFactory<TState>
                 logger,
                 enableEventCompaction,
                 retainedEventsAfterSnapshot,
-                compactionScheduler)
+                compactionScheduler,
+                recoverFromVersionDriftOnReplay)
         {
             _transitionState = transitionState;
         }
