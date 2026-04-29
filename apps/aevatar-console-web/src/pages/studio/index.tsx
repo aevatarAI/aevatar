@@ -110,6 +110,7 @@ import type { ServiceCatalogSnapshot } from '@/shared/models/services';
 import type {
   StudioExecutionDetail,
   StudioExecutionSummary,
+  StudioMemberBindingRevision,
   StudioMemberSummary,
   StudioValidationFinding,
   StudioWorkflowDocument,
@@ -1153,11 +1154,156 @@ function readInitialBuildSurface(state: StudioRouteState): BuildSurface {
   }
 
   const buildFocus = parseStudioBuildFocus(state.focusKey);
-  if (state.tab === 'scripts' || buildFocus.kind === 'script') {
+  const routeMember = parseStudioRouteMember(state.memberKey);
+  if (
+    state.tab === 'scripts' ||
+    buildFocus.kind === 'script' ||
+    routeMember.kind === 'script'
+  ) {
     return 'scripts';
   }
 
   return 'editor';
+}
+
+function findPublishedStudioMemberByMemberKey(
+  memberKey: string,
+  publishedMembers: readonly PublishedStudioMemberRecord[],
+): PublishedStudioMemberRecord | null {
+  const normalizedMemberKey = trimOptional(memberKey);
+  const memberToken = readMemberIdFromMemberKey(normalizedMemberKey);
+  if (!memberToken) {
+    return null;
+  }
+
+  return (
+    publishedMembers.find(
+      ({ memberSummary, service }) =>
+        trimOptional(memberSummary?.memberId) === memberToken ||
+        trimOptional(memberSummary?.publishedServiceId) === memberToken ||
+        trimOptional(service.serviceId) === memberToken,
+    ) ?? null
+  );
+}
+
+function resolveLifecycleScriptId(
+  memberKey: string,
+  publishedMembers: readonly PublishedStudioMemberRecord[],
+  studioScopeMembers: readonly StudioMemberSummary[],
+): string {
+  const directScriptId = readScriptIdFromMemberKey(memberKey);
+  if (directScriptId) {
+    return directScriptId;
+  }
+
+  const publishedScriptId = trimOptional(
+    findPublishedStudioMemberByMemberKey(memberKey, publishedMembers)?.matchedScript
+      ?.script?.scriptId,
+  );
+  if (publishedScriptId) {
+    return publishedScriptId;
+  }
+
+  const memberSummary = resolveStudioMemberSummaryFromMemberKey(
+    memberKey,
+    publishedMembers,
+    studioScopeMembers,
+  );
+  if (
+    normalizeStudioMemberBindingImplementationKind(
+      memberSummary?.implementationKind,
+    ) === 'script'
+  ) {
+    return trimOptional(memberSummary?.publishedServiceId)
+      ? ''
+      : trimOptional(memberSummary?.displayName);
+  }
+
+  return '';
+}
+
+function resolveLifecycleWorkflowId(
+  memberKey: string,
+  publishedMembers: readonly PublishedStudioMemberRecord[],
+  studioScopeMembers: readonly StudioMemberSummary[],
+): string {
+  const workflowRouteValue = readWorkflowMemberRouteValueFromMemberKey(memberKey);
+  if (workflowRouteValue) {
+    return workflowRouteValue;
+  }
+
+  const publishedWorkflowId = trimOptional(
+    findPublishedStudioMemberByMemberKey(memberKey, publishedMembers)?.matchedWorkflow
+      ?.workflowId,
+  );
+  if (publishedWorkflowId) {
+    return publishedWorkflowId;
+  }
+
+  const memberSummary = resolveStudioMemberSummaryFromMemberKey(
+    memberKey,
+    publishedMembers,
+    studioScopeMembers,
+  );
+  if (
+    normalizeStudioMemberBindingImplementationKind(
+      memberSummary?.implementationKind,
+    ) === 'workflow'
+  ) {
+    return trimOptional(memberSummary?.displayName);
+  }
+
+  return '';
+}
+
+function resolveLifecycleBuildSurface(input: {
+  readonly fallback: BuildSurface;
+  readonly memberKey: string;
+  readonly publishedMembers: readonly PublishedStudioMemberRecord[];
+  readonly studioScopeMembers: readonly StudioMemberSummary[];
+}): BuildSurface {
+  const normalizedMemberKey = trimOptional(input.memberKey);
+  if (normalizedMemberKey.startsWith('script:')) {
+    return 'scripts';
+  }
+
+  if (normalizedMemberKey.startsWith('workflow:')) {
+    return 'editor';
+  }
+
+  const memberSummary = resolveStudioMemberSummaryFromMemberKey(
+    normalizedMemberKey,
+    input.publishedMembers,
+    input.studioScopeMembers,
+  );
+  const implementationKind = normalizeStudioMemberBindingImplementationKind(
+    memberSummary?.implementationKind,
+  );
+  if (implementationKind === 'script') {
+    return 'scripts';
+  }
+
+  if (implementationKind === 'workflow') {
+    return 'editor';
+  }
+
+  const publishedMember = findPublishedStudioMemberByMemberKey(
+    normalizedMemberKey,
+    input.publishedMembers,
+  );
+  if (publishedMember?.matchedScript?.script?.scriptId) {
+    return 'scripts';
+  }
+
+  if (publishedMember?.matchedWorkflow?.workflowId) {
+    return 'editor';
+  }
+
+  if (publishedMember?.revision?.implementationKind === 'gagent') {
+    return 'gagent';
+  }
+
+  return input.fallback;
 }
 
 function normalizeObserveRunStatus(status: string | null | undefined): string {
@@ -1797,6 +1943,7 @@ type PublishedStudioMemberRecord = {
       readonly scriptId?: string | null;
     } | null;
   } | null;
+  readonly revision?: StudioMemberBindingRevision | null;
 };
 
 function resolveStudioMemberSummaryFromMemberKey(
@@ -5196,53 +5343,6 @@ const StudioPage: React.FC = () => {
       studioScopeMembers,
     ],
   );
-  const handleSelectLifecycleStep = useCallback(
-    async (stepKey: string) => {
-      const normalizedStep = stepKey.trim().toLowerCase();
-      const targetStudioSurface: StudioSurface =
-        normalizedStep === 'observe'
-          ? 'observe'
-          : normalizedStep === 'bind'
-            ? 'bind'
-            : normalizedStep === 'invoke'
-              ? 'invoke'
-              : 'build';
-      const isCurrentBuildSurface =
-        targetStudioSurface === 'build' && studioSurface === 'build';
-      if (isCurrentBuildSurface) {
-        return;
-      }
-      if (!(await confirmScriptsStudioLeave())) {
-        return;
-      }
-
-      if (stepKey === 'build') {
-        applyStudioTarget('build', buildSurface);
-        return;
-      }
-
-      if (stepKey === 'bind') {
-        applyStudioTarget('bind');
-        return;
-      }
-
-      if (stepKey === 'invoke') {
-        applyStudioTarget('invoke');
-        return;
-      }
-
-      if (stepKey === 'observe') {
-        applyStudioTarget('observe');
-      }
-    },
-    [
-      applyStudioTarget,
-      buildSurface,
-      confirmScriptsStudioLeave,
-      studioSurface,
-    ],
-  );
-
   const pageTitle =
     isBuildEditorSurface
       ? 'Workflow 构建'
@@ -5445,6 +5545,47 @@ const StudioPage: React.FC = () => {
   const currentFocusMemberKey =
     studioSurface === 'build' ? buildSurfaceMemberKey : lifecycleSurfaceMemberKey;
   useEffect(() => {
+    if (
+      studioSurface !== 'build' ||
+      (buildSurface !== 'editor' && buildSurface !== 'scripts')
+    ) {
+      return;
+    }
+
+    const memberSummary = resolveStudioMemberSummaryFromMemberKey(
+      lifecycleSurfaceMemberKey,
+      publishedScopeMembers,
+      studioScopeMembers,
+    );
+    if (
+      normalizeStudioMemberBindingImplementationKind(
+        memberSummary?.implementationKind,
+      ) !== 'script'
+    ) {
+      return;
+    }
+
+    const scriptId = resolveLifecycleScriptId(
+      lifecycleSurfaceMemberKey,
+      publishedScopeMembers,
+      studioScopeMembers,
+    );
+    if (!scriptId) {
+      return;
+    }
+
+    setSelectedWorkflowId('');
+    setSelectedScriptId(scriptId);
+    setTemplateWorkflow('');
+    setBuildSurface('scripts');
+  }, [
+    buildSurface,
+    lifecycleSurfaceMemberKey,
+    publishedScopeMembers,
+    studioScopeMembers,
+    studioSurface,
+  ]);
+  useEffect(() => {
     if (typeof window === 'undefined') {
       return;
     }
@@ -5617,6 +5758,141 @@ const StudioPage: React.FC = () => {
       ? currentServiceRevisionByServiceId.get(serviceId) ?? null
       : null;
   }, [currentServiceRevisionByServiceId, workbenchPublishedService?.serviceId]);
+  useEffect(() => {
+    if (studioSurface !== 'build' || buildSurface !== 'editor') {
+      return;
+    }
+
+    const implementationKind = normalizeStudioMemberBindingImplementationKind(
+      workbenchStudioMemberDetailQuery.data?.implementationRef
+        ?.implementationKind ||
+        workbenchStudioMember?.implementationKind ||
+        workbenchPublishedServiceRevision?.implementationKind,
+    );
+    if (implementationKind !== 'script') {
+      return;
+    }
+
+    const scriptId =
+      trimOptional(
+        workbenchStudioMemberDetailQuery.data?.implementationRef?.scriptId,
+      ) ||
+      trimOptional(workbenchPublishedServiceRevision?.scriptId) ||
+      (trimOptional(workbenchStudioMember?.publishedServiceId)
+        ? ''
+        : trimOptional(workbenchStudioMember?.displayName));
+
+    setSelectedWorkflowId('');
+    if (scriptId) {
+      setSelectedScriptId(scriptId);
+    }
+    setTemplateWorkflow('');
+    setBuildSurface('scripts');
+  }, [
+    buildSurface,
+    studioSurface,
+    workbenchPublishedServiceRevision?.implementationKind,
+    workbenchPublishedServiceRevision?.scriptId,
+    workbenchStudioMember?.displayName,
+    workbenchStudioMember?.implementationKind,
+    workbenchStudioMember?.publishedServiceId,
+    workbenchStudioMemberDetailQuery.data?.implementationRef?.implementationKind,
+    workbenchStudioMemberDetailQuery.data?.implementationRef?.scriptId,
+  ]);
+  const handleSelectLifecycleStep = useCallback(
+    async (stepKey: string) => {
+      const normalizedStep = stepKey.trim().toLowerCase();
+      const targetStudioSurface: StudioSurface =
+        normalizedStep === 'observe'
+          ? 'observe'
+          : normalizedStep === 'bind'
+            ? 'bind'
+            : normalizedStep === 'invoke'
+              ? 'invoke'
+              : 'build';
+      const isCurrentBuildSurface =
+        targetStudioSurface === 'build' && studioSurface === 'build';
+      if (isCurrentBuildSurface) {
+        return;
+      }
+      if (!(await confirmScriptsStudioLeave())) {
+        return;
+      }
+
+      if (stepKey === 'build') {
+        const lifecycleMemberKey =
+          lifecycleSurfaceMemberKey || currentFocusMemberKey;
+        const lifecycleScriptId =
+          trimOptional(
+            workbenchStudioMemberDetailQuery.data?.implementationRef?.scriptId,
+          ) ||
+          trimOptional(workbenchPublishedServiceRevision?.scriptId) ||
+          resolveLifecycleScriptId(
+            lifecycleMemberKey,
+            publishedScopeMembers,
+            studioScopeMembers,
+          ) ||
+          (readScriptIdFromMemberKey(lifecycleMemberKey)
+            ? trimOptional(selectedScriptId)
+            : '');
+        const resolvedBuildSurface = resolveLifecycleBuildSurface({
+          fallback: lifecycleScriptId ? 'scripts' : buildSurface,
+          memberKey: lifecycleMemberKey,
+          publishedMembers: publishedScopeMembers,
+          studioScopeMembers,
+        });
+        if (lifecycleScriptId) {
+          setSelectedWorkflowId('');
+          setSelectedScriptId(lifecycleScriptId);
+          setTemplateWorkflow('');
+        } else if (resolvedBuildSurface === 'scripts') {
+          setSelectedWorkflowId('');
+          setSelectedScriptId('');
+          setTemplateWorkflow('');
+        } else {
+          const lifecycleWorkflowId = resolveLifecycleWorkflowId(
+            lifecycleMemberKey,
+            publishedScopeMembers,
+            studioScopeMembers,
+          );
+          if (lifecycleWorkflowId) {
+            setSelectedWorkflowId(lifecycleWorkflowId);
+            setSelectedScriptId('');
+            setTemplateWorkflow('');
+          }
+        }
+        applyStudioTarget('build', resolvedBuildSurface);
+        return;
+      }
+
+      if (stepKey === 'bind') {
+        applyStudioTarget('bind');
+        return;
+      }
+
+      if (stepKey === 'invoke') {
+        applyStudioTarget('invoke');
+        return;
+      }
+
+      if (stepKey === 'observe') {
+        applyStudioTarget('observe');
+      }
+    },
+    [
+      applyStudioTarget,
+      buildSurface,
+      confirmScriptsStudioLeave,
+      currentFocusMemberKey,
+      lifecycleSurfaceMemberKey,
+      publishedScopeMembers,
+      selectedScriptId,
+      studioSurface,
+      studioScopeMembers,
+      workbenchPublishedServiceRevision?.scriptId,
+      workbenchStudioMemberDetailQuery.data?.implementationRef?.scriptId,
+    ],
+  );
   useEffect(() => {
     if (!resolvedStudioScopeId || !workbenchPublishedServiceId) {
       return;
