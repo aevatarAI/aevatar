@@ -12,7 +12,7 @@ namespace Aevatar.Foundation.Runtime.Persistence;
 /// File-backed event store.
 /// Stores each agent stream in a local file with optimistic concurrency checks.
 /// </summary>
-public sealed class FileEventStore : IEventStore
+public sealed class FileEventStore : IEventStore, IEventStoreMaintenance
 {
     private const int StreamFormatMagic = 0x53464541; // AEFS
     private const int StreamFormatVersion = 1;
@@ -168,6 +168,29 @@ public sealed class FileEventStore : IEventStore
             if (removed > 0)
                 WriteStream(agentId, stream, ct);
             return removed;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public async Task<bool> ResetStreamAsync(string agentId, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
+        ct.ThrowIfCancellationRequested();
+
+        var gate = _agentLocks.GetOrAdd(agentId, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+
+        try
+        {
+            var path = GetStreamPath(agentId);
+            if (!File.Exists(path))
+                return false;
+
+            File.Delete(path);
+            return true;
         }
         finally
         {

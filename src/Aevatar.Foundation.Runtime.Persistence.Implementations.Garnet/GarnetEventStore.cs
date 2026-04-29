@@ -11,7 +11,7 @@ namespace Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet;
 /// <summary>
 /// Garnet-backed event store with optimistic concurrency and stream compaction support.
 /// </summary>
-public sealed class GarnetEventStore : IEventStore
+public sealed class GarnetEventStore : IEventStore, IEventStoreMaintenance
 {
     private const string AppendScript = """
                                       local currentRaw = redis.call('GET', KEYS[1])
@@ -238,6 +238,23 @@ public sealed class GarnetEventStore : IEventStore
             toVersion,
             deleted);
         return deleted;
+    }
+
+    public async Task<bool> ResetStreamAsync(string agentId, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
+        ct.ThrowIfCancellationRequested();
+
+        var keys = BuildKeys(agentId);
+        var deleted = await _database.KeyDeleteAsync(
+            [keys.VersionKey, keys.EventIndexKey, keys.EventDataKey]);
+        ct.ThrowIfCancellationRequested();
+
+        _logger.LogInformation(
+            "Garnet event-store stream reset completed. agentId={AgentId} deletedKeys={DeletedKeys}",
+            agentId,
+            deleted);
+        return deleted > 0;
     }
 
     private StreamKeys BuildKeys(string agentId)

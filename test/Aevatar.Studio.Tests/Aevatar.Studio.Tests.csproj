@@ -25,6 +25,7 @@
     <ProjectReference Include="../../src/Aevatar.Studio.Projection/Aevatar.Studio.Projection.csproj" />
     <ProjectReference Include="../../src/Aevatar.Studio.Hosting/Aevatar.Studio.Hosting.csproj" />
     <ProjectReference Include="../../agents/Aevatar.GAgents.StudioMember/Aevatar.GAgents.StudioMember.csproj" />
+    <ProjectReference Include="../../agents/Aevatar.GAgents.StudioTeam/Aevatar.GAgents.StudioTeam.csproj" />
   </ItemGroup>
 
   <ItemGroup>

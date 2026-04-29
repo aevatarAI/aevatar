@@ -52,7 +52,8 @@ public static class AgentBuilderTemplates
             "daily_report",
             skillPrompt,
             executionPrompt,
-            ["api-github", "api-lark-bot"]);
+            ["api-github", "api-lark-bot"],
+            repoList);
         return true;
     }
 
@@ -301,7 +302,8 @@ public sealed record DailyReportTemplateSpec(
     string SkillName,
     string SkillContent,
     string ExecutionPrompt,
-    IReadOnlyList<string> RequiredServiceSlugs);
+    IReadOnlyList<string> RequiredServiceSlugs,
+    IReadOnlyList<string> Repositories);
 
 public sealed record SocialMediaTemplateSpec(
     string WorkflowId,
