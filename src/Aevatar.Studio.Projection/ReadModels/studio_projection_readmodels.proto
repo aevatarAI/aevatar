@@ -147,4 +147,14 @@ message StudioMemberCurrentStateDocument {
   string last_bound_revision_id = 41;
   string last_bound_implementation_kind = 42; // wire-stable string
   google.protobuf.Timestamp last_bound_at = 43;
+
+  // ── Latest binding run status (denormalized) ──
+  string latest_binding_id = 50;
+  string latest_binding_status = 51; // "pending" | "completed" | "failed" | ""
+  string latest_binding_failure_code = 52;
+  string latest_binding_failure_summary = 53;
+  bool latest_binding_retryable = 54;
+  google.protobuf.Timestamp latest_binding_requested_at = 55;
+  google.protobuf.Timestamp latest_binding_completed_at = 56;
+  google.protobuf.Timestamp latest_binding_failed_at = 57;
 }

@@ -31,4 +31,15 @@ public static class ProjectionMaterializerRegistration
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IProjectionArtifactMaterializer<TContext>, TMaterializer>());
         return services;
     }
+
+    public static IServiceCollection AddCommittedObservationContinuation<TContext, TContinuation>(
+        this IServiceCollection services)
+        where TContext : class, IProjectionMaterializationContext
+        where TContinuation : class, ICommittedObservationContinuation<TContext>
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ICommittedObservationContinuation<TContext>, TContinuation>());
+        return services;
+    }
 }

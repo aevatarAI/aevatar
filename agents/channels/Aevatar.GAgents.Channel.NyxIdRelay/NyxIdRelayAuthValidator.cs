@@ -86,6 +86,12 @@ public sealed class NyxIdRelayAuthValidator
             return Fail(jwtValidation.ErrorCode, jwtValidation.ErrorSummary);
         }
 
+        var principal = jwtValidation.Principal;
+        if (principal is null)
+        {
+            return Fail("callback_jwt_invalid", "Callback JWT did not produce a principal.");
+        }
+
         var payloadApiKeyId = NormalizeOptional(payload.Agent?.ApiKeyId);
         if (payloadApiKeyId is null ||
             !string.Equals(payloadApiKeyId, jwtValidation.RelayApiKeyId, StringComparison.Ordinal))
@@ -144,12 +150,10 @@ public sealed class NyxIdRelayAuthValidator
         }
 
         var userToken = NormalizeOptional(http.Request.Headers["X-NyxID-User-Token"].FirstOrDefault());
-        var scopeId = NormalizeOptional(jwtValidation.Principal.FindFirstValue("scope_id")) ??
-                      NormalizeOptional(jwtValidation.Principal.FindFirstValue(JwtRegisteredClaimNames.Sub)) ??
-                      NormalizeOptional(jwtValidation.Principal.FindFirstValue(ClaimTypes.NameIdentifier));
+        var scopeId = NormalizeOptional(principal.FindFirstValue("scope_id"));
         return new NyxIdRelayAuthenticationResult(
             true,
-            Principal: jwtValidation.Principal,
+            Principal: principal,
             RelayApiKeyId: jwtValidation.RelayApiKeyId,
             UserAccessToken: userToken,
             ScopeId: scopeId);
@@ -259,9 +263,7 @@ public sealed class NyxIdRelayAuthValidator
                     ErrorSummary: "Callback JWT is missing body_sha256.");
             }
 
-            var canonicalScopeId = NormalizeOptional(principal.FindFirstValue("scope_id")) ??
-                                   NormalizeOptional(principal.FindFirstValue(JwtRegisteredClaimNames.Sub)) ??
-                                   NormalizeOptional(principal.FindFirstValue(ClaimTypes.NameIdentifier));
+            var canonicalScopeId = NormalizeOptional(principal.FindFirstValue("scope_id"));
             if (!string.IsNullOrWhiteSpace(canonicalScopeId))
                 EnsureCanonicalScopeClaim(principal, canonicalScopeId);
 

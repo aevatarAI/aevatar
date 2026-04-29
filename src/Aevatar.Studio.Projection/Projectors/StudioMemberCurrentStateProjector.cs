@@ -71,6 +71,7 @@ public sealed class StudioMemberCurrentStateProjector
 
         ApplyImplementationRef(document, state.ImplementationRef);
         ApplyLastBinding(document, state.LastBinding);
+        ApplyLatestBindingRun(document, state.BindingRuns.LastOrDefault());
 
         await _writeDispatcher.UpsertAsync(document, ct);
     }
@@ -113,5 +114,22 @@ public sealed class StudioMemberCurrentStateProjector
             lastBinding.ImplementationKind);
         if (lastBinding.BoundAtUtc != null)
             document.LastBoundAt = lastBinding.BoundAtUtc;
+    }
+
+    private static void ApplyLatestBindingRun(
+        StudioMemberCurrentStateDocument document,
+        StudioMemberBindingRun? bindingRun)
+    {
+        if (bindingRun == null || string.IsNullOrEmpty(bindingRun.BindingId))
+            return;
+
+        document.LatestBindingId = bindingRun.BindingId;
+        document.LatestBindingStatus = MemberImplementationKindMapper.ToWireName(bindingRun.Status);
+        document.LatestBindingFailureCode = bindingRun.FailureCode ?? string.Empty;
+        document.LatestBindingFailureSummary = bindingRun.FailureSummary ?? string.Empty;
+        document.LatestBindingRetryable = bindingRun.Retryable;
+        document.LatestBindingRequestedAt = bindingRun.RequestedAtUtc;
+        document.LatestBindingCompletedAt = bindingRun.CompletedAtUtc;
+        document.LatestBindingFailedAt = bindingRun.FailedAtUtc;
     }
 }

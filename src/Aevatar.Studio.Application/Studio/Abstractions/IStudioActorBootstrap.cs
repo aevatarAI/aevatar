@@ -27,4 +27,23 @@ public interface IStudioActorBootstrap
     /// </summary>
     Task<IActor> EnsureAsync<TAgent>(string actorId, CancellationToken ct = default)
         where TAgent : IAgent, IProjectedActor;
+
+    /// <summary>
+    /// Gets an already-initialized Studio actor and activates its projection
+    /// scope. Returns <c>null</c> when the actor has not been created. Command
+    /// paths that operate on existing identities use this to avoid creating an
+    /// empty actor merely because a route supplied an id.
+    /// </summary>
+    Task<IActor?> GetExistingAsync<TAgent>(string actorId, CancellationToken ct = default)
+        where TAgent : IAgent, IProjectedActor;
+
+    /// <summary>
+    /// Gets an already-initialized Studio actor without touching projection
+    /// lifecycle. Durable projection continuations use this when they need to
+    /// report completion back to the same actor whose committed event is
+    /// currently being observed; re-ensuring that same projection scope from
+    /// inside its actor turn would create a self-wait in local runtimes.
+    /// </summary>
+    Task<IActor?> GetExistingActorAsync<TAgent>(string actorId, CancellationToken ct = default)
+        where TAgent : IAgent, IProjectedActor;
 }

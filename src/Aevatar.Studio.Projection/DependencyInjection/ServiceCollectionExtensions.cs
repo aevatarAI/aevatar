@@ -5,6 +5,7 @@ using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Projection.CommandServices;
+using Aevatar.Studio.Projection.Continuations;
 using Aevatar.Studio.Projection.Metadata;
 using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.Projectors;
@@ -82,6 +83,10 @@ public static class ServiceCollectionExtensions
             StudioMaterializationContext,
             StudioMemberCurrentStateProjector>();
 
+        services.AddCommittedObservationContinuation<
+            StudioMaterializationContext,
+            StudioMemberBindingContinuationHandler>();
+
         // ── Document metadata providers (for index creation in Elasticsearch) ──
 
         services.TryAddSingleton<
@@ -137,6 +142,7 @@ public static class ServiceCollectionExtensions
         // Command services (write side)
         services.TryAddSingleton<IUserConfigCommandService, ActorDispatchUserConfigCommandService>();
         services.TryAddSingleton<IStudioMemberCommandPort, ActorDispatchStudioMemberCommandService>();
+        services.TryAddSingleton<StudioMemberBindingContinuationService>();
 
         return services;
     }

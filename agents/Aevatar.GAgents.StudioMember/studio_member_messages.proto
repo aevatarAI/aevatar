@@ -27,6 +27,13 @@ enum StudioMemberLifecycleStage {
   STUDIO_MEMBER_LIFECYCLE_STAGE_BIND_READY = 3;
 }
 
+enum StudioMemberBindingStatus {
+  STUDIO_MEMBER_BINDING_STATUS_UNSPECIFIED = 0;
+  STUDIO_MEMBER_BINDING_STATUS_PENDING = 1;
+  STUDIO_MEMBER_BINDING_STATUS_COMPLETED = 2;
+  STUDIO_MEMBER_BINDING_STATUS_FAILED = 3;
+}
+
 // ─── Implementation refs ───
 //
 // Each implementation kind carries a typed sub-message rather than a generic
@@ -66,6 +73,64 @@ message StudioMemberBindingContract {
   google.protobuf.Timestamp bound_at_utc = 4;
 }
 
+// ─── Binding run contract ───
+//
+// Bind is an async member-owned run. The request-time command records a
+// pending run on the StudioMember authority; a continuation later reports
+// completion or failure by binding_id. The request spec is typed and mirrors
+// Studio's HTTP binding shape; no Metadata bag is used for control-flow
+// semantics.
+
+message StudioMemberWorkflowBindingSpec {
+  repeated string workflow_yamls = 1;
+}
+
+message StudioMemberScriptBindingSpec {
+  string script_id = 1;
+  string script_revision = 2;
+}
+
+message StudioMemberGAgentEndpointSpec {
+  string endpoint_id = 1;
+  string display_name = 2;
+  string kind = 3;
+  string request_type_url = 4;
+  string response_type_url = 5;
+  string description = 6;
+}
+
+message StudioMemberGAgentBindingSpec {
+  string actor_type_name = 1;
+  repeated StudioMemberGAgentEndpointSpec endpoints = 2;
+}
+
+message StudioMemberBindingSpec {
+  string revision_id = 1;
+  StudioMemberWorkflowBindingSpec workflow = 2;
+  StudioMemberScriptBindingSpec script = 3;
+  StudioMemberGAgentBindingSpec gagent = 4;
+}
+
+message StudioMemberBindingRun {
+  string binding_id = 1;
+  StudioMemberBindingStatus status = 2;
+  string scope_id = 3;
+  string member_id = 4;
+  string published_service_id = 5;
+  StudioMemberImplementationKind implementation_kind = 6;
+  string display_name = 7;
+  StudioMemberBindingSpec request = 8;
+  google.protobuf.Timestamp requested_at_utc = 9;
+  string revision_id = 10;
+  string expected_actor_id = 11;
+  StudioMemberImplementationRef resolved_implementation_ref = 12;
+  google.protobuf.Timestamp completed_at_utc = 13;
+  string failure_code = 14;
+  string failure_summary = 15;
+  bool retryable = 16;
+  google.protobuf.Timestamp failed_at_utc = 17;
+}
+
 // ─── State ───
 //
 // State for a single StudioMember actor. Actor ID format:
@@ -87,6 +152,7 @@ message StudioMemberState {
   google.protobuf.Timestamp created_at_utc = 9;
   google.protobuf.Timestamp updated_at_utc = 10;
   StudioMemberBindingContract last_binding = 11;
+  repeated StudioMemberBindingRun binding_runs = 12;
 }
 
 // ─── Events ───
@@ -121,4 +187,37 @@ message StudioMemberBoundEvent {
   string revision_id = 2;
   StudioMemberImplementationKind implementation_kind = 3;
   google.protobuf.Timestamp bound_at_utc = 4;
+}
+
+message StudioMemberBindingRequestedCommand {
+  string binding_id = 1;
+  StudioMemberBindingSpec request = 2;
+  google.protobuf.Timestamp requested_at_utc = 3;
+}
+
+message StudioMemberBindingRequestedEvent {
+  string binding_id = 1;
+  string scope_id = 2;
+  string member_id = 3;
+  string published_service_id = 4;
+  StudioMemberImplementationKind implementation_kind = 5;
+  string display_name = 6;
+  StudioMemberBindingSpec request = 7;
+  google.protobuf.Timestamp requested_at_utc = 8;
+}
+
+message StudioMemberBindingCompletedEvent {
+  string binding_id = 1;
+  string revision_id = 2;
+  string expected_actor_id = 3;
+  StudioMemberImplementationRef resolved_implementation_ref = 4;
+  google.protobuf.Timestamp completed_at_utc = 5;
+}
+
+message StudioMemberBindingFailedEvent {
+  string binding_id = 1;
+  string failure_code = 2;
+  string failure_summary = 3;
+  bool retryable = 4;
+  google.protobuf.Timestamp failed_at_utc = 5;
 }

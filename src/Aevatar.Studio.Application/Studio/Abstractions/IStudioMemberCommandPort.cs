@@ -22,6 +22,17 @@ public interface IStudioMemberCommandPort
         CancellationToken ct = default);
 
     /// <summary>
+    /// Requests an async member binding run on an existing StudioMember
+    /// authority. This command must not create a missing member actor; Create
+    /// is the only command that establishes member identity.
+    /// </summary>
+    Task<StudioMemberBindingAcceptedResponse> RequestBindingAsync(
+        string scopeId,
+        string memberId,
+        UpdateStudioMemberBindingRequest request,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Updates the implementation reference for an existing member (e.g. once
     /// Studio has produced a workflow yaml, script revision, or wired up a
     /// gagent type for the member). Idempotent on identical inputs.
@@ -43,5 +54,17 @@ public interface IStudioMemberCommandPort
         string publishedServiceId,
         string revisionId,
         string implementationKindName,
+        CancellationToken ct = default);
+
+    Task CompleteBindingAsync(
+        string scopeId,
+        string memberId,
+        StudioMemberBindingCompletionRequest request,
+        CancellationToken ct = default);
+
+    Task FailBindingAsync(
+        string scopeId,
+        string memberId,
+        StudioMemberBindingFailureRequest request,
         CancellationToken ct = default);
 }

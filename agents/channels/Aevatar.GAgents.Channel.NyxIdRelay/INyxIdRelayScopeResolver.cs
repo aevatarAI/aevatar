@@ -1,16 +1,15 @@
 namespace Aevatar.GAgents.Channel.NyxIdRelay;
 
 /// <summary>
-/// Resolves the canonical Aevatar scope id for a Nyx relay callback when it cannot
-/// be derived from the callback JWT itself.
+/// Resolves the Aevatar scope id associated with a Nyx relay API key for
+/// non-admission enrichment paths.
 /// </summary>
 /// <remarks>
-/// NyxID's relay callback JWT (see ChronoAIProject/NyxID#504) only carries
-/// channel-routing claims (api_key_id, message_id, platform, body_sha256, jti) -
-/// it does not emit any scope / sub / nameid claim. The relay endpoint still needs a
-/// scope id to address the per-tenant ConversationGAgent actor, so it falls back
-/// from the validator's claim-based extraction to this resolver, which looks up the
-/// scope id recorded against the bot registration during provisioning.
+/// The relay webhook admission path must not use this projection-backed lookup
+/// to choose a tenant. Callback routing requires a verified scope from the
+/// callback token or another authoritative admission contract. This resolver is
+/// kept only for optional enrichment such as loading the bot owner's display or
+/// LLM preferences, where projection lag must fail closed to "no enrichment".
 ///
 /// This port lives in NyxidChat to keep the relay endpoint independent from the
 /// ChannelRuntime implementation project. The implementation in ChannelRuntime

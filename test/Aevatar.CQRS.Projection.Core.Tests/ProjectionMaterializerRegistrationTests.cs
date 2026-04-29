@@ -36,6 +36,24 @@ public sealed class ProjectionMaterializerRegistrationTests
             x.ImplementationType == typeof(TestArtifactMaterializer));
     }
 
+    [Fact]
+    public void AddCommittedObservationContinuation_ShouldRegisterContinuationOnly()
+    {
+        var services = new ServiceCollection();
+
+        services.AddCommittedObservationContinuation<TestContext, TestContinuation>();
+
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommittedObservationContinuation<TestContext>) &&
+            x.ImplementationType == typeof(TestContinuation));
+        services.Should().NotContain(x =>
+            x.ServiceType == typeof(IProjectionMaterializer<TestContext>) &&
+            x.ImplementationType == typeof(TestContinuation));
+        services.Should().NotContain(x =>
+            x.ServiceType == typeof(IProjectionArtifactMaterializer<TestContext>) &&
+            x.ImplementationType == typeof(TestContinuation));
+    }
+
     private sealed class TestContext : IProjectionMaterializationContext
     {
         public string RootActorId { get; init; } = "actor-1";
@@ -57,6 +75,17 @@ public sealed class ProjectionMaterializerRegistrationTests
     private sealed class TestArtifactMaterializer : IProjectionArtifactMaterializer<TestContext>
     {
         public ValueTask ProjectAsync(TestContext context, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            _ = context;
+            _ = envelope;
+            ct.ThrowIfCancellationRequested();
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class TestContinuation : ICommittedObservationContinuation<TestContext>
+    {
+        public ValueTask ContinueAsync(TestContext context, EventEnvelope envelope, CancellationToken ct = default)
         {
             _ = context;
             _ = envelope;

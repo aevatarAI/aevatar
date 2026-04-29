@@ -4,11 +4,10 @@ namespace Aevatar.Studio.Application.Studio.Abstractions;
 
 /// <summary>
 /// Application-level facade for member-first Studio APIs. Orchestrates the
-/// command and query ports plus the underlying scope binding capability so
-/// the HTTP layer never has to know about ServiceId or scope-default
-/// fallback. Endpoints depend on this interface rather than reaching for
-/// <see cref="IStudioMemberCommandPort"/>, <see cref="IStudioMemberQueryPort"/>
-/// or the platform binding port directly.
+/// command and query ports so the HTTP layer never has to know about
+/// ServiceId or scope-default fallback. Endpoints depend on this interface
+/// rather than reaching for <see cref="IStudioMemberCommandPort"/> or
+/// <see cref="IStudioMemberQueryPort"/> directly.
 /// </summary>
 public interface IStudioMemberService
 {
@@ -35,26 +34,24 @@ public interface IStudioMemberService
         CancellationToken ct = default);
 
     /// <summary>
-    /// Binds the given member to its own stable <c>publishedServiceId</c>
-    /// (never the scope default service). Resolves the member, builds a
-    /// scope binding request with <c>ServiceId = publishedServiceId</c>,
-    /// delegates to the existing scope binding command port, and records the
-    /// resulting revision back on the member authority.
+    /// Requests an asynchronous bind on the member authority. Synchronous
+    /// return means accepted for dispatch with a stable binding id; completion
+    /// is observed later through the member read model.
     /// </summary>
-    Task<StudioMemberBindingResponse> BindAsync(
+    Task<StudioMemberBindingAcceptedResponse> BindAsync(
         string scopeId,
         string memberId,
         UpdateStudioMemberBindingRequest request,
         CancellationToken ct = default);
 
     /// <summary>
-    /// Returns the last successful binding contract for the member, or
-    /// <c>null</c> when the member exists but has never been bound.
+    /// Returns the last successful binding contract plus the latest bind run
+    /// status for the member.
     /// Throws <see cref="StudioMemberNotFoundException"/> when the member
     /// itself does not exist — endpoints distinguish "missing member" (404)
     /// from "exists, never bound" (200 with null binding).
     /// </summary>
-    Task<StudioMemberBindingContractResponse?> GetBindingAsync(
+    Task<StudioMemberBindingViewResponse> GetBindingAsync(
         string scopeId,
         string memberId,
         CancellationToken ct = default);

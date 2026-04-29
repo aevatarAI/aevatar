@@ -623,7 +623,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
         return;
       }
       setPendingBindNotice({
-        message: `${pendingBindingCandidate.displayName} is now bound. Review the invoke contract below.`,
+        message: `${pendingBindingCandidate.displayName} binding was accepted. Studio will refresh the invoke contract when the binding completes.`,
         type: 'success',
       });
     } catch (error) {

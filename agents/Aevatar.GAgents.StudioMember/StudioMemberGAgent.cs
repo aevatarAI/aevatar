@@ -101,6 +101,71 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         await PersistDomainEventAsync(evt);
     }
 
+    [EventHandler(EndpointName = "requestBinding")]
+    public async Task HandleBindingRequested(StudioMemberBindingRequestedCommand command)
+    {
+        if (string.IsNullOrEmpty(State.MemberId))
+        {
+            throw new InvalidOperationException("member not yet created.");
+        }
+
+        ArgumentNullException.ThrowIfNull(command);
+        if (string.IsNullOrWhiteSpace(command.BindingId))
+        {
+            throw new InvalidOperationException("binding_id is required.");
+        }
+
+        if (State.BindingRuns.Any(IsActiveBindingRun))
+        {
+            throw new InvalidOperationException(
+                $"member '{State.MemberId}' already has an active binding run.");
+        }
+
+        ValidateBindingSpec(State.ImplementationKind, command.Request);
+
+        await PersistDomainEventAsync(new StudioMemberBindingRequestedEvent
+        {
+            BindingId = command.BindingId.Trim(),
+            ScopeId = State.ScopeId,
+            MemberId = State.MemberId,
+            PublishedServiceId = State.PublishedServiceId,
+            ImplementationKind = State.ImplementationKind,
+            DisplayName = State.DisplayName,
+            Request = command.Request?.Clone() ?? new StudioMemberBindingSpec(),
+            RequestedAtUtc = command.RequestedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+    }
+
+    [EventHandler(EndpointName = "completeBinding")]
+    public async Task HandleBindingCompleted(StudioMemberBindingCompletedEvent evt)
+    {
+        if (string.IsNullOrEmpty(State.MemberId))
+        {
+            throw new InvalidOperationException("member not yet created.");
+        }
+
+        var run = FindBindingRun(State, evt.BindingId);
+        if (run is null || run.Status != StudioMemberBindingStatus.Pending)
+            return;
+
+        await PersistDomainEventAsync(evt);
+    }
+
+    [EventHandler(EndpointName = "failBinding")]
+    public async Task HandleBindingFailed(StudioMemberBindingFailedEvent evt)
+    {
+        if (string.IsNullOrEmpty(State.MemberId))
+        {
+            throw new InvalidOperationException("member not yet created.");
+        }
+
+        var run = FindBindingRun(State, evt.BindingId);
+        if (run is null || run.Status != StudioMemberBindingStatus.Pending)
+            return;
+
+        await PersistDomainEventAsync(evt);
+    }
+
     protected override StudioMemberState TransitionState(
         StudioMemberState current, IMessage evt)
     {
@@ -110,6 +175,9 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             .On<StudioMemberRenamedEvent>(ApplyRenamed)
             .On<StudioMemberImplementationUpdatedEvent>(ApplyImplementationUpdated)
             .On<StudioMemberBoundEvent>(ApplyBound)
+            .On<StudioMemberBindingRequestedEvent>(ApplyBindingRequested)
+            .On<StudioMemberBindingCompletedEvent>(ApplyBindingCompleted)
+            .On<StudioMemberBindingFailedEvent>(ApplyBindingFailed)
             .OrCurrent();
     }
 
@@ -200,6 +268,76 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         return next;
     }
 
+    private static StudioMemberState ApplyBindingRequested(
+        StudioMemberState state, StudioMemberBindingRequestedEvent evt)
+    {
+        var next = state.Clone();
+        next.BindingRuns.Add(new StudioMemberBindingRun
+        {
+            BindingId = evt.BindingId,
+            Status = StudioMemberBindingStatus.Pending,
+            ScopeId = evt.ScopeId,
+            MemberId = evt.MemberId,
+            PublishedServiceId = evt.PublishedServiceId,
+            ImplementationKind = evt.ImplementationKind,
+            DisplayName = evt.DisplayName,
+            Request = evt.Request?.Clone() ?? new StudioMemberBindingSpec(),
+            RequestedAtUtc = evt.RequestedAtUtc,
+        });
+        next.UpdatedAtUtc = evt.RequestedAtUtc;
+        return next;
+    }
+
+    private static StudioMemberState ApplyBindingCompleted(
+        StudioMemberState state, StudioMemberBindingCompletedEvent evt)
+    {
+        var index = FindBindingRunIndex(state, evt.BindingId);
+        if (index < 0)
+            return state;
+
+        var next = state.Clone();
+        var run = next.BindingRuns[index].Clone();
+        run.Status = StudioMemberBindingStatus.Completed;
+        run.RevisionId = evt.RevisionId;
+        run.ExpectedActorId = evt.ExpectedActorId;
+        run.ResolvedImplementationRef = evt.ResolvedImplementationRef?.Clone();
+        run.CompletedAtUtc = evt.CompletedAtUtc;
+        next.BindingRuns[index] = run;
+
+        if (evt.ResolvedImplementationRef != null)
+            next.ImplementationRef = evt.ResolvedImplementationRef.Clone();
+
+        next.LastBinding = new StudioMemberBindingContract
+        {
+            PublishedServiceId = run.PublishedServiceId,
+            RevisionId = evt.RevisionId,
+            ImplementationKind = run.ImplementationKind,
+            BoundAtUtc = evt.CompletedAtUtc,
+        };
+        next.LifecycleStage = StudioMemberLifecycleStage.BindReady;
+        next.UpdatedAtUtc = evt.CompletedAtUtc;
+        return next;
+    }
+
+    private static StudioMemberState ApplyBindingFailed(
+        StudioMemberState state, StudioMemberBindingFailedEvent evt)
+    {
+        var index = FindBindingRunIndex(state, evt.BindingId);
+        if (index < 0)
+            return state;
+
+        var next = state.Clone();
+        var run = next.BindingRuns[index].Clone();
+        run.Status = StudioMemberBindingStatus.Failed;
+        run.FailureCode = evt.FailureCode;
+        run.FailureSummary = evt.FailureSummary;
+        run.Retryable = evt.Retryable;
+        run.FailedAtUtc = evt.FailedAtUtc;
+        next.BindingRuns[index] = run;
+        next.UpdatedAtUtc = evt.FailedAtUtc;
+        return next;
+    }
+
     private static bool HasResolvedImplementationRef(StudioMemberImplementationRef? implRef)
     {
         if (implRef == null)
@@ -213,5 +351,57 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             return true;
 
         return false;
+    }
+
+    private static void ValidateBindingSpec(
+        StudioMemberImplementationKind implementationKind,
+        StudioMemberBindingSpec? request)
+    {
+        if (request is null)
+        {
+            throw new InvalidOperationException("binding request is required.");
+        }
+
+        switch (implementationKind)
+        {
+            case StudioMemberImplementationKind.Workflow:
+                if (request.Workflow is null || request.Workflow.WorkflowYamls.Count == 0)
+                    throw new InvalidOperationException("workflow yamls are required for workflow members.");
+                break;
+            case StudioMemberImplementationKind.Script:
+                if (request.Script is null || string.IsNullOrWhiteSpace(request.Script.ScriptId))
+                    throw new InvalidOperationException("scriptId is required for script members.");
+                break;
+            case StudioMemberImplementationKind.Gagent:
+                if (request.Gagent is null || string.IsNullOrWhiteSpace(request.Gagent.ActorTypeName))
+                    throw new InvalidOperationException("actorTypeName is required for gagent members.");
+                break;
+            default:
+                throw new InvalidOperationException(
+                    $"unsupported implementationKind '{implementationKind}'.");
+        }
+    }
+
+    private static bool IsActiveBindingRun(StudioMemberBindingRun run) =>
+        run.Status == StudioMemberBindingStatus.Pending;
+
+    private static StudioMemberBindingRun? FindBindingRun(StudioMemberState state, string? bindingId)
+    {
+        var index = FindBindingRunIndex(state, bindingId);
+        return index < 0 ? null : state.BindingRuns[index];
+    }
+
+    private static int FindBindingRunIndex(StudioMemberState state, string? bindingId)
+    {
+        if (string.IsNullOrWhiteSpace(bindingId))
+            return -1;
+
+        for (var i = state.BindingRuns.Count - 1; i >= 0; i--)
+        {
+            if (string.Equals(state.BindingRuns[i].BindingId, bindingId, StringComparison.Ordinal))
+                return i;
+        }
+
+        return -1;
     }
 }

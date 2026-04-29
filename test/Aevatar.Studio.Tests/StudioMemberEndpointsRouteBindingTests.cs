@@ -69,13 +69,13 @@ public sealed class StudioMemberEndpointsRouteBindingTests
             string scopeId, string memberId, CancellationToken ct = default) =>
             Task.FromException<StudioMemberDetailResponse>(new NotImplementedException());
 
-        public Task<StudioMemberBindingResponse> BindAsync(
+        public Task<StudioMemberBindingAcceptedResponse> BindAsync(
             string scopeId, string memberId, UpdateStudioMemberBindingRequest request, CancellationToken ct = default) =>
-            Task.FromException<StudioMemberBindingResponse>(new NotImplementedException());
+            Task.FromException<StudioMemberBindingAcceptedResponse>(new NotImplementedException());
 
-        public Task<StudioMemberBindingContractResponse?> GetBindingAsync(
+        public Task<StudioMemberBindingViewResponse> GetBindingAsync(
             string scopeId, string memberId, CancellationToken ct = default) =>
-            Task.FromResult<StudioMemberBindingContractResponse?>(null);
+            Task.FromResult(new StudioMemberBindingViewResponse(null));
 
         public Task<StudioMemberEndpointContractResponse?> GetEndpointContractAsync(
             string scopeId, string memberId, string endpointId, CancellationToken ct = default) =>

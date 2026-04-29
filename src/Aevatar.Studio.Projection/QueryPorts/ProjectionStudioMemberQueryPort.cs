@@ -108,7 +108,8 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
         var summary = ToSummary(document);
         var implementationRef = ToImplementationRefResponse(document, summary.ImplementationKind);
         var lastBinding = ToLastBindingResponse(document);
-        return new StudioMemberDetailResponse(summary, implementationRef, lastBinding);
+        var latestBindingRun = ToLatestBindingRunResponse(document);
+        return new StudioMemberDetailResponse(summary, implementationRef, lastBinding, latestBindingRun);
     }
 
     private static StudioMemberImplementationRefResponse? ToImplementationRefResponse(
@@ -158,6 +159,30 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
             BoundAt: document.LastBoundAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue);
     }
 
+    private static StudioMemberBindingRunResponse? ToLatestBindingRunResponse(
+        StudioMemberCurrentStateDocument document)
+    {
+        if (string.IsNullOrEmpty(document.LatestBindingId))
+            return null;
+
+        var failureCode = string.IsNullOrEmpty(document.LatestBindingFailureCode)
+            ? null
+            : document.LatestBindingFailureCode;
+        var failureSummary = string.IsNullOrEmpty(document.LatestBindingFailureSummary)
+            ? null
+            : document.LatestBindingFailureSummary;
+
+        return new StudioMemberBindingRunResponse(
+            BindingId: document.LatestBindingId,
+            Status: NormalizeBindingStatusWire(document.LatestBindingStatus),
+            RequestedAt: document.LatestBindingRequestedAt?.ToDateTimeOffset(),
+            CompletedAt: document.LatestBindingCompletedAt?.ToDateTimeOffset(),
+            FailedAt: document.LatestBindingFailedAt?.ToDateTimeOffset(),
+            FailureCode: failureCode,
+            FailureSummary: failureSummary,
+            Retryable: document.LatestBindingRetryable);
+    }
+
     private static string NormalizeImplementationKindWire(string? wire) => wire switch
     {
         MemberImplementationKindNames.Workflow => MemberImplementationKindNames.Workflow,
@@ -171,6 +196,14 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
         MemberLifecycleStageNames.Created => MemberLifecycleStageNames.Created,
         MemberLifecycleStageNames.BuildReady => MemberLifecycleStageNames.BuildReady,
         MemberLifecycleStageNames.BindReady => MemberLifecycleStageNames.BindReady,
+        _ => string.Empty,
+    };
+
+    private static string NormalizeBindingStatusWire(string? wire) => wire switch
+    {
+        StudioMemberBindingStatusNames.Pending => StudioMemberBindingStatusNames.Pending,
+        StudioMemberBindingStatusNames.Completed => StudioMemberBindingStatusNames.Completed,
+        StudioMemberBindingStatusNames.Failed => StudioMemberBindingStatusNames.Failed,
         _ => string.Empty,
     };
 }

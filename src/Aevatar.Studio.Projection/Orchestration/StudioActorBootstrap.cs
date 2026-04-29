@@ -33,4 +33,24 @@ internal sealed class StudioActorBootstrap : IStudioActorBootstrap
 
         return actor;
     }
+
+    public async Task<IActor?> GetExistingAsync<TAgent>(string actorId, CancellationToken ct = default)
+        where TAgent : IAgent, IProjectedActor
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+
+        var actor = await _runtime.GetAsync(actorId);
+        if (actor is null)
+            return null;
+
+        await _projectionPort.EnsureProjectionAsync(actorId, TAgent.ProjectionKind, ct);
+        return actor;
+    }
+
+    public Task<IActor?> GetExistingActorAsync<TAgent>(string actorId, CancellationToken ct = default)
+        where TAgent : IAgent, IProjectedActor
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+        return _runtime.GetAsync(actorId);
+    }
 }

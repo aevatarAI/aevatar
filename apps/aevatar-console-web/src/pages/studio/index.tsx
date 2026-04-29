@@ -3495,38 +3495,51 @@ const StudioPage: React.FC = () => {
     }
 
     const resolvedBuildMemberId = trimOptional(buildPendingMemberSummary?.memberId);
-    const result = resolvedBuildMemberId
-      ? await studioApi.bindMemberWorkflow({
-          scopeId: resolvedStudioScopeId,
-          memberId: resolvedBuildMemberId,
-          displayName: buildPendingBindCandidate.displayName,
-          workflowYamls: await buildWorkflowYamlBundle(),
-        })
-      : await studioApi.bindScopeWorkflow({
-          scopeId: resolvedStudioScopeId,
-          displayName: buildPendingBindCandidate.displayName,
-          workflowYamls: await buildWorkflowYamlBundle(),
-        });
+    let boundServiceCandidates: (string | null | undefined)[];
+    let optimisticBoundServiceId: string;
+    if (resolvedBuildMemberId) {
+      const accepted = await studioApi.bindMemberWorkflow({
+        scopeId: resolvedStudioScopeId,
+        memberId: resolvedBuildMemberId,
+        displayName: buildPendingBindCandidate.displayName,
+        workflowYamls: await buildWorkflowYamlBundle(),
+      });
+      boundServiceCandidates = [
+        buildPendingMemberSummary?.publishedServiceId,
+        buildPendingBindCandidate.displayName,
+        accepted.memberId,
+      ];
+      optimisticBoundServiceId =
+        trimOptional(buildPendingMemberSummary?.publishedServiceId) ||
+        trimOptional(buildPendingBindCandidate.displayName) ||
+        trimOptional(accepted.memberId);
+    } else {
+      const result = await studioApi.bindScopeWorkflow({
+        scopeId: resolvedStudioScopeId,
+        displayName: buildPendingBindCandidate.displayName,
+        workflowYamls: await buildWorkflowYamlBundle(),
+      });
+      boundServiceCandidates = [
+        buildPendingBindCandidate.displayName,
+        result.displayName,
+        result.targetName,
+        result.workflowName,
+      ];
+      optimisticBoundServiceId =
+        trimOptional(result.serviceId) ||
+        trimOptional(buildPendingBindCandidate.displayName) ||
+        trimOptional(result.displayName) ||
+        trimOptional(result.targetName) ||
+        trimOptional(result.workflowName);
+    }
     await queryClient.invalidateQueries({
       queryKey: ['studio-scope-members', resolvedStudioScopeId],
     });
     const servicesResult = await scopeServicesQuery.refetch();
-    const optimisticBoundServiceId =
-      trimOptional(buildPendingMemberSummary?.publishedServiceId) ||
-      trimOptional(buildPendingBindCandidate.displayName) ||
-      trimOptional(result.displayName) ||
-      trimOptional(result.targetName) ||
-      trimOptional(result.workflowName);
     const boundServiceId =
-      trimOptional(result.serviceId) ||
       resolveBoundServiceIdFromCatalog({
         services: servicesResult.data ?? [],
-        candidates: [
-          buildPendingBindCandidate.displayName,
-          result.displayName,
-          result.targetName,
-          result.workflowName,
-        ],
+        candidates: boundServiceCandidates,
       }) ||
       optimisticBoundServiceId;
 

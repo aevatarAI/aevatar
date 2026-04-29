@@ -533,6 +533,7 @@ public sealed class NyxIdRelayAuthValidatorTests
         string issuer = Issuer,
         string audience = CallbackAudience,
         string subject = "scope-123",
+        string? scopeId = "scope-123",
         string agentApiKeyId = "api-key-123",
         string? payloadAgentApiKeyId = null,
         string messageId = "msg-1",
@@ -583,6 +584,7 @@ public sealed class NyxIdRelayAuthValidatorTests
             issuer,
             audience,
             subject,
+            scopeId,
             agentApiKeyId,
             tokenMessageId ?? messageId,
             tokenPlatform ?? platform,
@@ -608,6 +610,7 @@ public sealed class NyxIdRelayAuthValidatorTests
         string issuer,
         string audience,
         string subject,
+        string? scopeId,
         string relayApiKeyId,
         string messageId,
         string platform,
@@ -627,6 +630,9 @@ public sealed class NyxIdRelayAuthValidatorTests
             new("body_sha256", bodySha256),
             new(JwtRegisteredClaimNames.Jti, jti),
         };
+
+        if (!string.IsNullOrWhiteSpace(scopeId))
+            claims.Add(new Claim("scope_id", scopeId));
 
         if (!string.IsNullOrWhiteSpace(tokenType))
             claims.Add(new Claim("token_type", tokenType));

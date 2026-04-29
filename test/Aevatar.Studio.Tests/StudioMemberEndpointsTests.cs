@@ -158,15 +158,14 @@ public sealed class StudioMemberEndpointsTests
     }
 
     [Fact]
-    public async Task HandleBindAsync_ShouldReturnOk_OnSuccess()
+    public async Task HandleBindAsync_ShouldReturnAccepted_OnSuccess()
     {
-        var binding = new StudioMemberBindingResponse(
-            MemberId: "m-1",
-            PublishedServiceId: "member-m-1",
-            RevisionId: "rev-1",
-            ImplementationKind: MemberImplementationKindNames.Workflow,
+        var binding = new StudioMemberBindingAcceptedResponse(
             ScopeId: ScopeId,
-            ExpectedActorId: "actor");
+            MemberId: "m-1",
+            BindingId: "bind-1",
+            Status: StudioMemberBindingStatusNames.Accepted,
+            AcceptedAt: DateTimeOffset.UtcNow);
         var service = new RecordingMemberService
         {
             BindResponse = binding,
@@ -182,7 +181,7 @@ public sealed class StudioMemberEndpointsTests
             service,
             CancellationToken.None);
 
-        result.Should().BeOfType<Ok<StudioMemberBindingResponse>>()
+        result.Should().BeOfType<Accepted<StudioMemberBindingAcceptedResponse>>()
             .Which.Value.Should().BeSameAs(binding);
     }
 
@@ -239,7 +238,7 @@ public sealed class StudioMemberEndpointsTests
             "member-m-1", "rev-1", MemberImplementationKindNames.Workflow, DateTimeOffset.UtcNow);
         var service = new RecordingMemberService
         {
-            GetBindingResponse = contract,
+            GetBindingResponse = new StudioMemberBindingViewResponse(contract),
         };
 
         var result = await InvokeHandle<IResult>(
@@ -631,9 +630,9 @@ public sealed class StudioMemberEndpointsTests
         public StudioMemberRosterResponse? ListResponse { get; set; }
         public StudioMemberDetailResponse? GetResponse { get; set; }
         public Exception? GetException { get; set; }
-        public StudioMemberBindingResponse? BindResponse { get; set; }
+        public StudioMemberBindingAcceptedResponse? BindResponse { get; set; }
         public Exception? BindException { get; set; }
-        public StudioMemberBindingContractResponse? GetBindingResponse { get; set; }
+        public StudioMemberBindingViewResponse? GetBindingResponse { get; set; }
         public StudioMemberEndpointContractResponse? EndpointContractResponse { get; set; }
         public Exception? EndpointContractException { get; set; }
         public StudioMemberBindingActivationResponse? ActivateResponse { get; set; }
@@ -663,16 +662,16 @@ public sealed class StudioMemberEndpointsTests
                 GetResponse ?? throw new StudioMemberNotFoundException(scopeId, memberId));
         }
 
-        public Task<StudioMemberBindingResponse> BindAsync(
+        public Task<StudioMemberBindingAcceptedResponse> BindAsync(
             string scopeId, string memberId, UpdateStudioMemberBindingRequest request, CancellationToken ct = default)
         {
             if (BindException != null) throw BindException;
             return Task.FromResult(BindResponse!);
         }
 
-        public Task<StudioMemberBindingContractResponse?> GetBindingAsync(
+        public Task<StudioMemberBindingViewResponse> GetBindingAsync(
             string scopeId, string memberId, CancellationToken ct = default)
-            => Task.FromResult(GetBindingResponse);
+            => Task.FromResult(GetBindingResponse ?? new StudioMemberBindingViewResponse(null));
 
         public Task<StudioMemberEndpointContractResponse?> GetEndpointContractAsync(
             string scopeId, string memberId, string endpointId, CancellationToken ct = default)

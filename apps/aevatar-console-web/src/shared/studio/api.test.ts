@@ -789,17 +789,13 @@ describe('studioApi host-session requests', () => {
 
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
-      status: 200,
+      status: 202,
       json: async () => ({
         scopeId: 'scope-1',
-        publishedServiceId: 'joker',
-        displayName: 'joker',
-        revisionId: 'rev-1',
-        implementationKind: 'workflow',
-        workflow: {
-          workflowName: 'joker',
-          definitionActorIdPrefix: 'scope-workflow:scope-1:joker',
-        },
+        memberId: 'joker',
+        bindingId: 'bind-1',
+        status: 'accepted',
+        acceptedAt: '2026-03-26T08:00:00Z',
       }),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
@@ -812,12 +808,12 @@ describe('studioApi host-session requests', () => {
       revisionId: 'rev-1',
     });
 
-    expect(result.serviceId).toBe('joker');
-    expect(result.implementationKind).toBe('workflow');
-    expect(result.targetKind).toBe('workflow');
-    expect(result.workflow).toEqual({
-      workflowName: 'joker',
-      definitionActorIdPrefix: 'scope-workflow:scope-1:joker',
+    expect(result).toEqual({
+      scopeId: 'scope-1',
+      memberId: 'joker',
+      bindingId: 'bind-1',
+      status: 'accepted',
+      acceptedAt: '2026-03-26T08:00:00Z',
     });
 
     const [input, init] = fetchMock.mock.calls[0] as [
@@ -993,18 +989,22 @@ describe('studioApi host-session requests', () => {
       ok: true,
       status: 200,
       json: async () => ({
-        available: true,
-        scopeId: 'scope-1',
-        publishedServiceId: 'joker',
-        displayName: 'joker',
-        publishedServiceKey: 'scope-1:default:joker',
-        defaultServingRevisionId: 'rev-2',
-        activeServingRevisionId: 'rev-2',
-        deploymentId: 'deploy-2',
-        deploymentStatus: 'Active',
-        primaryActorId: 'actor://scope/joker',
-        updatedAt: '2026-03-26T08:00:00Z',
-        revisions: [],
+        lastBinding: {
+          publishedServiceId: 'joker',
+          revisionId: 'rev-2',
+          implementationKind: 'workflow',
+          boundAt: '2026-03-26T08:00:00Z',
+        },
+        latestBindingRun: {
+          bindingId: 'bind-1',
+          status: 'completed',
+          requestedAt: '2026-03-26T07:59:00Z',
+          completedAt: '2026-03-26T08:00:00Z',
+          failedAt: null,
+          failureCode: null,
+          failureSummary: null,
+          retryable: false,
+        },
       }),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
@@ -1012,8 +1012,12 @@ describe('studioApi host-session requests', () => {
     await expect(studioApi.getMemberBinding('scope-1', 'joker')).resolves.toEqual(
       expect.objectContaining({
         serviceId: 'joker',
-        serviceKey: 'scope-1:default:joker',
+        serviceKey: 'joker',
         displayName: 'joker',
+        latestBindingRun: expect.objectContaining({
+          bindingId: 'bind-1',
+          status: 'completed',
+        }),
       }),
     );
 
@@ -1160,6 +1164,7 @@ describe('studioApi host-session requests', () => {
         implementationKind: 'workflow',
         boundAt: '2026-04-27T08:05:00Z',
       },
+      latestBindingRun: null,
     });
 
     expect(fetchMock).toHaveBeenCalledWith(

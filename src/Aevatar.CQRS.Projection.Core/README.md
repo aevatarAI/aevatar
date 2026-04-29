@@ -13,6 +13,7 @@
 
 - [IProjectionMaterializer.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Pipeline/IProjectionMaterializer.cs)
 - [IProjectionMaterializerKinds.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Pipeline/IProjectionMaterializerKinds.cs)
+- [ICommittedObservationContinuation.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Pipeline/ICommittedObservationContinuation.cs)
 - [IProjectionMaterializationContext.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Core/IProjectionMaterializationContext.cs)
 - [ProjectionMaterializationStartRequest.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Core/ProjectionMaterializationStartRequest.cs)
 - [IProjectionMaterializationActivationService.cs](/Users/auric/aevatar/src/Aevatar.CQRS.Projection.Core.Abstractions/Abstractions/Ports/IProjectionMaterializationActivationService.cs)
@@ -53,4 +54,5 @@
 - durable materializer 必须显式区分：
   - `ICurrentStateProjectionMaterializer<TContext>`：actor-scoped current-state replica，不能依赖回读旧文档
   - `IProjectionArtifactMaterializer<TContext>`：derived durable artifact，不再伪装成 canonical readmodel
+- durable business continuation 必须使用 `ICommittedObservationContinuation<TContext>` 单独注册；它可以在 committed fact 后通过显式 command port 推进业务协议，但不得注册为 materializer，也不得物化 read model
 - session 只负责发布 session event stream，不再把 live sink 当作生命周期事实
