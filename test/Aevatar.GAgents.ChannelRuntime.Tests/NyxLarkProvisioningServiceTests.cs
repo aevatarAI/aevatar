@@ -19,7 +19,7 @@ public class NyxLarkProvisioningServiceTests
         handler.Enqueue("/api/v1/api-keys", """{"id":"key-123","full_key":"full-key"}""");
         handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-456","status":"pending_webhook"}""");
         handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-789","default_agent":true}""");
-        handler.Enqueue("/api/v1/keys", """{"id":"svc-001","slug":"api-lark-bot"}""");
+        handler.Enqueue("/api/v1/keys", """{"id":"svc-1"}""");
 
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
@@ -76,7 +76,7 @@ public class NyxLarkProvisioningServiceTests
         handler.Requests[1].Body.Should().Contain("\"app_id\":\"cli_a1b2c3\"");
         handler.Requests[1].Body.Should().Contain("\"verification_token\":\"verify-123\"");
         handler.Requests[2].Body.Should().Contain("\"default_agent\":true");
-        handler.Requests[3].Path.Should().Be("/api/v1/keys");
+        handler.Requests[3].Body.Should().Contain("\"label\":\"Lark App cli_a1b2c3\"");
         handler.Requests[3].Body.Should().Contain("\"service_slug\":\"api-lark-bot\"");
     }
 
@@ -142,7 +142,7 @@ public class NyxLarkProvisioningServiceTests
         handler.Enqueue("/api/v1/api-keys", """{"id":"key-123","full_key":"full-key"}""");
         handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-456"}""");
         handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-789"}""");
-        handler.Enqueue("/api/v1/keys", """{"id":"svc-001","slug":"api-lark-bot"}""");
+        handler.Enqueue("/api/v1/keys", """{"id":"svc-1"}""");
         handler.Enqueue(HttpMethod.Delete, "/api/v1/channel-conversations/route-789", """{"ok":true}""");
         handler.Enqueue(HttpMethod.Delete, "/api/v1/channel-bots/bot-456", """{"ok":true}""");
         handler.Enqueue(HttpMethod.Delete, "/api/v1/api-keys/key-123", """{"ok":true}""");

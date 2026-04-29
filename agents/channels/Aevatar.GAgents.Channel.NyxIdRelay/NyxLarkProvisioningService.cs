@@ -266,12 +266,6 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 confirmedBot.Id,
                 confirmedApiKey.Id,
                 ct);
-
-            // Note: proxy service connection (api-lark-bot) is skipped during repair because
-            // the repair request does not carry Lark app credentials (AppId/AppSecret).
-            // The service was connected during the original ProvisionAsync call and is
-            // reusable across registrations.
-
             await RegisterLocalMirrorAsync(
                 registrationId,
                 nyxProviderSlug,
@@ -406,10 +400,10 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         try
         {
             var credential = JsonSerializer.Serialize(new { app_id = appId, app_secret = appSecret });
-            var body = JsonSerializer.Serialize(new { service_slug = DefaultNyxProviderSlug, credential });
+            var body = JsonSerializer.Serialize(new { service_slug = DefaultNyxProviderSlug, credential, label = $"Lark App {appId}" });
             await _nyxClient.CreateServiceAsync(accessToken, body, ct);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // Best-effort: 409 conflict (service already exists) or any other error is
             // non-fatal. The core relay path works without this; only typing reactions

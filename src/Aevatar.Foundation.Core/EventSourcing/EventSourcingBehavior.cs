@@ -151,6 +151,9 @@ public class EventSourcingBehavior<TState> : IEventSourcingBehavior<TState>
     }
 
     /// <inheritdoc />
+    public void DiscardPendingEvents() => _pending.Clear();
+
+    /// <inheritdoc />
     public async Task<TState?> ReplayAsync(string agentId, CancellationToken ct = default)
     {
         var snapshot = await TryLoadSnapshotAsync(agentId, ct);
