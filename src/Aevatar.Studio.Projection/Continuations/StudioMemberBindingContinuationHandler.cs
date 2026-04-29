@@ -2,7 +2,6 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StudioMember;
-using Aevatar.Studio.Projection.CommandServices;
 using Aevatar.Studio.Projection.Orchestration;
 
 namespace Aevatar.Studio.Projection.Continuations;
@@ -13,13 +12,12 @@ namespace Aevatar.Studio.Projection.Continuations;
 internal sealed class StudioMemberBindingContinuationHandler
     : ICommittedObservationContinuation<StudioMaterializationContext>
 {
-    private readonly StudioMemberBindingContinuationService _continuationService;
+    private readonly IStudioMemberBindingContinuationDispatcher _dispatcher;
 
     public StudioMemberBindingContinuationHandler(
-        StudioMemberBindingContinuationService continuationService)
+        IStudioMemberBindingContinuationDispatcher dispatcher)
     {
-        _continuationService = continuationService
-            ?? throw new ArgumentNullException(nameof(continuationService));
+        _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
     }
 
     public async ValueTask ContinueAsync(
@@ -37,7 +35,7 @@ internal sealed class StudioMemberBindingContinuationHandler
             return;
         }
 
-        await _continuationService.HandleRequestedAsync(
+        await _dispatcher.DispatchAsync(
             payload.Unpack<StudioMemberBindingRequestedEvent>(),
             ct);
     }

@@ -622,9 +622,18 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ArgumentNullException.ThrowIfNull(activity);
 
         var nyxAgentApiKeyId = NormalizeOptional(activity.TransportExtras?.NyxAgentApiKeyId);
+        var validatedScopeId = NormalizeOptional(activity.TransportExtras?.ValidatedScopeId);
         if (!string.IsNullOrWhiteSpace(nyxAgentApiKeyId) &&
             _registrationQueryByNyxIdentityPort is not null)
         {
+            if (!string.IsNullOrWhiteSpace(validatedScopeId))
+            {
+                return await ResolveRegistrationByVerifiedScopeAsync(
+                    nyxAgentApiKeyId,
+                    validatedScopeId,
+                    ct);
+            }
+
             var byNyxIdentity = await _registrationQueryByNyxIdentityPort.GetByNyxAgentApiKeyIdAsync(
                 nyxAgentApiKeyId,
                 ct);
@@ -639,7 +648,44 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             }
         }
 
+        if (!string.IsNullOrWhiteSpace(validatedScopeId))
+        {
+            _logger.LogWarning(
+                "Rejecting relay activity because verified scope cannot be routed without Nyx identity query: activity={ActivityId}, nyxAgentApiKeyId={NyxAgentApiKeyId}, scope={ScopeId}",
+                activity.Id,
+                nyxAgentApiKeyId,
+                validatedScopeId);
+            return null;
+        }
+
         return await ResolveRegistrationAsync(activity.Bot?.Value, ct);
+    }
+
+    private async Task<ChannelBotRegistrationEntry?> ResolveRegistrationByVerifiedScopeAsync(
+        string nyxAgentApiKeyId,
+        string validatedScopeId,
+        CancellationToken ct)
+    {
+        var registrations = await _registrationQueryByNyxIdentityPort!.ListByNyxAgentApiKeyIdAsync(
+            nyxAgentApiKeyId,
+            ct);
+        var matches = registrations
+            .Where(entry => string.Equals(
+                NormalizeOptional(entry.ScopeId),
+                validatedScopeId,
+                StringComparison.Ordinal))
+            .ToArray();
+
+        if (matches.Length == 1)
+            return matches[0];
+
+        _logger.LogWarning(
+            "Rejecting relay registration because verified scope did not resolve to one registration: nyxAgentApiKeyId={NyxAgentApiKeyId}, scope={ScopeId}, matches={MatchCount}, total={TotalCount}",
+            nyxAgentApiKeyId,
+            validatedScopeId,
+            matches.Length,
+            registrations.Count);
+        return null;
     }
 
     private async Task<ChannelBotRegistrationEntry?> ResolveRegistrationByNyxIdentityScanAsync(

@@ -1277,6 +1277,7 @@ public class NyxIdChatEndpointsCoverageTests
         activity.OutboundDelivery.CorrelationId.Should().Be("corr-1");
         activity.TransportExtras.NyxPlatform.Should().Be("slack");
         activity.TransportExtras.NyxUserAccessToken.Should().Be(relay.UserToken);
+        activity.TransportExtras.ValidatedScopeId.Should().Be("scope-a");
     }
 
     [Fact]

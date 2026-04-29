@@ -297,6 +297,9 @@ message TransportExtras {
   // chat can address it via `receive_id_type=chat_id`). For p2p DMs the chat_id is bot-specific
   // and not cross-app safe; downstream senders prefer `nyx_lark_union_id` for p2p targets.
   string nyx_lark_chat_id = 8;
+  // The scope id verified from the relay callback token. Admission and registration routing
+  // must prefer this authority claim over read-model inference.
+  string validated_scope_id = 9;
 }
 
 // Represents one normalized activity flowing through the channel pipeline.

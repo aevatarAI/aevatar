@@ -13,7 +13,7 @@ namespace Aevatar.Studio.Projection.CommandServices;
 /// Handles committed StudioMember binding requests by performing the external
 /// scope binding upsert, then reporting completion or failure back to the same
 /// StudioMember actor. This is deliberately not a read-model projector: it is
-/// the business continuation endpoint that a durable event-delivery subscriber
+/// the business continuation endpoint that the dedicated continuation actor
 /// invokes after <see cref="StudioMemberBindingRequestedEvent"/> is committed.
 /// </summary>
 internal sealed class StudioMemberBindingContinuationService

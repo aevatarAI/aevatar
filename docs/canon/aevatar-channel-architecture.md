@@ -313,7 +313,7 @@ public record ChatActivity(
 
 **为什么新增 `OutboundDeliveryContext`**：Nyx relay 这类 async callback transport 的 reply 不只是 "往这个 conversation 发一条消息"，还需要把 ingress 提供的 **opaque reply target**（如 relay `message_id`）和 **opaque delivery credential**（如 relay access token）带回 outbound 边界。它们不是业务 metadata bag，也不是 `ConversationReference` 的稳定会话语义，而是**一次 inbound turn 派生出的 reply-delivery 事实**。因此单独建模成 `ChatActivity.OutboundDelivery`；但持久化到 `ConversationTurnCompletedEvent` 时只保留非敏感的 `OutboundDeliveryReceipt.reply_message_id`，避免把短期 reply token 扩散进 projection/audit/readmodel。
 
-**为什么新增 `TransportExtras`**：某些 transport ingress 会带来必须穿过 runtime 的结构化事实，例如 Nyx relay 的 `nyx_message_id`、`nyx_agent_api_key_id`、`nyx_platform`、`nyx_conversation_id`。这些值会影响 registration lookup、reply correlation 和 platform dispatch，但它们**不属于** `ConversationReference` 的稳定业务语义，也不应该退回到开放式 metadata bag。`TransportExtras` 的职责正是承载这类 typed ingress facts；`RawPayloadBlobRef` 继续只做 forensic hash/blob 引用，**不能**反向充当 reply credential 或 structured routing metadata 的回查通道。
+**为什么新增 `TransportExtras`**：某些 transport ingress 会带来必须穿过 runtime 的结构化事实，例如 Nyx relay 的 `nyx_message_id`、`nyx_agent_api_key_id`、`nyx_platform`、`nyx_conversation_id`。这些值会影响 registration lookup、reply correlation 和 platform dispatch，但它们**不属于** `ConversationReference` 的稳定业务语义，也不应该退回到开放式 metadata bag。`validated_scope_id` 是 Nyx relay callback token 已验证的准入 claim；当它存在时，下游 registration 解析必须按 `nyx_agent_api_key_id + validated_scope_id` 做唯一匹配，不能再通过单条 read model 查询或 bounded scan 推断租户。`TransportExtras` 的职责正是承载这类 typed ingress facts；`RawPayloadBlobRef` 继续只做 forensic hash/blob 引用，**不能**反向充当 reply credential 或 structured routing metadata 的回查通道。
 
 ### 5.1b Supporting types
 

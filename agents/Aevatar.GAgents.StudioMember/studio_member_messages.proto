@@ -211,6 +211,10 @@ message StudioMemberBindingRequestedEvent {
   google.protobuf.Timestamp requested_at_utc = 8;
 }
 
+message StudioMemberBindingContinuationRequestedCommand {
+  StudioMemberBindingRequestedEvent request = 1;
+}
+
 message StudioMemberBindingCompletedEvent {
   string binding_id = 1;
   string revision_id = 2;

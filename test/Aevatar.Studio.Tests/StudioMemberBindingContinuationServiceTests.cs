@@ -2,6 +2,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgents.StudioMember;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
@@ -216,12 +217,10 @@ public sealed class StudioMemberBindingContinuationServiceTests
     }
 
     [Fact]
-    public async Task ContinueAsync_ShouldInvokeContinuation_WhenCommittedBindingRequestArrives()
+    public async Task ContinueAsync_ShouldDispatchContinuationRun_WhenCommittedBindingRequestArrives()
     {
-        var scopeBinding = new RecordingScopeBindingPort();
-        var memberCommand = new RecordingMemberCommandPort();
-        var service = NewService(scopeBinding, memberCommand);
-        var continuation = new StudioMemberBindingContinuationHandler(service);
+        var dispatcher = new RecordingContinuationDispatcher();
+        var continuation = new StudioMemberBindingContinuationHandler(dispatcher);
 
         await continuation.ContinueAsync(
             new StudioMaterializationContext
@@ -232,9 +231,32 @@ public sealed class StudioMemberBindingContinuationServiceTests
             WrapCommitted(NewWorkflowRequest()),
             CancellationToken.None);
 
-        scopeBinding.LastRequest.Should().NotBeNull();
-        memberCommand.Completed.Should().ContainSingle()
-            .Which.Request.BindingId.Should().Be("bind-1");
+        dispatcher.Requests.Should().ContainSingle()
+            .Which.BindingId.Should().Be("bind-1");
+    }
+
+    [Fact]
+    public async Task Dispatcher_ShouldCreateContinuationActorAndDispatchTypedCommand()
+    {
+        var runtime = new RecordingActorRuntime();
+        var streamProvider = new RecordingStreamProvider();
+        var dispatcher = new StudioMemberBindingContinuationDispatcher(runtime, streamProvider);
+        var request = NewWorkflowRequest();
+
+        await dispatcher.DispatchAsync(request);
+
+        var expectedActorId = StudioMemberBindingContinuationDispatcher.BuildActorId(request);
+        runtime.CreateCalls.Should().ContainSingle(call =>
+            call.Type == typeof(StudioMemberBindingContinuationGAgent) &&
+            call.Id == expectedActorId);
+        streamProvider.Streams.Should().ContainKey(expectedActorId);
+        streamProvider.Streams[expectedActorId].Envelopes.Should().ContainSingle();
+        var envelope = streamProvider.Streams[expectedActorId].Envelopes[0];
+        envelope.Payload.Should().NotBeNull();
+        envelope.Payload!.Is(StudioMemberBindingContinuationRequestedCommand.Descriptor).Should().BeTrue();
+        var command = envelope.Payload.Unpack<StudioMemberBindingContinuationRequestedCommand>();
+        command.Request.BindingId.Should().Be("bind-1");
+        command.Request.ScopeId.Should().Be("scope-1");
     }
 
     private static StudioMemberBindingRequestedEvent NewWorkflowRequest() =>
@@ -399,5 +421,116 @@ public sealed class StudioMemberBindingContinuationServiceTests
             string ScopeId,
             string MemberId,
             StudioMemberBindingFailureRequest Request);
+    }
+
+    private sealed class RecordingContinuationDispatcher : IStudioMemberBindingContinuationDispatcher
+    {
+        public List<StudioMemberBindingRequestedEvent> Requests { get; } = [];
+
+        public Task DispatchAsync(StudioMemberBindingRequestedEvent request, CancellationToken ct = default)
+        {
+            Requests.Add(request.Clone());
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingActorRuntime : IActorRuntime
+    {
+        private readonly Dictionary<string, IActor> _actors = [];
+
+        public List<(System.Type Type, string? Id)> CreateCalls { get; } = [];
+
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+            where TAgent : IAgent => CreateAsync(typeof(TAgent), id, ct);
+
+        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default)
+        {
+            var actor = new RecordingActor(id ?? Guid.NewGuid().ToString("N"));
+            _actors[actor.Id] = actor;
+            CreateCalls.Add((agentType, id));
+            return Task.FromResult<IActor>(actor);
+        }
+
+        public Task<IActor?> GetAsync(string id) =>
+            Task.FromResult(_actors.GetValueOrDefault(id));
+
+        public Task DestroyAsync(string id, CancellationToken ct = default)
+        {
+            _actors.Remove(id);
+            return Task.CompletedTask;
+        }
+
+        public Task<bool> ExistsAsync(string id) => Task.FromResult(_actors.ContainsKey(id));
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingStreamProvider : IStreamProvider
+    {
+        public Dictionary<string, RecordingStream> Streams { get; } = [];
+
+        public IStream GetStream(string actorId)
+        {
+            if (!Streams.TryGetValue(actorId, out var stream))
+            {
+                stream = new RecordingStream(actorId);
+                Streams[actorId] = stream;
+            }
+
+            return stream;
+        }
+    }
+
+    private sealed class RecordingStream : IStream
+    {
+        public RecordingStream(string streamId) => StreamId = streamId;
+
+        public string StreamId { get; }
+
+        public List<EventEnvelope> Envelopes { get; } = [];
+
+        public Task ProduceAsync<T>(T message, CancellationToken ct = default) where T : IMessage
+        {
+            message.Should().BeOfType<EventEnvelope>();
+            Envelopes.Add((EventEnvelope)(object)message);
+            return Task.CompletedTask;
+        }
+
+        public Task<IAsyncDisposable> SubscribeAsync<T>(Func<T, Task> handler, CancellationToken ct = default)
+            where T : IMessage, new() =>
+            throw new NotImplementedException();
+
+        public Task UpsertRelayAsync(StreamForwardingBinding binding, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task RemoveRelayAsync(string targetStreamId, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task<IReadOnlyList<StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default) =>
+            throw new NotImplementedException();
+    }
+
+    private sealed class RecordingActor : IActor
+    {
+        public RecordingActor(string id) => Id = id;
+
+        public string Id { get; }
+        public IAgent Agent { get; } = new RecordingAgent();
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
+        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private sealed class RecordingAgent : IAgent
+    {
+        public string Id => "recording-agent";
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<string> GetDescriptionAsync() => Task.FromResult(string.Empty);
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
+            Task.FromResult<IReadOnlyList<System.Type>>([]);
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 }

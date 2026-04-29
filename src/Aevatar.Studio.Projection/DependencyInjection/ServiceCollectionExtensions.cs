@@ -152,6 +152,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IUserConfigCommandService, ActorDispatchUserConfigCommandService>();
         services.TryAddSingleton<IStudioMemberCommandPort, ActorDispatchStudioMemberCommandService>();
         services.TryAddSingleton<StudioMemberBindingContinuationService>();
+        services.TryAddSingleton<IStudioMemberBindingContinuationDispatcher, StudioMemberBindingContinuationDispatcher>();
         services.TryAddSingleton<IStudioTeamCommandPort, ActorDispatchStudioTeamCommandService>();
 
         return services;
