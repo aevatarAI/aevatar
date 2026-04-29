@@ -148,13 +148,47 @@ message StudioMemberCurrentStateDocument {
   string last_bound_implementation_kind = 42; // wire-stable string
   google.protobuf.Timestamp last_bound_at = 43;
 
+  // ── Team membership (ADR-0017) ──
+  // Optional. Absence = unassigned; empty string is not a valid serialized
+  // value (the application layer rejects empty `teamId` on the wire).
+  optional string team_id = 50;
+
   // ── Latest binding run status (denormalized) ──
-  string latest_binding_id = 50;
-  string latest_binding_status = 51; // "pending" | "completed" | "failed" | ""
-  string latest_binding_failure_code = 52;
-  string latest_binding_failure_summary = 53;
-  bool latest_binding_retryable = 54;
-  google.protobuf.Timestamp latest_binding_requested_at = 55;
-  google.protobuf.Timestamp latest_binding_completed_at = 56;
-  google.protobuf.Timestamp latest_binding_failed_at = 57;
+  string latest_binding_id = 60;
+  string latest_binding_status = 61; // "pending" | "completed" | "failed" | ""
+  string latest_binding_failure_code = 62;
+  string latest_binding_failure_summary = 63;
+  bool latest_binding_retryable = 64;
+  google.protobuf.Timestamp latest_binding_requested_at = 65;
+  google.protobuf.Timestamp latest_binding_completed_at = 66;
+  google.protobuf.Timestamp latest_binding_failed_at = 67;
+}
+
+// ─── StudioTeam Current State ReadModel ───
+//
+// Materialized from StudioTeamGAgent committed events (ADR-0017). Document id
+// is the actor id (<c>studio-team:{scopeId}:{teamId}</c>). scope_id is the
+// prefix used by query ports to list teams per scope. The full member roster
+// is intentionally NOT mirrored — listing members goes through the member
+// read model filtered by team_id (see ADR-0017 Non-Goals).
+
+message StudioTeamCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+
+  // ── Identity / display ──
+  string team_id = 20;
+  string scope_id = 21;
+  string display_name = 22;
+  string description = 23;
+
+  // ── Lifecycle (wire-stable string mirroring StudioTeamLifecycleStage). ──
+  string lifecycle_stage = 24;           // "active" | "archived" | ""
+  google.protobuf.Timestamp created_at = 25;
+
+  // ── Aggregate (derived from StudioTeamState.member_ids.size()). ──
+  int32 member_count = 30;
 }

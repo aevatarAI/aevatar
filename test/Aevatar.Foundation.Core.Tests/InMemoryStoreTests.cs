@@ -156,4 +156,35 @@ public class InMemoryEventStoreTests
 
         (await store.GetVersionAsync("a1")).ShouldBe(6);
     }
+
+    [Fact]
+    public async Task ResetStreamAsync_ShouldDeleteEventsAndResetVersion()
+    {
+        var store = new InMemoryEventStore();
+        await store.AppendAsync("a1",
+        [
+            new StateEvent
+            {
+                EventId = "e1",
+                Version = 1,
+                AgentId = "a1",
+            },
+        ], 0);
+
+        var reset = await store.ResetStreamAsync("a1");
+
+        reset.ShouldBeTrue();
+        (await store.GetVersionAsync("a1")).ShouldBe(0);
+        (await store.GetEventsAsync("a1")).ShouldBeEmpty();
+        await store.AppendAsync("a1",
+        [
+            new StateEvent
+            {
+                EventId = "e2",
+                Version = 1,
+                AgentId = "a1",
+            },
+        ], 0);
+        (await store.GetVersionAsync("a1")).ShouldBe(1);
+    }
 }

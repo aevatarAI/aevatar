@@ -5,6 +5,7 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions.Maintenance;
 using Aevatar.GAgents.Channel.Abstractions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -37,6 +38,10 @@ public static class ChannelRuntimeServiceCollectionExtensions
         this IServiceCollection services, IConfiguration? configuration)
     {
         ArgumentNullException.ThrowIfNull(services);
+
+        // ─── Retired-actor cleanup contribution ───
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IRetiredActorSpec, ChannelRuntimeRetiredActorSpec>());
 
         // ─── Core middlewares + default turn runner ───
         services.TryAddSingleton<ConversationResolverMiddleware>();

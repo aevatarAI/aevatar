@@ -1,0 +1,85 @@
+syntax = "proto3";
+package aevatar.gagents.studio_team;
+option csharp_namespace = "Aevatar.GAgents.StudioTeam";
+
+import "google/protobuf/timestamp.proto";
+
+// Team is the optional grouping layer between scope and member, locked by
+// ADR-0017. The member contract from ADR-0016 stays authoritative for member
+// identity; team composes on top by carrying member_id roster as derived
+// aggregate state.
+
+// Lifecycle: monotonic, no reactivation in v1. See ADR-0017 §Locked Rule 5.
+enum StudioTeamLifecycleStage {
+  STUDIO_TEAM_LIFECYCLE_STAGE_UNSPECIFIED = 0;
+  STUDIO_TEAM_LIFECYCLE_STAGE_ACTIVE      = 1;
+  STUDIO_TEAM_LIFECYCLE_STAGE_ARCHIVED    = 2;
+}
+
+// State for a single StudioTeam actor. Actor ID format:
+//   studio-team:{scopeId}:{teamId}
+//
+// member_ids is the persisted roster (set semantics) — mutated only via
+// idempotent set operations on committed StudioMemberReassignedEvent.
+// member_count is a derived projection of member_ids.size() and is written
+// alongside on each StudioTeamMemberRosterChangedEvent commit.
+message StudioTeamState {
+  string team_id        = 1;
+  string scope_id       = 2;
+  string display_name   = 3;
+  string description    = 4;
+  StudioTeamLifecycleStage lifecycle_stage = 5;
+  repeated string member_ids = 6;
+  google.protobuf.Timestamp created_at_utc = 7;
+  google.protobuf.Timestamp updated_at_utc = 8;
+  // Reserved for v2: last_activity_at_utc, etc.
+}
+
+// ─── Events ───
+//
+// One event per discrete transition. Updated event uses proto3 `optional` for
+// presence so absent fields mean "no change"; empty string is a valid clear
+// for description but display_name empty is rejected by the application
+// layer. See ADR-0017 §Q6.
+
+message StudioTeamCreatedEvent {
+  string team_id        = 1;
+  string scope_id       = 2;
+  string display_name   = 3;
+  string description    = 4;
+  google.protobuf.Timestamp created_at_utc = 5;
+}
+
+message StudioTeamUpdatedEvent {
+  string team_id  = 1;
+  string scope_id = 2;
+  optional string display_name = 3;
+  optional string description  = 4;
+  google.protobuf.Timestamp updated_at_utc = 5;
+}
+
+message StudioTeamArchivedEvent {
+  string team_id  = 1;
+  string scope_id = 2;
+  google.protobuf.Timestamp archived_at_utc = 3;
+}
+
+// Roster mutation event: emitted by TeamGAgent after applying an idempotent
+// set operation triggered by a committed StudioMemberReassignedEvent. The
+// `effect` enum makes "did this event mutate the roster or no-op?" explicit
+// for downstream auditors and the read model projection.
+enum StudioTeamRosterEffect {
+  STUDIO_TEAM_ROSTER_EFFECT_UNSPECIFIED = 0;
+  STUDIO_TEAM_ROSTER_EFFECT_ADDED       = 1;
+  STUDIO_TEAM_ROSTER_EFFECT_REMOVED     = 2;
+  STUDIO_TEAM_ROSTER_EFFECT_NOOP        = 3;  // duplicate / replay collapsed
+}
+
+message StudioTeamMemberRosterChangedEvent {
+  string team_id   = 1;
+  string scope_id  = 2;
+  string member_id = 3;
+  StudioTeamRosterEffect effect = 4;
+  int32  member_count = 5;       // size of member_ids after this event
+  google.protobuf.Timestamp changed_at_utc = 6;
+}

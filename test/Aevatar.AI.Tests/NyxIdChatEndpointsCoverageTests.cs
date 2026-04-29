@@ -162,6 +162,26 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task HandleCreateConversationAsync_ShouldRejectScopeMismatch_BeforeCreatingActor()
+    {
+        var actorStore = new StubGAgentActorStore();
+        var runtime = new StubActorRuntime();
+        var result = await InvokeResultAsync(
+            "HandleCreateConversationAsync",
+            CreateScopeGuardedContext("scope-other"),
+            "scope-a",
+            actorStore,
+            runtime,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        response.Body.Should().Contain("SCOPE_ACCESS_DENIED");
+        actorStore.AddedActors.Should().BeEmpty();
+        runtime.CreateCalls.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleCreateConversationAsync_ShouldBubbleFailure_WhenActorRegistrationFails()
     {
         var actorStore = new StubGAgentActorStore
@@ -296,6 +316,24 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task HandleListConversationsAsync_ShouldRejectScopeMismatch_BeforeRegistryRead()
+    {
+        var actorStore = new StubGAgentActorStore();
+
+        var result = await InvokeResultAsync(
+            "HandleListConversationsAsync",
+            CreateScopeGuardedContext("scope-other"),
+            "scope-a",
+            actorStore,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        response.Body.Should().Contain("SCOPE_ACCESS_DENIED");
+        actorStore.LastRequestedScopeId.Should().BeNull();
+    }
+
+    [Fact]
     public async Task HandleListConversationsAsync_ShouldBubbleRegistryReadFailure()
     {
         var actorStore = new StubGAgentActorStore
@@ -338,6 +376,67 @@ public class NyxIdChatEndpointsCoverageTests
         historyStore.DeletedConversations.Should().ContainSingle(entry =>
             entry.ScopeId == "scope-a" &&
             entry.ConversationId == "actor-1");
+        actorStore.AdmissionTargets.Should().ContainSingle(target =>
+            target.ScopeId == "scope-a" &&
+            target.ResourceKind == ScopeResourceKind.GAgentActor &&
+            target.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
+            target.ActorId == "actor-1" &&
+            target.Operation == ScopeResourceOperation.Delete);
+    }
+
+    [Fact]
+    public async Task HandleDeleteConversationAsync_ShouldRejectScopeMismatch_BeforeAdmission()
+    {
+        var actorStore = new StubGAgentActorStore();
+        var historyStore = new StubChatHistoryStore();
+
+        var result = await InvokeResultAsync(
+            "HandleDeleteConversationAsync",
+            CreateScopeGuardedContext("scope-other"),
+            "scope-a",
+            "actor-1",
+            actorStore,
+            actorStore,
+            historyStore,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        response.Body.Should().Contain("SCOPE_ACCESS_DENIED");
+        actorStore.AdmissionTargets.Should().BeEmpty();
+        actorStore.RemovedActors.Should().BeEmpty();
+        historyStore.DeletedConversations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleDeleteConversationAsync_ShouldReturnNotFound_WhenConversationIsUnregistered()
+    {
+        var actorStore = new StubGAgentActorStore
+        {
+            AdmissionResult = ScopeResourceAdmissionResult.NotFound(),
+        };
+        var historyStore = new StubChatHistoryStore();
+
+        var result = await InvokeResultAsync(
+            "HandleDeleteConversationAsync",
+            new DefaultHttpContext(),
+            "scope-a",
+            "actor-missing",
+            actorStore,
+            actorStore,
+            historyStore,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        actorStore.AdmissionTargets.Should().ContainSingle(target =>
+            target.ScopeId == "scope-a" &&
+            target.ResourceKind == ScopeResourceKind.GAgentActor &&
+            target.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
+            target.ActorId == "actor-missing" &&
+            target.Operation == ScopeResourceOperation.Delete);
+        actorStore.RemovedActors.Should().BeEmpty();
+        historyStore.DeletedConversations.Should().BeEmpty();
     }
 
     [Fact]
@@ -439,6 +538,61 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task HandleStreamMessageAsync_ShouldRejectScopeMismatch_BeforeAdmission()
+    {
+        var context = CreateScopeGuardedContext("scope-other");
+        context.Request.Headers.Authorization = "Bearer valid-token";
+        context.Response.Body = new MemoryStream();
+        var actorStore = new StubGAgentActorStore();
+
+        await InvokeTaskAsync(
+            "HandleStreamMessageAsync",
+            context,
+            "scope-a",
+            "actor-1",
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
+            new StubActorRuntime(),
+            actorStore,
+            new StubSubscriptionProvider(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        actorStore.AdmissionTargets.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleStreamMessageAsync_ShouldReturnNotFound_WhenConversationIsUnregistered()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Headers.Authorization = "Bearer valid-token";
+        var actorStore = new StubGAgentActorStore
+        {
+            AdmissionResult = ScopeResourceAdmissionResult.NotFound(),
+        };
+
+        await InvokeTaskAsync(
+            "HandleStreamMessageAsync",
+            context,
+            "scope-a",
+            "actor-missing",
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
+            new StubActorRuntime(),
+            actorStore,
+            new StubSubscriptionProvider(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        actorStore.AdmissionTargets.Should().ContainSingle(target =>
+            target.ScopeId == "scope-a" &&
+            target.ResourceKind == ScopeResourceKind.GAgentActor &&
+            target.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
+            target.ActorId == "actor-missing" &&
+            target.Operation == ScopeResourceOperation.Stream);
+    }
+
+    [Fact]
     public async Task HandleApproveAsync_ShouldRejectWithoutAuthorization()
     {
         var context = new DefaultHttpContext();
@@ -478,6 +632,61 @@ public class NyxIdChatEndpointsCoverageTests
             NullLoggerFactory.Instance,
             CancellationToken.None);
         context.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+    }
+
+    [Fact]
+    public async Task HandleApproveAsync_ShouldRejectScopeMismatch_BeforeAdmission()
+    {
+        var context = CreateScopeGuardedContext("scope-other");
+        context.Request.Headers.Authorization = "Bearer valid-token";
+        context.Response.Body = new MemoryStream();
+        var actorStore = new StubGAgentActorStore();
+
+        await InvokeTaskAsync(
+            "HandleApproveAsync",
+            context,
+            "scope-a",
+            "actor-1",
+            new NyxIdChatEndpoints.NyxIdApprovalRequest("req"),
+            new StubActorRuntime(),
+            actorStore,
+            new StubSubscriptionProvider(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        actorStore.AdmissionTargets.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleApproveAsync_ShouldReturnNotFound_WhenConversationIsUnregistered()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Headers.Authorization = "Bearer valid-token";
+        var actorStore = new StubGAgentActorStore
+        {
+            AdmissionResult = ScopeResourceAdmissionResult.NotFound(),
+        };
+
+        await InvokeTaskAsync(
+            "HandleApproveAsync",
+            context,
+            "scope-a",
+            "actor-missing",
+            new NyxIdChatEndpoints.NyxIdApprovalRequest("req"),
+            new StubActorRuntime(),
+            actorStore,
+            new StubSubscriptionProvider(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        actorStore.AdmissionTargets.Should().ContainSingle(target =>
+            target.ScopeId == "scope-a" &&
+            target.ResourceKind == ScopeResourceKind.GAgentActor &&
+            target.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
+            target.ActorId == "actor-missing" &&
+            target.Operation == ScopeResourceOperation.Approve);
     }
 
     [Fact]
@@ -1781,6 +1990,7 @@ public class NyxIdChatEndpointsCoverageTests
 
     private static async Task<IResult> InvokeResultAsync(string methodName, params object[] args)
     {
+        EnsureEndpointContextServices(args);
         var method = EndpointsType.GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static)!;
         var result = method.Invoke(null, args);
         return result switch
@@ -1793,6 +2003,7 @@ public class NyxIdChatEndpointsCoverageTests
 
     private static async Task InvokeTaskAsync(string methodName, params object[] args)
     {
+        EnsureEndpointContextServices(args);
         var method = EndpointsType.GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static)!;
         var result = method.Invoke(null, args)!;
         switch (result)
@@ -1817,6 +2028,62 @@ public class NyxIdChatEndpointsCoverageTests
             Task<T> task => await task,
             _ => throw new InvalidOperationException($"Unexpected return type: {result.GetType().FullName}"),
         };
+    }
+
+    private static void EnsureEndpointContextServices(IEnumerable<object> args)
+    {
+        foreach (var context in args.OfType<DefaultHttpContext>())
+        {
+            var currentServices = context.RequestServices;
+            if (currentServices?.GetService<IHostEnvironment>() is not null)
+                continue;
+
+            context.RequestServices = new FallbackServiceProvider(
+                currentServices ?? EmptyServiceProvider.Instance,
+                CreateScopeGuardServices(authenticationEnabled: false));
+        }
+    }
+
+    private static DefaultHttpContext CreateScopeGuardedContext(string claimedScopeId)
+    {
+        var context = new DefaultHttpContext
+        {
+            RequestServices = CreateScopeGuardServices(authenticationEnabled: true),
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+                [new Claim("scope_id", claimedScopeId)],
+                authenticationType: "test")),
+        };
+        return context;
+    }
+
+    private static ServiceProvider CreateScopeGuardServices(bool authenticationEnabled) =>
+        new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<IConfiguration>(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Aevatar:Authentication:Enabled"] = authenticationEnabled ? "true" : "false",
+                })
+                .Build())
+            .AddSingleton<IHostEnvironment>(new TestHostEnvironment
+            {
+                EnvironmentName = authenticationEnabled ? Environments.Production : Environments.Development,
+            })
+            .BuildServiceProvider();
+
+    private sealed class FallbackServiceProvider(
+        IServiceProvider primary,
+        IServiceProvider fallback) : IServiceProvider
+    {
+        public object? GetService(Type serviceType) =>
+            primary.GetService(serviceType) ?? fallback.GetService(serviceType);
+    }
+
+    private sealed class EmptyServiceProvider : IServiceProvider
+    {
+        public static EmptyServiceProvider Instance { get; } = new();
+
+        public object? GetService(Type serviceType) => null;
     }
 
     private static string BuildRelayConversationActorId(string relayIdentity, string canonicalKey)
@@ -2119,8 +2386,11 @@ public class NyxIdChatEndpointsCoverageTests
         public Exception? RemoveActorException { get; init; }
         public GAgentActorRegistryCommandStage RegisterStage { get; init; } =
             GAgentActorRegistryCommandStage.AdmissionVisible;
+        public ScopeResourceAdmissionResult AdmissionResult { get; init; } =
+            ScopeResourceAdmissionResult.Allowed();
         public List<(string ScopeId, string GAgentType, string ActorId)> AddedActors { get; } = [];
         public List<(string ScopeId, string GAgentType, string ActorId)> RemovedActors { get; } = [];
+        public List<ScopeResourceTarget> AdmissionTargets { get; } = [];
         public string? LastRequestedScopeId { get; private set; }
 
         public Task<GAgentActorRegistrySnapshot> ListActorsAsync(
@@ -2169,7 +2439,19 @@ public class NyxIdChatEndpointsCoverageTests
         public Task<ScopeResourceAdmissionResult> AuthorizeTargetAsync(
             ScopeResourceTarget target,
             CancellationToken cancellationToken = default)
-            => Task.FromResult(ScopeResourceAdmissionResult.Allowed());
+        {
+            AdmissionTargets.Add(target);
+            return Task.FromResult(AdmissionResult);
+        }
+    }
+
+    private sealed class TestHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Production;
+        public string ApplicationName { get; set; } = "Aevatar.AI.Tests";
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+        public Microsoft.Extensions.FileProviders.IFileProvider ContentRootFileProvider { get; set; } =
+            new Microsoft.Extensions.FileProviders.NullFileProvider();
     }
 
     private sealed class StubChatHistoryStore : IChatHistoryStore

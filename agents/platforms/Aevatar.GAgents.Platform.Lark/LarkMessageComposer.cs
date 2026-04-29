@@ -102,12 +102,25 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
             });
         }
 
-        foreach (var card in intent.Cards)
+        for (var i = 0; i < intent.Cards.Count; i++)
         {
+            var card = intent.Cards[i];
+            // First card's Title is consumed by ResolveHeaderTitle as the card header (Title
+            // takes precedence over intent.Text there), so render its body markdown without the
+            // title to avoid header/body duplication. Form mode already does this; non-form mode
+            // used to leak the title twice and made every single-card response (e.g. /agents,
+            // /agent-status) show a redundant bold title row right under the header. When the
+            // first card has no Title, ResolveHeaderTitle falls back to intent.Text and this
+            // skip is a no-op (no title to elide).
+            var skipTitle = i == 0;
+            var markdown = BuildCardMarkdown(card, skipTitle);
+            if (string.IsNullOrWhiteSpace(markdown))
+                continue;
+
             elements.Add(new
             {
                 tag = "markdown",
-                content = BuildCardMarkdown(card),
+                content = markdown,
             });
         }
 

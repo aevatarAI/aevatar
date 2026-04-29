@@ -29,4 +29,7 @@
     <Protobuf Include="projection_scope_messages.proto" GrpcServices="None" AdditionalImportDirs="..\Aevatar.Foundation.Abstractions" />
     <Protobuf Include="projection_session_event_transport.proto" GrpcServices="None" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Aevatar.CQRS.Projection.Core.Tests" />
+  </ItemGroup>
 </Project>

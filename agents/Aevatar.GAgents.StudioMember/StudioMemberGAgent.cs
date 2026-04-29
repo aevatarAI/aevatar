@@ -101,6 +101,74 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         await PersistDomainEventAsync(evt);
     }
 
+    /// <summary>
+    /// Mutates the member's team assignment (ADR-0017 Locked Rule 3).
+    /// The single event shape covers assign / unassign / move; from/to are
+    /// proto3 <c>optional string</c> so absence means "unassigned".
+    ///
+    /// from_team_id must agree with the current state.team_id — this guards
+    /// against stale or hand-crafted events committing against a roster the
+    /// member no longer claims to be on. The destination TeamGAgents are
+    /// dispatched the same event by the application command port and apply
+    /// idempotent set operations to their own roster.
+    /// </summary>
+    [EventHandler(EndpointName = "reassignTeam")]
+    public async Task HandleReassigned(StudioMemberReassignedEvent evt)
+    {
+        if (string.IsNullOrEmpty(State.MemberId))
+        {
+            throw new InvalidOperationException("member not yet created.");
+        }
+
+        if (!string.Equals(State.ScopeId, evt.ScopeId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"member '{State.MemberId}' (scope {State.ScopeId}) cannot accept reassignment in scope {evt.ScopeId}.");
+        }
+
+        if (!evt.HasFromTeamId && !evt.HasToTeamId)
+        {
+            throw new InvalidOperationException(
+                "reassign event must carry at least one of from_team_id / to_team_id.");
+        }
+
+        if (evt.HasFromTeamId && evt.HasToTeamId
+            && string.Equals(evt.FromTeamId, evt.ToTeamId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "from_team_id and to_team_id must differ when both are present.");
+        }
+
+        if (evt.HasFromTeamId && string.IsNullOrEmpty(evt.FromTeamId))
+        {
+            throw new InvalidOperationException(
+                "from_team_id must not be empty when present.");
+        }
+        if (evt.HasToTeamId && string.IsNullOrEmpty(evt.ToTeamId))
+        {
+            throw new InvalidOperationException(
+                "to_team_id must not be empty when present.");
+        }
+
+        var currentTeam = State.HasTeamId ? State.TeamId : null;
+        var fromTeam = evt.HasFromTeamId ? evt.FromTeamId : null;
+        var toTeam = evt.HasToTeamId ? evt.ToTeamId : null;
+
+        if (!string.Equals(currentTeam, fromTeam, StringComparison.Ordinal))
+        {
+            if (string.Equals(currentTeam, toTeam, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            throw new InvalidOperationException(
+                $"member '{State.MemberId}' current team_id is '{currentTeam ?? "<unassigned>"}' but " +
+                $"reassign event names from_team_id '{fromTeam ?? "<unassigned>"}'.");
+        }
+
+        await PersistDomainEventAsync(evt);
+    }
+
     [EventHandler(EndpointName = "requestBinding")]
     public async Task HandleBindingRequested(StudioMemberBindingRequestedCommand command)
     {
@@ -175,6 +243,7 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             .On<StudioMemberRenamedEvent>(ApplyRenamed)
             .On<StudioMemberImplementationUpdatedEvent>(ApplyImplementationUpdated)
             .On<StudioMemberBoundEvent>(ApplyBound)
+            .On<StudioMemberReassignedEvent>(ApplyReassigned)
             .On<StudioMemberBindingRequestedEvent>(ApplyBindingRequested)
             .On<StudioMemberBindingCompletedEvent>(ApplyBindingCompleted)
             .On<StudioMemberBindingFailedEvent>(ApplyBindingFailed)
@@ -265,6 +334,22 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         };
         next.LifecycleStage = StudioMemberLifecycleStage.BindReady;
         next.UpdatedAtUtc = evt.BoundAtUtc;
+        return next;
+    }
+
+    private static StudioMemberState ApplyReassigned(
+        StudioMemberState state, StudioMemberReassignedEvent evt)
+    {
+        var next = state.Clone();
+        if (evt.HasToTeamId)
+        {
+            next.TeamId = evt.ToTeamId;
+        }
+        else
+        {
+            next.ClearTeamId();
+        }
+        next.UpdatedAtUtc = evt.ReassignedAtUtc;
         return next;
     }
 

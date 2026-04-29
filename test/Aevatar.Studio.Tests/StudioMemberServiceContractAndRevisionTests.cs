@@ -69,6 +69,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertTeamQueryPort(),
             lifecycle,
             commandPort);
 
@@ -105,6 +106,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertTeamQueryPort(),
             lifecycle,
             new RecordingServiceCommandPort());
 
@@ -120,6 +122,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertTeamQueryPort(),
             new InMemoryServiceLifecycleQueryPort(),
             new RecordingServiceCommandPort());
 
@@ -140,6 +143,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertTeamQueryPort(),
             lifecycle,
             new RecordingServiceCommandPort());
 
@@ -168,6 +172,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertTeamQueryPort(),
             lifecycle,
             commandPort);
 
@@ -211,6 +216,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertTeamQueryPort(),
             lifecycle,
             commandPort);
 
@@ -241,6 +247,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertTeamQueryPort(),
             lifecycle,
             commandPort);
 
@@ -269,6 +276,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertTeamQueryPort(),
             lifecycle,
             commandPort);
 
@@ -304,6 +312,7 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertTeamQueryPort(),
             lifecycle,
             commandPort);
 
@@ -416,6 +425,11 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             string revisionId, string implementationKindName, CancellationToken ct = default) =>
             throw new InvalidOperationException("contract/activate/retire flows must not record new bindings.");
 
+        public Task ReassignTeamAsync(
+            string scopeId, string memberId, string? fromTeamId, string? toTeamId,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("contract/activate/retire flows must not reassign teams.");
+
         public Task CompleteBindingAsync(
             string scopeId, string memberId, StudioMemberBindingCompletionRequest request, CancellationToken ct = default) =>
             throw new InvalidOperationException("contract/activate/retire flows must not complete binding runs.");
@@ -423,6 +437,17 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         public Task FailBindingAsync(
             string scopeId, string memberId, StudioMemberBindingFailureRequest request, CancellationToken ct = default) =>
             throw new InvalidOperationException("contract/activate/retire flows must not fail binding runs.");
+    }
+
+    private sealed class InertTeamQueryPort : IStudioTeamQueryPort
+    {
+        public Task<StudioTeamRosterResponse> ListAsync(
+            string scopeId, StudioTeamRosterPageRequest? page = null, CancellationToken ct = default) =>
+            Task.FromResult(new StudioTeamRosterResponse(scopeId, []));
+
+        public Task<StudioTeamSummaryResponse?> GetAsync(
+            string scopeId, string teamId, CancellationToken ct = default) =>
+            Task.FromResult<StudioTeamSummaryResponse?>(null);
     }
 
     private sealed class InMemoryServiceLifecycleQueryPort : IServiceLifecycleQueryPort

@@ -59,6 +59,11 @@ internal static class StudioMemberEndpoints
                 "/api/scopes/{scopeId}/members/{memberId}/binding/revisions/{revisionId}:retire",
                 HandleRetireBindingRevisionAsync)
             .WithTags("StudioMembers");
+
+        // ADR-0017: PATCH a member's team assignment. Body shape carries
+        // Merge-Patch semantics for `teamId` — see HandlePatchAsync.
+        app.MapPatch("/api/scopes/{scopeId}/members/{memberId}", HandlePatchAsync)
+            .WithTags("StudioMembers");
     }
 
     internal static async Task<IResult> HandleCreateAsync(
@@ -270,6 +275,87 @@ internal static class StudioMemberEndpoints
         catch (InvalidOperationException ex)
         {
             return BadRequest("INVALID_STUDIO_MEMBER_BINDING_REVISION_REQUEST", ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Wire body for PATCH. Mirrors the JSON Merge-Patch table locked in
+    /// ADR-0017 §Q6: <c>teamId</c> absent in JSON means "no change", explicit
+    /// <c>null</c> means "unassign", a non-empty string means "assign /
+    /// reassign", and the empty string is rejected with 400.
+    ///
+    /// Distinguishing absent from explicit null requires the field to be
+    /// modeled as <see cref="JsonElement"/> rather than <see cref="string"/>?.
+    /// The handler converts the wire form into a <see cref="PatchValue{T}"/>
+    /// before the application layer sees it.
+    /// </summary>
+    public sealed class StudioMemberPatchBody
+    {
+        public System.Text.Json.JsonElement? TeamId { get; set; }
+    }
+
+    internal static async Task<IResult> HandlePatchAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        StudioMemberPatchBody body,
+        [FromServices] IStudioMemberService memberService,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
+        if (body == null)
+            return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", "request body is required.");
+
+        // Translate the wire body into the application contract. JsonElement
+        // semantics:
+        //   - body.TeamId == null            → field absent in JSON → no change
+        //   - body.TeamId.ValueKind == Null  → explicit null → unassign
+        //   - body.TeamId.ValueKind == String → assign / reassign (empty rejected)
+        PatchValue<string> teamIdPatch;
+        if (!body.TeamId.HasValue)
+        {
+            teamIdPatch = PatchValue<string>.Absent;
+        }
+        else
+        {
+            var jsonValue = body.TeamId.Value;
+            switch (jsonValue.ValueKind)
+            {
+                case System.Text.Json.JsonValueKind.Null:
+                    teamIdPatch = PatchValue<string>.Of(null);
+                    break;
+                case System.Text.Json.JsonValueKind.String:
+                    {
+                        var raw = jsonValue.GetString();
+                        if (string.IsNullOrEmpty(raw))
+                            return BadRequest(
+                                "INVALID_STUDIO_MEMBER_REQUEST",
+                                "teamId must not be empty when present (use null to mean 'unassign').");
+                        teamIdPatch = PatchValue<string>.Of(raw);
+                        break;
+                    }
+                default:
+                    return BadRequest(
+                        "INVALID_STUDIO_MEMBER_REQUEST",
+                        "teamId must be a string, null, or absent.");
+            }
+        }
+
+        try
+        {
+            var detail = await memberService.UpdateAsync(
+                scopeId, memberId, new UpdateStudioMemberRequest(teamIdPatch), ct);
+            return Results.Ok(detail);
+        }
+        catch (StudioMemberNotFoundException ex)
+        {
+            return NotFound(ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", ex.Message);
         }
     }
 

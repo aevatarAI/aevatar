@@ -100,7 +100,13 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
                 ? null
                 : document.LastBoundRevisionId,
             CreatedAt: document.CreatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
-            UpdatedAt: document.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue);
+            UpdatedAt: document.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue)
+        {
+            // Optional team assignment from ADR-0017. Mirror the document's
+            // proto3 optional `team_id` semantics — absence on the wire means
+            // "unassigned" on the application contract.
+            TeamId = document.HasTeamId ? document.TeamId : null,
+        };
     }
 
     private static StudioMemberDetailResponse ToDetail(StudioMemberCurrentStateDocument document)

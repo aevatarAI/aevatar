@@ -146,8 +146,20 @@ public sealed class StudioMemberServiceBindingTests
         new(
             memberCommandPort,
             memberQueryPort,
+            new InertTeamQueryPort(),
             new ThrowingServiceLifecycleQueryPort(),
             new ThrowingServiceCommandPort());
+
+    private sealed class InertTeamQueryPort : IStudioTeamQueryPort
+    {
+        public Task<StudioTeamRosterResponse> ListAsync(
+            string scopeId, StudioTeamRosterPageRequest? page = null, CancellationToken ct = default) =>
+            Task.FromResult(new StudioTeamRosterResponse(scopeId, []));
+
+        public Task<StudioTeamSummaryResponse?> GetAsync(
+            string scopeId, string teamId, CancellationToken ct = default) =>
+            Task.FromResult<StudioTeamSummaryResponse?>(null);
+    }
 
     private static StudioMemberDetailResponse NewDetail(string implementationKindWire)
     {
@@ -285,6 +297,14 @@ public sealed class StudioMemberServiceBindingTests
             StudioMemberBindingFailureRequest request,
             CancellationToken ct = default) =>
             throw new NotImplementedException("Not exercised in this test.");
+
+        public Task ReassignTeamAsync(
+            string scopeId, string memberId, string? fromTeamId, string? toTeamId,
+            CancellationToken ct = default)
+        {
+            OperationsInOrder.Add("ReassignTeam");
+            return Task.CompletedTask;
+        }
 
         public sealed record RecordedBinding(
             string ScopeId,

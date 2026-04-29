@@ -8,6 +8,14 @@ public static class ChannelMetadataKeys
 {
     public const string Platform = "channel.platform";
     public const string SenderId = "channel.sender_id";
+    /// <summary>
+    /// The bot's registration scope id (per-NyxID-account; one bot = one scope). Carries
+    /// the inbound channel registration's scope so caller-scope resolution and tools can
+    /// route per-bot operations consistently. The literal "scope_id" string was used
+    /// historically across multiple call sites; this typed constant exists so future
+    /// renames don't have to chase string literals (issue #466 review).
+    /// </summary>
+    public const string RegistrationScopeId = "scope_id";
     public const string SenderName = "channel.sender_name";
     public const string ConversationId = "channel.conversation_id";
     public const string MessageId = "channel.message_id";
@@ -47,4 +55,21 @@ public static class ChannelMetadataKeys
     /// <c>outbound_proxy_slug</c> form makes the routing-side semantics explicit.
     /// </summary>
     public const string LarkOutboundProxySlug = "channel.lark.outbound_proxy_slug";
+
+    /// <summary>
+    /// NyxID provider slug of the inbound channel-bot that received this turn's webhook
+    /// event. Equivalent to <c>ChannelInboundEvent.NyxProviderSlug</c>, surfaced as request
+    /// metadata so the agent-builder tool can capture it on the new agent's
+    /// <c>SkillRunnerOutboundConfig.FailureNotificationProviderSlug</c> at create time.
+    /// </summary>
+    /// <remarks>
+    /// The inbound channel-bot is the bot the user just successfully messaged. When the
+    /// agent's primary outbound proxy fails with a structural rejection (e.g. Lark
+    /// <c>99992364 user id cross tenant</c> from a cross-tenant relay/outbound mismatch),
+    /// the inbound bot's slug is the only known proxy that can still deliver to the user.
+    /// SkillRunner uses this for failure notifications only — primary outbound stays on the
+    /// caller-provided <c>nyx_provider_slug</c> argument so existing deployments are not
+    /// rerouted unexpectedly. See issue #423 §C.
+    /// </remarks>
+    public const string InboundChannelBotProxySlug = "channel.inbound.channel_bot_provider_slug";
 }

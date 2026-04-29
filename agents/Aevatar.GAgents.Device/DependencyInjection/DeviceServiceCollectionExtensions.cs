@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions.Maintenance;
 using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -33,6 +34,10 @@ public static class DeviceServiceCollectionExtensions
         var useElasticsearch = ElasticsearchProjectionConfiguration.IsEnabled(
             configuration,
             storeName: "DeviceRegistration");
+
+        // ─── Retired-actor cleanup contribution ───
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IRetiredActorSpec, DeviceRetiredActorSpec>());
 
         // ─── Device Registration projection pipeline ───
         services.AddProjectionMaterializationRuntimeCore<

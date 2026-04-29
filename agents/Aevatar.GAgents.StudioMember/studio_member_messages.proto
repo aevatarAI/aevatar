@@ -153,6 +153,11 @@ message StudioMemberState {
   google.protobuf.Timestamp updated_at_utc = 10;
   StudioMemberBindingContract last_binding = 11;
   repeated StudioMemberBindingRun binding_runs = 12;
+
+  // Optional team membership (ADR-0017). Absent means "unassigned"; empty
+  // string is rejected at the application layer. Mutated only via committed
+  // StudioMemberReassignedEvent.
+  optional string team_id = 50;
 }
 
 // ─── Events ───
@@ -220,4 +225,27 @@ message StudioMemberBindingFailedEvent {
   string failure_summary = 3;
   bool retryable = 4;
   google.protobuf.Timestamp failed_at_utc = 5;
+}
+
+// Single reassignment event covers assign / unassign / move (ADR-0017).
+// Both source and destination StudioTeamGAgents apply idempotent set
+// operations against this event.
+//
+// from_team_id and to_team_id are `optional` so absence carries the
+// "unassigned" intent; empty-string sentinels are not used.
+//   pure assign:   from_team_id absent,    to_team_id = "T2"
+//   pure unassign: from_team_id = "T1",    to_team_id absent
+//   move:          from_team_id = "T1",    to_team_id = "T2"
+// Constraints (enforced at the application layer):
+//   - At least one of from_team_id / to_team_id must be present.
+//   - from_team_id == to_team_id (both present and equal) is rejected.
+//   - The teams identified by from_team_id / to_team_id (when present) must be
+//     in the same scope as the member (i.e. TeamGAgent.State.ScopeId must equal
+//     the member's scope_id).
+message StudioMemberReassignedEvent {
+  string member_id              = 1;
+  string scope_id               = 2;
+  optional string from_team_id  = 3;
+  optional string to_team_id    = 4;
+  google.protobuf.Timestamp reassigned_at_utc = 5;
 }

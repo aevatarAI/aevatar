@@ -138,6 +138,8 @@ import {
   getDefaultBuildModeCards,
   StudioGAgentBuildPanel,
   StudioScriptBuildPanel,
+  type StudioScriptBuildState,
+  type StudioPendingScriptDraft,
   StudioWorkflowBuildPanel,
 } from './components/StudioBuildPanels';
 import StudioShell, {
@@ -195,6 +197,8 @@ type DraftRunNotice = {
   readonly type: 'success' | 'error';
   readonly message: string;
 };
+
+const STUDIO_SCRIPT_DRAFT_STORAGE_KEY = 'aevatar:studio:script-drafts:v1';
 
 type StudioNotice = {
   readonly type: 'success' | 'info' | 'warning' | 'error';
@@ -919,6 +923,106 @@ function buildInventoryWorkflowName(
 function buildWorkflowFileName(workflowName: string): string {
   const normalizedWorkflowName = trimOptional(workflowName) || 'workflow';
   return `${normalizedWorkflowName}.yaml`;
+}
+
+function buildScriptIdSlug(scriptName: string): string {
+  return trimOptional(scriptName)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
+}
+
+function buildInventoryScriptName(
+  scripts: ReadonlyArray<ScopedScriptDetail>,
+  members: ReadonlyArray<StudioMemberSummary>,
+): string {
+  const usedIds = new Set<string>();
+  for (const detail of scripts) {
+    const scriptId = buildScriptIdSlug(detail.script?.scriptId || '');
+    if (scriptId) {
+      usedIds.add(scriptId);
+    }
+  }
+
+  for (const member of members) {
+    const scriptId =
+      member.implementationKind === 'script'
+        ? buildScriptIdSlug(member.displayName)
+        : '';
+    if (scriptId) {
+      usedIds.add(scriptId);
+    }
+  }
+
+  for (let index = 1; index < 1000; index += 1) {
+    const candidate = `script-${index}`;
+    if (!usedIds.has(candidate)) {
+      return candidate;
+    }
+  }
+
+  return `script-${Date.now()}`;
+}
+
+function readStoredScriptDrafts(): Record<string, StudioPendingScriptDraft> {
+  if (typeof window === 'undefined') {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(
+      window.localStorage.getItem(STUDIO_SCRIPT_DRAFT_STORAGE_KEY) || '{}',
+    ) as Record<string, StudioPendingScriptDraft>;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeStoredScriptDrafts(
+  drafts: Record<string, StudioPendingScriptDraft>,
+): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.localStorage.setItem(
+    STUDIO_SCRIPT_DRAFT_STORAGE_KEY,
+    JSON.stringify(drafts),
+  );
+}
+
+function scriptDraftStorageKey(scopeId: string | undefined, scriptId: string): string {
+  return `${scopeId || 'workspace'}:${scriptId}`;
+}
+
+function loadStoredScriptDraft(
+  scopeId: string | undefined,
+  scriptId: string,
+): StudioPendingScriptDraft | null {
+  const stored = readStoredScriptDrafts()[
+    scriptDraftStorageKey(scopeId, scriptId)
+  ];
+  return stored?.scriptId ? stored : null;
+}
+
+function saveStoredScriptDraft(
+  scopeId: string | undefined,
+  draft: StudioPendingScriptDraft,
+): void {
+  const drafts = readStoredScriptDrafts();
+  drafts[scriptDraftStorageKey(scopeId, draft.scriptId)] = draft;
+  writeStoredScriptDrafts(drafts);
+}
+
+function removeStoredScriptDraft(
+  scopeId: string | undefined,
+  scriptId: string,
+): void {
+  const drafts = readStoredScriptDrafts();
+  delete drafts[scriptDraftStorageKey(scopeId, scriptId)];
+  writeStoredScriptDrafts(drafts);
 }
 
 function parseStudioIntent(value: string | null | undefined): StudioIntent | '' {
@@ -2010,6 +2114,20 @@ const StudioPage: React.FC = () => {
           ? initialSelectedMember.value
           : '',
   );
+  const [scriptBuildState, setScriptBuildState] =
+    useState<StudioScriptBuildState | null>(null);
+  const [pendingScriptDraft, setPendingScriptDraft] =
+    useState<StudioPendingScriptDraft | null>(() => {
+      const initialScriptId =
+        initialBuildFocus.kind === 'script'
+          ? initialBuildFocus.value
+          : initialSelectedMember.kind === 'script'
+            ? initialSelectedMember.value
+            : '';
+      return initialScriptId
+        ? loadStoredScriptDraft(initialRouteState.scopeId || undefined, initialScriptId)
+        : null;
+    });
   const [selectedGAgentTypeName, setSelectedGAgentTypeName] = useState('');
   const [selectedExecutionId, setSelectedExecutionId] = useState(
     () => initialRouteState.executionId,
@@ -2368,6 +2486,10 @@ const StudioPage: React.FC = () => {
           .filter(Boolean),
       ),
     [availableScopeScripts],
+  );
+  const suggestedCreateScriptName = useMemo(
+    () => buildInventoryScriptName(availableScopeScripts, studioScopeMembers),
+    [availableScopeScripts, studioScopeMembers],
   );
   const publishedScopeServiceRevisionQueries = useQueries({
     queries: publishedScopeServices.map((service) => {
@@ -3403,32 +3525,92 @@ const StudioPage: React.FC = () => {
         ? 'gagent'
         : 'workflow';
   const buildPendingBindCandidate = useMemo(() => {
-    if (
-      activeBuildMode !== 'workflow' ||
-      !resolvedStudioScopeId ||
-      !trimOptional(draftYaml)
-    ) {
+    if (!resolvedStudioScopeId) {
       return null;
     }
 
-    const displayName =
-      trimOptional(activeWorkflowName) ||
-      trimOptional(draftWorkflowName) ||
-      'draft';
+    const shouldBuildScriptCandidate =
+      activeBuildMode === 'script' ||
+      (isBindSurface && Boolean(trimOptional(selectedScriptId)));
 
-    return {
-      kind: 'workflow' as const,
-      displayName,
-      description:
-        'Publish the current workflow revision first, then Studio can reveal the invoke URL and endpoint contract for this member.',
-      actionLabel: 'Bind current revision',
-    };
+    if (shouldBuildScriptCandidate) {
+      const selectedId = trimOptional(selectedScriptId);
+      const catalogScriptState =
+        selectedId
+          ? availableScopeScripts.find(
+              (detail) => trimOptional(detail.script?.scriptId) === selectedId,
+            ) ?? null
+          : null;
+      const effectiveScriptState =
+        scriptBuildState?.scriptId && trimOptional(scriptBuildState.scriptId) === selectedId
+          ? scriptBuildState
+          : catalogScriptState
+          ? {
+              scriptId: trimOptional(catalogScriptState.script?.scriptId),
+              displayName: '',
+              scriptRevision:
+                trimOptional(catalogScriptState.source?.revision) ||
+                trimOptional(catalogScriptState.script?.activeRevision),
+              revisionId:
+                trimOptional(catalogScriptState.source?.revision) ||
+                trimOptional(catalogScriptState.script?.activeRevision),
+              dirty: false,
+              saveStatus: 'applied' as const,
+            }
+          : null;
+      const scriptId = trimOptional(effectiveScriptState?.scriptId);
+      if (
+        scriptId &&
+        selectedId &&
+        scriptId === selectedId &&
+        !effectiveScriptState?.dirty &&
+        effectiveScriptState?.saveStatus === 'applied'
+      ) {
+        return {
+          kind: 'script' as const,
+          displayName: trimOptional(effectiveScriptState.displayName) || scriptId,
+          description:
+            'Bind the catalog-applied Script revision as a callable member service. Draft-run remains a Build-only source test.',
+          actionLabel: 'Bind Script member',
+          scriptId,
+          scriptRevision:
+            trimOptional(effectiveScriptState.scriptRevision) ||
+            trimOptional(effectiveScriptState.revisionId),
+          revisionId: trimOptional(effectiveScriptState.revisionId),
+        };
+      }
+    }
+
+    if (activeBuildMode === 'workflow') {
+      if (!trimOptional(draftYaml)) {
+        return null;
+      }
+
+      const displayName =
+        trimOptional(activeWorkflowName) ||
+        trimOptional(draftWorkflowName) ||
+        'draft';
+
+      return {
+        kind: 'workflow' as const,
+        displayName,
+        description:
+          'Publish the current workflow revision first, then Studio can reveal the invoke URL and endpoint contract for this member.',
+        actionLabel: 'Bind current revision',
+      };
+    }
+
+    return null;
   }, [
     activeBuildMode,
     activeWorkflowName,
     draftWorkflowName,
     draftYaml,
     resolvedStudioScopeId,
+    scriptBuildState,
+    selectedScriptId,
+    availableScopeScripts,
+    isBindSurface,
   ]);
   const buildPendingMemberSummary = useMemo(() => {
     if (buildPendingBindCandidate?.kind !== 'workflow') {
@@ -3488,16 +3670,10 @@ const StudioPage: React.FC = () => {
       throw new Error('Resolve the current scope before binding this member.');
     }
 
-    if (buildPendingBindCandidate.kind !== 'workflow') {
-      throw new Error(
-        'Studio can only publish workflow revisions from this surface right now.',
-      );
-    }
-
     const resolvedBuildMemberId = trimOptional(buildPendingMemberSummary?.memberId);
     let boundServiceCandidates: (string | null | undefined)[];
     let optimisticBoundServiceId: string;
-    if (resolvedBuildMemberId) {
+    if (buildPendingBindCandidate.kind === 'workflow' && resolvedBuildMemberId) {
       const accepted = await studioApi.bindMemberWorkflow({
         scopeId: resolvedStudioScopeId,
         memberId: resolvedBuildMemberId,
@@ -3513,7 +3689,7 @@ const StudioPage: React.FC = () => {
         trimOptional(buildPendingMemberSummary?.publishedServiceId) ||
         trimOptional(buildPendingBindCandidate.displayName) ||
         trimOptional(accepted.memberId);
-    } else {
+    } else if (buildPendingBindCandidate.kind === 'workflow') {
       const result = await studioApi.bindScopeWorkflow({
         scopeId: resolvedStudioScopeId,
         displayName: buildPendingBindCandidate.displayName,
@@ -3531,6 +3707,29 @@ const StudioPage: React.FC = () => {
         trimOptional(result.displayName) ||
         trimOptional(result.targetName) ||
         trimOptional(result.workflowName);
+    } else {
+      const result = await studioApi.bindScopeScript({
+        scopeId: resolvedStudioScopeId,
+        displayName: buildPendingBindCandidate.displayName,
+        scriptId: buildPendingBindCandidate.scriptId,
+        scriptRevision: buildPendingBindCandidate.scriptRevision,
+        revisionId: buildPendingBindCandidate.revisionId,
+      });
+      boundServiceCandidates = [
+        buildPendingBindCandidate.displayName,
+        buildPendingBindCandidate.scriptId,
+        result.displayName,
+        result.targetName,
+        result.workflowName,
+        result.script?.scriptId,
+      ];
+      optimisticBoundServiceId =
+        trimOptional(result.serviceId) ||
+        trimOptional(buildPendingBindCandidate.displayName) ||
+        trimOptional(result.displayName) ||
+        trimOptional(result.targetName) ||
+        trimOptional(result.workflowName) ||
+        trimOptional(result.script?.scriptId);
     }
     await queryClient.invalidateQueries({
       queryKey: ['studio-scope-members', resolvedStudioScopeId],
@@ -3844,6 +4043,24 @@ const StudioPage: React.FC = () => {
     suggestedCreateWorkflowName,
   ]);
 
+  const openCreateScriptDraftFlow = useCallback(async () => {
+    if (!(await confirmScriptsStudioLeave())) {
+      return;
+    }
+
+    setCreateMemberName(suggestedCreateScriptName);
+    setCreateMemberKind('script');
+    setCreateMemberDirectoryId(
+      inventoryDirectoryId || inventoryDirectoryOptions[0]?.directoryId || '',
+    );
+    setCreateMemberModalOpen(true);
+  }, [
+    confirmScriptsStudioLeave,
+    inventoryDirectoryId,
+    inventoryDirectoryOptions,
+    suggestedCreateScriptName,
+  ]);
+
   useEffect(() => {
     if (!isStudioLocation || !pendingCreateMemberIntentSnapshot) {
       return;
@@ -3879,13 +4096,64 @@ const StudioPage: React.FC = () => {
     setCreateMemberModalOpen(false);
   }, [inventoryBusyKey]);
 
-  const handleCreateMember = useCallback(async () => {
-    if (createMemberKind !== 'workflow') {
-      void message.info(
-        createMemberKind === 'script'
-          ? 'Script member authority exists on the backend now, but this modal still continues through Build > Script.'
-          : 'GAgent member authority exists on the backend now, but this modal still continues through Build > GAgent.',
+  const handleCreateMember = useCallback(async (selectedCreateMemberKind: BuildMode) => {
+    if (selectedCreateMemberKind !== 'workflow') {
+      if (selectedCreateMemberKind === 'script' && !appContextQuery.data?.features.scripts) {
+        void message.warning('Script builder is not enabled for this workspace.');
+        return;
+      }
+
+      if (!(await confirmScriptsStudioLeave())) {
+        return;
+      }
+
+      if (selectedCreateMemberKind === 'script') {
+        const scriptDisplayName = trimOptional(createMemberName);
+        const scriptId = buildScriptIdSlug(scriptDisplayName);
+        if (!scriptId) {
+          void message.warning('Script name is required.');
+          return;
+        }
+
+        if (availableScopeScriptIds.has(scriptId)) {
+          void message.warning('A scope script with the same id already exists.');
+          return;
+        }
+
+        const nextDraft = {
+          scriptId,
+          displayName: scriptDisplayName,
+        };
+        saveStoredScriptDraft(resolvedStudioScopeId || undefined, nextDraft);
+        setPendingScriptDraft(nextDraft);
+        setSelectedScriptId(scriptId);
+        setScriptBuildState(null);
+        setCreateMemberModalOpen(false);
+        history.push(
+          buildStudioRoute({
+            scopeId: resolvedStudioScopeId || undefined,
+            focus: `script:${scriptId}`,
+            step: 'build',
+            tab: 'scripts',
+          }),
+        );
+        setBuildSurface('scripts');
+        setStudioSurface('build');
+        void message.success(`Created Script draft ${scriptId}.`);
+        return;
+      }
+
+      setCreateMemberModalOpen(false);
+      history.push(
+        buildStudioRoute({
+          scopeId: resolvedStudioScopeId || undefined,
+          step: 'build',
+          tab: 'gagents',
+        }),
       );
+      setBuildSurface('gagent');
+      setStudioSurface('build');
+      void message.info('Opened GAgent builder.');
       return;
     }
 
@@ -3976,9 +4244,12 @@ const StudioPage: React.FC = () => {
     }
   }, [
     applySavedWorkflowSelection,
-    createMemberKind,
+    appContextQuery.data?.features.scripts,
+    availableScopeScriptIds,
+    confirmScriptsStudioLeave,
     createMemberDirectoryId,
     createMemberName,
+    history,
     inventoryDirectoryId,
     queryClient,
     resolvedStudioScopeId,
@@ -5824,7 +6095,10 @@ const StudioPage: React.FC = () => {
   );
   const bindPendingCandidate =
     bindSelectedMemberServiceId ||
-    !workbenchMemberKey.startsWith('workflow:')
+    !(
+      workbenchMemberKey.startsWith('workflow:') ||
+      workbenchMemberKey.startsWith('script:')
+    )
       ? null
       : buildPendingBindCandidate;
   const bindInitialEndpointId = bindSelectedMemberServiceId
@@ -6463,7 +6737,12 @@ const StudioPage: React.FC = () => {
     Boolean(workbenchMemberKey) &&
     Boolean(
       selectedWorkflowId ||
-        selectedScriptId ||
+        (selectedScriptId
+          ? activeScriptPublishedServiceId ||
+            (scriptBuildState?.scriptId === selectedScriptId &&
+              !scriptBuildState.dirty &&
+              scriptBuildState.saveStatus === 'applied')
+          : false) ||
         workbenchPublishedService ||
         (isBuildGAgentSurface && trimOptional(selectedGAgentTypeName))
     );
@@ -6834,6 +7113,10 @@ const StudioPage: React.FC = () => {
       : sanitizeReturnTo(
           `${window.location.pathname}${window.location.search}${window.location.hash}`,
         );
+  const createScriptId = buildScriptIdSlug(createMemberName);
+  const createScriptIdAlreadyExists = Boolean(
+    createScriptId && availableScopeScriptIds.has(createScriptId),
+  );
   const createMemberButtonDisabled = inventoryBusyKey === 'create';
   const selectedInventoryMemberBusy =
     inventoryBusyKey === selectedInventoryMemberKey;
@@ -7071,10 +7354,42 @@ const StudioPage: React.FC = () => {
       scopeId={resolvedStudioScopeId || undefined}
       scriptsQuery={scopeScriptsQuery}
       selectedScriptId={selectedScriptId}
-      onSelectScriptId={setSelectedScriptId}
+      pendingScriptDraft={pendingScriptDraft}
+      onCreateScriptDraft={openCreateScriptDraftFlow}
+      onSelectScriptId={(scriptId) => {
+        setSelectedScriptId(scriptId);
+        const storedDraft = loadStoredScriptDraft(
+          resolvedStudioScopeId || undefined,
+          scriptId,
+        );
+        setPendingScriptDraft(storedDraft);
+      }}
       onRefreshScripts={() => scopeScriptsQuery.refetch()}
-      onContinueToBind={() => applyStudioTarget('bind')}
+      onPendingScriptDraftChange={(draft) => {
+        setPendingScriptDraft(draft);
+        if (draft) {
+          saveStoredScriptDraft(resolvedStudioScopeId || undefined, draft);
+        }
+      }}
+      onScriptDraftSaved={(scriptId) => {
+        if (pendingScriptDraft?.scriptId === scriptId) {
+          removeStoredScriptDraft(resolvedStudioScopeId || undefined, scriptId);
+          setPendingScriptDraft(null);
+        }
+      }}
+      onContinueToBind={() => {
+        history.push(
+          buildStudioRoute({
+            scopeId: resolvedStudioScopeId || undefined,
+            memberKey: selectedScriptId ? `script:${selectedScriptId}` : undefined,
+            step: 'bind',
+            tab: 'bindings',
+          }),
+        );
+        applyStudioTarget('bind');
+      }}
       onRegisterLeaveGuard={handleRegisterScriptLeaveGuard}
+      onScriptBuildStateChange={setScriptBuildState}
     />
   ) : (
     <div
@@ -7272,16 +7587,26 @@ const StudioPage: React.FC = () => {
               open={createMemberModalOpen}
               title="Create member"
               onCancel={closeCreateMemberFlow}
-              onOk={() => void handleCreateMember()}
-              okText="Create member"
+              onOk={() => void handleCreateMember(createMemberKind)}
+              okText={
+                createMemberKind === 'workflow'
+                  ? 'Create member'
+                  : createMemberKind === 'script'
+                    ? 'Create Script draft'
+                    : 'Open GAgent builder'
+              }
               okButtonProps={{
                 disabled:
                   inventoryBusyAction === 'create' ||
-                  !trimOptional(createMemberName) ||
-                  createMemberKind !== 'workflow' ||
-                  !trimOptional(
-                    trimOptional(createMemberDirectoryId) || inventoryDirectoryId,
-                  ),
+                  (createMemberKind === 'workflow' &&
+                    (!trimOptional(createMemberName) ||
+                      !trimOptional(
+                        trimOptional(createMemberDirectoryId) || inventoryDirectoryId,
+                      ))) ||
+                  (createMemberKind === 'script' &&
+                    (!appContextQuery.data?.features.scripts ||
+                      !createScriptId ||
+                      createScriptIdAlreadyExists)),
                 loading: inventoryBusyAction === 'create',
               }}
               cancelButtonProps={{
@@ -7316,7 +7641,14 @@ const StudioPage: React.FC = () => {
                                 cursor: 'pointer',
                               }
                         }
-                        onClick={() => setCreateMemberKind(kind)}
+                        onClick={() => {
+                          setCreateMemberKind(kind);
+                          if (kind === 'workflow') {
+                            setCreateMemberName(suggestedCreateWorkflowName);
+                          } else if (kind === 'script') {
+                            setCreateMemberName(suggestedCreateScriptName);
+                          }
+                        }}
                       >
                         {label}
                       </button>
@@ -7324,28 +7656,45 @@ const StudioPage: React.FC = () => {
                   </div>
                   <div style={inventoryCreateHintStyle}>
                     Choose the implementation kind first. Workflow entry now
-                    registers a backend member authority; Script and GAgent will
-                    move into this modal once their Build handoff is ready.
+                    registers a backend member authority; Script creates a named
+                    draft identity before Build; GAgent opens its Build workspace
+                    for implementation editing and binding prep.
                   </div>
                 </div>
-                <label style={inventoryCreateFieldStackStyle}>
-                  <span style={inventoryCreateFieldLabelStyle}>Member name</span>
-                  <input
-                    aria-label="Member name"
-                    autoFocus
-                    onChange={(event) => setCreateMemberName(event.target.value)}
-                    placeholder={suggestedCreateWorkflowName}
-                    style={inventoryCreateInputStyle}
-                    type="text"
-                    value={createMemberName}
-                  />
-                </label>
+                {createMemberKind === 'workflow' || createMemberKind === 'script' ? (
+                  <label style={inventoryCreateFieldStackStyle}>
+                    <span style={inventoryCreateFieldLabelStyle}>
+                      {createMemberKind === 'workflow' ? 'Member name' : 'Script name'}
+                    </span>
+                    <input
+                      aria-label={createMemberKind === 'workflow' ? 'Member name' : 'Script name'}
+                      autoFocus
+                      onChange={(event) => setCreateMemberName(event.target.value)}
+                      placeholder={
+                        createMemberKind === 'workflow'
+                          ? suggestedCreateWorkflowName
+                          : suggestedCreateScriptName
+                      }
+                      style={inventoryCreateInputStyle}
+                      type="text"
+                      value={createMemberName}
+                    />
+                    {createMemberKind === 'script' ? (
+                      <div style={inventoryCreateHintStyle}>
+                        Script id: {createScriptId || 'enter-a-script-name'}
+                        {createScriptIdAlreadyExists
+                          ? ' · already exists in this scope'
+                          : ' · saved after Validate and Save revision'}
+                      </div>
+                    ) : null}
+                  </label>
+                ) : null}
                 <div style={inventoryCreateHintStyle}>
                   {createMemberKind === 'workflow'
                     ? 'Workflow members currently start from a blank workflow draft with an empty canvas, and Studio also registers the member authority in backend once the draft is created.'
                     : createMemberKind === 'script'
-                      ? 'Script member authority exists on backend, but this modal still hands off through Build > Script for implementation editing.'
-                      : 'GAgent member authority exists on backend, but this modal still hands off through Build > GAgent for implementation editing.'}
+                      ? 'Script starts as a named draft. It becomes a callable member only after Save revision is catalog-applied and Bind succeeds.'
+                      : 'GAgent member authority exists on backend, but this modal still hands off through Build > GAgent for implementation editing and binding prep.'}
                 </div>
                 {createMemberKind === 'workflow' ? (
                   <label style={inventoryCreateFieldStackStyle}>

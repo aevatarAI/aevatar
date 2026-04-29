@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
@@ -11,18 +12,18 @@ public static class AgentBuilderCardFlow
 {
     private const string PrivateChatType = "p2p";
     private const string CardActionChatType = "card_action";
-    private const string OpenDailyReportFormAction = "open_daily_report_form";
-    private const string OpenSocialMediaFormAction = "open_social_media_form";
-    private const string DailyReportAction = "create_daily_report";
-    private const string SocialMediaAction = "create_social_media";
-    private const string ListTemplatesAction = "list_templates";
-    private const string ListAgentsAction = "list_agents";
-    private const string AgentStatusAction = "agent_status";
-    private const string RunAgentAction = "run_agent";
-    private const string DisableAgentAction = "disable_agent";
-    private const string EnableAgentAction = "enable_agent";
-    private const string ConfirmDeleteAgentAction = "confirm_delete_agent";
-    private const string DeleteAgentAction = "delete_agent";
+    private const string OpenDailyReportFormAction = AgentBuilderActionIds.OpenDailyReportForm;
+    private const string OpenSocialMediaFormAction = AgentBuilderActionIds.OpenSocialMediaForm;
+    private const string DailyReportAction = AgentBuilderActionIds.DailyReport;
+    private const string SocialMediaAction = AgentBuilderActionIds.SocialMedia;
+    private const string ListTemplatesAction = AgentBuilderActionIds.ListTemplates;
+    private const string ListAgentsAction = AgentBuilderActionIds.ListAgents;
+    private const string AgentStatusAction = AgentBuilderActionIds.AgentStatus;
+    private const string RunAgentAction = AgentBuilderActionIds.RunAgent;
+    private const string DisableAgentAction = AgentBuilderActionIds.DisableAgent;
+    private const string EnableAgentAction = AgentBuilderActionIds.EnableAgent;
+    private const string ConfirmDeleteAgentAction = AgentBuilderActionIds.ConfirmDeleteAgent;
+    private const string DeleteAgentAction = AgentBuilderActionIds.DeleteAgent;
     private const string DefaultScheduleTime = "09:00";
     private const string SocialMediaCommand = "/social-media";
     private const string AgentStatusCommand = "/agent-status";
@@ -237,6 +238,8 @@ public static class AgentBuilderCardFlow
                     return true;
                 }
 
+                // Use the MessageContent overload so the relay composer renders this as a real
+                // Lark card instead of forwarding a JSON-as-text payload (issue #482).
                 decision = AgentBuilderFlowDecision.DirectReply(BuildDeleteConfirmationCard(
                     agentId,
                     evt.Extra.TryGetValue("template", out var template) ? template : null));
@@ -257,6 +260,12 @@ public static class AgentBuilderCardFlow
         }
     }
 
+    /// <summary>
+    /// Formats the tool result for a card-action invocation. Each branch returns a structured
+    /// <see cref="MessageContent"/> with <c>Cards</c> and <c>Actions</c> populated; never a Lark
+    /// card JSON string wrapped as <see cref="MessageContent.Text"/>. The latter shape used to
+    /// reach the relay verbatim and the user saw raw <c>{"config":...}</c> blobs (issue #482).
+    /// </summary>
     public static MessageContent FormatToolResult(AgentBuilderFlowDecision decision, string toolResultJson)
     {
         ArgumentNullException.ThrowIfNull(decision);
@@ -268,16 +277,20 @@ public static class AgentBuilderCardFlow
             {
                 // Daily report creation uses the shared formatter so Nyx-relay slash commands and
                 // Feishu card-action submits render the same "running now, I'll reply when done"
-                // acknowledgment instead of one path dumping the legacy JSON card as text.
+                // acknowledgment.
                 DailyReportAction => AgentBuilderCardContent.FormatDailyReportToolReply(doc.RootElement),
-                SocialMediaAction => ToTextContent(FormatCreateSocialMediaResult(doc.RootElement)),
-                ListTemplatesAction => ToTextContent(FormatListTemplatesResult(doc.RootElement)),
-                ListAgentsAction => ToTextContent(FormatListAgentsResult(doc.RootElement)),
-                AgentStatusAction => ToTextContent(FormatAgentStatusResult(doc.RootElement)),
-                RunAgentAction => ToTextContent(FormatRunAgentResult(doc.RootElement)),
-                DisableAgentAction => ToTextContent(FormatDisableAgentResult(doc.RootElement)),
-                EnableAgentAction => ToTextContent(FormatEnableAgentResult(doc.RootElement)),
-                DeleteAgentAction => ToTextContent(FormatDeleteAgentResult(doc.RootElement)),
+                SocialMediaAction => FormatCreateSocialMediaResult(doc.RootElement),
+                ListTemplatesAction => FormatListTemplatesResult(doc.RootElement),
+                // Card-click "Refresh List" and the typed `/agents` command share the same
+                // unified renderer (issue #476).
+                ListAgentsAction => AgentBuilderCardContent.FormatListAgentsResult(doc.RootElement),
+                AgentStatusAction => FormatAgentStatusResult(doc.RootElement),
+                RunAgentAction => FormatRunAgentResult(doc.RootElement),
+                DisableAgentAction => FormatDisableAgentResult(doc.RootElement),
+                EnableAgentAction => FormatEnableAgentResult(doc.RootElement),
+                // After a delete completes, surface the updated registry through the same unified
+                // list renderer with the delete notice prepended.
+                DeleteAgentAction => FormatDeleteAgentResultAsList(doc.RootElement),
                 _ => ToTextContent(toolResultJson),
             };
         }
@@ -287,7 +300,7 @@ public static class AgentBuilderCardFlow
         }
     }
 
-    private static MessageContent ToTextContent(string text) => new() { Text = text };
+    private static MessageContent ToTextContent(string text) => AgentBuilderJson.TextContent(text);
 
     public static string ResolveToolChatType(ChannelInboundEvent evt)
     {
@@ -500,19 +513,56 @@ public static class AgentBuilderCardFlow
             return true;
         }
 
-        if (TryParseAgentCommand(normalizedText, DeleteAgentCommand, out agentId, out errorReply))
-        {
-            if (errorReply != null)
-            {
-                decision = AgentBuilderFlowDecision.DirectReply(errorReply);
-                return true;
-            }
+        if (TryResolveDeleteAgentTextCommand(normalizedText, out decision))
+            return true;
 
-            decision = AgentBuilderFlowDecision.DirectReply(BuildDeleteConfirmationCard(agentId!, null));
+        return false;
+    }
+
+    /// <summary>
+    /// Parses <c>/delete-agent &lt;agent_id&gt; [confirm]</c>. The optional <c>confirm</c> trailer
+    /// matches the NyxRelay text contract (and the inline command hint surfaced from the shared
+    /// <c>/agents</c> renderer) so a user who follows the printed hint
+    /// <c>/delete-agent &lt;id&gt; confirm</c> in a direct-webhook chat does not end up with
+    /// <c>"&lt;id&gt; confirm"</c> being treated as a single agent_id by the legacy
+    /// <see cref="TryParseAgentCommand"/> parser. Without the trailing keyword we still surface
+    /// the explicit confirmation card; with it we skip the extra step and dispatch the delete
+    /// directly, mirroring the relay path's semantics.
+    /// </summary>
+    private static bool TryResolveDeleteAgentTextCommand(
+        string normalizedText,
+        out AgentBuilderFlowDecision? decision)
+    {
+        decision = null;
+        if (!normalizedText.StartsWith(DeleteAgentCommand, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var tokens = ChannelTextCommandParser.Tokenize(normalizedText);
+        if (tokens.Count < 2 || string.IsNullOrWhiteSpace(tokens[1]))
+        {
+            decision = AgentBuilderFlowDecision.DirectReply($"Usage: {DeleteAgentCommand} <agent_id>");
             return true;
         }
 
-        return false;
+        var agentId = tokens[1].Trim();
+        var confirmed = tokens.Count > 2 &&
+                        string.Equals(tokens[2], "confirm", StringComparison.OrdinalIgnoreCase);
+
+        if (confirmed)
+        {
+            decision = AgentBuilderFlowDecision.ToolCall(
+                DeleteAgentAction,
+                JsonSerializer.Serialize(new
+                {
+                    action = DeleteAgentAction,
+                    agent_id = agentId,
+                    confirm = true,
+                }));
+            return true;
+        }
+
+        decision = AgentBuilderFlowDecision.DirectReply(BuildDeleteConfirmationCard(agentId, null));
+        return true;
     }
 
     private static bool TryParseAgentCommand(
@@ -597,65 +647,69 @@ public static class AgentBuilderCardFlow
         return normalized.Length == 0 ? null : normalized;
     }
 
-    private static string FormatCreateSocialMediaResult(JsonElement root)
+    private static MessageContent FormatCreateSocialMediaResult(JsonElement root)
     {
         if (TryReadError(root, out var error))
-            return $"Create social media agent failed: {error}";
+            return ToTextContent($"Create social media agent failed: {error}");
 
         var status = ReadString(root, "status") ?? "accepted";
         var agentId = ReadString(root, "agent_id") ?? "unknown-agent";
         var workflowId = ReadString(root, "workflow_id") ?? "pending";
         var nextRun = ReadString(root, "next_scheduled_run") ?? "pending";
-        var note = ReadString(root, "note");
+        var note = NormalizeOptional(ReadString(root, "note"));
 
-        var lines = new List<string>
+        var headline = string.Equals(status, "created", StringComparison.OrdinalIgnoreCase)
+            ? "Social media agent created."
+            : "Social media agent accepted.";
+
+        var body = new StringBuilder();
+        body.Append(headline).Append('\n');
+        body.Append($"- Agent ID: `{agentId}`\n");
+        body.Append($"- Workflow ID: `{workflowId}`\n");
+        body.Append($"- Next scheduled run: `{nextRun}`");
+        if (note is not null)
+            body.Append("\n\n").Append(note);
+
+        var content = new MessageContent();
+        content.Cards.Add(new CardBlock
         {
-            string.Equals(status, "created", StringComparison.OrdinalIgnoreCase)
-                ? $"Social media agent created: {agentId}"
-                : $"Social media agent accepted: {agentId}",
-            $"Workflow ID: `{workflowId}`",
-            $"Next scheduled run: {nextRun}",
-        };
-
-        if (!string.IsNullOrWhiteSpace(note))
-            lines.Add(note!);
-
-        return BuildInfoCard(
-            "Social Media Agent",
-            string.Join("\n", lines),
-            "orange",
-            new object[]
-            {
-                BuildButton("View Agents", "primary", new
-                {
-                    agent_builder_action = ListAgentsAction,
-                }),
-                BuildButton("Create Another", "default", new
-                {
-                    agent_builder_action = OpenSocialMediaFormAction,
-                }),
-            });
+            Kind = CardBlockKind.Section,
+            BlockId = $"social_media_created:{agentId}",
+            Title = "Social Media Agent",
+            Text = body.ToString(),
+        });
+        content.Actions.Add(BuildCardAction("View Agents", ListAgentsAction, isPrimary: true));
+        content.Actions.Add(BuildCardAction("Create Another", OpenSocialMediaFormAction, isPrimary: false));
+        return content;
     }
 
-    private static string FormatListTemplatesResult(JsonElement root)
+    private static MessageContent FormatListTemplatesResult(JsonElement root)
     {
         if (TryReadError(root, out var error))
-            return $"List templates failed: {error}";
+            return ToTextContent($"List templates failed: {error}");
+
+        var content = new MessageContent();
 
         if (!root.TryGetProperty("templates", out var templatesElement) ||
-            templatesElement.ValueKind != JsonValueKind.Array)
+            templatesElement.ValueKind != JsonValueKind.Array ||
+            templatesElement.GetArrayLength() == 0)
         {
-            return "No templates available.";
+            content.Cards.Add(new CardBlock
+            {
+                Kind = CardBlockKind.Section,
+                BlockId = "templates_empty",
+                Title = "Available Templates",
+                Text = "No templates available right now.",
+            });
+            content.Actions.Add(BuildCardAction("View Agents", ListAgentsAction, isPrimary: false));
+            return content;
         }
 
-        var elements = new List<object>
-        {
-            new
-            {
-                tag = "markdown",
-                content = "Day One currently exposes the templates below.",
-            },
-        };
+        var body = new StringBuilder();
+        body.Append("Day One currently exposes the templates below.");
+
+        var hasReadyDaily = false;
+        var hasReadySocial = false;
 
         foreach (var item in templatesElement.EnumerateArray())
         {
@@ -665,106 +719,41 @@ public static class AgentBuilderCardFlow
             var requiredFields = ReadStringArray(item, "required_fields");
             var optionalFields = ReadStringArray(item, "optional_fields");
 
-            elements.Add(new
-            {
-                tag = "markdown",
-                content =
-                    $"**{EscapeMarkdown(name)}**\nStatus: `{EscapeMarkdown(status)}`\n{EscapeMarkdown(description)}\nRequired: {FormatFieldList(requiredFields)}\nOptional: {FormatFieldList(optionalFields)}",
-            });
+            body.Append("\n\n");
+            body.Append($"**`{name}`** · {status}\n");
+            body.Append($"{description}\n");
+            body.Append($"- Required: {FormatFieldList(requiredFields)}\n");
+            body.Append($"- Optional: {FormatFieldList(optionalFields)}");
 
-            if (string.Equals(name, "daily_report", StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(status, "ready", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(status, "ready", StringComparison.OrdinalIgnoreCase))
             {
-                elements.Add(new
-                {
-                    tag = "action",
-                    actions = new object[]
-                    {
-                        BuildButton("Create Daily Report", "primary", new
-                        {
-                            agent_builder_action = OpenDailyReportFormAction,
-                        }),
-                    },
-                });
-            }
-            else if (string.Equals(name, "social_media", StringComparison.OrdinalIgnoreCase) &&
-                     string.Equals(status, "ready", StringComparison.OrdinalIgnoreCase))
-            {
-                elements.Add(new
-                {
-                    tag = "action",
-                    actions = new object[]
-                    {
-                        BuildButton("Create Social Media", "primary", new
-                        {
-                            agent_builder_action = OpenSocialMediaFormAction,
-                        }),
-                    },
-                });
+                if (string.Equals(name, "daily_report", StringComparison.OrdinalIgnoreCase))
+                    hasReadyDaily = true;
+                else if (string.Equals(name, "social_media", StringComparison.OrdinalIgnoreCase))
+                    hasReadySocial = true;
             }
         }
 
-        elements.Add(new
+        content.Cards.Add(new CardBlock
         {
-            tag = "action",
-            actions = new object[]
-            {
-                BuildButton("List Agents", "default", new
-                {
-                    agent_builder_action = ListAgentsAction,
-                }),
-            },
+            Kind = CardBlockKind.Section,
+            BlockId = "templates_list",
+            Title = "Available Templates",
+            Text = body.ToString(),
         });
 
-        return JsonSerializer.Serialize(new
-        {
-            config = new
-            {
-                wide_screen_mode = true,
-            },
-            header = new
-            {
-                title = new
-                {
-                    tag = "plain_text",
-                    content = "Available Templates",
-                },
-                template = "indigo",
-            },
-            elements,
-        });
+        if (hasReadyDaily)
+            content.Actions.Add(BuildCardAction("Create Daily Report", OpenDailyReportFormAction, isPrimary: true));
+        if (hasReadySocial)
+            content.Actions.Add(BuildCardAction("Create Social Media", OpenSocialMediaFormAction, isPrimary: !hasReadyDaily));
+        content.Actions.Add(BuildCardAction("View Agents", ListAgentsAction, isPrimary: false));
+        return content;
     }
 
-    private static string FormatListAgentsResult(JsonElement root)
+    private static MessageContent FormatAgentStatusResult(JsonElement root)
     {
         if (TryReadError(root, out var error))
-            return $"List agents failed: {error}";
-
-        if (!root.TryGetProperty("agents", out var agentsElement) ||
-            agentsElement.ValueKind != JsonValueKind.Array)
-        {
-            return BuildEmptyAgentListCard();
-        }
-
-        var agents = new List<AgentListCardItem>();
-        foreach (var item in agentsElement.EnumerateArray())
-        {
-            var agentId = ReadString(item, "agent_id") ?? "unknown-agent";
-            var template = ReadString(item, "template") ?? "unknown-template";
-            var status = ReadString(item, "status") ?? "unknown";
-            var nextRun = ReadString(item, "next_scheduled_run") ?? "pending";
-            agents.Add(new AgentListCardItem(agentId, template, status, nextRun));
-        }
-
-        return agents.Count == 0
-            ? BuildEmptyAgentListCard()
-            : BuildAgentListCard(agents);
-    }
-
-    private static string FormatAgentStatusResult(JsonElement root)
-    {
-        if (TryReadError(root, out var error))
-            return $"Agent status failed: {error}";
+            return ToTextContent($"Agent status failed: {error}");
 
         var agentId = ReadString(root, "agent_id") ?? "unknown-agent";
         var template = ReadString(root, "template") ?? "unknown-template";
@@ -774,79 +763,99 @@ public static class AgentBuilderCardFlow
         var lastRunAt = ReadString(root, "last_run_at") ?? "n/a";
         var nextRunAt = ReadString(root, "next_scheduled_run") ?? "n/a";
         var errorCount = ReadString(root, "error_count") ?? "0";
-        var lastError = ReadString(root, "last_error");
-        var note = ReadString(root, "note");
+        var lastError = NormalizeOptional(ReadString(root, "last_error"));
+        var note = NormalizeOptional(ReadString(root, "note"));
 
-        var lines = new List<string>
+        var body = new StringBuilder();
+        body.Append($"- Agent ID: `{agentId}`\n");
+        body.Append($"- Template: `{template}`\n");
+        body.Append($"- Status: `{status}`\n");
+        body.Append($"- Schedule: `{scheduleCron}` ({scheduleTimezone})\n");
+        body.Append($"- Last run: `{lastRunAt}`\n");
+        body.Append($"- Next run: `{nextRunAt}`\n");
+        body.Append($"- Error count: `{errorCount}`");
+        if (lastError is not null)
+            body.Append($"\n- Last error: {lastError}");
+        if (note is not null)
+            body.Append("\n\n").Append(note);
+
+        var content = new MessageContent();
+        content.Cards.Add(new CardBlock
         {
-            $"**Agent:** `{agentId}`",
-            $"Template: `{template}`",
-            $"Status: `{status}`",
-            $"Schedule: `{scheduleCron}` ({scheduleTimezone})",
-            $"Last run: `{lastRunAt}`",
-            $"Next run: `{nextRunAt}`",
-            $"Error count: `{errorCount}`",
-        };
+            Kind = CardBlockKind.Section,
+            BlockId = $"agent_status:{agentId}",
+            Title = "Agent Status",
+            Text = body.ToString(),
+        });
 
-        if (!string.IsNullOrWhiteSpace(lastError))
-            lines.Add($"Last error: `{lastError}`");
-        if (!string.IsNullOrWhiteSpace(note))
-            lines.Add(note!);
+        var isDisabled = string.Equals(
+            status,
+            SkillRunnerDefaults.StatusDisabled,
+            StringComparison.OrdinalIgnoreCase);
+        content.Actions.Add(BuildAgentScopedCardAction("Refresh Status", AgentStatusAction, agentId, isPrimary: false));
+        if (isDisabled)
+        {
+            content.Actions.Add(BuildAgentScopedCardAction("Enable", EnableAgentAction, agentId, isPrimary: true));
+        }
+        else
+        {
+            content.Actions.Add(BuildAgentScopedCardAction("Run Now", RunAgentAction, agentId, isPrimary: true));
+            content.Actions.Add(BuildAgentScopedCardAction("Disable", DisableAgentAction, agentId, isPrimary: false));
+        }
+        content.Actions.Add(BuildCardAction("Back to Agents", ListAgentsAction, isPrimary: false));
 
-        return BuildInfoCard(
-            "Agent Status",
-            string.Join("\n", lines),
-            string.Equals(status, SkillRunnerDefaults.StatusDisabled, StringComparison.OrdinalIgnoreCase) ? "grey" : "green",
-            BuildStatusCardActions(agentId, template, status));
+        // The card-flow path keeps the explicit confirmation step before deletion (vs. the typed
+        // /agent-status path's direct delete) so the per-agent template is carried along to the
+        // confirmation card. Danger styling matches Lark's red-button affordance.
+        var deleteButton = BuildAgentScopedCardAction("Delete", ConfirmDeleteAgentAction, agentId, isPrimary: false);
+        deleteButton.IsDanger = true;
+        deleteButton.Arguments["template"] = template;
+        content.Actions.Add(deleteButton);
+        return content;
     }
 
-    private static string FormatRunAgentResult(JsonElement root)
+    private static MessageContent FormatRunAgentResult(JsonElement root)
     {
         if (TryReadError(root, out var error))
-            return $"Run agent failed: {error}";
+            return ToTextContent($"Run agent failed: {error}");
 
         var agentId = ReadString(root, "agent_id") ?? "unknown-agent";
         var template = ReadString(root, "template") ?? "unknown-template";
         var note = ReadString(root, "note") ?? "Manual run dispatched.";
 
-        return BuildInfoCard(
-            "Run Triggered",
-            $"Agent `{agentId}` (`{template}`)\n{note}",
-            "green",
-            new object[]
-            {
-                BuildButton("Back to Agents", "default", new
-                {
-                    agent_builder_action = ListAgentsAction,
-                }),
-                BuildButton("Refresh Status", "primary", new
-                {
-                    agent_builder_action = AgentStatusAction,
-                    agent_id = agentId,
-                }),
-            });
+        var content = new MessageContent();
+        content.Cards.Add(new CardBlock
+        {
+            Kind = CardBlockKind.Section,
+            BlockId = $"run_triggered:{agentId}",
+            Title = "Run Triggered",
+            Text = $"Agent `{agentId}` (`{template}`)\n\n{note}",
+        });
+        content.Actions.Add(BuildCardAction("Back to Agents", ListAgentsAction, isPrimary: false));
+        content.Actions.Add(BuildAgentScopedCardAction("Refresh Status", AgentStatusAction, agentId, isPrimary: true));
+        return content;
     }
 
-    private static string FormatDisableAgentResult(JsonElement root)
+    private static MessageContent FormatDisableAgentResult(JsonElement root)
     {
         if (TryReadError(root, out var error))
-            return $"Disable agent failed: {error}";
+            return ToTextContent($"Disable agent failed: {error}");
 
         return FormatAgentStatusResult(root);
     }
 
-    private static string FormatEnableAgentResult(JsonElement root)
+    private static MessageContent FormatEnableAgentResult(JsonElement root)
     {
         if (TryReadError(root, out var error))
-            return $"Enable agent failed: {error}";
+            return ToTextContent($"Enable agent failed: {error}");
 
         return FormatAgentStatusResult(root);
     }
 
-    private static string FormatDeleteAgentResult(JsonElement root)
+    private static MessageContent FormatDeleteAgentResultAsList(JsonElement root)
     {
         if (TryReadError(root, out var error))
-            return $"Delete agent failed: {error}";
+            return ToTextContent($"Delete agent failed: {error}");
 
         var status = ReadString(root, "status") ?? "accepted";
         var agentId = ReadString(root, "agent_id") ?? "unknown-agent";
@@ -866,33 +875,14 @@ public static class AgentBuilderCardFlow
         if (!string.IsNullOrWhiteSpace(note))
             lines.Add(note!);
 
-        var noticeMarkdown = string.Join("\n", lines);
-        var agents = ReadAgentList(root);
-        return agents.Count == 0
-            ? BuildEmptyAgentListCard(noticeMarkdown)
-            : BuildAgentListCard(agents, noticeMarkdown);
+        return AgentBuilderCardContent.FormatListAgentsResult(root, string.Join("\n", lines));
     }
 
-    private static bool TryReadError(JsonElement root, out string error)
-    {
-        error = ReadString(root, "error") ?? string.Empty;
-        return error.Length > 0;
-    }
+    private static bool TryReadError(JsonElement root, out string error) =>
+        AgentBuilderJson.TryReadError(root, out error);
 
-    private static string? ReadString(JsonElement element, string propertyName)
-    {
-        if (!element.TryGetProperty(propertyName, out var property))
-            return null;
-
-        return property.ValueKind switch
-        {
-            JsonValueKind.String => property.GetString(),
-            JsonValueKind.Number => property.GetRawText(),
-            JsonValueKind.True => bool.TrueString,
-            JsonValueKind.False => bool.FalseString,
-            _ => null,
-        };
-    }
+    private static string? ReadString(JsonElement element, string propertyName) =>
+        AgentBuilderJson.TryReadString(element, propertyName);
 
     private static IReadOnlyList<string> ReadStringArray(JsonElement element, string propertyName)
     {
@@ -915,353 +905,51 @@ public static class AgentBuilderCardFlow
             ? "`None`"
             : string.Join(", ", fields.Select(static field => $"`{field}`"));
 
-    private static string BuildAgentListCard(IReadOnlyList<AgentListCardItem> agents, string? noticeMarkdown = null)
-    {
-        var elements = new List<object>
-        {
-            new
-            {
-                tag = "markdown",
-                content = $"You currently have **{agents.Count}** agent(s).",
-            },
-            new
-            {
-                tag = "markdown",
-                content = "Quick commands: `/daily`, `/social-media`, `/agent-status <agent_id>`, `/run-agent <agent_id>`, `/disable-agent <agent_id>`, `/enable-agent <agent_id>`, `/delete-agent <agent_id>`",
-            },
-        };
-
-        if (!string.IsNullOrWhiteSpace(noticeMarkdown))
-        {
-            elements.Insert(0, new
-            {
-                tag = "markdown",
-                content = noticeMarkdown,
-            });
-        }
-
-        foreach (var agent in agents)
-        {
-            elements.Add(new
-            {
-                tag = "markdown",
-                content = $"**{EscapeMarkdown(agent.Template)}**\nID: `{EscapeMarkdown(agent.AgentId)}`\nStatus: `{EscapeMarkdown(agent.Status)}`\nNext run: `{EscapeMarkdown(agent.NextRun)}`",
-            });
-            elements.Add(new
-            {
-                tag = "action",
-                actions = new object[]
-                {
-                    BuildButton("Status", "primary", new
-                    {
-                        agent_builder_action = AgentStatusAction,
-                        agent_id = agent.AgentId,
-                    }),
-                    BuildAgentListPrimaryAction(agent),
-                    BuildButton("Delete", "danger", new
-                    {
-                        agent_builder_action = ConfirmDeleteAgentAction,
-                        agent_id = agent.AgentId,
-                        template = agent.Template,
-                    }),
-                },
-            });
-        }
-
-        elements.Add(new
-        {
-            tag = "action",
-            actions = new object[]
-            {
-                BuildButton("Refresh List", "default", new
-                {
-                    agent_builder_action = ListAgentsAction,
-                }),
-                BuildButton("Create Daily Report", "default", new
-                {
-                    agent_builder_action = OpenDailyReportFormAction,
-                }),
-                BuildButton("Create Social Media", "default", new
-                {
-                    agent_builder_action = OpenSocialMediaFormAction,
-                }),
-                BuildButton("View Templates", "default", new
-                {
-                    agent_builder_action = ListTemplatesAction,
-                }),
-            },
-        });
-
-        return JsonSerializer.Serialize(new
-        {
-            config = new
-            {
-                wide_screen_mode = true,
-            },
-            header = new
-            {
-                title = new
-                {
-                    tag = "plain_text",
-                    content = "Current Agents",
-                },
-                template = "wathet",
-            },
-            elements,
-        });
-    }
-
-    private static string BuildEmptyAgentListCard()
-    {
-        return BuildEmptyAgentListCard(null);
-    }
-
-    private static string BuildEmptyAgentListCard(string? noticeMarkdown)
-    {
-        var elements = new List<object>();
-        if (!string.IsNullOrWhiteSpace(noticeMarkdown))
-        {
-            elements.Add(new
-            {
-                tag = "markdown",
-                content = noticeMarkdown,
-            });
-        }
-
-        elements.Add(new
-        {
-            tag = "markdown",
-            content = "No agents found yet. Create your first daily report or social media agent from here.",
-        });
-        elements.Add(new
-        {
-            tag = "markdown",
-            content = "Quick commands: `/templates`, `/daily`, `/social-media`, `/agent-status <agent_id>`",
-        });
-        elements.Add(new
-        {
-            tag = "action",
-            actions = new object[]
-            {
-                BuildButton("Create Daily Report", "primary", new
-                {
-                    agent_builder_action = OpenDailyReportFormAction,
-                }),
-                BuildButton("View Templates", "default", new
-                {
-                    agent_builder_action = ListTemplatesAction,
-                }),
-                BuildButton("Create Social Media", "default", new
-                {
-                    agent_builder_action = OpenSocialMediaFormAction,
-                }),
-            },
-        });
-
-        return JsonSerializer.Serialize(new
-        {
-            config = new
-            {
-                wide_screen_mode = true,
-            },
-            header = new
-            {
-                title = new
-                {
-                    tag = "plain_text",
-                    content = "Current Agents",
-                },
-                template = "wathet",
-            },
-            elements,
-        });
-    }
-
-    private static string BuildDeleteConfirmationCard(string agentId, string? template)
+    private static MessageContent BuildDeleteConfirmationCard(string agentId, string? template)
     {
         var templateLabel = NormalizeOptional(template) ?? "unknown-template";
-        return BuildInfoCard(
-            "Delete Agent",
-            $"Delete agent `{EscapeMarkdown(agentId)}` from template `{EscapeMarkdown(templateLabel)}`?\nThis will disable scheduling, revoke the Nyx API key, and tombstone the registry entry.",
-            "red",
-            new object[]
-            {
-                BuildButton("Confirm Delete", "danger", new
-                {
-                    agent_builder_action = DeleteAgentAction,
-                    agent_id = agentId,
-                }),
-                BuildButton("Back to Agents", "default", new
-                {
-                    agent_builder_action = ListAgentsAction,
-                }),
-            });
-    }
-
-    private static string BuildInfoCard(
-        string title,
-        string markdown,
-        string template,
-        object[] actions)
-    {
-        return JsonSerializer.Serialize(new
+        var content = new MessageContent();
+        content.Cards.Add(new CardBlock
         {
-            config = new
-            {
-                wide_screen_mode = true,
-            },
-            header = new
-            {
-                title = new
-                {
-                    tag = "plain_text",
-                    content = title,
-                },
-                template,
-            },
-            elements = new object[]
-            {
-                new
-                {
-                    tag = "markdown",
-                    content = markdown,
-                },
-                new
-                {
-                    tag = "action",
-                    actions,
-                },
-            },
+            Kind = CardBlockKind.Section,
+            BlockId = $"delete_confirm:{agentId}",
+            Title = "Delete Agent",
+            Text =
+                $"Delete agent `{agentId}` from template `{templateLabel}`?\n\n" +
+                "This will disable scheduling, revoke the Nyx API key, and tombstone the registry entry.",
         });
+        var confirmButton = BuildAgentScopedCardAction("Confirm Delete", DeleteAgentAction, agentId, isPrimary: false);
+        confirmButton.IsDanger = true;
+        content.Actions.Add(confirmButton);
+        content.Actions.Add(BuildCardAction("Back to Agents", ListAgentsAction, isPrimary: false));
+        return content;
     }
 
-    private static object BuildButton(string label, string style, object value) =>
-        new
-        {
-            tag = "button",
-            type = style,
-            text = new
-            {
-                tag = "plain_text",
-                content = label,
-            },
-            value,
-        };
-
-    private static object BuildLinkButton(string label, string style, string url) =>
-        new
-        {
-            tag = "button",
-            type = style,
-            text = new
-            {
-                tag = "plain_text",
-                content = label,
-            },
-            multi_url = new
-            {
-                url,
-                pc_url = url,
-                ios_url = url,
-                android_url = url,
-            },
-        };
-
-    private static string EscapeMarkdown(string value) =>
-        value
-            .Replace("\\", "\\\\", StringComparison.Ordinal)
-            .Replace("`", "\\`", StringComparison.Ordinal);
-
-    private static object[] BuildStatusCardActions(string agentId, string template, string status)
+    private static ActionElement BuildCardAction(string label, string agentBuilderAction, bool isPrimary)
     {
-        var actions = new List<object>
+        var button = new ActionElement
         {
-            BuildButton("Refresh Status", "default", new
-            {
-                agent_builder_action = AgentStatusAction,
-                agent_id = agentId,
-            }),
+            Kind = ActionElementKind.Button,
+            ActionId = agentBuilderAction,
+            Label = label,
+            IsPrimary = isPrimary,
         };
-
-        if (string.Equals(status, SkillRunnerDefaults.StatusDisabled, StringComparison.OrdinalIgnoreCase))
-        {
-            actions.Add(BuildButton("Enable Agent", "primary", new
-            {
-                agent_builder_action = EnableAgentAction,
-                agent_id = agentId,
-            }));
-        }
-        else
-        {
-            actions.Add(BuildButton("Run Now", "primary", new
-            {
-                agent_builder_action = RunAgentAction,
-                agent_id = agentId,
-            }));
-            actions.Add(BuildButton("Disable Agent", "default", new
-            {
-                agent_builder_action = DisableAgentAction,
-                agent_id = agentId,
-            }));
-        }
-
-        actions.Add(BuildButton("Back to Agents", "default", new
-        {
-            agent_builder_action = ListAgentsAction,
-        }));
-        actions.Add(BuildButton("Delete Agent", "danger", new
-        {
-            agent_builder_action = ConfirmDeleteAgentAction,
-            agent_id = agentId,
-            template,
-        }));
-
-        return actions.ToArray();
+        button.Arguments["agent_builder_action"] = agentBuilderAction;
+        return button;
     }
 
-    private static object BuildAgentListPrimaryAction(AgentListCardItem agent)
+    private static ActionElement BuildAgentScopedCardAction(
+        string label,
+        string agentBuilderAction,
+        string agentId,
+        bool isPrimary)
     {
-        if (string.Equals(agent.Status, SkillRunnerDefaults.StatusDisabled, StringComparison.OrdinalIgnoreCase))
-        {
-            return BuildButton("Enable", "default", new
-            {
-                agent_builder_action = EnableAgentAction,
-                agent_id = agent.AgentId,
-            });
-        }
-
-        return BuildButton("Run Now", "default", new
-        {
-            agent_builder_action = RunAgentAction,
-            agent_id = agent.AgentId,
-        });
+        var button = BuildCardAction(label, agentBuilderAction, isPrimary);
+        button.Arguments["agent_id"] = agentId;
+        return button;
     }
 
-    private static IReadOnlyList<AgentListCardItem> ReadAgentList(JsonElement root)
-    {
-        if (!root.TryGetProperty("agents", out var agentsElement) ||
-            agentsElement.ValueKind != JsonValueKind.Array)
-            return Array.Empty<AgentListCardItem>();
-
-        var agents = new List<AgentListCardItem>();
-        foreach (var item in agentsElement.EnumerateArray())
-        {
-            var agentId = ReadString(item, "agent_id") ?? "unknown-agent";
-            var template = ReadString(item, "template") ?? "unknown-template";
-            var status = ReadString(item, "status") ?? "unknown";
-            var nextRun = ReadString(item, "next_scheduled_run") ?? "pending";
-            agents.Add(new AgentListCardItem(agentId, template, status, nextRun));
-        }
-
-        return agents;
-    }
 }
-
-public sealed record AgentListCardItem(
-    string AgentId,
-    string Template,
-    string Status,
-    string NextRun);
 
 public sealed record AgentBuilderFlowDecision(
     bool RequiresToolExecution,

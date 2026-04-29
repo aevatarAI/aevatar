@@ -223,6 +223,14 @@ public sealed class StudioMemberBindingContinuationServiceTests
             return Task.CompletedTask;
         }
 
+        public Task ReassignTeamAsync(
+            string scopeId,
+            string memberId,
+            string? fromTeamId,
+            string? toTeamId,
+            CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
         public sealed record CompletedCall(
             string ScopeId,
             string MemberId,

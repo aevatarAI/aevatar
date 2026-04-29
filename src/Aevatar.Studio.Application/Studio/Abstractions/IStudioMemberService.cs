@@ -101,4 +101,17 @@ public interface IStudioMemberService
         string memberId,
         string revisionId,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Patches a member's properties — currently the team assignment
+    /// (ADR-0017 §Q6). Merge Patch semantics: <c>request.TeamId</c> absent
+    /// means "no change", <c>request.TeamId.Value == null</c> means
+    /// "unassign", and a non-empty value means "assign / reassign".
+    /// Returns the updated member detail.
+    /// </summary>
+    Task<StudioMemberDetailResponse> UpdateAsync(
+        string scopeId,
+        string memberId,
+        UpdateStudioMemberRequest request,
+        CancellationToken ct = default);
 }
