@@ -129,7 +129,7 @@ public static partial class NyxIdChatEndpoints
                 CorrelationId = activity.OutboundDelivery.CorrelationId,
             };
 
-            var actorId = BuildRelayConversationActorId(relayIdentity, activity.Conversation.CanonicalKey);
+            var actorId = BuildRelayConversationActorId(relayIdentity, scopeId, activity.Conversation.CanonicalKey);
             var actor = await actorRuntime.GetAsync(actorId)
                 ?? await actorRuntime.CreateAsync<ConversationGAgent>(actorId, ct);
             var command = new EventEnvelope
@@ -200,12 +200,16 @@ public static partial class NyxIdChatEndpoints
         return null;
     }
 
-    private static string BuildRelayConversationActorId(string relayIdentity, string canonicalKey)
+    private static string BuildRelayConversationActorId(
+        string relayIdentity,
+        string validatedScopeId,
+        string canonicalKey)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(relayIdentity);
+        ArgumentException.ThrowIfNullOrWhiteSpace(validatedScopeId);
         ArgumentException.ThrowIfNullOrWhiteSpace(canonicalKey);
 
-        var actorKey = $"{relayIdentity.Trim()}\n{canonicalKey.Trim()}";
+        var actorKey = $"{relayIdentity.Trim()}\n{validatedScopeId.Trim()}\n{canonicalKey.Trim()}";
         var relayHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(actorKey)))
             .ToLowerInvariant();
         return $"channel-conversation:relay:{relayHash}";

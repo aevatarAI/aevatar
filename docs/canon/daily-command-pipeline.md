@@ -164,7 +164,7 @@ QA 关注点：
 | `499` | — | 客户端取消 | — |
 | `500 Internal Server Error` | — | handler 未捕获异常 | 日志含 `Relay handler unexpected error` |
 
-**派发**：成功后构造 `NyxRelayInboundActivity`（含 reply token、user access token、normalized `ChatActivity`、validated scope），包装成 `EventEnvelope` 后通过 `IActorDispatchPort.DispatchAsync` 投递到 `ConversationGAgent` inbox。`IActorRuntime` 只负责 lookup/create；actor id 由 relay identity + conversation canonical key 生成 opaque hash，不承载 scope ownership。
+**派发**：成功后构造 `NyxRelayInboundActivity`（含 reply token、user access token、normalized `ChatActivity`、validated scope），包装成 `EventEnvelope` 后通过 `IActorDispatchPort.DispatchAsync` 投递到 `ConversationGAgent` inbox。`IActorRuntime` 只负责 lookup/create；actor id 由 relay identity + validated scope + conversation canonical key 生成 opaque hash，用于隔离同一 Nyx API key 下的多 scope 会话，但不作为可解析的 ownership 事实。
 
 ### 阶段 ③ aevatar 内部业务路由
 

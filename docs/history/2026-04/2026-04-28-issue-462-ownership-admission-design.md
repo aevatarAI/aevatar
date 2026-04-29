@@ -29,7 +29,7 @@ The current branch narrows relay admission and routing:
 - carry the verified scope as typed `TransportExtras.validated_scope_id`;
 - resolve downstream channel bot registration by `nyx_agent_api_key_id + validated_scope_id`;
 - reject scope mismatches or ambiguous registration matches;
-- build relay conversation actor ids from relay identity plus canonical conversation key, not from scope ownership;
+- build relay conversation actor ids from relay identity, verified scope, and canonical conversation key as an opaque partition key;
 - deliver relay inbound envelopes through `IActorDispatchPort`.
 
 ## Explicitly Out Of Scope
@@ -53,9 +53,9 @@ This removes the security-sensitive projection fallback. Projection lag or dupli
 
 ### Scope Is Typed Context, Not Actor Identity
 
-`scope_id` is carried as typed `validated_scope_id` in the relay activity context. It is not encoded into the relay conversation actor id.
+`scope_id` is carried as typed `validated_scope_id` in the relay activity context. It is also part of the opaque actor-address hash so that the same Nyx API key and same platform conversation cannot share one `ConversationGAgent` across scopes.
 
-The actor id is an opaque address derived from relay identity and the canonical conversation key. Ownership/admission decisions must use the verified typed scope, not actor id structure.
+The actor id is an opaque address derived from relay identity, verified scope, and the canonical conversation key. Ownership/admission decisions must use the verified typed scope and registration validation, not actor id parsing or suffix structure.
 
 ### Downstream Registration Must Match The Verified Scope
 
