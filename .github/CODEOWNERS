@@ -1,26 +1,29 @@
 # Default fallback — any path with no other rule routes here
-*                                                       @loning
+*                                                       @louis4li
 
-# ─── Architecture canon & ADRs (CEO sign-off) ──────────────
-/CLAUDE.md                                              @loning
-/docs/canon/                                            @loning
-/docs/adr/                                              @loning
+# ─── Architecture canon & ADRs ─────────────────────────────
+# Two backend leads as joint owners — one of them must approve
+/CLAUDE.md                                              @louis4li @eanzhao
+/docs/canon/                                            @louis4li @eanzhao
+/docs/adr/                                              @louis4li @eanzhao
 
 # ─── Core actor / channel runtime (highest blast radius) ───
-/agents/Aevatar.GAgents.ChannelRuntime/                 @louis4li @loning
-/agents/channels/                                       @louis4li @loning
-/agents/Aevatar.GAgents.NyxidChat/                      @louis4li @loning
-/agents/Aevatar.GAgents.NyxIdRelay/                     @louis4li @loning
-**/*.proto                                              @louis4li @loning
+# louis4li + eanzhao mutual review pair: when one authors,
+# only the other can satisfy the code-owner approval.
+/agents/Aevatar.GAgents.ChannelRuntime/                 @louis4li @eanzhao
+/agents/channels/                                       @louis4li @eanzhao
+/agents/Aevatar.GAgents.NyxidChat/                      @louis4li @eanzhao
+/agents/Aevatar.GAgents.NyxIdRelay/                     @louis4li @eanzhao
+**/*.proto                                              @louis4li @eanzhao
 
 # ─── Platform internals (CQRS, projection, scripting) ──────
-/src/platform/                                          @louis4li
-/src/Aevatar.Studio.Application/                        @louis4li @loning
+/src/platform/                                          @louis4li @eanzhao
+/src/Aevatar.Studio.Application/                        @louis4li @eanzhao
 
 # ─── Studio frontend (existing review pair) ────────────────
 /apps/aevatar-console-web/                              @AbigailDeng @potter-sun
 
 # ─── CI guards & engineering discipline ────────────────────
-/tools/ci/                                              @louis4li @loning
-/.github/workflows/                                     @louis4li @loning
-/.github/CODEOWNERS                                     @loning
+/tools/ci/                                              @louis4li @eanzhao
+/.github/workflows/                                     @louis4li @eanzhao
+/.github/CODEOWNERS                                     @louis4li @eanzhao
