@@ -10,7 +10,13 @@
     <InternalsVisibleTo Include="Aevatar.GAgents.ChannelRuntime.Tests" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Aevatar.GAgents.Channel.Abstractions\Aevatar.GAgents.Channel.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.GAgents.Channel.Identity.Abstractions\Aevatar.GAgents.Channel.Identity.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Core\Aevatar.CQRS.Projection.Core.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Core.Abstractions\Aevatar.CQRS.Projection.Core.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Runtime.Abstractions\Aevatar.CQRS.Projection.Runtime.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Stores.Abstractions\Aevatar.CQRS.Projection.Stores.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Core\Aevatar.Foundation.Core.csproj" />
   </ItemGroup>
@@ -21,12 +27,17 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Http" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+  </ItemGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
   <ItemGroup>
     <Protobuf Include="protos\*.proto"
               GrpcServices="None"
               ProtoRoot="protos"
-              AdditionalImportDirs="..\Aevatar.GAgents.Channel.Identity.Abstractions\protos" />
+              AdditionalImportDirs="..\Aevatar.GAgents.Channel.Identity.Abstractions\protos;..\Aevatar.GAgents.Channel.Abstractions\protos" />
   </ItemGroup>
 </Project>

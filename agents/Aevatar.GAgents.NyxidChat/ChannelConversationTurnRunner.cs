@@ -4,6 +4,7 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Runtime;
@@ -61,6 +62,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _ = TrySendImmediateLarkReactionAsync(activity, registration, ct);
 
         var inbound = ToInboundMessage(activity);
+        if (await TryHandleSlashCommandAsync(activity, inbound, registration, runtimeContext, ct) is { } slashResult)
+            return slashResult;
+
         if (await TryHandleWorkflowResumeAsync(inbound, ct) is { } workflowResumeResult)
             return workflowResumeResult;
 
@@ -98,6 +102,103 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
     public Task<ConversationTurnResult> RunInboundAsync(ChatActivity activity, CancellationToken ct) =>
         RunInboundAsync(activity, ConversationTurnRuntimeContext.Empty, ct);
+
+    // ─── Identity slash commands (/init, /unbind) ───
+    //
+    // ADR-0017 §Decision: when per-user binding is enabled, /init and /unbind
+    // are routed before the LLM so the bot owner's bot-shared mode is bypassed
+    // for unbound senders. Identity ports are resolved lazily through the
+    // service provider so deployments that have not enabled binding fall
+    // through to the legacy flow without the runner constructor changing.
+    private async Task<ConversationTurnResult?> TryHandleSlashCommandAsync(
+        ChatActivity activity,
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
+    {
+        var trimmed = (inbound.Text ?? string.Empty).Trim();
+        if (string.IsNullOrEmpty(trimmed))
+            return null;
+
+        var isInit = trimmed.Equals("/init", StringComparison.OrdinalIgnoreCase) ||
+                     trimmed.StartsWith("/init ", StringComparison.OrdinalIgnoreCase);
+        var isUnbind = trimmed.Equals("/unbind", StringComparison.OrdinalIgnoreCase) ||
+                       trimmed.StartsWith("/unbind ", StringComparison.OrdinalIgnoreCase);
+        if (!isInit && !isUnbind)
+            return null;
+
+        var queryPort = _services.GetService<IExternalIdentityBindingQueryPort>();
+        var broker = _services.GetService<INyxIdCapabilityBroker>();
+        if (queryPort is null || broker is null)
+        {
+            _logger.LogDebug(
+                "Slash command observed but identity ports are not registered; falling through to default flow: command={Command}",
+                isInit ? "/init" : "/unbind");
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(inbound.SenderId) || string.IsNullOrWhiteSpace(inbound.Platform))
+        {
+            _logger.LogWarning(
+                "Slash command rejected: missing sender_id or platform on inbound message");
+            return null;
+        }
+
+        var subject = new ExternalSubjectRef
+        {
+            Platform = inbound.Platform.Trim().ToLowerInvariant(),
+            Tenant = string.Empty,
+            ExternalUserId = inbound.SenderId.Trim(),
+        };
+
+        string replyText;
+        try
+        {
+            if (isInit)
+            {
+                var existing = await queryPort.ResolveAsync(subject, ct);
+                if (existing is not null)
+                {
+                    replyText = "已绑定 NyxID 账号。需要切换账号请先发送 /unbind 再发送 /init。";
+                }
+                else
+                {
+                    var challenge = await broker.StartExternalBindingAsync(subject, ct);
+                    replyText = $"打开此链接完成 NyxID 登录(5 分钟内有效):\n{challenge.AuthorizeUrl}";
+                }
+            }
+            else
+            {
+                var existing = await queryPort.ResolveAsync(subject, ct);
+                if (existing is null)
+                {
+                    replyText = "当前未绑定 NyxID 账号。";
+                }
+                else
+                {
+                    await broker.RevokeBindingAsync(subject, ct);
+                    replyText = "已解绑 NyxID 账号。如需重新绑定,发送 /init。";
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Slash command handling failed: command={Command}", isInit ? "/init" : "/unbind");
+            replyText = "处理 /init 或 /unbind 时遇到内部错误,请稍后重试。";
+        }
+
+        var outbound = new MessageContent { Text = replyText };
+        var sentSeed = string.IsNullOrWhiteSpace(activity.Id) ? Guid.NewGuid().ToString("N") : activity.Id;
+        return await SendReplyAsync(
+            outbound,
+            sentSeed,
+            activity.Conversation,
+            inbound,
+            registration,
+            runtimeContext,
+            ct);
+    }
 
     public async Task<ConversationTurnResult> RunLlmReplyAsync(
         LlmReplyReadyEvent reply,

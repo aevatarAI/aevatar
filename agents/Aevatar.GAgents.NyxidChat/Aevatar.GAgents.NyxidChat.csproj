@@ -13,6 +13,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.GAgents.Channel.Abstractions\Aevatar.GAgents.Channel.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.GAgents.Channel.Identity.Abstractions\Aevatar.GAgents.Channel.Identity.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.GAgents.Channel.Runtime\Aevatar.GAgents.Channel.Runtime.csproj" />
     <ProjectReference Include="..\channels\Aevatar.GAgents.Channel.NyxIdRelay\Aevatar.GAgents.Channel.NyxIdRelay.csproj" />
     <ProjectReference Include="..\platforms\Aevatar.GAgents.Platform.Lark\Aevatar.GAgents.Platform.Lark.csproj" />

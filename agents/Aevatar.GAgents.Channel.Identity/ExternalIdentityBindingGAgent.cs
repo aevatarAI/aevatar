@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;

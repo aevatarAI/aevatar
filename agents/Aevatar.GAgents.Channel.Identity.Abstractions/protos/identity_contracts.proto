@@ -4,21 +4,10 @@ package aevatar.gagents.channel.identity.abstractions;
 
 option csharp_namespace = "Aevatar.GAgents.Channel.Identity.Abstractions";
 
-// Platform-level identity reference for an external chat-platform user.
-// Keying domain for ExternalIdentityBindingGAgent (one binding per
-// (platform, tenant, external_user_id)). Independent of any specific bot —
-// the same Lark user holds one NyxID identity across all bots they talk to.
-// See ADR-0017 §Actor Architecture.
-message ExternalSubjectRef {
-  // Platform name (lower-case ASCII): "lark", "telegram", "discord", "slack".
-  string platform = 1;
-  // Tenant identifier scoped by platform (e.g. Lark open_tenant_id,
-  // Discord guild_id). Empty allowed only for platforms without tenant scope.
-  string tenant = 2;
-  // External user identifier scoped by (platform, tenant) (e.g. Lark
-  // open_user_id, Telegram user_id, Discord user.id).
-  string external_user_id = 3;
-}
+// ExternalSubjectRef lives in Channel.Abstractions (channel_contracts.proto)
+// because Identity is a consumer of channel concepts — see ADR-0017 §Actor
+// Architecture. C# callers reach it via the `Aevatar.GAgents.Channel.Abstractions`
+// namespace; proto files reach it via `aevatar.gagents.channel.abstractions.ExternalSubjectRef`.
 
 // Opaque pointer issued by NyxID broker on successful binding completion.
 // aevatar holds binding_id in ExternalIdentityBindingGAgent state; the

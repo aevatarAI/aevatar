@@ -1,3 +1,5 @@
+using Aevatar.GAgents.Channel.Abstractions;
+
 namespace Aevatar.GAgents.Channel.Identity.Abstractions;
 
 /// <summary>

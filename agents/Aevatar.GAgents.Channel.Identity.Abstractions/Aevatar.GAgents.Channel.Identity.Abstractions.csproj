@@ -9,6 +9,7 @@
     <WarningsAsErrors>$(WarningsAsErrors);CS1591</WarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Aevatar.GAgents.Channel.Abstractions\Aevatar.GAgents.Channel.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup>
@@ -19,6 +20,9 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
-    <Protobuf Include="protos\*.proto" GrpcServices="None" ProtoRoot="protos" />
+    <Protobuf Include="protos\*.proto"
+              GrpcServices="None"
+              ProtoRoot="protos"
+              AdditionalImportDirs="..\Aevatar.GAgents.Channel.Abstractions\protos" />
   </ItemGroup>
 </Project>

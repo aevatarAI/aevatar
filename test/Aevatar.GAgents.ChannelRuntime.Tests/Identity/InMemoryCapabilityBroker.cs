@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;

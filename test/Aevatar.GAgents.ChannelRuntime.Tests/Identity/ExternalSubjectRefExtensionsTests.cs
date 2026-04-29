@@ -1,4 +1,5 @@
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.GAgents.Channel.Abstractions;
 using FluentAssertions;
 using Xunit;
 
