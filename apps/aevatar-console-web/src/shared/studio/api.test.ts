@@ -740,6 +740,7 @@ describe('studioApi host-session requests', () => {
     const result = await studioApi.bindScopeScript({
       scopeId: 'scope-1',
       displayName: 'script-1',
+      serviceId: 'script-1',
       scriptId: 'script-1',
       scriptRevision: 'rev-1',
       revisionId: 'rev-1',
@@ -766,6 +767,7 @@ describe('studioApi host-session requests', () => {
     expect(JSON.parse(String(init?.body))).toEqual({
       implementationKind: 'script',
       displayName: 'script-1',
+      serviceId: 'script-1',
       script: {
         scriptId: 'script-1',
         scriptRevision: 'rev-1',

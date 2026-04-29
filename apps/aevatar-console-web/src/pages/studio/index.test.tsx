@@ -3520,7 +3520,7 @@ describe("StudioPage", () => {
     });
     expect(
       screen.getByText(
-        "Script starts as a named draft. It becomes a callable member only after Save revision is catalog-applied and Bind succeeds.",
+        "Script starts as a named draft. It becomes a callable member only after Save script is catalog-applied and Bind succeeds.",
       ),
     ).toBeTruthy();
     expect(screen.getByText(/Script id: refund-handler/)).toBeTruthy();
@@ -3811,6 +3811,30 @@ describe("StudioPage", () => {
       expect(screen.getByText("services:default")).toBeTruthy();
     });
     expect(screen.queryByText("services:default,billing-api")).toBeNull();
+  });
+
+  it("keeps Invoke open for a bound member while endpoint discovery is pending", async () => {
+    mockServicesApi.listServices.mockResolvedValueOnce([
+      {
+        serviceId: "script-alpha",
+        displayName: "script-alpha",
+        deploymentStatus: "Active",
+        primaryActorId: "actor-script-alpha",
+        endpoints: [],
+      },
+    ]);
+
+    renderStudioPage(
+      "/studio?scopeId=scope-1&memberId=script-alpha&step=invoke&tab=invoke"
+    );
+
+    expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("service:script-alpha")).toBeTruthy();
+      expect(screen.getByText("services:script-alpha")).toBeTruthy();
+      expect(screen.getByText("endpoint:chat")).toBeTruthy();
+    });
+    expect(screen.queryByText(/还不能直接调用/)).toBeNull();
   });
 
   it("surfaces the current workflow as a bind candidate before any published service exists", async () => {
@@ -5455,9 +5479,9 @@ describe("StudioPage", () => {
         expect.objectContaining({
           scopeId: "scope-1",
           displayName: "script-alpha",
+          serviceId: "script-alpha",
           scriptId: "script-alpha",
           scriptRevision: "rev-1",
-          revisionId: "rev-1",
         })
       );
     });

@@ -480,7 +480,7 @@ describe('StudioWorkflowBuildPanel', () => {
 
     expect(screen.getByText('Validate current source')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Save revision' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save script' })).toBeDisabled();
   });
 
   it('offers Add script from the empty Script build state', () => {
@@ -546,7 +546,7 @@ describe('StudioWorkflowBuildPanel', () => {
       (screen.getByLabelText('Mock script code editor') as HTMLTextAreaElement).value,
     ).toContain('DraftBehavior');
     expect(screen.getByText('Validate current source')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save revision' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save script' })).toBeDisabled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
 
@@ -559,9 +559,9 @@ describe('StudioWorkflowBuildPanel', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Save revision' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Save script' })).toBeEnabled();
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Save revision' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
 
     await waitFor(() => {
       expect(mockedScriptsApi.saveScript).toHaveBeenCalledWith(
@@ -572,6 +572,9 @@ describe('StudioWorkflowBuildPanel', () => {
         }),
       );
     });
+    expect(mockedScriptsApi.saveScript.mock.calls[0]?.[1]).not.toHaveProperty(
+      'revisionId',
+    );
     await waitFor(() => {
       expect(handleDraftSaved).toHaveBeenCalledWith('orders-script');
     });
@@ -718,11 +721,11 @@ describe('StudioWorkflowBuildPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
     await waitFor(
       () => {
-        expect(screen.getByRole('button', { name: 'Save revision' })).toBeEnabled();
+        expect(screen.getByRole('button', { name: 'Save script' })).toBeEnabled();
       },
       { timeout: 3000 },
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Save revision' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
 
     expect(await screen.findByText(/Waiting for catalog/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeDisabled();
@@ -774,11 +777,11 @@ describe('StudioWorkflowBuildPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
     await waitFor(
       () => {
-        expect(screen.getByRole('button', { name: 'Save revision' })).toBeEnabled();
+        expect(screen.getByRole('button', { name: 'Save script' })).toBeEnabled();
       },
       { timeout: 3000 },
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Save revision' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
 
     expect(await screen.findByText('Catalog rejected the revision.')).toBeInTheDocument();
     expect(screen.getByText('Save needs attention')).toBeInTheDocument();
@@ -848,11 +851,11 @@ describe('StudioWorkflowBuildPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
     await waitFor(
       () => {
-        expect(screen.getByRole('button', { name: 'Save revision' })).toBeEnabled();
+        expect(screen.getByRole('button', { name: 'Save script' })).toBeEnabled();
       },
       { timeout: 3000 },
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Save revision' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
 
     expect(await screen.findByText(/checking again in 1s/)).toBeInTheDocument();
     await waitFor(
@@ -921,9 +924,9 @@ describe('StudioWorkflowBuildPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Validate' }));
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Save revision' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Save script' })).toBeEnabled();
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Save revision' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save script' }));
     await waitFor(() => {
       expect(mockedScriptsApi.observeSaveScript).toHaveBeenCalled();
     });
@@ -953,7 +956,7 @@ describe('StudioWorkflowBuildPanel', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Save revision' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Save script' })).toBeDisabled();
     });
     expect(screen.queryByText(/Save applied/)).toBeNull();
     expect(screen.getByRole('button', { name: 'Continue to Bind' })).toBeDisabled();

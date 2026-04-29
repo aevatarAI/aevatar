@@ -1447,6 +1447,7 @@ export const studioApi = {
           compactObject({
             implementationKind: "script",
             displayName: trimOptional(input.displayName),
+            serviceId: trimOptional(input.serviceId),
             script: compactObject({
               scriptId: input.scriptId.trim(),
               scriptRevision: input.scriptRevision.trim(),

@@ -620,7 +620,7 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
     expect(header).toBeTruthy();
 
     const headerScope = within(header as HTMLElement);
-    expect(headerScope.getByText(/^draft-/)).toBeTruthy();
+    expect(headerScope.getByText('not saved')).toBeTruthy();
     expect(headerScope.getByText('嵌入式 Host')).toBeTruthy();
     expect(headerScope.getByText('Scope 1626c177…b0d6')).toBeTruthy();
     expect(headerScope.getByRole('button', { name: 'New draft' })).toBeTruthy();
@@ -747,9 +747,9 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
       expect(mockedStudioApi.bindScopeScript).toHaveBeenCalledWith({
         scopeId: 'scope-1',
         displayName: 'script-1',
+        serviceId: 'script-1',
         scriptId: 'script-1',
         scriptRevision: 'rev-1',
-        revisionId: 'script-1-rev-1',
       });
     });
 
@@ -795,7 +795,7 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
       expect(mockedScriptsApi.runDraftScript).toHaveBeenCalledWith({
         scopeId: 'scope-1',
         scriptId: 'script-1',
-        scriptRevision: expect.stringMatching(/^draft-/),
+        scriptRevision: undefined,
         source: expect.any(String),
         package: expect.objectContaining({
           format: 'aevatar.scripting.package.v1',

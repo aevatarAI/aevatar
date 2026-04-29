@@ -273,7 +273,7 @@ describe('StudioMemberBindPanel', () => {
     expect(bindSurfaceStyle).not.toContain('height');
     const primaryGrid = screen.getByTestId('studio-bind-primary-grid');
     expect(primaryGrid).toHaveStyle({
-      alignItems: 'start',
+      alignItems: 'stretch',
       display: 'grid',
     });
     expect(primaryGrid.contains(supportingDetailsTitle)).toBe(false);
@@ -409,6 +409,53 @@ describe('StudioMemberBindPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Continue to Invoke' }));
     expect(handleContinueToInvoke).toHaveBeenCalledWith('default', 'chat');
+  });
+
+  it('allows continuing to Invoke while endpoint discovery is pending', async () => {
+    const handleContinueToInvoke = jest.fn();
+
+    renderWithQueryClient(
+      React.createElement(StudioMemberBindPanel, {
+        authSession: {
+          enabled: true,
+          authenticated: true,
+          name: 'Abigail Deng',
+          scopeId: 'scope-1',
+          scopeSource: 'nyxid',
+        },
+        scopeId: 'scope-1',
+        preferredServiceId: 'script-4',
+        onContinueToInvoke: handleContinueToInvoke,
+        services: [
+          {
+            serviceKey: 'scope-1:default:script-4',
+            tenantId: 'scope-1',
+            appId: 'default',
+            namespace: 'default',
+            serviceId: 'script-4',
+            displayName: 'script-4',
+            defaultServingRevisionId: 'rev-script-1',
+            activeServingRevisionId: 'rev-script-1',
+            deploymentId: '',
+            primaryActorId: 'actor-script-4',
+            deploymentStatus: 'Active',
+            endpoints: [],
+            policyIds: [],
+            updatedAt: '2026-04-29T08:00:00Z',
+          },
+        ],
+      }),
+    );
+
+    expect(await screen.findByText('No endpoint data available')).toBeTruthy();
+    const continueButton = screen.getByRole('button', {
+      name: 'Continue to Invoke',
+    });
+    expect(continueButton).not.toBeDisabled();
+
+    fireEvent.click(continueButton);
+
+    expect(handleContinueToInvoke).toHaveBeenCalledWith('script-4', 'chat');
   });
 
   it('does not block current draft smoke tests on published endpoint auth state', async () => {
