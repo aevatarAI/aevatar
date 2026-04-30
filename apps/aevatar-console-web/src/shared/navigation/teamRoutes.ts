@@ -14,6 +14,7 @@ type TeamDetailRouteState = {
   readonly scopeId: string;
   readonly serviceId: string;
   readonly tab: TeamDetailTab;
+  readonly teamId: string;
   readonly workflowId: string;
 };
 
@@ -74,12 +75,14 @@ export function buildTeamsHref(): string {
 }
 
 export function buildTeamCreateHref(options?: {
+  scopeId?: string;
   teamName?: string;
   entryName?: string;
   teamDraftWorkflowId?: string;
   teamDraftWorkflowName?: string;
 }): string {
   return buildHref('/teams/new', {
+    scopeId: options?.scopeId,
     teamName: options?.teamName,
     entryName: options?.entryName,
     teamDraftWorkflowId: options?.teamDraftWorkflowId,
@@ -90,6 +93,7 @@ export function buildTeamCreateHref(options?: {
 export function buildTeamDetailHref(options: {
   memberId?: string;
   scopeId: string;
+  teamId?: string;
   tab?: TeamDetailTab;
   serviceId?: string;
   runId?: string;
@@ -101,6 +105,7 @@ export function buildTeamDetailHref(options: {
   }
 
   return buildHref(`/teams/${encodeURIComponent(scopeId)}`, {
+    teamId: options.teamId,
     memberId: options.memberId,
     workflowId: options.workflowId,
     tab: options.tab,
@@ -127,6 +132,7 @@ export function readTeamDetailRouteState(
     scopeId: trimOptional(params.get('scopeId')) || scopeIdFromPath,
     serviceId: trimOptional(params.get('serviceId')),
     tab: parseTeamTab(params.get('tab'), defaultTab),
+    teamId: trimOptional(params.get('teamId')),
     workflowId: trimOptional(params.get('workflowId')),
   };
 }

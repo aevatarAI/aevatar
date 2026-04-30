@@ -11,13 +11,14 @@ describe("teamRoutes", () => {
       buildTeamDetailHref({
         memberId: " member-alpha ",
         scopeId: " scope-alpha ",
+        teamId: " team-support ",
         workflowId: "workflow-1",
         serviceId: "service-1",
         runId: "run-1",
         tab: "events",
       }),
     ).toBe(
-      "/teams/scope-alpha?memberId=member-alpha&workflowId=workflow-1&tab=events&serviceId=service-1&runId=run-1",
+      "/teams/scope-alpha?teamId=team-support&memberId=member-alpha&workflowId=workflow-1&tab=events&serviceId=service-1&runId=run-1",
     );
   });
 
@@ -33,20 +34,21 @@ describe("teamRoutes", () => {
   it("preserves draft team names when returning to the create page", () => {
     expect(
       buildTeamCreateHref({
+        scopeId: "scope-alpha",
         teamName: "订单助手团队",
         entryName: "订单入口",
         teamDraftWorkflowId: "workflow-7",
         teamDraftWorkflowName: "order-entry-draft",
       }),
     ).toBe(
-      "/teams/new?teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3&teamDraftWorkflowId=workflow-7&teamDraftWorkflowName=order-entry-draft",
+      "/teams/new?scopeId=scope-alpha&teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3&teamDraftWorkflowId=workflow-7&teamDraftWorkflowName=order-entry-draft",
     );
   });
 
   it("reads the team detail route state from path and query", () => {
     expect(
       readTeamDetailRouteState(
-        "?memberId=member-alpha&workflowId=wf-1&serviceId=service-1&runId=run-1&tab=members",
+        "?teamId=team-alpha&memberId=member-alpha&workflowId=wf-1&serviceId=service-1&runId=run-1&tab=members",
         "/teams/scope-alpha",
       ),
     ).toEqual({
@@ -55,6 +57,7 @@ describe("teamRoutes", () => {
       scopeId: "scope-alpha",
       serviceId: "service-1",
       tab: "members",
+      teamId: "team-alpha",
       workflowId: "wf-1",
     });
   });
@@ -71,6 +74,7 @@ describe("teamRoutes", () => {
       scopeId: "scope-alpha",
       serviceId: "",
       tab: "bindings",
+      teamId: "",
       workflowId: "wf-1",
     });
   });
@@ -87,6 +91,7 @@ describe("teamRoutes", () => {
       scopeId: "scope-query",
       serviceId: "",
       tab: "overview",
+      teamId: "",
       workflowId: "wf-2",
     });
   });
@@ -103,6 +108,7 @@ describe("teamRoutes", () => {
       scopeId: "scope-query",
       serviceId: "",
       tab: "overview",
+      teamId: "",
       workflowId: "wf-2",
     });
   });

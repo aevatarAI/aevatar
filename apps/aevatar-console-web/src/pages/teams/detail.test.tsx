@@ -1,1258 +1,249 @@
-import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { message } from "antd";
 import React from "react";
-import { scopesApi } from "@/shared/api/scopesApi";
-import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
-import { servicesApi } from "@/shared/api/servicesApi";
-import { runtimeGAgentApi } from "@/shared/api/runtimeGAgentApi";
-import { history } from "@/shared/navigation/history";
 import { studioApi } from "@/shared/studio/api";
-import { loadDraftRunPayload } from "@/shared/runs/draftRunSession";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import TeamDetailPage from "./detail";
 
-jest.mock("@/shared/graphs/GraphCanvas", () => ({
-  __esModule: true,
-  default: () => {
-    const React = require("react");
-    return React.createElement("div", null, "Graph canvas");
-  },
-}));
-
-function mockCreateRunsCatalog() {
+jest.mock("antd", () => {
+  const actual = jest.requireActual("antd");
   return {
-    scopeId: "scope-1",
-    serviceId: "default",
-    serviceKey: "scope-1:default",
-    displayName: "Support Runtime",
-    runs: [
-      {
-        scopeId: "scope-1",
-        serviceId: "default",
-        runId: "run-current",
-        actorId: "actor-intake",
-        definitionActorId: "definition://support-triage",
-        revisionId: "rev-2",
-        deploymentId: "dep-2",
-        workflowName: "support-triage",
-        completionStatus: "waiting_approval",
-        stateVersion: 2,
-        lastEventId: "evt-2",
-        lastUpdatedAt: "2026-04-09T09:05:00Z",
-        boundAt: "2026-04-09T09:00:00Z",
-        bindingUpdatedAt: "2026-04-09T09:00:00Z",
-        lastSuccess: false,
-        totalSteps: 4,
-        completedSteps: 2,
-        roleReplyCount: 1,
-        lastOutput: "",
-        lastError: "Waiting on approval",
-      },
-      {
-        scopeId: "scope-1",
-        serviceId: "default",
-        runId: "run-good",
-        actorId: "actor-intake-v1",
-        definitionActorId: "definition://support-triage-v1",
-        revisionId: "rev-1",
-        deploymentId: "dep-1",
-        workflowName: "support-triage-v1",
-        completionStatus: "completed",
-        stateVersion: 1,
-        lastEventId: "evt-1",
-        lastUpdatedAt: "2026-04-09T08:55:00Z",
-        boundAt: "2026-04-09T08:50:00Z",
-        bindingUpdatedAt: "2026-04-09T08:50:00Z",
-        lastSuccess: true,
-        totalSteps: 3,
-        completedSteps: 3,
-        roleReplyCount: 1,
-        lastOutput: "Resolved",
-        lastError: "",
-      },
-    ],
-  };
-}
-
-function mockCreateServiceRevisionCatalog(overrides?: Record<string, any>) {
-  return {
-    scopeId: "scope-1",
-    serviceId: "default",
-    serviceKey: "scope-1:default",
-    displayName: "Support Escalation Triage",
-    defaultServingRevisionId: "rev-2",
-    activeServingRevisionId: "rev-2",
-    deploymentId: "dep-2",
-    deploymentStatus: "Active",
-    primaryActorId: "actor-intake",
-    catalogStateVersion: 2,
-    catalogLastEventId: "evt-catalog-2",
-    updatedAt: "2026-04-09T09:00:00Z",
-    revisions: [
-      {
-        revisionId: "rev-2",
-        implementationKind: "workflow",
-        status: "Published",
-        artifactHash: "hash-2",
-        failureReason: "",
-        isDefaultServing: true,
-        isActiveServing: true,
-        isServingTarget: true,
-        allocationWeight: 100,
-        servingState: "Active",
-        deploymentId: "dep-2",
-        primaryActorId: "actor-intake",
-        createdAt: "2026-04-09T08:00:00Z",
-        preparedAt: "2026-04-09T08:01:00Z",
-        publishedAt: "2026-04-09T08:02:00Z",
-        retiredAt: null,
-        workflowName: "support-triage",
-        workflowDefinitionActorId: "definition://support-triage",
-        inlineWorkflowCount: 1,
-        scriptId: "",
-        scriptRevision: "",
-        scriptDefinitionActorId: "",
-        scriptSourceHash: "",
-        staticActorTypeName: "",
-      },
-      {
-        revisionId: "rev-1",
-        implementationKind: "workflow",
-        status: "Published",
-        artifactHash: "hash-1",
-        failureReason: "",
-        isDefaultServing: false,
-        isActiveServing: false,
-        isServingTarget: false,
-        allocationWeight: 0,
-        servingState: "",
-        deploymentId: "",
-        primaryActorId: "actor-intake-v1",
-        createdAt: "2026-04-08T08:00:00Z",
-        preparedAt: "2026-04-08T08:01:00Z",
-        publishedAt: "2026-04-08T08:02:00Z",
-        retiredAt: null,
-        workflowName: "support-triage-v1",
-        workflowDefinitionActorId: "definition://support-triage-v1",
-        inlineWorkflowCount: 1,
-        scriptId: "",
-        scriptRevision: "",
-        scriptDefinitionActorId: "",
-        scriptSourceHash: "",
-        staticActorTypeName: "",
-      },
-    ],
-    ...overrides,
-  };
-}
-
-function mockCreateMembersCatalog() {
-  return {
-    scopeId: "scope-1",
-    members: [
-      {
-        memberId: "member-support",
-        scopeId: "scope-1",
-        displayName: "Support Escalation Triage",
-        description: "负责处理升级工单",
-        implementationKind: "workflow",
-        lifecycleStage: "bind_ready",
-        publishedServiceId: "default",
-        lastBoundRevisionId: "rev-2",
-        createdAt: "2026-04-09T08:00:00Z",
-        updatedAt: "2026-04-09T09:00:00Z",
-      },
-    ],
-    nextPageToken: null,
-  };
-}
-
-function mockCreateRunAudit(scopeId: string, runId: string) {
-  return {
-    summary: {
-      scopeId,
-      serviceId: "default",
-      runId,
-      actorId: "actor-intake",
-      definitionActorId: "definition://support-triage",
-      revisionId: runId === "run-current" ? "rev-2" : "rev-1",
-      deploymentId: runId === "run-current" ? "dep-2" : "dep-1",
-      workflowName: "support-triage",
-      completionStatus: runId === "run-current" ? "waiting_approval" : "completed",
-      stateVersion: 2,
-      lastEventId: "evt-2",
-      lastUpdatedAt: "2026-04-09T09:05:00Z",
-      boundAt: "2026-04-09T09:00:00Z",
-      bindingUpdatedAt: "2026-04-09T09:00:00Z",
-      lastSuccess: runId !== "run-current",
-      totalSteps: 4,
-      completedSteps: runId === "run-current" ? 2 : 4,
-      roleReplyCount: 1,
-      lastOutput: runId === "run-current" ? "" : "Resolved",
-      lastError: runId === "run-current" ? "Waiting on approval" : "",
-    },
-    audit: {
-      reportVersion: "1",
-      projectionScope: "service",
-      topologySource: "audit",
-      completionStatus: runId === "run-current" ? "waiting_approval" : "completed",
-      workflowName: "support-triage",
-      rootActorId: "actor-intake",
-      commandId: "cmd-1",
-      stateVersion: 2,
-      lastEventId: "evt-2",
-      createdAt: "2026-04-09T09:00:00Z",
-      updatedAt: "2026-04-09T09:05:00Z",
-      startedAt: "2026-04-09T09:00:00Z",
-      endedAt: null,
-      durationMs: 1000,
-      success: runId !== "run-current",
-      input: "hello",
-      finalOutput: runId === "run-current" ? "" : "Resolved",
-      finalError: runId === "run-current" ? "Waiting on approval" : "",
-      topology:
-        runId === "run-current"
-          ? [
-              {
-                parent: "actor-intake",
-                child: "actor-risk",
-              },
-              {
-                parent: "actor-risk",
-                child: "actor-ops",
-              },
-            ]
-          : [
-              {
-                parent: "actor-intake-v1",
-                child: "actor-risk",
-              },
-            ],
-      steps: [
-        {
-          stepId: "risk_review",
-          stepType: runId === "run-current" ? "human_approval" : "llm_call",
-          targetRole: "operator",
-          requestedAt: "2026-04-09T09:01:00Z",
-          completedAt: runId === "run-current" ? null : "2026-04-09T09:02:00Z",
-          success: runId !== "run-current",
-          workerId: "actor-intake",
-          outputPreview: "",
-          error: "",
-          requestParameters: {},
-          completionAnnotations: {},
-          nextStepId: "",
-          branchKey: "",
-          assignedVariable: "",
-          assignedValue: "",
-          suspensionType: runId === "run-current" ? "human_approval" : "",
-          suspensionPrompt: runId === "run-current" ? "Approve escalation" : "",
-          suspensionTimeoutSeconds: null,
-          requestedVariableName: "",
-          durationMs: null,
-        },
-      ],
-      roleReplies:
-        runId === "run-current"
-          ? [
-              {
-                timestamp: "2026-04-09T09:02:30Z",
-                roleId: "operator",
-                sessionId: "session-1",
-                content: "Escalation needs approval from on-call.",
-                contentLength: 39,
-              },
-            ]
-          : [],
-      timeline:
-        runId === "run-current"
-          ? [
-              {
-                timestamp: "2026-04-09T09:01:30Z",
-                stage: "human_gate",
-                message: "Approval requested from operator",
-                agentId: "actor-intake",
-                stepId: "risk_review",
-                stepType: "human_approval",
-                eventType: "suspension_requested",
-                data: {},
-              },
-            ]
-          : [],
-      summary: {
-        totalSteps: 4,
-        requestedSteps: 2,
-        completedSteps: runId === "run-current" ? 2 : 4,
-        roleReplyCount: 1,
-        stepTypeCounts: {},
-      },
+    ...actual,
+    message: {
+      ...actual.message,
+      success: jest.fn(),
+      info: jest.fn(),
+      warning: jest.fn(),
+      error: jest.fn(),
+      destroy: jest.fn(),
     },
   };
-}
-
-jest.mock("@/shared/api/scopesApi", () => ({
-  scopesApi: {
-    listWorkflows: jest.fn(async () => [
-      {
-        scopeId: "scope-1",
-        workflowId: "workflow-1",
-        displayName: "Support Escalation Triage",
-        serviceKey: "scope-1:default",
-        workflowName: "support-triage",
-        actorId: "actor-intake",
-        activeRevisionId: "rev-2",
-        deploymentId: "dep-2",
-        deploymentStatus: "Active",
-        updatedAt: "2026-04-09T09:00:00Z",
-      },
-      {
-        scopeId: "scope-1",
-        workflowId: "workflow-2",
-        displayName: "Support Escalation Triage v1",
-        serviceKey: "scope-1:default",
-        workflowName: "support-triage-v1",
-        actorId: "actor-intake-v1",
-        activeRevisionId: "rev-1",
-        deploymentId: "dep-1",
-        deploymentStatus: "Retired",
-        updatedAt: "2026-04-08T09:00:00Z",
-      },
-    ]),
-    getWorkflowDetail: jest.fn(async () => ({
-      available: true,
-      scopeId: "scope-1",
-      workflow: {
-        scopeId: "scope-1",
-        workflowId: "workflow-1",
-        displayName: "Support Escalation Triage",
-        serviceKey: "scope-1:default",
-        workflowName: "support-triage",
-        actorId: "actor-intake",
-        activeRevisionId: "rev-2",
-        deploymentId: "dep-2",
-        deploymentStatus: "Active",
-        updatedAt: "2026-04-09T09:00:00Z",
-      },
-      source: {
-        workflowYaml: "name: support-triage",
-        definitionActorId: "definition://support-triage",
-        inlineWorkflowYamls: null,
-      },
-    })),
-    listScripts: jest.fn(async () => [
-      {
-        scriptId: "script-1",
-      },
-    ]),
-  },
-}));
-
-jest.mock("@/shared/api/servicesApi", () => ({
-  servicesApi: {
-    listServices: jest.fn(async () => [
-      {
-        serviceKey: "scope-1:default",
-        tenantId: "scope-1",
-        appId: "default",
-        namespace: "default",
-        serviceId: "default",
-        displayName: "Support Runtime",
-        defaultServingRevisionId: "rev-2",
-        activeServingRevisionId: "rev-2",
-        deploymentId: "dep-2",
-        primaryActorId: "actor-intake",
-        deploymentStatus: "Active",
-        endpoints: [],
-        policyIds: [],
-        updatedAt: "2026-04-09T09:00:00Z",
-      },
-    ]),
-  },
-}));
-
-jest.mock("@/shared/api/runtimeGAgentApi", () => ({
-  runtimeGAgentApi: {
-    listActors: jest.fn(async () => [
-      {
-        gAgentType: "IntakeAgent",
-        actorIds: ["actor-intake"],
-      },
-      {
-        gAgentType: "RiskReviewAgent",
-        actorIds: ["actor-risk"],
-      },
-    ]),
-  },
-}));
-
-jest.mock("@/shared/api/runtimeActorsApi", () => ({
-  runtimeActorsApi: {
-    getActorGraphEnriched: jest.fn(async () => ({
-      snapshot: {
-        actorId: "actor-intake",
-        workflowName: "support-triage",
-        lastCommandId: "cmd-1",
-        completionStatusValue: 1,
-        stateVersion: 2,
-        lastEventId: "evt-2",
-        lastUpdatedAt: "2026-04-09T09:05:00Z",
-        lastSuccess: false,
-        lastOutput: "",
-        lastError: "Waiting on approval",
-        totalSteps: 4,
-        requestedSteps: 2,
-        completedSteps: 2,
-        roleReplyCount: 1,
-      },
-      subgraph: {
-        rootNodeId: "actor-intake",
-        nodes: [
-          {
-            nodeId: "actor-intake",
-            nodeType: "actor",
-            updatedAt: "2026-04-09T09:05:00Z",
-            properties: {
-              role: "triage lead",
-            },
-          },
-          {
-            nodeId: "actor-risk",
-            nodeType: "actor",
-            updatedAt: "2026-04-09T09:05:00Z",
-            properties: {
-              role: "risk review",
-            },
-          },
-        ],
-        edges: [
-          {
-            edgeId: "edge-1",
-            fromNodeId: "actor-intake",
-            toNodeId: "actor-risk",
-            edgeType: "handoff",
-            updatedAt: "2026-04-09T09:05:00Z",
-            properties: {},
-          },
-        ],
-      },
-    })),
-  },
-}));
-
-jest.mock("@/shared/api/scopeRuntimeApi", () => ({
-  scopeRuntimeApi: {
-    getServiceRevisions: jest.fn(async () => mockCreateServiceRevisionCatalog()),
-    listMemberRuns: jest.fn(async () => mockCreateRunsCatalog()),
-    listServiceRuns: jest.fn(async () => mockCreateRunsCatalog()),
-    getMemberRunAudit: jest.fn(async (scopeId: string, _memberId: string, runId: string) =>
-      mockCreateRunAudit(scopeId, runId),
-    ),
-    getServiceRunAudit: jest.fn(async (scopeId: string, _serviceId: string, runId: string) =>
-      mockCreateRunAudit(scopeId, runId),
-    ),
-  },
-}));
+});
 
 jest.mock("@/shared/studio/api", () => ({
   studioApi: {
-    getScopeBinding: jest.fn(async () => ({
-      available: true,
-      scopeId: "scope-1",
-      serviceId: "default",
-      displayName: "Support Escalation Triage",
-      serviceKey: "scope-1:default",
-      defaultServingRevisionId: "rev-2",
-      activeServingRevisionId: "rev-2",
-      deploymentId: "dep-2",
-      deploymentStatus: "Active",
-      primaryActorId: "actor-intake",
-      updatedAt: "2026-04-09T09:00:00Z",
-      revisions: [
-        {
-          revisionId: "rev-2",
-          implementationKind: "workflow",
-          status: "Published",
-          artifactHash: "hash-2",
-          failureReason: "",
-          isDefaultServing: true,
-          isActiveServing: true,
-          isServingTarget: true,
-          allocationWeight: 100,
-          servingState: "Active",
-          deploymentId: "dep-2",
-          primaryActorId: "actor-intake",
-          createdAt: "2026-04-09T08:00:00Z",
-          preparedAt: "2026-04-09T08:01:00Z",
-          publishedAt: "2026-04-09T08:02:00Z",
-          retiredAt: null,
-          workflowName: "support-triage",
-          workflowDefinitionActorId: "definition://support-triage",
-          inlineWorkflowCount: 1,
-          scriptId: "",
-          scriptRevision: "",
-          scriptDefinitionActorId: "",
-          scriptSourceHash: "",
-          staticActorTypeName: "",
-        },
-        {
-          revisionId: "rev-1",
-          implementationKind: "workflow",
-          status: "Published",
-          artifactHash: "hash-1",
-          failureReason: "",
-          isDefaultServing: false,
-          isActiveServing: false,
-          isServingTarget: false,
-          allocationWeight: 0,
-          servingState: "",
-          deploymentId: "",
-          primaryActorId: "actor-intake-v1",
-          createdAt: "2026-04-08T08:00:00Z",
-          preparedAt: "2026-04-08T08:01:00Z",
-          publishedAt: "2026-04-08T08:02:00Z",
-          retiredAt: null,
-          workflowName: "support-triage-v1",
-          workflowDefinitionActorId: "definition://support-triage-v1",
-          inlineWorkflowCount: 1,
-          scriptId: "",
-          scriptRevision: "",
-          scriptDefinitionActorId: "",
-          scriptSourceHash: "",
-          staticActorTypeName: "",
-        },
-      ],
-    })),
-    getDefaultRouteTarget: jest.fn(async () => ({
-      available: true,
-      scopeId: "scope-1",
-      serviceId: "default",
-      displayName: "Support Escalation Triage",
-      serviceKey: "scope-1:default",
-      defaultServingRevisionId: "rev-2",
-      activeServingRevisionId: "rev-2",
-      deploymentId: "dep-2",
-      deploymentStatus: "Active",
-      primaryActorId: "actor-intake",
-      updatedAt: "2026-04-09T09:00:00Z",
-      revisions: [
-        {
-          revisionId: "rev-2",
-          implementationKind: "workflow",
-          status: "Published",
-          artifactHash: "hash-2",
-          failureReason: "",
-          isDefaultServing: true,
-          isActiveServing: true,
-          isServingTarget: true,
-          allocationWeight: 100,
-          servingState: "Active",
-          deploymentId: "dep-2",
-          primaryActorId: "actor-intake",
-          createdAt: "2026-04-09T08:00:00Z",
-          preparedAt: "2026-04-09T08:01:00Z",
-          publishedAt: "2026-04-09T08:02:00Z",
-          retiredAt: null,
-          workflowName: "support-triage",
-          workflowDefinitionActorId: "definition://support-triage",
-          inlineWorkflowCount: 1,
-          scriptId: "",
-          scriptRevision: "",
-          scriptDefinitionActorId: "",
-          scriptSourceHash: "",
-          staticActorTypeName: "",
-        },
-      ],
-    })),
-    getWorkspaceSettings: jest.fn(async () => ({
-      runtimeBaseUrl: "https://runtime.aevatar.test",
-      directories: [
-        {
-          directoryId: "default",
-          label: "Default",
-          path: "/tmp/workflows",
-          isBuiltIn: false,
-        },
-      ],
-    })),
-    getConnectorCatalog: jest.fn(async () => ({
-      homeDirectory: "actor://connector-catalog",
-      filePath: "actor://connector-catalog/connectors",
-      fileExists: true,
-      connectors: [
-        {
-          name: "web-search",
-          type: "http",
-          enabled: true,
-          timeoutMs: 30000,
-          retry: 1,
-          http: {
-            baseUrl: "https://search.example.com",
-            allowedMethods: ["GET"],
-            allowedPaths: ["/search"],
-            allowedInputKeys: ["query"],
-            defaultHeaders: {},
-          },
-        },
-        {
-          name: "ops-terminal",
-          type: "cli",
-          enabled: false,
-          timeoutMs: 30000,
-          retry: 0,
-          cli: {
-            command: "opsctl",
-            fixedArguments: ["tickets"],
-            allowedOperations: ["lookup"],
-            allowedInputKeys: ["ticket"],
-            workingDirectory: "/tmp",
-            environment: {},
-          },
-        },
-      ],
-    })),
-    listMembers: jest.fn(async () => mockCreateMembersCatalog()),
-    parseYaml: jest.fn(async () => ({
-      document: {
-        name: "support-triage",
-        roles: [
-          {
-            id: "triage_operator",
-            name: "triage_operator",
-            connectors: ["web-search", "crm-sync"],
-          },
-        ],
-      },
-      graph: null,
-      findings: [],
-    })),
+    listTeams: jest.fn(),
+    getMember: jest.fn(),
+    getTeam: jest.fn(),
+    listTeamMembers: jest.fn(),
+    listMembers: jest.fn(),
+    updateMemberTeam: jest.fn(),
+    createMember: jest.fn(),
+    updateTeam: jest.fn(),
+    archiveTeam: jest.fn(),
   },
 }));
 
+const teamRoster = {
+  scopeId: "scope-a",
+  teams: [
+    {
+      teamId: "team-support",
+      scopeId: "scope-a",
+      displayName: "Support Team",
+      description: "Handles inbound support requests",
+      lifecycleStage: "active",
+      memberCount: 2,
+      createdAt: "2026-04-30T08:00:00Z",
+      updatedAt: "2026-04-30T09:00:00Z",
+    },
+    {
+      teamId: "team-ops",
+      scopeId: "scope-a",
+      displayName: "Ops Team",
+      description: "Owns escalation follow-through",
+      lifecycleStage: "active",
+      memberCount: 1,
+      createdAt: "2026-04-30T08:10:00Z",
+      updatedAt: "2026-04-30T09:10:00Z",
+    },
+  ],
+  nextPageToken: null,
+};
+
+const teamSummary = {
+  teamId: "team-support",
+  scopeId: "scope-a",
+  displayName: "Support Team",
+  description: "Handles inbound support requests",
+  lifecycleStage: "active",
+  memberCount: 2,
+  createdAt: "2026-04-30T08:00:00Z",
+  updatedAt: "2026-04-30T09:00:00Z",
+};
+
+const teamMembers = {
+  scopeId: "scope-a",
+  members: [
+    {
+      memberId: "member-planner",
+      scopeId: "scope-a",
+      teamId: "team-support",
+      displayName: "Planner",
+      description: "Routes support issues",
+      implementationKind: "workflow",
+      lifecycleStage: "bind_ready",
+      publishedServiceId: "service-planner",
+      lastBoundRevisionId: "rev-1",
+      createdAt: "2026-04-30T08:00:00Z",
+      updatedAt: "2026-04-30T09:00:00Z",
+    },
+    {
+      memberId: "member-responder",
+      scopeId: "scope-a",
+      teamId: "team-support",
+      displayName: "Responder",
+      description: "Drafts answers",
+      implementationKind: "workflow",
+      lifecycleStage: "bind_ready",
+      publishedServiceId: "service-responder",
+      lastBoundRevisionId: "rev-2",
+      createdAt: "2026-04-30T08:10:00Z",
+      updatedAt: "2026-04-30T09:10:00Z",
+    },
+  ],
+  nextPageToken: null,
+};
+
+const allMembers = {
+  scopeId: "scope-a",
+  members: [
+    ...teamMembers.members,
+    {
+      memberId: "member-floater",
+      scopeId: "scope-a",
+      teamId: null,
+      displayName: "Floater",
+      description: "Unassigned helper",
+      implementationKind: "workflow",
+      lifecycleStage: "created",
+      publishedServiceId: "",
+      lastBoundRevisionId: null,
+      createdAt: "2026-04-30T08:20:00Z",
+      updatedAt: "2026-04-30T09:20:00Z",
+    },
+  ],
+  nextPageToken: null,
+};
+
 describe("TeamDetailPage", () => {
   beforeEach(() => {
-    window.history.replaceState({}, "", "/teams/scope-1?scopeId=scope-1");
-    (scopeRuntimeApi.getServiceRevisions as jest.Mock).mockReset();
-    (scopeRuntimeApi.getServiceRevisions as jest.Mock).mockImplementation(
-      async () => mockCreateServiceRevisionCatalog(),
-    );
-    (scopeRuntimeApi.listMemberRuns as jest.Mock).mockReset();
-    (scopeRuntimeApi.listMemberRuns as jest.Mock).mockImplementation(
-      async () => mockCreateRunsCatalog(),
-    );
-    (scopeRuntimeApi.listServiceRuns as jest.Mock).mockReset();
-    (scopeRuntimeApi.listServiceRuns as jest.Mock).mockImplementation(
-      async () => mockCreateRunsCatalog(),
-    );
-    (scopeRuntimeApi.getMemberRunAudit as jest.Mock).mockReset();
-    (scopeRuntimeApi.getMemberRunAudit as jest.Mock).mockImplementation(
-      async (scopeId: string, _memberId: string, runId: string) =>
-        mockCreateRunAudit(scopeId, runId),
-    );
-    (scopeRuntimeApi.getServiceRunAudit as jest.Mock).mockReset();
-    (scopeRuntimeApi.getServiceRunAudit as jest.Mock).mockImplementation(
-      async (scopeId: string, _serviceId: string, runId: string) =>
-        mockCreateRunAudit(scopeId, runId),
-    );
-    (studioApi.listMembers as jest.Mock).mockReset();
-    (studioApi.listMembers as jest.Mock).mockImplementation(
-      async () => mockCreateMembersCatalog(),
-    );
-  });
+    window.history.replaceState({}, "", "/teams/scope-a?teamId=team-support");
+    jest.clearAllMocks();
 
-  it("renders the chinese team-first overview shell", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    expect(
-      await screen.findByText((_, node) => {
-        return node?.textContent === "Aevatar / Teams / 团队详情 / 概览";
-      }),
-    ).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Aevatar" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Teams" })).toBeTruthy();
-    expect(screen.getByText("scopeId")).toBeTruthy();
-    expect(screen.getByText("scope-1")).toBeTruthy();
-    const currentPostureHeading = screen.getByText("当前态势");
-    const trustHeading = screen.getByText("信任态势");
-    const governanceHeading = screen.getByText("治理快照");
-    const compareHeading = screen.getByText("Run Compare / Change Diff");
-    expect(screen.getByText("团队构成")).toBeTruthy();
-    expect(screen.getByText("运行摘要")).toBeTruthy();
-    expect(currentPostureHeading).toBeTruthy();
-    expect(trustHeading).toBeTruthy();
-    expect(
-      await screen.findByText("Comparing run run-current against baseline run-good."),
-    ).toBeTruthy();
-    expect(screen.getByText("需要人工处理后继续")).toBeTruthy();
-    expect(screen.getByText("等待人工")).toBeTruthy();
-    expect(governanceHeading).toBeTruthy();
-    expect(compareHeading).toBeTruthy();
-    expect(
-      currentPostureHeading.compareDocumentPosition(trustHeading) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(
-      governanceHeading.compareDocumentPosition(compareHeading) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(screen.getByText("Runtime deltas")).toBeTruthy();
-    expect(await screen.findByText("Step deltas")).toBeTruthy();
-    expect(await screen.findByText("Handoff deltas")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "本次对话" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "服务映射" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "高级编辑" })).toBeTruthy();
-  });
-
-  it("keeps compare honest when no successful baseline exists", async () => {
-    (scopeRuntimeApi.listServiceRuns as jest.Mock).mockResolvedValueOnce({
-      ...mockCreateRunsCatalog(),
-      runs: [mockCreateRunsCatalog().runs[0]],
+    (studioApi.listTeams as jest.Mock).mockResolvedValue(teamRoster);
+    (studioApi.getTeam as jest.Mock).mockResolvedValue(teamSummary);
+    (studioApi.listTeamMembers as jest.Mock).mockResolvedValue(teamMembers);
+    (studioApi.listMembers as jest.Mock).mockResolvedValue(allMembers);
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      summary: teamMembers.members[0],
+      implementationRef: null,
+      lastBinding: null,
     });
+    (studioApi.updateMemberTeam as jest.Mock).mockResolvedValue({
+      summary: teamMembers.members[0],
+      implementationRef: null,
+      lastBinding: null,
+    });
+    (studioApi.createMember as jest.Mock).mockResolvedValue(teamMembers.members[0]);
+    (studioApi.updateTeam as jest.Mock).mockResolvedValue(teamSummary);
+    (studioApi.archiveTeam as jest.Mock).mockResolvedValue({
+      ...teamSummary,
+      lifecycleStage: "archived",
+    });
+  });
 
+  it("renders team summary and member management around the backend team endpoints", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("信任态势")).toBeTruthy();
+    expect(await screen.findByText("Support Team")).toBeTruthy();
+    expect(screen.getByText("Team Summary")).toBeTruthy();
+    expect(screen.getAllByText("Planner").length).toBeGreaterThan(0);
     expect(
-      (await screen.findAllByText("No successful baseline is available yet.")).length,
+      screen.getAllByText("Handles inbound support requests").length,
     ).toBeGreaterThan(0);
-    expect(screen.getByText("等待基线")).toBeTruthy();
-    expect(screen.getByText("无基线")).toBeTruthy();
-    expect(screen.getByText("暂无成功基线运行")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Open in Studio" }).length).toBe(2);
+    expect(screen.getAllByRole("button", { name: "Remove from Team" }).length).toBe(2);
+    expect(screen.getByText("Create Member In This Team")).toBeTruthy();
+    expect(screen.getByText("Add Existing Member")).toBeTruthy();
   });
 
-  it("keeps selected run facts aligned without inventing a failed baseline", async () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/teams/scope-1?scopeId=scope-1&runId=run-good",
-    );
-
+  it("creates a new member directly inside the current team", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(
-      (await screen.findAllByText("No successful baseline is available yet.")).length,
-    ).toBeGreaterThan(0);
-    expect(
-      screen.queryByText("Comparing run run-current against baseline run-good."),
-    ).toBeNull();
+    fireEvent.change(await screen.findByLabelText("New Member Display Name"), {
+      target: { value: "Analyst" },
+    });
+    fireEvent.change(screen.getByLabelText("New Member ID"), {
+      target: { value: "member-analyst" },
+    });
+    fireEvent.change(screen.getByLabelText("New Member Description"), {
+      target: { value: "Checks support tickets before execution" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create Member" }));
 
     await waitFor(() => {
-      const auditedRunIds = (scopeRuntimeApi.getServiceRunAudit as jest.Mock).mock.calls.map(
-        (call) => call[2],
-      );
-      expect(auditedRunIds).toContain("run-good");
-      expect(auditedRunIds).not.toContain("run-current");
-    });
-  });
-
-  it("prefers the explicit workflow display name for the team heading", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    expect(
-      await screen.findByRole("heading", {
-        level: 1,
-        name: "Support Escalation Triage",
-      }),
-    ).toBeTruthy();
-  });
-
-  it("demotes machine-generated long scope ids into compact team metadata", async () => {
-    const longScopeId = "1626c177-917b-4fcc-a5ee-aa74a171b0d6";
-
-    window.history.replaceState(
-      {},
-      "",
-      `/teams/${longScopeId}?scopeId=${longScopeId}`,
-    );
-    (scopesApi.listWorkflows as jest.Mock).mockResolvedValueOnce([]);
-    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
-
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    expect(
-      await screen.findByRole("heading", { level: 1, name: "当前团队" }),
-    ).toBeTruthy();
-    expect(screen.queryByText(`Team ${longScopeId}`)).toBeNull();
-    expect(screen.getByText("scopeId")).toBeTruthy();
-    expect(screen.getByText("1626c177...71b0d6")).toBeTruthy();
-  });
-
-  it("falls back to workflowName when the scope display name is only the workflow id", async () => {
-    (scopesApi.listWorkflows as jest.Mock).mockResolvedValueOnce([
-      {
-        scopeId: "scope-1",
-        workflowId: "workflow-opaque-id",
-        displayName: "workflow-opaque-id",
-        serviceKey: "scope-1:default",
-        workflowName: "support-triage",
-        actorId: "actor-intake",
-        activeRevisionId: "rev-2",
-        deploymentId: "dep-2",
-        deploymentStatus: "Active",
-        updatedAt: "2026-04-09T09:00:00Z",
-      },
-    ]);
-    (scopesApi.getWorkflowDetail as jest.Mock).mockResolvedValueOnce({
-      available: true,
-      scopeId: "scope-1",
-      workflow: {
-        scopeId: "scope-1",
-        workflowId: "workflow-opaque-id",
-        displayName: "workflow-opaque-id",
-        serviceKey: "scope-1:default",
-        workflowName: "support-triage",
-        actorId: "actor-intake",
-        activeRevisionId: "rev-2",
-        deploymentId: "dep-2",
-        deploymentStatus: "Active",
-        updatedAt: "2026-04-09T09:00:00Z",
-      },
-      source: {
-        workflowYaml: "name: support-triage",
-        definitionActorId: "definition://support-triage",
-        inlineWorkflowYamls: null,
-      },
+      expect(studioApi.createMember).toHaveBeenCalledWith({
+        scopeId: "scope-a",
+        teamId: "team-support",
+        displayName: "Analyst",
+        description: "Checks support tickets before execution",
+        implementationKind: "workflow",
+        memberId: "member-analyst",
+      });
     });
 
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    expect(
-      await screen.findByRole("heading", {
-        level: 1,
-        name: "support-triage",
-      }),
-    ).toBeTruthy();
-    expect(
-      screen.queryByRole("heading", {
-        level: 1,
-        name: "workflow-opaque-id",
-      }),
-    ).toBeNull();
+    expect(message.success).toHaveBeenCalledWith("成员已创建并加入团队。");
   });
 
-  it("shows full raw identifiers inside overview tooltips", async () => {
-    const longRevisionId =
-      "rev-20260414154556-4d89bc2a3bf347f8b3bde41d716964f3";
-
-    (scopeRuntimeApi.getServiceRevisions as jest.Mock).mockResolvedValueOnce(
-      mockCreateServiceRevisionCatalog({
-        defaultServingRevisionId: longRevisionId,
-        activeServingRevisionId: longRevisionId,
-        revisions: [
-          {
-            ...mockCreateServiceRevisionCatalog().revisions[0],
-            revisionId: longRevisionId,
-          },
-        ],
-      }),
-    );
-
+  it("assigns an existing member into the current team", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await screen.findByText("运行摘要");
-
-    const revisionNote = await screen.findByText(/revisionId ·/);
-
-    fireEvent.mouseEnter(revisionNote);
-
-    expect(await screen.findByText(`revisionId · ${longRevisionId}`)).toBeTruthy();
-  });
-
-  it("returns to the teams list when clicking the breadcrumb teams link", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    fireEvent.click(screen.getByRole("link", { name: "Teams" }));
+    await screen.findByRole("option", {
+      name: "Floater · member-floater · currently unassigned",
+    });
+    fireEvent.change(await screen.findByLabelText("Existing Member Selector"), {
+      target: { value: "member-floater" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add Member" }));
 
     await waitFor(() => {
-      expect(window.location.pathname).toBe("/teams");
-      expect(window.location.search).toContain("scopeId=scope-1");
-    });
-  });
-
-  it("returns to the teams list when clicking the breadcrumb aevatar link", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    fireEvent.click(screen.getByRole("link", { name: "Aevatar" }));
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/teams");
-      expect(window.location.search).toContain("scopeId=scope-1");
-    });
-  });
-
-  it("switches tabs inside the detail page", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    fireEvent.click(screen.getByRole("button", { name: "Bindings" }));
-
-    expect(await screen.findByText("当前绑定与治理摘要")).toBeTruthy();
-    expect(screen.getByText("Bindings 与连接能力")).toBeTruthy();
-    expect(screen.getByText("当前选中绑定")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "选择绑定 web-search" })).toBeTruthy();
-    expect(window.location.search).toContain("tab=bindings");
-    expect(window.location.search).not.toContain("step=bind");
-  });
-
-  it("canonicalizes legacy service deep links into member-first detail routes", async () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/teams/scope-1?scopeId=scope-1&serviceId=default&tab=events",
-    );
-
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    expect(await screen.findByText("当前任务事件流")).toBeTruthy();
-
-    await waitFor(() => {
-      const params = new URLSearchParams(window.location.search);
-      expect(params.get("memberId")).toBe("member-support");
-      expect(params.get("serviceId")).toBe("default");
-      expect(params.get("tab")).toBe("events");
-    });
-
-    await waitFor(() => {
-      expect(scopeRuntimeApi.listMemberRuns).toHaveBeenCalledWith(
-        "scope-1",
-        "member-support",
-        expect.objectContaining({ take: 12 }),
+      expect(studioApi.updateMemberTeam).toHaveBeenCalledWith(
+        "scope-a",
+        "member-floater",
+        "team-support",
       );
     });
   });
 
-  it("shows the team asset view with workflow and script entries", async () => {
+  it("removes a member from the current team", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await screen.findByRole("button", { name: "服务映射" });
-    fireEvent.click(screen.getByRole("button", { name: "Assets" }));
-
-    expect(await screen.findByText("当前 Team 资产")).toBeTruthy();
-    expect(screen.getAllByText("Workflow 资产").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Script 资产").length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "打开 workflow Support Escalation Triage" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "打开 script script-1" })).toBeTruthy();
-  });
-
-  it("shows a team-first configuration view", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    fireEvent.click(screen.getByRole("button", { name: "配置" }));
-
-    expect(await screen.findByText("当前配置主线")).toBeTruthy();
-    expect(screen.getByText("当前配置明细")).toBeTruthy();
-    expect(screen.getByText("继续调整这支团队")).toBeTruthy();
-    expect(screen.getAllByText("绑定方式").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("连接器引用").length).toBeGreaterThan(0);
-    expect(screen.getAllByRole("button", { name: "高级编辑" }).length).toBeGreaterThan(0);
-  });
-
-  it("shows a readable team members view", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
-
-    expect(await screen.findByText("参与者结构")).toBeTruthy();
-    expect(screen.getByText("运行时参与者身份")).toBeTruthy();
-    expect(screen.getByText("当前焦点")).toBeTruthy();
-    expect(screen.getByText("可见 Actor")).toBeTruthy();
-    expect(screen.getAllByText("actorId").length).toBeGreaterThan(0);
-    expect(screen.getByText("actor-intake")).toBeTruthy();
-    expect(screen.getAllByText("serviceId").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("default").length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "打开 Services" })).toBeTruthy();
-  });
-
-  it("shows a team-first event stream with member mapping", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    fireEvent.click(screen.getByRole("button", { name: "事件流" }));
-
-    expect(await screen.findByText("当前任务事件流")).toBeTruthy();
-    expect(screen.getByText("本次 Run 成员映射")).toBeTruthy();
-    expect(await screen.findByText("切换 Run")).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "运行记录" }).length).toBeGreaterThan(0);
-    expect((await screen.findAllByText(/risk_review/)).length).toBeGreaterThan(0);
-  });
-
-  it("switches runs inside the event stream", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    fireEvent.click(screen.getByRole("button", { name: "事件流" }));
-    await screen.findByText("当前任务事件流");
-
-    fireEvent.click(await screen.findByRole("button", { name: "切换到 run-good" }));
+    const removeButtons = await screen.findAllByRole("button", {
+      name: "Remove from Team",
+    });
+    fireEvent.click(removeButtons[1]);
 
     await waitFor(() => {
-      expect(window.location.search).toContain("runId=run-good");
+      expect(studioApi.updateMemberTeam).toHaveBeenCalledWith(
+        "scope-a",
+        "member-planner",
+        null,
+      );
     });
-    expect(await screen.findByText("LLM_CALL")).toBeTruthy();
   });
 
-  it("syncs tab and run state when the route changes after mount", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-
-    act(() => {
-      history.push("/teams/scope-1?scopeId=scope-1&tab=events&runId=run-good");
-    });
-
-    expect(await screen.findByText("当前任务事件流")).toBeTruthy();
-    expect(await screen.findByText("LLM_CALL")).toBeTruthy();
-  });
-
-  it("surfaces team signal failures without leaking raw runtime errors", async () => {
-    (scopeRuntimeApi.listServiceRuns as jest.Mock).mockRejectedValueOnce(
-      new Error("No stub for /api/scopes/scope-1/services/default/runs"),
-    );
+  it("resolves old member-first deep links into canonical team routes", async () => {
+    window.history.replaceState({}, "", "/teams/scope-a?memberId=member-planner");
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    expect(await screen.findByRole("button", { name: "服务映射" })).toBeTruthy();
-    expect(screen.queryByText("部分团队信号暂不可用")).toBeNull();
-    expect(screen.queryByText("最近团队运行信号暂时无法加载。")).toBeNull();
-    expect(
-      screen.queryByText("No stub for /api/scopes/scope-1/services/default/runs"),
-    ).toBeNull();
-  });
-
-  it("opens a playback run replay with observed session context", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    fireEvent.click(screen.getByRole("button", { name: "事件流" }));
-    await screen.findAllByText(/risk_review/);
-    fireEvent.click(screen.getAllByRole("button", { name: "本次对话" })[0]);
 
     await waitFor(() => {
-      expect(window.location.pathname).toBe("/runtime/runs");
+      expect(new URLSearchParams(window.location.search).get("teamId")).toBe(
+        "team-support",
+      );
     });
-    const draftKey = new URLSearchParams(window.location.search).get("draftKey");
-    expect(draftKey).toBeTruthy();
-    expect(loadDraftRunPayload(draftKey)).toMatchObject({
-      kind: "observed_run_session",
-      actorId: "actor-intake",
-      endpointId: "chat",
-      routeName: "support-triage",
-      runId: "run-current",
-      scopeId: "scope-1",
-      serviceOverrideId: "default",
-    });
-  });
 
-  it("opens runtime explorer from the service mapping action", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    fireEvent.click(screen.getByRole("button", { name: "事件拓扑" }));
-    await screen.findByText("团队事件路径");
-    fireEvent.click(screen.getAllByRole("button", { name: "服务映射" })[0]);
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/runtime/explorer/detail");
-    });
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("actorId")).toBe("actor-intake");
-    expect(params.get("runId")).toBe("run-current");
-    expect(params.get("scopeId")).toBe("scope-1");
-    expect(params.get("serviceId")).toBe("default");
-  });
-
-  it("opens Mission Control from the team event stream with run context", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    fireEvent.click(screen.getByRole("button", { name: "事件流" }));
-    await screen.findByText("当前任务事件流");
-    await screen.findByText(/Current playback is centered on risk_review/);
-    fireEvent.click(await screen.findByRole("button", { name: "打开 Mission Control" }));
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/runtime/mission-control");
-    });
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("actorId")).toBe("actor-intake");
-    expect(params.get("autoStream")).toBe("true");
-    expect(params.get("prompt")).toBe("hello");
-    expect(params.get("runId")).toBe("run-current");
-    expect(params.get("scopeId")).toBe("scope-1");
-    expect(params.get("serviceId")).toBe("default");
-  });
-
-  it("updates the topology depth selection when the focus member is available", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    fireEvent.click(screen.getByRole("button", { name: "事件拓扑" }));
-    await screen.findByText("团队事件路径");
-
-    const nearButton = screen.getByRole("button", { name: "近邻" });
-    const expandButton = screen.getByRole("button", { name: "扩展" });
-    const panoramaButton = screen.getByRole("button", { name: "全景" });
-
-    expect(expandButton).toHaveAttribute("aria-pressed", "true");
-    expect(nearButton).toHaveAttribute("aria-pressed", "false");
-    expect(panoramaButton).toHaveAttribute("aria-pressed", "false");
-
-    fireEvent.click(panoramaButton);
-
-    expect(panoramaButton).toHaveAttribute("aria-pressed", "true");
-    expect(expandButton).toHaveAttribute("aria-pressed", "false");
-  });
-
-  it("disables topology controls when the current team has no focus member yet", async () => {
-    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce({
-      available: false,
-      scopeId: "scope-1",
-      serviceId: "",
-      displayName: "",
-      serviceKey: "",
-      defaultServingRevisionId: "",
-      activeServingRevisionId: "",
-      deploymentId: "",
-      deploymentStatus: "",
-      primaryActorId: "",
-      updatedAt: "2026-04-09T09:00:00Z",
-      revisions: [],
-    });
-    (servicesApi.listServices as jest.Mock).mockResolvedValueOnce([]);
-    (runtimeGAgentApi.listActors as jest.Mock).mockResolvedValueOnce([]);
-
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    fireEvent.click(screen.getByRole("button", { name: "事件拓扑" }));
-    await screen.findByText("团队事件路径");
-
-    expect(
-      screen.getByText("当前还没有可用的团队成员焦点，待成员或运行信号可见后再切换视角。"),
-    ).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "服务映射" })[0]).toBeDisabled();
-    expect(screen.getByRole("button", { name: "近邻" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "扩展" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "全景" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "打开平台拓扑" })).toBeDisabled();
-    expect(
-      screen.getByText("当前还没有可用的团队成员焦点，所以暂时没有可展开的事件拓扑关系。"),
-    ).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "配置" }));
-    expect(await screen.findByText("继续调整这支团队")).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "服务映射" })[0]).toBeDisabled();
-  });
-
-  it("opens platform workbenches from members and bindings", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
-    await screen.findByText("运行时参与者身份");
-    fireEvent.click(screen.getByRole("button", { name: "打开 Services" }));
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/services");
-    });
-    expect(window.location.search).toContain("tenantId=scope-1");
-    expect(window.location.search).toContain("serviceId=default");
-
-    cleanup();
-    window.history.replaceState({}, "", "/teams/scope-1?scopeId=scope-1");
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    fireEvent.click(screen.getByRole("button", { name: "Bindings" }));
-    await screen.findByText("当前绑定与治理摘要");
-    fireEvent.click(screen.getByRole("button", { name: "打开 Governance" }));
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/governance");
-    });
-    expect(window.location.search).toContain("serviceId=default");
-    expect(window.location.search).toContain("view=bindings");
-  });
-
-  it("opens Studio in the current team context from the top actions", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    await screen.findByText("Support Escalation Triage");
-    fireEvent.click(screen.getByRole("button", { name: "高级编辑" }));
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/studio");
-    });
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("scopeId")).toBe("scope-1");
-    expect(params.get("member")).toBe("workflow:workflow-1");
-    expect(params.get("memberId")).toBeNull();
-    expect(params.get("focus")).toBeNull();
-    expect(params.get("tab")).toBe("studio");
-  });
-
-  it("opens workflow and script Studio deep links from assets with scope context", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    fireEvent.click(screen.getByRole("button", { name: "Assets" }));
-    await screen.findByText("当前 Team 资产");
-
-    fireEvent.click(screen.getByRole("button", { name: "打开 workflow Support Escalation Triage" }));
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/studio");
-    });
-    expect(window.location.search).toContain("scopeId=scope-1");
-    expect(window.location.search).toContain("member=workflow%3Aworkflow-1");
-    expect(window.location.search).not.toContain(
-      "focus=workflow%3Aworkflow-1",
-    );
-
-    cleanup();
-    window.history.replaceState({}, "", "/teams/scope-1?scopeId=scope-1&tab=assets");
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByText("当前 Team 资产");
-    fireEvent.click(await screen.findByRole("button", { name: "打开 script script-1" }));
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/studio");
-    });
-    expect(window.location.search).toContain("scopeId=scope-1");
-    expect(window.location.search).toContain("member=script%3Ascript-1");
-    expect(window.location.search).not.toContain("focus=script%3Ascript-1");
-    expect(window.location.search).toContain("tab=scripts");
-  });
-
-  it("drops stale service and run hints in favor of the requested workflow truth", async () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/teams/scope-1?workflowId=workflow-1&serviceId=stale-service&runId=stale-run",
-    );
-
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    expect(await screen.findByText("Support Escalation Triage")).toBeTruthy();
-    expect(screen.queryByText("路由上下文已自动校正")).toBeNull();
-  });
-
-  it("falls back gracefully when the requested workflow is no longer visible", async () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/teams/scope-1?workflowId=workflow-missing",
-    );
-
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    expect(
-      await screen.findByRole("heading", { level: 1, name: "当前团队" }),
-    ).toBeTruthy();
-    expect(screen.queryByText("路由上下文已自动校正")).toBeNull();
+    expect(studioApi.getMember).toHaveBeenCalledWith("scope-a", "member-planner");
   });
 });

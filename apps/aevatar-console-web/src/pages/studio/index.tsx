@@ -7435,8 +7435,10 @@ const StudioPage: React.FC = () => {
     .filter(Boolean);
   const studioReturnHref = resolvedStudioScopeId
     ? buildTeamDetailHref({
+        memberId: workbenchStudioMemberId || undefined,
         scopeId: resolvedStudioScopeId,
         tab: 'advanced',
+        teamId: trimOptional(workbenchStudioMember?.teamId) || undefined,
         serviceId:
           trimOptional(routeState.memberId) ||
           trimOptional(workbenchPublishedService?.serviceId) ||
