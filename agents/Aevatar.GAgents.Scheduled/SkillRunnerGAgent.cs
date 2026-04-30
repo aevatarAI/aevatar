@@ -5,6 +5,7 @@ using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.Hooks;
+using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
@@ -22,6 +23,7 @@ namespace Aevatar.GAgents.Scheduled;
 public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 {
     private readonly NyxIdApiClient? _nyxIdApiClient;
+    private readonly IOwnerLlmConfigSource? _ownerLlmConfigSource;
     // Per-run counter for nyxid_proxy outcomes, populated by the instance-owned
     // NyxIdProxyToolFailureCountingMiddleware appended to the tool-call middleware chain.
     // The runner reads it after each ChatStreamAsync to enforce the safety net for issue
@@ -37,7 +39,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         IEnumerable<IAgentToolSource>? toolSources = null,
-        NyxIdApiClient? nyxIdApiClient = null)
+        NyxIdApiClient? nyxIdApiClient = null,
+        IOwnerLlmConfigSource? ownerLlmConfigSource = null)
         : this(
             BuildToolMiddlewareChain(toolMiddlewares),
             llmProviderFactory,
@@ -45,7 +48,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             agentMiddlewares,
             llmMiddlewares,
             toolSources,
-            nyxIdApiClient)
+            nyxIdApiClient,
+            ownerLlmConfigSource)
     {
     }
 
@@ -56,7 +60,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares,
         IEnumerable<IAgentToolSource>? toolSources,
-        NyxIdApiClient? nyxIdApiClient)
+        NyxIdApiClient? nyxIdApiClient,
+        IOwnerLlmConfigSource? ownerLlmConfigSource)
         : base(
             llmProviderFactory,
             additionalHooks,
@@ -66,6 +71,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             toolSources)
     {
         _nyxIdApiClient = nyxIdApiClient;
+        _ownerLlmConfigSource = ownerLlmConfigSource;
         _toolFailureCounter = toolMiddlewareChain.Counter;
     }
 
@@ -296,7 +302,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         _toolFailureCounter.Reset();
 
         var prompt = BuildExecutionPrompt(now, reason);
-        var metadata = BuildExecutionMetadata();
+        var metadata = await BuildExecutionMetadataAsync(ct);
         var requestId = Guid.NewGuid().ToString("N");
         var content = new StringBuilder();
 
@@ -685,7 +691,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         }
     }
 
-    private IReadOnlyDictionary<string, string> BuildExecutionMetadata()
+    private async Task<IReadOnlyDictionary<string, string>> BuildExecutionMetadataAsync(CancellationToken ct)
     {
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -694,6 +700,25 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         };
         if (!string.IsNullOrWhiteSpace(State.ScopeId))
             metadata["scope_id"] = State.ScopeId;
+
+        // Pin the bot owner's pre-configured model + NyxID route + tool-round cap onto the
+        // outbound LLM metadata, the same pattern ChannelLlmReplyInboxRuntime applies for
+        // nyxid-chat. Without this, scheduled runs fall through to NyxIdLLMProvider's
+        // compile-time defaults (`gpt-5.4` against `/api/v1/llm/gateway/v1/`), which the
+        // gateway routes to the OpenAI provider — failing for bot owners who pre-configured
+        // a custom NyxID service like `chrono-llm` at `/api/v1/proxy/s/chrono-llm`. The
+        // source is bound once via constructor injection (LocalActorRuntime activates agents
+        // through ActivatorUtilities so DI fills the optional ctor param at activation
+        // time); a per-execution `Services.GetService<>` lookup would be redundant and was
+        // dropped per codex's PR #509 partial dissent on r3159047120.
+        await OwnerLlmConfigApplier.ApplyAsync(
+            metadata,
+            State.ScopeId,
+            _ownerLlmConfigSource,
+            Logger,
+            actorLabel: "Skill runner",
+            actorId: Id,
+            ct);
         return metadata;
     }
 

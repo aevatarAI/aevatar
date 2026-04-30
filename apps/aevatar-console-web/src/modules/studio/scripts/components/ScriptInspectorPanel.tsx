@@ -86,9 +86,9 @@ const ScriptInspectorPanel: React.FC<ScriptInspectorPanelProps> = ({
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">版本</div>
+              <div className="console-scripts-field-label">已保存版本</div>
               <div className="console-scripts-field-value">
-                {selectedDraft.revision}
+                {renderValue(selectedDraft.revision)}
               </div>
             </div>
             <div className="console-scripts-field">

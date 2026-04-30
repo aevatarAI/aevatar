@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Authoring.Lark;
@@ -27,6 +28,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private readonly NyxIdApiClient _nyxClient;
     private readonly NyxIdRelayOutboundPort _relayOutboundPort;
     private readonly IInteractiveReplyDispatcher? _interactiveReplyDispatcher;
+    private readonly IOwnerLlmConfigSource? _ownerLlmConfigSource;
     private readonly ILogger<ChannelConversationTurnRunner> _logger;
 
     public ChannelConversationTurnRunner(
@@ -37,7 +39,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         NyxIdApiClient nyxClient,
         NyxIdRelayOutboundPort relayOutboundPort,
         IInteractiveReplyDispatcher? interactiveReplyDispatcher,
-        ILogger<ChannelConversationTurnRunner> logger)
+        ILogger<ChannelConversationTurnRunner> logger,
+        IOwnerLlmConfigSource? ownerLlmConfigSource = null)
     {
         _services = services ?? throw new ArgumentNullException(nameof(services));
         _registrationQueryPort = registrationQueryPort ?? throw new ArgumentNullException(nameof(registrationQueryPort));
@@ -46,6 +49,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _nyxClient = nyxClient ?? throw new ArgumentNullException(nameof(nyxClient));
         _relayOutboundPort = relayOutboundPort ?? throw new ArgumentNullException(nameof(relayOutboundPort));
         _interactiveReplyDispatcher = interactiveReplyDispatcher;
+        _ownerLlmConfigSource = ownerLlmConfigSource;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -117,7 +121,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
 
         return ConversationTurnResult.LlmReplyRequested(
-            BuildLlmReplyRequest(activity, registration, inboundEvent, runtimeContext));
+            await BuildLlmReplyRequestAsync(activity, registration, inboundEvent, runtimeContext, ct));
     }
 
     public Task<ConversationTurnResult> RunInboundAsync(ChatActivity activity, CancellationToken ct) =>
@@ -626,10 +630,11 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             var previousMetadata = AgentToolRequestContext.CurrentMetadata;
             try
             {
-                AgentToolRequestContext.CurrentMetadata = BuildAgentBuilderMetadata(
+                AgentToolRequestContext.CurrentMetadata = await BuildAgentBuilderMetadataAsync(
                     activity,
                     inboundEvent,
-                    ResolveUserAccessToken(activity));
+                    ResolveUserAccessToken(activity),
+                    ct);
                 var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_services);
                 var toolResult = await tool.ExecuteAsync(decision.ToolArgumentsJson!, ct);
                 replyContent = relayDecisionMatched
@@ -1010,9 +1015,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             authPrincipal: "bot");
     }
 
-    private static IReadOnlyDictionary<string, string> BuildReplyMetadata(
+    private async Task<IReadOnlyDictionary<string, string>> BuildReplyMetadataAsync(
         ChannelInboundEvent inboundEvent,
-        ChatActivity? activity = null)
+        ChatActivity? activity,
+        CancellationToken ct)
     {
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -1048,15 +1054,34 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (!string.IsNullOrWhiteSpace(larkChatId))
             metadata[ChannelMetadataKeys.LarkChatId] = larkChatId;
 
+        // Mirror SkillRunnerGAgent / WorkflowAgentGAgent: pin the bot owner's UserConfig
+        // (DefaultModel + PreferredLlmRoute + MaxToolRounds) onto outbound LLM metadata so the
+        // channel inbound → LLM path honors the same per-owner LLM routing the scheduled agents
+        // do. Without this, channel-bot LLM turns fall through to NyxIdLLMProvider's compile-time
+        // defaults and 400 against a bot owner who pre-configured a custom NyxID service. Source
+        // is bound once via constructor injection — no per-execution Services.GetService<>
+        // lookup, per codex's PR #509 partial dissent on r3159047120.
+        await OwnerLlmConfigApplier.ApplyAsync(
+            metadata,
+            inboundEvent.RegistrationScopeId,
+            _ownerLlmConfigSource,
+            _logger,
+            actorLabel: "Channel turn runner",
+            actorId: inboundEvent.MessageId,
+            ct);
+
         return metadata;
     }
 
-    private static IReadOnlyDictionary<string, string> BuildAgentBuilderMetadata(
+    private async Task<IReadOnlyDictionary<string, string>> BuildAgentBuilderMetadataAsync(
         ChatActivity activity,
         ChannelInboundEvent inboundEvent,
-        string? userAccessToken)
+        string? userAccessToken,
+        CancellationToken ct)
     {
-        var metadata = new Dictionary<string, string>(BuildReplyMetadata(inboundEvent, activity), StringComparer.Ordinal)
+        var metadata = new Dictionary<string, string>(
+            await BuildReplyMetadataAsync(inboundEvent, activity, ct),
+            StringComparer.Ordinal)
         {
             [ChannelMetadataKeys.ChatType] = ResolveConversationChatType(activity.Conversation),
         };
@@ -1135,11 +1160,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         return inboundEvent;
     }
 
-    private static NeedsLlmReplyEvent BuildLlmReplyRequest(
+    private async Task<NeedsLlmReplyEvent> BuildLlmReplyRequestAsync(
         ChatActivity activity,
         ChannelBotRegistrationEntry registration,
         ChannelInboundEvent inboundEvent,
-        ConversationTurnRuntimeContext runtimeContext)
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
     {
         var request = new NeedsLlmReplyEvent
         {
@@ -1162,7 +1188,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             request.ReplyTokenExpiresAtUnixMs = token.ExpiresAtUtc.ToUnixTimeMilliseconds();
         }
 
-        foreach (var pair in BuildReplyMetadata(inboundEvent, activity))
+        foreach (var pair in await BuildReplyMetadataAsync(inboundEvent, activity, ct))
             request.Metadata[pair.Key] = pair.Value;
 
         return request;

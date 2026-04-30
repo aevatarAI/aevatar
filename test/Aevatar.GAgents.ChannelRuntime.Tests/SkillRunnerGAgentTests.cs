@@ -2,6 +2,7 @@ using System.Net;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -742,6 +743,114 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         handler.Requests.Should().HaveCount(2);
     }
 
+    [Fact]
+    public async Task BuildExecutionMetadata_ShouldPinOwnerLlmConfigOverrides_WhenSourceReturnsConfig()
+    {
+        // Regression for the "/daily failed: Provider 'openai' not connected" report:
+        // skill runners must honor the bot owner's pre-configured model + NyxID route + tool
+        // cap — same shape ChannelLlmReplyInboxRuntime applies for nyxid-chat. Without it,
+        // every scheduled run falls through to NyxIdLLMProvider's compile-time `gpt-5.4` +
+        // gateway default, which the gateway routes to OpenAI and 400s for bot owners who
+        // wired a custom NyxID service like `chrono-llm` at `/api/v1/proxy/s/chrono-llm`.
+        var source = new StubOwnerLlmConfigSource(new OwnerLlmConfig(
+            DefaultModel: "gpt-5.5",
+            PreferredLlmRoute: "/api/v1/proxy/s/chrono-llm",
+            MaxToolRounds: 7));
+
+        var agent = CreateAgent("skill-runner-userconfig", _serviceProvider, source);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateInitializeCommand());
+
+        var metadata = await InvokeBuildExecutionMetadataAsync(agent);
+
+        metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("gpt-5.5");
+        metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/api/v1/proxy/s/chrono-llm");
+        metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("7");
+        source.RequestedScopeIds.Should().ContainSingle().Which.Should().Be("scope-1");
+    }
+
+    [Fact]
+    public async Task BuildExecutionMetadata_ShouldOmitOverrides_WhenOwnerLlmConfigSourceIsAbsent()
+    {
+        // No host wiring (e.g. tests that don't compose Studio + the bridge): valid metadata
+        // still comes out, no override keys leak, NyxIdLLMProvider falls through to its
+        // compile-time defaults.
+        await _agent.HandleInitializeAsync(CreateInitializeCommand());
+
+        var metadata = await InvokeBuildExecutionMetadataAsync(_agent);
+
+        metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+        metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
+        metadata.Should().NotContainKey(LLMRequestMetadataKeys.MaxToolRoundsOverride);
+        metadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("nyx-api-key");
+    }
+
+    [Fact]
+    public async Task BuildExecutionMetadata_ShouldOmitOverrides_WhenOwnerLlmConfigFieldsAreEmpty()
+    {
+        // Bot owners who haven't saved any LLM preference get OwnerLlmConfig.Empty (or empty
+        // strings via the host adapter). The applier must NOT pin empty values onto metadata,
+        // because NyxIdLLMProvider treats a non-empty NyxIdRoutePreference of "" as a relative
+        // path against the authority and produces an invalid URL.
+        var source = new StubOwnerLlmConfigSource(OwnerLlmConfig.Empty);
+
+        var agent = CreateAgent("skill-runner-userconfig-empty", _serviceProvider, source);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateInitializeCommand());
+
+        var metadata = await InvokeBuildExecutionMetadataAsync(agent);
+
+        metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+        metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
+        metadata.Should().NotContainKey(LLMRequestMetadataKeys.MaxToolRoundsOverride);
+    }
+
+    [Fact]
+    public async Task BuildExecutionMetadata_ShouldFallBackQuietly_WhenOwnerLlmConfigSourceThrows()
+    {
+        // The source can throw on transient projection failures. The agent's execution turn
+        // must still proceed with provider defaults — the applier catches and logs the
+        // failure, never bubbles it up to the trigger handler.
+        var source = new ThrowingOwnerLlmConfigSource();
+
+        var agent = CreateAgent("skill-runner-userconfig-throws", _serviceProvider, source);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeAsync(CreateInitializeCommand());
+
+        var metadata = await InvokeBuildExecutionMetadataAsync(agent);
+
+        metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+        metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
+    }
+
+    private static async Task<IReadOnlyDictionary<string, string>> InvokeBuildExecutionMetadataAsync(
+        SkillRunnerGAgent agent)
+    {
+        var method = typeof(SkillRunnerGAgent).GetMethod(
+            "BuildExecutionMetadataAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        method.Should().NotBeNull();
+        var task = (Task<IReadOnlyDictionary<string, string>>)method!.Invoke(agent, [CancellationToken.None])!;
+        return await task;
+    }
+
+    internal sealed class StubOwnerLlmConfigSource(OwnerLlmConfig config) : IOwnerLlmConfigSource
+    {
+        public List<string> RequestedScopeIds { get; } = new();
+
+        public Task<OwnerLlmConfig> GetForScopeAsync(string scopeId, CancellationToken ct = default)
+        {
+            RequestedScopeIds.Add(scopeId);
+            return Task.FromResult(config);
+        }
+    }
+
+    internal sealed class ThrowingOwnerLlmConfigSource : IOwnerLlmConfigSource
+    {
+        public Task<OwnerLlmConfig> GetForScopeAsync(string scopeId, CancellationToken ct = default) =>
+            throw new InvalidOperationException("projection unavailable");
+    }
+
     private static void AttachNyxIdApiClient(SkillRunnerGAgent agent, HttpMessageHandler handler)
     {
         var client = new NyxIdApiClient(
@@ -825,10 +934,13 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         }
     }
 
-    private SkillRunnerGAgent CreateAgent(string actorId, ServiceProvider? serviceProvider = null)
+    private SkillRunnerGAgent CreateAgent(
+        string actorId,
+        ServiceProvider? serviceProvider = null,
+        IOwnerLlmConfigSource? ownerLlmConfigSource = null)
     {
         var resolvedServices = serviceProvider ?? _serviceProvider;
-        var agent = new SkillRunnerGAgent
+        var agent = new SkillRunnerGAgent(ownerLlmConfigSource: ownerLlmConfigSource)
         {
             Services = resolvedServices,
             EventSourcingBehaviorFactory =
