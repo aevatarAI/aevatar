@@ -232,12 +232,13 @@ public sealed class StudioMemberGAgentStateTests
             CreatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         });
 
-        var bound = _agent.Apply(withImpl, new StudioMemberBoundEvent
+        var bound = _agent.Apply(withImpl, new StudioMemberBindingCompletedEvent
         {
+            BindingRunId = "bind-legacy-test",
             PublishedServiceId = "member-m-1",
             RevisionId = "rev-7",
             ImplementationKind = StudioMemberImplementationKind.Workflow,
-            BoundAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(2)),
+            CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(2)),
         });
 
         bound.LifecycleStage.Should().Be(StudioMemberLifecycleStage.BindReady);
@@ -246,6 +247,260 @@ public sealed class StudioMemberGAgentStateTests
         bound.LastBinding.RevisionId.Should().Be("rev-7");
         bound.PublishedServiceId.Should().Be("member-m-1");
     }
+
+    [Fact]
+    public void BindingAdmissionRequested_ShouldRecordPendingRun()
+    {
+        var created = _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DisplayName = "Original",
+            ImplementationKind = StudioMemberImplementationKind.Script,
+            PublishedServiceId = "member-m-1",
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        var requestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1));
+
+        var pending = _agent.Apply(created, new StudioMemberBindAdmissionRequested
+        {
+            BindingRunId = "bind-1",
+            ScopeId = "scope-1",
+            MemberId = "m-1",
+            RequestHash = "hash-1",
+            RequestedAtUtc = requestedAt,
+            Request = new StudioMemberBindingRequest
+            {
+                BindingRunId = "bind-1",
+                ScopeId = "scope-1",
+                MemberId = "m-1",
+                RequestHash = "hash-1",
+                Script = new StudioMemberScriptBindingRequest
+                {
+                    ScriptId = "script-1",
+                },
+            },
+        });
+
+        pending.Binding.CurrentBindingRunId.Should().Be("bind-1");
+        pending.Binding.CurrentStatus.Should().Be(StudioMemberBindingRunStatus.AdmissionPending);
+        pending.Binding.UpdatedAtUtc.Should().Be(requestedAt);
+    }
+
+    [Fact]
+    public void BindingAdmitted_ShouldRecordAdmittedRun()
+    {
+        var created = _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DisplayName = "Original",
+            ImplementationKind = StudioMemberImplementationKind.Script,
+            PublishedServiceId = "member-m-1",
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        var pending = _agent.Apply(created, NewAdmissionRequested());
+        var admittedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(2));
+
+        var admitted = _agent.Apply(pending, new StudioMemberBindingAdmittedEvent
+        {
+            BindingRunId = "bind-1",
+            ScopeId = "scope-1",
+            MemberId = "m-1",
+            PublishedServiceId = "member-m-1",
+            ImplementationKind = StudioMemberImplementationKind.Script,
+            DisplayName = "Original",
+            AdmittedAtUtc = admittedAt,
+        });
+
+        admitted.Binding.CurrentBindingRunId.Should().Be("bind-1");
+        admitted.Binding.CurrentStatus.Should().Be(StudioMemberBindingRunStatus.Admitted);
+        admitted.Binding.UpdatedAtUtc.Should().Be(admittedAt);
+    }
+
+    [Fact]
+    public void BindingRejected_ShouldRecordTerminalFailure()
+    {
+        var created = _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DisplayName = "Original",
+            ImplementationKind = StudioMemberImplementationKind.Script,
+            PublishedServiceId = "member-m-1",
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        var pending = _agent.Apply(created, NewAdmissionRequested());
+        var failedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(2));
+
+        var rejected = _agent.Apply(pending, new StudioMemberBindingRejectedEvent
+        {
+            BindingRunId = "bind-1",
+            ScopeId = "scope-1",
+            MemberId = "m-1",
+            Failure = new StudioMemberBindingFailure
+            {
+                Code = "STUDIO_MEMBER_IMPLEMENTATION_KIND_MISMATCH",
+                Message = "kind mismatch",
+                FailedAtUtc = failedAt,
+            },
+        });
+
+        rejected.Binding.CurrentBindingRunId.Should().Be("bind-1");
+        rejected.Binding.CurrentStatus.Should().Be(StudioMemberBindingRunStatus.Rejected);
+        rejected.Binding.LastTerminalBindingRunId.Should().Be("bind-1");
+        rejected.Binding.LastFailure.Code.Should().Be("STUDIO_MEMBER_IMPLEMENTATION_KIND_MISMATCH");
+        rejected.Binding.UpdatedAtUtc.Should().Be(failedAt);
+    }
+
+    [Fact]
+    public void BindingCompleted_ShouldCaptureLastBindingAndAuthorityState()
+    {
+        var created = _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DisplayName = "Original",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            PublishedServiceId = "member-m-1",
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        var pendingAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1));
+        var pending = _agent.Apply(created, new StudioMemberBindingPlatformPendingEvent
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            PendingAtUtc = pendingAt,
+        });
+
+        var completedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(2));
+        var completed = _agent.Apply(pending, new StudioMemberBindingCompletedEvent
+        {
+            BindingRunId = "bind-1",
+            PublishedServiceId = "member-m-1",
+            RevisionId = "rev-8",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            ImplementationRef = new StudioMemberImplementationRef
+            {
+                Workflow = new StudioMemberWorkflowRef
+                {
+                    WorkflowId = "wf-1",
+                    WorkflowRevision = "rev-8",
+                },
+            },
+            CompletedAtUtc = completedAt,
+        });
+
+        completed.LifecycleStage.Should().Be(StudioMemberLifecycleStage.BindReady);
+        completed.LastBinding.Should().NotBeNull();
+        completed.LastBinding.RevisionId.Should().Be("rev-8");
+        completed.Binding.CurrentBindingRunId.Should().Be("bind-1");
+        completed.Binding.CurrentStatus.Should().Be(StudioMemberBindingRunStatus.Succeeded);
+        completed.Binding.LastTerminalBindingRunId.Should().Be("bind-1");
+        completed.Binding.LastFailure.Should().BeNull();
+        completed.Binding.UpdatedAtUtc.Should().Be(completedAt);
+    }
+
+    [Fact]
+    public void BindingFailed_ShouldKeepLastBindingAndRecordFailure()
+    {
+        var created = _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DisplayName = "Original",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            PublishedServiceId = "member-m-1",
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        var completed = _agent.Apply(created, new StudioMemberBindingCompletedEvent
+        {
+            BindingRunId = "bind-success",
+            PublishedServiceId = "member-m-1",
+            RevisionId = "rev-good",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+        });
+        var pending = _agent.Apply(completed, new StudioMemberBindingPlatformPendingEvent
+        {
+            BindingRunId = "bind-fail",
+            PlatformBindingCommandId = "platform-2",
+            PendingAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(2)),
+        });
+        var failedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(3));
+
+        var failed = _agent.Apply(pending, new StudioMemberBindingFailedEvent
+        {
+            BindingRunId = "bind-fail",
+            Failure = new StudioMemberBindingFailure
+            {
+                Code = "SCOPE_BINDING_FAILED",
+                Message = "platform failed",
+                FailedAtUtc = failedAt,
+            },
+        });
+
+        failed.LastBinding.RevisionId.Should().Be("rev-good");
+        failed.Binding.CurrentBindingRunId.Should().Be("bind-fail");
+        failed.Binding.CurrentStatus.Should().Be(StudioMemberBindingRunStatus.Failed);
+        failed.Binding.LastTerminalBindingRunId.Should().Be("bind-fail");
+        failed.Binding.LastFailure.Code.Should().Be("SCOPE_BINDING_FAILED");
+        failed.Binding.UpdatedAtUtc.Should().Be(failedAt);
+    }
+
+    [Fact]
+    public void BindingCompleted_ShouldIgnoreStaleRun()
+    {
+        var created = _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DisplayName = "Original",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            PublishedServiceId = "member-m-1",
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        var current = _agent.Apply(created, new StudioMemberBindingPlatformPendingEvent
+        {
+            BindingRunId = "bind-current",
+            PlatformBindingCommandId = "platform-current",
+            PendingAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+        });
+
+        var stale = _agent.Apply(current, new StudioMemberBindingCompletedEvent
+        {
+            BindingRunId = "bind-old",
+            PublishedServiceId = "member-m-1",
+            RevisionId = "rev-old",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(2)),
+        });
+
+        stale.LastBinding.Should().BeNull();
+        stale.Binding.CurrentBindingRunId.Should().Be("bind-current");
+        stale.Binding.CurrentStatus.Should().Be(StudioMemberBindingRunStatus.PlatformBindingPending);
+    }
+
+    private static StudioMemberBindAdmissionRequested NewAdmissionRequested() =>
+        new()
+        {
+            BindingRunId = "bind-1",
+            ScopeId = "scope-1",
+            MemberId = "m-1",
+            RequestHash = "hash-1",
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+            Request = new StudioMemberBindingRequest
+            {
+                BindingRunId = "bind-1",
+                ScopeId = "scope-1",
+                MemberId = "m-1",
+                RequestHash = "hash-1",
+                Script = new StudioMemberScriptBindingRequest
+                {
+                    ScriptId = "script-1",
+                },
+            },
+        };
 
     private sealed class StudioMemberStateApplier
     {

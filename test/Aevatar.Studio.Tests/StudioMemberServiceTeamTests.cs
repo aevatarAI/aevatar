@@ -157,7 +157,6 @@ public sealed class StudioMemberServiceTeamTests
             commandPort ?? new RecordingMemberCommandPort(),
             memberQueryPort ?? new InMemoryMemberQueryPort(NewDetail()),
             teamQueryPort ?? new InMemoryTeamQueryPort(NewTeamSummary()),
-            new ThrowingScopeBindingPort(),
             new ThrowingServiceLifecycleQueryPort(),
             new ThrowingServiceCommandPort());
 
@@ -261,6 +260,11 @@ public sealed class StudioMemberServiceTeamTests
         public Task UpdateImplementationAsync(
             string scopeId, string memberId,
             StudioMemberImplementationRefResponse implementation, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task StartBindingRunAsync(
+            StudioMemberBindingRunStartRequest request,
+            CancellationToken ct = default) =>
             Task.CompletedTask;
 
         public Task RecordBindingAsync(

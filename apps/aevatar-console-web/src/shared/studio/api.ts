@@ -14,6 +14,11 @@ import type {
   StudioExecutionDetail,
   StudioExecutionSummary,
   StudioMemberBindingContract,
+  StudioMemberBindingAcceptedResponse,
+  StudioMemberBindingFailure,
+  StudioMemberBindingRunStatus,
+  StudioMemberBindingRunStatusResponse,
+  StudioMemberBindingViewResponse,
   StudioMemberDetail,
   StudioMemberImplementationKind,
   StudioMemberImplementationRef,
@@ -1098,8 +1103,164 @@ function decodeStudioMemberBindingContract(
   };
 }
 
+function normalizeStudioMemberBindingRunStatus(
+  value: string | number | null | undefined
+): StudioMemberBindingRunStatus {
+  if (value == null) {
+    return "unknown";
+  }
+
+  return normalizeEnumValue(value, "status", {
+    "0": "unknown",
+    "1": "accepted",
+    "2": "admission_pending",
+    "3": "admitted",
+    "4": "platform_binding_pending",
+    "5": "succeeded",
+    "6": "failed",
+    "7": "rejected",
+    accepted: "accepted",
+    admission_pending: "admission_pending",
+    admissionpending: "admission_pending",
+    admitted: "admitted",
+    platform_binding_pending: "platform_binding_pending",
+    platformbindingpending: "platform_binding_pending",
+    platform_pending: "platform_binding_pending",
+    platformpending: "platform_binding_pending",
+    succeeded: "succeeded",
+    completed: "succeeded",
+    failed: "failed",
+    rejected: "rejected",
+    unspecified: "unknown",
+    unknown: "unknown",
+  }) as StudioMemberBindingRunStatus;
+}
+
+function decodeStudioMemberBindingFailure(
+  value: unknown
+): StudioMemberBindingFailure {
+  const record = expectRecord(value, "StudioMemberBindingFailure");
+  return {
+    code: readString(record, ["code", "Code"], "StudioMemberBindingFailure.code"),
+    message:
+      readNullableString(
+        record,
+        ["message", "Message"],
+        "StudioMemberBindingFailure.message"
+      ) ?? null,
+    failedAt:
+      readNullableString(
+        record,
+        ["failedAt", "FailedAt", "failedAtUtc", "FailedAtUtc"],
+        "StudioMemberBindingFailure.failedAt"
+      ) ?? null,
+  };
+}
+
+function decodeStudioMemberBindingRunStatusResponse(
+  value: unknown
+): StudioMemberBindingRunStatusResponse {
+  const record = expectRecord(value, "StudioMemberBindingRunStatusResponse");
+  return {
+    status: normalizeStudioMemberBindingRunStatus(
+      readOptionalScalar(record, ["status", "Status"])
+    ),
+    bindingRunId: readString(
+      record,
+      ["bindingRunId", "BindingRunId"],
+      "StudioMemberBindingRunStatusResponse.bindingRunId"
+    ),
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioMemberBindingRunStatusResponse.scopeId"
+    ),
+    memberId: readString(
+      record,
+      ["memberId", "MemberId"],
+      "StudioMemberBindingRunStatusResponse.memberId"
+    ),
+    platformBindingCommandId:
+      readNullableString(
+        record,
+        ["platformBindingCommandId", "PlatformBindingCommandId"],
+        "StudioMemberBindingRunStatusResponse.platformBindingCommandId"
+      ) ?? null,
+    lastSuccessfulBinding:
+      record.lastSuccessfulBinding == null &&
+      record.LastSuccessfulBinding == null
+        ? null
+        : decodeStudioMemberBindingContract(
+            record.lastSuccessfulBinding ?? record.LastSuccessfulBinding
+          ),
+    failure:
+      record.failure == null && record.Failure == null
+        ? null
+        : decodeStudioMemberBindingFailure(record.failure ?? record.Failure),
+    updatedAt:
+      readNullableString(
+        record,
+        ["updatedAt", "UpdatedAt", "updatedAtUtc", "UpdatedAtUtc"],
+        "StudioMemberBindingRunStatusResponse.updatedAt"
+      ) ?? null,
+  };
+}
+
+function decodeStudioMemberBindingAcceptedResponse(
+  value: unknown
+): StudioMemberBindingAcceptedResponse {
+  const record = expectRecord(value, "StudioMemberBindingAcceptedResponse");
+  return {
+    status: normalizeStudioMemberBindingRunStatus(
+      readOptionalScalar(record, ["status", "Status"])
+    ),
+    bindingRunId: readString(
+      record,
+      ["bindingRunId", "BindingRunId"],
+      "StudioMemberBindingAcceptedResponse.bindingRunId"
+    ),
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioMemberBindingAcceptedResponse.scopeId"
+    ),
+    memberId: readString(
+      record,
+      ["memberId", "MemberId"],
+      "StudioMemberBindingAcceptedResponse.memberId"
+    ),
+  };
+}
+
+function decodeStudioMemberBindingViewResponse(
+  value: unknown
+): StudioMemberBindingViewResponse {
+  const record = expectRecord(value, "StudioMemberBindingViewResponse");
+  const currentBindingRun =
+    record.currentBindingRun == null && record.CurrentBindingRun == null
+      ? undefined
+      : decodeStudioMemberBindingRunStatusResponse(
+          record.currentBindingRun ?? record.CurrentBindingRun
+        );
+  return {
+    lastBinding:
+      record.lastBinding == null && record.LastBinding == null
+        ? null
+        : decodeStudioMemberBindingContract(
+            record.lastBinding ?? record.LastBinding
+          ),
+    ...(currentBindingRun === undefined ? {} : { currentBindingRun }),
+  };
+}
+
 function decodeStudioMemberDetail(value: unknown): StudioMemberDetail {
   const record = expectRecord(value, "StudioMemberDetail");
+  const currentBindingRun =
+    record.currentBindingRun == null && record.CurrentBindingRun == null
+      ? undefined
+      : decodeStudioMemberBindingRunStatusResponse(
+          record.currentBindingRun ?? record.CurrentBindingRun
+        );
   return {
     summary: decodeStudioMemberSummary(
       expectRecord(record.summary ?? record.Summary, "StudioMemberDetail.summary")
@@ -1116,6 +1277,7 @@ function decodeStudioMemberDetail(value: unknown): StudioMemberDetail {
         : decodeStudioMemberBindingContract(
             record.lastBinding ?? record.LastBinding
           ),
+    ...(currentBindingRun === undefined ? {} : { currentBindingRun }),
   };
 }
 
@@ -1507,10 +1669,10 @@ export const studioApi = {
     displayName?: string | null;
     workflowYamls: readonly string[];
     revisionId?: string | null;
-  }): Promise<StudioScopeBindingResult> {
+  }): Promise<StudioMemberBindingAcceptedResponse> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}/binding`,
-      decodeStudioScopeBindingResult,
+      decodeStudioMemberBindingAcceptedResponse,
       {
         method: "PUT",
         headers: JSON_HEADERS,
@@ -1535,10 +1697,10 @@ export const studioApi = {
     scriptId: string;
     scriptRevision: string;
     revisionId?: string | null;
-  }): Promise<StudioScopeScriptBindingResult> {
+  }): Promise<StudioMemberBindingAcceptedResponse> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}/binding`,
-      decodeStudioScopeBindingResult,
+      decodeStudioMemberBindingAcceptedResponse,
       {
         method: "PUT",
         headers: JSON_HEADERS,
@@ -1564,10 +1726,10 @@ export const studioApi = {
     actorTypeName: string;
     endpoints: StudioScopeGAgentBindingInput["endpoints"];
     revisionId?: string | null;
-  }): Promise<StudioScopeGAgentBindingResult> {
+  }): Promise<StudioMemberBindingAcceptedResponse> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}/binding`,
-      decodeStudioScopeBindingResult,
+      decodeStudioMemberBindingAcceptedResponse,
       {
         method: "PUT",
         headers: JSON_HEADERS,
@@ -1600,10 +1762,21 @@ export const studioApi = {
   getMemberBinding(
     scopeId: string,
     memberId: string
-  ): Promise<StudioScopeBindingStatus> {
+  ): Promise<StudioMemberBindingViewResponse> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/members/${encodeURIComponent(memberId.trim())}/binding`,
-      decodeStudioScopeBindingStatus
+      decodeStudioMemberBindingViewResponse
+    );
+  },
+
+  getMemberBindingRun(
+    scopeId: string,
+    memberId: string,
+    bindingRunId: string
+  ): Promise<StudioMemberBindingRunStatusResponse> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/members/${encodeURIComponent(memberId.trim())}/binding-runs/${encodeURIComponent(bindingRunId.trim())}`,
+      decodeStudioMemberBindingRunStatusResponse
     );
   },
 

@@ -56,10 +56,17 @@ public sealed class StudioMemberCurrentStateProjectorTests
                 ImplementationKind = StudioMemberImplementationKind.Workflow,
                 BoundAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
             },
+            Binding = new StudioMemberBindingAuthorityState
+            {
+                CurrentBindingRunId = "bind-1",
+                CurrentStatus = StudioMemberBindingRunStatus.Succeeded,
+                LastTerminalBindingRunId = "bind-1",
+                UpdatedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+            },
         };
 
         var envelope = WrapCommitted(
-            payload: new StudioMemberBoundEvent { RevisionId = "rev-9" },
+            payload: new StudioMemberBindingCompletedEvent { RevisionId = "rev-9" },
             state: state,
             version: 5,
             eventId: "evt-9");
@@ -95,6 +102,12 @@ public sealed class StudioMemberCurrentStateProjectorTests
         written.LastBoundRevisionId.Should().Be("rev-9");
         written.LastBoundImplementationKind.Should().Be(MemberImplementationKindNames.Workflow);
         written.LastBoundAt.Should().NotBeNull();
+
+        // async binding status denormalized from member authority state.
+        written.BindingCurrentRunId.Should().Be("bind-1");
+        written.BindingCurrentStatus.Should().Be(StudioMemberBindingRunStatusNames.Succeeded);
+        written.BindingLastTerminalRunId.Should().Be("bind-1");
+        written.BindingUpdatedAt.Should().NotBeNull();
     }
 
     [Fact]

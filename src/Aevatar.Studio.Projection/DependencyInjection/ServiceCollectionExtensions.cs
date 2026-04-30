@@ -10,6 +10,7 @@ using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.Projectors;
 using Aevatar.Studio.Projection.QueryPorts;
 using Aevatar.Studio.Projection.ReadModels;
+using Aevatar.GAgents.StudioMember;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -146,6 +147,7 @@ public static class ServiceCollectionExtensions
         // Command services (write side)
         services.TryAddSingleton<IUserConfigCommandService, ActorDispatchUserConfigCommandService>();
         services.TryAddSingleton<IStudioMemberCommandPort, ActorDispatchStudioMemberCommandService>();
+        services.TryAddSingleton<IStudioMemberPlatformBindingCommandPort, ScopeBindingStudioMemberPlatformBindingCommandService>();
         services.TryAddSingleton<IStudioTeamCommandPort, ActorDispatchStudioTeamCommandService>();
 
         return services;

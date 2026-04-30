@@ -33,6 +33,16 @@ public interface IStudioMemberCommandPort
         CancellationToken ct = default);
 
     /// <summary>
+    /// Starts an asynchronous binding run. Implementations dispatch a
+    /// <c>StudioMemberBindingRunRequested</c> message to a run actor and
+    /// return after the message is accepted for dispatch; they do not wait
+    /// for member admission, platform binding, or read-model visibility.
+    /// </summary>
+    Task StartBindingRunAsync(
+        StudioMemberBindingRunStartRequest request,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Records that the member has been bound to its published service at the
     /// given revision. Called by the member binding orchestrator after the
     /// underlying scope binding upsert succeeds.

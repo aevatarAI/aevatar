@@ -48,6 +48,10 @@ internal static class StudioMemberEndpoints
         app.MapGet("/api/scopes/{scopeId}/members/{memberId}/binding", HandleGetBindingAsync)
             .WithTags("StudioMembers");
         app.MapGet(
+                "/api/scopes/{scopeId}/members/{memberId}/binding-runs/{bindingRunId}",
+                HandleGetBindingRunAsync)
+            .WithTags("StudioMembers");
+        app.MapGet(
                 "/api/scopes/{scopeId}/members/{memberId}/endpoints/{endpointId}/contract",
                 HandleGetEndpointContractAsync)
             .WithTags("StudioMembers");
@@ -148,7 +152,10 @@ internal static class StudioMemberEndpoints
 
         try
         {
-            return Results.Ok(await memberService.BindAsync(scopeId, memberId, request, ct));
+            var receipt = await memberService.BindAsync(scopeId, memberId, request, ct);
+            return Results.Accepted(
+                $"/api/scopes/{Uri.EscapeDataString(scopeId)}/members/{Uri.EscapeDataString(memberId)}/binding-runs/{Uri.EscapeDataString(receipt.BindingRunId)}",
+                receipt);
         }
         catch (StudioMemberNotFoundException ex)
         {
@@ -179,12 +186,40 @@ internal static class StudioMemberEndpoints
             // Bare `404 NotFound` for the "exists but never bound" case used
             // to overload 404 with two different meanings; the wrapper keeps
             // the response always a JSON object with a single nullable field.
-            var binding = await memberService.GetBindingAsync(scopeId, memberId, ct);
-            return Results.Ok(new StudioMemberBindingViewResponse(binding));
+            return Results.Ok(await memberService.GetBindingAsync(scopeId, memberId, ct));
         }
         catch (StudioMemberNotFoundException ex)
         {
             return NotFound(ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", ex.Message);
+        }
+    }
+
+    internal static async Task<IResult> HandleGetBindingRunAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        string bindingRunId,
+        [FromServices] IStudioMemberService memberService,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
+        try
+        {
+            return Results.Ok(await memberService.GetBindingRunAsync(scopeId, memberId, bindingRunId, ct));
+        }
+        catch (StudioMemberNotFoundException ex)
+        {
+            return NotFound(ex);
+        }
+        catch (StudioMemberBindingRunNotFoundException ex)
+        {
+            return BindingRunNotFound(ex);
         }
         catch (InvalidOperationException ex)
         {
@@ -369,6 +404,18 @@ internal static class StudioMemberEndpoints
                 message = ex.Message,
                 scopeId = ex.ScopeId,
                 memberId = ex.MemberId,
+            },
+            statusCode: StatusCodes.Status404NotFound);
+
+    private static IResult BindingRunNotFound(StudioMemberBindingRunNotFoundException ex) =>
+        Results.Json(
+            new
+            {
+                code = "STUDIO_MEMBER_BINDING_RUN_NOT_FOUND",
+                message = ex.Message,
+                scopeId = ex.ScopeId,
+                memberId = ex.MemberId,
+                bindingRunId = ex.BindingRunId,
             },
             statusCode: StatusCodes.Status404NotFound);
 }

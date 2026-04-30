@@ -198,10 +198,45 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
         bootstrap.EnsuredActorIds.Should().ContainSingle()
             .Which.Should().Be("studio-member:scope-1:m-1");
         dispatch.Dispatches.Should().ContainSingle();
-        var evt = dispatch.Dispatches[0].Envelope.Payload.Unpack<StudioMemberBoundEvent>();
+        var evt = dispatch.Dispatches[0].Envelope.Payload.Unpack<StudioMemberBindingCompletedEvent>();
         evt.PublishedServiceId.Should().Be("member-m-1");
         evt.RevisionId.Should().Be("rev-7");
         evt.ImplementationKind.Should().Be(StudioMemberImplementationKind.Gagent);
+        evt.BindingRunId.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public async Task StartBindingRunAsync_ShouldDispatchRequestedEventToRunActor()
+    {
+        var bootstrap = new RecordingBootstrap();
+        var dispatch = new RecordingDispatchPort();
+        var service = new ActorDispatchStudioMemberCommandService(bootstrap, dispatch);
+
+        await service.StartBindingRunAsync(
+            new StudioMemberBindingRunStartRequest(
+                BindingRunId: "bind-1",
+                ScopeId: ScopeId,
+                MemberId: "m-1",
+                ImplementationKind: MemberImplementationKindNames.Script,
+                Binding: new UpdateStudioMemberBindingRequest(
+                    Script: new StudioMemberScriptBindingSpec(
+                        ScriptId: "script-1",
+                        ScriptRevision: "rev-a"))),
+            CancellationToken.None);
+
+        bootstrap.EnsuredActorIds.Should().Equal(
+            "studio-member-binding-run:bind-1",
+            "studio-member:scope-1:m-1");
+        dispatch.Dispatches.Should().ContainSingle();
+        var dispatched = dispatch.Dispatches[0];
+        dispatched.ActorId.Should().Be("studio-member-binding-run:bind-1");
+        dispatched.Envelope.Payload.Is(StudioMemberBindingRunRequested.Descriptor).Should().BeTrue();
+        var evt = dispatched.Envelope.Payload.Unpack<StudioMemberBindingRunRequested>();
+        evt.Request.BindingRunId.Should().Be("bind-1");
+        evt.Request.ScopeId.Should().Be(ScopeId);
+        evt.Request.MemberId.Should().Be("m-1");
+        evt.Request.Script.ScriptId.Should().Be("script-1");
+        evt.Request.Script.ScriptRevision.Should().Be("rev-a");
     }
 
     [Fact]

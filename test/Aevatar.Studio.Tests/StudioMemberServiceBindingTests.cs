@@ -12,13 +12,9 @@ namespace Aevatar.Studio.Tests;
 /// <summary>
 /// Locks in the most important invariants from issue #325:
 ///
-///   - Member binding never falls back to the scope default service.
-///   - The ServiceId Studio sends to the underlying scope binding command is
-///     the member's stable publishedServiceId, sourced from the authority
-///     state — not derived from a frontend-supplied value.
-///   - Renaming a member does not change publishedServiceId.
-///   - workflow / script / gagent each route through the same orchestration.
-///   - The resulting revision is recorded back on the member authority.
+///   - Bind admission is no longer read-model gated.
+///   - Bind returns an honest async accepted receipt.
+///   - workflow / script / gagent requests keep their typed payload shape.
 /// </summary>
 public sealed class StudioMemberServiceBindingTests
 {
@@ -27,14 +23,12 @@ public sealed class StudioMemberServiceBindingTests
     private const string PublishedServiceId = "member-m-bind-test";
 
     [Fact]
-    public async Task BindAsync_Workflow_ShouldUseMemberPublishedServiceId()
+    public async Task BindAsync_Workflow_ShouldDispatchBindingRunWithoutReadingMember()
     {
-        var detail = NewDetail(MemberImplementationKindNames.Workflow);
-        var queryPort = new InMemoryQueryPort(detail);
+        var queryPort = new ThrowingBindQueryPort();
         var commandPort = new RecordingCommandPort();
-        var bindingPort = new RecordingScopeBindingPort();
 
-        var service = NewService(commandPort, queryPort, bindingPort);
+        var service = NewService(commandPort, queryPort);
 
         var response = await service.BindAsync(
             ScopeId,
@@ -43,43 +37,26 @@ public sealed class StudioMemberServiceBindingTests
                 Workflow: new StudioMemberWorkflowBindingSpec(["workflow:\n  name: x"])),
             CancellationToken.None);
 
-        // The bind orchestration MUST hand the platform binding port the
-        // member's stable publishedServiceId — never null/empty (which would
-        // fall back to the scope default service).
-        bindingPort.LastRequest.Should().NotBeNull();
-        bindingPort.LastRequest!.ServiceId.Should().Be(PublishedServiceId);
-        bindingPort.LastRequest.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Workflow);
-        bindingPort.LastRequest.Workflow!.WorkflowYamls.Should().ContainSingle();
+        response.Status.Should().Be(StudioMemberBindingRunStatusNames.Accepted);
+        response.BindingRunId.Should().StartWith("bind-");
+        response.ScopeId.Should().Be(ScopeId);
+        response.MemberId.Should().Be(MemberId);
 
-        // Lifecycle fix: BindAsync must persist the resolved impl_ref on the
-        // member (UpdateImplementationAsync) BEFORE recording the binding
-        // (RecordBindingAsync), so the actor walks Created → BuildReady →
-        // BindReady on every bind. Both must run, and impl_update must
-        // happen first.
-        commandPort.OperationsInOrder.Should().Equal(
-            "UpdateImplementation", "RecordBinding");
-        commandPort.RecordedImplementationUpdates.Should().ContainSingle()
-            .Which.ImplementationKind.Should().Be(MemberImplementationKindNames.Workflow);
-
-        // The orchestrator records the resulting revision back on the
-        // member authority so /members/.../binding can read it from the
-        // read model later.
-        commandPort.RecordedBindings.Should().ContainSingle()
-            .Which.PublishedServiceId.Should().Be(PublishedServiceId);
-        response.PublishedServiceId.Should().Be(PublishedServiceId);
-        response.RevisionId.Should().Be(bindingPort.IssuedRevisionId);
-        response.ImplementationKind.Should().Be(MemberImplementationKindNames.Workflow);
+        var started = commandPort.StartedRuns.Should().ContainSingle().Which;
+        started.BindingRunId.Should().Be(response.BindingRunId);
+        started.ScopeId.Should().Be(ScopeId);
+        started.MemberId.Should().Be(MemberId);
+        started.ImplementationKind.Should().Be(MemberImplementationKindNames.Workflow);
+        started.Binding.Workflow!.WorkflowYamls.Should().ContainSingle();
     }
 
     [Fact]
     public async Task BindAsync_Script_ShouldRouteThroughScriptingKind()
     {
-        var detail = NewDetail(MemberImplementationKindNames.Script);
-        var queryPort = new InMemoryQueryPort(detail);
+        var queryPort = new ThrowingBindQueryPort();
         var commandPort = new RecordingCommandPort();
-        var bindingPort = new RecordingScopeBindingPort();
 
-        var service = NewService(commandPort, queryPort, bindingPort);
+        var service = NewService(commandPort, queryPort);
 
         await service.BindAsync(
             ScopeId,
@@ -88,26 +65,19 @@ public sealed class StudioMemberServiceBindingTests
                 Script: new StudioMemberScriptBindingSpec(ScriptId: "s-1", ScriptRevision: "v3")),
             CancellationToken.None);
 
-        bindingPort.LastRequest!.ServiceId.Should().Be(PublishedServiceId);
-        bindingPort.LastRequest.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Scripting);
-        bindingPort.LastRequest.Script!.ScriptId.Should().Be("s-1");
-        bindingPort.LastRequest.Script.ScriptRevision.Should().Be("v3");
-
-        commandPort.OperationsInOrder.Should().Equal(
-            "UpdateImplementation", "RecordBinding");
-        commandPort.RecordedImplementationUpdates.Should().ContainSingle()
-            .Which.ScriptId.Should().Be("s-1");
+        var started = commandPort.StartedRuns.Should().ContainSingle().Which;
+        started.ImplementationKind.Should().Be(MemberImplementationKindNames.Script);
+        started.Binding.Script!.ScriptId.Should().Be("s-1");
+        started.Binding.Script.ScriptRevision.Should().Be("v3");
     }
 
     [Fact]
     public async Task BindAsync_GAgent_ShouldRouteThroughGAgentKind()
     {
-        var detail = NewDetail(MemberImplementationKindNames.GAgent);
-        var queryPort = new InMemoryQueryPort(detail);
+        var queryPort = new ThrowingBindQueryPort();
         var commandPort = new RecordingCommandPort();
-        var bindingPort = new RecordingScopeBindingPort();
 
-        var service = NewService(commandPort, queryPort, bindingPort);
+        var service = NewService(commandPort, queryPort);
 
         await service.BindAsync(
             ScopeId,
@@ -125,49 +95,36 @@ public sealed class StudioMemberServiceBindingTests
                     ])),
             CancellationToken.None);
 
-        bindingPort.LastRequest!.ServiceId.Should().Be(PublishedServiceId);
-        bindingPort.LastRequest.ImplementationKind.Should().Be(ScopeBindingImplementationKind.GAgent);
-        bindingPort.LastRequest.GAgent!.ActorTypeName.Should().Be("MyActor");
-        bindingPort.LastRequest.GAgent.Endpoints.Should().ContainSingle();
-        bindingPort.LastRequest.GAgent.Endpoints[0].Kind.Should().Be(ServiceEndpointKind.Chat);
-
-        commandPort.OperationsInOrder.Should().Equal(
-            "UpdateImplementation", "RecordBinding");
-        commandPort.RecordedImplementationUpdates.Should().ContainSingle()
-            .Which.ActorTypeName.Should().Be("MyActor");
+        var started = commandPort.StartedRuns.Should().ContainSingle().Which;
+        started.ImplementationKind.Should().Be(MemberImplementationKindNames.GAgent);
+        started.Binding.GAgent!.ActorTypeName.Should().Be("MyActor");
+        started.Binding.GAgent.Endpoints.Should().ContainSingle()
+            .Which.Kind.Should().Be("chat");
     }
 
     [Fact]
-    public async Task BindAsync_ShouldFail_WhenMemberDoesNotExist()
+    public async Task BindAsync_ShouldAccept_WhenMemberReadModelDoesNotExistYet()
     {
-        var queryPort = new InMemoryQueryPort(detail: null);
-        var service = NewService(
-            new RecordingCommandPort(),
-            queryPort,
-            new RecordingScopeBindingPort());
+        var commandPort = new RecordingCommandPort();
+        var service = NewService(commandPort, new ThrowingBindQueryPort());
 
-        var act = () => service.BindAsync(
+        var response = await service.BindAsync(
             ScopeId,
             MemberId,
             new UpdateStudioMemberBindingRequest(
                 Workflow: new StudioMemberWorkflowBindingSpec(["workflow:"])),
             CancellationToken.None);
 
-        // Assert the typed exception so a regression that swaps it for a
-        // plain InvalidOperationException is caught — endpoints map the
-        // typed one to 404 and untyped IOEx to 400.
-        await act.Should().ThrowAsync<StudioMemberNotFoundException>()
-            .WithMessage("*not found in scope*");
+        response.Status.Should().Be(StudioMemberBindingRunStatusNames.Accepted);
+        commandPort.StartedRuns.Should().ContainSingle();
     }
 
     [Fact]
-    public async Task BindAsync_ShouldFail_WhenWorkflowYamlsAreMissing()
+    public async Task BindAsync_ShouldFail_WhenBindingImplementationIsMissing()
     {
-        var detail = NewDetail(MemberImplementationKindNames.Workflow);
         var service = NewService(
             new RecordingCommandPort(),
-            new InMemoryQueryPort(detail),
-            new RecordingScopeBindingPort());
+            new ThrowingBindQueryPort());
 
         var act = () => service.BindAsync(
             ScopeId,
@@ -176,7 +133,7 @@ public sealed class StudioMemberServiceBindingTests
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*workflow yamls are required*");
+            .WithMessage("*exactly one binding implementation is required*");
     }
 
     [Fact]
@@ -194,14 +151,13 @@ public sealed class StudioMemberServiceBindingTests
 
         var service = NewService(
             new RecordingCommandPort(),
-            new InMemoryQueryPort(withBinding),
-            new RecordingScopeBindingPort());
+            new InMemoryQueryPort(withBinding));
 
         var binding = await service.GetBindingAsync(ScopeId, MemberId);
 
-        binding.Should().NotBeNull();
-        binding!.PublishedServiceId.Should().Be(PublishedServiceId);
-        binding.RevisionId.Should().Be("rev-9");
+        binding.LastBinding.Should().NotBeNull();
+        binding.LastBinding!.PublishedServiceId.Should().Be(PublishedServiceId);
+        binding.LastBinding.RevisionId.Should().Be("rev-9");
     }
 
     // Bind / GetBinding don't touch the lifecycle/command ports. We pass
@@ -211,13 +167,11 @@ public sealed class StudioMemberServiceBindingTests
     // green.
     private static StudioMemberService NewService(
         IStudioMemberCommandPort memberCommandPort,
-        IStudioMemberQueryPort memberQueryPort,
-        IScopeBindingCommandPort scopeBindingCommandPort) =>
+        IStudioMemberQueryPort memberQueryPort) =>
         new(
             memberCommandPort,
             memberQueryPort,
             new InertTeamQueryPort(),
-            scopeBindingCommandPort,
             new ThrowingServiceLifecycleQueryPort(),
             new ThrowingServiceCommandPort());
 
@@ -278,11 +232,30 @@ public sealed class StudioMemberServiceBindingTests
         }
     }
 
+    private sealed class ThrowingBindQueryPort : IStudioMemberQueryPort
+    {
+        public Task<StudioMemberRosterResponse> ListAsync(
+            string scopeId,
+            StudioMemberRosterPageRequest? page = null,
+            CancellationToken ct = default)
+        {
+            throw new InvalidOperationException("BindAsync must not query StudioMember read models.");
+        }
+
+        public Task<StudioMemberDetailResponse?> GetAsync(
+            string scopeId, string memberId, CancellationToken ct = default)
+        {
+            throw new InvalidOperationException("BindAsync must not query StudioMember read models.");
+        }
+    }
+
     private sealed class RecordingCommandPort : IStudioMemberCommandPort
     {
         public List<RecordedBinding> RecordedBindings { get; } = [];
 
         public List<StudioMemberImplementationRefResponse> RecordedImplementationUpdates { get; } = [];
+
+        public List<StudioMemberBindingRunStartRequest> StartedRuns { get; } = [];
 
         public List<string> OperationsInOrder { get; } = [];
 
@@ -300,6 +273,15 @@ public sealed class StudioMemberServiceBindingTests
         {
             RecordedImplementationUpdates.Add(implementation);
             OperationsInOrder.Add("UpdateImplementation");
+            return Task.CompletedTask;
+        }
+
+        public Task StartBindingRunAsync(
+            StudioMemberBindingRunStartRequest request,
+            CancellationToken ct = default)
+        {
+            StartedRuns.Add(request);
+            OperationsInOrder.Add("StartBindingRun");
             return Task.CompletedTask;
         }
 
@@ -389,53 +371,4 @@ public sealed class StudioMemberServiceBindingTests
             RollbackServiceRolloutCommand command, CancellationToken ct = default) => throw Reject(nameof(RollbackServiceRolloutAsync));
     }
 
-    private sealed class RecordingScopeBindingPort : IScopeBindingCommandPort
-    {
-        public string IssuedRevisionId { get; } = "rev-test";
-
-        public ScopeBindingUpsertRequest? LastRequest { get; private set; }
-
-        public Task<ScopeBindingUpsertResult> UpsertAsync(
-            ScopeBindingUpsertRequest request, CancellationToken ct = default)
-        {
-            LastRequest = request;
-            // Mirror the production binding ports: populate the kind-specific
-            // result so BindAsync can derive the resolved implementation_ref
-            // and call UpdateImplementationAsync. Leaving these null skips
-            // the lifecycle wiring entirely and silently passes any test
-            // that doesn't assert on the call ordering.
-            ScopeBindingWorkflowResult? workflowResult = null;
-            ScopeBindingScriptResult? scriptResult = null;
-            ScopeBindingGAgentResult? gagentResult = null;
-            switch (request.ImplementationKind)
-            {
-                case ScopeBindingImplementationKind.Workflow:
-                    workflowResult = new ScopeBindingWorkflowResult(
-                        WorkflowName: $"wf-{request.ServiceId}",
-                        DefinitionActorIdPrefix: $"def-{request.ServiceId}");
-                    break;
-                case ScopeBindingImplementationKind.Scripting:
-                    scriptResult = new ScopeBindingScriptResult(
-                        ScriptId: request.Script?.ScriptId ?? string.Empty,
-                        ScriptRevision: request.Script?.ScriptRevision ?? IssuedRevisionId,
-                        DefinitionActorId: $"def-{request.ServiceId}");
-                    break;
-                case ScopeBindingImplementationKind.GAgent:
-                    gagentResult = new ScopeBindingGAgentResult(
-                        ActorTypeName: request.GAgent?.ActorTypeName ?? string.Empty);
-                    break;
-            }
-
-            return Task.FromResult(new ScopeBindingUpsertResult(
-                ScopeId: request.ScopeId,
-                ServiceId: request.ServiceId ?? string.Empty,
-                DisplayName: request.DisplayName ?? string.Empty,
-                RevisionId: IssuedRevisionId,
-                ImplementationKind: request.ImplementationKind,
-                ExpectedActorId: $"actor-{request.ServiceId}-{IssuedRevisionId}",
-                Workflow: workflowResult,
-                Script: scriptResult,
-                GAgent: gagentResult));
-        }
-    }
 }
