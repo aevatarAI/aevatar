@@ -41,6 +41,10 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
     /// </summary>
     internal static readonly TimeSpan MaxRetryDelay = TimeSpan.FromMinutes(30);
 
+    internal static readonly TimeSpan ProvisioningObservationTimeout = TimeSpan.FromMinutes(2);
+
+    private static readonly TimeSpan ProvisioningObservationPollDelay = TimeSpan.FromSeconds(2);
+
     private readonly IAevatarOAuthClientProvider _clientProvider;
     private readonly AevatarOAuthClientProjectionPort _projectionPort;
     private readonly IActorRuntime _actorRuntime;
@@ -244,6 +248,8 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
             "Production deployments must enable broker_capability_enabled on this client at NyxID admin (one-time per cluster).",
             AevatarOAuthClientGAgent.WellKnownId,
             authority);
+
+        await WaitForProvisionedReadModelAsync(authority, redirectUri, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -257,4 +263,48 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
     private static bool RedirectUriDrifted(string? stored, string resolved) =>
         string.IsNullOrEmpty(stored)
         || !string.Equals(stored, resolved, StringComparison.Ordinal);
+
+    private async Task WaitForProvisionedReadModelAsync(
+        string authority,
+        string redirectUri,
+        CancellationToken ct)
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(ProvisioningObservationTimeout);
+        AevatarOAuthClientSnapshot? lastSnapshot = null;
+
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            try
+            {
+                var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
+                lastSnapshot = snapshot;
+                if (string.Equals(snapshot.NyxIdAuthority, authority, StringComparison.Ordinal)
+                    && !string.IsNullOrEmpty(snapshot.ClientId)
+                    && !RedirectUriDrifted(snapshot.RedirectUri, redirectUri))
+                {
+                    _logger.LogInformation(
+                        "Aevatar OAuth client provisioning observed in readmodel: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}",
+                        snapshot.ClientId,
+                        snapshot.NyxIdAuthority,
+                        snapshot.RedirectUri);
+                    return;
+                }
+            }
+            catch (AevatarOAuthClientNotProvisionedException)
+            {
+                // Projection has not materialized the first state root yet.
+            }
+
+            await Task.Delay(ProvisioningObservationPollDelay, ct).ConfigureAwait(false);
+        }
+
+        throw new TimeoutException(
+            "Aevatar OAuth client provisioning did not become visible in the readmodel " +
+            $"within {ProvisioningObservationTimeout.TotalSeconds:n0}s " +
+            $"(authority='{authority}', expected_redirect_uri='{redirectUri}', " +
+            $"last_client_id='{lastSnapshot?.ClientId ?? "<none>"}', " +
+            $"last_redirect_uri='{lastSnapshot?.RedirectUri ?? "<none>"}').");
+    }
 }

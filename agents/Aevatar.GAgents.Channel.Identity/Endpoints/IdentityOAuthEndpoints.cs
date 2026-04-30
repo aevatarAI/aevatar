@@ -229,9 +229,12 @@ public static class IdentityOAuthEndpoints
             var resolvedRedirectUri = NyxIdRedirectUriResolver.Resolve();
             var redirectUriDrifted = string.IsNullOrEmpty(snapshot.RedirectUri)
                 || !string.Equals(snapshot.RedirectUri, resolvedRedirectUri, StringComparison.Ordinal);
+            var status = redirectUriDrifted
+                ? "redirect_uri_drifted"
+                : snapshot.BrokerCapabilityObserved ? "ready" : "broker_capability_pending";
             return Results.Ok(new
             {
-                status = snapshot.BrokerCapabilityObserved ? "ready" : "broker_capability_pending",
+                status,
                 client_id = snapshot.ClientId,
                 client_id_issued_at = snapshot.ClientIdIssuedAt,
                 nyxid_authority = snapshot.NyxIdAuthority,
