@@ -343,6 +343,41 @@ jest.mock("@/shared/api/scopesApi", () => ({
 
 jest.mock("@/shared/api/scopeRuntimeApi", () => ({
   scopeRuntimeApi: {
+    listServices: jest.fn(async () => [
+      {
+        activeServingRevisionId: "rev-1",
+        appId: "default",
+        defaultServingRevisionId: "rev-1",
+        deploymentId: "deploy-1",
+        deploymentStatus: "Active",
+        displayName: "Support service",
+        endpoints: [
+          {
+            description: "Streaming support chat",
+            displayName: "Chat",
+            endpointId: "chat",
+            kind: "chat",
+            requestTypeUrl: "type.googleapis.com/google.protobuf.StringValue",
+            responseTypeUrl: "type.googleapis.com/google.protobuf.StringValue",
+          },
+          {
+            description: "Ask for structured help",
+            displayName: "Assist",
+            endpointId: "assist",
+            kind: "command",
+            requestTypeUrl: "type.googleapis.com/google.protobuf.StringValue",
+            responseTypeUrl: "type.googleapis.com/google.protobuf.StringValue",
+          },
+        ],
+        namespace: "default",
+        policyIds: [],
+        primaryActorId: "actor://support",
+        serviceId: "support-service",
+        serviceKey: "scope-a:default:default:support-service",
+        tenantId: "scope-a",
+        updatedAt: "2026-04-01T09:00:00Z",
+      },
+    ]),
     getServiceRunAudit: jest.fn(async () => ({
       summary: {
         actorId: "actor://support-command",

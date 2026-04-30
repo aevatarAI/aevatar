@@ -547,7 +547,7 @@ function decodeServiceCommandAcceptedReceipt(
   };
 }
 
-const decodeServiceCatalogSnapshots: Decoder<ServiceCatalogSnapshot[]> = (
+export const decodeServiceCatalogSnapshots: Decoder<ServiceCatalogSnapshot[]> = (
   value
 ) =>
   expectArray(value, "ServiceCatalogSnapshot[]", decodeServiceCatalogSnapshot);
