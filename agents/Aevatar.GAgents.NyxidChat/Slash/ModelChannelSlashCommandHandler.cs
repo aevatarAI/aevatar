@@ -55,7 +55,7 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
         var (sub, arg) = ParseSubcommand(context.ArgumentText);
         return sub switch
         {
-            "" or "list" => await BuildListReplyAsync(queryPort, bindingId, ct).ConfigureAwait(false),
+            "" or "list" => await BuildListReplyAsync(queryPort, bindingId, context.RegistrationScopeId, ct).ConfigureAwait(false),
             "use" => await HandleUseAsync(context, queryPort, bindingId, arg, ct).ConfigureAwait(false),
             "reset" => await HandleResetAsync(context, queryPort, bindingId, ct).ConfigureAwait(false),
             _ => UsageHint(),
@@ -80,10 +80,18 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
     private static async Task<MessageContent> BuildListReplyAsync(
         IUserConfigQueryPort queryPort,
         string bindingId,
+        string registrationScopeId,
         CancellationToken ct)
     {
         var senderConfig = await queryPort.GetAsync(bindingId, ct).ConfigureAwait(false);
-        var ownerConfig = await queryPort.GetAsync(ct).ConfigureAwait(false);
+        // Use the registration's actual owner scope, not the ambient port —
+        // outside a Studio HTTP request the ambient resolver can be `default`
+        // or unrelated to this bot's registration. Per
+        // ChannelSlashCommandContext.RegistrationScopeId docstring, this is
+        // the entry point for "/model showing the inheriting default".
+        var ownerConfig = string.IsNullOrWhiteSpace(registrationScopeId)
+            ? await queryPort.GetAsync(ct).ConfigureAwait(false)
+            : await queryPort.GetAsync(registrationScopeId, ct).ConfigureAwait(false);
 
         var senderModel = string.IsNullOrWhiteSpace(senderConfig.DefaultModel) ? "(未设置)" : senderConfig.DefaultModel;
         var ownerModel = string.IsNullOrWhiteSpace(ownerConfig.DefaultModel) ? "(未设置)" : ownerConfig.DefaultModel;

@@ -76,7 +76,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
 
     private HttpClient CreateHttpClient() => _httpClientFactory.CreateClient(HttpClientName);
 
-    private string ResolveRedirectUri() => NyxIdRedirectUriResolver.Resolve(_configuration);
+    private string ResolveRedirectUri() => NyxIdRedirectUriResolver.Resolve(_configuration, _logger);
 
     public async Task<BindingChallenge> StartExternalBindingAsync(
         ExternalSubjectRef externalSubject,

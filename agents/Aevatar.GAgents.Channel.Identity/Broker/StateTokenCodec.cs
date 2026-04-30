@@ -105,10 +105,15 @@ public sealed class StateTokenCodec
         }
         catch (AevatarOAuthClientNotProvisionedException)
         {
-            return DecodeResult.Failed("state_signature_invalid");
+            // Distinct from a real signature mismatch — cluster is still
+            // bootstrapping (DCR not yet completed). Same root cause as
+            // /init's "正在初始化" hint; surface a separate code so the
+            // callback handler / ops dashboards can branch on it instead of
+            // blaming the caller for a bad signature.
+            return DecodeResult.Failed("state_client_not_provisioned");
         }
         if (snapshot.HmacKey.Length == 0)
-            return DecodeResult.Failed("state_signature_invalid");
+            return DecodeResult.Failed("state_client_not_provisioned");
 
         var presentedKid = Encoding.UTF8.GetString(kidBytes);
         var keyToVerify = ResolveVerificationKey(snapshot, presentedKid);

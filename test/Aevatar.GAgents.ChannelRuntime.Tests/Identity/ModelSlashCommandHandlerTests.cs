@@ -61,13 +61,18 @@ public sealed class ModelSlashCommandHandlerTests
     [Fact]
     public async Task List_ShowsSenderAndOwnerModels()
     {
+        // Owner default lives under the registration scope, NOT the ambient
+        // overload — channel inbound has no Studio HTTP request behind it,
+        // so the ambient resolver would return `default` / unrelated state
+        // (PR #521 codex review #11). The handler now reads
+        // queryPort.GetAsync(context.RegistrationScopeId, ct).
         var queryPort = new StubUserConfigQueryPort
         {
             ByScope =
             {
                 ["bnd_sender"] = MakeConfig("sender-claude"),
+                ["owner-scope"] = MakeConfig("owner-gpt"),
             },
-            Ambient = MakeConfig("owner-gpt"),
         };
         var handler = new ModelChannelSlashCommandHandler(NullLogger<ModelChannelSlashCommandHandler>.Instance);
 
@@ -77,6 +82,10 @@ public sealed class ModelSlashCommandHandlerTests
         reply!.Text.Should().Contain("sender-claude");
         reply.Text.Should().Contain("owner-gpt");
         reply.Text.Should().Contain("/model use");
+        // Pin the scope semantics: ambient overload must NOT be used for
+        // owner-default lookup on the channel inbound path.
+        queryPort.AmbientCalls.Should().Be(0);
+        queryPort.ScopedCalls.Should().Contain("owner-scope");
     }
 
     [Fact]
@@ -84,8 +93,12 @@ public sealed class ModelSlashCommandHandlerTests
     {
         var queryPort = new StubUserConfigQueryPort
         {
-            // No sender override, just bot owner default.
-            Ambient = MakeConfig("owner-gpt"),
+            ByScope =
+            {
+                // No sender override — only bot owner default under the
+                // registration scope.
+                ["owner-scope"] = MakeConfig("owner-gpt"),
+            },
         };
         var handler = new ModelChannelSlashCommandHandler(NullLogger<ModelChannelSlashCommandHandler>.Instance);
 
@@ -94,6 +107,41 @@ public sealed class ModelSlashCommandHandlerTests
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("(未设置)");
         reply.Text.Should().Contain("owner-gpt");
+    }
+
+    [Fact]
+    public async Task List_FallsBackToAmbient_WhenRegistrationScopeIdEmpty()
+    {
+        // Defence: a misconfigured registration with an empty scope must
+        // not throw IUserConfigQueryPort.GetAsync(string) on a blank id;
+        // fall back to the ambient overload so /model list still renders
+        // *something* useful instead of a stack trace.
+        var queryPort = new StubUserConfigQueryPort
+        {
+            ByScope = { ["bnd_sender"] = MakeConfig("sender-claude") },
+            Ambient = MakeConfig("owner-gpt"),
+        };
+        var handler = new ModelChannelSlashCommandHandler(NullLogger<ModelChannelSlashCommandHandler>.Instance);
+
+        var ctx = new ChannelSlashCommandContext
+        {
+            CommandName = "model",
+            ArgumentText = "list",
+            Subject = new ExternalSubjectRef { Platform = "lark", Tenant = "t", ExternalUserId = "u" },
+            BindingIdValue = "bnd_sender",
+            RegistrationId = "reg",
+            RegistrationScopeId = string.Empty,
+            SenderId = "u",
+            SenderName = "Eric",
+            IsPrivateChat = true,
+            Services = BuildServices(queryPort),
+        };
+
+        var reply = await handler.HandleAsync(ctx, default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("owner-gpt");
+        queryPort.AmbientCalls.Should().Be(1);
     }
 
     [Fact]
@@ -164,11 +212,20 @@ public sealed class ModelSlashCommandHandlerTests
     {
         public Dictionary<string, StudioConfig> ByScope { get; } = new(StringComparer.Ordinal);
         public StudioConfig Ambient { get; set; } = new(string.Empty);
+        public int AmbientCalls { get; private set; }
+        public List<string> ScopedCalls { get; } = new();
 
-        public Task<StudioConfig> GetAsync(CancellationToken ct = default) => Task.FromResult(Ambient);
+        public Task<StudioConfig> GetAsync(CancellationToken ct = default)
+        {
+            AmbientCalls++;
+            return Task.FromResult(Ambient);
+        }
 
-        public Task<StudioConfig> GetAsync(string scopeId, CancellationToken ct = default) =>
-            Task.FromResult(ByScope.TryGetValue(scopeId, out var cfg) ? cfg : new StudioConfig(string.Empty));
+        public Task<StudioConfig> GetAsync(string scopeId, CancellationToken ct = default)
+        {
+            ScopedCalls.Add(scopeId);
+            return Task.FromResult(ByScope.TryGetValue(scopeId, out var cfg) ? cfg : new StudioConfig(string.Empty));
+        }
     }
 
     private sealed class StubUserConfigCommandService : IUserConfigCommandService

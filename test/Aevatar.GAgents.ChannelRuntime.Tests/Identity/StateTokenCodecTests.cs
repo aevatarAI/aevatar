@@ -95,12 +95,14 @@ public class StateTokenCodecTests
         var encoder = new StateTokenCodec(new FakeOAuthClientProvider(Snapshot()), options: null, clock);
         var token = await encoder.EncodeAsync("corr-1", SampleSubject(), "verifier-abc");
 
-        // Verifier has no client provisioned yet.
+        // Verifier has no client provisioned yet — distinct from a tampered
+        // signature so the callback handler / ops can surface a "still
+        // bootstrapping" error instead of accusing the caller.
         var verifier = new StateTokenCodec(new FakeOAuthClientProvider(snapshot: null), options: null, clock);
         var result = await verifier.TryDecodeAsync(token);
 
         result.Succeeded.Should().BeFalse();
-        result.ErrorCode.Should().Be("state_signature_invalid");
+        result.ErrorCode.Should().Be("state_client_not_provisioned");
     }
 
     [Theory]

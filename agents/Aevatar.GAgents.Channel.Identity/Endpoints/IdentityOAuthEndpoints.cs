@@ -67,10 +67,17 @@ public static class IdentityOAuthEndpoints
         if (!decode.Succeeded || decode.ExternalSubject is null)
         {
             logger.LogWarning("OAuth callback rejected state token: {ErrorCode}", decode.ErrorCode);
+            // Cluster cold-start: same root cause as /init's "正在初始化"
+            // hint — the verifier silo lost the cached snapshot or the
+            // bootstrap actor isn't ready yet. Surface a specific message so
+            // the user retries instead of suspecting a tampered link.
+            var detail = decode.ErrorCode == "state_client_not_provisioned"
+                ? "Aevatar 集群正在初始化 NyxID 客户端,请 30 秒后回到 Lark 重新发送 /init。"
+                : "绑定链接已过期或无效,请回到 Lark 重新发送 /init";
             return Results.BadRequest(new
             {
                 error = decode.ErrorCode,
-                detail = "绑定链接已过期或无效,请回到 Lark 重新发送 /init",
+                detail,
             });
         }
         var subject = decode.ExternalSubject;

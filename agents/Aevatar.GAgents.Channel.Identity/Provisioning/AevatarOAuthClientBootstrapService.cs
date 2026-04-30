@@ -72,8 +72,29 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
         // Run the bootstrap as a background task so a transient NyxID
         // outage does not block host startup, but DO retry indefinitely
         // (capped backoff) so the cluster self-heals when NyxID returns.
-        _bootstrapTask = Task.Run(() => RunWithRetryAsync(_stoppingCts.Token), CancellationToken.None);
+        // Wrap RunWithRetryAsync in a top-level try/catch so any escape
+        // (e.g. ObjectDisposed on _stoppingCts after race-y shutdown) is
+        // logged and observed rather than swallowed by the unobserved-task
+        // exception sink.
+        _bootstrapTask = Task.Run(RunSafelyAsync, CancellationToken.None);
         return Task.CompletedTask;
+    }
+
+    private async Task RunSafelyAsync()
+    {
+        try
+        {
+            await RunWithRetryAsync(_stoppingCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_stoppingCts.IsCancellationRequested)
+        {
+            // expected when host shutdown cancels mid-flight
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Aevatar OAuth client bootstrap loop exited unexpectedly; broker mode unavailable until host restart.");
+        }
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
@@ -88,7 +109,17 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
         }
         catch (OperationCanceledException)
         {
-            // expected when host shutdown timeout fires
+            // expected when the host's shutdown CT fires before the bootstrap
+            // task observes its own _stoppingCts cancellation.
+        }
+        catch (TimeoutException)
+        {
+            // WaitAsync(TimeSpan)-shaped overloads can throw TimeoutException;
+            // host shutdown timeout (Host:ShutdownTimeoutSeconds) is the path
+            // here. Log + continue — the task has already been cancelled via
+            // _stoppingCts so it will self-terminate even after we return.
+            _logger.LogInformation(
+                "Aevatar OAuth client bootstrap did not complete within host shutdown timeout; continuing in background.");
         }
     }
 
@@ -161,7 +192,7 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
         // races on the projection readmodel and creates orphan OAuth clients
         // at NyxID. The redirect URI must match what the broker sends at
         // authorize / token time — both call sites use NyxIdRedirectUriResolver.
-        var redirectUri = NyxIdRedirectUriResolver.Resolve(_configuration);
+        var redirectUri = NyxIdRedirectUriResolver.Resolve(_configuration, _logger);
         var actor = await _actorRuntime
             .CreateAsync<AevatarOAuthClientGAgent>(AevatarOAuthClientGAgent.WellKnownId, ct)
             .ConfigureAwait(false);

@@ -101,6 +101,13 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             return;
         }
 
+        // CancellationToken.None is the contract here: the framework's
+        // [EventHandler] dispatcher (EventHandlerDiscoverer.TryBuild requires
+        // parameters.Length == 1) does not surface a turn-scoped CT, so the
+        // actor takes ownership of completing this single external side-
+        // effect atomically. The named HTTP client's per-request timeout
+        // (default 100s) bounds the worst case during silo shutdown — the
+        // DCR call itself is bounded.
         var clientName = string.IsNullOrWhiteSpace(cmd.ClientName) ? "aevatar" : cmd.ClientName;
         var registration = await registrar
             .RegisterPublicClientAsync(cmd.NyxidAuthority, clientName, cmd.RedirectUri, CancellationToken.None)
