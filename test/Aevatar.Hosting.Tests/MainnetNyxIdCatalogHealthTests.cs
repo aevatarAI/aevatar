@@ -48,6 +48,24 @@ public sealed class MainnetNyxIdCatalogHealthTests
     }
 
     [Fact]
+    public void Evaluate_WhenCatalogLoadedButLastRefreshWasEmpty_ShouldStayHealthyWithFailureDetails()
+    {
+        var result = NyxIdCatalogHealthContributor.Evaluate(new NyxIdSpecCatalogStatus(
+            BaseUrlConfigured: true,
+            SpecFetchTokenConfigured: true,
+            InitialRefreshAttempted: true,
+            RefreshInProgress: false,
+            OperationCount: 12,
+            LastSuccessfulRefreshUtc: DateTimeOffset.Parse("2026-04-30T08:00:00Z"),
+            LastRefreshError: "Spec yielded no operations.",
+            LastRefreshFailureKind: NyxIdSpecCatalogRefreshFailureKind.EmptySpec));
+
+        result.Status.Should().Be(AevatarHealthStatuses.Healthy);
+        result.Message.Should().Contain("loaded 12 operations");
+        result.Details.Should().Contain("lastRefreshFailureKind", nameof(NyxIdSpecCatalogRefreshFailureKind.EmptySpec));
+    }
+
+    [Fact]
     public void Evaluate_WhenInitialRefreshStillLoading_ShouldBeHealthy()
     {
         var result = NyxIdCatalogHealthContributor.Evaluate(new NyxIdSpecCatalogStatus(

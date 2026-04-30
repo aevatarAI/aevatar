@@ -86,6 +86,10 @@ export AEVATAR_Aevatar__NyxId__SpecFetchToken="<real-user-nyxid-api-key>"
 并在同一组件的 `lastRefreshError` / `lastRefreshFailureKind` 里暴露临时失败；
 后台 refresh 成功后会更新 operation count。
 
+若已经加载过可用 catalog，后续 refresh 返回空 spec 会被视为软失败：
+host 保留上一版 catalog 继续服务，`nyxid-catalog` 组件保持 ready，并通过
+`lastRefreshFailureKind=EmptySpec` 暴露上游 spec 异常。
+
 部署后冒烟：
 
 ```bash

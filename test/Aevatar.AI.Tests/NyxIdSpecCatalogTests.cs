@@ -1,5 +1,6 @@
 using System.Diagnostics.Metrics;
 using System.Net;
+using System.Reflection;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -131,6 +132,51 @@ public class NyxIdSpecCatalogTests
     }
 
     [Fact]
+    public async Task Refresh_WhenSpecYieldsNoOperations_ShouldPreservePreviousCatalogAndExposeSoftFailure()
+    {
+        const string loadedSpec = """
+            {
+              "openapi": "3.1.0",
+              "paths": {
+                "/things": {
+                  "get": { "operationId": "list_things", "summary": "List things" }
+                }
+              }
+            }
+            """;
+        const string emptySpec = """
+            {
+              "openapi": "3.1.0",
+              "paths": {}
+            }
+            """;
+        var handler = new FakeHttpHandler(loadedSpec);
+        var http = new HttpClient(handler);
+        var logger = new RecordingLogger<NyxIdSpecCatalog>();
+        var options = new NyxIdToolOptions
+        {
+            BaseUrl = "https://nyx.test",
+            SpecFetchToken = "user-api-key-xyz",
+        };
+
+        using var catalog = new NyxIdSpecCatalog(options, http, logger);
+
+        await logger.WaitForEntryAsync(
+            entry => entry.Message.Contains("NyxIdSpecCatalog updated", StringComparison.Ordinal),
+            TimeSpan.FromSeconds(2));
+
+        handler.RespondWith(emptySpec);
+        await InvokeFetchAndUpdateAsync(catalog);
+
+        catalog.Operations.Should().ContainSingle(operation => operation.OperationId == "list_things");
+        var status = catalog.GetStatus();
+        status.OperationCount.Should().Be(1);
+        status.LastSuccessfulRefreshUtc.Should().NotBeNull();
+        status.LastRefreshError.Should().Be("Spec yielded no operations.");
+        status.LastRefreshFailureKind.Should().Be(NyxIdSpecCatalogRefreshFailureKind.EmptySpec);
+    }
+
+    [Fact]
     public async Task ProxyExecute_OperationMiss_ShouldRecordLookupMissMetric()
     {
         using var metricCapture = new NyxIdMetricCapture();
@@ -165,10 +211,22 @@ public class NyxIdSpecCatalogTests
                     StringComparison.Ordinal)));
     }
 
+    private static async Task InvokeFetchAndUpdateAsync(NyxIdSpecCatalog catalog)
+    {
+        var method = typeof(NyxIdSpecCatalog).GetMethod(
+            "FetchAndUpdateAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+
+        method.Should().NotBeNull();
+        var result = method!.Invoke(catalog, [CancellationToken.None]);
+        result.Should().BeAssignableTo<Task>();
+        await (Task)result!;
+    }
+
     private sealed class FakeHttpHandler : HttpMessageHandler
     {
-        private readonly string? _responseBody;
-        private readonly HttpStatusCode _statusCode;
+        private string? _responseBody;
+        private HttpStatusCode _statusCode;
 
         public int RequestCount { get; private set; }
         public string? LastRequestUri { get; private set; }
@@ -177,6 +235,12 @@ public class NyxIdSpecCatalogTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public FakeHttpHandler(string? responseBody = null, HttpStatusCode statusCode = HttpStatusCode.OK)
+        {
+            _responseBody = responseBody;
+            _statusCode = statusCode;
+        }
+
+        public void RespondWith(string? responseBody, HttpStatusCode statusCode = HttpStatusCode.OK)
         {
             _responseBody = responseBody;
             _statusCode = statusCode;

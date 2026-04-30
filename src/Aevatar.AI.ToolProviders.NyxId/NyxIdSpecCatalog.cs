@@ -157,6 +157,8 @@ public sealed class NyxIdSpecCatalog : IDisposable
 
         if (cards.Length == 0)
         {
+            // Empty spec refreshes are soft failures: keep the last usable catalog
+            // for execution, while status exposes the stale source condition.
             RememberRefreshFailure("Spec yielded no operations.", NyxIdSpecCatalogRefreshFailureKind.EmptySpec);
             _logger.LogWarning("NyxIdSpecCatalog: spec yielded no operations, preserving existing catalog");
             return;
