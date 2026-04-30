@@ -2082,6 +2082,11 @@ jest.mock("./components/bind/StudioMemberBindPanel", () => ({
           : "candidate:none"
       ),
       React.createElement(
+        "div",
+        { key: "workflow-yamls" },
+        `workflow-yamls:${props.buildWorkflowYamls ? "present" : "none"}`
+      ),
+      React.createElement(
         "button",
         {
           key: "select-endpoint",
@@ -3131,7 +3136,7 @@ describe("StudioPage", () => {
   });
 
   it("resyncs the Studio deep link when the target workflow changes after mount", async () => {
-    renderStudioPage("/studio?focus=workflow%3Aworkflow-1&tab=studio");
+    renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
 
     expect(await screen.findByText("DAG Canvas")).toBeTruthy();
 
@@ -3185,7 +3190,7 @@ describe("StudioPage", () => {
       ],
     };
 
-    renderStudioPage("/studio?focus=workflow%3Aworkflow-1&tab=studio");
+    renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
 
     expect(await screen.findByText("DAG Canvas")).toBeTruthy();
     expect(screen.queryByText("尚未加载定义")).toBeNull();
@@ -3460,6 +3465,50 @@ describe("StudioPage", () => {
     });
   });
 
+  it("moves focus from a Script draft to the new Workflow member after create", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      features: {
+        ...defaultStudioAppContext.features,
+        scripts: true,
+      },
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+
+    renderStudioPage("/studio?scopeId=scope-1&focus=script%3Ascript-alpha&tab=scripts");
+
+    expect(await screen.findByTestId("studio-script-build-panel")).toBeTruthy();
+    expect(screen.getByLabelText("Script ID")).toHaveValue("script-alpha");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Create member" }));
+    const createDialog = await screen.findByRole("dialog", { name: "Create member" });
+    fireEvent.click(
+      within(createDialog).getByRole("button", { name: "Create Workflow member" }),
+    );
+    fireEvent.change(within(createDialog).getByLabelText("Member name"), {
+      target: {
+        value: "orders-workflow",
+      },
+    });
+    fireEvent.click(within(createDialog).getByRole("button", { name: "Create member" }));
+
+    await waitFor(() => {
+      expect(studioApi.saveWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowName: "orders-workflow",
+        }),
+      );
+    });
+    expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
+    expect(screen.queryByTestId("studio-script-build-panel")).toBeNull();
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("tab")).toBe("studio");
+      expect(searchParams.get("focus")).not.toBe("script:script-alpha");
+    });
+  });
+
   it("opens the create-member modal once from the typed Studio intent", async () => {
     renderStudioPage("/studio?tab=studio&intent=create-member");
 
@@ -3663,6 +3712,38 @@ describe("StudioPage", () => {
       );
     });
 
+    await waitFor(() => {
+      expect(message.success).toHaveBeenCalledWith(
+        "Deleted workflow member workspace-demo.",
+      );
+    });
+  });
+
+  it("treats a missing workflow draft as already deleted from the inventory rail", async () => {
+    (studioApi.deleteWorkflow as jest.Mock).mockRejectedValueOnce(
+      new Error("Not Found"),
+    );
+
+    renderStudioPage("/studio?focus=workflow%3Aworkflow-1&tab=studio");
+
+    fireEvent.click(await screen.findByLabelText("Delete workspace-demo"));
+
+    await waitFor(() => {
+      expect(Modal.confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Delete workflow member",
+        })
+      );
+    });
+
+    const confirmConfig = (Modal.confirm as jest.Mock).mock.calls[0]?.[0];
+    await expect(
+      act(async () => {
+        await confirmConfig.onOk();
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(message.error).not.toHaveBeenCalled();
     await waitFor(() => {
       expect(message.success).toHaveBeenCalledWith(
         "Deleted workflow member workspace-demo.",
@@ -5308,6 +5389,46 @@ describe("StudioPage", () => {
     expect(screen.getByText("Script source")).toBeTruthy();
   });
 
+  it("does not duplicate the selected Script member and its script artifact in the rail", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      features: {
+        ...defaultStudioAppContext.features,
+        scripts: true,
+      },
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    (scriptsApi.listScripts as jest.Mock).mockResolvedValue([
+      {
+        available: true,
+        scopeId: "scope-1",
+        script: {
+          scopeId: "scope-1",
+          scriptId: "script-1",
+          catalogActorId: "catalog-1",
+          definitionActorId: "definition-1",
+          activeRevision: "rev-script-1",
+          activeSourceHash: "hash-1",
+          updatedAt: "2026-03-18T00:00:00Z",
+        },
+        source: {
+          sourceText: "using System;",
+          definitionActorId: "definition-1",
+          revision: "rev-script-1",
+          sourceHash: "hash-1",
+        },
+      },
+    ]);
+
+    renderStudioPage("/studio?scopeId=scope-1&focus=script%3Ascript-1&tab=scripts");
+
+    const rail = await screen.findByLabelText("Team members");
+    await waitFor(() => {
+      expect(within(rail).getAllByRole("button", { name: "script-1" })).toHaveLength(1);
+    });
+  });
+
   it("returns from Bind to the selected Script build surface", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,
@@ -5685,9 +5806,11 @@ describe("StudioPage", () => {
         actorId: "actor-invoke",
         assistantText: "Observed output",
         commandId: "command-invoke",
+        correlationId: "",
         completedAtUtc: new Date(now).toISOString(),
         endpointId: "chat",
         error: "",
+        errorCode: "",
         events: [
           {
             name: "aevatar.run.context",

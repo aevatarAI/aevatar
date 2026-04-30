@@ -92,6 +92,7 @@ describe("draftRunSession", () => {
       prompt: "hello service",
       actorId: "actor://scope-a/default",
       commandId: "cmd-1",
+      correlationId: "corr-1",
       runId: "run-1",
       events: [
         {
@@ -113,6 +114,7 @@ describe("draftRunSession", () => {
         endpointKind: "chat",
         actorId: "actor://scope-a/default",
         commandId: "cmd-1",
+        correlationId: "corr-1",
         runId: "run-1",
         events: [
           expect.objectContaining({
