@@ -98,18 +98,23 @@ public static class IdentityOAuthEndpoints
             }, statusCode: StatusCodes.Status502BadGateway);
         }
 
-        // broker_capability_enabled=false case — NyxID returned a refresh_token
-        // path (binding_id absent). Tell the user clearly what's missing and
-        // surface the cluster's client_id so ops can flip the flag at NyxID
-        // admin (one-time per cluster).
+        // Defensive: NyxID returned no binding_id even though authorization-code
+        // exchange succeeded. Post NyxID#576 fix, broker mode is triggered by
+        // EITHER `broker_capability_enabled=true` OR `urn:nyxid:scope:broker_binding`
+        // appearing in the client's `allowed_scopes` (oauth_broker_service.rs
+        // is_broker_client). Aevatar's DCR call always requests that scope, so
+        // the happy path returns a binding_id automatically — no ops handoff.
+        // Reaching this branch implies the client was misregistered (e.g. an
+        // operator-provisioned confidential client without the scope, or a DCR
+        // race that pre-dates the NyxID#576 fix). Log + 409 with diagnostic.
         if (string.IsNullOrEmpty(exchange.BindingId))
         {
             logger.LogWarning(
-                "OAuth callback succeeded but NyxID did not return a binding_id — broker_capability_enabled is likely off on the aevatar OAuth client. Operator must enable broker_capability via NyxID admin.");
+                "OAuth callback succeeded but NyxID did not return a binding_id — the OAuth client is registered without broker capability. Expected `urn:nyxid:scope:broker_binding` in allowed_scopes (DCR self-bootstrap requests this) or `broker_capability_enabled=true` on a manually provisioned client.");
             return Results.Json(new
             {
                 status = "broker_capability_disabled",
-                detail = "Aevatar 已注册到 NyxID,但管理员还没开启该 OAuth client 的 broker_capability_enabled 标记。请联系运维通过 NyxID admin 一次性开启该开关后再重试 /init。访问 /api/oauth/aevatar-client/status 查看 client_id。",
+                detail = "Aevatar 已注册到 NyxID,但 OAuth client 未授予 broker capability — DCR 自举正常路径下 scope 会包含 urn:nyxid:scope:broker_binding。请检查 /api/oauth/aevatar-client/status 是否显示 client_id 与 allowed_scopes 一致;若是手动创建的 client,请通过 NyxID admin 把 broker_binding scope 加入 allowed_scopes 后再重试 /init。",
             }, statusCode: StatusCodes.Status409Conflict);
         }
 

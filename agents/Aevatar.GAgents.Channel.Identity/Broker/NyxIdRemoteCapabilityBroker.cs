@@ -125,9 +125,15 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         ArgumentException.ThrowIfNullOrWhiteSpace(bindingId);
 
         var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
+        // NyxID delete_binding requires client_id from Basic auth OR query
+        // params; missing → silent 204 with no revocation. Aevatar uses the
+        // public-client + PKCE shape (no client_secret stored), so we send
+        // client_id as a query param. NyxID validates ownership inside
+        // revoke_binding_by_client (oauth_broker_service.rs) — only the
+        // binding's owning client_id revokes; mismatches still 204 cleanly.
         using var request = new HttpRequestMessage(
             HttpMethod.Delete,
-            $"{snapshot.NyxIdAuthority.TrimEnd('/')}{BindingsEndpoint}/{Uri.EscapeDataString(bindingId)}");
+            $"{snapshot.NyxIdAuthority.TrimEnd('/')}{BindingsEndpoint}/{Uri.EscapeDataString(bindingId)}?client_id={Uri.EscapeDataString(snapshot.ClientId)}");
         var http = CreateHttpClient();
         using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
 
