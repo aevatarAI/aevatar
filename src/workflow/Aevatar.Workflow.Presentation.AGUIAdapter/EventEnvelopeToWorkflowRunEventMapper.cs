@@ -614,6 +614,20 @@ public sealed class WorkflowSuspendedRunEventEnvelopeMappingHandler : IWorkflowR
         foreach (var (key, value) in evt.Metadata)
             metadata[key] = value;
 
+        var customPayload = new WorkflowHumanInputRequestCustomPayload
+        {
+            StepId = evt.StepId,
+            RunId = evt.RunId,
+            SuspensionType = evt.SuspensionType.ToWireName(),
+            Prompt = evt.Prompt,
+            TimeoutSeconds = evt.TimeoutSeconds,
+            VariableName = evt.VariableName,
+            Content = evt.Content,
+            DeliveryTargetId = evt.DeliveryTargetId,
+            Metadata = { metadata },
+        };
+        customPayload.Options.Add(evt.ExpectedOptions);
+
         events =
         [
             new WorkflowRunEventEnvelope
@@ -622,18 +636,7 @@ public sealed class WorkflowSuspendedRunEventEnvelopeMappingHandler : IWorkflowR
                 Custom = new WorkflowCustomEventPayload
                 {
                     Name = "aevatar.human_input.request",
-                    Payload = Any.Pack(new WorkflowHumanInputRequestCustomPayload
-                    {
-                        StepId = evt.StepId,
-                        RunId = evt.RunId,
-                        SuspensionType = evt.SuspensionType,
-                        Prompt = evt.Prompt,
-                        TimeoutSeconds = evt.TimeoutSeconds,
-                        VariableName = evt.VariableName,
-                        Content = evt.Content,
-                        DeliveryTargetId = evt.DeliveryTargetId,
-                        Metadata = { metadata },
-                    }),
+                    Payload = Any.Pack(customPayload),
                 },
             },
         ];

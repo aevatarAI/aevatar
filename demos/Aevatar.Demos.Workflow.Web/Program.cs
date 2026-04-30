@@ -1153,8 +1153,7 @@ static object BuildRoleDto(RoleDefinition role) => new
 
 static WorkflowResumedEvent BuildAutoResumedEvent(WorkflowSuspendedEvent suspended, string originalInput)
 {
-    var suspensionType = suspended.SuspensionType ?? string.Empty;
-    if (string.Equals(suspensionType, "human_approval", StringComparison.OrdinalIgnoreCase))
+    if (suspended.SuspensionType == WorkflowSuspensionType.HumanApproval)
     {
         var shouldReject = (suspended.Prompt ?? string.Empty).Contains("AUTO_REJECT", StringComparison.OrdinalIgnoreCase);
 

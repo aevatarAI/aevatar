@@ -234,7 +234,7 @@ public sealed class WorkflowProjectionMaterializationTests
                 {
                     RunId = "run-1",
                     StepId = "step-9",
-                    SuspensionType = "wait_signal",
+                    SuspensionType = WorkflowSuspensionType.HumanApproval,
                     Prompt = "Need approval",
                     TimeoutSeconds = 30,
                     VariableName = "approval",
@@ -280,7 +280,7 @@ public sealed class WorkflowProjectionMaterializationTests
         report.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Stopped);
         report.FinalError.Should().Be("manual-stop");
         report.Steps.Should().ContainSingle();
-        report.Steps[0].SuspensionType.Should().Be("wait_signal");
+        report.Steps[0].SuspensionType.Should().Be("human_approval");
         report.Steps[0].SuspensionPrompt.Should().Be("Need approval");
         report.Steps[0].SuspensionTimeoutSeconds.Should().Be(30);
         report.Timeline.Select(x => x.Stage).Should().Contain([
@@ -379,7 +379,7 @@ public sealed class WorkflowProjectionMaterializationTests
                 {
                     RunId = "run-1",
                     StepId = "step-1",
-                    SuspensionType = "human_input",
+                    SuspensionType = WorkflowSuspensionType.HumanInput,
                     Prompt = "confirm",
                     TimeoutSeconds = 15,
                     VariableName = "answer",

@@ -39,15 +39,19 @@ public sealed class WorkflowHumanInteractionProjector
         foreach (var (key, value) in evt.Metadata)
             annotations[key] = value;
 
+        var options = evt.ExpectedOptions.Count > 0
+            ? (IReadOnlyList<string>)evt.ExpectedOptions.ToArray()
+            : evt.SuspensionType.DefaultExpectedOptions();
+
         var request = new HumanInteractionRequest
         {
             ActorId = context.RootActorId,
             RunId = evt.RunId,
             StepId = evt.StepId,
-            SuspensionType = evt.SuspensionType,
+            SuspensionType = evt.SuspensionType.ToWireName(),
             Prompt = evt.Prompt,
             Content = string.IsNullOrWhiteSpace(evt.Content) ? null : evt.Content,
-            Options = ResolveOptions(evt.SuspensionType),
+            Options = options,
             TimeoutSeconds = evt.TimeoutSeconds,
             Annotations = annotations,
         };
@@ -57,13 +61,4 @@ public sealed class WorkflowHumanInteractionProjector
             evt.DeliveryTargetId,
             ct);
     }
-
-    private static IReadOnlyList<string> ResolveOptions(string suspensionType) =>
-        suspensionType switch
-        {
-            "human_approval" => ["approve", "reject"],
-            "human_input" => ["submit"],
-            "secure_input" => ["submit"],
-            _ => Array.Empty<string>(),
-        };
 }
