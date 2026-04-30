@@ -55,6 +55,7 @@ public sealed class AevatarOAuthClientProjector
             NyxidAuthority = state.NyxidAuthority ?? string.Empty,
             BrokerCapabilityObserved = state.BrokerCapabilityObserved,
             BrokerCapabilityObservedAtUnix = state.BrokerCapabilityObservedAtUnix,
+            RedirectUri = state.RedirectUri ?? string.Empty,
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
             UpdatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow),

@@ -81,9 +81,25 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             return;
         }
 
-        var alreadyProvisioned = !string.IsNullOrEmpty(State.ClientId)
+        var sameClient = !string.IsNullOrEmpty(State.ClientId)
             && string.Equals(State.NyxidAuthority, cmd.NyxidAuthority, StringComparison.Ordinal);
-        if (alreadyProvisioned)
+
+        // Redirect URI drift: re-DCR when the persisted callback no longer
+        // matches what the resolver hands us. Original prod incident
+        // (aismart-app-mainnet 2026-04-30): the cluster registered against
+        // NyxID with the Kestrel wildcard `http://+:8080/...` because the
+        // resolver mistakenly read ASPNETCORE_URLS. After the resolver fix
+        // the env now produces the correct public URL, but the actor's
+        // existing client_id at NyxID is still bound to the wrong callback
+        // — every /init authorizes to a non-routable host. Empty stored
+        // redirect_uri is legacy/unknown, not a valid match: the broken
+        // production state already has a client_id and no recorded callback,
+        // so we must re-DCR once and persist the public redirect URI.
+        var redirectUriDrifted = sameClient
+            && (string.IsNullOrEmpty(State.RedirectUri)
+                || !string.Equals(State.RedirectUri, cmd.RedirectUri, StringComparison.Ordinal));
+
+        if (sameClient && !redirectUriDrifted)
         {
             // Seed HMAC key on first activation against an existing client_id
             // (defence-in-depth against partial state loaded from snapshots).
@@ -117,6 +133,15 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             return;
         }
 
+        if (redirectUriDrifted)
+        {
+            Logger.LogWarning(
+                "Aevatar OAuth client redirect URI drifted: stored='{Stored}', resolved='{Resolved}'. " +
+                "Re-running DCR to register a new client_id at NyxID with the corrected callback target.",
+                State.RedirectUri,
+                cmd.RedirectUri);
+        }
+
         var registrar = Services.GetService<NyxIdDynamicClientRegistrationClient>();
         if (registrar is null)
         {
@@ -143,11 +168,13 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             ClientIdIssuedAtUnix = registration.IssuedAt.ToUnixTimeSeconds(),
             NyxidAuthority = cmd.NyxidAuthority,
             PersistedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            RedirectUri = cmd.RedirectUri,
         });
         Logger.LogInformation(
-            "Provisioned aevatar OAuth client via DCR: client_id={ClientId}, authority={Authority}",
+            "Provisioned aevatar OAuth client via DCR: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}",
             registration.ClientId,
-            cmd.NyxidAuthority);
+            cmd.NyxidAuthority,
+            cmd.RedirectUri);
 
         if (State.HmacKey.Length == 0)
         {
@@ -290,6 +317,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         next.ClientId = evt.ClientId ?? string.Empty;
         next.ClientIdIssuedAtUnix = evt.ClientIdIssuedAtUnix;
         next.NyxidAuthority = evt.NyxidAuthority ?? string.Empty;
+        next.RedirectUri = evt.RedirectUri ?? string.Empty;
         // Re-provisioning resets the broker observation: a new client_id
         // starts with broker_capability_enabled=false until ops flips it.
         next.BrokerCapabilityObserved = false;

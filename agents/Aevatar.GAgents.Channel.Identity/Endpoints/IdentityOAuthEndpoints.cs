@@ -226,12 +226,18 @@ public static class IdentityOAuthEndpoints
         try
         {
             var snapshot = await provider.GetAsync(ct).ConfigureAwait(false);
+            var resolvedRedirectUri = NyxIdRedirectUriResolver.Resolve();
+            var redirectUriDrifted = string.IsNullOrEmpty(snapshot.RedirectUri)
+                || !string.Equals(snapshot.RedirectUri, resolvedRedirectUri, StringComparison.Ordinal);
             return Results.Ok(new
             {
                 status = snapshot.BrokerCapabilityObserved ? "ready" : "broker_capability_pending",
                 client_id = snapshot.ClientId,
                 client_id_issued_at = snapshot.ClientIdIssuedAt,
                 nyxid_authority = snapshot.NyxIdAuthority,
+                redirect_uri_registered = snapshot.RedirectUri,
+                redirect_uri_resolved = resolvedRedirectUri,
+                redirect_uri_drifted = redirectUriDrifted,
                 broker_capability_observed = snapshot.BrokerCapabilityObserved,
                 broker_capability_observed_at = snapshot.BrokerCapabilityObservedAt,
                 ops_handoff = snapshot.BrokerCapabilityObserved

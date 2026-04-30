@@ -87,7 +87,7 @@ public sealed class InitChannelSlashCommandHandler : IChannelSlashCommandHandler
     /// button). Channels without card support degrade to plain text via
     /// <see cref="MessageContent.Text"/> being set as the fallback.
     /// </summary>
-    internal static MessageContent BuildBindingCard(string authorizeUrl)
+    public static MessageContent BuildBindingCard(string authorizeUrl)
     {
         var content = new MessageContent
         {
