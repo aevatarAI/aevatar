@@ -1,4 +1,9 @@
-import { CheckCircleOutlined, CopyOutlined, LinkOutlined } from '@ant-design/icons';
+import {
+  ApiOutlined,
+  CheckCircleOutlined,
+  CopyOutlined,
+  LinkOutlined,
+} from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import { Alert, Button, Collapse, Empty, Input, Select, Space, Tag, Typography, message } from 'antd';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
@@ -85,14 +90,15 @@ const rootStyle: React.CSSProperties = {
 };
 
 const controlsGridStyle: React.CSSProperties = {
+  alignItems: 'stretch',
   display: 'grid',
-  gap: 12,
-  gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) auto',
+  gap: 14,
+  gridTemplateColumns: 'minmax(240px, 1fr) minmax(240px, 1fr)',
 };
 
 const pageFlowStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 16,
+  gap: 14,
   width: '100%',
 };
 
@@ -102,10 +108,55 @@ const contractSectionStyle: React.CSSProperties = {
 };
 
 const workflowGridStyle: React.CSSProperties = {
+  alignItems: 'stretch',
   display: 'grid',
   gap: 14,
   gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 360px), 1fr))',
-  alignItems: 'start',
+  width: '100%',
+};
+
+const sourcePanelStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 14,
+};
+
+const sourceSummaryStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+  justifyContent: 'space-between',
+};
+
+const sourceStatusStyle: React.CSSProperties = {
+  alignItems: 'center',
+  color: '#475569',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 6,
+  minWidth: 0,
+};
+
+const contractAndActionsGridStyle: React.CSSProperties = {
+  alignItems: 'stretch',
+  display: 'grid',
+  gap: 14,
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 380px), 1fr))',
+};
+
+const equalHeightPanelStyle: React.CSSProperties = {
+  height: '100%',
+};
+
+const sourceControlStackStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 8,
+  gridTemplateRows: 'auto minmax(58px, 1fr)',
+  minWidth: 0,
+};
+
+const sourceControlSelectStyle: React.CSSProperties = {
+  height: 58,
   width: '100%',
 };
 
@@ -118,13 +169,14 @@ const parameterGridStyle: React.CSSProperties = {
 const surfaceCardStyle: React.CSSProperties = {
   background: '#ffffff',
   border: '1px solid #eef2f7',
-  borderRadius: 12,
+  borderRadius: 10,
 };
 
 const valueCardStyle: React.CSSProperties = {
   ...surfaceCardStyle,
   display: 'grid',
   gap: 3,
+  minHeight: 58,
   minWidth: 0,
   padding: 12,
 };
@@ -188,6 +240,36 @@ const compactCardStyle: React.CSSProperties = {
 
 const smokeInputStyle: React.CSSProperties = {
   fontFamily: monoFontFamily,
+};
+
+const contractUrlCardStyle: React.CSSProperties = {
+  ...surfaceCardStyle,
+  display: 'grid',
+  gridTemplateColumns: '82px minmax(0, 1fr)',
+  overflow: 'hidden',
+};
+
+const contractMethodStyle: React.CSSProperties = {
+  alignItems: 'center',
+  background: '#111827',
+  color: '#fffdf8',
+  display: 'flex',
+  fontFamily: monoFontFamily,
+  fontSize: 12,
+  fontWeight: 700,
+  justifyContent: 'center',
+  minWidth: 0,
+  padding: '10px 12px',
+};
+
+const contractUrlStyle: React.CSSProperties = {
+  color: '#0f172a',
+  fontFamily: monoFontFamily,
+  fontSize: 12.5,
+  minWidth: 0,
+  overflowX: 'auto',
+  padding: '10px 14px',
+  whiteSpace: 'nowrap',
 };
 
 const revisionCardStyle: React.CSSProperties = {
@@ -577,6 +659,14 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
   const bindingList = bindingCatalog?.bindings ?? [];
   const hasMultiplePublishedServices = services.length > 1;
   const revisionList = revisionCatalogQuery.data?.revisions ?? [];
+  const hasEndpointOptions = Boolean(selectedService?.endpoints.length);
+  const endpointUnavailableMessage =
+    selectedService && !hasEndpointOptions
+      ? 'This published service has no endpoint data available yet.'
+      : '';
+  // Temporary placeholder while #511 adds a real scope-owned endpoint catalog.
+  const fallbackEndpointId =
+    selectedEndpoint?.endpointId || (selectedService && !hasEndpointOptions ? 'chat' : '');
   const bindSurfaceIdentity = useMemo(() => {
     const pendingCandidateIdentity = pendingBindingCandidate
       ? `candidate:${scopeId}:${pendingBindingCandidate.kind}:${pendingBindingCandidate.displayName}`
@@ -746,94 +836,155 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
         <AevatarPanel
           layoutMode="document"
           padding={14}
-          title="Current member contract"
-          titleHelp="Keep only the callable essentials here so the page opens with the method, URL, auth, and revision at a glance."
+          title="Published contract source"
+          titleHelp="Choose the service and endpoint first. The invoke URL, smoke test, and snippets all follow this selection."
           extra={
-            <Button
-              icon={<CopyOutlined />}
-              onClick={() => void copyText(bindContract?.invokeUrl || '')}
-            >
-              Copy URL
-            </Button>
+            <Space wrap size={[6, 6]}>
+              <Tag color={bindContract ? 'green' : 'default'}>
+                {bindContract ? 'contract selected' : 'needs endpoint'}
+              </Tag>
+              {revisionList.length > 0 ? (
+                <Tag>revisions · {revisionList.length}</Tag>
+              ) : null}
+            </Space>
           }
         >
-          <div
-            data-testid="studio-bind-contract-section"
-            style={contractSectionStyle}
-          >
-            <Typography.Text type="secondary">
-              {runsCurrentWorkflowDraft
-                ? 'Keep the current draft in focus here; the smoke test and snippets below are the two fastest follow-up actions.'
-                : 'Keep the active invoke contract in focus here; the smoke test and snippets below are the two fastest follow-up actions.'}
-            </Typography.Text>
-            {bindContract ? (
-              <>
-                <div
-                  data-testid="studio-bind-contract-card"
-                  style={{
-                    ...surfaceCardStyle,
-                    display: 'grid',
-                    gridTemplateColumns: '88px minmax(0, 1fr)',
-                  }}
+          <div style={sourcePanelStyle}>
+            <div style={sourceSummaryStyle}>
+              <div style={sourceStatusStyle}>
+                <ApiOutlined />
+                <Typography.Text strong>
+                  {selectedService?.displayName ||
+                    selectedService?.serviceId ||
+                    'No published service'}
+                </Typography.Text>
+                {selectedEndpoint ? (
+                  <Typography.Text type="secondary">
+                    / {selectedEndpoint.displayName || selectedEndpoint.endpointId}
+                  </Typography.Text>
+                ) : null}
+              </div>
+              {bindContract ? (
+                <Button
+                  icon={<CopyOutlined />}
+                  onClick={() => void copyText(bindContract.invokeUrl)}
                 >
-                  <div
-                    style={{
-                      alignItems: 'center',
-                      background: '#f8fafc',
-                      borderRight: '1px solid #eef2f7',
-                      color: '#475569',
-                      display: 'flex',
-                      fontFamily: monoFontFamily,
-                      fontSize: 12,
-                      fontWeight: 700,
-                      justifyContent: 'center',
-                      minWidth: 0,
-                      padding: '10px 12px',
+                  Copy URL
+                </Button>
+              ) : null}
+            </div>
+            <div style={controlsGridStyle}>
+              <div style={sourceControlStackStyle}>
+                <Typography.Text type="secondary">Published service</Typography.Text>
+                {hasMultiplePublishedServices ? (
+                  <Select
+                    options={serviceOptions}
+                    placeholder="Select a published service"
+                    style={sourceControlSelectStyle}
+                    value={selectedServiceId || undefined}
+                    onChange={(value) => {
+                      setSelectedServiceId(String(value || ''));
+                      setSelectedEndpointId('');
                     }}
-                  >
-                    {bindContract.method}
+                  />
+                ) : (
+                  <div style={valueCardStyle}>
+                    <Typography.Text strong style={{ wordBreak: 'break-word' }}>
+                      {selectedService?.displayName ||
+                        selectedService?.serviceId ||
+                        'No published service'}
+                    </Typography.Text>
+                    <Typography.Text type="secondary">
+                      {selectedService?.serviceId || 'No service id'}
+                    </Typography.Text>
                   </div>
-                  <div
-                    style={{
-                      color: '#0f172a',
-                      flex: 1,
-                      fontFamily: monoFontFamily,
-                      fontSize: 12.5,
-                      minWidth: 0,
-                      overflowX: 'auto',
-                      padding: '10px 14px',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {bindContract.invokeUrl}
-                  </div>
-                </div>
-                <Space wrap size={[6, 6]}>
-                  <Tag>auth · {bindContract.authLabel}</Tag>
-                  <Tag>revision · {bindContract.revisionId}</Tag>
-                  {bindContract.streaming.sse ? (
-                    <Tag color="gold">stream · text/event-stream</Tag>
-                  ) : (
-                    <Tag>response · application/json</Tag>
-                  )}
-                  {bindContract.streaming.aguiFrames ? (
-                    <Tag color="geekblue">AGUI frames</Tag>
-                  ) : null}
-                </Space>
-              </>
-            ) : (
-              <Empty
-                description="Inspect the published contract in focus to reveal its invoke URL and endpoint details."
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                )}
+              </div>
+              <div style={sourceControlStackStyle}>
+                <Typography.Text type="secondary">Endpoint</Typography.Text>
+                <Select
+                  disabled={!selectedService || !hasEndpointOptions}
+                  options={endpointOptions}
+                  placeholder={
+                    hasEndpointOptions
+                      ? 'Select an endpoint'
+                      : 'No endpoint data available'
+                  }
+                  style={sourceControlSelectStyle}
+                  value={selectedEndpointId || undefined}
+                  onChange={(value) => setSelectedEndpointId(String(value || ''))}
+                />
+              </div>
+            </div>
+            {endpointUnavailableMessage ? (
+              <Alert
+                showIcon
+                message={endpointUnavailableMessage}
+                description="The service revision history can still load, but Invoke needs endpoint data on the selected service contract."
+                type="warning"
               />
-            )}
+            ) : null}
           </div>
         </AevatarPanel>
 
-        <div data-testid="studio-bind-primary-grid" style={workflowGridStyle}>
+        <div style={contractAndActionsGridStyle}>
           <AevatarPanel
             layoutMode="document"
             padding={14}
+            style={equalHeightPanelStyle}
+            title="Current member contract"
+            titleHelp="Keep only the callable essentials here so the page opens with the method, URL, auth, and revision at a glance."
+          >
+            <div
+              data-testid="studio-bind-contract-section"
+              style={contractSectionStyle}
+            >
+              <Typography.Text type="secondary">
+                {runsCurrentWorkflowDraft
+                  ? 'Keep the current draft in focus here; the smoke test and snippets below are the two fastest follow-up actions.'
+                  : 'Keep the active invoke contract in focus here; the smoke test and snippets below are the two fastest follow-up actions.'}
+              </Typography.Text>
+              {bindContract ? (
+                <>
+                  <div
+                    data-testid="studio-bind-contract-card"
+                    style={contractUrlCardStyle}
+                  >
+                    <div style={contractMethodStyle}>
+                      {bindContract.method}
+                    </div>
+                    <div style={contractUrlStyle}>
+                      {bindContract.invokeUrl}
+                    </div>
+                  </div>
+                  <Space wrap size={[6, 6]}>
+                    <Tag>auth · {bindContract.authLabel}</Tag>
+                    <Tag>revision · {bindContract.revisionId}</Tag>
+                    {bindContract.streaming.sse ? (
+                      <Tag color="gold">stream · text/event-stream</Tag>
+                    ) : (
+                      <Tag>response · application/json</Tag>
+                    )}
+                    {bindContract.streaming.aguiFrames ? (
+                      <Tag color="geekblue">AGUI frames</Tag>
+                    ) : null}
+                  </Space>
+                </>
+              ) : (
+                <Alert
+                  showIcon
+                  message="Select an endpoint to reveal the invoke contract."
+                  description="The contract URL, revision badge, snippets, and smoke test are generated from the selected service endpoint."
+                  type="info"
+                />
+              )}
+            </div>
+          </AevatarPanel>
+
+          <AevatarPanel
+            layoutMode="document"
+            padding={14}
+            style={equalHeightPanelStyle}
             title="Quick smoke test"
             titleHelp={
               runsCurrentWorkflowDraft
@@ -915,15 +1066,15 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 <Button
                   block
                   icon={<LinkOutlined />}
-                  disabled={!selectedService || !selectedEndpoint}
+                  disabled={!selectedService || (hasEndpointOptions && !selectedEndpoint)}
                   onClick={() => {
-                    if (!selectedService || !selectedEndpoint) {
+                    if (!selectedService) {
                       return;
                     }
 
                     onContinueToInvoke?.(
                       selectedService.serviceId,
-                      selectedEndpoint.endpointId,
+                      fallbackEndpointId,
                     );
                   }}
                 >
@@ -986,10 +1137,13 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
               ) : null}
             </div>
           </AevatarPanel>
+        </div>
 
+        <div data-testid="studio-bind-primary-grid" style={workflowGridStyle}>
           <AevatarPanel
             layoutMode="document"
             padding={14}
+            style={equalHeightPanelStyle}
             title="Integration snippets"
             titleHelp="Give the user a ready-to-copy call shape right away, without making them hunt through the support sections."
           >
@@ -1052,56 +1206,6 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
               defaultActiveKey={[]}
               ghost
               items={[
-              {
-                key: 'published-contract-source',
-                label: 'Published contract source',
-                children: (
-                  <div style={{ display: 'grid', gap: 12 }}>
-                    <Typography.Text type="secondary">
-                      Studio still resolves invoke URL, revisions, and governance details through
-                      the published service surface. Keep this section nearby when you need to
-                      switch the active contract source.
-                    </Typography.Text>
-                    <div style={controlsGridStyle}>
-                      <div style={{ display: 'grid', gap: 8 }}>
-                        <Typography.Text type="secondary">Published service</Typography.Text>
-                        {hasMultiplePublishedServices ? (
-                          <Select
-                            options={serviceOptions}
-                            placeholder="Select a published service"
-                            value={selectedServiceId || undefined}
-                            onChange={(value) => {
-                              setSelectedServiceId(String(value || ''));
-                              setSelectedEndpointId('');
-                            }}
-                          />
-                        ) : (
-                          <div style={valueCardStyle}>
-                            <Typography.Text strong style={{ wordBreak: 'break-word' }}>
-                              {selectedService?.displayName ||
-                                selectedService?.serviceId ||
-                                'No published service'}
-                            </Typography.Text>
-                            <Typography.Text type="secondary">
-                              {selectedService?.serviceId || 'No service id'}
-                            </Typography.Text>
-                          </div>
-                        )}
-                      </div>
-                      <div style={{ display: 'grid', gap: 8 }}>
-                        <Typography.Text type="secondary">Endpoint</Typography.Text>
-                        <Select
-                          disabled={!selectedService}
-                          options={endpointOptions}
-                          placeholder="Select an endpoint"
-                          value={selectedEndpointId || undefined}
-                          onChange={(value) => setSelectedEndpointId(String(value || ''))}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                ),
-              },
               {
                 key: 'contract-details',
                 label: 'Contract details',

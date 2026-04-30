@@ -110,7 +110,7 @@ const ScriptsResourceRail: React.FC<ScriptsResourceRailProps> = ({
                   key={draft.key}
                   active={draft.key === selectedDraftKey}
                   title={draft.scriptId}
-                  meta={draft.revision}
+                  meta={draft.revision || 'local draft'}
                   summary={formatScriptDateTime(draft.updatedAtUtc)}
                   status={dirty ? 'dirty' : draft.scopeDetail?.script ? 'scope' : ''}
                   onClick={() => onSelectDraft(draft)}

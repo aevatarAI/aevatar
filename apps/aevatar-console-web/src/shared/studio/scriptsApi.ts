@@ -192,7 +192,7 @@ export const scriptsApi = {
   validateDraft(
     payload: {
       scriptId: string;
-      scriptRevision: string;
+      scriptRevision?: string;
       source?: string;
       package?: ScriptPackage | null;
     },

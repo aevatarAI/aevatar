@@ -620,7 +620,7 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
     expect(header).toBeTruthy();
 
     const headerScope = within(header as HTMLElement);
-    expect(headerScope.getByText(/^draft-/)).toBeTruthy();
+    expect(headerScope.getByText('not saved')).toBeTruthy();
     expect(headerScope.getByText('嵌入式 Host')).toBeTruthy();
     expect(headerScope.getByText('Scope 1626c177…b0d6')).toBeTruthy();
     expect(headerScope.getByRole('button', { name: 'New draft' })).toBeTruthy();
@@ -747,9 +747,9 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
       expect(mockedStudioApi.bindScopeScript).toHaveBeenCalledWith({
         scopeId: 'scope-1',
         displayName: 'script-1',
+        serviceId: 'script-1',
         scriptId: 'script-1',
         scriptRevision: 'rev-1',
-        revisionId: 'script-1-rev-1',
       });
     });
 
@@ -769,6 +769,67 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
     expect(mockedHistory.push).toHaveBeenCalledWith(
       '/scopes/assets?scopeId=scope-1&tab=scripts&scriptId=script-1',
     );
+  });
+
+  it('blocks scope binding when the saved script has no applied revision', async () => {
+    window.localStorage.setItem(
+      'aevatar:console:scripts-studio:v1',
+      JSON.stringify([
+        {
+          key: 'script-without-revision',
+          scriptId: 'script-1',
+          revision: '',
+          baseRevision: '',
+          input: '',
+          package: {
+            csharpSources: [
+              {
+                path: 'Behavior.cs',
+                content: 'public sealed class DemoScript {}',
+              },
+            ],
+            protoFiles: [],
+            entryBehaviorTypeName: 'DraftBehavior',
+            entrySourcePath: 'Behavior.cs',
+          },
+          selectedFilePath: 'Behavior.cs',
+          definitionActorId: 'definition-1',
+          runtimeActorId: 'runtime-1',
+          updatedAtUtc: '2026-03-24T00:00:00Z',
+          lastSourceHash: 'hash-1',
+          scopeDetail: {
+            available: true,
+            scopeId: 'scope-1',
+            script: {
+              scopeId: 'scope-1',
+              scriptId: 'script-1',
+              catalogActorId: 'catalog-1',
+              definitionActorId: 'definition-1',
+              activeRevision: '',
+              activeSourceHash: 'hash-1',
+              updatedAt: '2026-03-24T00:00:00Z',
+            },
+            source: {
+              sourceText: 'public sealed class DemoScript {}',
+              definitionActorId: 'definition-1',
+              revision: '',
+              sourceHash: 'hash-1',
+            },
+          },
+        },
+      ]),
+    );
+
+    renderPage({
+      mode: 'embedded',
+      scopeId: 'scope-1',
+    });
+
+    const bindButton = await screen.findByRole('button', {
+      name: 'Update default route',
+    });
+    expect(bindButton).toBeDisabled();
+    expect(mockedStudioApi.bindScopeScript).not.toHaveBeenCalled();
   });
 
   it('runs the current script draft without rebinding the scope service', async () => {
@@ -795,7 +856,7 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
       expect(mockedScriptsApi.runDraftScript).toHaveBeenCalledWith({
         scopeId: 'scope-1',
         scriptId: 'script-1',
-        scriptRevision: expect.stringMatching(/^draft-/),
+        scriptRevision: undefined,
         source: expect.any(String),
         package: expect.objectContaining({
           format: 'aevatar.scripting.package.v1',

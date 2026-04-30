@@ -62,6 +62,7 @@ import {
   buildScopeConsoleServiceOptions,
   scopeServiceAppId,
   scopeServiceNamespace,
+  type ScopeConsoleServiceOption,
 } from '@/shared/runs/scopeConsole';
 import {
   applyStepInspectorDraft,
@@ -2055,6 +2056,33 @@ function resolveStudioServiceDefaultEndpointId(
   );
 }
 
+function createEndpointDiscoveryPendingInvokeService(input: {
+  readonly label?: string;
+  readonly serviceId: string;
+}): ScopeConsoleServiceOption {
+  const serviceId = trimOptional(input.serviceId);
+  const label = trimOptional(input.label) || serviceId;
+  return {
+    deploymentStatus: '',
+    displayName: label,
+    endpoints: [
+      {
+        description:
+          'Temporary chat endpoint hint used while backend endpoint discovery is pending.',
+        displayName: 'Chat',
+        endpointId: 'chat',
+        kind: 'chat',
+        requestTypeUrl: '',
+        responseTypeUrl: '',
+      },
+    ],
+    kind: 'service',
+    namespace: scopeServiceNamespace,
+    primaryActorId: '',
+    serviceId,
+  };
+}
+
 function resolvePublishedServiceIdFromMemberKey(
   memberKey: string,
   publishedMembers: readonly PublishedStudioMemberRecord[],
@@ -2604,6 +2632,37 @@ const StudioPage: React.FC = () => {
     () => studioMembersQuery.data?.members ?? [],
     [studioMembersQuery.data?.members],
   );
+  useEffect(() => {
+    const routeMemberId = trimOptional(routeState.memberId);
+    if (!routeMemberId || selectedScriptId) {
+      return;
+    }
+
+    const routeMember = studioScopeMembers.find(
+      (member) => trimOptional(member.memberId) === routeMemberId,
+    );
+    if (
+      normalizeStudioMemberBindingImplementationKind(
+        routeMember?.implementationKind,
+      ) !== 'script'
+    ) {
+      return;
+    }
+
+    const scriptId =
+      trimOptional(routeMember?.publishedServiceId) ||
+      trimOptional(routeMember?.displayName);
+    if (!scriptId) {
+      return;
+    }
+    if (selectedScriptId === scriptId) {
+      return;
+    }
+
+    setSelectedWorkflowId('');
+    setSelectedScriptId(scriptId);
+    setTemplateWorkflow('');
+  }, [routeState.memberId, selectedScriptId, studioScopeMembers]);
   const studioMemberByPublishedServiceId = useMemo(() => {
     const members = new Map<string, (typeof studioScopeMembers)[number]>();
     for (const member of studioScopeMembers) {
@@ -3723,7 +3782,6 @@ const StudioPage: React.FC = () => {
           scriptRevision:
             trimOptional(effectiveScriptState.scriptRevision) ||
             trimOptional(effectiveScriptState.revisionId),
-          revisionId: trimOptional(effectiveScriptState.revisionId),
         };
       }
     }
@@ -3835,9 +3893,9 @@ const StudioPage: React.FC = () => {
         : await studioApi.bindScopeScript({
             scopeId: resolvedStudioScopeId,
             displayName: buildPendingBindCandidate.displayName,
+            serviceId: buildPendingBindCandidate.scriptId,
             scriptId: buildPendingBindCandidate.scriptId,
             scriptRevision: buildPendingBindCandidate.scriptRevision,
-            revisionId: buildPendingBindCandidate.revisionId,
           });
     await queryClient.invalidateQueries({
       queryKey: ['studio-scope-members', resolvedStudioScopeId],
@@ -3867,12 +3925,15 @@ const StudioPage: React.FC = () => {
       optimisticBoundServiceId;
 
     if (boundServiceId) {
+      const buildCandidateMemberKey =
+        buildPendingBindCandidate.kind === 'script'
+          ? trimOptional(selectedScriptId)
+            ? `script:${trimOptional(selectedScriptId)}`
+            : ''
+          : trimOptional(selectedWorkflowMemberKey);
       const boundMemberKey =
         (resolvedBuildMemberId ? `member:${resolvedBuildMemberId}` : '') ||
-        trimOptional(selectedWorkflowMemberKey) ||
-        (trimOptional(selectedScriptId)
-          ? `script:${trimOptional(selectedScriptId)}`
-          : '') ||
+        buildCandidateMemberKey ||
         trimOptional(routeState.memberKey) ||
         (trimOptional(routeState.memberId)
           ? `member:${trimOptional(routeState.memberId)}`
@@ -6371,13 +6432,36 @@ const StudioPage: React.FC = () => {
     trimOptional(routeState.memberId) ||
     currentSelectedMemberServiceId;
   const invokeTargetService = useMemo(
-    () =>
-      invokeTargetServiceId
-        ? runtimeConsoleServices.find(
-            (service) => service.serviceId === invokeTargetServiceId,
-          ) ?? null
-        : null,
-    [invokeTargetServiceId, runtimeConsoleServices],
+    () => {
+      if (!invokeTargetServiceId) {
+        return null;
+      }
+
+      const matchedService =
+        runtimeConsoleServices.find(
+          (service) => service.serviceId === invokeTargetServiceId,
+        ) ?? null;
+      if (matchedService) {
+        return matchedService;
+      }
+
+      if (
+        process.env.NODE_ENV !== 'production' &&
+        process.env.NODE_ENV !== 'test'
+      ) {
+        console.warn(
+          '[Studio] Using temporary chat endpoint fallback while scope service endpoint discovery is pending (#511).',
+          {
+            serviceId: invokeTargetServiceId,
+          },
+        );
+      }
+      return createEndpointDiscoveryPendingInvokeService({
+        label: currentMemberLabel,
+        serviceId: invokeTargetServiceId,
+      });
+    },
+    [currentMemberLabel, invokeTargetServiceId, runtimeConsoleServices],
   );
   const invokeTargetServices = useMemo(
     () => (invokeTargetService ? [invokeTargetService] : []),
@@ -7937,7 +8021,7 @@ const StudioPage: React.FC = () => {
                         Script id: {createScriptId || 'enter-a-script-name'}
                         {createScriptIdAlreadyExists
                           ? ' · already exists in this scope'
-                          : ' · saved after Validate and Save revision'}
+                          : ' · saved after Validate and Save script'}
                       </div>
                     ) : null}
                   </label>
@@ -7946,7 +8030,7 @@ const StudioPage: React.FC = () => {
                   {createMemberKind === 'workflow'
                     ? 'Workflow members currently start from a blank workflow draft with an empty canvas, and Studio also registers the member authority in backend once the draft is created.'
                     : createMemberKind === 'script'
-                      ? 'Script starts as a named draft. It becomes a callable member only after Save revision is catalog-applied and Bind succeeds.'
+                      ? 'Script starts as a named draft. It becomes a callable member only after Save script is catalog-applied and Bind succeeds.'
                       : 'GAgent member authority exists on backend, but this modal still hands off through Build > GAgent for implementation editing and binding prep.'}
                 </div>
                 {createMemberKind === 'workflow' ? (

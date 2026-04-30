@@ -503,9 +503,9 @@ export const getStudioDefaultRouteTargetCurrentRevision =
 export interface StudioScopeScriptBindingInput {
   readonly scopeId: string;
   readonly displayName?: string | null;
+  readonly serviceId?: string | null;
   readonly scriptId: string;
   readonly scriptRevision: string;
-  readonly revisionId?: string | null;
 }
 
 export type StudioScopeScriptBindingResult = StudioScopeBindingResult;
