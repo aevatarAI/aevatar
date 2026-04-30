@@ -1,7 +1,7 @@
 import { Alert, Button, Empty, Skeleton, Space, Typography, theme } from "antd";
 import React from "react";
 import { history } from "@/shared/navigation/history";
-import { buildStudioWorkflowEditorRoute } from "@/shared/studio/navigation";
+import { buildStudioRoute } from "@/shared/studio/navigation";
 import {
   AevatarPageShell,
   AevatarPanel,
@@ -336,7 +336,11 @@ export const TeamContextUnavailable: React.FC<{
               <Button
                 onClick={() =>
                   history.push(
-                    buildStudioWorkflowEditorRoute(),
+                    buildStudioRoute({
+                      scopeId: resolvedScopeId,
+                      tab: "studio",
+                      intent: "create-member",
+                    }),
                   )
                 }
                 type="primary"
@@ -348,7 +352,11 @@ export const TeamContextUnavailable: React.FC<{
               <Button
                 onClick={() =>
                   history.push(
-                    buildStudioWorkflowEditorRoute(),
+                    buildStudioRoute({
+                      scopeId: resolvedScopeId,
+                      tab: "studio",
+                      intent: "create-member",
+                    }),
                   )
                 }
               >

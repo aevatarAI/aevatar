@@ -6754,6 +6754,60 @@ const StudioPage: React.FC = () => {
     () => trimOptional(selectedMemberAuthoritySummary?.memberId),
     [selectedMemberAuthoritySummary?.memberId],
   );
+  useEffect(() => {
+    if (!isStudioLocation || studioSurface !== 'build') {
+      return;
+    }
+
+    const rawRouteMemberKey = trimOptional(routeState.memberKey);
+    if (
+      trimOptional(routeState.memberId) ||
+      !rawRouteMemberKey ||
+      (
+        !rawRouteMemberKey.startsWith('workflow:') &&
+        !rawRouteMemberKey.startsWith('script:')
+      )
+    ) {
+      return;
+    }
+
+    const stableBuildMemberId = trimOptional(
+      selectedMemberAuthorityId || workbenchStudioMemberId || routeSelectedMemberId,
+    );
+    if (!stableBuildMemberId) {
+      return;
+    }
+
+    history.replace(
+      buildStudioRoute({
+        scopeId: resolvedStudioScopeId || undefined,
+        memberId: stableBuildMemberId,
+        step: 'build',
+        tab:
+          buildSurface === 'scripts'
+            ? 'scripts'
+            : buildSurface === 'gagent'
+              ? 'gagents'
+              : 'studio',
+        prompt:
+          buildSurface === 'editor'
+            ? trimOptional(runPrompt) || undefined
+            : undefined,
+      }),
+    );
+  }, [
+    buildSurface,
+    history,
+    isStudioLocation,
+    resolvedStudioScopeId,
+    routeSelectedMemberId,
+    routeState.memberId,
+    routeState.memberKey,
+    runPrompt,
+    selectedMemberAuthorityId,
+    studioSurface,
+    workbenchStudioMemberId,
+  ]);
   const currentMemberImplementationLabel = !hasSelectedMemberFocus
     ? ''
     : workbenchMemberKey.startsWith('member:')
@@ -7037,6 +7091,7 @@ const StudioPage: React.FC = () => {
     const resolvedBuildMemberId =
       selectedBindMemberId ||
       fallbackSelectedBindMemberId ||
+      trimOptional(routeState.memberId) ||
       trimOptional(resolvedBuildMemberSummary?.memberId);
     if (!resolvedBuildMemberId) {
       throw new Error(
@@ -7197,6 +7252,19 @@ const StudioPage: React.FC = () => {
     scriptBuildState,
     studioScopeMembers,
     workbenchStudioMember?.lastBoundRevisionId,
+  ]);
+  const handleContinueWorkflowBuildToBind = useCallback(async () => {
+    if (!bindPendingCandidate || !trimOptional(draftYaml)) {
+      applyStudioTarget('bind');
+      return;
+    }
+
+    await handleBindPendingCandidate();
+  }, [
+    applyStudioTarget,
+    bindPendingCandidate,
+    draftYaml,
+    handleBindPendingCandidate,
   ]);
   const bindInitialEndpointId = bindSelectedMemberServiceId
     ? currentBindingSelectionServiceId === bindSelectedMemberServiceId &&
@@ -7696,35 +7764,29 @@ const StudioPage: React.FC = () => {
   const memberItems = useMemo(() => {
     const items: OrderedStudioShellMemberItem[] = [];
     const seen = new Set<string>();
-    const knownMemberIdentityTokens = new Set(
-      [
-        ...studioScopeMembers.flatMap((member) => [
-          normalizeComparableText(member.memberId),
-          normalizeComparableText(member.displayName),
-        ]),
-        ...visibleWorkflowSummaries.flatMap((workflow) => [
-          normalizeComparableText(workflow.workflowId),
-          normalizeComparableText(workflow.name),
-          normalizeComparableText(
-            trimOptional(workflow.fileName).replace(/\.(ya?ml)$/i, ''),
-          ),
-        ]),
-        ...availableScopeScripts.flatMap((scriptDetail) => [
-          normalizeComparableText(scriptDetail.script?.scriptId),
-        ]),
-      ].filter(Boolean),
-    );
-    const currentMemberItem: StudioShellMemberItem = {
-      key: selectedRailMemberKey || currentFocusMemberKey,
-      label: currentMemberLabel,
-      canDelete:
-        currentFocusMemberKey.startsWith('workflow:') && Boolean(selectedWorkflowId),
-      canRename: currentFocusMemberKey.startsWith('workflow:'),
-      description: currentMemberDescription,
-      kind: currentMemberKind,
-      meta: currentMemberMeta,
-      tone: currentMemberTone,
-    };
+    const currentMemberItemKey = trimOptional(
+      selectedMemberAuthorityId ||
+        workbenchStudioMemberId ||
+        selectedRailMemberId,
+    )
+      ? `member:${trimOptional(
+          selectedMemberAuthorityId ||
+            workbenchStudioMemberId ||
+            selectedRailMemberId,
+        )}`
+      : '';
+    const currentMemberItem: StudioShellMemberItem | null = currentMemberItemKey
+      ? {
+          key: currentMemberItemKey,
+          label: currentMemberLabel,
+          canDelete: false,
+          canRename: false,
+          description: currentMemberDescription,
+          kind: currentMemberKind,
+          meta: currentMemberMeta,
+          tone: currentMemberTone,
+        }
+      : null;
 
     const addItem = (item: StudioShellMemberItem | null) => {
       if (!item) {
@@ -7752,21 +7814,7 @@ const StudioPage: React.FC = () => {
       matchedScript,
     } of publishedScopeMembers) {
       if (!memberSummary) {
-        const orphanIdentityTokens = [
-          normalizeComparableText(matchedWorkflow?.workflowId),
-          normalizeComparableText(matchedWorkflow?.name),
-          normalizeComparableText(matchedScript?.script?.scriptId),
-          normalizeComparableText(serviceRevision?.workflowName),
-          normalizeComparableText(serviceRevision?.scriptId),
-          normalizeComparableText(service.displayName),
-        ].filter(Boolean);
-        if (
-          orphanIdentityTokens.some((token) =>
-            knownMemberIdentityTokens.has(token),
-          )
-        ) {
-          continue;
-        }
+        continue;
       }
 
       const memberLifecycleLabel = memberSummary
@@ -7819,66 +7867,10 @@ const StudioPage: React.FC = () => {
       });
     }
 
-    for (const workflow of visibleWorkflowSummaries) {
-      if (serviceBackedWorkflowIds.has(trimOptional(workflow.workflowId))) {
-        continue;
-      }
-
-      const workflowMemberKey = buildWorkflowMemberKeyFromSummary(workflow);
-      if (!workflowMemberKey) {
-        continue;
-      }
-
-      addItem({
-        key: workflowMemberKey,
-        label: workflow.name,
-        description: formatStudioAssetMeta({
-          primary: 'Workflow implementation',
-          secondary:
-            trimOptional(workflow.description) ||
-            trimOptional(workflow.fileName) ||
-            'Workspace workflow draft',
-        }) || 'Workspace workflow draft',
-        canDelete: true,
-        canRename: true,
-        kind: 'member',
-        meta: formatStudioAssetMeta({
-          primary: `${workflow.stepCount} steps`,
-          secondary: workflow.directoryLabel || workflow.fileName,
-        }),
-        tone:
-          currentFocusMemberKey === workflowMemberKey
-            ? 'live'
-            : 'idle',
-      });
-    }
-
-    for (const scriptDetail of availableScopeScripts) {
-      const scriptId = trimOptional(scriptDetail.script?.scriptId);
-      if (!scriptId || serviceBackedScriptIds.has(scriptId)) {
-        continue;
-      }
-
-      addItem({
-        key: `script:${scriptId}`,
-        label: scriptId,
-        description: formatStudioAssetMeta({
-          primary: 'Script implementation',
-          secondary:
-            trimOptional(scriptDetail.script?.definitionActorId) ||
-            'Scope-backed script behavior',
-        }) || 'Scope-backed script behavior',
-        kind: 'member',
-        meta: formatStudioAssetMeta({
-          primary: scriptDetail.script?.activeRevision || '',
-          secondary: 'Scope script',
-        }),
-        tone:
-          currentFocusMemberKey === `script:${scriptId}` ? 'live' : 'idle',
-      });
-    }
-
-    if (!seen.has(trimOptional(currentMemberItem.key))) {
+    if (
+      currentMemberItem &&
+      !seen.has(trimOptional(currentMemberItem.key))
+    ) {
       addItem(currentMemberItem);
     }
 
@@ -7916,8 +7908,6 @@ const StudioPage: React.FC = () => {
       })
       .map(({ insertionOrder: _insertionOrder, ...item }) => item);
   }, [
-    availableScopeScripts,
-    currentFocusMemberKey,
     currentMemberDescription,
     currentMemberKind,
     currentMemberLabel,
@@ -7926,11 +7916,10 @@ const StudioPage: React.FC = () => {
     effectiveSelectedMemberKey,
     memberRecencyOrder,
     publishedScopeMembers,
+    selectedMemberAuthorityId,
+    selectedRailMemberId,
     selectedRailMemberKey,
-    serviceBackedScriptIds,
-    serviceBackedWorkflowIds,
-    selectedWorkflowId,
-    visibleWorkflowSummaries,
+    workbenchStudioMemberId,
   ]);
   const selectedMemberCanBind = Boolean(
     resolvedStudioScopeId &&
@@ -8538,7 +8527,7 @@ const StudioPage: React.FC = () => {
       onAutoLayout={handleAutoLayoutWorkflow}
       onConnectNodes={handleWorkflowConnectNodes}
       onNodeLayoutChange={handleWorkflowNodeLayoutChange}
-      onContinueToBind={() => applyStudioTarget('bind')}
+      onContinueToBind={() => void handleContinueWorkflowBuildToBind()}
     />
   );
 

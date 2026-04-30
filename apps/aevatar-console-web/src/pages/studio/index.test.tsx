@@ -3781,6 +3781,15 @@ describe("StudioPage", () => {
 
     const bindSurface = await screen.findByTestId("studio-bind-surface");
     expect(bindSurface).toBeTruthy();
+    await waitFor(() => {
+      expect(studioApi.bindMemberWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scopeId: "scope-1",
+          memberId: "workspace-demo",
+          displayName: "workspace-demo",
+        }),
+      );
+    });
     expect(bindSurface.parentElement).not.toHaveStyle({
       height: "100%",
     });
@@ -4431,14 +4440,14 @@ describe("StudioPage", () => {
     fireEvent.click(continueToBindButton);
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
     await waitFor(() => {
+      expect(studioApi.bindMemberWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scopeId: "scope-1",
+          memberId: "draft2",
+          displayName: "draft2",
+        }),
+      );
       expect(screen.getByText("candidate:draft2")).toBeTruthy();
-    });
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Bind current member" }));
-    });
-
-    await waitFor(() => {
       expect(screen.getByText("service:default")).toBeTruthy();
       const searchParams = new URLSearchParams(window.location.search);
       expect(searchParams.get("member")).toBeNull();
@@ -4448,15 +4457,67 @@ describe("StudioPage", () => {
     });
 
     const rail = await screen.findByLabelText("Team members");
-    fireEvent.click(within(rail).getByRole("button", { name: "draft1" }));
-    fireEvent.click(within(rail).getByRole("button", { name: "draft2" }));
+    expect(within(rail).queryByRole("button", { name: "draft1" })).toBeTruthy();
+    expect(within(rail).queryByRole("button", { name: "draft2" })).toBeTruthy();
+  });
 
+  it("canonicalizes a workflow-backed build route to the real member id before binding", async () => {
+    mockStudioMembers = [
+      {
+        memberId: "member-joker",
+        scopeId: "scope-1",
+        displayName: "joker",
+        description: "Workflow-backed member",
+        implementationKind: "workflow",
+        lifecycleStage: "created",
+        publishedServiceId: "default",
+        lastBoundRevisionId: "",
+        createdAt: "2026-04-27T08:00:00Z",
+        updatedAt: "2026-04-27T08:05:00Z",
+      },
+    ];
+    (studioApi.listWorkflows as jest.Mock).mockResolvedValueOnce([
+      {
+        workflowId: "workflow-1",
+        name: "joker",
+        description: "Current workflow member",
+        fileName: "joker.yaml",
+        filePath: "/tmp/workflows/joker.yaml",
+        directoryId: "dir-1",
+        directoryLabel: "Workspace",
+        stepCount: 1,
+        hasLayout: true,
+        updatedAtUtc: "2026-03-18T00:00:00Z",
+      },
+    ]);
+
+    renderStudioPage(
+      "/studio?scopeId=scope-1&member=workflow%3Ajoker&step=build&tab=studio",
+    );
+
+    expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
     await waitFor(() => {
-      expect(screen.getByText("service:default")).toBeTruthy();
-      expect(screen.queryByText("service:no-service")).toBeNull();
       const searchParams = new URLSearchParams(window.location.search);
       expect(searchParams.get("member")).toBeNull();
-      expect(searchParams.get("memberId")).toBe("draft2");
+      expect(searchParams.get("memberId")).toBe("member-joker");
+      expect(searchParams.get("step")).toBe("build");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Bind" }));
+
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    await waitFor(() => {
+      expect(studioApi.bindMemberWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scopeId: "scope-1",
+          memberId: "member-joker",
+          displayName: "joker",
+        }),
+      );
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("member")).toBeNull();
+      expect(searchParams.get("memberId")).toBe("member-joker");
+      expect(searchParams.get("step")).toBe("bind");
     });
   });
 
@@ -4750,11 +4811,7 @@ describe("StudioPage", () => {
         "true"
       );
     });
-    within(rail)
-      .getAllByRole("button", { name: "draft1" })
-      .forEach((button) => {
-        expect(button).not.toHaveAttribute("aria-current", "true");
-      });
+    expect(within(rail).queryByRole("button", { name: "draft1" })).toBeNull();
   });
 
   it("pins Bind to the selected published member instead of the scope default route target", async () => {
@@ -5134,7 +5191,7 @@ describe("StudioPage", () => {
     });
   });
 
-  it("keeps the current bind surface active when switching to a workflow draft from the rail", async () => {
+  it("keeps workflow-only drafts out of the Team members rail while Bind stays pinned to the selected backend member", async () => {
     mockStudioMembers = [
       {
         memberId: "joker",
@@ -5224,7 +5281,7 @@ describe("StudioPage", () => {
     });
 
     const rail = await screen.findByLabelText("Team members");
-    fireEvent.click(within(rail).getByRole("button", { name: "draft1" }));
+    expect(within(rail).queryByRole("button", { name: "draft1" })).toBeNull();
 
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
     await waitFor(() => {
@@ -5238,9 +5295,7 @@ describe("StudioPage", () => {
       expect(searchParams.get("focus")).toBeNull();
       expect(searchParams.get("memberId")).toBe("joker");
     });
-    expect(message.error).toHaveBeenCalledWith(
-      "Studio could not resolve a stable member authority for the current draft. Re-open the member from Team members, or create/register a backend member before continuing to Bind.",
-    );
+    expect(message.error).not.toHaveBeenCalled();
     expect(screen.queryByTestId("studio-workflow-build-panel")).toBeNull();
   });
 
@@ -5589,7 +5644,7 @@ describe("StudioPage", () => {
       },
     ]);
 
-    renderStudioPage("/studio?scopeId=scope-1&tab=studio");
+    renderStudioPage("/studio?scopeId=scope-1&memberId=workspace-demo&tab=studio");
 
     await waitFor(() => {
       const searchParams = new URLSearchParams(window.location.search);
@@ -5600,12 +5655,44 @@ describe("StudioPage", () => {
     });
   });
 
-  it("keeps team members in recent-first order when selecting from the rail", async () => {
+  it("keeps workflow focus params cleared while backend members remain addressable from the rail", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,
       scopeId: "scope-1",
       scopeResolved: true,
     });
+    (studioApi.listMembers as jest.Mock).mockReset();
+    (studioApi.listMembers as jest.Mock).mockImplementation(async () => ({
+      scopeId: "scope-1",
+      members: mockStudioMembers,
+      nextPageToken: null,
+    }));
+    mockStudioMembers = [
+      {
+        memberId: "workspace-demo",
+        scopeId: "scope-1",
+        displayName: "workspace-demo",
+        description: "Workspace workflow member",
+        implementationKind: "workflow",
+        lifecycleStage: "bind_ready",
+        publishedServiceId: "default",
+        lastBoundRevisionId: "rev-2",
+        createdAt: "2026-04-27T08:00:00Z",
+        updatedAt: "2026-04-27T08:05:00Z",
+      },
+      {
+        memberId: "other-workflow",
+        scopeId: "scope-1",
+        displayName: "other-workflow",
+        description: "Other workflow member",
+        implementationKind: "workflow",
+        lifecycleStage: "created",
+        publishedServiceId: "other-workflow",
+        lastBoundRevisionId: "",
+        createdAt: "2026-04-27T08:00:00Z",
+        updatedAt: "2026-04-27T08:05:00Z",
+      },
+    ];
     (studioApi.listWorkflows as jest.Mock).mockResolvedValueOnce([
       {
         workflowId: "workflow-2",
@@ -5636,7 +5723,8 @@ describe("StudioPage", () => {
     renderStudioPage("/studio?scopeId=scope-1&tab=studio");
 
     const rail = await screen.findByLabelText("Team members");
-    await within(rail).findByText("other-workflow");
+    await within(rail).findByRole("button", { name: "workspace-demo" });
+    await within(rail).findByRole("button", { name: "other-workflow" });
     const workspaceButtonsBefore = within(rail).getAllByRole("button", {
       name: "workspace-demo",
     });
@@ -5659,7 +5747,10 @@ describe("StudioPage", () => {
       expect(
         within(rail).getAllByRole("button", { name: "workspace-demo" })
       ).toHaveLength(1);
-      expect(within(rail).getByRole("button", { name: "other-workflow" })).toBeTruthy();
+      expect(within(rail).getByRole("button", { name: "other-workflow" })).toHaveAttribute(
+        "aria-current",
+        "true"
+      );
     });
 
     const workspaceButtonsAfter = within(rail).getAllByRole("button", {
@@ -5669,7 +5760,6 @@ describe("StudioPage", () => {
     const otherWorkflowButtonAfter = within(rail).getByRole("button", {
       name: "other-workflow",
     });
-    const railButtonsAfter = within(rail).getAllByRole("button");
 
     expect(otherWorkflowButtonAfter).toBeTruthy();
     expect(workspaceButtonAfter).toBeTruthy();
@@ -5678,12 +5768,44 @@ describe("StudioPage", () => {
     expect(searchParams.get("focus")).toBeNull();
   });
 
-  it("highlights the newly selected workflow instead of keeping the previous service selected", async () => {
+  it("highlights the newly selected backend member instead of keeping the previous service selected", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,
       scopeId: "scope-1",
       scopeResolved: true,
     });
+    (studioApi.listMembers as jest.Mock).mockReset();
+    (studioApi.listMembers as jest.Mock).mockImplementation(async () => ({
+      scopeId: "scope-1",
+      members: mockStudioMembers,
+      nextPageToken: null,
+    }));
+    mockStudioMembers = [
+      {
+        memberId: "workspace-demo",
+        scopeId: "scope-1",
+        displayName: "workspace-demo",
+        description: "Workspace workflow member",
+        implementationKind: "workflow",
+        lifecycleStage: "bind_ready",
+        publishedServiceId: "default",
+        lastBoundRevisionId: "rev-2",
+        createdAt: "2026-04-27T08:00:00Z",
+        updatedAt: "2026-04-27T08:05:00Z",
+      },
+      {
+        memberId: "other-workflow",
+        scopeId: "scope-1",
+        displayName: "other-workflow",
+        description: "Other workflow member",
+        implementationKind: "workflow",
+        lifecycleStage: "created",
+        publishedServiceId: "other-workflow",
+        lastBoundRevisionId: "",
+        createdAt: "2026-04-27T08:00:00Z",
+        updatedAt: "2026-04-27T08:05:00Z",
+      },
+    ];
     (studioApi.listWorkflows as jest.Mock).mockResolvedValueOnce([
       {
         workflowId: "workflow-2",
@@ -5731,7 +5853,7 @@ describe("StudioPage", () => {
     });
   });
 
-  it("surfaces the currently selected workflow member ahead of older published members", async () => {
+  it("does not surface a workflow draft in the Team members rail when only backend members are available", async () => {
     mockStudioMembers = [
       {
         memberId: "joker",
@@ -5798,17 +5920,8 @@ describe("StudioPage", () => {
     renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
 
     const rail = await screen.findByLabelText("Team members");
-    const draftButton = await within(rail).findByRole("button", {
-      name: "draft1",
-    });
-    const jokerButton = within(rail).getByRole("button", {
-      name: "joker",
-    });
-
-    expect(
-      draftButton.compareDocumentPosition(jokerButton) &
-        Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
+    expect(await within(rail).findByRole("button", { name: "joker" })).toBeTruthy();
+    expect(within(rail).queryByRole("button", { name: "draft1" })).toBeNull();
   });
 
   it("does not render a duplicate member card when a legacy default service aliases the selected draft", async () => {
@@ -5910,7 +6023,7 @@ describe("StudioPage", () => {
     expect(within(rail).getByRole("button", { name: "joker" })).toBeTruthy();
   });
 
-  it("keeps a workflow draft visible when an orphan default service aliases it", async () => {
+  it("does not surface orphan workflow drafts in the Team members rail when only service aliases exist", async () => {
     mockStudioMembers = [
       {
         memberId: "joker",
@@ -6016,10 +6129,9 @@ describe("StudioPage", () => {
     );
 
     const rail = await screen.findByLabelText("Team members");
-    expect(await within(rail).findByRole("button", { name: "draft1" })).toBeTruthy();
-    expect(within(rail).getByRole("button", { name: "draft2" })).toBeTruthy();
-    expect(within(rail).getAllByRole("button", { name: "draft2" })).toHaveLength(1);
-    expect(within(rail).getByRole("button", { name: "joker" })).toBeTruthy();
+    expect(await within(rail).findByRole("button", { name: "joker" })).toBeTruthy();
+    expect(within(rail).queryByRole("button", { name: "draft1" })).toBeNull();
+    expect(within(rail).queryByRole("button", { name: "draft2" })).toBeNull();
   });
 
   it("does not hide a workflow draft when the matching service revision cannot be loaded", async () => {
@@ -6109,7 +6221,8 @@ describe("StudioPage", () => {
     renderStudioPage("/studio?scopeId=scope-1&tab=studio");
 
     const rail = await screen.findByLabelText("Team members");
-    expect(await within(rail).findByRole("button", { name: "Billing API" })).toBeTruthy();
+    expect(await within(rail).findByRole("button", { name: "workspace-demo" })).toBeTruthy();
+    expect(within(rail).queryByRole("button", { name: "Billing API" })).toBeNull();
 
     await waitFor(() => {
       expect(mockScopeRuntimeApi.getServiceRevisions).toHaveBeenCalledWith(
@@ -6129,6 +6242,18 @@ describe("StudioPage", () => {
       scopeId: "scope-1",
       scopeResolved: true,
     });
+    mockStudioMembers = Array.from({ length: 9 }, (_, index) => ({
+      memberId: `member-${index + 1}`,
+      scopeId: "scope-1",
+      displayName: `member-${index + 1}`,
+      description: `Member ${index + 1}`,
+      implementationKind: "workflow",
+      lifecycleStage: "created",
+      publishedServiceId: `member-${index + 1}`,
+      lastBoundRevisionId: "",
+      createdAt: "2026-04-27T08:00:00Z",
+      updatedAt: "2026-04-27T08:05:00Z",
+    }));
     (studioApi.listWorkflows as jest.Mock).mockResolvedValueOnce(
       Array.from({ length: 9 }, (_, index) => ({
         workflowId: `workflow-${index + 1}`,

@@ -7,7 +7,7 @@ import { Alert, Button, Space, Typography } from "antd";
 import React from "react";
 import { history } from "@/shared/navigation/history";
 import { buildTeamWorkspaceRoute } from "@/shared/navigation/scopeRoutes";
-import { buildStudioWorkflowWorkspaceRoute } from "@/shared/studio/navigation";
+import { buildStudioRoute } from "@/shared/studio/navigation";
 import {
   AevatarPageShell,
   AevatarPanel,
@@ -64,8 +64,10 @@ const LegacyTeamsHome: React.FC<SharedTeamsHomeProps> = ({
           <Button
             onClick={() =>
               history.push(
-                buildStudioWorkflowWorkspaceRoute({
+                buildStudioRoute({
                   scopeId: resolvedScopeId,
+                  tab: "studio",
+                  intent: "create-member",
                 }),
               )
             }

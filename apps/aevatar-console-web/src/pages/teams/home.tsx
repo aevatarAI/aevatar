@@ -40,7 +40,6 @@ import {
 } from "@/shared/studio/memberRuntime";
 import {
   buildStudioRoute,
-  buildStudioWorkflowWorkspaceRoute,
 } from "@/shared/studio/navigation";
 import {
   AevatarInspectorEmpty,
@@ -451,9 +450,10 @@ function buildMemberRosterPreview(input: {
     pickMeaningfulLabel(trimOptional(matchedService?.displayName), serviceId) ||
     (trimOptional(input.member.lastBoundRevisionId) ? "已绑定待确认" : "未绑定");
   const title = pickMeaningfulLabel(input.member.displayName, input.member.memberId) || "未命名成员";
-  const studioHref = buildStudioWorkflowWorkspaceRoute({
+  const studioHref = buildStudioRoute({
     scopeId: input.scopeId,
     memberId,
+    tab: "studio",
   });
 
   let attention: WorkflowOperationalAttention = "draft";
@@ -1330,8 +1330,10 @@ const TeamsHomePage: React.FC = () => {
                   <Button
                     onClick={() =>
                       history.push(
-                        buildStudioWorkflowWorkspaceRoute({
+                        buildStudioRoute({
                           scopeId,
+                          tab: "studio",
+                          intent: "create-member",
                         }),
                       )
                     }
@@ -1466,8 +1468,10 @@ const TeamsHomePage: React.FC = () => {
                 <Button
                   onClick={() =>
                     history.push(
-                      buildStudioWorkflowWorkspaceRoute({
+                      buildStudioRoute({
                         scopeId,
+                        tab: "studio",
+                        intent: "create-member",
                       }),
                     )
                   }
