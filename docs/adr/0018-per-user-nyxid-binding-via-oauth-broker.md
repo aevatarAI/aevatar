@@ -6,6 +6,28 @@ owner: eanzhao
 
 # ADR-0018: Per-User NyxID Binding via OAuth Broker
 
+## Update 2026-04-30 — NyxID#576 / PR #578 contract alignment
+
+ADR 第一版 (#549 时代) 假设 aevatar 持有一个**集群级 OAuth `client_secret`**,token-exchange / DELETE binding 走 confidential-client + Basic auth。implementation PR #521 自审过程中发现这条假设违反 aevatar "无 NyxID 颁发 secret 落地" 的不变量(`client_secret` 一旦泄漏,fleet-wide blast radius 覆盖所有用户),据此提了 [ChronoAIProject/NyxID#576](https://github.com/ChronoAIProject/NyxID/issues/576),要求 NyxID broker 接口接受**公共客户端 + PKCE**。
+
+NyxID 在 [PR #578](https://github.com/ChronoAIProject/NyxID/pull/578) (commit `516abda`) 落地了三处对齐:
+
+| 端点 | 之前(confidential only) | 现在(public + PKCE 也可) |
+|---|---|---|
+| `POST /oauth/register` (DCR) | 忽略 `body.scope`,硬编 `DEFAULT_MCP_ALLOWED_SCOPES` | 持久化请求的 `scope`(经 `validate_allowed_scopes`)进 client 的 `allowed_scopes` |
+| `POST /oauth/token` (token-exchange) | 强制要 `client_secret`,403 if absent | `client_type=public` 时 `validate_client_secret` skip;`is_broker_client` 改为 `broker_capability_enabled OR allowed_scopes 含 broker_binding`,DCR-issued public client 直接命中 |
+| `DELETE /oauth/bindings/{id}` | Basic auth `client_id+secret`,缺则 silent 204 | 接受 `?client_id=` query 参数;ownership check 仍在 `revoke_binding_by_client` |
+
+**Aevatar 端最终态(PR #521):**
+
+- DCR 自举注册公共客户端,scope 含 `urn:nyxid:scope:broker_binding`
+- token-exchange 仅传 `client_id`,不传 `client_secret`(根本没有)
+- DELETE binding 走 `?client_id=` query 参数
+- 不存任何 NyxID 颁发的 secret;唯一持久态密钥是本地自生成的 state-token HMAC key(`AevatarOAuthClientGAgent.State.HmacKey`),不出集群边界
+- broker 流不再需要 ops 一次性手动翻 `broker_capability_enabled` 开关,scope-based 自动触发
+
+后文 §Decision / §Storage Boundary / §Security Threat Model 中所有对 `client_secret` 的提及保留作为历史背景说明,但**现状以本 Update 为准**。`#375` user-secret 不变量与本 ADR 的 zero-NyxID-secret 状态现在是一致的——aevatar 不再需要"service-level secret 走 KMS / config 加载"的例外条款。
+
 ## Context
 
 Discussion `#400` 提出把 channel bot(Lark / Telegram / Discord)消息链路里的"sender"语义从 bot owner 改成**per Lark user 自己的 NyxID subject**:每个 sender 第一次交互走 `/init` 走一轮 NyxID 登录,之后用其自身 nyx subject 跑 LLM、tool、capability。
