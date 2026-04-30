@@ -37,31 +37,31 @@ authoritative state.
 
 ### Identity envelope
 
-A new `RuntimeActorIdentity` sub-record on `RuntimeActorGrainState` (Orleans
-serialized, `[Id(7)]`) carries:
+`RuntimeActorIdentity` is defined as a Protobuf message in
+`src/Aevatar.Foundation.Abstractions/runtime_actor_identity.proto` and
+embedded as `[Id(7)]` on `RuntimeActorGrainState`. Orleans serializes the
+proto-generated class through `AddProtobufSerializer` (already wired in
+`Aevatar.Foundation.Runtime.Implementations.Orleans`), so the runtime
+envelope stays a single Orleans state row but the new identity contract
+follows CLAUDE.md's *"先定义 `.proto`，再接入实现"* mandate end-to-end.
 
-- `Kind` — the FQ kind token (e.g. `scheduled.skill-runner`,
+Fields:
+
+- `kind` — the FQ kind token (e.g. `scheduled.skill-runner`,
   `channels.bot-registration`).
-- `StateSchemaVersion` — runtime-owned schema marker for the actor's
+- `state_schema_version` — runtime-owned schema marker for the actor's
   persisted business state. Business state protos themselves stay pure
   domain artifacts and never carry a version field. See ADR 0020 for
   rationale and the consumer contract from issue #500.
-- `LegacyClrTypeName` — populated only during the Phase 1/2 transition;
+- `legacy_clr_type_name` — populated only during the Phase 1/2 transition;
   becomes `reserved` in Phase 3.
 
-#### Why Orleans serialization here, not Protobuf
-
-CLAUDE.md mandates Protobuf for new persisted state objects. The exception
-made here is intentional and bounded: `RuntimeActorIdentity` is embedded in
-the existing Orleans-serialized `RuntimeActorGrainState` envelope (the
-runtime-owned outer record, not a domain state). Switching `RuntimeActorIdentity`
-alone to Protobuf would require either dual-encoding (Orleans wrapper +
-Protobuf bytes for `Identity`) or migrating the entire `RuntimeActorGrainState`
-to Protobuf — the latter is a separate storage-layer migration. Phase 1
-keeps the envelope's serialization technology homogeneous and defers the
-full Protobuf migration of `RuntimeActorGrainState` to a follow-up issue.
-This is recorded as an explicit waiver, not silent drift; the follow-up
-must land before any further state field is added to the runtime envelope.
+The outer `RuntimeActorGrainState` retains its Orleans `[GenerateSerializer]`
+attributes for now: it is the runtime-owned envelope (CLR type names,
+parent/child topology, opaque agent-state bytes), not a domain state, and
+the existing fields predate this PR. Migrating the outer record to
+Protobuf is tracked as a separate storage-layer follow-up; this PR
+intentionally limits its blast radius to the new identity field.
 
 ### Registry contract
 
@@ -74,16 +74,16 @@ public interface IAgentKindRegistry
 }
 
 public sealed record AgentImplementation(
-    Func<IAgent> Factory,
+    Func<IServiceProvider, IAgent> Factory,
     Type StateContractType,
     AgentImplementationMetadata Metadata);
 ```
 
 The registry returns an opaque `AgentImplementation` handle —
-`AgentImplementation.Factory()` produces an `IAgent`. The implementation
-CLR type does not appear in the contract surface, keeping the door open
-for scripted / workflow / out-of-process implementations behind the same
-kind.
+`AgentImplementation.Factory(services)` produces an `IAgent` using the
+activation-time service provider. The implementation CLR type does not
+appear in the contract surface, keeping the door open for scripted /
+workflow / out-of-process implementations behind the same kind.
 
 ### Kind naming convention
 
