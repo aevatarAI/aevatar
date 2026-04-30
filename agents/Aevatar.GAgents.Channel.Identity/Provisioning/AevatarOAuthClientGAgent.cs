@@ -159,38 +159,34 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             .RegisterPublicClientAsync(cmd.NyxidAuthority, clientName, cmd.RedirectUri, CancellationToken.None)
             .ConfigureAwait(false);
 
-        try
-        {
-            await PersistDomainEventAsync(new AevatarOAuthClientProvisionedEvent
+        // Cluster-shared Garnet event store + brief two-pod overlap during
+        // a K8s rolling deploy lets two grain activations of this well-
+        // known actor each replay v=N, each call DCR (each getting its own
+        // client_id from NyxID), and each try to commit Provisioned at
+        // expectedVersion=N. One wins, one sees OCC. See issue #549.
+        //
+        // Pass an absorber callback to PersistDomainEventAsync rather than
+        // catching OCC ourselves: the framework refreshes State from the
+        // store before invoking the callback, and there is no protected
+        // "replay state" helper a future handler could misuse outside an
+        // active commit path (PR #552 review codex/glm-5.1).
+        await PersistDomainEventAsync(
+            new AevatarOAuthClientProvisionedEvent
             {
                 ClientId = registration.ClientId,
                 ClientIdIssuedAtUnix = registration.IssuedAt.ToUnixTimeSeconds(),
                 NyxidAuthority = cmd.NyxidAuthority,
                 PersistedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                 RedirectUri = cmd.RedirectUri,
-            });
-        }
-        catch (EventStoreOptimisticConcurrencyException occ)
-        {
-            // Cluster-shared Garnet event store + brief two-pod overlap
-            // during a K8s rolling deploy lets two grain activations of
-            // this well-known actor each replay v=N, each call DCR (each
-            // getting its own client_id from NyxID), and each try to
-            // commit Provisioned at expectedVersion=N. One wins, one
-            // sees OCC. See issue #549 for the full causal chain.
-            //
-            // The losing handler must NOT retry the DCR — that would
-            // create another orphan client at NyxID on every backoff
-            // attempt. Refresh state from the store and check whether
-            // the peer's commit already matches what this command
-            // intended to install (same authority + same redirect URI).
-            // If yes, log the orphan client_id we just created so ops
-            // can delete it, and return success. The peer's record is
-            // the cluster-authoritative one going forward.
-            if (await TryAbsorbPeerDcrProvisioningAsync(cmd, registration.ClientId, occ).ConfigureAwait(false))
-                return;
-            throw;
-        }
+            },
+            onOptimisticConcurrencyConflict: occ => AbsorbPeerDcrProvisioningAsync(cmd, registration.ClientId, occ));
+
+        // The loser absorber path returned (peer committed the same
+        // shape). Detect that by comparing State.ClientId — if it is the
+        // peer's id, this handler must NOT continue with the post-
+        // Provisioned HMAC seed against state we did not produce.
+        if (!string.Equals(State.ClientId, registration.ClientId, StringComparison.Ordinal))
+            return;
 
         Logger.LogInformation(
             "Provisioned aevatar OAuth client via DCR: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}",
@@ -200,55 +196,28 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
 
         if (State.HmacKey.Length == 0)
         {
-            try
-            {
-                await PersistDomainEventAsync(BuildHmacKeyRotatedEvent());
-                Logger.LogInformation("Seeded HMAC key for aevatar OAuth client");
-            }
-            catch (EventStoreOptimisticConcurrencyException occ)
-            {
-                // Distinct race shape from the DCR commit OCC: this
-                // handler ALREADY successfully committed Provisioned, so
-                // registration.ClientId is the active cluster client —
-                // not an orphan. A peer wrote at v+2 between our
-                // Provisioned commit and this seed (e.g. their own HMAC
-                // seed). Absorb without orphan messaging when the peer's
-                // events leave the store with a non-empty HMAC; the
-                // cluster has one valid key.
-                if (await TryAbsorbPeerHmacSeedAsync(occ).ConfigureAwait(false))
-                    return;
-                throw;
-            }
+            // Distinct race shape from the DCR commit OCC: this handler
+            // ALREADY successfully committed Provisioned, so
+            // registration.ClientId is the active cluster client — not
+            // an orphan. A peer wrote at v+2 between our Provisioned
+            // commit and this seed (e.g. their own HMAC seed). Absorb
+            // without orphan messaging when the post-replay state has a
+            // non-empty HMAC.
+            await PersistDomainEventAsync(
+                BuildHmacKeyRotatedEvent(),
+                onOptimisticConcurrencyConflict: AbsorbPeerHmacSeedAsync);
+            Logger.LogInformation("Seeded HMAC key for aevatar OAuth client");
         }
     }
 
-    /// <summary>
-    /// Refreshes <see cref="State"/> from the event store after the
-    /// drift-branch <c>AevatarOAuthClientProvisionedEvent</c> commit lost
-    /// an OCC race, then checks whether the peer that won already
-    /// installed a Provisioned record matching the command's authority +
-    /// redirect URI. Returns <c>true</c> when the cluster is already in
-    /// the desired shape (caller should treat the OCC as a successful
-    /// no-op); returns <c>false</c> when the peer's commit was something
-    /// else and the caller should rethrow so the bootstrap retry loop
-    /// re-evaluates against fresh state.
-    /// </summary>
-    /// <remarks>
-    /// Logs <paramref name="orphanClientId"/> so ops can delete the
-    /// loser's NyxID client without searching by hand. This is the
-    /// orphan-aware path: only the DCR commit catch should call it,
-    /// because only that catch holds a fresh-from-DCR client_id that the
-    /// peer's commit makes orphan. The HMAC-seed catch (which runs after
-    /// THIS handler already committed Provisioned) uses
-    /// <see cref="TryAbsorbPeerHmacSeedAsync"/> instead.
-    /// </remarks>
-    private async Task<bool> TryAbsorbPeerDcrProvisioningAsync(
+    private Task<bool> AbsorbPeerDcrProvisioningAsync(
         EnsureAevatarOAuthClientProvisionedCommand cmd,
         string orphanClientId,
         EventStoreOptimisticConcurrencyException occ)
     {
-        await RefreshStateAfterOptimisticConcurrencyAsync(occ).ConfigureAwait(false);
-
+        // Framework already refreshed State from the store before invoking
+        // this callback. A peer healed the drift iff the cluster's stored
+        // record now matches the command's intended shape.
         var peerHealed = !string.IsNullOrEmpty(State.ClientId)
             && string.Equals(State.NyxidAuthority, cmd.NyxidAuthority, StringComparison.Ordinal)
             && string.Equals(State.RedirectUri, cmd.RedirectUri, StringComparison.Ordinal)
@@ -265,7 +234,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
                 orphanClientId,
                 occ.ExpectedVersion,
                 occ.ActualVersion);
-            return true;
+            return Task.FromResult(true);
         }
 
         Logger.LogError(
@@ -278,23 +247,11 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             orphanClientId,
             occ.ExpectedVersion,
             occ.ActualVersion);
-        return false;
+        return Task.FromResult(false);
     }
 
-    /// <summary>
-    /// Refreshes <see cref="State"/> after the post-Provisioned HMAC seed
-    /// lost an OCC race, then checks whether the cluster's HMAC slot is
-    /// now non-empty — meaning a peer activation already seeded a key
-    /// that all silos can use. This catch path is reached only after THIS
-    /// handler successfully committed <c>Provisioned</c>, so the actor's
-    /// ClientId is the active cluster client, not an orphan; orphan
-    /// messaging would be misleading and lead ops to delete a live
-    /// registration.
-    /// </summary>
-    private async Task<bool> TryAbsorbPeerHmacSeedAsync(EventStoreOptimisticConcurrencyException occ)
+    private Task<bool> AbsorbPeerHmacSeedAsync(EventStoreOptimisticConcurrencyException occ)
     {
-        await RefreshStateAfterOptimisticConcurrencyAsync(occ).ConfigureAwait(false);
-
         if (State.HmacKey.Length > 0)
         {
             Logger.LogWarning(
@@ -303,7 +260,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
                 State.ClientId,
                 occ.ExpectedVersion,
                 occ.ActualVersion);
-            return true;
+            return Task.FromResult(true);
         }
 
         Logger.LogError(
@@ -312,7 +269,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             State.ClientId,
             occ.ExpectedVersion,
             occ.ActualVersion);
-        return false;
+        return Task.FromResult(false);
     }
 
     /// <summary>
