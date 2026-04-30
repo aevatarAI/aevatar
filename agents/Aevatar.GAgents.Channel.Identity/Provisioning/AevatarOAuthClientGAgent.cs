@@ -87,6 +87,9 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         {
             // Seed HMAC key on first activation against an existing client_id
             // (defence-in-depth against partial state loaded from snapshots).
+            // Returning here is intentional: HmacKeyRotatedEvent itself
+            // re-publishes the state root, so the projector materializes the
+            // readmodel without needing an additional rebuild trigger.
             if (State.HmacKey.Length == 0)
             {
                 await PersistDomainEventAsync(BuildHmacKeyRotatedEvent());
@@ -94,6 +97,14 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
                 return;
             }
 
+            // Steady-state branch: nothing changed at NyxID, but a freshly-
+            // booted silo may have an empty projection (codex PR #539 P1 —
+            // happens after the projection-scope-activation fix is deployed
+            // to a cluster whose actor was already provisioned by an earlier
+            // build that never activated the scope). Persist a no-op rebuild
+            // event so the now-attached projector has a state-root
+            // publication to materialize. Apply is identity, so the OAuth
+            // client facts are not mutated.
             await PersistDomainEventAsync(new AevatarOAuthClientProjectionRebuildRequestedEvent
             {
                 Reason = "ensure_already_provisioned",
