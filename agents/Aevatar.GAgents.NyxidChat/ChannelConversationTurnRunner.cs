@@ -86,9 +86,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return slashResult;
 
         // Pre-LLM binding gate: when broker mode is wired, an unbound sender
-        // MUST be prompted to /init rather than served by the bot owner's
+        // MUST be prompted to bind NyxID rather than served by the bot owner's
         // credentials (codex L65 security: ADR-0018 §Decision "未绑定 sender
-        // 一律强制 /init,不回落到 bot owner"). Falls through transparently
+        // 一律强制绑定,不回落到 bot owner"). Falls through transparently
         // when identity ports are not registered (legacy bot-owner-shared
         // deployments). The gate also returns the resolved binding-id so the
         // LLM dispatch can apply the sender prefs override chain (issue #513
@@ -325,7 +325,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         MessageContent reply;
         if (!IsPrivateChat(inbound))
         {
-            reply = new MessageContent { Text = "请与 bot 私聊后点击绑定卡片完成 NyxID 绑定。" };
+            reply = new MessageContent { Text = "请与 bot 私聊任意消息以获取 NyxID 绑定卡片。" };
         }
         else
         {
@@ -411,7 +411,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     // senders with the bot owner's credentials (ADR-0018 §Decision). Returns
     // (null, null) when binding is not enabled (legacy mode); returns
     // (prompt, null) for unbound senders so the caller short-circuits with
-    // the /init hint; returns (null, bindingId) for bound senders so the LLM
+    // a binding prompt/card; returns (null, bindingId) for bound senders so the LLM
     // dispatch can carry the binding-id forward into metadata for the issue
     // #513 phase 3 prefs override chain.
     private async Task<(ConversationTurnResult? Blocking, string? SenderBindingId)> TryEnforceBindingGateAsync(

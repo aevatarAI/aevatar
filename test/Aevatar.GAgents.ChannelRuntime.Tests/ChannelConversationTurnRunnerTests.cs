@@ -1035,7 +1035,7 @@ public sealed class ChannelConversationTurnRunnerTests
         result.Success.Should().BeTrue();
         result.LlmReplyRequest.Should().BeNull();
         adapter.Replies.Should().ContainSingle();
-        adapter.Replies[0].ReplyText.Should().Contain("私聊");
+        adapter.Replies[0].ReplyText.Should().Contain("请与 bot 私聊任意消息以获取 NyxID 绑定卡片。");
         adapter.Replies[0].ReplyText.Should().NotContain("/init");
     }
 
