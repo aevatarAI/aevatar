@@ -12,6 +12,8 @@ public sealed class NyxIdSpecCatalog : IDisposable
     private readonly Timer? _refreshTimer;
 
     private OperationCard[] _catalog = [];
+    private long _lastSuccessfulRefreshUnixTimeSeconds;
+    private string? _lastRefreshError;
 
     public NyxIdSpecCatalog(
         NyxIdToolOptions options,
@@ -28,8 +30,9 @@ public sealed class NyxIdSpecCatalog : IDisposable
         if (string.IsNullOrWhiteSpace(_options.SpecFetchToken))
         {
             // NyxID's /api/v1/docs/openapi.json is human-only; without a token
-            // every fetch returns 401. Skip the timer to avoid 30-min noise.
-            _logger.LogInformation(
+            // every fetch returns 401. Skip the timer and surface this through
+            // readiness so production does not run with an invisible empty catalog.
+            _logger.LogWarning(
                 "NyxIdSpecCatalog: SpecFetchToken not configured; skipping background refresh, catalog will remain empty");
             return;
         }
@@ -40,6 +43,21 @@ public sealed class NyxIdSpecCatalog : IDisposable
     }
 
     public OperationCard[] Operations => Volatile.Read(ref _catalog);
+
+    public NyxIdSpecCatalogStatus GetStatus()
+    {
+        var lastSuccessfulRefreshUnixTimeSeconds = Volatile.Read(ref _lastSuccessfulRefreshUnixTimeSeconds);
+        var lastSuccessfulRefreshUtc = lastSuccessfulRefreshUnixTimeSeconds <= 0
+            ? (DateTimeOffset?)null
+            : DateTimeOffset.FromUnixTimeSeconds(lastSuccessfulRefreshUnixTimeSeconds);
+
+        return new NyxIdSpecCatalogStatus(
+            BaseUrlConfigured: !string.IsNullOrWhiteSpace(_options.BaseUrl),
+            SpecFetchTokenConfigured: !string.IsNullOrWhiteSpace(_options.SpecFetchToken),
+            OperationCount: Operations.Length,
+            LastSuccessfulRefreshUtc: lastSuccessfulRefreshUtc,
+            LastRefreshError: Volatile.Read(ref _lastRefreshError));
+    }
 
     public IReadOnlyList<OperationCard> Search(string query, int maxResults = 5)
     {
@@ -88,6 +106,7 @@ public sealed class NyxIdSpecCatalog : IDisposable
         }
         catch (Exception ex)
         {
+            RememberRefreshFailure(ex);
             _logger.LogWarning(ex, "NyxIdSpecCatalog initial fetch failed, starting with empty catalog");
         }
     }
@@ -105,6 +124,7 @@ public sealed class NyxIdSpecCatalog : IDisposable
             }
             catch (Exception ex)
             {
+                RememberRefreshFailure(ex);
                 _logger.LogWarning(ex, "NyxIdSpecCatalog refresh attempt {Attempt}/{Max} failed", i + 1, maxRetries);
                 if (i < maxRetries - 1)
                     await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, i + 1)));
@@ -128,12 +148,23 @@ public sealed class NyxIdSpecCatalog : IDisposable
 
         if (cards.Length == 0)
         {
+            Volatile.Write(ref _lastRefreshError, "Spec yielded no operations.");
             _logger.LogWarning("NyxIdSpecCatalog: spec yielded no operations, skipping update");
             return;
         }
 
         Volatile.Write(ref _catalog, cards);
+        Volatile.Write(ref _lastRefreshError, null);
+        Volatile.Write(ref _lastSuccessfulRefreshUnixTimeSeconds, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         _logger.LogInformation("NyxIdSpecCatalog updated: {Count} operations", cards.Length);
+    }
+
+    private void RememberRefreshFailure(Exception ex)
+    {
+        var message = string.IsNullOrWhiteSpace(ex.Message)
+            ? ex.GetType().Name
+            : ex.Message;
+        Volatile.Write(ref _lastRefreshError, message);
     }
 
     public void Dispose() => _refreshTimer?.Dispose();

@@ -1616,6 +1616,7 @@ flowchart LR
 | `AEVATAR_ActorRuntime__KafkaTopicName` | Kafka Topic 名称 |
 | `AEVATAR_ActorRuntime__KafkaConsumerGroup` | Kafka 消费组 |
 | `AEVATAR_Projection__Graph__Providers__Neo4j__Password` | Mainnet Host 连接 Neo4j 的密码 |
+| `AEVATAR_Aevatar__NyxId__SpecFetchToken` | NyxID OpenAPI spec catalog 拉取 token；缺失时 `/health/ready` 的 `nyxid-catalog` 组件不通过 |
 | `AEVATAR_Orleans__ClusteringMode` | `Localhost` / `Development` |
 | `AEVATAR_Orleans__ClusterId` | Orleans 集群 ID |
 | `AEVATAR_Orleans__ServiceId` | Orleans 服务 ID |

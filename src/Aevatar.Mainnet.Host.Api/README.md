@@ -53,6 +53,41 @@ export AEVATAR_Orleans__SiloPort=11111
 export AEVATAR_Orleans__GatewayPort=30000
 ```
 
+## NyxID spec catalog token
+
+`nyxid_search_capabilities` 与 `nyxid_proxy_execute` 依赖
+`NyxIdSpecCatalog` 从 NyxID 拉取 OpenAPI spec。NyxID 的
+`/api/v1/docs/openapi.json` 要求真实用户 token；未配置 token 时 catalog
+会保持为空，specialized NyxID tools 仍可用，但 generic capability discovery
+不可用。
+
+生产部署必须通过 Secret / 环境变量注入：
+
+```bash
+export AEVATAR_Aevatar__NyxId__SpecFetchToken="<real-user-nyxid-api-key>"
+```
+
+如果部署平台直接使用 .NET 裸环境变量，也可以注入等价的
+`Aevatar__NyxId__SpecFetchToken`。Mainnet host 会把它绑定到
+`Aevatar:NyxId:SpecFetchToken`。
+
+缺少 token 或 catalog 为空时，`/health/ready` 会返回 not-ready，并在
+`components` 中出现 `nyxid-catalog`：
+
+```json
+{
+  "name": "nyxid-catalog",
+  "status": "unhealthy",
+  "message": "NyxID spec fetch token is missing; generic capability discovery is unavailable."
+}
+```
+
+部署后冒烟：
+
+```bash
+curl -fsS http://127.0.0.1:5080/health/ready | jq '.components[] | select(.name == "nyxid-catalog")'
+```
+
 ## 本地持久化开发模式（Orleans + Garnet）
 
 如果只是想快速起一个本地开发后端，并且希望避免“写侧还在、读侧已丢失”的不对称状态，优先使用脚本默认的 `local` 模式。脚本会优先使用 `~/.dotnet/dotnet`，避免系统 `dotnet` 与仓库 `global.json` 的 SDK 版本不匹配：
