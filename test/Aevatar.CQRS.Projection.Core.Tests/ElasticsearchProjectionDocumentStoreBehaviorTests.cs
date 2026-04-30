@@ -124,6 +124,72 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
+    public async Task QueryAsync_WhenUsingExplicitTimestampSort_ShouldIncludeMissingAndUnmappedHints()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"hits":{"hits":[]}}"""));
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = false,
+            },
+            handler);
+
+        _ = await store.QueryAsync(new ProjectionDocumentQuery
+        {
+            Sorts =
+            [
+                new ProjectionDocumentSort
+                {
+                    FieldPath = nameof(TestStoreReadModel.UpdatedAt),
+                    Direction = ProjectionDocumentSortDirection.Desc,
+                },
+            ],
+        });
+
+        var searchRequest = handler.CapturedRequests.Should().ContainSingle().Subject;
+        searchRequest.Body.Should().Contain("\"updated_at_utc_value\"");
+        searchRequest.Body.Should().Contain("\"missing\":\"_last\"");
+        searchRequest.Body.Should().Contain("\"unmapped_type\":\"date\"");
+    }
+
+    [Fact]
+    public async Task QueryAsync_WhenUsingExplicitStringSort_ShouldUseKeywordUnmappedHint()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"hits":{"hits":[]}}"""));
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = false,
+            },
+            handler);
+
+        _ = await store.QueryAsync(new ProjectionDocumentQuery
+        {
+            Sorts =
+            [
+                new ProjectionDocumentSort
+                {
+                    FieldPath = nameof(TestStoreReadModel.Value),
+                    Direction = ProjectionDocumentSortDirection.Asc,
+                },
+            ],
+        });
+
+        var searchRequest = handler.CapturedRequests.Should().ContainSingle().Subject;
+        searchRequest.Body.Should().Contain("\"value\"");
+        searchRequest.Body.Should().Contain("\"missing\":\"_last\"");
+        searchRequest.Body.Should().Contain("\"unmapped_type\":\"keyword\"");
+    }
+
+    [Fact]
     public async Task QueryAsync_WhenFieldHasExplicitKeywordMapping_ShouldNotAppendKeywordSuffix()
     {
         var handler = new ScriptedHttpMessageHandler();

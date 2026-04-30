@@ -10,6 +10,17 @@ public sealed class ScriptCatalogEntryDocumentMetadataProvider
         Mappings: new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["dynamic"] = true,
+            ["properties"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["created_at_utc_value"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["type"] = "date",
+                },
+                ["updated_at_utc_value"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["type"] = "date",
+                },
+            },
         },
         Settings: new Dictionary<string, object?>(StringComparer.Ordinal),
         Aliases: new Dictionary<string, object?>(StringComparer.Ordinal));
