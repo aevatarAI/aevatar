@@ -257,14 +257,20 @@ public sealed class ConversationReplyGeneratorTests
         public List<string?> Lookups { get; } = new();
         public bool ThrowOnLookup { get; set; }
 
-        public Task<NyxIdUserLlmPreferences> GetAsync(string? senderBindingId, CancellationToken cancellationToken = default)
+        public Task<NyxIdUserLlmPreferences> GetOwnerAsync(CancellationToken cancellationToken = default)
         {
-            Lookups.Add(senderBindingId);
+            Lookups.Add(null);
             if (ThrowOnLookup)
                 throw new InvalidOperationException("simulated projection outage");
-            if (string.IsNullOrEmpty(senderBindingId))
-                return Task.FromResult(new NyxIdUserLlmPreferences(string.Empty, string.Empty));
-            return Task.FromResult(ByBinding.TryGetValue(senderBindingId, out var prefs)
+            return Task.FromResult(new NyxIdUserLlmPreferences(string.Empty, string.Empty));
+        }
+
+        public Task<NyxIdUserLlmPreferences> GetForBindingAsync(string bindingId, CancellationToken cancellationToken = default)
+        {
+            Lookups.Add(bindingId);
+            if (ThrowOnLookup)
+                throw new InvalidOperationException("simulated projection outage");
+            return Task.FromResult(ByBinding.TryGetValue(bindingId, out var prefs)
                 ? prefs
                 : new NyxIdUserLlmPreferences(string.Empty, string.Empty));
         }

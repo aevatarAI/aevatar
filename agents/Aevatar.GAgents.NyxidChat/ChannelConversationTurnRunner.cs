@@ -271,19 +271,34 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (string.IsNullOrWhiteSpace(text))
             return false;
 
+        // Trim handles Unicode leading/trailing whitespace (NBSP / U+3000 /
+        // ZWSP) by default. The bigger concern is the *separator* between
+        // command and arg: Lark / WeChat clients commonly inject NBSP or
+        // ideographic space there, so splitting only on ASCII ' ' would let
+        // "/init　foo" miss the registry. Iterate char-by-char and split
+        // on the first run of any char.IsWhiteSpace.
         var trimmed = text.Trim();
         if (trimmed.Length < 2 || trimmed[0] != '/')
             return false;
 
-        var firstSpace = trimmed.IndexOf(' ');
-        if (firstSpace < 0)
+        var firstSeparator = -1;
+        for (var i = 1; i < trimmed.Length; i++)
+        {
+            if (char.IsWhiteSpace(trimmed[i]))
+            {
+                firstSeparator = i;
+                break;
+            }
+        }
+
+        if (firstSeparator < 0)
         {
             commandName = trimmed[1..].ToLowerInvariant();
         }
         else
         {
-            commandName = trimmed[1..firstSpace].ToLowerInvariant();
-            argumentText = trimmed[(firstSpace + 1)..].Trim();
+            commandName = trimmed[1..firstSeparator].ToLowerInvariant();
+            argumentText = trimmed[(firstSeparator + 1)..].Trim();
         }
 
         return commandName.Length > 0;

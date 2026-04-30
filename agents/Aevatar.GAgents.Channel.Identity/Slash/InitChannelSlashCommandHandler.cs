@@ -58,6 +58,18 @@ public sealed class InitChannelSlashCommandHandler : IChannelSlashCommandHandler
         {
             challenge = await _broker.StartExternalBindingAsync(context.Subject, ct).ConfigureAwait(false);
         }
+        catch (AevatarOAuthClientNotProvisionedException ex)
+        {
+            // Cluster cold-start: DCR bootstrap is still running (or temporarily
+            // unreachable from NyxID). Distinct from a real broker failure —
+            // the user retrying in 30s typically resolves it without ops
+            // intervention. Logged at Information so the gap shows up in
+            // dashboards but does not page on every silo restart.
+            _logger.LogInformation(ex,
+                "/init received before aevatar OAuth client bootstrap finished; subject={Platform}:{Tenant}:{Sender}",
+                context.Subject.Platform, context.Subject.Tenant, context.Subject.ExternalUserId);
+            return PlainText("aevatar 正在初始化 NyxID 客户端,请 30 秒后重新发送 /init。");
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "/init failed to start external binding for subject={Platform}:{Tenant}:{Sender}",

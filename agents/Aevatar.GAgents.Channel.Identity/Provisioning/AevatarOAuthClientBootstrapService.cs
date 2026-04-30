@@ -2,7 +2,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -43,7 +42,7 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
     /// </summary>
     internal static readonly TimeSpan MaxRetryDelay = TimeSpan.FromMinutes(30);
 
-    private readonly IServiceProvider _services;
+    private readonly IAevatarOAuthClientProvider _clientProvider;
     private readonly IActorRuntime _actorRuntime;
     private readonly ILogger<AevatarOAuthClientBootstrapService> _logger;
     private readonly IConfiguration _configuration;
@@ -51,12 +50,18 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
     private Task? _bootstrapTask;
 
     public AevatarOAuthClientBootstrapService(
-        IServiceProvider services,
+        IAevatarOAuthClientProvider clientProvider,
         IActorRuntime actorRuntime,
         IConfiguration configuration,
         ILogger<AevatarOAuthClientBootstrapService> logger)
     {
-        _services = services ?? throw new ArgumentNullException(nameof(services));
+        // Provider is registered as a singleton (so are its transitive deps);
+        // injecting it directly avoids the brittle "resolve from the root
+        // IServiceProvider" pattern, which would silently mask any future
+        // scoped dep being added to the provider chain (ValidateScopes
+        // catches scoped → singleton at resolve time, not at AddHostedService
+        // wiring time).
+        _clientProvider = clientProvider ?? throw new ArgumentNullException(nameof(clientProvider));
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -130,7 +135,7 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
         AevatarOAuthClientSnapshot? cached = null;
         try
         {
-            cached = await _services.GetRequiredService<IAevatarOAuthClientProvider>().GetAsync(ct).ConfigureAwait(false);
+            cached = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
         }
         catch (AevatarOAuthClientNotProvisionedException)
         {

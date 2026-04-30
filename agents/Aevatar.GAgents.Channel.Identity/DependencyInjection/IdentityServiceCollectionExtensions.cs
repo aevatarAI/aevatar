@@ -41,6 +41,16 @@ public static class IdentityServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        // Guard against accidental double-registration. Most calls below use
+        // TryAdd*, but AddHttpClient / AddHostedService / AddOptions /
+        // AddProjection* helpers are NOT idempotent — calling this method
+        // twice would register the bootstrap hosted service twice (two DCR
+        // attempts on startup) and replace named-client config silently. The
+        // sentinel keys off the bootstrap service since it is unique to this
+        // module.
+        if (services.Any(static d => d.ImplementationType == typeof(AevatarOAuthClientBootstrapService)))
+            return services;
+
         // ─── Shared projection runtime infrastructure ───
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
@@ -86,13 +96,25 @@ public static class IdentityServiceCollectionExtensions
         services.TryAddSingleton<IAevatarOAuthClientProvider, AevatarOAuthClientProjectionProvider>();
 
         // ─── Broker (self-bootstrapping, no appsettings dependency) ───
+        // Register broker as a *singleton* and inject IHttpClientFactory so
+        // each call resolves a fresh HttpClient backed by the factory's
+        // rotating handler pool. The earlier shape — AddHttpClient<T>()
+        // (transient) re-exposed via TryAddSingleton<I> — pinned the first
+        // resolved HttpClient + HttpMessageHandler inside the singleton and
+        // silently defeated the 2-min handler rotation, so long-running
+        // silos would never pick up DNS / TLS-cert changes.
         services.AddOptions<NyxIdBrokerOptions>();
         services.TryAddSingleton<StateTokenCodec>();
-        services.AddHttpClient<NyxIdRemoteCapabilityBroker>();
+        services.AddHttpClient(NyxIdRemoteCapabilityBroker.HttpClientName);
+        services.TryAddSingleton<NyxIdRemoteCapabilityBroker>();
         services.TryAddSingleton<INyxIdCapabilityBroker>(sp => sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
         services.TryAddSingleton<INyxIdBrokerCallbackClient>(sp => sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
 
         // ─── OAuth client bootstrap (self-registration via NyxID DCR) ───
+        // DCR registrar stays as AddHttpClient<T>() (transient): the
+        // AevatarOAuthClientGAgent resolves it per command via Services.GetService<>()
+        // so the typed-client pattern's per-resolution handler rotation works
+        // as designed.
         services.AddHttpClient<NyxIdDynamicClientRegistrationClient>();
         services.AddHostedService<AevatarOAuthClientBootstrapService>();
 

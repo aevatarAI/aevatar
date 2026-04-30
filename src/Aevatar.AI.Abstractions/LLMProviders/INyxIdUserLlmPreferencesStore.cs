@@ -3,22 +3,37 @@ namespace Aevatar.AI.Abstractions.LLMProviders;
 /// <summary>
 /// Read-only view of the LLM preferences NyxID-bound users carry across
 /// chat surfaces. Reads are projection-backed (additive only — failures fall
-/// back to provider defaults). The optional <paramref name="senderBindingId"/>
-/// argument scopes the lookup to a specific binding (issue #513 phase 2):
-/// pass the inbound sender's NyxID binding-id to read sender-specific prefs;
-/// pass <c>null</c> (or omit) to read the ambient/bot-owner prefs the way
-/// non-channel callers (Studio API, streaming proxy) always have.
+/// back to provider defaults).
 /// </summary>
+/// <remarks>
+/// The two methods are deliberately distinct so call sites have to commit
+/// to a scope at the type level (issue #513 phase 2 follow-up). The earlier
+/// shape <c>GetAsync(string? senderBindingId)</c> let any caller drop into
+/// the bot-owner ambient scope by passing <c>null</c>, which made it easy
+/// for a future caller to leak owner-scoped config when they meant to read
+/// a sender's prefs.
+/// </remarks>
 public interface INyxIdUserLlmPreferencesStore
 {
     /// <summary>
-    /// Read LLM preferences for the requested binding, or for the ambient
-    /// scope when <paramref name="senderBindingId"/> is null/empty. Returns
-    /// a record with empty <c>DefaultModel</c> / <c>PreferredRoute</c> when
-    /// no document exists for the requested scope so callers can apply a
-    /// downstream override chain (sender → owner → provider default).
+    /// Read prefs for the ambient (bot-owner) scope. Used by Studio API and
+    /// the streaming proxy where there is no inbound sender — every caller
+    /// of this method intends to read the bot owner's pinned config.
     /// </summary>
-    Task<NyxIdUserLlmPreferences> GetAsync(string? senderBindingId, CancellationToken cancellationToken = default);
+    Task<NyxIdUserLlmPreferences> GetOwnerAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Read prefs for a specific NyxID binding-id. Returns a record with
+    /// empty <c>DefaultModel</c> / <c>PreferredRoute</c> when the sender
+    /// has not set their own values, so callers can layer this on top of
+    /// the bot-owner record (sender → owner → provider default).
+    /// </summary>
+    /// <exception cref="ArgumentException">
+    /// Thrown when <paramref name="bindingId"/> is null or whitespace —
+    /// callers must use <see cref="GetOwnerAsync"/> for the ambient scope
+    /// instead of passing a missing binding-id.
+    /// </exception>
+    Task<NyxIdUserLlmPreferences> GetForBindingAsync(string bindingId, CancellationToken cancellationToken = default);
 }
 
 public sealed record NyxIdUserLlmPreferences(

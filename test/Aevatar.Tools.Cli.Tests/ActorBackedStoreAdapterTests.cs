@@ -369,7 +369,7 @@ public sealed class ActorBackedStoreAdapterTests
 
         var store = new ActorBackedNyxIdUserLlmPreferencesStore(stubConfigStore);
 
-        var prefs = await store.GetAsync(senderBindingId: null);
+        var prefs = await store.GetOwnerAsync();
 
         prefs.DefaultModel.Should().Be("claude-opus");
         prefs.PreferredRoute.Should().Be("/api/v1/proxy/s/anthropic");
@@ -385,7 +385,7 @@ public sealed class ActorBackedStoreAdapterTests
 
         var store = new ActorBackedNyxIdUserLlmPreferencesStore(stubConfigStore);
 
-        var prefs = await store.GetAsync(senderBindingId: null);
+        var prefs = await store.GetOwnerAsync();
 
         prefs.PreferredRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway,
             "gateway should normalize to empty string");
@@ -399,7 +399,7 @@ public sealed class ActorBackedStoreAdapterTests
 
         var store = new ActorBackedNyxIdUserLlmPreferencesStore(stubConfigStore);
 
-        var prefs = await store.GetAsync(senderBindingId: null);
+        var prefs = await store.GetOwnerAsync();
 
         prefs.DefaultModel.Should().BeEmpty();
         prefs.PreferredRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
@@ -427,7 +427,7 @@ public sealed class ActorBackedStoreAdapterTests
 
         var store = new ActorBackedNyxIdUserLlmPreferencesStore(stubConfigStore);
 
-        var prefs = await store.GetAsync(senderBindingId: "  bnd_sender  ");
+        var prefs = await store.GetForBindingAsync("  bnd_sender  ");
 
         prefs.DefaultModel.Should().Be("sender-claude");
         prefs.PreferredRoute.Should().Be("/api/v1/proxy/s/sender");
@@ -438,6 +438,25 @@ public sealed class ActorBackedStoreAdapterTests
         stubConfigStore.ScopedCalls.Should().ContainSingle().Which.Should().Be("bnd_sender");
         stubConfigStore.AmbientCalls.Should().Be(0,
             "store must NOT fall back to the ambient overload when a binding-id is supplied");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task NyxIdUserLlmPreferencesStore_GetForBinding_RejectsMissingBindingId(string? bindingId)
+    {
+        // Defence-in-depth: callers that intend to read the ambient bot-
+        // owner scope must use GetOwnerAsync explicitly. The earlier shape
+        // (GetAsync(null) silently fell back to ambient) made it easy for a
+        // future caller to leak owner config when they meant to read sender
+        // prefs.
+        var stubConfigStore = new StubUserConfigStore(new UserConfig(DefaultModel: "any"));
+        var store = new ActorBackedNyxIdUserLlmPreferencesStore(stubConfigStore);
+
+        Func<Task> act = () => store.GetForBindingAsync(bindingId!);
+
+        await act.Should().ThrowAsync<ArgumentException>();
     }
 
     private sealed class RecordingUserConfigQueryPort : IUserConfigQueryPort

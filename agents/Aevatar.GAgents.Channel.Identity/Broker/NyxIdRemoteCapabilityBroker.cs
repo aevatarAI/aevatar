@@ -17,6 +17,14 @@ namespace Aevatar.GAgents.Channel.Identity.Broker;
 /// production deploys need zero broker-specific appsettings — the bootstrap
 /// service self-registers the client at NyxID DCR on first startup.
 /// </summary>
+/// <remarks>
+/// Resolves <see cref="HttpClient"/> per-request via
+/// <see cref="IHttpClientFactory"/> (named client <see cref="HttpClientName"/>)
+/// so the broker can be safely registered as a singleton without pinning the
+/// inner <c>HttpMessageHandler</c>. Pinning would defeat IHttpClientFactory's
+/// 2-min handler rotation: stale DNS, expired sockets, and TLS-cert refreshes
+/// would never be picked up on long-running silos.
+/// </remarks>
 public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxIdBrokerCallbackClient
 {
     public const string AuthorizeEndpoint = "/oauth/authorize";
@@ -25,12 +33,19 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
     public const string TokenExchangeGrantType = "urn:ietf:params:oauth:grant-type:token-exchange";
     public const string BindingIdSubjectTokenType = "urn:nyxid:params:oauth:token-type:binding-id";
 
+    /// <summary>
+    /// Named <see cref="IHttpClientFactory"/> client used for all NyxID broker
+    /// HTTP calls. Configured in
+    /// <c>IdentityServiceCollectionExtensions.AddChannelIdentity</c>.
+    /// </summary>
+    public const string HttpClientName = "nyxid-broker";
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
     };
 
-    private readonly HttpClient _http;
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly IAevatarOAuthClientProvider _clientProvider;
     private readonly NyxIdBrokerOptions _options;
     private readonly StateTokenCodec _stateTokenCodec;
@@ -40,7 +55,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
     private readonly ILogger<NyxIdRemoteCapabilityBroker> _logger;
 
     public NyxIdRemoteCapabilityBroker(
-        HttpClient http,
+        IHttpClientFactory httpClientFactory,
         IAevatarOAuthClientProvider clientProvider,
         IOptions<NyxIdBrokerOptions> options,
         StateTokenCodec stateTokenCodec,
@@ -49,7 +64,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         ILogger<NyxIdRemoteCapabilityBroker> logger,
         IConfiguration? configuration = null)
     {
-        _http = http ?? throw new ArgumentNullException(nameof(http));
+        _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _clientProvider = clientProvider ?? throw new ArgumentNullException(nameof(clientProvider));
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
         _stateTokenCodec = stateTokenCodec ?? throw new ArgumentNullException(nameof(stateTokenCodec));
@@ -58,6 +73,8 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _configuration = configuration;
     }
+
+    private HttpClient CreateHttpClient() => _httpClientFactory.CreateClient(HttpClientName);
 
     private string ResolveRedirectUri() => NyxIdRedirectUriResolver.Resolve(_configuration);
 
@@ -111,7 +128,8 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         using var request = new HttpRequestMessage(
             HttpMethod.Delete,
             $"{snapshot.NyxIdAuthority.TrimEnd('/')}{BindingsEndpoint}/{Uri.EscapeDataString(bindingId)}");
-        using var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
+        var http = CreateHttpClient();
+        using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
 
         if ((int)response.StatusCode is 404 or 410)
             return;
@@ -171,7 +189,8 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             Content = new FormUrlEncodedContent(form),
         };
 
-        using var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
+        var http = CreateHttpClient();
+        using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
@@ -239,7 +258,8 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             Content = new FormUrlEncodedContent(form),
         };
 
-        using var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
+        var http = CreateHttpClient();
+        using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);

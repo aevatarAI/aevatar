@@ -181,7 +181,7 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         NyxIdUserLlmPreferences preferences;
         try
         {
-            preferences = await _preferencesStore.GetAsync(senderBindingId, ct);
+            preferences = await _preferencesStore.GetForBindingAsync(senderBindingId, ct);
         }
         catch (OperationCanceledException)
         {
