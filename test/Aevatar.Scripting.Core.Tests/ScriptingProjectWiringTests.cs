@@ -9,6 +9,7 @@ using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Scripting.Projection.Materialization;
+using Aevatar.Scripting.Projection.Metadata;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
 using FluentAssertions;
@@ -48,5 +49,35 @@ public sealed class ScriptingProjectWiringTests
             .And.Contain(x => x is ScriptCatalogEntryProjector);
         provider.GetServices<ICurrentStateProjectionMaterializer<ScriptEvolutionMaterializationContext>>()
             .Should().ContainSingle(x => x is ScriptEvolutionReadModelProjector);
+    }
+
+    [Fact]
+    public void ScriptCatalogEntryDocumentMetadataProvider_ShouldDeclareSortableTimestampMappings()
+    {
+        var provider = new ScriptCatalogEntryDocumentMetadataProvider();
+
+        provider.Metadata.IndexName.Should().Be("script-catalog-entries");
+        provider.Metadata.Mappings.Should().ContainKey("dynamic").WhoseValue.Should().Be(true);
+        provider.Metadata.Mappings.Should().ContainKey("properties");
+
+        var properties = provider.Metadata.Mappings["properties"].Should()
+            .BeAssignableTo<IReadOnlyDictionary<string, object?>>()
+            .Subject;
+        properties.Should().ContainKey("created_at_utc_value");
+        properties.Should().ContainKey("updated_at_utc_value");
+        GetFieldType(properties, "created_at_utc_value").Should().Be("date");
+        GetFieldType(properties, "updated_at_utc_value").Should().Be("date");
+        provider.Metadata.Settings.Should().BeEmpty();
+        provider.Metadata.Aliases.Should().BeEmpty();
+    }
+
+    private static object? GetFieldType(
+        IReadOnlyDictionary<string, object?> properties,
+        string fieldName)
+    {
+        var field = properties[fieldName].Should()
+            .BeAssignableTo<IReadOnlyDictionary<string, object?>>()
+            .Subject;
+        return field["type"];
     }
 }

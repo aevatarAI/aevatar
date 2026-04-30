@@ -223,6 +223,78 @@ public sealed class ScopeServiceEndpointsTests
     }
 
     [Fact]
+    public async Task ListScopeServicesEndpoint_ShouldReturnScopeServiceCatalog()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Services =
+        [
+            new ServiceCatalogSnapshot(
+                "scope-a:default:default:orders",
+                "scope-a",
+                "default",
+                "default",
+                "orders",
+                "Orders",
+                "rev-1",
+                "rev-1",
+                "dep-1",
+                "orders-actor",
+                "Active",
+                [
+                    new ServiceEndpointSnapshot(
+                        "run",
+                        "Run",
+                        "command",
+                        Any.Pack(new StringValue()).TypeUrl,
+                        string.Empty,
+                        "Run command"),
+                ],
+                [],
+                DateTimeOffset.UtcNow),
+        ];
+
+        var response = await host.Client.GetAsync("/api/scopes/scope-a/services?take=25");
+        var body = await response.Content.ReadFromJsonAsync<IReadOnlyList<ServiceCatalogSnapshot>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        body.Should().NotBeNull();
+        body!.Should().ContainSingle();
+        body[0].ServiceId.Should().Be("orders");
+        body[0].Endpoints.Should().ContainSingle(x => x.EndpointId == "run");
+        host.LifecycleQueryPort.LastListTenantId.Should().Be("scope-a");
+        host.LifecycleQueryPort.LastListAppId.Should().Be("default");
+        host.LifecycleQueryPort.LastListNamespace.Should().Be("default");
+        host.LifecycleQueryPort.LastListTake.Should().Be(25);
+    }
+
+    [Fact]
+    public async Task ListScopeServicesEndpoint_ShouldUseExplicitAppId()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+
+        var response = await host.Client.GetAsync("/api/scopes/scope-a/services?appId=%20customApp%20");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        host.LifecycleQueryPort.LastListTenantId.Should().Be("scope-a");
+        host.LifecycleQueryPort.LastListAppId.Should().Be("customApp");
+        host.LifecycleQueryPort.LastListNamespace.Should().Be("default");
+        host.LifecycleQueryPort.LastListTake.Should().Be(200);
+    }
+
+    [Fact]
+    public async Task ListScopeServicesEndpoint_ShouldRejectMismatchedAuthenticatedScope()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/scopes/scope-a/services");
+        request.Headers.Add("X-Test-Scope-Id", "scope-b");
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        host.LifecycleQueryPort.LastListTenantId.Should().BeNull();
+    }
+
+    [Fact]
     public async Task GetBindingEndpoint_ShouldReturnDefaultScopeBindingSummary()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
@@ -4776,11 +4848,21 @@ public sealed class ScopeServiceEndpointsTests
 
         public ServiceDeploymentCatalogSnapshot? Deployments { get; set; }
 
+        public IReadOnlyList<ServiceCatalogSnapshot> Services { get; set; } = [];
+
         public ServiceIdentity? LastServiceIdentity { get; private set; }
 
         public ServiceIdentity? LastRevisionsIdentity { get; private set; }
 
         public ServiceIdentity? LastDeploymentsIdentity { get; private set; }
+
+        public string? LastListTenantId { get; private set; }
+
+        public string? LastListAppId { get; private set; }
+
+        public string? LastListNamespace { get; private set; }
+
+        public int LastListTake { get; private set; }
 
         public Task<ServiceCatalogSnapshot?> GetServiceAsync(ServiceIdentity identity, CancellationToken ct = default)
         {
@@ -4793,8 +4875,14 @@ public sealed class ScopeServiceEndpointsTests
             string appId,
             string @namespace,
             int take = 200,
-            CancellationToken ct = default) =>
-            throw new NotSupportedException();
+            CancellationToken ct = default)
+        {
+            LastListTenantId = tenantId;
+            LastListAppId = appId;
+            LastListNamespace = @namespace;
+            LastListTake = take;
+            return Task.FromResult(Services);
+        }
 
         public Task<ServiceRevisionCatalogSnapshot?> GetServiceRevisionsAsync(ServiceIdentity identity, CancellationToken ct = default)
         {
