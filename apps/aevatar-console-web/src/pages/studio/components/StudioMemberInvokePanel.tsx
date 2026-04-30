@@ -1,21 +1,14 @@
-import {
-  ClearOutlined,
-  LinkOutlined,
-  PlayCircleOutlined,
-  StopOutlined,
-} from '@ant-design/icons';
-import { Alert, Button, Grid, Input, Select, Tabs, Typography } from 'antd';
+import { Alert, Grid } from 'antd';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   applyRuntimeEvent,
   createRuntimeEventAccumulator,
   type RuntimeEvent,
-  type RuntimeStepInfo,
-  type RuntimeToolCallInfo,
 } from '@/shared/agui/runtimeEventSemantics';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
-import { RuntimeEventPreviewPanel } from '@/shared/agui/runtimeConversationPresentation';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
+import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
+import type { ScopeServiceEndpointContract } from '@/shared/models/runtime/scopeServices';
 import { history } from '@/shared/navigation/history';
 import { buildRuntimeRunsHref } from '@/shared/navigation/runtimeRoutes';
 import { saveObservedRunSessionPayload } from '@/shared/runs/draftRunSession';
@@ -32,8 +25,22 @@ import {
   type StudioMemberBindingRevision,
 } from '@/shared/studio/models';
 import type { StudioObserveSessionSeed } from '@/shared/studio/observeSession';
-import { AevatarPanel, AevatarStatusTag } from '@/shared/ui/aevatarPageShells';
-import { AEVATAR_PRESSABLE_CARD_CLASS } from '@/shared/ui/interactionStandards';
+import { AevatarPanel } from '@/shared/ui/aevatarPageShells';
+import {
+  buildStudioInvokeCurrentRunViewModel,
+  cloneInvokeResult,
+  createIdleInvokeResult as createIdleResult,
+  type CurrentRunRequest,
+  type InvokeHistoryEntry,
+  type InvokeResultState,
+  type StudioInvokeChatMessage,
+} from './StudioMemberInvokePanel.currentRun';
+import StudioMemberCurrentRunPanel from './StudioMemberCurrentRunPanel';
+import StudioMemberInvokeHistoryPanel from './StudioMemberInvokeHistoryPanel';
+import {
+  StudioMemberInvokeComposerPanel,
+  StudioMemberInvokeContractPanel,
+} from './StudioMemberInvokeSetupPanels';
 
 type StudioMemberInvokePanelProps = {
   readonly scopeId: string;
@@ -58,69 +65,6 @@ type StudioMemberInvokePanelProps = {
   ) => void;
 };
 
-type InvokeResultState = {
-  readonly actorId: string;
-  readonly assistantText: string;
-  readonly commandId: string;
-  readonly endpointId: string;
-  readonly error: string;
-  readonly eventCount: number;
-  readonly events: RuntimeEvent[];
-  readonly finalOutput: string;
-  readonly mode: 'stream' | 'invoke';
-  readonly responseJson: string;
-  readonly runId: string;
-  readonly serviceId: string;
-  readonly status: 'idle' | 'running' | 'success' | 'error';
-  readonly steps: RuntimeStepInfo[];
-  readonly thinking: string;
-  readonly toolCalls: RuntimeToolCallInfo[];
-};
-
-type StudioInvokeChatMessage = {
-  readonly content: string;
-  readonly error?: string;
-  readonly id: string;
-  readonly role: 'assistant' | 'user';
-  readonly status: 'complete' | 'error' | 'streaming';
-  readonly thinking?: string;
-  readonly timestamp: number;
-};
-
-type CurrentRunRequest = {
-  readonly mode: 'stream' | 'invoke';
-  readonly payloadBase64: string;
-  readonly payloadTypeUrl: string;
-  readonly prompt: string;
-  readonly startedAt: number;
-};
-
-type InvokeHistoryEntry = {
-  readonly completedAt: number;
-  readonly createdAt: number;
-  readonly endpointId: string;
-  readonly endpointLabel: string;
-  readonly errorDetail: string;
-  readonly eventCount: number;
-  readonly id: string;
-  readonly mode: 'stream' | 'invoke';
-  readonly payloadBase64: string;
-  readonly payloadTypeUrl: string;
-  readonly prompt: string;
-  readonly runId: string;
-  readonly serviceId: string;
-  readonly startedAt: number;
-  readonly status: 'success' | 'error';
-  readonly summary: string;
-  readonly snapshot: {
-    readonly chatMessages: StudioInvokeChatMessage[];
-    readonly result: InvokeResultState;
-  };
-};
-
-const monoFontFamily =
-  "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace";
-
 function createClientId(prefix: string): string {
   const generated = globalThis.crypto?.randomUUID?.();
   if (generated) {
@@ -143,127 +87,10 @@ function trimPreview(value: string, limit = 180): string {
   return trimmed.length > limit ? `${trimmed.slice(0, limit - 3)}...` : trimmed;
 }
 
-function toIsoTimestamp(value: number | null | undefined): string {
-  return typeof value === 'number' && Number.isFinite(value)
-    ? new Date(value).toISOString()
-    : '';
-}
-
-function truncateMiddle(value: string, head = 18, tail = 12): string {
-  if (value.length <= head + tail + 3) {
-    return value;
-  }
-
-  return `${value.slice(0, head)}...${value.slice(-tail)}`;
-}
-
-function formatHistoryTimestamp(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) {
-    return '刚刚';
-  }
-
-  return new Intl.DateTimeFormat('zh-CN', {
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    month: 'short',
-  }).format(value);
-}
-
-function formatDuration(startedAt: number, completedAt: number): string {
-  if (!Number.isFinite(startedAt) || !Number.isFinite(completedAt)) {
-    return '未知';
-  }
-
-  const durationMs = Math.max(0, completedAt - startedAt);
-  if (durationMs < 1000) {
-    return `${durationMs} ms`;
-  }
-
-  return `${(durationMs / 1000).toFixed(durationMs >= 10_000 ? 0 : 1)} s`;
-}
-
-function createIdleResult(): InvokeResultState {
-  return {
-    actorId: '',
-    assistantText: '',
-    commandId: '',
-    endpointId: '',
-    error: '',
-    eventCount: 0,
-    events: [],
-    finalOutput: '',
-    mode: 'invoke',
-    responseJson: '',
-    runId: '',
-    serviceId: '',
-    status: 'idle',
-    steps: [],
-    thinking: '',
-    toolCalls: [],
-  };
-}
-
-function cloneInvokeResult(result: InvokeResultState): InvokeResultState {
-  return {
-    ...result,
-    events: [...result.events],
-    steps: [...result.steps],
-    toolCalls: [...result.toolCalls],
-  };
-}
-
 function cloneChatMessages(
   messages: readonly StudioInvokeChatMessage[],
 ): StudioInvokeChatMessage[] {
   return messages.map((message) => ({ ...message }));
-}
-
-function getCurrentResultStatusLabel(status: InvokeResultState['status']): string {
-  switch (status) {
-    case 'running':
-      return '运行中';
-    case 'success':
-      return '成功';
-    case 'error':
-      return '失败';
-    default:
-      return '空闲';
-  }
-}
-
-function getCurrentResultStatusStyle(
-  status: InvokeResultState['status'],
-): React.CSSProperties {
-  if (status === 'running') {
-    return {
-      background: '#eff6ff',
-      border: '1px solid #bfdbfe',
-      color: '#1d4ed8',
-    };
-  }
-
-  if (status === 'success') {
-    return {
-      background: '#f0fdf4',
-      border: '1px solid #86efac',
-      color: '#15803d',
-    };
-  }
-
-  if (status === 'error') {
-    return {
-      background: '#fef2f2',
-      border: '1px solid #fecaca',
-      color: '#b91c1c',
-    };
-  }
-
-  return {
-    background: '#f8fafc',
-    border: '1px solid #e5e7eb',
-    color: '#475569',
-  };
 }
 
 function getContractStatusLabel(options: {
@@ -288,11 +115,54 @@ function getPreferredRunOutput(options: {
   return trimOptional(options.finalOutput) || trimOptional(options.assistantText);
 }
 
+function formatElapsedTime(startedAt: number | null, completedAt: number | null): string {
+  if (!startedAt) {
+    return '00:00';
+  }
+
+  const endedAt = completedAt || Date.now();
+  const elapsedSeconds = Math.max(0, Math.floor((endedAt - startedAt) / 1000));
+  const minutes = Math.floor(elapsedSeconds / 60)
+    .toString()
+    .padStart(2, '0');
+  const seconds = (elapsedSeconds % 60).toString().padStart(2, '0');
+  return `${minutes}:${seconds}`;
+}
+
+function getRunStatusLabel(status: InvokeResultState['status']): string {
+  switch (status) {
+    case 'running':
+      return 'Running';
+    case 'success':
+      return 'Success';
+    case 'error':
+      return 'Error';
+    default:
+      return 'Idle';
+  }
+}
+
+function getRunStatusDotStyle(status: InvokeResultState['status']): React.CSSProperties {
+  if (status === 'running') {
+    return { background: '#1677ff' };
+  }
+
+  if (status === 'success') {
+    return { background: '#22c55e' };
+  }
+
+  if (status === 'error') {
+    return { background: '#ef4444' };
+  }
+
+  return { background: '#94a3b8' };
+}
+
 const surfaceStyle: React.CSSProperties = {
   display: 'flex',
   flex: 1,
   flexDirection: 'column',
-  gap: 16,
+  gap: 12,
   minHeight: 0,
   minWidth: 0,
   overflowX: 'hidden',
@@ -300,231 +170,86 @@ const surfaceStyle: React.CSSProperties = {
   paddingBottom: 12,
 };
 
-const contractGridStyle: React.CSSProperties = {
+const consoleFrameStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 12,
-  gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+  gap: 10,
+  minHeight: 0,
   minWidth: 0,
 };
 
-const contractFieldStyle: React.CSSProperties = {
+const runConsolePanelStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 4,
+  gap: 0,
+  minHeight: 0,
+};
+
+const runSummaryGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 8,
+  gridTemplateColumns: 'repeat(auto-fit, minmax(112px, 1fr))',
+  marginBottom: 4,
   minWidth: 0,
 };
 
-const contractLabelStyle: React.CSSProperties = {
+const runSummaryCardStyle: React.CSSProperties = {
+  background: '#f8fafc',
+  border: '1px solid #e5e7eb',
+  borderRadius: 8,
+  display: 'grid',
+  gap: 2,
+  minWidth: 0,
+  padding: '7px 10px',
+};
+
+const runSummaryLabelStyle: React.CSSProperties = {
   color: '#64748b',
   fontSize: 11,
   fontWeight: 700,
   letterSpacing: 0.4,
-  lineHeight: '16px',
+  lineHeight: '14px',
   textTransform: 'uppercase',
 };
 
-const contractValueStyle: React.CSSProperties = {
-  color: '#111827',
-  display: 'block',
-  fontSize: 13,
-  fontWeight: 600,
-  lineHeight: '20px',
-  minWidth: 0,
-  overflowWrap: 'anywhere',
-  wordBreak: 'break-word',
-};
-
-const contractStatusPillBaseStyle: React.CSSProperties = {
-  borderRadius: 999,
-  display: 'inline-flex',
-  fontSize: 12,
-  fontWeight: 700,
-  lineHeight: '18px',
-  padding: '4px 10px',
-  width: 'fit-content',
-};
-
-const helperTextStyle: React.CSSProperties = {
-  color: '#64748b',
-  fontSize: 13,
-  lineHeight: 1.6,
-  minWidth: 0,
-};
-
-const playgroundActionsStyle: React.CSSProperties = {
-  alignItems: 'center',
-  display: 'flex',
-  flexWrap: 'wrap',
-  gap: 10,
-  justifyContent: 'flex-start',
-};
-
-const controlsGridStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 14,
-  gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-  minWidth: 0,
-};
-
-const requestSummaryStyle: React.CSSProperties = {
-  background: '#f8fafc',
-  border: '1px solid #e5e7eb',
-  borderRadius: 12,
-  display: 'grid',
-  gap: 8,
-  minWidth: 0,
-  padding: '12px 14px',
-};
-
-const requestSummaryRowStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 4,
-  minWidth: 0,
-};
-
-const consoleFrameStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 12,
-  minHeight: 0,
-  minWidth: 0,
-};
-
-const consolePaneStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 14,
-  minHeight: 320,
-  minWidth: 0,
-};
-
-const resultSurfaceStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 14,
-  minHeight: 0,
-  minWidth: 0,
-};
-
-const transcriptStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 12,
-  maxHeight: 360,
-  minHeight: 0,
-  minWidth: 0,
-  overflowY: 'auto',
-  paddingRight: 4,
-};
-
-const bubbleBaseStyle: React.CSSProperties = {
-  border: '1px solid #e5e7eb',
-  borderRadius: 14,
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 8,
-  maxWidth: '88%',
-  minWidth: 0,
-  padding: '12px 14px',
-};
-
-const plainResultStyle: React.CSSProperties = {
+const contractDetailsStyle: React.CSSProperties = {
   background: '#ffffff',
   border: '1px solid #e5e7eb',
-  borderRadius: 14,
-  color: '#111827',
+  borderRadius: 8,
   minWidth: 0,
-  padding: '14px 16px',
-  whiteSpace: 'pre-wrap',
-  wordBreak: 'break-word',
+  padding: '10px 12px',
 };
 
-const rawOutputStyle: React.CSSProperties = {
-  background: '#0f172a',
-  borderRadius: 14,
-  color: '#e2e8f0',
-  fontFamily: monoFontFamily,
-  fontSize: 12,
-  lineHeight: 1.6,
-  margin: 0,
-  maxHeight: 360,
-  minHeight: 0,
-  minWidth: 0,
-  overflow: 'auto',
-  padding: 16,
-  whiteSpace: 'pre-wrap',
-  wordBreak: 'break-word',
-};
-
-const emptyConsoleTextStyle: React.CSSProperties = {
-  color: '#64748b',
-  fontSize: 14,
-  lineHeight: 1.7,
-  minWidth: 0,
-};
-
-const runsListStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 10,
-  minWidth: 0,
-};
-
-const historyCardStyle: React.CSSProperties = {
-  background: '#ffffff',
-  border: '1px solid #e5e7eb',
-  borderRadius: 12,
+const contractDetailsSummaryStyle: React.CSSProperties = {
+  color: '#334155',
   cursor: 'pointer',
-  display: 'grid',
-  gap: 8,
-  minWidth: 0,
-  padding: '12px 14px',
-  textAlign: 'left',
-  width: '100%',
+  fontSize: 13,
+  fontWeight: 700,
+  lineHeight: '20px',
 };
 
-const historyMetaStyle: React.CSSProperties = {
-  color: '#6b7280',
+const contractDetailsBodyStyle: React.CSSProperties = {
+  marginTop: 10,
+};
+
+const runSummaryValueStyle: React.CSSProperties = {
+  alignItems: 'center',
+  color: '#111827',
   display: 'flex',
-  flexWrap: 'wrap',
-  fontSize: 12,
-  gap: 8,
+  fontSize: 13,
+  fontWeight: 700,
+  gap: 6,
+  lineHeight: '18px',
   minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
 };
 
-const inlineDetailStyle: React.CSSProperties = {
-  background: '#f8fafc',
-  border: '1px solid #e5e7eb',
-  borderRadius: 12,
-  display: 'grid',
-  gap: 10,
-  minWidth: 0,
-  padding: '12px 14px',
-};
-
-const detailRowStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 4,
-  minWidth: 0,
-};
-
-const consoleTabLabelStyle: React.CSSProperties = {
-  fontWeight: 600,
-};
-
-const CompactCopyableValue: React.FC<{
-  readonly fallback?: string;
-  readonly value?: string;
-}> = ({ fallback = '—', value }) => {
-  const normalized = trimOptional(value);
-  if (!normalized) {
-    return (
-      <Typography.Text style={helperTextStyle} type="secondary">
-        {fallback}
-      </Typography.Text>
-    );
-  }
-
-  return (
-    <Typography.Text copyable={{ text: normalized }} style={contractValueStyle}>
-      {truncateMiddle(normalized)}
-    </Typography.Text>
-  );
+const runStatusDotBaseStyle: React.CSSProperties = {
+  borderRadius: 999,
+  display: 'inline-block',
+  flex: '0 0 auto',
+  height: 7,
+  width: 7,
 };
 
 const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
@@ -543,6 +268,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const screens = Grid.useBreakpoint();
   const abortControllerRef = useRef<AbortController | null>(null);
   const nyxIdChatBoundRef = useRef(false);
+  const payloadTypeUrlEditedRef = useRef(false);
   const previousBindingKeyRef = useRef('');
   const transcriptAnchorRef = useRef<HTMLDivElement | null>(null);
   const [selectedServiceId, setSelectedServiceId] = useState(() =>
@@ -556,6 +282,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const [payloadTypeUrl, setPayloadTypeUrl] = useState('');
   const [payloadBase64, setPayloadBase64] = useState('');
   const [payloadJsonPreview, setPayloadJsonPreview] = useState('');
+  const [endpointContract, setEndpointContract] =
+    useState<ScopeServiceEndpointContract | null>(null);
+  const [endpointContractError, setEndpointContractError] = useState('');
   const [invokeResult, setInvokeResult] = useState<InvokeResultState>(
     createIdleResult(),
   );
@@ -565,9 +294,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const [chatMessages, setChatMessages] = useState<StudioInvokeChatMessage[]>([]);
   const [requestHistory, setRequestHistory] = useState<InvokeHistoryEntry[]>([]);
   const [expandedHistoryId, setExpandedHistoryId] = useState('');
-  const [consoleTab, setConsoleTab] = useState<'result' | 'trace' | 'raw'>(
-    'result',
-  );
+  const [consoleTab, setConsoleTab] = useState<
+    'conversation' | 'timeline' | 'events'
+  >('conversation');
   const [activeRunCompletedAt, setActiveRunCompletedAt] = useState<number | null>(
     null,
   );
@@ -578,6 +307,14 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     selectedService?.endpoints.find(
       (endpoint) => endpoint.endpointId === selectedEndpointId,
     ) ?? null;
+  const effectiveRequestTypeUrl =
+    trimOptional(endpointContract?.requestTypeUrl) ||
+    trimOptional(selectedEndpoint?.requestTypeUrl);
+  const effectiveResponseTypeUrl =
+    trimOptional(endpointContract?.responseTypeUrl) ||
+    trimOptional(selectedEndpoint?.responseTypeUrl);
+  const effectiveDefaultPrompt = trimOptional(endpointContract?.defaultSmokePrompt);
+  const effectiveSampleRequestJson = trimOptional(endpointContract?.sampleRequestJson);
   const isChatEndpoint = Boolean(
     selectedEndpoint && isChatServiceEndpoint(selectedEndpoint),
   );
@@ -589,6 +326,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const currentPublishedContext = describeStudioMemberBindingRevisionContext(
     currentMemberRevision,
   );
+  const currentRevisionId =
+    trimOptional(endpointContract?.revisionId) ||
+    trimOptional(currentMemberRevision?.revisionId);
   const normalizedMemberId = trimOptional(memberId);
   const currentMemberActorId = trimOptional(currentMemberRevision?.primaryActorId);
   const currentMemberLabel =
@@ -608,71 +348,26 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   }, [initialServiceId, requestHistory, selectedService?.serviceId]);
   const expandedHistoryEntry =
     visibleRequestHistory.find((entry) => entry.id === expandedHistoryId) ?? null;
-  const currentRunHasData =
-    invokeResult.status !== 'idle' ||
-    Boolean(currentRunRequest?.prompt) ||
-    Boolean(currentRunRequest?.payloadBase64) ||
-    Boolean(currentRunRequest?.payloadTypeUrl) ||
-    Boolean(invokeResult.runId) ||
-    Boolean(invokeResult.commandId) ||
-    Boolean(invokeResult.actorId) ||
-    Boolean(invokeResult.error) ||
-    Boolean(invokeResult.finalOutput) ||
-    Boolean(invokeResult.responseJson) ||
-    Boolean(invokeResult.assistantText) ||
-    chatMessages.length > 0 ||
-    invokeResult.events.length > 0;
-  const currentObserveSessionSeed = useMemo<StudioObserveSessionSeed | null>(() => {
-    const serviceId = trimOptional(selectedServiceId);
-    const endpointId = trimOptional(selectedEndpointId);
-    if (!serviceId || !endpointId || !currentRunHasData) {
-      return null;
-    }
-
-    return {
-      actorId: trimOptional(invokeResult.actorId),
-      assistantText: invokeResult.assistantText,
-      commandId: trimOptional(invokeResult.commandId),
-      completedAtUtc: toIsoTimestamp(activeRunCompletedAt) || null,
-      endpointId,
-      error: invokeResult.error,
-      events: [...invokeResult.events],
-      finalOutput: invokeResult.finalOutput,
-      mode: invokeResult.mode,
-      payloadBase64:
-        currentRunRequest?.payloadBase64 ||
-        (!isChatEndpoint ? payloadBase64.trim() : '') ||
-        '',
-      payloadTypeUrl:
-        currentRunRequest?.payloadTypeUrl ||
-        (!isChatEndpoint ? payloadTypeUrl.trim() : '') ||
-        '',
-      prompt: currentRunRequest?.prompt || '',
-      runId: trimOptional(invokeResult.runId),
-      serviceId,
-      serviceLabel:
-        trimOptional(selectedService?.displayName) ||
-        currentMemberLabel,
-      startedAtUtc: toIsoTimestamp(currentRunRequest?.startedAt) || '',
-      status: invokeResult.status === 'error' ? 'error' : invokeResult.status === 'success' ? 'success' : 'running',
-    };
+  const currentRunViewModel = useMemo(() => {
+    return buildStudioInvokeCurrentRunViewModel({
+      activeRunCompletedAt,
+      chatMessageCount: chatMessages.length,
+      currentMemberLabel,
+      currentRunRequest,
+      invokeResult,
+      isChatEndpoint,
+      payloadBase64,
+      payloadTypeUrl,
+      selectedEndpointId,
+      selectedServiceDisplayName: selectedService?.displayName,
+      selectedServiceId,
+    });
   }, [
     activeRunCompletedAt,
+    chatMessages.length,
     currentMemberLabel,
-    currentRunHasData,
-    currentRunRequest?.payloadBase64,
-    currentRunRequest?.payloadTypeUrl,
-    currentRunRequest?.prompt,
-    currentRunRequest?.startedAt,
-    invokeResult.actorId,
-    invokeResult.assistantText,
-    invokeResult.commandId,
-    invokeResult.error,
-    invokeResult.events,
-    invokeResult.finalOutput,
-    invokeResult.mode,
-    invokeResult.runId,
-    invokeResult.status,
+    currentRunRequest,
+    invokeResult,
     isChatEndpoint,
     payloadBase64,
     payloadTypeUrl,
@@ -680,59 +375,23 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     selectedService?.displayName,
     selectedServiceId,
   ]);
-  const currentResultStatusLabel = getCurrentResultStatusLabel(invokeResult.status);
+  const currentRunHasData = currentRunViewModel.hasData;
+  const currentObserveSessionSeed = currentRunViewModel.observeSessionSeed;
+  const currentRawOutput = currentRunViewModel.rawOutput;
   const currentContractStatusLabel = getContractStatusLabel({
-    hasEndpoint: Boolean(selectedEndpoint),
+    hasEndpoint: Boolean(selectedEndpoint) && !endpointContractError,
     hasMember: Boolean(selectedService),
   });
-  const currentRawOutput = useMemo(() => {
-    if (invokeResult.responseJson) {
-      return invokeResult.responseJson;
-    }
-
-    if (!currentRunHasData) {
-      return '';
-    }
-
-    return JSON.stringify(
-      {
-        actorId: invokeResult.actorId || undefined,
-        commandId: invokeResult.commandId || undefined,
-        endpointId: invokeResult.endpointId || selectedEndpointId || undefined,
-        error: invokeResult.error || undefined,
-        eventCount: invokeResult.eventCount || invokeResult.events.length,
-        finalOutput: invokeResult.finalOutput || undefined,
-        mode: invokeResult.mode || currentRunRequest?.mode,
-        runId: invokeResult.runId || undefined,
-        serviceId: invokeResult.serviceId || selectedServiceId || undefined,
-        status: invokeResult.status,
-        stepCount: invokeResult.steps.length,
-        toolCallCount: invokeResult.toolCalls.length,
-      },
-      null,
-      2,
-    );
-  }, [
-    currentRunHasData,
-    currentRunRequest?.mode,
-    invokeResult.actorId,
-    invokeResult.commandId,
-    invokeResult.endpointId,
-    invokeResult.error,
-    invokeResult.eventCount,
-    invokeResult.events.length,
-    invokeResult.finalOutput,
-    invokeResult.mode,
-    invokeResult.responseJson,
-    invokeResult.runId,
-    invokeResult.serviceId,
-    invokeResult.status,
-    invokeResult.steps.length,
-    invokeResult.toolCalls.length,
-    selectedEndpointId,
-    selectedServiceId,
-  ]);
-  const consoleMinHeight = screens.xl || screens.lg ? 420 : 320;
+  const consoleMinHeight = screens.xl || screens.lg ? 280 : 220;
+  const runElapsedLabel = formatElapsedTime(
+    currentRunRequest?.startedAt ?? null,
+    activeRunCompletedAt,
+  );
+  const runIdLabel =
+    trimOptional(invokeResult.runId) ||
+    trimOptional(invokeResult.commandId) ||
+    'Not started';
+  const endpointLabel = selectedEndpoint?.displayName || selectedEndpointId || '—';
 
   useEffect(() => {
     if (!services.length) {
@@ -817,8 +476,63 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   }, [currentObserveSessionSeed, onObserveSessionChange]);
 
   useEffect(() => {
+    const endpointId = trimOptional(selectedEndpoint?.endpointId);
+    const serviceId = trimOptional(selectedService?.serviceId);
+    if (!scopeId || !endpointId || !serviceId || selectedService?.kind === 'nyxid-chat') {
+      setEndpointContract(null);
+      setEndpointContractError('');
+      return;
+    }
+
+    let cancelled = false;
+    setEndpointContract(null);
+    setEndpointContractError('');
+
+    const request = normalizedMemberId
+      ? scopeRuntimeApi.getMemberEndpointContract(
+          scopeId,
+          normalizedMemberId,
+          endpointId,
+        )
+      : scopeRuntimeApi.getServiceEndpointContract(scopeId, serviceId, endpointId);
+
+    request
+      .then((contract) => {
+        if (cancelled) {
+          return;
+        }
+
+        setEndpointContract(contract);
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+
+        setEndpointContract(null);
+        setEndpointContractError(
+          error instanceof Error ? error.message : String(error),
+        );
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    normalizedMemberId,
+    scopeId,
+    selectedEndpoint?.endpointId,
+    selectedService?.kind,
+    selectedService?.serviceId,
+  ]);
+
+  useEffect(() => {
     nyxIdChatBoundRef.current = false;
   }, [scopeId]);
+
+  useEffect(() => {
+    payloadTypeUrlEditedRef.current = false;
+  }, [scopeId, selectedEndpointId, selectedServiceId]);
 
   useEffect(() => {
     if (!selectedEndpoint || isChatServiceEndpoint(selectedEndpoint)) {
@@ -828,9 +542,15 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       return;
     }
 
-    setPayloadTypeUrl(selectedEndpoint.requestTypeUrl || '');
-    setPayloadJsonPreview('');
-  }, [selectedEndpoint]);
+    setPayloadTypeUrl((current) => {
+      if (payloadTypeUrlEditedRef.current) {
+        return current;
+      }
+
+      return effectiveRequestTypeUrl;
+    });
+    setPayloadJsonPreview((current) => current || effectiveSampleRequestJson);
+  }, [effectiveRequestTypeUrl, effectiveSampleRequestJson, selectedEndpoint]);
 
   useEffect(() => {
     const nextBindingKey = `${scopeId}::${selectedServiceId}::${selectedEndpointId}`;
@@ -851,7 +571,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     setInvokeResult(createIdleResult());
     setPayloadJsonPreview('');
     setActiveRunCompletedAt(null);
-    setConsoleTab('result');
+    setConsoleTab('conversation');
   }, [scopeId, selectedEndpointId, selectedServiceId]);
 
   useEffect(
@@ -916,7 +636,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const handleAbort = useCallback(() => {
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
-    setConsoleTab('result');
+    setConsoleTab('conversation');
     setInvokeResult((current) => ({
       ...current,
       error: '调用已中止。',
@@ -952,7 +672,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     setFormError('');
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
-    setConsoleTab('result');
+    setConsoleTab('conversation');
     setCurrentRunRequest({
       mode: isChatServiceEndpoint(selectedEndpoint) ? 'stream' : 'invoke',
       payloadBase64: trimmedPayloadBase64,
@@ -1036,7 +756,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             actorId: accumulator.actorId,
             assistantText: accumulator.assistantText,
             commandId: accumulator.commandId,
+            correlationId: accumulator.correlationId,
             endpointId: selectedEndpoint.endpointId,
+            errorCode: accumulator.errorCode,
             error: accumulator.errorText,
             eventCount: accumulator.events.length,
             events: [...accumulator.events],
@@ -1062,7 +784,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             actorId: accumulator.actorId,
             assistantText: accumulator.assistantText,
             commandId: accumulator.commandId,
+            correlationId: accumulator.correlationId,
             endpointId: selectedEndpoint.endpointId,
+            errorCode: accumulator.errorCode,
             error: accumulator.errorText,
             eventCount: accumulator.events.length,
             events: [...accumulator.events],
@@ -1116,7 +840,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             actorId: accumulator.actorId,
             assistantText: accumulator.assistantText,
             commandId: accumulator.commandId,
+            correlationId: accumulator.correlationId,
             endpointId: selectedEndpoint.endpointId,
+            errorCode: accumulator.errorCode,
             error: message,
             eventCount: accumulator.events.length,
             events: [...accumulator.events],
@@ -1199,6 +925,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
       } = extractRuntimeInvokeReceipt(response);
       const events: RuntimeEvent[] = [
         {
+          commandId: commandId || undefined,
+          correlationId: correlationId || undefined,
           runId: runId || undefined,
           threadId: correlationId || undefined,
           timestamp: completedAt,
@@ -1206,14 +934,15 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         } as RuntimeEvent,
       ];
 
-      if (actorId || commandId) {
+      if (actorId || commandId || correlationId) {
         events.push({
-          name: 'RunContext',
+          name: 'aevatar.run.context',
           timestamp: completedAt,
           type: 'CUSTOM',
           value: {
             actorId: actorId || undefined,
             commandId: commandId || undefined,
+            correlationId: correlationId || undefined,
           },
         } as RuntimeEvent);
       }
@@ -1222,6 +951,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         ...createIdleResult(),
         actorId,
         commandId,
+        correlationId,
         endpointId: selectedEndpoint.endpointId,
         eventCount: events.length,
         events,
@@ -1324,6 +1054,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         ? saveObservedRunSessionPayload({
             actorId: invokeResult.actorId || undefined,
             commandId: invokeResult.commandId || undefined,
+            correlationId: invokeResult.correlationId || undefined,
             endpointId: invokeResult.endpointId || selectedEndpoint.endpointId,
             events: invokeResult.events,
             payloadBase64: currentPayloadBase64 || undefined,
@@ -1367,242 +1098,12 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
 
   const handleClear = useCallback(() => {
     setChatMessages([]);
-    setConsoleTab('result');
+    setConsoleTab('conversation');
     setCurrentRunRequest(null);
     setFormError('');
     setInvokeResult(createIdleResult());
     setActiveRunCompletedAt(null);
   }, []);
-
-  const endpointOptions = (selectedService?.endpoints ?? []).map((endpoint) => ({
-    label: endpoint.displayName || endpoint.endpointId,
-    value: endpoint.endpointId,
-  }));
-
-  const consoleItems = useMemo(
-    () => [
-      {
-        children: (
-          <div style={{ ...consolePaneStyle, minHeight: consoleMinHeight }}>
-            {currentRunHasData ? (
-              <div style={resultSurfaceStyle}>
-                <div
-                  style={{
-                    alignItems: 'center',
-                    display: 'flex',
-                    flexWrap: 'wrap',
-                    gap: 10,
-                    justifyContent: 'space-between',
-                  }}
-                >
-                  <span
-                    style={{
-                      ...contractStatusPillBaseStyle,
-                      ...getCurrentResultStatusStyle(invokeResult.status),
-                    }}
-                  >
-                    {currentResultStatusLabel}
-                  </span>
-                  {currentRunRequest?.startedAt ? (
-                    <Typography.Text style={helperTextStyle} type="secondary">
-                      开始于 {formatHistoryTimestamp(currentRunRequest.startedAt)}
-                    </Typography.Text>
-                  ) : null}
-                </div>
-
-                {currentRunRequest ? (
-                  <div style={requestSummaryStyle}>
-                    <div style={requestSummaryRowStyle}>
-                      <Typography.Text type="secondary">当前输入</Typography.Text>
-                      <div style={contractValueStyle}>
-                        {currentRunRequest.prompt ||
-                          trimPreview(currentRunRequest.payloadTypeUrl, 96) ||
-                          '这次调用使用了类型化载荷。'}
-                      </div>
-                    </div>
-                    {!isChatEndpoint &&
-                    (currentRunRequest.payloadTypeUrl ||
-                      currentRunRequest.payloadBase64) ? (
-                      <div style={requestSummaryRowStyle}>
-                        {currentRunRequest.payloadTypeUrl ? (
-                          <Typography.Text style={helperTextStyle} type="secondary">
-                            类型：{currentRunRequest.payloadTypeUrl}
-                          </Typography.Text>
-                        ) : null}
-                        {currentRunRequest.payloadBase64 ? (
-                          <Typography.Text style={helperTextStyle} type="secondary">
-                            已附带 payloadBase64
-                          </Typography.Text>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-
-                {invokeResult.status === 'error' && invokeResult.error ? (
-                  <Alert
-                    showIcon
-                    message="这次调用失败了。"
-                    description={invokeResult.error}
-                    type="error"
-                  />
-                ) : null}
-
-                {chatMessages.length > 0 ? (
-                  <div
-                    data-testid="studio-invoke-chat-transcript"
-                    style={transcriptStyle}
-                  >
-                    {chatMessages.map((message) => {
-                      const isAssistant = message.role === 'assistant';
-                      return (
-                        <div
-                          key={message.id}
-                          style={{
-                            alignItems: isAssistant ? 'flex-start' : 'flex-end',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: 4,
-                          }}
-                        >
-                          <div
-                            style={{
-                              ...bubbleBaseStyle,
-                              background: isAssistant ? '#ffffff' : '#eff6ff',
-                              borderColor: isAssistant ? '#e5e7eb' : '#bfdbfe',
-                            }}
-                          >
-                            <div
-                              style={{
-                                color: '#6b7280',
-                                fontSize: 11,
-                                fontWeight: 700,
-                                textTransform: 'uppercase',
-                              }}
-                            >
-                              {isAssistant ? '成员响应' : '你'}
-                            </div>
-                            <div
-                              style={{
-                                color: message.error ? '#b91c1c' : '#111827',
-                                lineHeight: 1.7,
-                                whiteSpace: 'pre-wrap',
-                                wordBreak: 'break-word',
-                              }}
-                            >
-                              {message.content ||
-                                (message.status === 'streaming' ? '正在响应…' : '')}
-                            </div>
-                            {message.thinking ? (
-                              <div
-                                style={{
-                                  borderTop: '1px solid #e5e7eb',
-                                  color: '#6b7280',
-                                  fontSize: 12,
-                                  lineHeight: 1.6,
-                                  paddingTop: 8,
-                                  whiteSpace: 'pre-wrap',
-                                }}
-                              >
-                                {message.thinking}
-                              </div>
-                            ) : null}
-                          </div>
-                        </div>
-                      );
-                    })}
-                    <div ref={transcriptAnchorRef} />
-                  </div>
-                ) : invokeResult.status === 'running' ? (
-                  <Typography.Text style={emptyConsoleTextStyle} type="secondary">
-                    调用已经发出，当前结果会在这里持续更新。
-                  </Typography.Text>
-                ) : invokeResult.responseJson ? (
-                  <Typography.Text style={emptyConsoleTextStyle} type="secondary">
-                    这次结构化调用已经返回结果。切到“原始”可以查看完整返回体。
-                  </Typography.Text>
-                ) : invokeResult.finalOutput ? (
-                  <div style={plainResultStyle}>{invokeResult.finalOutput}</div>
-                ) : invokeResult.assistantText ? (
-                  <div style={plainResultStyle}>{invokeResult.assistantText}</div>
-                ) : invokeResult.status === 'error' ? (
-                  <Typography.Text style={emptyConsoleTextStyle} type="secondary">
-                    这次调用失败了，没有额外结果文本。
-                  </Typography.Text>
-                ) : null}
-              </div>
-            ) : (
-              <Typography.Text style={emptyConsoleTextStyle} type="secondary">
-                还没有开始调用。先在上方输入提示词或载荷，再发起一次调用。
-              </Typography.Text>
-            )}
-          </div>
-        ),
-        key: 'result',
-        label: <span style={consoleTabLabelStyle}>结果</span>,
-      },
-      {
-        children: (
-          <div style={{ ...consolePaneStyle, minHeight: consoleMinHeight }}>
-            {invokeResult.events.length > 0 ? (
-              <RuntimeEventPreviewPanel
-                events={invokeResult.events}
-                title={`观测事件（${invokeResult.events.length}）`}
-              />
-            ) : (
-              <Typography.Text style={emptyConsoleTextStyle} type="secondary">
-                当前 run 还没有可展示的追踪事件。
-              </Typography.Text>
-            )}
-
-            {(invokeResult.steps.length > 0 || invokeResult.toolCalls.length > 0) && (
-              <div style={requestSummaryStyle}>
-                <Typography.Text type="secondary">调试概览</Typography.Text>
-                <Typography.Text style={contractValueStyle}>
-                  步骤 {invokeResult.steps.length} 个，工具调用{' '}
-                  {invokeResult.toolCalls.length} 个。
-                </Typography.Text>
-              </div>
-            )}
-          </div>
-        ),
-        key: 'trace',
-        label: <span style={consoleTabLabelStyle}>追踪</span>,
-      },
-      {
-        children: (
-          <div style={{ ...consolePaneStyle, minHeight: consoleMinHeight }}>
-            {currentRawOutput ? (
-              <pre style={rawOutputStyle}>{currentRawOutput}</pre>
-            ) : (
-              <Typography.Text style={emptyConsoleTextStyle} type="secondary">
-                当前 run 没有额外原始输出。
-              </Typography.Text>
-            )}
-          </div>
-        ),
-        key: 'raw',
-        label: <span style={consoleTabLabelStyle}>原始</span>,
-      },
-    ],
-    [
-      consoleMinHeight,
-      currentRawOutput,
-      currentResultStatusLabel,
-      currentRunHasData,
-      currentRunRequest,
-      invokeResult.assistantText,
-      invokeResult.error,
-      invokeResult.events,
-      invokeResult.finalOutput,
-      invokeResult.responseJson,
-      invokeResult.status,
-      invokeResult.steps.length,
-      invokeResult.toolCalls.length,
-      isChatEndpoint,
-      chatMessages,
-    ],
-  );
 
   return (
     <div data-testid="studio-member-invoke-panel" style={surfaceStyle}>
@@ -1630,322 +1131,106 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         <>
           <AevatarPanel
             layoutMode="document"
-            padding={10}
-            title="调用契约"
-            titleHelp="这里只保留当前调用对象和契约准备状态，不展示运行结果，也不读取输入校验。"
-          >
-            <div style={contractGridStyle}>
-              <div style={contractFieldStyle}>
-                <div style={contractLabelStyle}>状态</div>
-                <span
-                  style={{
-                    ...contractStatusPillBaseStyle,
-                    ...getCurrentResultStatusStyle(
-                      currentContractStatusLabel === '已就绪' ? 'success' : 'idle',
-                    ),
-                  }}
-                >
-                  {currentContractStatusLabel}
-                </span>
-              </div>
-              <div style={contractFieldStyle}>
-                <div style={contractLabelStyle}>Member</div>
-                <div style={contractValueStyle}>{currentMemberLabel}</div>
-              </div>
-              <div style={contractFieldStyle}>
-                <div style={contractLabelStyle}>Endpoint</div>
-                <div style={contractValueStyle}>
-                  {selectedEndpoint?.displayName || selectedEndpointId || '未选择'}
-                </div>
-              </div>
-              <div style={contractFieldStyle}>
-                <div style={contractLabelStyle}>Revision</div>
-                <CompactCopyableValue
-                  fallback="尚未开始服务"
-                  value={currentMemberRevision?.revisionId}
-                />
-              </div>
-              <div style={contractFieldStyle}>
-                <div style={contractLabelStyle}>Published Context</div>
-                <CompactCopyableValue
-                  fallback="尚未配置"
-                  value={currentPublishedContext}
-                />
-              </div>
-              <div style={contractFieldStyle}>
-                <div style={contractLabelStyle}>Actor ID</div>
-                <CompactCopyableValue
-                  fallback="尚未分配"
-                  value={currentMemberActorId}
-                />
-              </div>
-            </div>
-          </AevatarPanel>
-
-          <AevatarPanel
-            layoutMode="document"
             padding={14}
-            title="调试台"
-            titleHelp="先输入 prompt 或载荷，再直接执行当前成员调用。"
-          >
-            <div style={{ display: 'grid', gap: 12 }}>
-              <div style={{ display: 'grid', gap: 8, minWidth: 0 }}>
-                <Typography.Text strong>
-                  {isChatEndpoint ? '提示词' : '提示词或命令输入'}
-                </Typography.Text>
-                <Input.TextArea
-                  aria-label="调用请求输入"
-                  autoSize={{ minRows: 4, maxRows: 8 }}
-                  placeholder={
-                    isChatEndpoint
-                      ? '输入你想发给当前成员的消息...'
-                      : '这里可以填写补充提示词；如果端点需要类型化载荷，请在下方填写 payloadBase64。'
-                  }
-                  value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
-                />
-                {formError ? (
-                  <Typography.Text type="danger">{formError}</Typography.Text>
-                ) : isChatEndpoint ? (
-                  <Typography.Text style={helperTextStyle} type="secondary">
-                    这是当前成员的对话输入区。开始对话后，结果会直接显示在下方工作台。
-                  </Typography.Text>
-                ) : null}
-              </div>
-
-              {!isChatEndpoint ? (
-                <div
-                  aria-label="Typed invoke form"
-                  style={{ display: 'grid', gap: 12 }}
-                >
-                  <div style={contractGridStyle}>
-                    <div style={contractFieldStyle}>
-                      <div style={contractLabelStyle}>Request type</div>
-                      <CompactCopyableValue
-                        fallback="未声明"
-                        value={selectedEndpoint?.requestTypeUrl}
-                      />
-                    </div>
-                    <div style={contractFieldStyle}>
-                      <div style={contractLabelStyle}>Response type</div>
-                      <CompactCopyableValue
-                        fallback="未声明"
-                        value={selectedEndpoint?.responseTypeUrl}
-                      />
-                    </div>
-                    <div style={contractFieldStyle}>
-                      <div style={contractLabelStyle}>Endpoint kind</div>
-                      <div style={contractValueStyle}>
-                        {selectedEndpoint?.kind || 'command'}
-                      </div>
-                    </div>
-                  </div>
-                  <div style={controlsGridStyle}>
-                  <div style={{ display: 'grid', gap: 8, minWidth: 0 }}>
-                    <Typography.Text strong>Request type URL</Typography.Text>
-                    <Input
-                      placeholder="type.googleapis.com/example.Command"
-                      value={payloadTypeUrl}
-                      onChange={(event) => setPayloadTypeUrl(event.target.value)}
-                    />
-                  </div>
-                  <div style={{ display: 'grid', gap: 8, minWidth: 0 }}>
-                    <Typography.Text strong>Protobuf payload Base64</Typography.Text>
-                    <Input.TextArea
-                      autoSize={{ minRows: 4, maxRows: 8 }}
-                      placeholder="粘贴与 request type 对应的 protobuf payload base64。"
-                      value={payloadBase64}
-                      onChange={(event) => setPayloadBase64(event.target.value)}
-                    />
-                  </div>
-                  </div>
-                  <div style={{ display: 'grid', gap: 8 }}>
-                    <Typography.Text strong>JSON scratchpad</Typography.Text>
-                    <Input.TextArea
-                      autoSize={{ minRows: 3, maxRows: 7 }}
-                      placeholder="可在这里整理 typed payload 的 JSON 形态；Studio 不会把 JSON 冒充成 protobuf bytes。"
-                      value={payloadJsonPreview}
-                      onChange={(event) => setPayloadJsonPreview(event.target.value)}
-                    />
-                    <Typography.Text style={helperTextStyle} type="secondary">
-                      Invoke still sends protobuf `payloadBase64`; JSON scratchpad is only for composing or reviewing typed input.
-                    </Typography.Text>
-                  </div>
-                </div>
-              ) : null}
-
-              <div
-                data-testid="studio-invoke-playground-actions"
-                style={playgroundActionsStyle}
-              >
-                <Button
-                  disabled={!canInvoke || invokeResult.status === 'running'}
-                  icon={<PlayCircleOutlined />}
-                  onClick={() => void handleInvoke()}
-                  type="primary"
-                >
-                  {isChatEndpoint ? '开始对话' : '执行调用'}
-                </Button>
-                <Button
-                  disabled={invokeResult.status !== 'running'}
-                  icon={<StopOutlined />}
-                  onClick={handleAbort}
-                >
-                  中止
-                </Button>
-                <Button
-                  disabled={!scopeId || !selectedEndpoint}
-                  icon={<LinkOutlined />}
-                  onClick={handleOpenRuns}
-                >
-                  打开运行记录
-                </Button>
-                <Button icon={<ClearOutlined />} onClick={handleClear}>
-                  清空
-                </Button>
-              </div>
-            </div>
-          </AevatarPanel>
-
-          <AevatarPanel
-            layoutMode="document"
-            padding={14}
-            title="当前结果"
-            titleHelp="这是唯一的结果展示区。默认看结果，追踪和原始信息作为调试视图延后展示。"
+            style={runConsolePanelStyle}
+            title="Conversation"
+            titleHelp="Invoke 现在按 runs 页的交互组织：先看当前 run，再从底部输入 prompt 发起调用。"
           >
             <div style={consoleFrameStyle}>
-              <Tabs
-                activeKey={consoleTab}
-                items={consoleItems}
-                onChange={(value) =>
-                  setConsoleTab(value as 'result' | 'trace' | 'raw')
-                }
+              <div style={runSummaryGridStyle}>
+                <div style={runSummaryCardStyle}>
+                  <div style={runSummaryLabelStyle}>Status</div>
+                  <div style={runSummaryValueStyle}>
+                    <span
+                      style={{
+                        ...runStatusDotBaseStyle,
+                        ...getRunStatusDotStyle(invokeResult.status),
+                      }}
+                    />
+                    {getRunStatusLabel(invokeResult.status)}
+                  </div>
+                </div>
+                <div style={runSummaryCardStyle}>
+                  <div style={runSummaryLabelStyle}>Run ID</div>
+                  <div title={runIdLabel} style={runSummaryValueStyle}>
+                    {runIdLabel}
+                  </div>
+                </div>
+                <div style={runSummaryCardStyle}>
+                  <div style={runSummaryLabelStyle}>Elapsed</div>
+                  <div style={runSummaryValueStyle}>{runElapsedLabel}</div>
+                </div>
+                <div style={runSummaryCardStyle}>
+                  <div style={runSummaryLabelStyle}>Endpoint</div>
+                  <div title={endpointLabel} style={runSummaryValueStyle}>
+                    {endpointLabel}
+                  </div>
+                </div>
+              </div>
+              <StudioMemberCurrentRunPanel
+                activeTab={consoleTab}
+                chatMessages={chatMessages}
+                consoleMinHeight={consoleMinHeight}
+                currentRawOutput={currentRawOutput}
+                currentRunHasData={currentRunHasData}
+                currentRunRequest={currentRunRequest}
+                invokeResult={invokeResult}
+                isChatEndpoint={isChatEndpoint}
+                transcriptAnchorRef={transcriptAnchorRef}
+                onTabChange={setConsoleTab}
+              />
+              <StudioMemberInvokeComposerPanel
+                canInvoke={canInvoke}
+                defaultPrompt={effectiveDefaultPrompt}
+                effectiveRequestTypeUrl={effectiveRequestTypeUrl}
+                effectiveResponseTypeUrl={effectiveResponseTypeUrl}
+                endpointKind={selectedEndpoint?.kind || 'command'}
+                formError={formError}
+                hasOpenRunsTarget={Boolean(scopeId && selectedEndpoint)}
+                invokeStatus={invokeResult.status}
+                isChatEndpoint={isChatEndpoint}
+                layout="dock"
+                payloadBase64={payloadBase64}
+                payloadJsonPreview={payloadJsonPreview}
+                payloadTypeUrl={payloadTypeUrl}
+                prompt={prompt}
+                onAbort={handleAbort}
+                onClear={handleClear}
+                onInvoke={() => void handleInvoke()}
+                onOpenRuns={handleOpenRuns}
+                onPayloadBase64Change={setPayloadBase64}
+                onPayloadJsonPreviewChange={setPayloadJsonPreview}
+                onPayloadTypeUrlChange={(value) => {
+                  payloadTypeUrlEditedRef.current = true;
+                  setPayloadTypeUrl(value);
+                }}
+                onPromptChange={setPrompt}
               />
             </div>
           </AevatarPanel>
 
-          {visibleRequestHistory.length > 0 ? (
-            <AevatarPanel
-              layoutMode="document"
-              padding={14}
-              title={`Runs（${visibleRequestHistory.length}）`}
-              titleHelp="这里只保留历史运行列表和技术详情，不再重复展示结果内容。"
-            >
-              <div data-testid="studio-invoke-history-scroll" style={runsListStyle}>
-                {visibleRequestHistory.map((entry) => {
-                  const isExpanded = expandedHistoryId === entry.id;
-                  return (
-                    <div key={entry.id} style={runsListStyle}>
-                      <button
-                        aria-expanded={isExpanded}
-                        aria-pressed={isExpanded}
-                        className={AEVATAR_PRESSABLE_CARD_CLASS}
-                        style={{
-                          ...historyCardStyle,
-                          background: isExpanded ? '#f5f7ff' : '#ffffff',
-                          borderColor: isExpanded ? '#91caff' : '#e5e7eb',
-                        }}
-                        type="button"
-                        onClick={() => handleSelectHistoryEntry(entry.id)}
-                      >
-                        <div
-                          style={{
-                            alignItems: 'center',
-                            display: 'flex',
-                            gap: 8,
-                            justifyContent: 'space-between',
-                            minWidth: 0,
-                          }}
-                        >
-                          <Typography.Text
-                            strong
-                            style={{ ...contractValueStyle, flex: 1 }}
-                          >
-                            {trimPreview(entry.prompt || entry.summary, 72)}
-                          </Typography.Text>
-                          <AevatarStatusTag
-                            domain="run"
-                            label={entry.status === 'success' ? '成功' : '失败'}
-                            status={entry.status}
-                          />
-                        </div>
-                        <div style={historyMetaStyle}>
-                          <span>{formatHistoryTimestamp(entry.createdAt)}</span>
-                          <span>{entry.eventCount} 个事件</span>
-                          <span>{entry.endpointLabel}</span>
-                        </div>
-                      </button>
+          <StudioMemberInvokeHistoryPanel
+            entries={visibleRequestHistory}
+            expandedHistoryId={expandedHistoryId}
+            onSelectEntry={handleSelectHistoryEntry}
+          />
 
-                      {isExpanded ? (
-                        <div
-                          data-testid="studio-invoke-inline-detail"
-                          style={inlineDetailStyle}
-                        >
-                          {entry.snapshot.result.commandId ? (
-                            <div style={detailRowStyle}>
-                              <Typography.Text type="secondary">
-                                Command ID
-                              </Typography.Text>
-                              <CompactCopyableValue
-                                value={entry.snapshot.result.commandId}
-                              />
-                            </div>
-                          ) : null}
-                          {entry.snapshot.result.actorId ? (
-                            <div style={detailRowStyle}>
-                              <Typography.Text type="secondary">
-                                Actor ID
-                              </Typography.Text>
-                              <CompactCopyableValue
-                                value={entry.snapshot.result.actorId}
-                              />
-                            </div>
-                          ) : null}
-                          {(entry.runId || entry.snapshot.result.runId) ? (
-                            <div style={detailRowStyle}>
-                              <Typography.Text type="secondary">
-                                Metadata
-                              </Typography.Text>
-                              <CompactCopyableValue
-                                value={entry.runId || entry.snapshot.result.runId}
-                              />
-                            </div>
-                          ) : null}
-                          <div style={detailRowStyle}>
-                            <Typography.Text type="secondary">
-                              Duration
-                            </Typography.Text>
-                            <div style={contractValueStyle}>
-                              {formatDuration(entry.startedAt, entry.completedAt)}
-                            </div>
-                          </div>
-                          <div style={detailRowStyle}>
-                            <Typography.Text type="secondary">
-                              Timestamps
-                            </Typography.Text>
-                            <div style={helperTextStyle}>
-                              开始：{formatHistoryTimestamp(entry.startedAt)}
-                            </div>
-                            <div style={helperTextStyle}>
-                              完成：{formatHistoryTimestamp(entry.completedAt)}
-                            </div>
-                          </div>
-                          {entry.errorDetail ? (
-                            <div style={detailRowStyle}>
-                              <Typography.Text type="secondary">
-                                Error Detail
-                              </Typography.Text>
-                              <div style={contractValueStyle}>{entry.errorDetail}</div>
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </div>
-            </AevatarPanel>
-          ) : null}
+          <details style={contractDetailsStyle}>
+            <summary style={contractDetailsSummaryStyle}>
+              Advanced contract details
+            </summary>
+            <div style={contractDetailsBodyStyle}>
+              <StudioMemberInvokeContractPanel
+                actorId={currentMemberActorId}
+                contractError={endpointContractError}
+                endpointLabel={selectedEndpoint?.displayName || selectedEndpointId}
+                memberLabel={currentMemberLabel}
+                publishedContext={currentPublishedContext}
+                revisionId={currentRevisionId}
+                statusLabel={currentContractStatusLabel}
+              />
+            </div>
+          </details>
         </>
       )}
     </div>

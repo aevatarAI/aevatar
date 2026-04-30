@@ -564,13 +564,24 @@ function decodeScopeServiceEndpointContract(
   label = "ScopeServiceEndpointContract",
 ): ScopeServiceEndpointContract {
   const record = expectRecord(value, label);
+  const serviceId =
+    readOptionalString(record, ["serviceId", "ServiceId"]) ||
+    readOptionalString(record, ["publishedServiceId", "PublishedServiceId"]) ||
+    readOptionalString(record, ["memberId", "MemberId"]) ||
+    "";
+  if (!serviceId) {
+    throw new Error(
+      `${label}.serviceId, ${label}.publishedServiceId, or ${label}.memberId is required.`,
+    );
+  }
   return {
     scopeId: readString(record, ["scopeId", "ScopeId"], `${label}.scopeId`),
-    serviceId: readString(
-      record,
-      ["serviceId", "ServiceId"],
-      `${label}.serviceId`,
-    ),
+    serviceId,
+    memberId: readOptionalString(record, ["memberId", "MemberId"]),
+    publishedServiceId: readOptionalString(record, [
+      "publishedServiceId",
+      "PublishedServiceId",
+    ]),
     endpointId: readString(
       record,
       ["endpointId", "EndpointId"],
@@ -1250,6 +1261,17 @@ export const scopeRuntimeApi = {
   ): Promise<ScopeServiceEndpointContract> {
     return requestJson(
       `/api/scopes/${encodeURIComponent(scopeId)}/services/${encodeURIComponent(serviceId)}/endpoints/${encodeURIComponent(endpointId)}/contract`,
+      decodeScopeServiceEndpointContract,
+    );
+  },
+
+  getMemberEndpointContract(
+    scopeId: string,
+    memberId: string,
+    endpointId: string,
+  ): Promise<ScopeServiceEndpointContract> {
+    return requestJson(
+      `/api/scopes/${encodeURIComponent(scopeId)}/members/${encodeURIComponent(memberId)}/endpoints/${encodeURIComponent(endpointId)}/contract`,
       decodeScopeServiceEndpointContract,
     );
   },

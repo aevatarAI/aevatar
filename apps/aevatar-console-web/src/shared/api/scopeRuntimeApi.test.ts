@@ -307,6 +307,99 @@ describe("scopeRuntimeApi", () => {
     );
   });
 
+  it("loads member endpoint invoke contract details", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        scopeId: "scope-a",
+        memberId: "script-1",
+        publishedServiceId: "script-1",
+        endpointId: "command",
+        invokePath: "/api/scopes/scope-a/members/script-1/invoke/command",
+        method: "POST",
+        requestContentType: "application/json",
+        responseContentType: "application/json",
+        requestTypeUrl:
+          "type.googleapis.com/aevatar.tools.cli.hosting.AppScriptCommand",
+        responseTypeUrl: "",
+        supportsSse: false,
+        supportsWebSocket: false,
+        supportsAguiFrames: false,
+        streamFrameFormat: null,
+        smokeTestSupported: true,
+        defaultSmokeInputMode: "typed-payload",
+        defaultSmokePrompt: null,
+        sampleRequestJson: "{}",
+        deploymentStatus: "Active",
+        revisionId: "rev-script",
+        curlExample: "curl ...",
+        fetchExample: "await fetch(...)",
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      scopeRuntimeApi.getMemberEndpointContract("scope-a", "script-1", "command"),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        endpointId: "command",
+        memberId: "script-1",
+        publishedServiceId: "script-1",
+        serviceId: "script-1",
+        requestTypeUrl:
+          "type.googleapis.com/aevatar.tools.cli.hosting.AppScriptCommand",
+      }),
+    );
+
+    const [input, init] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(input).toBe(
+      "/api/scopes/scope-a/members/script-1/endpoints/command/contract",
+    );
+    expect(new Headers(init?.headers).get("Authorization")).toBe(
+      "Bearer access-token",
+    );
+  });
+
+  it("rejects endpoint contracts without service or member identity", async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        scopeId: "scope-a",
+        endpointId: "command",
+        invokePath: "/api/scopes/scope-a/members/script-1/invoke/command",
+        method: "POST",
+        requestContentType: "application/json",
+        responseContentType: "application/json",
+        requestTypeUrl:
+          "type.googleapis.com/aevatar.tools.cli.hosting.AppScriptCommand",
+        responseTypeUrl: "",
+        supportsSse: false,
+        supportsWebSocket: false,
+        supportsAguiFrames: false,
+        streamFrameFormat: null,
+        smokeTestSupported: true,
+        defaultSmokeInputMode: "typed-payload",
+        defaultSmokePrompt: null,
+        sampleRequestJson: "{}",
+        deploymentStatus: "Active",
+        revisionId: "rev-script",
+        curlExample: null,
+        fetchExample: null,
+      }),
+    } as Response) as typeof global.fetch;
+
+    await expect(
+      scopeRuntimeApi.getMemberEndpointContract("scope-a", "script-1", "command"),
+    ).rejects.toThrow(
+      "ScopeServiceEndpointContract.serviceId, ScopeServiceEndpointContract.publishedServiceId, or ScopeServiceEndpointContract.memberId is required.",
+    );
+  });
+
   it("loads member-scoped runs through the member runtime route", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,

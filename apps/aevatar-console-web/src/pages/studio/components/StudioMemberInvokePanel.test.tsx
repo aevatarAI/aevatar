@@ -3,12 +3,20 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import React from 'react';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
+import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
 import StudioMemberInvokePanel from './StudioMemberInvokePanel';
 
 jest.mock('@/shared/api/runtimeRunsApi', () => ({
   runtimeRunsApi: {
     invokeEndpoint: jest.fn(),
     streamChat: jest.fn(),
+  },
+}));
+
+jest.mock('@/shared/api/scopeRuntimeApi', () => ({
+  scopeRuntimeApi: {
+    getMemberEndpointContract: jest.fn(),
+    getServiceEndpointContract: jest.fn(),
   },
 }));
 
@@ -31,6 +39,56 @@ describe('StudioMemberInvokePanel', () => {
       requestId: 'run-1',
       targetActorId: 'actor-1',
     });
+    (scopeRuntimeApi.getMemberEndpointContract as jest.Mock).mockResolvedValue({
+      defaultSmokeInputMode: 'typed-payload',
+      defaultSmokePrompt: null,
+      deploymentStatus: 'Active',
+      endpointId: 'submit',
+      fetchExample: null,
+      curlExample: null,
+      invokePath: '/api/scopes/scope-1/members/default/invoke/submit',
+      method: 'POST',
+      publishedServiceId: 'default',
+      requestContentType: 'application/json',
+      requestTypeUrl: 'type.googleapis.com/example.ContractSubmit',
+      responseContentType: 'application/json',
+      responseTypeUrl: 'type.googleapis.com/example.ContractSubmitResult',
+      revisionId: 'contract-rev',
+      sampleRequestJson: '{"message":"hello"}',
+      scopeId: 'scope-1',
+      serviceId: 'default',
+      smokeTestSupported: true,
+      streamFrameFormat: null,
+      supportsAguiFrames: false,
+      supportsSse: false,
+      supportsWebSocket: false,
+    });
+    (scopeRuntimeApi.getServiceEndpointContract as jest.Mock).mockImplementation(
+      (_scopeId: string, serviceId: string, endpointId: string) =>
+        Promise.resolve({
+          defaultSmokeInputMode: 'typed-payload',
+          defaultSmokePrompt: null,
+          deploymentStatus: 'Active',
+          endpointId,
+          fetchExample: null,
+          curlExample: null,
+          invokePath: `/api/scopes/scope-1/services/${serviceId}/invoke/${endpointId}`,
+          method: 'POST',
+          requestContentType: 'application/json',
+          requestTypeUrl: 'type.googleapis.com/example.ContractSubmit',
+          responseContentType: 'application/json',
+          responseTypeUrl: 'type.googleapis.com/example.ContractSubmitResult',
+          revisionId: 'contract-rev',
+          sampleRequestJson: '{"message":"hello"}',
+          scopeId: 'scope-1',
+          serviceId,
+          smokeTestSupported: true,
+          streamFrameFormat: null,
+          supportsAguiFrames: false,
+          supportsSse: false,
+          supportsWebSocket: false,
+        }),
+    );
     (parseBackendSSEStream as jest.Mock).mockImplementation(async function* () {});
   });
 
@@ -90,19 +148,22 @@ describe('StudioMemberInvokePanel', () => {
 
     expect(await screen.findByTestId('studio-member-invoke-panel')).toBeTruthy();
     expect(screen.getByText('调用契约')).toBeTruthy();
-    expect(screen.getByText('调试台')).toBeTruthy();
-    expect(screen.getByText('当前结果')).toBeTruthy();
+    expect(screen.getByText('Status')).toBeTruthy();
+    expect(screen.getByText('Run ID')).toBeTruthy();
+    expect(screen.getByText('Elapsed')).toBeTruthy();
+    expect(screen.getByText('Not started')).toBeTruthy();
     expect(screen.getByText('Member')).toBeTruthy();
     expect(screen.getByText('Published Context')).toBeTruthy();
     expect(screen.getByText('Revision')).toBeTruthy();
     expect(screen.getByText('已就绪')).toBeTruthy();
     expect(screen.queryByText('缺少提示词')).toBeNull();
-    expect(screen.getByText('结果')).toBeTruthy();
-    expect(screen.getByText('追踪')).toBeTruthy();
-    expect(screen.getByText('原始')).toBeTruthy();
+    expect(screen.getAllByText('Conversation').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Timeline')).toBeTruthy();
+    expect(screen.getByText('Events')).toBeTruthy();
+    expect(screen.getByText('Advanced typed payload')).toBeTruthy();
     expect(screen.getByTestId('studio-invoke-playground-actions')).toBeTruthy();
     expect(
-      screen.getByText('还没有开始调用。先在上方输入提示词或载荷，再发起一次调用。'),
+      screen.getByText('No conversation yet. Send a prompt to start the run.'),
     ).toBeTruthy();
     expect(screen.queryByText('Runs（0）')).toBeNull();
     expect(screen.queryByText('运行详情')).toBeNull();
@@ -138,15 +199,15 @@ describe('StudioMemberInvokePanel', () => {
       }),
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: '开始对话' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Send' }));
 
     expect(await screen.findByText('请输入提示词后再开始对话。')).toBeTruthy();
     expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
     expect(screen.getByText('已就绪')).toBeTruthy();
     expect(screen.queryByText('缺少提示词')).toBeNull();
-    expect(screen.getByText('当前结果')).toBeTruthy();
+    expect(screen.getAllByText('Conversation').length).toBeGreaterThanOrEqual(1);
     expect(
-      screen.getByText('还没有开始调用。先在上方输入提示词或载荷，再发起一次调用。'),
+      screen.getByText('No conversation yet. Send a prompt to start the run.'),
     ).toBeTruthy();
     expect(screen.queryByText(/Runs（/)).toBeNull();
     expect(screen.queryByText('这次调用失败了。')).toBeNull();
@@ -198,7 +259,7 @@ describe('StudioMemberInvokePanel', () => {
       },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: '开始对话' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
     await waitFor(() => {
       expect(runtimeRunsApi.streamChat).toHaveBeenCalledWith(
@@ -250,6 +311,19 @@ describe('StudioMemberInvokePanel', () => {
       }),
     );
 
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced typed payload' }));
+    expect(await screen.findByLabelText('Typed invoke form')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        screen.getByPlaceholderText('type.googleapis.com/example.Command'),
+      ).toHaveValue('type.googleapis.com/example.ContractSubmit');
+    });
+    expect(scopeRuntimeApi.getMemberEndpointContract).toHaveBeenCalledWith(
+      'scope-1',
+      'default',
+      'submit',
+    );
+
     fireEvent.change(await screen.findByLabelText('调用请求输入'), {
       target: {
         value: 'Route this escalation to billing review.',
@@ -268,10 +342,8 @@ describe('StudioMemberInvokePanel', () => {
         },
       },
     );
-    expect(screen.getByLabelText('Typed invoke form')).toBeInTheDocument();
-    expect(screen.getByText(/SubmitResult/)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '执行调用' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Invoke' }));
 
     await waitFor(() => {
         expect(runtimeRunsApi.invokeEndpoint).toHaveBeenCalledWith(
@@ -304,7 +376,7 @@ describe('StudioMemberInvokePanel', () => {
 
     expect(await screen.findByText('Runs（1）')).toBeTruthy();
     expect(
-      screen.getByText('这次结构化调用已经返回结果。切到“原始”可以查看完整返回体。'),
+      screen.getByText('这次结构化调用已经返回结果。切到 Events 可以查看完整返回体。'),
     ).toBeTruthy();
     expect(screen.queryByText('运行详情')).toBeNull();
     expect(screen.queryByText('最新输出')).toBeNull();

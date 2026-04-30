@@ -60,4 +60,34 @@ describe("runtimeEventSemantics", () => {
 
     expect(accumulator.finalOutput).toBe("final run answer");
   });
+
+  it("tracks command, correlation, and error code identifiers", () => {
+    const accumulator = createRuntimeEventAccumulator();
+    const events: AGUIEvent[] = [
+      {
+        type: AGUIEventType.RUN_STARTED,
+        actorId: "actor-1",
+        commandId: "cmd-1",
+        correlationId: "corr-1",
+        runId: "run-1",
+        threadId: "actor-1",
+      } as unknown as AGUIEvent,
+      {
+        type: AGUIEventType.RUN_ERROR,
+        code: "ERR_RUNTIME",
+        commandId: "cmd-1",
+        correlationId: "corr-1",
+        message: "failed",
+        runId: "run-1",
+      } as unknown as AGUIEvent,
+    ];
+
+    events.forEach((event) => applyRuntimeEvent(accumulator, event));
+
+    expect(accumulator.actorId).toBe("actor-1");
+    expect(accumulator.commandId).toBe("cmd-1");
+    expect(accumulator.correlationId).toBe("corr-1");
+    expect(accumulator.errorCode).toBe("ERR_RUNTIME");
+    expect(accumulator.errorText).toBe("failed");
+  });
 });
