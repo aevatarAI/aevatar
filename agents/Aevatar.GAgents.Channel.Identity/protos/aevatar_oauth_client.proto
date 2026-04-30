@@ -52,7 +52,8 @@ message AevatarOAuthClientState {
   // operator sets AEVATAR_OAUTH_REDIRECT_BASE_URL after the cluster was
   // first bootstrapped against an internal listening URL) and re-register
   // the OAuth client; otherwise NyxID would keep the wrong callback target
-  // forever. Empty when state predates the redirect-uri-tracking field.
+  // forever. Empty means legacy/unknown and forces one re-DCR on the next
+  // EnsureProvisioned command so existing broken clients are healed.
   string redirect_uri = 12;
 }
 
@@ -108,8 +109,8 @@ message AevatarOAuthClientProvisionedEvent {
   google.protobuf.Timestamp persisted_at = 4;
   // Redirect URI registered with NyxID at this DCR call. Empty when an
   // older event predates the redirect-uri-tracking field; the actor
-  // treats empty stored redirect_uri as "match anything" so legacy state
-  // does not force a spurious re-DCR on first redeploy.
+  // treats empty stored redirect_uri as legacy/unknown and re-DCRs once on
+  // the next EnsureProvisioned command.
   string redirect_uri = 5;
 }
 

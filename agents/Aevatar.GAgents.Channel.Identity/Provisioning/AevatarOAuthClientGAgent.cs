@@ -91,14 +91,13 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         // resolver mistakenly read ASPNETCORE_URLS. After the resolver fix
         // the env now produces the correct public URL, but the actor's
         // existing client_id at NyxID is still bound to the wrong callback
-        // — every /init authorizes to a non-routable host. We treat empty
-        // stored redirect_uri (legacy event-store snapshots that predate
-        // the field) as "match anything" so this drift check does not
-        // force a spurious re-DCR for clusters that already had the right
-        // callback before the field existed.
+        // — every /init authorizes to a non-routable host. Empty stored
+        // redirect_uri is legacy/unknown, not a valid match: the broken
+        // production state already has a client_id and no recorded callback,
+        // so we must re-DCR once and persist the public redirect URI.
         var redirectUriDrifted = sameClient
-            && !string.IsNullOrEmpty(State.RedirectUri)
-            && !string.Equals(State.RedirectUri, cmd.RedirectUri, StringComparison.Ordinal);
+            && (string.IsNullOrEmpty(State.RedirectUri)
+                || !string.Equals(State.RedirectUri, cmd.RedirectUri, StringComparison.Ordinal));
 
         if (sameClient && !redirectUriDrifted)
         {

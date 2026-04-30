@@ -8,6 +8,7 @@ using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Slash;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Runtime;
@@ -321,18 +322,89 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
     {
-        var hint = IsPrivateChat(inbound)
-            ? "请先发送 /init 完成 NyxID 绑定后再继续对话。"
-            : "请与 bot 私聊后发送 /init 完成 NyxID 绑定。";
+        MessageContent reply;
+        if (!IsPrivateChat(inbound))
+        {
+            reply = new MessageContent { Text = "请与 bot 私聊后点击绑定卡片完成 NyxID 绑定。" };
+        }
+        else
+        {
+            var broker = _services.GetService<INyxIdCapabilityBroker>();
+            if (broker is null)
+            {
+                _logger.LogError("Binding gate cannot start NyxID binding because INyxIdCapabilityBroker is not registered.");
+                reply = new MessageContent { Text = "NyxID 绑定入口暂不可用,请稍后重试。" };
+            }
+            else if (!TryResolveExternalSubject(inbound, registration, out var subject))
+            {
+                _logger.LogWarning(
+                    "Binding gate cannot start NyxID binding because subject cannot be resolved: platform={Platform}, sender={Sender}, registration={RegistrationId}",
+                    inbound.Platform,
+                    inbound.SenderId,
+                    registration.Id);
+                reply = new MessageContent { Text = "无法识别当前 Lark 用户身份,请稍后重试。" };
+            }
+            else
+            {
+                try
+                {
+                    var challenge = await broker.StartExternalBindingAsync(subject, ct).ConfigureAwait(false);
+                    reply = InitChannelSlashCommandHandler.BuildBindingCard(challenge.AuthorizeUrl);
+                }
+                catch (AevatarOAuthClientNotProvisionedException ex)
+                {
+                    _logger.LogInformation(
+                        ex,
+                        "Binding gate observed before aevatar OAuth client bootstrap finished; subject={Platform}:{Tenant}:{Sender}",
+                        subject.Platform,
+                        subject.Tenant,
+                        subject.ExternalUserId);
+                    reply = new MessageContent { Text = "Aevatar 正在初始化 NyxID 客户端,请 30 秒后再次发送消息。" };
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        ex,
+                        "Binding gate failed to start external binding for subject={Platform}:{Tenant}:{Sender}",
+                        subject.Platform,
+                        subject.Tenant,
+                        subject.ExternalUserId);
+                    reply = new MessageContent { Text = "启动 NyxID 绑定时遇到内部错误,请稍后重试。" };
+                }
+            }
+        }
+
         var sentSeed = string.IsNullOrWhiteSpace(activity.Id) ? Guid.NewGuid().ToString("N") : activity.Id;
         return await SendReplyAsync(
-            new MessageContent { Text = hint },
+            reply,
             sentSeed,
             activity.Conversation,
             inbound,
             registration,
             runtimeContext,
             ct).ConfigureAwait(false);
+    }
+
+    private static bool TryResolveExternalSubject(
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        out ExternalSubjectRef subject)
+    {
+        subject = new ExternalSubjectRef();
+        if (string.IsNullOrWhiteSpace(inbound.SenderId) || string.IsNullOrWhiteSpace(inbound.Platform))
+            return false;
+
+        var tenant = ResolveTenant(inbound, registration);
+        if (tenant is null)
+            return false;
+
+        subject = new ExternalSubjectRef
+        {
+            Platform = inbound.Platform.Trim().ToLowerInvariant(),
+            Tenant = tenant,
+            ExternalUserId = inbound.SenderId.Trim(),
+        };
+        return true;
     }
 
     // Pre-LLM binding gate: when identity is wired, refuse to serve unbound

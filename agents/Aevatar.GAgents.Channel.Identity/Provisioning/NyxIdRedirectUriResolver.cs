@@ -74,7 +74,8 @@ public static class NyxIdRedirectUriResolver
                 "Set {EnvVar} to a publicly-reachable origin (e.g. https://staging.example.com) for non-prod clusters.",
                 OverrideEnvVar,
                 trimmed,
-                DefaultPublicBaseUrl);
+                DefaultPublicBaseUrl,
+                OverrideEnvVar);
             return DefaultPublicBaseUrl;
         }
 

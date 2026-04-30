@@ -247,13 +247,14 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
     }
 
     /// <summary>
-    /// True only when the snapshot has a recorded redirect URI AND it does
-    /// not match the current resolver output. Empty / null stored
-    /// redirect_uri is treated as "match anything" so legacy event-store
-    /// snapshots that predate the redirect-uri-tracking field do not force
-    /// a spurious re-DCR on first redeploy of this code.
+    /// True when the snapshot either predates redirect-uri tracking or no
+    /// longer matches the current resolver output. Legacy empty redirect_uri
+    /// is unknown, not trustworthy: the production incident this code heals
+    /// already has a persisted client_id at NyxID with no recorded callback
+    /// in our state, so treating empty as "match anything" would keep the
+    /// broken client forever.
     /// </summary>
     private static bool RedirectUriDrifted(string? stored, string resolved) =>
-        !string.IsNullOrEmpty(stored)
-        && !string.Equals(stored, resolved, StringComparison.Ordinal);
+        string.IsNullOrEmpty(stored)
+        || !string.Equals(stored, resolved, StringComparison.Ordinal);
 }
