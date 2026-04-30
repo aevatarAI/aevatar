@@ -34,6 +34,7 @@ export type ObservedRunSessionPayload = {
   payloadBase64?: string;
   actorId?: string;
   commandId?: string;
+  correlationId?: string;
   runId?: string;
   events: AGUIEvent[];
   createdAt: string;
@@ -136,6 +137,7 @@ export function saveObservedRunSessionPayload(payload: {
   payloadBase64?: string;
   actorId?: string;
   commandId?: string;
+  correlationId?: string;
   runId?: string;
 }): string {
   if (typeof window === "undefined") {
@@ -166,6 +168,7 @@ export function saveObservedRunSessionPayload(payload: {
     payloadBase64: payload.payloadBase64?.trim() || undefined,
     actorId: payload.actorId?.trim() || undefined,
     commandId: payload.commandId?.trim() || undefined,
+    correlationId: payload.correlationId?.trim() || undefined,
     runId: payload.runId?.trim() || undefined,
     createdAt: new Date().toISOString(),
   };
@@ -240,6 +243,7 @@ export function loadDraftRunPayload(
         payloadBase64: observedPayload.payloadBase64?.trim() || undefined,
         actorId: observedPayload.actorId?.trim() || undefined,
         commandId: observedPayload.commandId?.trim() || undefined,
+        correlationId: observedPayload.correlationId?.trim() || undefined,
         runId: observedPayload.runId?.trim() || undefined,
         events,
         createdAt: observedPayload.createdAt?.trim() || "",

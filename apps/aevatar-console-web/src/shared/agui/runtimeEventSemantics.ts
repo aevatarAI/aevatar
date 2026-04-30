@@ -99,6 +99,8 @@ export type RuntimeEventAccumulator = {
   actorId: string;
   assistantText: string;
   commandId: string;
+  correlationId: string;
+  errorCode: string;
   errorText: string;
   events: RuntimeEvent[];
   finalOutput: string;
@@ -146,7 +148,7 @@ export function describeRuntimeEvent(event: RuntimeEvent): string {
 
 export function extractRunContext(
   event: RuntimeEvent
-): { actorId?: string; commandId?: string } | null {
+): { actorId?: string; commandId?: string; correlationId?: string } | null {
   if (event.type !== AGUIEventType.CUSTOM) {
     return null;
   }
@@ -167,6 +169,7 @@ export function extractRunContext(
   return {
     actorId: data.actorId,
     commandId: data.commandId,
+    correlationId: data.correlationId,
   };
 }
 
@@ -471,6 +474,8 @@ export function createRuntimeEventAccumulator(input?: {
     actorId: input?.actorId ?? "",
     assistantText: "",
     commandId: "",
+    correlationId: "",
+    errorCode: "",
     errorText: "",
     events: [],
     finalOutput: "",
@@ -500,6 +505,18 @@ export function applyRuntimeEvent(
     accumulator.actorId =
       readOptionalString(event as unknown as JsonRecord, "actorId", "threadId") ||
       accumulator.actorId;
+    accumulator.commandId =
+      readOptionalString(
+        event as unknown as JsonRecord,
+        "commandId",
+        "command_id"
+      ) || accumulator.commandId;
+    accumulator.correlationId =
+      readOptionalString(
+        event as unknown as JsonRecord,
+        "correlationId",
+        "correlation_id"
+      ) || accumulator.correlationId;
     accumulator.runId = event.runId || accumulator.runId;
   }
 
@@ -572,12 +589,43 @@ export function applyRuntimeEvent(
   }
 
   if (event.type === AGUIEventType.RUN_ERROR) {
+    accumulator.commandId =
+      readOptionalString(
+        event as unknown as JsonRecord,
+        "commandId",
+        "command_id"
+      ) || accumulator.commandId;
+    accumulator.correlationId =
+      readOptionalString(
+        event as unknown as JsonRecord,
+        "correlationId",
+        "correlation_id"
+      ) || accumulator.correlationId;
+    accumulator.errorCode =
+      readOptionalString(
+        event as unknown as JsonRecord,
+        "code",
+        "errorCode",
+        "error_code"
+      ) || accumulator.errorCode;
     accumulator.errorText = String(
       event.message || "Assistant run failed."
     ).trim();
   }
 
   if (event.type === AGUIEventType.RUN_FINISHED) {
+    accumulator.commandId =
+      readOptionalString(
+        event as unknown as JsonRecord,
+        "commandId",
+        "command_id"
+      ) || accumulator.commandId;
+    accumulator.correlationId =
+      readOptionalString(
+        event as unknown as JsonRecord,
+        "correlationId",
+        "correlation_id"
+      ) || accumulator.correlationId;
     const finalOutput = extractRunFinishedOutput(event);
     setFinalOutput(accumulator, finalOutput, "run_finished");
   }
@@ -586,6 +634,8 @@ export function applyRuntimeEvent(
   if (runContext) {
     accumulator.actorId = runContext.actorId || accumulator.actorId;
     accumulator.commandId = runContext.commandId || accumulator.commandId;
+    accumulator.correlationId =
+      runContext.correlationId || accumulator.correlationId;
   }
 
   const stepRequest = extractStepRequest(event);
