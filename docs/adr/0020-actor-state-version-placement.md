@@ -36,17 +36,22 @@ is wrong:
 ## Decision
 
 Place `state_schema_version` on the runtime envelope, alongside `kind` and
-`legacy_clr_type_name`, on `RuntimeActorIdentity` (see ADR 0019):
+`legacy_clr_type_name`, on `RuntimeActorIdentity` (see ADR 0019). The
+identity envelope is defined as a Protobuf message in
+`src/Aevatar.Foundation.Abstractions/runtime_actor_identity.proto`:
 
-```csharp
-[GenerateSerializer]
-public sealed class RuntimeActorIdentity
-{
-    [Id(0)] public string Kind { get; set; } = string.Empty;
-    [Id(1)] public int StateSchemaVersion { get; set; }
-    [Id(2)] public string? LegacyClrTypeName { get; set; }
+```proto
+message RuntimeActorIdentity {
+  string kind = 1;
+  int32 state_schema_version = 2;
+  string legacy_clr_type_name = 3;
 }
 ```
+
+Orleans serializes the proto-generated class through `AddProtobufSerializer`
+(wired in `AddAevatarFoundationRuntimeOrleans`), so the runtime envelope
+stays a single Orleans state row while the identity contract itself
+follows the Protobuf-first mandate.
 
 Business state protos themselves stay pure domain artifacts and never
 carry a version field.

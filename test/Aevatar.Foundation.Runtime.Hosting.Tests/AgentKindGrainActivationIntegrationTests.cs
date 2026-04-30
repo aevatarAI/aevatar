@@ -102,6 +102,13 @@ public sealed class AgentKindGrainActivationIntegrationTests
             var second = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
             (await second.IsInitializedAsync()).Should().BeTrue();
             (await second.GetAgentKindAsync()).Should().Be("integrationtests.canonical");
+
+            // Probe the live agent: GetDescriptionAsync forwards to the bound
+            // _agent instance, so a stale Identity row without re-binding
+            // would surface as the grain's "Uninitialized:..." fallback. This
+            // makes the test exercise the actual resume → bind path, not
+            // just the persisted state slots.
+            (await second.GetDescriptionAsync()).Should().Be(nameof(IntegrationFixtureCanonicalAgent));
         }
         finally
         {
