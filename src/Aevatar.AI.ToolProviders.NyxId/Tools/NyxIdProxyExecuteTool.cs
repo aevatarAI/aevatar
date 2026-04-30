@@ -71,7 +71,8 @@ public sealed class NyxIdProxyExecuteTool : IAgentTool
 
         if (op == null)
         {
-            NyxIdToolProviderMetrics.RecordSpecCatalogLookupMiss(operationId);
+            NyxIdToolProviderMetrics.RecordSpecCatalogLookupMiss(
+                NyxIdToolProviderMetrics.SpecCatalogLookupMissReasonUnknownOperation);
             _logger.LogWarning(
                 "NyxIdProxyExecute: spec catalog lookup miss for operation {OperationId}; operationCount={OperationCount}",
                 operationId,

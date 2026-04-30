@@ -71,8 +71,8 @@ export AEVATAR_Aevatar__NyxId__SpecFetchToken="<real-user-nyxid-api-key>"
 `Aevatar__NyxId__SpecFetchToken`。Mainnet host 会把它绑定到
 `Aevatar:NyxId:SpecFetchToken`。
 
-缺少 token 或 catalog 为空时，`/health/ready` 会返回 not-ready，并在
-`components` 中出现 `nyxid-catalog`：
+缺少 token、token 被 NyxID 拒绝或 spec 成功返回但 catalog 为空时，
+`/health/ready` 会返回 not-ready，并在 `components` 中出现 `nyxid-catalog`：
 
 ```json
 {
@@ -81,6 +81,10 @@ export AEVATAR_Aevatar__NyxId__SpecFetchToken="<real-user-nyxid-api-key>"
   "message": "NyxID spec fetch token is missing; generic capability discovery is unavailable."
 }
 ```
+
+若 token 已配置但启动时 NyxID / 网络短暂不可用，readiness 会保持 ready，
+并在同一组件的 `lastRefreshError` / `lastRefreshFailureKind` 里暴露临时失败；
+后台 refresh 成功后会更新 operation count。
 
 部署后冒烟：
 

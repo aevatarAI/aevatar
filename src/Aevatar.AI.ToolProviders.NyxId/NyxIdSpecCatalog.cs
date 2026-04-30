@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -6,14 +7,20 @@ namespace Aevatar.AI.ToolProviders.NyxId;
 
 public sealed class NyxIdSpecCatalog : IDisposable
 {
+    private static readonly TimeSpan RefreshInterval = TimeSpan.FromMinutes(30);
+
+    private readonly object _statusGate = new();
     private readonly NyxIdToolOptions _options;
     private readonly HttpClient _http;
     private readonly ILogger _logger;
     private readonly Timer? _refreshTimer;
 
     private OperationCard[] _catalog = [];
-    private long _lastSuccessfulRefreshUnixTimeSeconds;
+    private bool _initialRefreshAttempted;
+    private bool _refreshInProgress;
+    private DateTimeOffset? _lastSuccessfulRefreshUtc;
     private string? _lastRefreshError;
+    private NyxIdSpecCatalogRefreshFailureKind? _lastRefreshFailureKind;
 
     public NyxIdSpecCatalog(
         NyxIdToolOptions options,
@@ -37,26 +44,32 @@ public sealed class NyxIdSpecCatalog : IDisposable
             return;
         }
 
-        _ = InitialFetchAsync();
-        _refreshTimer = new Timer(_ => _ = RefreshAsync(), null,
-            TimeSpan.FromMinutes(30), TimeSpan.FromMinutes(30));
+        _refreshTimer = new Timer(_ => _ = RefreshAsync(), null, TimeSpan.Zero, RefreshInterval);
     }
 
-    public OperationCard[] Operations => Volatile.Read(ref _catalog);
+    public OperationCard[] Operations
+    {
+        get
+        {
+            lock (_statusGate)
+                return _catalog;
+        }
+    }
 
     public NyxIdSpecCatalogStatus GetStatus()
     {
-        var lastSuccessfulRefreshUnixTimeSeconds = Volatile.Read(ref _lastSuccessfulRefreshUnixTimeSeconds);
-        var lastSuccessfulRefreshUtc = lastSuccessfulRefreshUnixTimeSeconds <= 0
-            ? (DateTimeOffset?)null
-            : DateTimeOffset.FromUnixTimeSeconds(lastSuccessfulRefreshUnixTimeSeconds);
-
-        return new NyxIdSpecCatalogStatus(
-            BaseUrlConfigured: !string.IsNullOrWhiteSpace(_options.BaseUrl),
-            SpecFetchTokenConfigured: !string.IsNullOrWhiteSpace(_options.SpecFetchToken),
-            OperationCount: Operations.Length,
-            LastSuccessfulRefreshUtc: lastSuccessfulRefreshUtc,
-            LastRefreshError: Volatile.Read(ref _lastRefreshError));
+        lock (_statusGate)
+        {
+            return new NyxIdSpecCatalogStatus(
+                BaseUrlConfigured: !string.IsNullOrWhiteSpace(_options.BaseUrl),
+                SpecFetchTokenConfigured: !string.IsNullOrWhiteSpace(_options.SpecFetchToken),
+                InitialRefreshAttempted: _initialRefreshAttempted,
+                RefreshInProgress: _refreshInProgress,
+                OperationCount: _catalog.Length,
+                LastSuccessfulRefreshUtc: _lastSuccessfulRefreshUtc,
+                LastRefreshError: _lastRefreshError,
+                LastRefreshFailureKind: _lastRefreshFailureKind);
+        }
     }
 
     public IReadOnlyList<OperationCard> Search(string query, int maxResults = 5)
@@ -97,38 +110,34 @@ public sealed class NyxIdSpecCatalog : IDisposable
         return score;
     }
 
-    private async Task InitialFetchAsync()
-    {
-        try
-        {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            await FetchAndUpdateAsync(cts.Token);
-        }
-        catch (Exception ex)
-        {
-            RememberRefreshFailure(ex);
-            _logger.LogWarning(ex, "NyxIdSpecCatalog initial fetch failed, starting with empty catalog");
-        }
-    }
-
     private async Task RefreshAsync()
     {
-        const int maxRetries = 3;
-        for (var i = 0; i < maxRetries; i++)
+        if (!TryMarkRefreshStarted())
+            return;
+
+        try
         {
-            try
+            const int maxRetries = 3;
+            for (var i = 0; i < maxRetries; i++)
             {
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                await FetchAndUpdateAsync(cts.Token);
-                return;
+                try
+                {
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                    await FetchAndUpdateAsync(cts.Token);
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    RememberRefreshFailure(ex);
+                    _logger.LogWarning(ex, "NyxIdSpecCatalog refresh attempt {Attempt}/{Max} failed", i + 1, maxRetries);
+                    if (i < maxRetries - 1)
+                        await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, i + 1)));
+                }
             }
-            catch (Exception ex)
-            {
-                RememberRefreshFailure(ex);
-                _logger.LogWarning(ex, "NyxIdSpecCatalog refresh attempt {Attempt}/{Max} failed", i + 1, maxRetries);
-                if (i < maxRetries - 1)
-                    await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, i + 1)));
-            }
+        }
+        finally
+        {
+            MarkRefreshFinished();
         }
     }
 
@@ -148,14 +157,18 @@ public sealed class NyxIdSpecCatalog : IDisposable
 
         if (cards.Length == 0)
         {
-            Volatile.Write(ref _lastRefreshError, "Spec yielded no operations.");
-            _logger.LogWarning("NyxIdSpecCatalog: spec yielded no operations, skipping update");
+            RememberRefreshFailure("Spec yielded no operations.", NyxIdSpecCatalogRefreshFailureKind.EmptySpec);
+            _logger.LogWarning("NyxIdSpecCatalog: spec yielded no operations, preserving existing catalog");
             return;
         }
 
-        Volatile.Write(ref _catalog, cards);
-        Volatile.Write(ref _lastRefreshError, null);
-        Volatile.Write(ref _lastSuccessfulRefreshUnixTimeSeconds, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        lock (_statusGate)
+        {
+            _lastSuccessfulRefreshUtc = DateTimeOffset.UtcNow;
+            _lastRefreshError = null;
+            _lastRefreshFailureKind = null;
+            _catalog = cards;
+        }
         _logger.LogInformation("NyxIdSpecCatalog updated: {Count} operations", cards.Length);
     }
 
@@ -164,7 +177,56 @@ public sealed class NyxIdSpecCatalog : IDisposable
         var message = string.IsNullOrWhiteSpace(ex.Message)
             ? ex.GetType().Name
             : ex.Message;
-        Volatile.Write(ref _lastRefreshError, message);
+        RememberRefreshFailure(message, ClassifyRefreshFailure(ex));
+    }
+
+    private void RememberRefreshFailure(
+        string message,
+        NyxIdSpecCatalogRefreshFailureKind failureKind)
+    {
+        lock (_statusGate)
+        {
+            _lastRefreshError = message;
+            _lastRefreshFailureKind = failureKind;
+        }
+    }
+
+    private bool TryMarkRefreshStarted()
+    {
+        lock (_statusGate)
+        {
+            if (_refreshInProgress)
+                return false;
+
+            _refreshInProgress = true;
+            return true;
+        }
+    }
+
+    private void MarkRefreshFinished()
+    {
+        lock (_statusGate)
+        {
+            _initialRefreshAttempted = true;
+            _refreshInProgress = false;
+        }
+    }
+
+    private static NyxIdSpecCatalogRefreshFailureKind ClassifyRefreshFailure(Exception ex)
+    {
+        if (ex is HttpRequestException { StatusCode: HttpStatusCode.Unauthorized })
+            return NyxIdSpecCatalogRefreshFailureKind.Unauthorized;
+
+        if (ex is HttpRequestException { StatusCode: HttpStatusCode.Forbidden })
+            return NyxIdSpecCatalogRefreshFailureKind.Forbidden;
+
+        if (ex is HttpRequestException { StatusCode: not null })
+            return NyxIdSpecCatalogRefreshFailureKind.HttpError;
+
+        if (ex is HttpRequestException or TaskCanceledException or TimeoutException)
+            return NyxIdSpecCatalogRefreshFailureKind.NetworkError;
+
+        return NyxIdSpecCatalogRefreshFailureKind.Unexpected;
     }
 
     public void Dispose() => _refreshTimer?.Dispose();

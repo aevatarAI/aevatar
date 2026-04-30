@@ -42,9 +42,12 @@ public class NyxIdSpecCatalogTests
         catalog.GetStatus().Should().BeEquivalentTo(new NyxIdSpecCatalogStatus(
             BaseUrlConfigured: true,
             SpecFetchTokenConfigured: false,
+            InitialRefreshAttempted: false,
+            RefreshInProgress: false,
             OperationCount: 0,
             LastSuccessfulRefreshUtc: null,
-            LastRefreshError: null));
+            LastRefreshError: null,
+            LastRefreshFailureKind: null));
         logger.Entries.Should().Contain(entry =>
             entry.Level == LogLevel.Warning &&
             entry.Message.Contains("SpecFetchToken not configured", StringComparison.Ordinal));
@@ -155,8 +158,11 @@ public class NyxIdSpecCatalogTests
         metricCapture.LookupMisses.Should().ContainSingle(measurement =>
             measurement.Value == 1 &&
             measurement.Tags.Any(tag =>
-                tag.Key == "operation_id" &&
-                string.Equals(tag.Value as string, "missing_operation", StringComparison.Ordinal)));
+                tag.Key == "reason" &&
+                string.Equals(
+                    tag.Value as string,
+                    NyxIdToolProviderMetrics.SpecCatalogLookupMissReasonUnknownOperation,
+                    StringComparison.Ordinal)));
     }
 
     private sealed class FakeHttpHandler : HttpMessageHandler

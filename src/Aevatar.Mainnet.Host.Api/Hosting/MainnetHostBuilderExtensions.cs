@@ -22,8 +22,8 @@ using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Platform.Telegram;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.StreamingProxy;
-using Aevatar.Hosting;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
+using Aevatar.Hosting;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
 using Microsoft.AspNetCore.Builder;
@@ -109,7 +109,7 @@ public static class MainnetHostBuilderExtensions
                         ?? builder.Configuration["Aevatar:Authentication:Authority"];
             o.SpecFetchToken = builder.Configuration["Aevatar:NyxId:SpecFetchToken"];
         });
-        builder.Services.AddAevatarHealthContributor(CreateNyxIdCatalogHealthContributor());
+        builder.Services.AddAevatarHealthContributor(NyxIdCatalogHealthContributor.Create());
         builder.Services.AddLarkTools(o =>
         {
             o.ProviderSlug = builder.Configuration["Aevatar:Lark:NyxProviderSlug"] ?? "api-lark-bot";
@@ -141,64 +141,4 @@ public static class MainnetHostBuilderExtensions
 
         return app;
     }
-
-    internal static AevatarHealthContributorRegistration CreateNyxIdCatalogHealthContributor() =>
-        new()
-        {
-            Name = "nyxid-catalog",
-            Category = "dependency",
-            Critical = true,
-            ProbeAsync = static (serviceProvider, _) =>
-            {
-                var catalog = serviceProvider.GetRequiredService<NyxIdSpecCatalog>();
-                var status = catalog.GetStatus();
-                var details = BuildNyxIdCatalogHealthDetails(status);
-
-                if (!status.BaseUrlConfigured)
-                {
-                    return ValueTask.FromResult(AevatarHealthContributorResult.Healthy(
-                        "NyxID catalog is not configured.",
-                        details));
-                }
-
-                if (!status.SpecFetchTokenConfigured)
-                {
-                    return ValueTask.FromResult(AevatarHealthContributorResult.Unhealthy(
-                        "NyxID spec fetch token is missing; generic capability discovery is unavailable.",
-                        details));
-                }
-
-                if (status.OperationCount == 0)
-                {
-                    return ValueTask.FromResult(AevatarHealthContributorResult.Unhealthy(
-                        "NyxID spec catalog is empty; generic capability discovery is unavailable.",
-                        details));
-                }
-
-                return ValueTask.FromResult(AevatarHealthContributorResult.Healthy(
-                    $"NyxID spec catalog loaded {status.OperationCount} operations.",
-                    details));
-            },
-        };
-
-    private static IReadOnlyDictionary<string, string> BuildNyxIdCatalogHealthDetails(
-        NyxIdSpecCatalogStatus status)
-    {
-        var details = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            ["baseUrlConfigured"] = FormatBool(status.BaseUrlConfigured),
-            ["specFetchTokenConfigured"] = FormatBool(status.SpecFetchTokenConfigured),
-            ["operationCount"] = status.OperationCount.ToString(),
-        };
-
-        if (status.LastSuccessfulRefreshUtc.HasValue)
-            details["lastSuccessfulRefreshUtc"] = status.LastSuccessfulRefreshUtc.Value.ToString("O");
-
-        if (!string.IsNullOrWhiteSpace(status.LastRefreshError))
-            details["lastRefreshError"] = status.LastRefreshError;
-
-        return details;
-    }
-
-    private static string FormatBool(bool value) => value ? "true" : "false";
 }
