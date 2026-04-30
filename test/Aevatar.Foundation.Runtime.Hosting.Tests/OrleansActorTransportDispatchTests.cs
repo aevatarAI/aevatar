@@ -46,6 +46,8 @@ public sealed class OrleansActorTransportDispatchTests
 
         public Task<bool> InitializeAgentAsync(string agentTypeName) => Task.FromResult(true);
 
+        public Task<bool> InitializeAgentByKindAsync(string kind) => Task.FromResult(true);
+
         public Task<bool> IsInitializedAsync() => Task.FromResult(true);
 
         public Task HandleEnvelopeAsync(byte[] envelopeBytes)
@@ -70,6 +72,8 @@ public sealed class OrleansActorTransportDispatchTests
         public Task<string> GetDescriptionAsync() => Task.FromResult("recording");
 
         public Task<string> GetAgentTypeNameAsync() => Task.FromResult(string.Empty);
+
+        public Task<string> GetAgentKindAsync() => Task.FromResult(string.Empty);
 
         public Task DeactivateAsync() => Task.CompletedTask;
 
