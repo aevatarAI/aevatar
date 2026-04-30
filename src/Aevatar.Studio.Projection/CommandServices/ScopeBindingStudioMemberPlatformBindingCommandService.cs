@@ -38,10 +38,6 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             ? $"platform-{request.BindingRunId}-1"
             : request.PlatformBindingCommandId;
 
-        _ = Task.Run(
-            () => RunBindingAsync(replyActorId, commandId, request.Clone()),
-            CancellationToken.None);
-
         return Task.FromResult(new StudioMemberPlatformBindingAccepted
         {
             BindingRunId = request.BindingRunId,
@@ -50,15 +46,29 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         });
     }
 
+    public Task ExecuteAsync(
+        string replyActorId,
+        string platformBindingCommandId,
+        StudioMemberPlatformBindingStartRequested request,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(replyActorId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(platformBindingCommandId);
+        ArgumentNullException.ThrowIfNull(request);
+
+        return RunBindingAsync(replyActorId, platformBindingCommandId, request, ct);
+    }
+
     private async Task RunBindingAsync(
         string replyActorId,
         string commandId,
-        StudioMemberPlatformBindingStartRequested request)
+        StudioMemberPlatformBindingStartRequested request,
+        CancellationToken ct)
     {
         try
         {
             var result = await _scopeBindingCommandPort
-                .UpsertAsync(BuildScopeBindingRequest(request), CancellationToken.None)
+                .UpsertAsync(BuildScopeBindingRequest(request), ct)
                 .ConfigureAwait(false);
 
             await DispatchAsync(
@@ -77,7 +87,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                         ImplementationRef = BuildImplementationRef(result),
                     },
                 },
-                CancellationToken.None).ConfigureAwait(false);
+                ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -100,7 +110,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                         FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                     },
                 },
-                CancellationToken.None).ConfigureAwait(false);
+                ct).ConfigureAwait(false);
         }
     }
 

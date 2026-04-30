@@ -156,6 +156,7 @@ public sealed class StudioMemberServiceTeamTests
         new(
             commandPort ?? new RecordingMemberCommandPort(),
             memberQueryPort ?? new InMemoryMemberQueryPort(NewDetail()),
+            new InertBindingRunQueryPort(),
             teamQueryPort ?? new InMemoryTeamQueryPort(NewTeamSummary()),
             new ThrowingServiceLifecycleQueryPort(),
             new ThrowingServiceCommandPort());
@@ -220,6 +221,16 @@ public sealed class StudioMemberServiceTeamTests
         public Task<StudioTeamSummaryResponse?> GetAsync(
             string scopeId, string teamId, CancellationToken ct = default) =>
             Task.FromResult(_team);
+    }
+
+    private sealed class InertBindingRunQueryPort : IStudioMemberBindingRunQueryPort
+    {
+        public Task<StudioMemberBindingRunStatusResponse?> GetAsync(
+            string scopeId,
+            string memberId,
+            string bindingRunId,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("binding run query port should not be called");
     }
 
     private sealed class ThrowingTeamQueryPort : IStudioTeamQueryPort

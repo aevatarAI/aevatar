@@ -160,6 +160,28 @@ public sealed class StudioMemberServiceBindingTests
         binding.LastBinding.RevisionId.Should().Be("rev-9");
     }
 
+    [Fact]
+    public async Task GetBindingRunAsync_ShouldReadBindingRunQueryPort()
+    {
+        var runQuery = new InMemoryBindingRunQueryPort(new StudioMemberBindingRunStatusResponse(
+            BindingRunId: "bind-1",
+            Status: StudioMemberBindingRunStatusNames.PlatformBindingPending,
+            UpdatedAt: DateTimeOffset.UtcNow)
+        {
+            PlatformBindingCommandId = "platform-bind-1",
+        });
+        var service = NewService(
+            new RecordingCommandPort(),
+            new ThrowingBindQueryPort(),
+            runQuery);
+
+        var run = await service.GetBindingRunAsync(ScopeId, MemberId, "bind-1");
+
+        run.BindingRunId.Should().Be("bind-1");
+        run.PlatformBindingCommandId.Should().Be("platform-bind-1");
+        runQuery.Requests.Should().ContainSingle().Which.Should().Be((ScopeId, MemberId, "bind-1"));
+    }
+
     // Bind / GetBinding don't touch the lifecycle/command ports. We pass
     // throwing stubs so that any future regression which routes a bind
     // through the platform service ports — instead of through the existing
@@ -167,10 +189,12 @@ public sealed class StudioMemberServiceBindingTests
     // green.
     private static StudioMemberService NewService(
         IStudioMemberCommandPort memberCommandPort,
-        IStudioMemberQueryPort memberQueryPort) =>
+        IStudioMemberQueryPort memberQueryPort,
+        IStudioMemberBindingRunQueryPort? bindingRunQueryPort = null) =>
         new(
             memberCommandPort,
             memberQueryPort,
+            bindingRunQueryPort ?? new InMemoryBindingRunQueryPort(null),
             new InertTeamQueryPort(),
             new ThrowingServiceLifecycleQueryPort(),
             new ThrowingServiceCommandPort());
@@ -246,6 +270,28 @@ public sealed class StudioMemberServiceBindingTests
             string scopeId, string memberId, CancellationToken ct = default)
         {
             throw new InvalidOperationException("BindAsync must not query StudioMember read models.");
+        }
+    }
+
+    private sealed class InMemoryBindingRunQueryPort : IStudioMemberBindingRunQueryPort
+    {
+        private readonly StudioMemberBindingRunStatusResponse? _run;
+
+        public InMemoryBindingRunQueryPort(StudioMemberBindingRunStatusResponse? run)
+        {
+            _run = run;
+        }
+
+        public List<(string ScopeId, string MemberId, string BindingRunId)> Requests { get; } = [];
+
+        public Task<StudioMemberBindingRunStatusResponse?> GetAsync(
+            string scopeId,
+            string memberId,
+            string bindingRunId,
+            CancellationToken ct = default)
+        {
+            Requests.Add((scopeId, memberId, bindingRunId));
+            return Task.FromResult(_run);
         }
     }
 

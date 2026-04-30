@@ -15,6 +15,27 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
 {
     public static string ProjectionKind => "studio-member-binding-run";
 
+    protected override async Task OnActivateAsync(CancellationToken ct)
+    {
+        await base.OnActivateAsync(ct);
+
+        if (State.Status == StudioMemberBindingRunStatus.PlatformBindingPending
+            && !string.IsNullOrEmpty(State.BindingRunId)
+            && !string.IsNullOrEmpty(State.PlatformBindingCommandId)
+            && State.Request != null
+            && State.Admitted != null)
+        {
+            await SendToAsync(
+                Id,
+                new StudioMemberPlatformBindingExecuteRequested
+                {
+                    BindingRunId = State.BindingRunId,
+                    PlatformBindingCommandId = State.PlatformBindingCommandId,
+                },
+                ct);
+        }
+    }
+
     [EventHandler(EndpointName = "requestBindingRun")]
     public async Task HandleRequested(StudioMemberBindingRunRequested evt)
     {
@@ -107,6 +128,52 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
             return;
 
         await PersistDomainEventAsync(evt);
+        await SendToAsync(
+            Id,
+            new StudioMemberPlatformBindingExecuteRequested
+            {
+                BindingRunId = evt.BindingRunId,
+                PlatformBindingCommandId = evt.PlatformBindingCommandId,
+            });
+    }
+
+    [EventHandler(EndpointName = "executePlatformBinding", AllowSelfHandling = true)]
+    public async Task HandlePlatformBindingExecuteRequested(StudioMemberPlatformBindingExecuteRequested evt)
+    {
+        if (!CanAcceptRunEvent(evt.BindingRunId))
+            return;
+
+        if (!string.Equals(State.PlatformBindingCommandId, evt.PlatformBindingCommandId, StringComparison.Ordinal))
+            return;
+
+        var platformBindingPort = Services.GetService<IStudioMemberPlatformBindingCommandPort>();
+        if (platformBindingPort == null)
+        {
+            await SendToAsync(Id, new StudioMemberPlatformBindingFailed
+            {
+                BindingRunId = evt.BindingRunId,
+                PlatformBindingCommandId = evt.PlatformBindingCommandId,
+                Failure = new StudioMemberBindingFailure
+                {
+                    Code = "STUDIO_MEMBER_PLATFORM_BINDING_PORT_UNAVAILABLE",
+                    Message = "studio member platform binding command port is not registered.",
+                    FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                },
+            });
+            return;
+        }
+
+        await platformBindingPort.ExecuteAsync(
+            Id,
+            evt.PlatformBindingCommandId,
+            new StudioMemberPlatformBindingStartRequested
+            {
+                BindingRunId = State.BindingRunId,
+                PlatformBindingCommandId = State.PlatformBindingCommandId,
+                Request = State.Request.Clone(),
+                Admitted = State.Admitted.Clone(),
+                RequestedAtUtc = State.UpdatedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            });
     }
 
     [EventHandler(EndpointName = "completePlatformBinding")]

@@ -28,6 +28,7 @@ public sealed class StudioMemberService : IStudioMemberService
 
     private readonly IStudioMemberCommandPort _memberCommandPort;
     private readonly IStudioMemberQueryPort _memberQueryPort;
+    private readonly IStudioMemberBindingRunQueryPort _bindingRunQueryPort;
     private readonly IStudioTeamQueryPort _teamQueryPort;
     private readonly IServiceLifecycleQueryPort _serviceLifecycleQueryPort;
     private readonly IServiceCommandPort _serviceCommandPort;
@@ -35,12 +36,14 @@ public sealed class StudioMemberService : IStudioMemberService
     public StudioMemberService(
         IStudioMemberCommandPort memberCommandPort,
         IStudioMemberQueryPort memberQueryPort,
+        IStudioMemberBindingRunQueryPort bindingRunQueryPort,
         IStudioTeamQueryPort teamQueryPort,
         IServiceLifecycleQueryPort serviceLifecycleQueryPort,
         IServiceCommandPort serviceCommandPort)
     {
         _memberCommandPort = memberCommandPort ?? throw new ArgumentNullException(nameof(memberCommandPort));
         _memberQueryPort = memberQueryPort ?? throw new ArgumentNullException(nameof(memberQueryPort));
+        _bindingRunQueryPort = bindingRunQueryPort ?? throw new ArgumentNullException(nameof(bindingRunQueryPort));
         _teamQueryPort = teamQueryPort ?? throw new ArgumentNullException(nameof(teamQueryPort));
         _serviceLifecycleQueryPort = serviceLifecycleQueryPort
             ?? throw new ArgumentNullException(nameof(serviceLifecycleQueryPort));
@@ -137,19 +140,11 @@ public sealed class StudioMemberService : IStudioMemberService
         CancellationToken ct = default)
     {
         var normalizedBindingRunId = NormalizeRequired(bindingRunId, nameof(bindingRunId));
-        var detail = await _memberQueryPort.GetAsync(scopeId, memberId, ct)
-            ?? throw new StudioMemberNotFoundException(scopeId, memberId);
-
-        if (detail.CurrentBindingRun == null
-            || !string.Equals(
-                detail.CurrentBindingRun.BindingRunId,
-                normalizedBindingRunId,
-                StringComparison.Ordinal))
-        {
+        var run = await _bindingRunQueryPort.GetAsync(scopeId, memberId, normalizedBindingRunId, ct);
+        if (run == null)
             throw new StudioMemberBindingRunNotFoundException(scopeId, memberId, normalizedBindingRunId);
-        }
 
-        return detail.CurrentBindingRun;
+        return run;
     }
 
     public async Task<StudioMemberEndpointContractResponse?> GetEndpointContractAsync(

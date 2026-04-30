@@ -163,6 +163,39 @@ message StudioMemberCurrentStateDocument {
   google.protobuf.Timestamp binding_updated_at = 66;
 }
 
+// ─── StudioMemberBindingRun Current State ReadModel ───
+//
+// Materialized from StudioMemberBindingRunGAgent committed events. Document id
+// is the run actor id (<c>studio-member-binding-run:{bindingRunId}</c>).
+// This read model is the status endpoint's authority-shaped query surface:
+// member documents may reference the active run, but they do not own the run's
+// accepted/platform-pending/succeeded/failed execution state.
+
+message StudioMemberBindingRunCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+
+  string binding_run_id = 20;
+  string scope_id = 21;
+  string member_id = 22;
+  string request_hash = 23;
+  string status = 24;
+  string platform_binding_command_id = 25;
+  int32 attempt_count = 26;
+
+  string failure_code = 30;
+  string failure_message = 31;
+  google.protobuf.Timestamp failure_at = 32;
+
+  string result_published_service_id = 40;
+  string result_revision_id = 41;
+  string result_implementation_kind = 42;
+  string result_expected_actor_id = 43;
+}
+
 // ─── StudioTeam Current State ReadModel ───
 //
 // Materialized from StudioTeamGAgent committed events (ADR-0017). Document id

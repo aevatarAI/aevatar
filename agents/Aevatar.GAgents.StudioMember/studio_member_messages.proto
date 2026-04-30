@@ -282,6 +282,11 @@ message StudioMemberPlatformBindingAccepted {
   google.protobuf.Timestamp accepted_at_utc = 3;
 }
 
+message StudioMemberPlatformBindingExecuteRequested {
+  string binding_run_id = 1;
+  string platform_binding_command_id = 2;
+}
+
 message StudioMemberPlatformBindingSucceeded {
   string binding_run_id = 1;
   string platform_binding_command_id = 2;

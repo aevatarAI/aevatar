@@ -85,6 +85,10 @@ public static class ServiceCollectionExtensions
 
         services.AddCurrentStateProjectionMaterializer<
             StudioMaterializationContext,
+            StudioMemberBindingRunCurrentStateProjector>();
+
+        services.AddCurrentStateProjectionMaterializer<
+            StudioMaterializationContext,
             StudioTeamCurrentStateProjector>();
 
         // ── Document metadata providers (for index creation in Elasticsearch) ──
@@ -126,6 +130,10 @@ public static class ServiceCollectionExtensions
             StudioMemberCurrentStateDocumentMetadataProvider>();
 
         services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<StudioMemberBindingRunCurrentStateDocument>,
+            StudioMemberBindingRunCurrentStateDocumentMetadataProvider>();
+
+        services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<StudioTeamCurrentStateDocument>,
             StudioTeamCurrentStateDocumentMetadataProvider>();
 
@@ -142,6 +150,7 @@ public static class ServiceCollectionExtensions
         // Query ports (read side)
         services.TryAddSingleton<IUserConfigQueryPort, ProjectionUserConfigQueryPort>();
         services.TryAddSingleton<IStudioMemberQueryPort, ProjectionStudioMemberQueryPort>();
+        services.TryAddSingleton<IStudioMemberBindingRunQueryPort, ProjectionStudioMemberBindingRunQueryPort>();
         services.TryAddSingleton<IStudioTeamQueryPort, ProjectionStudioTeamQueryPort>();
 
         // Command services (write side)

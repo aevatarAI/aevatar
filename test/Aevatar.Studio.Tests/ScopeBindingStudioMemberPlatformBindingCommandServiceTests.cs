@@ -12,7 +12,7 @@ namespace Aevatar.Studio.Tests;
 public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
 {
     [Fact]
-    public async Task StartAsync_ShouldAcceptAndDispatchSucceededContinuation()
+    public async Task StartAsync_ShouldOnlyAcceptWithoutRunningPlatformBinding()
     {
         var scopeBindingPort = new RecordingScopeBindingCommandPort();
         var dispatchPort = new RecordingDispatchPort();
@@ -29,7 +29,27 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         accepted.BindingRunId.Should().Be("bind-1");
         accepted.PlatformBindingCommandId.Should().Be("platform-bind-1");
 
-        var dispatch = await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        scopeBindingPort.Requests.Should().BeEmpty();
+        dispatchPort.Dispatches.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldRunPlatformBindingAndDispatchSucceededContinuation()
+    {
+        var scopeBindingPort = new RecordingScopeBindingCommandPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var service = new ScopeBindingStudioMemberPlatformBindingCommandService(
+            scopeBindingPort,
+            dispatchPort,
+            NullLogger<ScopeBindingStudioMemberPlatformBindingCommandService>.Instance);
+
+        await service.ExecuteAsync(
+            "studio-member-binding-run:bind-1",
+            "platform-bind-1",
+            NewScriptStartRequest(),
+            CancellationToken.None);
+
+        var dispatch = dispatchPort.Dispatches.Should().ContainSingle().Which;
         dispatch.ActorId.Should().Be("studio-member-binding-run:bind-1");
         var succeeded = dispatch.Envelope.Payload.Unpack<StudioMemberPlatformBindingSucceeded>();
         succeeded.BindingRunId.Should().Be("bind-1");
@@ -49,7 +69,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
     }
 
     [Fact]
-    public async Task StartAsync_WhenScopeBindingFails_ShouldDispatchFailedContinuation()
+    public async Task ExecuteAsync_WhenScopeBindingFails_ShouldDispatchFailedContinuation()
     {
         var scopeBindingPort = new RecordingScopeBindingCommandPort
         {
@@ -61,12 +81,13 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             dispatchPort,
             NullLogger<ScopeBindingStudioMemberPlatformBindingCommandService>.Instance);
 
-        await service.StartAsync(
+        await service.ExecuteAsync(
             "studio-member-binding-run:bind-1",
+            "platform-bind-1",
             NewScriptStartRequest(),
             CancellationToken.None);
 
-        var dispatch = await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        var dispatch = dispatchPort.Dispatches.Should().ContainSingle().Which;
         var failed = dispatch.Envelope.Payload.Unpack<StudioMemberPlatformBindingFailed>();
         failed.BindingRunId.Should().Be("bind-1");
         failed.PlatformBindingCommandId.Should().Be("platform-bind-1");
@@ -128,12 +149,11 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
 
     private sealed class RecordingDispatchPort : IActorDispatchPort
     {
-        public TaskCompletionSource<DispatchedCommand> NextDispatch { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public List<DispatchedCommand> Dispatches { get; } = [];
 
         public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
-            NextDispatch.TrySetResult(new DispatchedCommand(actorId, envelope));
+            Dispatches.Add(new DispatchedCommand(actorId, envelope));
             return Task.CompletedTask;
         }
 

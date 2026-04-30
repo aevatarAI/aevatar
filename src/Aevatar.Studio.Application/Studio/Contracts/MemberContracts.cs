@@ -118,7 +118,10 @@ public sealed record StudioMemberBindingRunStatusResponse(
     string BindingRunId,
     string Status,
     StudioMemberBindingFailureResponse? Failure = null,
-    DateTimeOffset? UpdatedAt = null);
+    DateTimeOffset? UpdatedAt = null)
+{
+    public string? PlatformBindingCommandId { get; init; }
+}
 
 public sealed record StudioMemberRosterResponse(
     string ScopeId,
