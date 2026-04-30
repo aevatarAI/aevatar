@@ -1,5 +1,6 @@
 using System.Net;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -586,6 +587,60 @@ public sealed class SkillExecutionGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleStartAsync_WhenLlmCompletes_ShouldPersistCompletionAndReportDefinition()
+    {
+        var llm = new StubLlmProviderFactory("daily report complete");
+        var captured = new List<EventEnvelope>();
+        var dispatch = Substitute.For<IActorDispatchPort>();
+        dispatch.DispatchAsync(
+                "def-test",
+                Arg.Do<EventEnvelope>(captured.Add),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        using var provider = BuildServiceProvider(
+            _store,
+            services => services.AddSingleton(dispatch));
+        var agent = CreateExecutionAgent(
+            "exec-start-complete",
+            serviceProvider: provider,
+            llmProviderFactory: llm);
+        await agent.ActivateAsync();
+
+        var scheduledAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        await agent.HandleStartAsync(new StartSkillExecutionCommand
+        {
+            DefinitionId = "def-test",
+            ScheduledAt = scheduledAt,
+            Reason = "manual",
+            SkillContent = "You are a test skill.",
+            ExecutionPrompt = "Run the test.",
+            OutboundConfig = CreateOutboundConfig(),
+            ScopeId = "scope-1",
+            ProviderName = llm.Name,
+            Model = "test-model",
+            DefinitionConfigRevision = 7,
+            DefinitionExecutionSequence = 3,
+        });
+
+        llm.StreamCalls.Should().Be(1);
+        agent.State.Status.Should().Be("completed");
+        agent.State.ScheduledAt.Should().Be(scheduledAt);
+        agent.State.Output.Should().Be("daily report complete");
+
+        var events = await _store.GetEventsAsync("exec-start-complete");
+        events.Should().Contain(x => x.EventData.Is(SkillExecutionStartedEvent.Descriptor));
+        events.Should().Contain(x => x.EventData.Is(SkillExecutionCompletedEvent.Descriptor));
+        events.Should().NotContain(x => x.EventData.Is(SkillExecutionFailedEvent.Descriptor));
+
+        var report = captured.Should().ContainSingle().Subject.Payload.Unpack<ReportSkillExecutionCompletedCommand>();
+        report.ExecutionId.Should().Be("exec-start-complete");
+        report.CompletedAt.Should().NotBeNull();
+        report.DefinitionConfigRevision.Should().Be(7);
+        report.DefinitionExecutionSequence.Should().Be(3);
+    }
+
+    [Fact]
     public async Task HandleStartAsync_WhenAlreadyStarted_ShouldIgnoreDuplicateStart()
     {
         var agent = await CreateActivatedExecutionAgent(
@@ -827,10 +882,13 @@ public sealed class SkillExecutionGAgentTests : IAsyncLifetime
     private SkillExecutionGAgent CreateExecutionAgent(
         string actorId,
         IOwnerLlmConfigSource? ownerLlmConfigSource = null,
-        ServiceProvider? serviceProvider = null)
+        ServiceProvider? serviceProvider = null,
+        ILLMProviderFactory? llmProviderFactory = null)
     {
         var resolvedServices = serviceProvider ?? _serviceProvider;
-        var agent = new SkillExecutionGAgent(ownerLlmConfigSource: ownerLlmConfigSource)
+        var agent = new SkillExecutionGAgent(
+            llmProviderFactory: llmProviderFactory,
+            ownerLlmConfigSource: ownerLlmConfigSource)
         {
             Services = resolvedServices,
             EventSourcingBehaviorFactory =
@@ -893,6 +951,37 @@ public sealed class SkillExecutionGAgentTests : IAsyncLifetime
             typeof(DefaultEventSourcingBehaviorFactory<>));
         configure?.Invoke(services);
         return services.BuildServiceProvider();
+    }
+
+    private sealed class StubLlmProviderFactory(string response) : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "stub";
+
+        public int StreamCalls { get; private set; }
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default) =>
+            throw new InvalidOperationException("SkillExecutionGAgent must use ChatStreamAsync on the interactive path.");
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            StreamCalls++;
+            ct.ThrowIfCancellationRequested();
+            yield return new LLMStreamChunk
+            {
+                DeltaContent = response,
+                FinishReason = "stop",
+                IsLast = true,
+            };
+            await Task.CompletedTask;
+        }
     }
 
     private static SkillRunnerOutboundConfig CreateOutboundConfig() => new()
