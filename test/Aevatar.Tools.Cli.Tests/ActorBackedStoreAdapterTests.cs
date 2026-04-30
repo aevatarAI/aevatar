@@ -369,7 +369,7 @@ public sealed class ActorBackedStoreAdapterTests
 
         var store = new ActorBackedNyxIdUserLlmPreferencesStore(stubConfigStore);
 
-        var prefs = await store.GetAsync();
+        var prefs = await store.GetOwnerAsync();
 
         prefs.DefaultModel.Should().Be("claude-opus");
         prefs.PreferredRoute.Should().Be("/api/v1/proxy/s/anthropic");
@@ -385,7 +385,7 @@ public sealed class ActorBackedStoreAdapterTests
 
         var store = new ActorBackedNyxIdUserLlmPreferencesStore(stubConfigStore);
 
-        var prefs = await store.GetAsync();
+        var prefs = await store.GetOwnerAsync();
 
         prefs.PreferredRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway,
             "gateway should normalize to empty string");
@@ -399,11 +399,84 @@ public sealed class ActorBackedStoreAdapterTests
 
         var store = new ActorBackedNyxIdUserLlmPreferencesStore(stubConfigStore);
 
-        var prefs = await store.GetAsync();
+        var prefs = await store.GetOwnerAsync();
 
         prefs.DefaultModel.Should().BeEmpty();
         prefs.PreferredRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
         prefs.MaxToolRounds.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task NyxIdUserLlmPreferencesStore_RoutesToScopedQueryPort_WhenBindingIdSupplied()
+    {
+        // Issue #513 phase 2: when a sender binding-id is provided, the
+        // store must call IUserConfigQueryPort.GetAsync(scopeId, ct), not
+        // the ambient overload — otherwise sender prefs collapse to bot-
+        // owner ambient state.
+        var stubConfigStore = new RecordingUserConfigQueryPort
+        {
+            ByScope =
+            {
+                ["bnd_sender"] = new UserConfig(
+                    DefaultModel: "sender-claude",
+                    PreferredLlmRoute: "/api/v1/proxy/s/sender",
+                    MaxToolRounds: 3),
+            },
+            Ambient = new UserConfig(DefaultModel: "owner-gpt"),
+        };
+
+        var store = new ActorBackedNyxIdUserLlmPreferencesStore(stubConfigStore);
+
+        var prefs = await store.GetForBindingAsync("  bnd_sender  ");
+
+        prefs.DefaultModel.Should().Be("sender-claude");
+        prefs.PreferredRoute.Should().Be("/api/v1/proxy/s/sender");
+        prefs.MaxToolRounds.Should().Be(3);
+        // The store trims the binding-id before forwarding so platform-
+        // injected whitespace doesn't fan out two distinct user-config
+        // actors for the same sender.
+        stubConfigStore.ScopedCalls.Should().ContainSingle().Which.Should().Be("bnd_sender");
+        stubConfigStore.AmbientCalls.Should().Be(0,
+            "store must NOT fall back to the ambient overload when a binding-id is supplied");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task NyxIdUserLlmPreferencesStore_GetForBinding_RejectsMissingBindingId(string? bindingId)
+    {
+        // Defence-in-depth: callers that intend to read the ambient bot-
+        // owner scope must use GetOwnerAsync explicitly. The earlier shape
+        // (GetAsync(null) silently fell back to ambient) made it easy for a
+        // future caller to leak owner config when they meant to read sender
+        // prefs.
+        var stubConfigStore = new StubUserConfigStore(new UserConfig(DefaultModel: "any"));
+        var store = new ActorBackedNyxIdUserLlmPreferencesStore(stubConfigStore);
+
+        Func<Task> act = () => store.GetForBindingAsync(bindingId!);
+
+        await act.Should().ThrowAsync<ArgumentException>();
+    }
+
+    private sealed class RecordingUserConfigQueryPort : IUserConfigQueryPort
+    {
+        public Dictionary<string, UserConfig> ByScope { get; } = new(StringComparer.Ordinal);
+        public UserConfig Ambient { get; set; } = new(DefaultModel: string.Empty);
+        public List<string> ScopedCalls { get; } = new();
+        public int AmbientCalls { get; private set; }
+
+        public Task<UserConfig> GetAsync(CancellationToken ct = default)
+        {
+            AmbientCalls++;
+            return Task.FromResult(Ambient);
+        }
+
+        public Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default)
+        {
+            ScopedCalls.Add(scopeId);
+            return Task.FromResult(ByScope.TryGetValue(scopeId, out var cfg) ? cfg : new UserConfig(string.Empty));
+        }
     }
 
     // ════════════════════════════════════════════════════════════

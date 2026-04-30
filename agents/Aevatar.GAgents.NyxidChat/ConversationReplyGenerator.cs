@@ -128,26 +128,19 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
     {
         var effective = new Dictionary<string, string>(metadata, StringComparer.Ordinal);
 
-        if (_preferencesStore is not null)
+        // Issue #513 phase 3: prefs override chain is sender → bot-owner →
+        // provider default. The bot owner's prefs are already pinned upstream
+        // by OwnerLlmConfigApplier (channel inbound) or by direct
+        // INyxIdUserLlmPreferencesStore reads (Studio API / streaming proxy),
+        // so this generator only has to layer sender overrides on top when
+        // the inbound carries a binding-id. SetIfFilled is field-level, so a
+        // sender who set DefaultModel but not PreferredRoute still inherits
+        // the bot owner's route from the upstream-pinned metadata.
+        if (_preferencesStore is not null &&
+            metadata.TryGetValue(LLMRequestMetadataKeys.SenderBindingId, out var senderBindingId) &&
+            !string.IsNullOrWhiteSpace(senderBindingId))
         {
-            try
-            {
-                var preferences = await _preferencesStore.GetAsync(ct);
-                if (!string.IsNullOrWhiteSpace(preferences.DefaultModel))
-                    effective[LLMRequestMetadataKeys.ModelOverride] = preferences.DefaultModel.Trim();
-                if (!string.IsNullOrWhiteSpace(preferences.PreferredRoute))
-                    effective[LLMRequestMetadataKeys.NyxIdRoutePreference] = preferences.PreferredRoute.Trim();
-                if (preferences.MaxToolRounds > 0)
-                    effective[LLMRequestMetadataKeys.MaxToolRoundsOverride] = preferences.MaxToolRounds.ToString();
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch
-            {
-                // User config is additive only; channel runtime falls back to server defaults on failure.
-            }
+            await ApplyPreferencesAsync(senderBindingId, effective, ct);
         }
 
         if (_userMemoryStore is not null)
@@ -169,6 +162,49 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         }
 
         return effective;
+    }
+
+    /// <summary>
+    /// Read prefs for the bound sender and overwrite the matching metadata
+    /// keys. Field-level: empty fields on the sender's record are skipped so
+    /// the bot owner's value stays intact. User-config failures degrade to
+    /// "no sender override" rather than failing the LLM turn.
+    /// </summary>
+    private async Task ApplyPreferencesAsync(
+        string senderBindingId,
+        Dictionary<string, string> effective,
+        CancellationToken ct)
+    {
+        if (_preferencesStore is null)
+            return;
+
+        NyxIdUserLlmPreferences preferences;
+        try
+        {
+            preferences = await _preferencesStore.GetForBindingAsync(senderBindingId, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return;
+        }
+
+        SetIfFilled(effective, LLMRequestMetadataKeys.ModelOverride, preferences.DefaultModel?.Trim());
+        SetIfFilled(effective, LLMRequestMetadataKeys.NyxIdRoutePreference, preferences.PreferredRoute?.Trim());
+        SetIfFilled(
+            effective,
+            LLMRequestMetadataKeys.MaxToolRoundsOverride,
+            preferences.MaxToolRounds > 0 ? preferences.MaxToolRounds.ToString() : null);
+    }
+
+    private static void SetIfFilled(Dictionary<string, string> map, string key, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return;
+        map[key] = value;
     }
 
     private async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct)

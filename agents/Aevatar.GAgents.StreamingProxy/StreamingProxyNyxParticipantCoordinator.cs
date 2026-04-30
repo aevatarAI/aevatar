@@ -489,7 +489,7 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
 
         try
         {
-            return await _preferencesStore.GetAsync(ct);
+            return await _preferencesStore.GetOwnerAsync(ct);
         }
         catch
         {
