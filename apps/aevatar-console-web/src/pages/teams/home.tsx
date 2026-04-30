@@ -17,7 +17,6 @@ import {
 } from "antd";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
-import { servicesApi } from "@/shared/api/servicesApi";
 import { loadRestorableAuthSession } from "@/shared/auth/session";
 import { formatCompactDateTime } from "@/shared/datetime/dateTime";
 import { history } from "@/shared/navigation/history";
@@ -56,7 +55,6 @@ import {
 } from "./workflowOperationalUnits";
 
 const scopeServiceAppId = "default";
-const scopeServiceNamespace = "default";
 const compactTeamRosterThreshold = 6;
 
 type MemberRosterPreview = {
@@ -855,11 +853,9 @@ const TeamsHomePage: React.FC = () => {
     enabled: scopeId.length > 0,
     queryKey: ["teams", "services", scopeId],
     queryFn: () =>
-      servicesApi.listServices({
-        tenantId: scopeId,
+      scopeRuntimeApi.listServices(scopeId, {
         appId: scopeServiceAppId,
-        namespace: scopeServiceNamespace,
-    }),
+      }),
     retry: false,
   });
 

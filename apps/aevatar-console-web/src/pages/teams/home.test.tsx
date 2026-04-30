@@ -1,7 +1,6 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
-import { servicesApi } from "@/shared/api/servicesApi";
 import {
   clearStoredAuthSession,
   persistAuthSession,
@@ -10,14 +9,9 @@ import { studioApi } from "@/shared/studio/api";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import TeamsHomePage from "./home";
 
-jest.mock("@/shared/api/servicesApi", () => ({
-  servicesApi: {
-    listServices: jest.fn(),
-  },
-}));
-
 jest.mock("@/shared/api/scopeRuntimeApi", () => ({
   scopeRuntimeApi: {
+    listServices: jest.fn(),
     listMemberRuns: jest.fn(),
   },
 }));
@@ -132,7 +126,7 @@ describe("TeamsHomePage", () => {
       members: defaultMembers,
       nextPageToken: null,
     });
-    (servicesApi.listServices as jest.Mock).mockResolvedValue(defaultServices);
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValue(defaultServices);
     (scopeRuntimeApi.listMemberRuns as jest.Mock).mockImplementation(
       async (_scopeId: string, memberId: string) => buildMemberRunCatalog(memberId),
     );
@@ -273,7 +267,7 @@ describe("TeamsHomePage", () => {
       ],
       nextPageToken: null,
     });
-    (servicesApi.listServices as jest.Mock).mockResolvedValueOnce([
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValueOnce([
       ...defaultServices,
       {
         serviceKey: "scope-a:joker",

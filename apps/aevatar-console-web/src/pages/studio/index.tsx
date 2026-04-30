@@ -31,7 +31,6 @@ import {
   USER_CONFIG_PROVIDER_SOURCE_SERVICE,
   USER_LLM_ROUTE_GATEWAY,
 } from '../chat/chatConversationConfig';
-import { servicesApi } from '@/shared/api/servicesApi';
 import {
   Button,
   Modal,
@@ -62,7 +61,6 @@ import {
   buildScopeConsoleServiceOptions,
   scopeServiceAppId,
   scopeServiceNamespace,
-  type ScopeConsoleServiceOption,
 } from '@/shared/runs/scopeConsole';
 import {
   applyStepInspectorDraft,
@@ -2056,33 +2054,6 @@ function resolveStudioServiceDefaultEndpointId(
   );
 }
 
-function createEndpointDiscoveryPendingInvokeService(input: {
-  readonly label?: string;
-  readonly serviceId: string;
-}): ScopeConsoleServiceOption {
-  const serviceId = trimOptional(input.serviceId);
-  const label = trimOptional(input.label) || serviceId;
-  return {
-    deploymentStatus: '',
-    displayName: label,
-    endpoints: [
-      {
-        description:
-          'Temporary chat endpoint hint used while backend endpoint discovery is pending.',
-        displayName: 'Chat',
-        endpointId: 'chat',
-        kind: 'chat',
-        requestTypeUrl: '',
-        responseTypeUrl: '',
-      },
-    ],
-    kind: 'service',
-    namespace: scopeServiceNamespace,
-    primaryActorId: '',
-    serviceId,
-  };
-}
-
 function resolvePublishedServiceIdFromMemberKey(
   memberKey: string,
   publishedMembers: readonly PublishedStudioMemberRecord[],
@@ -2562,10 +2533,8 @@ const StudioPage: React.FC = () => {
     queryKey: ['studio-scope-services', resolvedStudioScopeId],
     enabled: studioHostReady && Boolean(resolvedStudioScopeId),
     queryFn: () =>
-      servicesApi.listServices({
+      scopeRuntimeApi.listServices(resolvedStudioScopeId, {
         appId: scopeServiceAppId,
-        namespace: scopeServiceNamespace,
-        tenantId: resolvedStudioScopeId,
       }),
   });
   const studioMembersQuery = useQuery({
@@ -6445,23 +6414,9 @@ const StudioPage: React.FC = () => {
         return matchedService;
       }
 
-      if (
-        process.env.NODE_ENV !== 'production' &&
-        process.env.NODE_ENV !== 'test'
-      ) {
-        console.warn(
-          '[Studio] Using temporary chat endpoint fallback while scope service endpoint discovery is pending (#511).',
-          {
-            serviceId: invokeTargetServiceId,
-          },
-        );
-      }
-      return createEndpointDiscoveryPendingInvokeService({
-        label: currentMemberLabel,
-        serviceId: invokeTargetServiceId,
-      });
+      return null;
     },
-    [currentMemberLabel, invokeTargetServiceId, runtimeConsoleServices],
+    [invokeTargetServiceId, runtimeConsoleServices],
   );
   const invokeTargetServices = useMemo(
     () => (invokeTargetService ? [invokeTargetService] : []),
