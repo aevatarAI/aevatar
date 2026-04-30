@@ -39,7 +39,8 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         if (evt is not null
             && evt is not AevatarOAuthClientProvisionedEvent
             && evt is not AevatarOAuthClientHmacKeyRotatedEvent
-            && evt is not AevatarOAuthClientBrokerCapabilityObservedEvent)
+            && evt is not AevatarOAuthClientBrokerCapabilityObservedEvent
+            && evt is not AevatarOAuthClientProjectionRebuildRequestedEvent)
         {
             Logger.LogWarning(
                 "AevatarOAuthClientGAgent received unrecognised event type {EventType}; state unchanged",
@@ -51,6 +52,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             .On<AevatarOAuthClientProvisionedEvent>(ApplyProvisioned)
             .On<AevatarOAuthClientHmacKeyRotatedEvent>(ApplyHmacKeyRotated)
             .On<AevatarOAuthClientBrokerCapabilityObservedEvent>(ApplyBrokerCapabilityObserved)
+            .On<AevatarOAuthClientProjectionRebuildRequestedEvent>(static (state, _) => state)
             .OrCurrent();
     }
 
@@ -85,11 +87,33 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         {
             // Seed HMAC key on first activation against an existing client_id
             // (defence-in-depth against partial state loaded from snapshots).
+            // Returning here is intentional: HmacKeyRotatedEvent itself
+            // re-publishes the state root, so the projector materializes the
+            // readmodel without needing an additional rebuild trigger.
             if (State.HmacKey.Length == 0)
             {
                 await PersistDomainEventAsync(BuildHmacKeyRotatedEvent());
                 Logger.LogInformation("Seeded HMAC key for aevatar OAuth client (existing client_id)");
+                return;
             }
+
+            // Steady-state branch: nothing changed at NyxID, but a freshly-
+            // booted silo may have an empty projection (codex PR #539 P1 —
+            // happens after the projection-scope-activation fix is deployed
+            // to a cluster whose actor was already provisioned by an earlier
+            // build that never activated the scope). Persist a no-op rebuild
+            // event so the now-attached projector has a state-root
+            // publication to materialize. Apply is identity, so the OAuth
+            // client facts are not mutated.
+            await PersistDomainEventAsync(new AevatarOAuthClientProjectionRebuildRequestedEvent
+            {
+                Reason = "ensure_already_provisioned",
+                RequestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            });
+            Logger.LogInformation(
+                "Requested aevatar OAuth client projection rebuild: actorId={ActorId}, authority={Authority}",
+                Id,
+                cmd.NyxidAuthority);
             return;
         }
 

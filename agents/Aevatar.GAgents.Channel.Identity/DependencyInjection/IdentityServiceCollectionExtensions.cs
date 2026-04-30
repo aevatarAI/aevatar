@@ -94,6 +94,14 @@ public static class IdentityServiceCollectionExtensions
             IProjectionDocumentMetadataProvider<AevatarOAuthClientDocument>,
             AevatarOAuthClientDocumentMetadataProvider>();
         services.TryAddSingleton<IAevatarOAuthClientProvider, AevatarOAuthClientProjectionProvider>();
+        // Projection scope activator — bootstrap calls EnsureProjectionForActorAsync
+        // before dispatching the provisioning command so the projector
+        // subscribes to the actor's committed event stream and materializes
+        // the readmodel. Without this the OAuth-client document never
+        // appears and the provider keeps throwing
+        // AevatarOAuthClientNotProvisionedException even after DCR succeeds
+        // (production regression observed 2026-04-30 in aismart-app-mainnet).
+        services.TryAddSingleton<AevatarOAuthClientProjectionPort>();
 
         // ─── Broker (self-bootstrapping, no appsettings dependency) ───
         // Register broker as a *singleton* and inject IHttpClientFactory so

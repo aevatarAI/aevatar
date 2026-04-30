@@ -81,6 +81,15 @@ message RotateAevatarOAuthClientHmacKeyCommand {}
 // broker_capability_enabled on this client.
 message ObserveBrokerCapabilityCommand {}
 
+// Persisted when bootstrap needs to re-emit the authoritative state root for
+// the OAuth client projection without changing business state. This repairs a
+// missing/stale readmodel after the projection scope is activated, while
+// keeping rebuild semantics owned by the actor rather than query-time replay.
+message AevatarOAuthClientProjectionRebuildRequestedEvent {
+  string reason = 1;
+  google.protobuf.Timestamp requested_at = 2;
+}
+
 // Persisted on successful provision. Carries the client_id + issuance
 // timestamp + authority so the projector can materialize the readmodel.
 message AevatarOAuthClientProvisionedEvent {
