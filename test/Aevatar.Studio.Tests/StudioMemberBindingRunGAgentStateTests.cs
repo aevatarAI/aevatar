@@ -50,6 +50,33 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     }
 
     [Fact]
+    public void PlatformBindingStartRequested_ShouldPersistCommandIdForRecovery()
+    {
+        var requested = _agent.Apply(new StudioMemberBindingRunState(), NewRequested());
+        var admitted = _agent.Apply(requested, new StudioMemberBindingAdmittedEvent
+        {
+            BindingRunId = "bind-1",
+            ScopeId = "scope-1",
+            MemberId = "m-1",
+            PublishedServiceId = "member-m-1",
+            ImplementationKind = StudioMemberImplementationKind.Script,
+            DisplayName = "Script member",
+            AdmittedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+
+        var pending = _agent.Apply(admitted, new StudioMemberPlatformBindingStartRequested
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-bind-1",
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+        });
+
+        pending.Status.Should().Be(StudioMemberBindingRunStatus.PlatformBindingPending);
+        pending.PlatformBindingCommandId.Should().Be("platform-bind-1");
+        pending.AttemptCount.Should().Be(1);
+    }
+
+    [Fact]
     public void PlatformSucceeded_ShouldRecordTerminalResult()
     {
         var accepted = _agent.Apply(new StudioMemberBindingRunState(), NewRequested());

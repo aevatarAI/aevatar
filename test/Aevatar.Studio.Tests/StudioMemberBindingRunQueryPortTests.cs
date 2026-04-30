@@ -33,6 +33,8 @@ public sealed class StudioMemberBindingRunQueryPortTests
 
         run.Should().NotBeNull();
         run!.BindingRunId.Should().Be("bind-1");
+        run.ScopeId.Should().Be("scope-1");
+        run.MemberId.Should().Be("m-1");
         run.Status.Should().Be(StudioMemberBindingRunStatusNames.PlatformBindingPending);
         run.PlatformBindingCommandId.Should().Be("platform-bind-1");
         run.UpdatedAt.Should().Be(DateTimeOffset.Parse("2026-04-30T08:00:00Z"));

@@ -52,6 +52,8 @@ public sealed class ProjectionStudioMemberBindingRunQueryPort : IStudioMemberBin
 
         return new StudioMemberBindingRunStatusResponse(
             BindingRunId: document.BindingRunId,
+            ScopeId: document.ScopeId,
+            MemberId: document.MemberId,
             Status: NormalizeBindingRunStatusWire(document.Status),
             Failure: failure,
             UpdatedAt: document.UpdatedAt?.ToDateTimeOffset())

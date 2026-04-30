@@ -257,6 +257,8 @@ public sealed class StudioMemberEndpointsTests
     {
         var run = new StudioMemberBindingRunStatusResponse(
             BindingRunId: "bind-1",
+            ScopeId: ScopeId,
+            MemberId: "member-1",
             Status: StudioMemberBindingRunStatusNames.PlatformBindingPending,
             UpdatedAt: DateTimeOffset.UtcNow);
         var service = new RecordingMemberService

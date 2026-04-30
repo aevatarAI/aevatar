@@ -116,6 +116,8 @@ public sealed record StudioMemberBindingFailureResponse(
 
 public sealed record StudioMemberBindingRunStatusResponse(
     string BindingRunId,
+    string ScopeId,
+    string MemberId,
     string Status,
     StudioMemberBindingFailureResponse? Failure = null,
     DateTimeOffset? UpdatedAt = null)

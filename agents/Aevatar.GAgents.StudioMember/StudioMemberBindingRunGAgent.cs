@@ -294,6 +294,7 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
 
         var next = state.Clone();
         next.Status = StudioMemberBindingRunStatus.PlatformBindingPending;
+        next.PlatformBindingCommandId = evt.PlatformBindingCommandId;
         next.AttemptCount++;
         next.UpdatedAtUtc = evt.RequestedAtUtc;
         return next;

@@ -165,6 +165,8 @@ public sealed class StudioMemberServiceBindingTests
     {
         var runQuery = new InMemoryBindingRunQueryPort(new StudioMemberBindingRunStatusResponse(
             BindingRunId: "bind-1",
+            ScopeId: ScopeId,
+            MemberId: MemberId,
             Status: StudioMemberBindingRunStatusNames.PlatformBindingPending,
             UpdatedAt: DateTimeOffset.UtcNow)
         {
