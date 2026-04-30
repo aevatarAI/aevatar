@@ -43,6 +43,7 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
     internal static readonly TimeSpan MaxRetryDelay = TimeSpan.FromMinutes(30);
 
     private readonly IAevatarOAuthClientProvider _clientProvider;
+    private readonly AevatarOAuthClientProjectionPort _projectionPort;
     private readonly IActorRuntime _actorRuntime;
     private readonly ILogger<AevatarOAuthClientBootstrapService> _logger;
     private readonly IConfiguration _configuration;
@@ -51,6 +52,7 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
 
     public AevatarOAuthClientBootstrapService(
         IAevatarOAuthClientProvider clientProvider,
+        AevatarOAuthClientProjectionPort projectionPort,
         IActorRuntime actorRuntime,
         IConfiguration configuration,
         ILogger<AevatarOAuthClientBootstrapService> logger)
@@ -62,6 +64,7 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
         // catches scoped → singleton at resolve time, not at AddHostedService
         // wiring time).
         _clientProvider = clientProvider ?? throw new ArgumentNullException(nameof(clientProvider));
+        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -163,6 +166,22 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
     private async Task EnsureProvisionedAsync(CancellationToken ct)
     {
         var authority = NyxIdAuthorityResolver.Resolve(_logger);
+
+        // Activate the projection scope FIRST so the projector subscribes
+        // to the actor's committed events before we dispatch the
+        // provisioning command. Without this the AevatarOAuthClient
+        // readmodel never materializes and IAevatarOAuthClientProvider
+        // keeps throwing AevatarOAuthClientNotProvisionedException long
+        // after DCR succeeded (production regression observed
+        // 2026-04-30 in aismart-app-mainnet — the bootstrap log showed
+        // "Provisioned aevatar OAuth client via DCR" + "Seeded HMAC key"
+        // immediately after the silo started, but every /init still
+        // returned "正在初始化" because no consumer was watching the
+        // event stream).
+        await _projectionPort
+            .EnsureProjectionForActorAsync(AevatarOAuthClientGAgent.WellKnownId, ct)
+            .ConfigureAwait(false);
+
         AevatarOAuthClientSnapshot? cached = null;
         try
         {
