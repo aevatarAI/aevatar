@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 
 # Issue #498 acceptance: every [GAgent("...")] / [LegacyAgentKind("...")]
-# token must match ^[a-z0-9]+(\.[a-z0-9-]+)+$ and must NOT end with -v\d+.
+# token must match ^[a-z0-9]+(\.[a-z0-9]+(-[a-z0-9]+)*)+$ and must NOT end
+# with -v\d+. Hyphens are only legal inside non-prefix segments.
 # Kind tokens are stable business identifiers; CLR identity is incidental.
 
 set -euo pipefail
@@ -10,8 +11,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
-# Match valid kind tokens (kept in sync with AgentKindToken.FormatPattern):
-#   ^[a-z0-9]+(\.[a-z0-9]+(-[a-z0-9]+)*)+$
+# Kept in sync with Aevatar.Foundation.Abstractions.TypeSystem.AgentKindToken.FormatPattern.
 KIND_REGEX='^[a-z0-9]+(\.[a-z0-9]+(-[a-z0-9]+)*)+$'
 VERSIONED_TAIL_REGEX='-v[0-9]+$'
 
@@ -29,12 +29,16 @@ emit_violation() {
 # Files that may declare kinds: any C# under src/, agents/, tools/ excluding tests.
 SEARCH_PATHS=("src" "agents" "tools/Aevatar.Tools.Cli")
 
-# Walk every [GAgent("...")] and [LegacyAgentKind("...")] occurrence.
-attribute_pattern='\[(GAgent|LegacyAgentKind)\("([^"]+)"\)\]'
+# `rg -o` emits one line per match (not per matching line); this is required
+# because a single source line may legally carry both `[GAgent("a.b")]` and
+# `[LegacyAgentKind("c.d")]` and we need to validate every kind token.
+# Capture group `kind` extracts just the token.
+attribute_pattern='\[(GAgent|LegacyAgentKind)\("(?P<kind>[^"]+)"\)\]'
 
 while IFS=: read -r file line content; do
-  # Strip the file:line prefix; extract the kind argument.
-  kind_token="$(printf '%s' "${content}" | sed -E "s/.*\[(GAgent|LegacyAgentKind)\(\"([^\"]+)\"\)\].*/\2/")"
+  # `rg -o` already returns just the matched substring (the whole attribute),
+  # so the embedded sed extracts the kind argument from one match per line.
+  kind_token="$(printf '%s' "${content}" | sed -E 's/^\[(GAgent|LegacyAgentKind)\("([^"]+)"\)\]$/\2/')"
   if [[ -z "${kind_token}" || "${kind_token}" == "${content}" ]]; then
     continue
   fi
@@ -49,7 +53,7 @@ while IFS=: read -r file line content; do
     emit_violation "${file}" "${line}" "${kind_token}" \
       "must match ${KIND_REGEX} (e.g. 'scheduled.skill-runner', 'channels.bot-registration')"
   fi
-done < <(rg --no-heading -n "${attribute_pattern}" "${SEARCH_PATHS[@]}" --glob '*.cs' || true)
+done < <(rg -o --no-heading -n "${attribute_pattern}" "${SEARCH_PATHS[@]}" --glob '*.cs' || true)
 
 if (( violations > 0 )); then
   echo "agent_kind_naming_guard: ${violations} invalid kind token(s) found." >&2

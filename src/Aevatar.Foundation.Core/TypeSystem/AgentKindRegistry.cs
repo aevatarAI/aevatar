@@ -14,39 +14,45 @@ namespace Aevatar.Foundation.Core.TypeSystem;
 /// <remarks>
 /// Registration is one-shot: builders capture types at host startup; the
 /// registry itself is read-only after construction so the activation hot
-/// path is lock-free dictionary lookup.
+/// path is lock-free dictionary lookup. <see cref="AgentImplementation"/>
+/// instances are pre-built per registration so resolution allocates nothing
+/// on the activation path.
 /// </remarks>
 public sealed class AgentKindRegistry : IAgentKindRegistry
 {
-    private readonly IServiceProvider _services;
-    private readonly Dictionary<string, AgentRegistration> _byKind;
+    private readonly Dictionary<string, AgentImplementation> _implByKind;
     private readonly Dictionary<string, string> _legacyKindToKind;
     private readonly Dictionary<string, string> _clrTypeNameToKind;
 
-    public AgentKindRegistry(IServiceProvider services, IEnumerable<AgentRegistration> registrations)
+    public AgentKindRegistry(IEnumerable<AgentRegistration> registrations)
     {
-        ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(registrations);
 
-        _services = services;
-        _byKind = new Dictionary<string, AgentRegistration>(StringComparer.Ordinal);
+        var byKind = new Dictionary<string, AgentRegistration>(StringComparer.Ordinal);
+        _implByKind = new Dictionary<string, AgentImplementation>(StringComparer.Ordinal);
         _legacyKindToKind = new Dictionary<string, string>(StringComparer.Ordinal);
         _clrTypeNameToKind = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        foreach (var registration in registrations)
-            Add(registration);
+        // Two-pass build: collect all primary kinds first so legacy-alias
+        // collision checks (alias colliding with a primary) see the full set.
+        var snapshot = registrations as IReadOnlyCollection<AgentRegistration> ?? registrations.ToList();
+        foreach (var registration in snapshot)
+            AddPrimary(byKind, registration);
+
+        foreach (var registration in snapshot)
+            AddAliases(byKind, registration);
     }
 
     public AgentImplementation Resolve(string kind)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(kind);
 
-        if (_byKind.TryGetValue(kind, out var direct))
-            return direct.ToImplementation(_services);
+        if (_implByKind.TryGetValue(kind, out var direct))
+            return direct;
 
         if (_legacyKindToKind.TryGetValue(kind, out var canonical) &&
-            _byKind.TryGetValue(canonical, out var aliased))
-            return aliased.ToImplementation(_services);
+            _implByKind.TryGetValue(canonical, out var aliased))
+            return aliased;
 
         throw new UnknownAgentKindException(kind);
     }
@@ -66,12 +72,14 @@ public sealed class AgentKindRegistry : IAgentKindRegistry
     {
         ArgumentNullException.ThrowIfNull(implementation);
         kind = implementation.Metadata.Kind;
-        return _byKind.ContainsKey(kind);
+        return _implByKind.ContainsKey(kind);
     }
 
-    private void Add(AgentRegistration registration)
+    private void AddPrimary(
+        Dictionary<string, AgentRegistration> byKind,
+        AgentRegistration registration)
     {
-        if (_byKind.TryGetValue(registration.Kind, out var existing))
+        if (byKind.TryGetValue(registration.Kind, out var existing))
         {
             throw new InvalidOperationException(
                 $"Duplicate agent kind '{registration.Kind}': already registered for " +
@@ -79,7 +87,8 @@ public sealed class AgentKindRegistry : IAgentKindRegistry
                 $"'{registration.ImplementationType.FullName}'.");
         }
 
-        _byKind[registration.Kind] = registration;
+        byKind[registration.Kind] = registration;
+        _implByKind[registration.Kind] = registration.BuildImplementation();
 
         var implClrName = registration.ImplementationType.FullName
             ?? throw new InvalidOperationException(
@@ -88,9 +97,27 @@ public sealed class AgentKindRegistry : IAgentKindRegistry
         TryAddClrTypeNameLookup(implClrName, registration.Kind);
         foreach (var legacyClrName in registration.LegacyClrTypeNames)
             TryAddClrTypeNameLookup(legacyClrName, registration.Kind);
+    }
 
+    private void AddAliases(
+        Dictionary<string, AgentRegistration> byKind,
+        AgentRegistration registration)
+    {
         foreach (var legacyKind in registration.LegacyKinds)
         {
+            // A legacy alias colliding with an existing primary would be
+            // shadowed in Resolve (primary lookup wins), silently routing
+            // some callers to the wrong implementation. Surface the conflict
+            // at registration time instead.
+            if (byKind.TryGetValue(legacyKind, out var primaryOwner) &&
+                !string.Equals(primaryOwner.Kind, registration.Kind, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Legacy agent kind '{legacyKind}' is also a primary kind owned by " +
+                    $"'{primaryOwner.ImplementationType.FullName}'. A legacy alias and a primary kind " +
+                    "cannot share the same token; pick a different alias or rename the primary.");
+            }
+
             if (_legacyKindToKind.TryGetValue(legacyKind, out var owner) &&
                 !string.Equals(owner, registration.Kind, StringComparison.Ordinal))
             {
@@ -130,22 +157,35 @@ public sealed record AgentRegistration(
     IReadOnlyList<string> LegacyKinds,
     IReadOnlyList<string> LegacyClrTypeNames)
 {
-    public AgentImplementation ToImplementation(IServiceProvider services) =>
-        new(
-            Factory: () => CreateInstance(services),
+    /// <summary>
+    /// Builds the <see cref="AgentImplementation"/> handle once at registry
+    /// construction. The factory closes over the agent's CLR type only;
+    /// dependency resolution happens against the activation-time
+    /// <see cref="IServiceProvider"/> the caller passes in, so grain-scoped
+    /// services bind through the grain's container instead of the silo
+    /// root container.
+    /// </summary>
+    public AgentImplementation BuildImplementation()
+    {
+        var implType = ImplementationType;
+        var kind = Kind;
+        return new AgentImplementation(
+            Factory: services => CreateInstance(services, implType, kind),
             StateContractType: StateContractType,
             Metadata: new AgentImplementationMetadata(
                 Kind: Kind,
                 ImplementationClrTypeName: ImplementationType.FullName ?? ImplementationType.Name,
                 LegacyKinds: LegacyKinds,
                 LegacyClrTypeNames: LegacyClrTypeNames));
+    }
 
-    private IAgent CreateInstance(IServiceProvider services)
+    private static IAgent CreateInstance(IServiceProvider services, Type implementationType, string kind)
     {
-        var instance = ActivatorUtilities.CreateInstance(services, ImplementationType);
+        ArgumentNullException.ThrowIfNull(services);
+        var instance = ActivatorUtilities.CreateInstance(services, implementationType);
         return instance as IAgent
             ?? throw new InvalidOperationException(
-                $"Agent class '{ImplementationType.FullName}' for kind '{Kind}' does not implement IAgent.");
+                $"Agent class '{implementationType.FullName}' for kind '{kind}' does not implement IAgent.");
     }
 
     public static AgentRegistration FromAgentType(Type agentType)
@@ -184,20 +224,12 @@ public sealed record AgentRegistration(
 
     private static Type ResolveStateContract(Type agentType)
     {
-        // Walk the inheritance chain looking for IAgent<TState>. State contract is
-        // diagnostic metadata; an agent without one falls back to typeof(object).
-        for (var current = agentType; current != null; current = current.BaseType)
+        // Type.GetInterfaces() already returns the full interface set across
+        // the inheritance chain, so a single scan suffices.
+        foreach (var iface in agentType.GetInterfaces())
         {
-            foreach (var iface in current.GetInterfaces())
-            {
-                if (!iface.IsGenericType)
-                    continue;
-
-                if (iface.GetGenericTypeDefinition() != typeof(IAgent<>))
-                    continue;
-
+            if (iface.IsGenericType && iface.GetGenericTypeDefinition() == typeof(IAgent<>))
                 return iface.GetGenericArguments()[0];
-            }
         }
 
         return typeof(object);

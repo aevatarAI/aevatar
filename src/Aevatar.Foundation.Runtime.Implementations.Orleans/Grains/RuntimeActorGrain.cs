@@ -24,6 +24,11 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     private readonly IPersistentState<RuntimeActorGrainState> _state;
     private IAgent? _agent;
     private string? _activeKind;
+    // Set once OnActivateAsync has finished its identity-resolution attempt.
+    // Without this, every inbound envelope that arrives while the agent is
+    // unbound retries the registry / reflection probe, which amplifies a
+    // persistent misconfiguration into per-envelope I/O.
+    private bool _identityResolutionAttempted;
     private IEventDeduplicator? _deduplicator;
     private IEnvelopePropagationPolicy _propagationPolicy =
         new DefaultEnvelopePropagationPolicy(new DefaultCorrelationLinkPolicy());
@@ -78,6 +83,8 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     /// </summary>
     private async Task ResumeFromPersistedIdentityAsync(CancellationToken ct)
     {
+        _identityResolutionAttempted = true;
+
         var identity = _state.State.Identity;
         if (identity != null && !string.IsNullOrWhiteSpace(identity.Kind))
         {
@@ -85,8 +92,17 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             return;
         }
 
-        if (!string.IsNullOrWhiteSpace(_state.State.AgentTypeName))
-            await BindAgentByLegacyClrTypeAsync(_state.State.AgentTypeName, ct);
+        if (string.IsNullOrWhiteSpace(_state.State.AgentTypeName))
+            return;
+
+        var outcome = await BindAgentByLegacyClrTypeAsync(_state.State.AgentTypeName, ct);
+        if (outcome == LegacyBindOutcome.BoundWithLazyTag)
+        {
+            // Lazy-tag mutated _state.State.Identity in-memory; persist
+            // exactly once here so subsequent activations skip the legacy
+            // CLR-name lookup. AgentTypeName stays untouched until Phase 3.
+            await _state.WriteStateAsync();
+        }
     }
 
     public override async Task OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
@@ -141,13 +157,17 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         if (_agent != null)
             return string.Equals(_state.State.AgentTypeName, agentTypeName, StringComparison.Ordinal);
 
-        var bound = await BindAgentByLegacyClrTypeAsync(agentTypeName);
-        if (!bound)
+        var outcome = await BindAgentByLegacyClrTypeAsync(agentTypeName);
+        if (outcome == LegacyBindOutcome.Failed)
             return false;
 
         _state.State.AgentId = this.GetPrimaryKeyString();
         _state.State.AgentTypeName = agentTypeName;
+        // BindAgentByLegacyClrTypeAsync may have mutated Identity in-memory
+        // (BoundWithLazyTag); a single WriteStateAsync persists both the
+        // legacy CLR-name fields and the lazy-tagged Identity envelope.
         await _state.WriteStateAsync();
+        _identityResolutionAttempted = true;
         return true;
     }
 
@@ -156,17 +176,34 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         ArgumentException.ThrowIfNullOrWhiteSpace(kind);
 
         if (_agent != null)
-            return string.Equals(_activeKind, kind, StringComparison.Ordinal);
+            return KindResolvesToActiveImplementation(kind);
 
-        var bound = await BindAgentByKindAsync(kind);
-        if (!bound)
+        var implementation = await BindAgentByKindAsync(kind);
+        if (implementation == null)
             return false;
 
+        // Persist the *canonical* kind, not the caller-provided string. If
+        // `kind` is a legacy alias, persisting it would lock the actor onto a
+        // deprecated token; subsequent alias removal would orphan the row.
+        var canonicalKind = implementation.Metadata.Kind;
+
         _state.State.AgentId = this.GetPrimaryKeyString();
-        _state.State.Identity = new RuntimeActorIdentity { Kind = kind };
+        _state.State.Identity = new RuntimeActorIdentity { Kind = canonicalKind };
+        // Also write AgentTypeName so older runtime pods (without this PR)
+        // activating the same row through the legacy CLR-name path still find
+        // an implementation. Phase 3 hard-deprecation removes this line once
+        // every pod is on the kind-registry path.
+        _state.State.AgentTypeName = implementation.Metadata.ImplementationClrTypeName;
         await _state.WriteStateAsync();
+        _identityResolutionAttempted = true;
         return true;
     }
+
+    private bool KindResolvesToActiveImplementation(string kind) =>
+        RuntimeActorIdentityResolution.ResolvesToSameImplementation(
+            ServiceProvider?.GetService<IAgentKindRegistry>(),
+            _activeKind,
+            kind);
 
     public Task<bool> IsInitializedAsync() =>
         Task.FromResult(
@@ -181,7 +218,12 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     {
         if (_agent == null)
         {
-            await ResumeFromPersistedIdentityAsync(CancellationToken.None);
+            // Only attempt resolution when OnActivateAsync hasn't already
+            // tried — otherwise a persistent misconfiguration (missing
+            // [GAgent] registration, deleted CLR class, etc.) amplifies into
+            // a per-envelope registry probe + reflection scan + state write.
+            if (!_identityResolutionAttempted)
+                await ResumeFromPersistedIdentityAsync(CancellationToken.None);
 
             if (_agent == null)
             {
@@ -371,19 +413,23 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         }
 
         _state.State = new RuntimeActorGrainState();
+        // Clearing state takes us back to "no identity configured"; let any
+        // future envelope re-attempt resolution rather than treating it as
+        // permanently failed.
+        _identityResolutionAttempted = false;
         await _state.ClearStateAsync();
     }
 
-    private async Task<bool> BindAgentByKindAsync(string kind, CancellationToken ct = default)
+    private async Task<AgentImplementation?> BindAgentByKindAsync(string kind, CancellationToken ct = default)
     {
         var registry = ServiceProvider?.GetService<IAgentKindRegistry>();
         if (registry == null)
         {
             _logger.LogError(
                 "Cannot bind actor {ActorId} by kind '{Kind}': IAgentKindRegistry not registered.",
-                this.GetPrimaryKeyString(),
+                SafeGetActorIdForLog(),
                 kind);
-            return false;
+            return null;
         }
 
         AgentImplementation implementation;
@@ -397,19 +443,32 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 ex,
                 "Unable to resolve agent kind '{Kind}' for actor {ActorId}.",
                 kind,
-                this.GetPrimaryKeyString());
-            return false;
+                SafeGetActorIdForLog());
+            return null;
         }
 
-        var bound = await BindAgentAsync(implementation, ct);
-        if (!bound)
-            return false;
+        if (!await BindAgentAsync(implementation, ct))
+            return null;
 
-        _activeKind = kind;
-        return true;
+        // Track the *canonical* kind from the registry, not the caller's
+        // input. Aliases resolve to the same impl but should not surface as
+        // separate identities once activation succeeds.
+        _activeKind = implementation.Metadata.Kind;
+        return implementation;
     }
 
-    private async Task<bool> BindAgentByLegacyClrTypeAsync(string clrTypeName, CancellationToken ct = default)
+    private enum LegacyBindOutcome
+    {
+        Failed,
+        // Resolved via the reflection fallback or activation failed before
+        // Identity could be lazy-tagged. Caller should not persist Identity.
+        Bound,
+        // Resolved via the registry to a stable kind; Identity has been
+        // mutated in-memory but not persisted. Caller decides when to write.
+        BoundWithLazyTag,
+    }
+
+    private async Task<LegacyBindOutcome> BindAgentByLegacyClrTypeAsync(string clrTypeName, CancellationToken ct = default)
     {
         var registry = ServiceProvider?.GetService<IAgentKindRegistry>();
         var legacyResolver = ServiceProvider?.GetService<ILegacyAgentClrTypeResolver>();
@@ -417,18 +476,40 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         // Prefer kind resolution: if a registered class lists this CLR full
         // name (current Type.FullName or [LegacyClrTypeName]), bind by kind
         // and lazy-tag Identity.Kind so subsequent activations skip this lane.
-        if (registry != null && TryNormalizeClrTypeName(clrTypeName, out var normalizedClrName) &&
+        if (registry != null && RuntimeActorIdentityResolution.TryNormalizeClrTypeName(clrTypeName, out var normalizedClrName) &&
             registry.TryResolveKindByClrTypeName(normalizedClrName, out var resolvedKind))
         {
-            var implementation = registry.Resolve(resolvedKind);
-            if (await BindAgentAsync(implementation, ct))
+            AgentImplementation implementation;
+            try
             {
-                await LazyTagIdentityAsync(resolvedKind, clrTypeName);
-                _activeKind = resolvedKind;
-                return true;
+                implementation = registry.Resolve(resolvedKind);
+            }
+            catch (UnknownAgentKindException ex)
+            {
+                // Defensive symmetry with BindAgentByKindAsync. The registry
+                // is immutable post-build and returning a kind the registry
+                // can't resolve indicates internal corruption — surface it as
+                // a failed bind rather than an unhandled exception that drops
+                // the envelope.
+                _logger.LogError(
+                    ex,
+                    "Registry returned kind '{Kind}' for legacy CLR name '{ClrTypeName}' but Resolve failed for actor {ActorId}.",
+                    resolvedKind,
+                    clrTypeName,
+                    SafeGetActorIdForLog());
+                return LegacyBindOutcome.Failed;
             }
 
-            return false;
+            if (!await BindAgentAsync(implementation, ct))
+                return LegacyBindOutcome.Failed;
+
+            _activeKind = implementation.Metadata.Kind;
+            // Mutate Identity in-memory only. The caller (Resume / Initialize)
+            // owns the WriteStateAsync so a single round-trip persists both
+            // this lazy-tag and any other state mutations the caller is
+            // making in the same step.
+            ApplyLazyIdentityTagInMemory(_activeKind, clrTypeName);
+            return LegacyBindOutcome.BoundWithLazyTag;
         }
 
         // Phase 1 transitional fallback: un-decorated [GAgent] classes still
@@ -437,17 +518,18 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         // ILegacyAgentClrTypeResolver registration.
         if (legacyResolver != null && legacyResolver.TryResolve(clrTypeName, out var legacyImpl))
         {
-            var bound = await BindAgentAsync(legacyImpl, ct);
-            if (bound)
-                _activeKind = legacyImpl.Metadata.Kind;
-            return bound;
+            if (!await BindAgentAsync(legacyImpl, ct))
+                return LegacyBindOutcome.Failed;
+
+            _activeKind = legacyImpl.Metadata.Kind;
+            return LegacyBindOutcome.Bound;
         }
 
         _logger.LogError(
             "Unable to resolve agent for actor {ActorId}: persisted AgentTypeName '{ClrTypeName}' is not registered with IAgentKindRegistry and no transitional fallback is available.",
             SafeGetActorIdForLog(),
             clrTypeName);
-        return false;
+        return LegacyBindOutcome.Failed;
     }
 
     private string SafeGetActorIdForLog()
@@ -470,7 +552,10 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         try
         {
             using var stateBinding = _stateBindingAccessor?.Bind(_state);
-            var agent = implementation.Factory()
+            // Pass the grain's activation-time ServiceProvider so the agent's
+            // constructor-injected scoped dependencies resolve in the grain's
+            // own container, not the silo root.
+            var agent = implementation.Factory(ServiceProvider)
                 ?? throw new InvalidOperationException(
                     $"Agent factory for kind '{implementation.Metadata.Kind}' returned null.");
             InjectDependencies(agent, this.GetPrimaryKeyString());
@@ -490,7 +575,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         }
     }
 
-    private async Task LazyTagIdentityAsync(string kind, string legacyClrTypeName)
+    private void ApplyLazyIdentityTagInMemory(string kind, string legacyClrTypeName)
     {
         var existing = _state.State.Identity;
         if (existing != null && string.Equals(existing.Kind, kind, StringComparison.Ordinal))
@@ -502,25 +587,6 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             StateSchemaVersion = existing?.StateSchemaVersion ?? 0,
             LegacyClrTypeName = legacyClrTypeName,
         };
-        await _state.WriteStateAsync();
-    }
-
-    /// <summary>
-    /// Strip the assembly-qualifier from a CLR type token so the registry
-    /// can match against <see cref="Type.FullName"/>. Tests + bootstrap
-    /// helpers historically pass <see cref="Type.AssemblyQualifiedName"/>.
-    /// </summary>
-    private static bool TryNormalizeClrTypeName(string clrTypeName, out string normalized)
-    {
-        if (string.IsNullOrWhiteSpace(clrTypeName))
-        {
-            normalized = string.Empty;
-            return false;
-        }
-
-        var commaIndex = clrTypeName.IndexOf(',');
-        normalized = commaIndex < 0 ? clrTypeName.Trim() : clrTypeName[..commaIndex].Trim();
-        return normalized.Length > 0;
     }
 
     private void InjectDependencies(IAgent agent, string actorId)

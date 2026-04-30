@@ -12,15 +12,14 @@ namespace Aevatar.Foundation.Core.TypeSystem;
 /// here so the grain itself depends only on
 /// <see cref="IAgentKindRegistry"/> + this transitional port.
 /// </summary>
+/// <remarks>
+/// Stateless: the resolver does not capture an <see cref="IServiceProvider"/>;
+/// the activation-time provider is supplied via
+/// <see cref="AgentImplementation.Factory"/> so grain-scoped dependencies
+/// resolve in the grain's own container.
+/// </remarks>
 public sealed class ReflectionLegacyAgentClrTypeResolver : ILegacyAgentClrTypeResolver
 {
-    private readonly IServiceProvider _services;
-
-    public ReflectionLegacyAgentClrTypeResolver(IServiceProvider services)
-    {
-        _services = services;
-    }
-
     public bool TryResolve(string clrTypeName, out AgentImplementation implementation)
     {
         if (string.IsNullOrWhiteSpace(clrTypeName))
@@ -37,7 +36,7 @@ public sealed class ReflectionLegacyAgentClrTypeResolver : ILegacyAgentClrTypeRe
         }
 
         implementation = new AgentImplementation(
-            Factory: () => CreateInstance(resolvedType),
+            Factory: services => CreateInstance(services, resolvedType),
             StateContractType: typeof(object),
             Metadata: new AgentImplementationMetadata(
                 Kind: string.Empty,
@@ -47,9 +46,10 @@ public sealed class ReflectionLegacyAgentClrTypeResolver : ILegacyAgentClrTypeRe
         return true;
     }
 
-    private IAgent CreateInstance(Type agentType)
+    private static IAgent CreateInstance(IServiceProvider services, Type agentType)
     {
-        var instance = ActivatorUtilities.CreateInstance(_services, agentType);
+        ArgumentNullException.ThrowIfNull(services);
+        var instance = ActivatorUtilities.CreateInstance(services, agentType);
         return instance as IAgent
             ?? throw new InvalidOperationException(
                 $"Resolved type '{agentType.FullName}' does not implement IAgent.");

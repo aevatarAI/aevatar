@@ -47,7 +47,9 @@ public static class AgentKindToken
 
         if (!Format.IsMatch(kind))
             throw new ArgumentException(
-                $"Agent kind '{kind}' must match {FormatPattern} (e.g. 'scheduled.skill-runner', 'channels.bot-registration').",
+                $"Agent kind '{kind}' must use the format '<module>.<entity>' " +
+                "(lowercase letters, digits and hyphens; hyphens not at segment edges; multiple dot-separated segments allowed). " +
+                "Examples: 'scheduled.skill-runner', 'channels.bot-registration'.",
                 parameterName);
     }
 }

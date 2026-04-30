@@ -12,7 +12,12 @@ public class AgentKindRegistryTests
     [Fact]
     public void Resolve_ReturnsImplementationForRegisteredKind()
     {
-        var registry = BuildRegistry(new AgentKindRegistryBuilder().Register<KindRegistryFixtureSubscription>());
+        var services = new ServiceCollection();
+        services.AddSingleton(new AgentKindRegistryBuilder().Register<KindRegistryFixtureSubscription>());
+        services.AddSingleton<IAgentKindRegistry>(sp =>
+            new AgentKindRegistry(sp.GetRequiredService<AgentKindRegistryBuilder>().Build()));
+        var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<IAgentKindRegistry>();
 
         var implementation = registry.Resolve("test.subscription");
 
@@ -20,8 +25,34 @@ public class AgentKindRegistryTests
         implementation.Metadata.ImplementationClrTypeName
             .Should().Be(typeof(KindRegistryFixtureSubscription).FullName);
 
-        var instance = implementation.Factory();
+        var instance = implementation.Factory(provider);
         instance.Should().BeOfType<KindRegistryFixtureSubscription>();
+    }
+
+    [Fact]
+    public void Factory_UsesCallerSuppliedServiceProvider_NotRegistryCaptureTime()
+    {
+        // The implementation factory must resolve dependencies from the
+        // *caller's* container so grain-scoped services (or test-overridden
+        // singletons) bind correctly. A factory that captured the registry's
+        // construction-time provider would silently use stale dependencies.
+        var registryServices = new ServiceCollection();
+        registryServices.AddSingleton(new AgentKindRegistryBuilder().Register<DependencyConsumingAgent>());
+        registryServices.AddSingleton<IAgentKindRegistry>(sp =>
+            new AgentKindRegistry(sp.GetRequiredService<AgentKindRegistryBuilder>().Build()));
+        // Registry-time provider has Marker = "registry".
+        registryServices.AddSingleton(new DependencyMarker("registry"));
+        var registry = registryServices.BuildServiceProvider().GetRequiredService<IAgentKindRegistry>();
+
+        // Caller-time provider has Marker = "caller". Factory should use it.
+        var callerServices = new ServiceCollection();
+        callerServices.AddSingleton(new DependencyMarker("caller"));
+        using var callerProvider = callerServices.BuildServiceProvider();
+
+        var implementation = registry.Resolve("test.dependency-consumer");
+        var instance = (DependencyConsumingAgent)implementation.Factory(callerProvider);
+
+        instance.Marker.Value.Should().Be("caller");
     }
 
     [Fact]
@@ -122,12 +153,193 @@ public class AgentKindRegistryTests
             .Should().Be(typeof(KindRegistryFixtureSplit).FullName);
     }
 
+    [Fact]
+    public void TryGetKind_ReturnsTrueForRegisteredImplementation()
+    {
+        var registry = BuildRegistry(new AgentKindRegistryBuilder().Register<KindRegistryFixtureSubscription>());
+        var implementation = registry.Resolve("test.subscription");
+
+        var found = registry.TryGetKind(implementation, out var kind);
+
+        found.Should().BeTrue();
+        kind.Should().Be("test.subscription");
+    }
+
+    [Fact]
+    public void TryGetKind_ThrowsForNullImplementation()
+    {
+        var registry = BuildRegistry(new AgentKindRegistryBuilder());
+
+        var act = () => registry.TryGetKind(null!, out _);
+
+        act.Should().Throw<ArgumentNullException>();
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("  ")]
+    public void Resolve_ThrowsForEmptyKind(string? kind)
+    {
+        var registry = BuildRegistry(new AgentKindRegistryBuilder());
+
+        var act = () => registry.Resolve(kind!);
+
+        act.Should().Throw<ArgumentException>();
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("  ")]
+    public void TryResolveKindByClrTypeName_ReturnsFalseForEmptyInput(string? clrName)
+    {
+        var registry = BuildRegistry(new AgentKindRegistryBuilder().Register<KindRegistryFixtureSubscription>());
+
+        var found = registry.TryResolveKindByClrTypeName(clrName!, out _);
+
+        found.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Build_RejectsConflictingClrTypeNameClaims()
+    {
+        // Two different kinds claim the same legacy CLR type name. Registry
+        // construction must reject this — otherwise reverse lookup is
+        // ambiguous and lazy-tagging picks one arbitrarily.
+        var first = new AgentRegistration(
+            Kind: "test.first",
+            ImplementationType: typeof(KindRegistryFixtureSubscription),
+            StateContractType: typeof(object),
+            LegacyKinds: Array.Empty<string>(),
+            LegacyClrTypeNames: new[] { "Some.Shared.Old.ClassName" });
+        var second = new AgentRegistration(
+            Kind: "test.second",
+            ImplementationType: typeof(KindRegistryFixtureSplit),
+            StateContractType: typeof(object),
+            LegacyKinds: Array.Empty<string>(),
+            LegacyClrTypeNames: new[] { "Some.Shared.Old.ClassName" });
+
+        var act = () => new AgentKindRegistry(new[] { first, second });
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*'Some.Shared.Old.ClassName' is claimed by both kinds 'test.first' and 'test.second'*");
+    }
+
+    [Fact]
+    public void Build_RejectsLegacyKindClaimedByMultipleCanonicalKinds()
+    {
+        var first = new AgentRegistration(
+            Kind: "test.alpha",
+            ImplementationType: typeof(KindRegistryFixtureSubscription),
+            StateContractType: typeof(object),
+            LegacyKinds: new[] { "shared.legacy" },
+            LegacyClrTypeNames: Array.Empty<string>());
+        var second = new AgentRegistration(
+            Kind: "test.beta",
+            ImplementationType: typeof(KindRegistryFixtureSplit),
+            StateContractType: typeof(object),
+            LegacyKinds: new[] { "shared.legacy" },
+            LegacyClrTypeNames: Array.Empty<string>());
+
+        var act = () => new AgentKindRegistry(new[] { first, second });
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Legacy agent kind 'shared.legacy' is claimed by both 'test.alpha' and 'test.beta'*");
+    }
+
+    [Fact]
+    public void Builder_RegisterSameTypeTwice_IsIdempotent()
+    {
+        var builder = new AgentKindRegistryBuilder()
+            .Register<KindRegistryFixtureSubscription>()
+            .Register<KindRegistryFixtureSubscription>();
+
+        var registry = BuildRegistry(builder);
+        registry.Resolve("test.subscription").Should().NotBeNull();
+    }
+
+    [Fact]
+    public void FromAgentType_ThrowsWhenTypeIsNotAgent()
+    {
+        var act = () => AgentRegistration.FromAgentType(typeof(string));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*does not implement IAgent*");
+    }
+
+    [Fact]
+    public void FromAgentType_ThrowsWhenTypeMissingGAgentAttribute()
+    {
+        var act = () => AgentRegistration.FromAgentType(typeof(LegacyResolverFixtureAgent));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*has no [GAgent] attribute*");
+    }
+
+    [Fact]
+    public void FromAgentType_ThrowsForNullArgument()
+    {
+        var act = () => AgentRegistration.FromAgentType(null!);
+
+        act.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void Builder_Register_ThrowsForNullRegistration()
+    {
+        var builder = new AgentKindRegistryBuilder();
+
+        var act = () => builder.Register((AgentRegistration)null!);
+
+        act.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void Build_RejectsLegacyAliasCollidingWithExistingPrimaryKind()
+    {
+        // Without this guard, Resolve("test.shared") silently routes to the
+        // first registration (primary lookup wins) and the second
+        // registration's [LegacyAgentKind("test.shared")] declaration is
+        // silently ignored — surface the conflict at registration time.
+        var first = new AgentRegistration(
+            Kind: "test.shared",
+            ImplementationType: typeof(KindRegistryFixtureSubscription),
+            StateContractType: typeof(object),
+            LegacyKinds: Array.Empty<string>(),
+            LegacyClrTypeNames: Array.Empty<string>());
+        var second = new AgentRegistration(
+            Kind: "test.other",
+            ImplementationType: typeof(KindRegistryFixtureSplit),
+            StateContractType: typeof(object),
+            LegacyKinds: new[] { "test.shared" },
+            LegacyClrTypeNames: Array.Empty<string>());
+
+        var act = () => new AgentKindRegistry(new[] { first, second });
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Legacy agent kind 'test.shared' is also a primary kind*");
+    }
+
+    [Fact]
+    public void Build_RejectsBuilderSnapshotMutationsAfterBuild()
+    {
+        // Build() must return a defensive copy: post-Build mutations to the
+        // builder must not leak into the constructed registry.
+        var builder = new AgentKindRegistryBuilder().Register<KindRegistryFixtureSubscription>();
+        var snapshot = builder.Build();
+        builder.Register<KindRegistryFixtureSplit>(); // mutates builder
+
+        snapshot.Should().HaveCount(1);
+        snapshot.Should().ContainSingle(r => r.Kind == "test.subscription");
+    }
+
     private static IAgentKindRegistry BuildRegistry(AgentKindRegistryBuilder builder)
     {
         var services = new ServiceCollection();
         services.AddSingleton(builder);
         services.AddSingleton<IAgentKindRegistry>(sp =>
-            new AgentKindRegistry(sp, sp.GetRequiredService<AgentKindRegistryBuilder>().Build()));
+            new AgentKindRegistry(sp.GetRequiredService<AgentKindRegistryBuilder>().Build()));
 
         var provider = services.BuildServiceProvider();
         return provider.GetRequiredService<IAgentKindRegistry>();
@@ -144,6 +356,22 @@ internal sealed class KindRegistryFixtureSubscription : KindRegistryFixtureAgent
 [LegacyClrTypeName("Some.Old.Namespace.SkillRunnerGAgent")]
 internal sealed class KindRegistryFixtureSplit : KindRegistryFixtureAgentBase
 {
+}
+
+internal sealed class DependencyMarker(string value)
+{
+    public string Value { get; } = value;
+}
+
+[GAgent("test.dependency-consumer")]
+internal sealed class DependencyConsumingAgent : KindRegistryFixtureAgentBase
+{
+    public DependencyConsumingAgent(DependencyMarker marker)
+    {
+        Marker = marker;
+    }
+
+    public DependencyMarker Marker { get; }
 }
 
 internal abstract class KindRegistryFixtureAgentBase : IAgent

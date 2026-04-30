@@ -56,10 +56,12 @@ public sealed class AgentKindRegistryBuilder
     }
 
     /// <summary>
-    /// Snapshots the registrations into an immutable collection; the builder
-    /// is intentionally not reusable after this call.
+    /// Snapshots the registrations into an immutable list. Returning a copy
+    /// rather than the live <c>Dictionary.ValueCollection</c> ensures
+    /// post-build mutations to the builder do not leak into the constructed
+    /// <see cref="AgentKindRegistry"/>.
     /// </summary>
-    public IReadOnlyCollection<AgentRegistration> Build() => _byKind.Values;
+    public IReadOnlyCollection<AgentRegistration> Build() => _byKind.Values.ToList();
 
     private void ScanAssembly(Assembly assembly)
     {

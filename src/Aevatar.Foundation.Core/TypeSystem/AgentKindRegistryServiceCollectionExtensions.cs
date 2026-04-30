@@ -36,8 +36,11 @@ public static class AgentKindRegistryServiceCollectionExtensions
 
         var builder = new AgentKindRegistryBuilder();
         services.AddSingleton(builder);
-        services.AddSingleton<IAgentKindRegistry>(sp =>
-            new AgentKindRegistry(sp, sp.GetRequiredService<AgentKindRegistryBuilder>().Build()));
+        // First call wins for the registry factory: subsequent
+        // AddAevatarAgentKindRegistry(...) invocations only mutate the shared
+        // builder, never re-register the factory, so DI ordering is stable.
+        services.TryAddSingleton<IAgentKindRegistry>(sp =>
+            new AgentKindRegistry(sp.GetRequiredService<AgentKindRegistryBuilder>().Build()));
         return builder;
     }
 }

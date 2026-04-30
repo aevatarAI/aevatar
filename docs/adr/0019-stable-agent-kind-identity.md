@@ -49,6 +49,20 @@ serialized, `[Id(7)]`) carries:
 - `LegacyClrTypeName` — populated only during the Phase 1/2 transition;
   becomes `reserved` in Phase 3.
 
+#### Why Orleans serialization here, not Protobuf
+
+CLAUDE.md mandates Protobuf for new persisted state objects. The exception
+made here is intentional and bounded: `RuntimeActorIdentity` is embedded in
+the existing Orleans-serialized `RuntimeActorGrainState` envelope (the
+runtime-owned outer record, not a domain state). Switching `RuntimeActorIdentity`
+alone to Protobuf would require either dual-encoding (Orleans wrapper +
+Protobuf bytes for `Identity`) or migrating the entire `RuntimeActorGrainState`
+to Protobuf — the latter is a separate storage-layer migration. Phase 1
+keeps the envelope's serialization technology homogeneous and defers the
+full Protobuf migration of `RuntimeActorGrainState` to a follow-up issue.
+This is recorded as an explicit waiver, not silent drift; the follow-up
+must land before any further state field is added to the runtime envelope.
+
 ### Registry contract
 
 ```csharp
