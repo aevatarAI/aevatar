@@ -35,6 +35,7 @@ message SkillExecutionState {
   optional int32 max_tokens = 17;
   optional int32 max_tool_rounds = 18;
   optional int32 max_history_messages = 19;
+  optional int64 definition_config_revision = 20;
 }
 
 message StartSkillExecutionCommand {
@@ -53,6 +54,7 @@ message StartSkillExecutionCommand {
   optional int32 max_tokens = 17;
   optional int32 max_tool_rounds = 18;
   optional int32 max_history_messages = 19;
+  optional int64 definition_config_revision = 20;
 }
 
 message SkillExecutionStartedEvent {
@@ -73,6 +75,7 @@ message SkillExecutionStartedEvent {
   optional int32 max_tokens = 17;
   optional int32 max_tool_rounds = 18;
   optional int32 max_history_messages = 19;
+  optional int64 definition_config_revision = 20;
 }
 
 message SkillExecutionCompletedEvent {

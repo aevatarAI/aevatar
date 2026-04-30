@@ -158,6 +158,8 @@ public sealed class SkillExecutionGAgent : AIGAgentBase<SkillExecutionState>
         if (command.HasMaxTokens) started.MaxTokens = command.MaxTokens;
         if (command.HasMaxToolRounds) started.MaxToolRounds = command.MaxToolRounds;
         if (command.HasMaxHistoryMessages) started.MaxHistoryMessages = command.MaxHistoryMessages;
+        if (command.HasDefinitionConfigRevision)
+            started.DefinitionConfigRevision = command.DefinitionConfigRevision;
 
         await PersistDomainEventAsync(started);
 
@@ -579,29 +581,37 @@ public sealed class SkillExecutionGAgent : AIGAgentBase<SkillExecutionState>
         return $"{prompt}\nCurrent UTC time: {now:O}\nTrigger reason: {(string.IsNullOrWhiteSpace(reason) ? "manual" : reason)}";
     }
 
-    private Task ReportExecutionCompletedAsync(Timestamp completedAt, CancellationToken ct) =>
-        ReportToDefinitionAsync(
-            new ReportSkillExecutionCompletedCommand
-            {
-                ExecutionId = Id,
-                CompletedAt = completedAt,
-            },
-            ct);
+    private Task ReportExecutionCompletedAsync(Timestamp completedAt, CancellationToken ct)
+    {
+        var command = new ReportSkillExecutionCompletedCommand
+        {
+            ExecutionId = Id,
+            CompletedAt = completedAt,
+        };
+        if (State.HasDefinitionConfigRevision)
+            command.DefinitionConfigRevision = State.DefinitionConfigRevision;
+
+        return ReportToDefinitionAsync(command, ct);
+    }
 
     private Task ReportExecutionFailedAsync(
         Timestamp failedAt,
         string error,
         int retryAttempt,
-        CancellationToken ct) =>
-        ReportToDefinitionAsync(
-            new ReportSkillExecutionFailedCommand
-            {
-                ExecutionId = Id,
-                FailedAt = failedAt,
-                Error = error,
-                RetryAttempt = retryAttempt,
-            },
-            ct);
+        CancellationToken ct)
+    {
+        var command = new ReportSkillExecutionFailedCommand
+        {
+            ExecutionId = Id,
+            FailedAt = failedAt,
+            Error = error,
+            RetryAttempt = retryAttempt,
+        };
+        if (State.HasDefinitionConfigRevision)
+            command.DefinitionConfigRevision = State.DefinitionConfigRevision;
+
+        return ReportToDefinitionAsync(command, ct);
+    }
 
     private async Task ReportToDefinitionAsync(IMessage command, CancellationToken ct)
     {
@@ -638,6 +648,10 @@ public sealed class SkillExecutionGAgent : AIGAgentBase<SkillExecutionState>
         else next.ClearMaxTokens();
         next.MaxToolRounds = evt.HasMaxToolRounds ? evt.MaxToolRounds : SkillDefinitionDefaults.DefaultMaxToolRounds;
         next.MaxHistoryMessages = evt.HasMaxHistoryMessages ? evt.MaxHistoryMessages : SkillDefinitionDefaults.DefaultMaxHistoryMessages;
+        if (evt.HasDefinitionConfigRevision)
+            next.DefinitionConfigRevision = evt.DefinitionConfigRevision;
+        else
+            next.ClearDefinitionConfigRevision();
         return next;
     }
 

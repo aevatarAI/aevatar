@@ -264,13 +264,13 @@ public sealed class WorkflowAgentGAgentTests : IAsyncLifetime
     [Fact]
     public async Task HandleTriggerAsync_ShouldPinOwnerLlmConfigOverridesOnDispatchedMetadata()
     {
-        // Symmetric with SkillDefinitionGAgentTests'
+        // Symmetric with SkillExecutionGAgentTests'
         // BuildExecutionMetadata_ShouldPinOwnerLlmConfigOverrides_WhenSourceReturnsConfig:
         // workflow-backed agents (e.g. social_media) honor the bot owner's pre-configured
         // model + NyxID route + tool cap exactly the same way. Without this, the workflow's
         // LLM steps fall through to NyxIdLLMProvider's compile-time `gpt-5.4` + gateway
         // default and 400 when the bot owner pre-configured `chrono-llm` instead of OpenAI.
-        var source = new SkillDefinitionGAgentTests.StubOwnerLlmConfigSource(new OwnerLlmConfig(
+        var source = new SkillExecutionGAgentTests.StubOwnerLlmConfigSource(new OwnerLlmConfig(
             DefaultModel: "gpt-5.5",
             PreferredLlmRoute: "/api/v1/proxy/s/chrono-llm",
             MaxToolRounds: 7));

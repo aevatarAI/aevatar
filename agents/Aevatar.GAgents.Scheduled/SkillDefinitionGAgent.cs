@@ -171,6 +171,7 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
                 ScopeId = State.ScopeId ?? string.Empty,
                 ProviderName = State.ProviderName ?? SkillDefinitionDefaults.DefaultProviderName,
                 Model = State.Model ?? string.Empty,
+                DefinitionConfigRevision = State.ConfigRevision,
             };
 
             if (State.HasTemperature)
@@ -289,12 +290,24 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
             return;
         }
 
+        if (IsStaleExecutionReport(
+                command.ExecutionId,
+                command.HasDefinitionConfigRevision,
+                command.DefinitionConfigRevision))
+        {
+            return;
+        }
+
         var completedAt = command.CompletedAt ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
-        await PersistDomainEventAsync(new SkillDefinitionExecutionCompletedEvent
+        var completed = new SkillDefinitionExecutionCompletedEvent
         {
             ExecutionId = command.ExecutionId.Trim(),
             CompletedAt = completedAt,
-        });
+        };
+        if (command.HasDefinitionConfigRevision)
+            completed.DefinitionConfigRevision = command.DefinitionConfigRevision;
+
+        await PersistDomainEventAsync(completed);
 
         await UpdateRegistryExecutionResultAsync(
             status: State.Enabled ? SkillDefinitionDefaults.StatusRunning : SkillDefinitionDefaults.StatusDisabled,
@@ -313,14 +326,26 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
             return;
         }
 
+        if (IsStaleExecutionReport(
+                command.ExecutionId,
+                command.HasDefinitionConfigRevision,
+                command.DefinitionConfigRevision))
+        {
+            return;
+        }
+
         var failedAt = command.FailedAt ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
-        await PersistDomainEventAsync(new SkillDefinitionExecutionFailedEvent
+        var failed = new SkillDefinitionExecutionFailedEvent
         {
             ExecutionId = command.ExecutionId.Trim(),
             FailedAt = failedAt,
             Error = command.Error?.Trim() ?? string.Empty,
             RetryAttempt = command.RetryAttempt,
-        });
+        };
+        if (command.HasDefinitionConfigRevision)
+            failed.DefinitionConfigRevision = command.DefinitionConfigRevision;
+
+        await PersistDomainEventAsync(failed);
 
         await UpdateRegistryExecutionResultAsync(
             status: State.Enabled ? SkillDefinitionDefaults.StatusError : SkillDefinitionDefaults.StatusDisabled,
@@ -422,6 +447,33 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
         await UserAgentCatalogStoreCommands.DispatchExecutionUpdateAsync(Services, Id, command, ct);
     }
 
+    private bool IsStaleExecutionReport(string executionId, bool hasDefinitionConfigRevision, long definitionConfigRevision)
+    {
+        if (!hasDefinitionConfigRevision)
+        {
+            if (State.ConfigRevision == 0)
+                return false;
+
+            Logger.LogInformation(
+                "Skill definition {ActorId} ignored unversioned execution report {ExecutionId}; current config revision is {CurrentRevision}",
+                Id,
+                executionId.Trim(),
+                State.ConfigRevision);
+            return true;
+        }
+
+        if (definitionConfigRevision == State.ConfigRevision)
+            return false;
+
+        Logger.LogInformation(
+            "Skill definition {ActorId} ignored stale execution report {ExecutionId} from config revision {ReportRevision}; current revision is {CurrentRevision}",
+            Id,
+            executionId.Trim(),
+            definitionConfigRevision,
+            State.ConfigRevision);
+        return true;
+    }
+
     private static SkillDefinitionState ApplyInitialized(SkillDefinitionState current, SkillDefinitionInitializedEvent evt)
     {
         var next = current.Clone();
@@ -448,6 +500,7 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
 
         next.MaxToolRounds = evt.HasMaxToolRounds ? evt.MaxToolRounds : SkillDefinitionDefaults.DefaultMaxToolRounds;
         next.MaxHistoryMessages = evt.HasMaxHistoryMessages ? evt.MaxHistoryMessages : SkillDefinitionDefaults.DefaultMaxHistoryMessages;
+        next.ConfigRevision = current.ConfigRevision + 1;
         return next;
     }
 
@@ -475,6 +528,7 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
         var next = current.Clone();
         next.Enabled = false;
         next.NextRunAt = null;
+        next.ConfigRevision = current.ConfigRevision + 1;
         return next;
     }
 
@@ -482,6 +536,7 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
     {
         var next = current.Clone();
         next.Enabled = true;
+        next.ConfigRevision = current.ConfigRevision + 1;
         return next;
     }
 
