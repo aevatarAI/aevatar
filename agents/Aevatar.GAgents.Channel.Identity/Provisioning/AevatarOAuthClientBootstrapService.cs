@@ -1,7 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -46,7 +45,6 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
     private readonly AevatarOAuthClientProjectionPort _projectionPort;
     private readonly IActorRuntime _actorRuntime;
     private readonly ILogger<AevatarOAuthClientBootstrapService> _logger;
-    private readonly IConfiguration _configuration;
     private readonly CancellationTokenSource _stoppingCts = new();
     private Task? _bootstrapTask;
 
@@ -54,7 +52,6 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
         IAevatarOAuthClientProvider clientProvider,
         AevatarOAuthClientProjectionPort projectionPort,
         IActorRuntime actorRuntime,
-        IConfiguration configuration,
         ILogger<AevatarOAuthClientBootstrapService> logger)
     {
         // Provider is registered as a singleton (so are its transitive deps);
@@ -66,7 +63,6 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
         _clientProvider = clientProvider ?? throw new ArgumentNullException(nameof(clientProvider));
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
-        _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -182,6 +178,15 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
             .EnsureProjectionForActorAsync(AevatarOAuthClientGAgent.WellKnownId, ct)
             .ConfigureAwait(false);
 
+        // Cold-boot DCR is mediated by the well-known actor (PR #521 review):
+        // every silo broadcasts EnsureAevatarOAuthClientProvisionedCommand,
+        // and the actor's single-threaded handler turns the broadcast into
+        // exactly one DCR HTTP call. Without this seam the bootstrap path
+        // races on the projection readmodel and creates orphan OAuth clients
+        // at NyxID. The redirect URI must match what the broker sends at
+        // authorize / token time — both call sites use NyxIdRedirectUriResolver.
+        var redirectUri = NyxIdRedirectUriResolver.Resolve(_logger);
+
         AevatarOAuthClientSnapshot? cached = null;
         try
         {
@@ -192,26 +197,28 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
             // expected on the first run
         }
 
+        var redirectDrifted = cached is not null && RedirectUriDrifted(cached.RedirectUri, redirectUri);
         if (cached is not null
             && string.Equals(cached.NyxIdAuthority, authority, StringComparison.Ordinal)
-            && !string.IsNullOrEmpty(cached.ClientId))
+            && !string.IsNullOrEmpty(cached.ClientId)
+            && !redirectDrifted)
         {
             _logger.LogInformation(
-                "Aevatar OAuth client already provisioned at NyxID: client_id={ClientId}, authority={Authority}, broker_capability_observed={BrokerObserved}",
+                "Aevatar OAuth client already provisioned at NyxID: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}, broker_capability_observed={BrokerObserved}",
                 cached.ClientId,
                 cached.NyxIdAuthority,
+                cached.RedirectUri ?? "<unrecorded>",
                 cached.BrokerCapabilityObserved);
             return;
         }
 
-        // Cold-boot DCR is mediated by the well-known actor (PR #521 review):
-        // every silo broadcasts EnsureAevatarOAuthClientProvisionedCommand,
-        // and the actor's single-threaded handler turns the broadcast into
-        // exactly one DCR HTTP call. Without this seam the bootstrap path
-        // races on the projection readmodel and creates orphan OAuth clients
-        // at NyxID. The redirect URI must match what the broker sends at
-        // authorize / token time — both call sites use NyxIdRedirectUriResolver.
-        var redirectUri = NyxIdRedirectUriResolver.Resolve(_configuration, _logger);
+        if (redirectDrifted)
+        {
+            _logger.LogWarning(
+                "Aevatar OAuth client redirect URI drifted (stored='{Stored}', resolved='{Resolved}'); dispatching EnsureProvisioned so the actor re-runs DCR.",
+                cached!.RedirectUri,
+                redirectUri);
+        }
         var actor = await _actorRuntime
             .CreateAsync<AevatarOAuthClientGAgent>(AevatarOAuthClientGAgent.WellKnownId, ct)
             .ConfigureAwait(false);
@@ -238,4 +245,15 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
             AevatarOAuthClientGAgent.WellKnownId,
             authority);
     }
+
+    /// <summary>
+    /// True only when the snapshot has a recorded redirect URI AND it does
+    /// not match the current resolver output. Empty / null stored
+    /// redirect_uri is treated as "match anything" so legacy event-store
+    /// snapshots that predate the redirect-uri-tracking field do not force
+    /// a spurious re-DCR on first redeploy of this code.
+    /// </summary>
+    private static bool RedirectUriDrifted(string? stored, string resolved) =>
+        !string.IsNullOrEmpty(stored)
+        && !string.Equals(stored, resolved, StringComparison.Ordinal);
 }

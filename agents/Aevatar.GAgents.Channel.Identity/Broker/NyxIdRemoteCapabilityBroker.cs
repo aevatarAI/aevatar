@@ -3,7 +3,6 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -51,7 +50,6 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
     private readonly StateTokenCodec _stateTokenCodec;
     private readonly IExternalIdentityBindingQueryPort _queryPort;
     private readonly TimeProvider _timeProvider;
-    private readonly IConfiguration? _configuration;
     private readonly ILogger<NyxIdRemoteCapabilityBroker> _logger;
 
     public NyxIdRemoteCapabilityBroker(
@@ -61,8 +59,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         StateTokenCodec stateTokenCodec,
         IExternalIdentityBindingQueryPort queryPort,
         TimeProvider timeProvider,
-        ILogger<NyxIdRemoteCapabilityBroker> logger,
-        IConfiguration? configuration = null)
+        ILogger<NyxIdRemoteCapabilityBroker> logger)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _clientProvider = clientProvider ?? throw new ArgumentNullException(nameof(clientProvider));
@@ -71,12 +68,11 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _configuration = configuration;
     }
 
     private HttpClient CreateHttpClient() => _httpClientFactory.CreateClient(HttpClientName);
 
-    private string ResolveRedirectUri() => NyxIdRedirectUriResolver.Resolve(_configuration, _logger);
+    private string ResolveRedirectUri() => NyxIdRedirectUriResolver.Resolve(_logger);
 
     public async Task<BindingChallenge> StartExternalBindingAsync(
         ExternalSubjectRef externalSubject,

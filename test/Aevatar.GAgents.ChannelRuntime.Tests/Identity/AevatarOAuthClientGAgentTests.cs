@@ -107,6 +107,59 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleEnsureProvisioned_ReDcrs_WhenRedirectUriDrifts()
+    {
+        // Pin the aismart-app-mainnet 2026-04-30 incident: cluster was
+        // first DCR-registered with a wildcard listen address as
+        // redirect_uri. After the resolver fix, the resolved URL changes;
+        // the actor MUST detect the drift and re-DCR a fresh client_id at
+        // NyxID with the corrected callback target. Empty stored
+        // redirect_uri ("legacy state") does NOT trigger drift to avoid
+        // re-DCR storms on first redeploy of clusters that were already
+        // configured correctly.
+        await _agent.HandleEnsureProvisioned(new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "http://+:8080/api/oauth/nyxid-callback",
+        });
+        var firstClientId = _agent.State.ClientId;
+        _agent.State.RedirectUri.Should().Be("http://+:8080/api/oauth/nyxid-callback",
+            "first DCR persists whatever the bootstrap supplied");
+
+        _registrar.NextClientId = "client-after-redirect-fix";
+        await _agent.HandleEnsureProvisioned(new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar-console-backend-api.aevatar.ai/api/oauth/nyxid-callback",
+        });
+
+        _registrar.Calls.Should().HaveCount(2,
+            "redirect URI drift must trigger a fresh DCR; otherwise NyxID keeps the wrong callback");
+        _agent.State.ClientId.Should().Be("client-after-redirect-fix");
+        _agent.State.ClientId.Should().NotBe(firstClientId);
+        _agent.State.RedirectUri.Should().Be("https://aevatar-console-backend-api.aevatar.ai/api/oauth/nyxid-callback");
+    }
+
+    [Fact]
+    public async Task HandleEnsureProvisioned_DoesNotReDcr_WhenRedirectUriMatches()
+    {
+        var redirectUri = "https://aevatar-console-backend-api.aevatar.ai/api/oauth/nyxid-callback";
+        await _agent.HandleEnsureProvisioned(new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = redirectUri,
+        });
+
+        await _agent.HandleEnsureProvisioned(new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = redirectUri,
+        });
+
+        _registrar.Calls.Should().HaveCount(1, "matching redirect URI must not re-DCR");
+    }
+
+    [Fact]
     public async Task HandleEnsureProvisioned_RegistersAgain_WhenAuthorityChanges()
     {
         await _agent.HandleEnsureProvisioned(new EnsureAevatarOAuthClientProvisionedCommand

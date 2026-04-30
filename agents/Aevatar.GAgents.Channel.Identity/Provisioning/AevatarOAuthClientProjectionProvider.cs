@@ -56,6 +56,7 @@ public sealed class AevatarOAuthClientProjectionProvider : IAevatarOAuthClientPr
             BrokerCapabilityObservedAt: brokerObservedAt,
             PreviousHmacKid: previousKid,
             PreviousHmacKey: previousKey,
-            PreviousHmacDemotedAt: previousDemotedAt);
+            PreviousHmacDemotedAt: previousDemotedAt,
+            RedirectUri: string.IsNullOrEmpty(document.RedirectUri) ? null : document.RedirectUri);
     }
 }

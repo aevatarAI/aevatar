@@ -47,6 +47,13 @@ message AevatarOAuthClientState {
   // state_token_lifetime so the previous-key window cannot persist past the
   // longest-lived in-flight state token.
   int64 previous_hmac_demoted_at_unix = 11;
+  // Redirect URI registered with NyxID at DCR. Persisted so
+  // HandleEnsureProvisioned can detect drift across redeploys (e.g.
+  // operator sets AEVATAR_OAUTH_REDIRECT_BASE_URL after the cluster was
+  // first bootstrapped against an internal listening URL) and re-register
+  // the OAuth client; otherwise NyxID would keep the wrong callback target
+  // forever. Empty when state predates the redirect-uri-tracking field.
+  string redirect_uri = 12;
 }
 
 // Issued by the bootstrap startup service from every silo on cluster cold-
@@ -91,12 +98,19 @@ message AevatarOAuthClientProjectionRebuildRequestedEvent {
 }
 
 // Persisted on successful provision. Carries the client_id + issuance
-// timestamp + authority so the projector can materialize the readmodel.
+// timestamp + authority + redirect_uri so the projector can materialize
+// the readmodel and so the actor can detect redirect-uri drift across
+// redeploys.
 message AevatarOAuthClientProvisionedEvent {
   string client_id = 1;
   int64 client_id_issued_at_unix = 2;
   string nyxid_authority = 3;
   google.protobuf.Timestamp persisted_at = 4;
+  // Redirect URI registered with NyxID at this DCR call. Empty when an
+  // older event predates the redirect-uri-tracking field; the actor
+  // treats empty stored redirect_uri as "match anything" so legacy state
+  // does not force a spurious re-DCR on first redeploy.
+  string redirect_uri = 5;
 }
 
 // Persisted when the actor seeds or rotates its HMAC key. On rotation, the
@@ -153,4 +167,9 @@ message AevatarOAuthClientDocument {
   // once now() > demoted_at + state_token_lifetime so the previous-key
   // window cannot persist past the longest-lived in-flight state token.
   int64 previous_hmac_demoted_at_unix = 15;
+  // Mirror of AevatarOAuthClientState.redirect_uri so the readmodel can
+  // expose it for diagnostics (e.g. /api/oauth/aevatar-client/status) and
+  // so an operator can confirm DCR registered the right callback target
+  // without inspecting actor state directly.
+  string redirect_uri = 16;
 }
