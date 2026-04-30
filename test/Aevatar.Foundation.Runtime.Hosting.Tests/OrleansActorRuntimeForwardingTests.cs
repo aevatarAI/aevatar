@@ -260,6 +260,13 @@ public sealed class OrleansActorRuntimeForwardingTests
             return Task.FromResult(true);
         }
 
+        public Task<bool> InitializeAgentByKindAsync(string kind)
+        {
+            _ = kind;
+            ObservedReentrancyIds.Add(RequestContext.ReentrancyId);
+            return Task.FromResult(true);
+        }
+
         public Task<bool> IsInitializedAsync()
         {
             ObservedReentrancyIds.Add(RequestContext.ReentrancyId);
@@ -318,6 +325,9 @@ public sealed class OrleansActorRuntimeForwardingTests
             Task.FromResult("recording");
 
         public Task<string> GetAgentTypeNameAsync() =>
+            Task.FromResult(string.Empty);
+
+        public Task<string> GetAgentKindAsync() =>
             Task.FromResult(string.Empty);
 
         public Task DeactivateAsync()
