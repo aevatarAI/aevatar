@@ -411,7 +411,7 @@ describe('StudioMemberBindPanel', () => {
     expect(handleContinueToInvoke).toHaveBeenCalledWith('default', 'chat');
   });
 
-  it('allows continuing to Invoke while endpoint discovery is pending', async () => {
+  it('blocks continuing to Invoke when the published service has no endpoints', async () => {
     const handleContinueToInvoke = jest.fn();
 
     renderWithQueryClient(
@@ -451,11 +451,11 @@ describe('StudioMemberBindPanel', () => {
     const continueButton = screen.getByRole('button', {
       name: 'Continue to Invoke',
     });
-    expect(continueButton).not.toBeDisabled();
+    expect(continueButton).toBeDisabled();
 
     fireEvent.click(continueButton);
 
-    expect(handleContinueToInvoke).toHaveBeenCalledWith('script-4', 'chat');
+    expect(handleContinueToInvoke).not.toHaveBeenCalled();
   });
 
   it('does not block current draft smoke tests on published endpoint auth state', async () => {

@@ -4,14 +4,13 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
 import { nyxIdChatApi } from "@/shared/api/nyxIdChatApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
-import { servicesApi } from "@/shared/api/servicesApi";
+import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { history } from "@/shared/navigation/history";
 import {
   buildScopeConsoleServiceOptions,
   createNyxIdChatBindingInput,
   nyxIdChatServiceId,
   scopeServiceAppId,
-  scopeServiceNamespace,
   type ScopeConsoleServiceOption,
 } from "@/shared/runs/scopeConsole";
 import { studioApi } from "@/shared/studio/api";
@@ -395,10 +394,8 @@ const ChatPage: React.FC = () => {
     enabled: scopeId.length > 0,
     queryKey: ["chat", "services", scopeId],
     queryFn: () =>
-      servicesApi.listServices({
+      scopeRuntimeApi.listServices(scopeId, {
         appId: scopeServiceAppId,
-        namespace: scopeServiceNamespace,
-        tenantId: scopeId,
       }),
   });
 

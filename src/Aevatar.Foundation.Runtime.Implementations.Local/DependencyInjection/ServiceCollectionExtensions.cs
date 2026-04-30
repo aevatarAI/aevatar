@@ -97,6 +97,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IAgentTypeVerifier, DefaultAgentTypeVerifier>();
         services.TryAddSingleton(typeof(IAgentClassDefaultsProvider<>), typeof(NullAgentClassDefaultsProvider<>));
 
+        // Kind-token identity registry (issue #498). Mirrors the Orleans
+        // runtime registration so in-memory + Orleans paths share the same
+        // identity model.
+        services.AddAevatarAgentKindRegistry();
+
         return services;
     }
 

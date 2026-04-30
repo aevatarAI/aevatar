@@ -1,4 +1,5 @@
 import { jsonBody, requestJson, withQuery } from "./http/client";
+import { decodeServiceCatalogSnapshots } from "./servicesApi";
 import {
   expectArray,
   expectRecord,
@@ -31,7 +32,10 @@ import type {
   BoundServiceReference,
   ServiceBindingSnapshot,
 } from "@/shared/models/governance";
-import type { ServiceCommandAcceptedReceipt } from "@/shared/models/services";
+import type {
+  ServiceCatalogSnapshot,
+  ServiceCommandAcceptedReceipt,
+} from "@/shared/models/services";
 import {
   normalizeStudioScopeBindingImplementationKind,
   type StudioScopeBindingRevision,
@@ -1149,6 +1153,19 @@ function encodeScopeServiceBindingPayload(input: ScopeServiceBindingInput) {
 }
 
 export const scopeRuntimeApi = {
+  listServices(
+    scopeId: string,
+    query?: { appId?: string; take?: number },
+  ): Promise<ServiceCatalogSnapshot[]> {
+    return requestJson(
+      withQuery(`/api/scopes/${encodeURIComponent(scopeId)}/services`, {
+        appId: query?.appId?.trim(),
+        take: query?.take,
+      }),
+      decodeServiceCatalogSnapshots,
+    );
+  },
+
   getServiceBindings(
     scopeId: string,
     serviceId: string,

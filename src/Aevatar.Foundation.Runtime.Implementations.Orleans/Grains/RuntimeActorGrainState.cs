@@ -1,3 +1,5 @@
+using Aevatar.Foundation.Abstractions.Runtime;
+
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 
 [GenerateSerializer]
@@ -23,4 +25,15 @@ public sealed class RuntimeActorGrainState
 
     [Id(6)]
     public long AgentStateSnapshotVersion { get; set; }
+
+    /// <summary>
+    /// Stable business identity (kind + schema version). Populated lazily
+    /// during the Phase 1 transition: empty for legacy rows, written on
+    /// first successful activation that resolves the persisted
+    /// <see cref="AgentTypeName"/> to a registered kind. <see cref="AgentTypeName"/>
+    /// stays alongside until Phase 3 hard-deprecation so mixed-version pods
+    /// safely coexist during gradual rollouts.
+    /// </summary>
+    [Id(7)]
+    public RuntimeActorIdentity? Identity { get; set; }
 }

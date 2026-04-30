@@ -725,9 +725,6 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
     selectedService && !hasEndpointOptions
       ? 'This published service has no endpoint data available yet.'
       : '';
-  // Temporary placeholder while #511 adds a real scope-owned endpoint catalog.
-  const fallbackEndpointId =
-    selectedEndpoint?.endpointId || (selectedService && !hasEndpointOptions ? 'chat' : '');
   const bindSurfaceIdentity = useMemo(() => {
     const pendingCandidateIdentity = pendingBindingCandidate
       ? `candidate:${scopeId}:${pendingBindingCandidate.kind}:${pendingBindingCandidate.displayName}`
@@ -1137,15 +1134,15 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 <Button
                   block
                   icon={<LinkOutlined />}
-                  disabled={!selectedService || (hasEndpointOptions && !selectedEndpoint)}
+                  disabled={!selectedService || !selectedEndpoint}
                   onClick={() => {
-                    if (!selectedService) {
+                    if (!selectedService || !selectedEndpoint) {
                       return;
                     }
 
                     onContinueToInvoke?.(
                       selectedService.serviceId,
-                      fallbackEndpointId,
+                      selectedEndpoint.endpointId,
                     );
                   }}
                 >

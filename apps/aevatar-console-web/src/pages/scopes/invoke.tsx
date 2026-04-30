@@ -36,7 +36,7 @@ import {
 } from '@/shared/agui/runtimeEventSemantics';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
-import { servicesApi } from '@/shared/api/servicesApi';
+import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
 import { history } from '@/shared/navigation/history';
 import { buildTeamWorkspaceRoute } from '@/shared/navigation/scopeRoutes';
 import {
@@ -52,7 +52,6 @@ import {
   isChatServiceEndpoint,
   nyxIdChatServiceId,
   scopeServiceAppId,
-  scopeServiceNamespace,
 } from '@/shared/runs/scopeConsole';
 import { studioApi } from '@/shared/studio/api';
 import type { ServiceCatalogSnapshot } from '@/shared/models/services';
@@ -536,10 +535,8 @@ const ScopeInvokePage: React.FC = () => {
     enabled: scopeId.length > 0,
     queryKey: ['scopes', 'invoke', 'services', scopeId],
     queryFn: () =>
-      servicesApi.listServices({
+      scopeRuntimeApi.listServices(scopeId, {
         appId: scopeServiceAppId,
-        namespace: scopeServiceNamespace,
-        tenantId: scopeId,
       }),
   });
 

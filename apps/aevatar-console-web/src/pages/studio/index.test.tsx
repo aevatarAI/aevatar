@@ -6,7 +6,6 @@ import { runtimeGAgentApi } from "@/shared/api/runtimeGAgentApi";
 import { runtimeQueryApi } from "@/shared/api/runtimeQueryApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
-import { servicesApi } from "@/shared/api/servicesApi";
 import { studioApi } from "@/shared/studio/api";
 import { scriptsApi } from "@/shared/studio/scriptsApi";
 import { saveStudioObserveSessionSeed } from "@/shared/studio/observeSession";
@@ -589,8 +588,8 @@ jest.mock("@/shared/api/runtimeGAgentApi", () => ({
   },
 }));
 
-jest.mock("@/shared/api/servicesApi", () => ({
-  servicesApi: {
+jest.mock("@/shared/api/scopeRuntimeApi", () => ({
+  scopeRuntimeApi: {
     listServices: jest.fn(async () => [
       {
         serviceId: "default",
@@ -609,11 +608,6 @@ jest.mock("@/shared/api/servicesApi", () => ({
         ],
       },
     ]),
-  },
-}));
-
-jest.mock("@/shared/api/scopeRuntimeApi", () => ({
-  scopeRuntimeApi: {
     getServiceRevisions: jest.fn(async (_scopeId: string, serviceId: string) =>
       mockBuildServiceRevisionCatalog({ serviceId })
     ),
@@ -670,10 +664,8 @@ const mockRuntimeGAgentApi = runtimeGAgentApi as unknown as {
   listTypes: jest.Mock;
   listActors: jest.Mock;
 };
-const mockServicesApi = servicesApi as unknown as {
-  listServices: jest.Mock;
-};
 const mockScopeRuntimeApi = scopeRuntimeApi as unknown as {
+  listServices: jest.Mock;
   getServiceRevisions: jest.Mock;
   listMemberRuns: jest.Mock;
   listServiceRuns: jest.Mock;
@@ -2856,7 +2848,7 @@ describe("StudioPage", () => {
         actorIds: ["orders-gagent"],
       },
     ]);
-    mockServicesApi.listServices.mockResolvedValue([
+    mockScopeRuntimeApi.listServices.mockResolvedValue([
       {
         serviceId: "default",
         displayName: "workspace-demo",
@@ -3100,9 +3092,10 @@ describe("StudioPage", () => {
     expect(screen.getByTestId("studio-workflow-build-panel")).toBeTruthy();
 
     await waitFor(() => {
-      expect(mockServicesApi.listServices).toHaveBeenCalledWith(
+      expect(mockScopeRuntimeApi.listServices).toHaveBeenCalledWith(
+        "scope-b",
         expect.objectContaining({
-          tenantId: "scope-b",
+          appId: "default",
         })
       );
     });
@@ -3769,7 +3762,7 @@ describe("StudioPage", () => {
   });
 
   it("pins Invoke to the selected member instead of exposing every runtime service", async () => {
-    mockServicesApi.listServices.mockResolvedValueOnce([
+    mockScopeRuntimeApi.listServices.mockResolvedValueOnce([
       {
         serviceId: "default",
         displayName: "workspace-demo",
@@ -3815,8 +3808,8 @@ describe("StudioPage", () => {
     expect(screen.queryByText("services:default,billing-api")).toBeNull();
   });
 
-  it("keeps Invoke open for a bound member while endpoint discovery is pending", async () => {
-    mockServicesApi.listServices.mockResolvedValueOnce([
+  it("shows an invoke empty state when a bound member has no endpoint data", async () => {
+    mockScopeRuntimeApi.listServices.mockResolvedValueOnce([
       {
         serviceId: "script-alpha",
         displayName: "script-alpha",
@@ -3831,16 +3824,15 @@ describe("StudioPage", () => {
     );
 
     expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
-    await waitFor(() => {
-      expect(screen.getByText("service:script-alpha")).toBeTruthy();
-      expect(screen.getByText("services:script-alpha")).toBeTruthy();
-      expect(screen.getByText("endpoint:chat")).toBeTruthy();
-    });
-    expect(screen.queryByText(/还不能直接调用/)).toBeNull();
+    expect(screen.getByText("service:script-alpha")).toBeTruthy();
+    expect(screen.getByText("services:none")).toBeTruthy();
+    expect(screen.getByText("endpoint:no-endpoint")).toBeTruthy();
+    expect(screen.getByText(/empty:script-alpha 还不能直接调用。/)).toBeTruthy();
   });
 
   it("surfaces the current workflow as a bind candidate before any published service exists", async () => {
-    mockServicesApi.listServices
+    mockScopeRuntimeApi.listServices.mockReset();
+    mockScopeRuntimeApi.listServices
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
         {
@@ -3942,7 +3934,7 @@ describe("StudioPage", () => {
         updatedAtUtc: "2026-03-18T00:10:00Z",
       },
     ]);
-    mockServicesApi.listServices
+    mockScopeRuntimeApi.listServices
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
         {
@@ -4044,7 +4036,7 @@ describe("StudioPage", () => {
         updatedAtUtc: "2026-03-18T00:10:00Z",
       },
     ]);
-    mockServicesApi.listServices
+    mockScopeRuntimeApi.listServices
       .mockResolvedValueOnce([
         {
           serviceId: "draft2",
@@ -4188,7 +4180,7 @@ describe("StudioPage", () => {
         updatedAtUtc: "2026-03-18T00:00:00Z",
       },
     ]);
-    mockServicesApi.listServices.mockResolvedValueOnce([
+    mockScopeRuntimeApi.listServices.mockResolvedValueOnce([
       {
         serviceId: "joker",
         displayName: "joker",
@@ -4257,7 +4249,7 @@ describe("StudioPage", () => {
   });
 
   it("pins Bind to the selected published member instead of the scope default route target", async () => {
-    mockServicesApi.listServices.mockResolvedValueOnce([
+    mockScopeRuntimeApi.listServices.mockResolvedValueOnce([
       {
         serviceId: "default",
         displayName: "workspace-demo",
@@ -4352,7 +4344,7 @@ describe("StudioPage", () => {
         updatedAtUtc: "2026-03-18T00:00:00Z",
       },
     ]);
-    mockServicesApi.listServices.mockResolvedValueOnce([
+    mockScopeRuntimeApi.listServices.mockResolvedValueOnce([
       {
         serviceId: "default",
         displayName: "workspace-demo",
@@ -4428,7 +4420,7 @@ describe("StudioPage", () => {
   });
 
   it("keeps the current bind surface active when switching members from the rail", async () => {
-    mockServicesApi.listServices.mockResolvedValueOnce([
+    mockScopeRuntimeApi.listServices.mockResolvedValueOnce([
       {
         serviceId: "default",
         displayName: "workspace-demo",
@@ -4533,7 +4525,7 @@ describe("StudioPage", () => {
         updatedAtUtc: "2026-03-18T00:00:00Z",
       },
     ]);
-    mockServicesApi.listServices.mockResolvedValueOnce([
+    mockScopeRuntimeApi.listServices.mockResolvedValueOnce([
       {
         serviceId: "joker",
         displayName: "joker",
@@ -5127,7 +5119,7 @@ describe("StudioPage", () => {
         updatedAtUtc: "2026-03-18T00:00:00Z",
       },
     ]);
-    mockServicesApi.listServices.mockResolvedValueOnce([
+    mockScopeRuntimeApi.listServices.mockResolvedValueOnce([
       {
         serviceId: "joker",
         displayName: "joker",
@@ -5178,7 +5170,7 @@ describe("StudioPage", () => {
       scopeResolved: true,
     });
     (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
-    mockServicesApi.listServices.mockResolvedValueOnce([
+    mockScopeRuntimeApi.listServices.mockResolvedValueOnce([
       {
         serviceId: "default",
         displayName: "workspace-demo",
@@ -5220,7 +5212,7 @@ describe("StudioPage", () => {
       scopeId: "scope-1",
       scopeResolved: true,
     });
-    mockServicesApi.listServices.mockResolvedValueOnce([
+    mockScopeRuntimeApi.listServices.mockResolvedValueOnce([
       {
         serviceId: "default",
         displayName: "workspace-demo",
@@ -5366,7 +5358,7 @@ describe("StudioPage", () => {
         },
       },
     ]);
-    mockServicesApi.listServices.mockResolvedValue([
+    mockScopeRuntimeApi.listServices.mockResolvedValue([
       {
         serviceId: "service-script-alpha",
         displayName: "draft-test",
@@ -5436,7 +5428,7 @@ describe("StudioPage", () => {
         },
       },
     ]);
-    mockServicesApi.listServices.mockResolvedValue([
+    mockScopeRuntimeApi.listServices.mockResolvedValue([
       {
         serviceId: "script-alpha",
         displayName: "script-alpha",

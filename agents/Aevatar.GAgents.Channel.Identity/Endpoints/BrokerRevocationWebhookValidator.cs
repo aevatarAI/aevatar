@@ -2,32 +2,41 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgents.Channel.Identity.Endpoints;
 
 /// <summary>
 /// Validates incoming NyxID broker-revocation webhooks (Continuous Access
 /// Evaluation channel — ChronoAIProject/NyxID#549 V2-7). NyxID signs each
-/// webhook body with HMAC-SHA256 over the raw bytes using the shared secret
-/// from <see cref="NyxIdBrokerOptions.StateTokenHmacKey"/> (this PR reuses
-/// the same key for the webhook channel; production deploys can split keys
-/// by introducing a <c>WebhookHmacKey</c> option). The signature is carried
-/// in the <c>X-NyxID-Signature</c> header as <c>sha256=&lt;hex&gt;</c>.
+/// webhook body with HMAC-SHA256 using the cluster-shared HMAC key seeded by
+/// the OAuth client provisioning actor (see <see cref="IAevatarOAuthClientProvider"/>);
+/// the signature is carried in the <c>X-NyxID-Signature</c> header as
+/// <c>sha256=&lt;hex&gt;</c>.
 /// </summary>
 public sealed class BrokerRevocationWebhookValidator
 {
     public const string SignatureHeader = "X-NyxID-Signature";
+    private static readonly TimeSpan FallbackStateTokenLifetime = TimeSpan.FromMinutes(5);
 
+    private readonly IAevatarOAuthClientProvider _clientProvider;
     private readonly NyxIdBrokerOptions _options;
+    private readonly TimeProvider _timeProvider;
 
-    public BrokerRevocationWebhookValidator(NyxIdBrokerOptions options)
+    public BrokerRevocationWebhookValidator(
+        IAevatarOAuthClientProvider clientProvider,
+        IOptions<NyxIdBrokerOptions>? options = null,
+        TimeProvider? timeProvider = null)
     {
-        _options = options ?? throw new ArgumentNullException(nameof(options));
+        _clientProvider = clientProvider ?? throw new ArgumentNullException(nameof(clientProvider));
+        _options = options?.Value ?? new NyxIdBrokerOptions();
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
-    public BrokerRevocationValidationResult Validate(HttpContext http, byte[] body)
+    public async Task<BrokerRevocationValidationResult> ValidateAsync(HttpContext http, byte[] body, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(body);
@@ -36,10 +45,20 @@ public sealed class BrokerRevocationWebhookValidator
         if (string.IsNullOrWhiteSpace(presented))
             return BrokerRevocationValidationResult.Failed("signature_missing");
 
-        if (string.IsNullOrEmpty(_options.StateTokenHmacKey))
-            return BrokerRevocationValidationResult.Failed("hmac_key_unconfigured");
+        AevatarOAuthClientSnapshot snapshot;
+        try
+        {
+            snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
+        }
+        catch (AevatarOAuthClientNotProvisionedException)
+        {
+            return BrokerRevocationValidationResult.Failed("hmac_key_unprovisioned");
+        }
 
-        var prefix = "sha256=";
+        if (snapshot.HmacKey.Length == 0)
+            return BrokerRevocationValidationResult.Failed("hmac_key_unprovisioned");
+
+        const string prefix = "sha256=";
         if (!presented.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             return BrokerRevocationValidationResult.Failed("signature_scheme_unsupported");
 
@@ -53,11 +72,50 @@ public sealed class BrokerRevocationWebhookValidator
             return BrokerRevocationValidationResult.Failed("signature_malformed");
         }
 
-        var keyBytes = Encoding.UTF8.GetBytes(_options.StateTokenHmacKey);
-        var expectedHmac = HMACSHA256.HashData(keyBytes, body);
-        if (!CryptographicOperations.FixedTimeEquals(expectedHmac, presentedHmac))
-            return BrokerRevocationValidationResult.Failed("signature_mismatch");
+        // Try the current key first. If it doesn't match AND a previous key
+        // is still inside the rotation grace window, also try that — NyxID
+        // could have signed this webhook before the rotation propagated to
+        // their side, and dropping the signal would silently miss real
+        // revocations (PR #521 review kimi MAJOR security; parity with
+        // StateTokenCodec.ResolveVerificationKey).
+        if (VerifySignature(snapshot.HmacKey, body, presentedHmac))
+            return ParseNotification(body);
 
+        if (TryGetGraceWindowKey(snapshot, out var previousKey)
+            && VerifySignature(previousKey, body, presentedHmac))
+        {
+            return ParseNotification(body);
+        }
+
+        return BrokerRevocationValidationResult.Failed("signature_mismatch");
+    }
+
+    private static bool VerifySignature(byte[] key, byte[] body, byte[] presentedHmac)
+    {
+        var expectedHmac = HMACSHA256.HashData(key, body);
+        return CryptographicOperations.FixedTimeEquals(expectedHmac, presentedHmac);
+    }
+
+    private bool TryGetGraceWindowKey(AevatarOAuthClientSnapshot snapshot, out byte[] previousKey)
+    {
+        previousKey = Array.Empty<byte>();
+        if (snapshot.PreviousHmacKey is not { Length: > 0 } pk)
+            return false;
+        if (snapshot.PreviousHmacDemotedAt is not { } demotedAt)
+            return false;
+
+        var lifetime = _options.StateTokenLifetime > TimeSpan.Zero
+            ? _options.StateTokenLifetime
+            : FallbackStateTokenLifetime;
+        if (_timeProvider.GetUtcNow() > demotedAt + lifetime)
+            return false;
+
+        previousKey = pk;
+        return true;
+    }
+
+    private static BrokerRevocationValidationResult ParseNotification(byte[] body)
+    {
         BrokerRevocationNotification? notification;
         try
         {

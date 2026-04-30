@@ -4,14 +4,11 @@ import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import { runtimeGAgentApi } from "@/shared/api/runtimeGAgentApi";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { scopesApi } from "@/shared/api/scopesApi";
-import { servicesApi } from "@/shared/api/servicesApi";
 import { studioApi } from "@/shared/studio/api";
 import { getScopeServiceCurrentRevision } from "@/shared/models/runtime/scopeServices";
 import { deriveTeamRuntimeLens, selectTeamCompareRuns } from "./teamRuntimeLens";
 
 const scopeServiceAppId = "default";
-const scopeServiceNamespace = "default";
-
 type UseTeamRuntimeLensOptions = {
   graphDepth?: number;
   includeCatalogSignals?: boolean;
@@ -74,10 +71,8 @@ export function useTeamRuntimeLens(
     enabled: normalizedScopeId.length > 0,
     queryKey: ["teams", "services", normalizedScopeId],
     queryFn: () =>
-      servicesApi.listServices({
-        tenantId: normalizedScopeId,
+      scopeRuntimeApi.listServices(normalizedScopeId, {
         appId: scopeServiceAppId,
-        namespace: scopeServiceNamespace,
       }),
     retry: false,
   });

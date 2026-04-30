@@ -6,7 +6,6 @@ import { authFetch } from "@/shared/auth/fetch";
 import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { scopesApi } from "@/shared/api/scopesApi";
-import { servicesApi } from "@/shared/api/servicesApi";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import type { ServiceCatalogSnapshot } from "@/shared/models/services";
@@ -25,7 +24,6 @@ import {
   buildScopeConsoleServiceOptions,
   extractRuntimeInvokeReceipt,
   scopeServiceAppId,
-  scopeServiceNamespace,
 } from "@/shared/runs/scopeConsole";
 import { studioApi } from "@/shared/studio/api";
 import { AevatarContextDrawer } from "@/shared/ui/aevatarPageShells";
@@ -526,7 +524,7 @@ export function ChatAdvancedConsole({
       {
         label: "Services",
         method: "GET",
-        path: `/services?tenantId=${scopeId}&appId=${scopeServiceAppId}&namespace=${scopeServiceNamespace}&take=20`,
+        path: `/scopes/${scopeId}/services?appId=${scopeServiceAppId}&take=20`,
       },
       {
         label: "Workflows",
@@ -705,11 +703,9 @@ export function ChatAdvancedConsole({
           result = await studioApi.getDefaultRouteTarget(scopeId);
           break;
         case "services":
-          result = await servicesApi.listServices({
+          result = await scopeRuntimeApi.listServices(scopeId, {
             appId: scopeServiceAppId,
-            namespace: scopeServiceNamespace,
             take: 100,
-            tenantId: scopeId,
           });
           break;
         case "workflows":

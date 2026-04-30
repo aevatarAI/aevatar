@@ -26,6 +26,68 @@ describe("scopeRuntimeApi", () => {
     window.localStorage.clear();
   });
 
+  it("loads scope-scoped services from the scope catalog endpoint", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [
+        {
+          serviceKey: "scope-a:custom-app:default:orders",
+          tenantId: "scope-a",
+          appId: "custom-app",
+          namespace: "default",
+          serviceId: "orders",
+          displayName: "Orders",
+          defaultServingRevisionId: "rev-1",
+          activeServingRevisionId: "rev-1",
+          deploymentId: "dep-1",
+          primaryActorId: "orders-actor",
+          deploymentStatus: "Active",
+          endpoints: [
+            {
+              endpointId: "run",
+              displayName: "Run",
+              kind: "command",
+              requestTypeUrl: "type.googleapis.com/aevatar.RunRequest",
+              responseTypeUrl: "type.googleapis.com/aevatar.RunReply",
+              description: "Run command",
+            },
+          ],
+          policyIds: [],
+          updatedAt: "2026-04-30T08:20:00Z",
+        },
+      ],
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      scopeRuntimeApi.listServices("scope-a", {
+        appId: " custom-app ",
+        take: 25,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        serviceId: "orders",
+        appId: "custom-app",
+        endpoints: [
+          expect.objectContaining({
+            endpointId: "run",
+            kind: "command",
+          }),
+        ],
+      }),
+    ]);
+
+    const [input, init] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(input).toBe("/api/scopes/scope-a/services?appId=custom-app&take=25");
+    expect(new Headers(init?.headers).get("Authorization")).toBe(
+      "Bearer access-token",
+    );
+  });
+
   it("loads scope-scoped service bindings", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,

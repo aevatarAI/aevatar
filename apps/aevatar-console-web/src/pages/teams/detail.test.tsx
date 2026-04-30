@@ -2,7 +2,6 @@ import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react
 import React from "react";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
-import { servicesApi } from "@/shared/api/servicesApi";
 import { runtimeGAgentApi } from "@/shared/api/runtimeGAgentApi";
 import { history } from "@/shared/navigation/history";
 import { studioApi } from "@/shared/studio/api";
@@ -346,29 +345,6 @@ jest.mock("@/shared/api/scopesApi", () => ({
   },
 }));
 
-jest.mock("@/shared/api/servicesApi", () => ({
-  servicesApi: {
-    listServices: jest.fn(async () => [
-      {
-        serviceKey: "scope-1:default",
-        tenantId: "scope-1",
-        appId: "default",
-        namespace: "default",
-        serviceId: "default",
-        displayName: "Support Runtime",
-        defaultServingRevisionId: "rev-2",
-        activeServingRevisionId: "rev-2",
-        deploymentId: "dep-2",
-        primaryActorId: "actor-intake",
-        deploymentStatus: "Active",
-        endpoints: [],
-        policyIds: [],
-        updatedAt: "2026-04-09T09:00:00Z",
-      },
-    ]),
-  },
-}));
-
 jest.mock("@/shared/api/runtimeGAgentApi", () => ({
   runtimeGAgentApi: {
     listActors: jest.fn(async () => [
@@ -440,6 +416,24 @@ jest.mock("@/shared/api/runtimeActorsApi", () => ({
 
 jest.mock("@/shared/api/scopeRuntimeApi", () => ({
   scopeRuntimeApi: {
+    listServices: jest.fn(async () => [
+      {
+        serviceKey: "scope-1:default",
+        tenantId: "scope-1",
+        appId: "default",
+        namespace: "default",
+        serviceId: "default",
+        displayName: "Support Runtime",
+        defaultServingRevisionId: "rev-2",
+        activeServingRevisionId: "rev-2",
+        deploymentId: "dep-2",
+        primaryActorId: "actor-intake",
+        deploymentStatus: "Active",
+        endpoints: [],
+        policyIds: [],
+        updatedAt: "2026-04-09T09:00:00Z",
+      },
+    ]),
     getServiceRevisions: jest.fn(async () => mockCreateServiceRevisionCatalog()),
     listMemberRuns: jest.fn(async () => mockCreateRunsCatalog()),
     listServiceRuns: jest.fn(async () => mockCreateRunsCatalog()),
@@ -1120,7 +1114,7 @@ describe("TeamDetailPage", () => {
       updatedAt: "2026-04-09T09:00:00Z",
       revisions: [],
     });
-    (servicesApi.listServices as jest.Mock).mockResolvedValueOnce([]);
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValueOnce([]);
     (runtimeGAgentApi.listActors as jest.Mock).mockResolvedValueOnce([]);
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
