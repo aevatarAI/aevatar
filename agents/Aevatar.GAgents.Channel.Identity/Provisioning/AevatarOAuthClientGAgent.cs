@@ -187,7 +187,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             // If yes, log the orphan client_id we just created so ops
             // can delete it, and return success. The peer's record is
             // the cluster-authoritative one going forward.
-            if (await TryAbsorbPeerProvisioningAsync(cmd, registration.ClientId, occ).ConfigureAwait(false))
+            if (await TryAbsorbPeerDcrProvisioningAsync(cmd, registration.ClientId, occ).ConfigureAwait(false))
                 return;
             throw;
         }
@@ -207,11 +207,15 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             }
             catch (EventStoreOptimisticConcurrencyException occ)
             {
-                // Same race shape: a peer wrote at v+2 (e.g. their own
-                // HMAC seed) between our Provisioned commit and this
-                // seed. Refresh — if HMAC is now non-empty, the peer
-                // already seeded; absorb. The cluster has one valid key.
-                if (await TryAbsorbPeerProvisioningAsync(cmd, registration.ClientId, occ).ConfigureAwait(false))
+                // Distinct race shape from the DCR commit OCC: this
+                // handler ALREADY successfully committed Provisioned, so
+                // registration.ClientId is the active cluster client —
+                // not an orphan. A peer wrote at v+2 between our
+                // Provisioned commit and this seed (e.g. their own HMAC
+                // seed). Absorb without orphan messaging when the peer's
+                // events leave the store with a non-empty HMAC; the
+                // cluster has one valid key.
+                if (await TryAbsorbPeerHmacSeedAsync(occ).ConfigureAwait(false))
                     return;
                 throw;
             }
@@ -219,27 +223,31 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
     }
 
     /// <summary>
-    /// Refreshes <see cref="State"/> from the event store after an
-    /// <see cref="EventStoreOptimisticConcurrencyException"/> raised by a
-    /// drift-branch commit, then checks whether the peer that won the race
-    /// already installed a Provisioned record matching the command's
-    /// authority + redirect URI. Returns <c>true</c> when the cluster is
-    /// already in the desired shape (caller should treat the OCC as a
-    /// successful no-op); returns <c>false</c> when the peer's commit was
-    /// something else and the caller should rethrow so the bootstrap retry
-    /// loop re-evaluates against fresh state.
+    /// Refreshes <see cref="State"/> from the event store after the
+    /// drift-branch <c>AevatarOAuthClientProvisionedEvent</c> commit lost
+    /// an OCC race, then checks whether the peer that won already
+    /// installed a Provisioned record matching the command's authority +
+    /// redirect URI. Returns <c>true</c> when the cluster is already in
+    /// the desired shape (caller should treat the OCC as a successful
+    /// no-op); returns <c>false</c> when the peer's commit was something
+    /// else and the caller should rethrow so the bootstrap retry loop
+    /// re-evaluates against fresh state.
     /// </summary>
     /// <remarks>
-    /// Deliberately scoped to the DCR commit path — see issue #549. The
-    /// orphan_client_id field is logged so ops can delete the loser's
-    /// NyxID client without searching by hand.
+    /// Logs <paramref name="orphanClientId"/> so ops can delete the
+    /// loser's NyxID client without searching by hand. This is the
+    /// orphan-aware path: only the DCR commit catch should call it,
+    /// because only that catch holds a fresh-from-DCR client_id that the
+    /// peer's commit makes orphan. The HMAC-seed catch (which runs after
+    /// THIS handler already committed Provisioned) uses
+    /// <see cref="TryAbsorbPeerHmacSeedAsync"/> instead.
     /// </remarks>
-    private async Task<bool> TryAbsorbPeerProvisioningAsync(
+    private async Task<bool> TryAbsorbPeerDcrProvisioningAsync(
         EnsureAevatarOAuthClientProvisionedCommand cmd,
         string orphanClientId,
         EventStoreOptimisticConcurrencyException occ)
     {
-        await RefreshStateFromStoreAsync().ConfigureAwait(false);
+        await RefreshStateAfterOptimisticConcurrencyAsync(occ).ConfigureAwait(false);
 
         var peerHealed = !string.IsNullOrEmpty(State.ClientId)
             && string.Equals(State.NyxidAuthority, cmd.NyxidAuthority, StringComparison.Ordinal)
@@ -268,6 +276,40 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             State.RedirectUri,
             cmd.RedirectUri,
             orphanClientId,
+            occ.ExpectedVersion,
+            occ.ActualVersion);
+        return false;
+    }
+
+    /// <summary>
+    /// Refreshes <see cref="State"/> after the post-Provisioned HMAC seed
+    /// lost an OCC race, then checks whether the cluster's HMAC slot is
+    /// now non-empty — meaning a peer activation already seeded a key
+    /// that all silos can use. This catch path is reached only after THIS
+    /// handler successfully committed <c>Provisioned</c>, so the actor's
+    /// ClientId is the active cluster client, not an orphan; orphan
+    /// messaging would be misleading and lead ops to delete a live
+    /// registration.
+    /// </summary>
+    private async Task<bool> TryAbsorbPeerHmacSeedAsync(EventStoreOptimisticConcurrencyException occ)
+    {
+        await RefreshStateAfterOptimisticConcurrencyAsync(occ).ConfigureAwait(false);
+
+        if (State.HmacKey.Length > 0)
+        {
+            Logger.LogWarning(
+                "Aevatar OAuth client HMAC-seed OCC race absorbed: peer activation already seeded a key. "
+                + "active_client_id={ClientId}, expected_version={Expected}, actual_version={Actual}.",
+                State.ClientId,
+                occ.ExpectedVersion,
+                occ.ActualVersion);
+            return true;
+        }
+
+        Logger.LogError(
+            "Aevatar OAuth client HMAC-seed OCC fired but the post-replay state has no HMAC key; rethrowing so the bootstrap retry path can complete the seed. "
+            + "active_client_id={ClientId}, expected_version={Expected}, actual_version={Actual}.",
+            State.ClientId,
             occ.ExpectedVersion,
             occ.ActualVersion);
         return false;

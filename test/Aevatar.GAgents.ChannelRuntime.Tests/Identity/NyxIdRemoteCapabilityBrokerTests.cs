@@ -11,6 +11,7 @@ using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 
+[Collection(NyxIdRedirectUriEnvCollection.Name)]
 public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
 {
     private static readonly byte[] HmacKey =
@@ -47,6 +48,38 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         var broker = NewBroker(NewSnapshot("https://old.example.com/api/oauth/nyxid-callback"));
 
         var act = () => broker.StartExternalBindingAsync(SampleSubject());
+
+        await act.Should()
+            .ThrowAsync<AevatarOAuthClientNotProvisionedException>()
+            .WithMessage("*redirect_uri*");
+    }
+
+    [Fact]
+    public async Task ExchangeAuthorizationCodeAsync_RejectsSnapshotWithMissingRedirectUri()
+    {
+        // The token-exchange path has the same EnsureRedirectUriCurrent
+        // guard as the authorize path. A code in flight is the higher-
+        // impact failure mode — the user already clicked the broker URL
+        // and NyxID has issued the code. If the code hits the broker with
+        // a stale snapshot, redirect_uri at /oauth/token would diverge
+        // from what NyxID recorded at /authorize and the exchange would
+        // fail with `invalid_grant`. Pin the early refusal so we never
+        // burn an authorization code against a known-stale snapshot.
+        var broker = NewBroker(NewSnapshot(redirectUri: null));
+
+        var act = () => broker.ExchangeAuthorizationCodeAsync("auth-code", "verifier");
+
+        await act.Should()
+            .ThrowAsync<AevatarOAuthClientNotProvisionedException>()
+            .WithMessage("*redirect_uri*");
+    }
+
+    [Fact]
+    public async Task ExchangeAuthorizationCodeAsync_RejectsSnapshotWithMismatchedRedirectUri()
+    {
+        var broker = NewBroker(NewSnapshot("https://old.example.com/api/oauth/nyxid-callback"));
+
+        var act = () => broker.ExchangeAuthorizationCodeAsync("auth-code", "verifier");
 
         await act.Should()
             .ThrowAsync<AevatarOAuthClientNotProvisionedException>()

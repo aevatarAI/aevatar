@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -89,17 +90,31 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
 
     /// <summary>
     /// Re-reads persisted events from the event store and replaces
-    /// in-memory <see cref="State"/> with the rebuilt result. Intended for
-    /// use from event-handler bodies that have caught
-    /// <c>EventStoreOptimisticConcurrencyException</c> and need to absorb
-    /// peer-committed facts before deciding whether to retry, no-op, or
-    /// rethrow. Does not invoke <see cref="OnStateChangedAsync"/> — the
-    /// projection-publish pipeline is driven by the peer's own
-    /// <c>PersistDomainEventsAsync</c> commit, not by this re-load.
+    /// in-memory <see cref="State"/> with the rebuilt result. The
+    /// <paramref name="conflict"/> parameter scopes this helper to OCC
+    /// absorption only: callers must already hold the conflict raised by
+    /// the framework's commit path so the API cannot be casually misused
+    /// as a general-purpose state replay escape hatch from inside ordinary
+    /// event handlers (CLAUDE.md "抽象一旦能被滥用就等于设计未完成").
     /// </summary>
-    protected async Task RefreshStateFromStoreAsync(CancellationToken ct = default)
+    /// <remarks>
+    /// Calls <see cref="IEventSourcingBehavior{TState}.DiscardPendingEvents"/>
+    /// before replay so any handler-raised events that survived as a
+    /// pending suffix on the failed batch (events raised after the
+    /// committed prefix removed by <c>ConfirmEventsAsync</c>) cannot be
+    /// silently committed on a subsequent <c>ConfirmEventsAsync</c>. Does
+    /// not invoke <see cref="OnStateChangedAsync"/> — the projection
+    /// publish pipeline is driven by the peer's own
+    /// <c>PersistDomainEventsAsync</c> commit, not by this re-load.
+    /// </remarks>
+    protected async Task RefreshStateAfterOptimisticConcurrencyAsync(
+        EventStoreOptimisticConcurrencyException conflict,
+        CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(conflict);
+
         var eventSourcing = EnsureEventSourcingConfigured();
+        eventSourcing.DiscardPendingEvents();
         var replayed = await eventSourcing.ReplayAsync(Id, ct).ConfigureAwait(false);
         using var guard = StateGuard.BeginWriteScope();
         _state = replayed ?? new TState();
