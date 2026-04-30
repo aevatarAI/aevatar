@@ -130,6 +130,152 @@ public sealed class ConversationReplyGeneratorTests
         reply.Should().Be("ok");
     }
 
+    [Fact]
+    public async Task GenerateReplyAsync_AppliesSenderPrefsOverChainOwnerDefault()
+    {
+        // Issue #513 phase 3: when the inbound carries a sender binding-id,
+        // sender prefs override the upstream-pinned bot-owner prefs field-
+        // by-field. The owner's metadata is already in the input (channel
+        // turn runner pins it via OwnerLlmConfigApplier in production), so
+        // the generator only has to layer sender overrides where the sender
+        // actually set a value.
+        var providerFactory = new RecordingProviderFactory();
+        var prefsStore = new ScopedStubPreferencesStore
+        {
+            // Sender (binding-id) has chosen a model but left route blank.
+            ByBinding =
+            {
+                ["bnd_sender"] = new NyxIdUserLlmPreferences("sender-model", string.Empty, MaxToolRounds: 0),
+            },
+        };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, preferencesStore: prefsStore);
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-1",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>
+            {
+                // Owner prefs pre-pinned upstream (mirrors what
+                // OwnerLlmConfigApplier writes from the registration scope).
+                [LLMRequestMetadataKeys.ModelOverride] = "owner-model",
+                [LLMRequestMetadataKeys.NyxIdRoutePreference] = "/api/v1/proxy/s/owner",
+                [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "9",
+                [LLMRequestMetadataKeys.SenderBindingId] = "bnd_sender",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        request.Metadata.Should().NotBeNull();
+        var metadata = request.Metadata!;
+        // Sender's model wins (non-empty).
+        metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("sender-model");
+        // Sender left route blank → owner's upstream-pinned route stays.
+        metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/api/v1/proxy/s/owner");
+        // Sender left max-rounds at 0 → owner's upstream-pinned value stays.
+        metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("9");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_LeavesOwnerPrefsIntactWhenNoSenderBinding()
+    {
+        // No SenderBindingId in metadata → generator does not touch the
+        // upstream-pinned owner prefs. Pins the no-op behaviour so legacy
+        // unbound deployments behave identically to before issue #513.
+        var providerFactory = new RecordingProviderFactory();
+        var prefsStore = new ScopedStubPreferencesStore();
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, preferencesStore: prefsStore);
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-2",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>
+            {
+                [LLMRequestMetadataKeys.ModelOverride] = "owner-only-model",
+                [LLMRequestMetadataKeys.NyxIdRoutePreference] = "owner-route",
+                [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "4",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        request.Metadata.Should().NotBeNull();
+        var metadata = request.Metadata!;
+        metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("owner-only-model");
+        metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("owner-route");
+        metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("4");
+        // Generator must not have touched the prefs store when no binding-id is present.
+        prefsStore.Lookups.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_FallsBackToOwnerPrefsWhenSenderStoreThrows()
+    {
+        // Pin graceful-degradation: a transient sender-config projection
+        // outage must not corrupt the LLM request — the upstream-pinned
+        // owner prefs survive (PR #521 review glm-5.1).
+        var providerFactory = new RecordingProviderFactory();
+        var prefsStore = new ScopedStubPreferencesStore { ThrowOnLookup = true };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, preferencesStore: prefsStore);
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-3",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>
+            {
+                [LLMRequestMetadataKeys.ModelOverride] = "owner-fallback-model",
+                [LLMRequestMetadataKeys.NyxIdRoutePreference] = "owner-route",
+                [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "5",
+                [LLMRequestMetadataKeys.SenderBindingId] = "bnd_sender",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        request.Metadata.Should().NotBeNull();
+        var metadata = request.Metadata!;
+        metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("owner-fallback-model");
+        metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("owner-route");
+        metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("5");
+    }
+
+    private sealed class ScopedStubPreferencesStore : INyxIdUserLlmPreferencesStore
+    {
+        public Dictionary<string, NyxIdUserLlmPreferences> ByBinding { get; } = new(StringComparer.Ordinal);
+        public List<string?> Lookups { get; } = new();
+        public bool ThrowOnLookup { get; set; }
+
+        public Task<NyxIdUserLlmPreferences> GetOwnerAsync(CancellationToken cancellationToken = default)
+        {
+            Lookups.Add(null);
+            if (ThrowOnLookup)
+                throw new InvalidOperationException("simulated projection outage");
+            return Task.FromResult(new NyxIdUserLlmPreferences(string.Empty, string.Empty));
+        }
+
+        public Task<NyxIdUserLlmPreferences> GetForBindingAsync(string bindingId, CancellationToken cancellationToken = default)
+        {
+            Lookups.Add(bindingId);
+            if (ThrowOnLookup)
+                throw new InvalidOperationException("simulated projection outage");
+            return Task.FromResult(ByBinding.TryGetValue(bindingId, out var prefs)
+                ? prefs
+                : new NyxIdUserLlmPreferences(string.Empty, string.Empty));
+        }
+    }
+
     private sealed class RecordingStreamingSink : IStreamingReplySink
     {
         public List<string> Emissions { get; } = [];

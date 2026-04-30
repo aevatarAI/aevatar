@@ -6,7 +6,9 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Slash;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Runtime;
@@ -84,12 +86,15 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return slashResult;
 
         // Pre-LLM binding gate: when broker mode is wired, an unbound sender
-        // MUST be prompted to /init rather than served by the bot owner's
+        // MUST be prompted to bind NyxID rather than served by the bot owner's
         // credentials (codex L65 security: ADR-0018 §Decision "未绑定 sender
-        // 一律强制 /init,不回落到 bot owner"). Falls through transparently
+        // 一律强制绑定,不回落到 bot owner"). Falls through transparently
         // when identity ports are not registered (legacy bot-owner-shared
-        // deployments).
-        if (await TryEnforceBindingGateAsync(activity, inbound, registration, runtimeContext, ct) is { } bindingGateResult)
+        // deployments). The gate also returns the resolved binding-id so the
+        // LLM dispatch can apply the sender prefs override chain (issue #513
+        // phase 3) without paying for a second projection lookup.
+        var (bindingGateResult, senderBindingId) = await TryEnforceBindingGateAsync(activity, inbound, registration, runtimeContext, ct).ConfigureAwait(false);
+        if (bindingGateResult is not null)
             return bindingGateResult;
 
         var inboundEvent = ToInboundEvent(activity, registration, inbound, ResolveUserAccessToken(activity));
@@ -121,19 +126,24 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
 
         return ConversationTurnResult.LlmReplyRequested(
-            await BuildLlmReplyRequestAsync(activity, registration, inboundEvent, runtimeContext, ct));
+            await BuildLlmReplyRequestAsync(activity, registration, inboundEvent, runtimeContext, senderBindingId, ct).ConfigureAwait(false));
     }
 
     public Task<ConversationTurnResult> RunInboundAsync(ChatActivity activity, CancellationToken ct) =>
         RunInboundAsync(activity, ConversationTurnRuntimeContext.Empty, ct);
 
-    // ─── Identity slash commands (/init, /unbind) ───
+    // ─── Slash command dispatch ───
     //
-    // ADR-0018 §Decision: when per-user binding is enabled, /init and /unbind
-    // are routed before the LLM so the bot owner's bot-shared mode is bypassed
-    // for unbound senders. Identity ports are resolved lazily through the
-    // service provider so deployments that have not enabled binding fall
-    // through to the legacy flow without the runner constructor changing.
+    // ADR-0018 §Decision: when per-user binding is enabled, slash commands
+    // (/init, /unbind, /whoami, /model, ...) are routed before the LLM so the
+    // bot owner's bot-shared mode is bypassed for unbound senders. Handlers
+    // are discovered as IEnumerable<IChannelSlashCommandHandler> from DI;
+    // identity ports are resolved lazily through the service provider so
+    // deployments that have not enabled binding fall through to the legacy
+    // flow without the runner constructor changing. Phase 6 (issue #513):
+    // each handler declares RequiresBinding so unbound senders trying to use
+    // a binding-only command (e.g. /model use) get the same hint as the LLM-
+    // turn binding gate instead of a stack trace.
     private async Task<ConversationTurnResult?> TryHandleSlashCommandAsync(
         ChatActivity activity,
         InboundMessage inbound,
@@ -141,24 +151,24 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
     {
-        var trimmed = (inbound.Text ?? string.Empty).Trim();
-        if (string.IsNullOrEmpty(trimmed))
-            return null;
-
-        var isInit = trimmed.Equals("/init", StringComparison.OrdinalIgnoreCase) ||
-                     trimmed.StartsWith("/init ", StringComparison.OrdinalIgnoreCase);
-        var isUnbind = trimmed.Equals("/unbind", StringComparison.OrdinalIgnoreCase) ||
-                       trimmed.StartsWith("/unbind ", StringComparison.OrdinalIgnoreCase);
-        if (!isInit && !isUnbind)
+        if (!TryParseSlashCommand(inbound.Text, out var commandName, out var argumentText))
             return null;
 
         var queryPort = _services.GetService<IExternalIdentityBindingQueryPort>();
-        var broker = _services.GetService<INyxIdCapabilityBroker>();
-        if (queryPort is null || broker is null)
+        if (queryPort is null)
         {
             _logger.LogDebug(
-                "Slash command observed but identity ports are not registered; falling through to default flow: command={Command}",
-                isInit ? "/init" : "/unbind");
+                "Slash command observed but identity query port is not registered; falling through: command={Command}",
+                commandName);
+            return null;
+        }
+
+        var handler = ResolveSlashCommandHandler(commandName);
+        if (handler is null)
+        {
+            // Unknown slash command — fall through to the LLM path to preserve
+            // the prior behaviour where /<unknown> just looked like a regular
+            // user message.
             return null;
         }
 
@@ -197,78 +207,214 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             ExternalUserId = inbound.SenderId.Trim(),
         };
 
-        string replyText;
+        BindingId? existing;
         try
         {
-            if (isInit)
-            {
-                var existing = await queryPort.ResolveAsync(subject, ct);
-                if (existing is not null)
-                {
-                    replyText = "已绑定 NyxID 账号。需要切换账号请先发送 /unbind 再发送 /init。";
-                }
-                else if (!IsPrivateChat(inbound))
-                {
-                    // ADR-0018 §Decision: authorize URL only via private DM.
-                    // Returning the URL in a group chat would expose the
-                    // sealed `state` token to all participants, enabling the
-                    // OAuth state-hijack scenario the ADR explicitly forbids
-                    // (codex L189 BLOCKER). Fail closed and tell the sender
-                    // to DM the bot.
-                    replyText = "为安全起见,/init 只能在与 bot 的私聊中发起。请先与 bot 私聊后再发送 /init。";
-                }
-                else
-                {
-                    var challenge = await broker.StartExternalBindingAsync(subject, ct);
-                    replyText = $"打开此链接完成 NyxID 登录(5 分钟内有效):\n{challenge.AuthorizeUrl}";
-                }
-            }
-            else
-            {
-                var existing = await queryPort.ResolveAsync(subject, ct);
-                if (existing is null)
-                {
-                    replyText = "当前未绑定 NyxID 账号。";
-                }
-                else
-                {
-                    // 1) Revoke at NyxID (source of truth — see ADR-0018
-                    //    §Decision /unbind behaviour).
-                    await broker.RevokeBindingAsync(subject, ct);
-
-                    // 2) Event-source the local actor revoke so the projection
-                    //    flips to inactive — otherwise Resolve keeps returning
-                    //    the stale binding_id until the next remote nudge.
-                    //    (consensus L183: codex + glm-5.1 MAJOR)
-                    await DispatchRevokeBindingAsync(subject, "user_unbind", ct);
-
-                    replyText = "已解绑 NyxID 账号。如需重新绑定,发送 /init。";
-                }
-            }
+            existing = await queryPort.ResolveAsync(subject, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Slash command handling failed: command={Command}", isInit ? "/init" : "/unbind");
-            replyText = "处理 /init 或 /unbind 时遇到内部错误,请稍后重试。";
+            // Fail closed: if we can't tell whether the sender is bound, treat
+            // them as unbound so commands that need binding don't proceed
+            // against bot-owner credentials.
+            _logger.LogError(ex, "Binding lookup for slash command {Command} failed; treating sender as unbound", commandName);
+            existing = null;
         }
 
-        var outbound = new MessageContent { Text = replyText };
+        if (handler.RequiresBinding && existing is null)
+        {
+            return await SendBindingPromptAsync(activity, inbound, registration, runtimeContext, ct).ConfigureAwait(false);
+        }
+
+        var commandContext = new ChannelSlashCommandContext
+        {
+            CommandName = handler.Name,
+            ArgumentText = argumentText,
+            Subject = subject,
+            BindingIdValue = existing?.Value,
+            RegistrationId = registration.Id,
+            RegistrationScopeId = registration.ScopeId ?? string.Empty,
+            SenderId = inbound.SenderId.Trim(),
+            SenderName = (inbound.SenderName ?? string.Empty).Trim(),
+            IsPrivateChat = IsPrivateChat(inbound),
+        };
+
+        MessageContent? reply;
+        try
+        {
+            reply = await handler.HandleAsync(commandContext, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Slash command {Command} threw", handler.Name);
+            reply = new MessageContent { Text = $"处理 /{handler.Name} 时遇到内部错误,请稍后重试。" };
+        }
+
+        if (reply is null)
+            return null;
+
         var sentSeed = string.IsNullOrWhiteSpace(activity.Id) ? Guid.NewGuid().ToString("N") : activity.Id;
         return await SendReplyAsync(
-            outbound,
+            reply,
             sentSeed,
             activity.Conversation,
             inbound,
             registration,
             runtimeContext,
-            ct);
+            ct).ConfigureAwait(false);
+    }
+
+    private static bool TryParseSlashCommand(string? text, out string commandName, out string argumentText)
+    {
+        commandName = string.Empty;
+        argumentText = string.Empty;
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        // Trim handles Unicode leading/trailing whitespace (NBSP / U+3000 /
+        // ZWSP) by default. The bigger concern is the *separator* between
+        // command and arg: Lark / WeChat clients commonly inject NBSP or
+        // ideographic space there, so splitting only on ASCII ' ' would let
+        // "/init　foo" miss the registry. Iterate char-by-char and split
+        // on the first run of any char.IsWhiteSpace.
+        var trimmed = text.Trim();
+        if (trimmed.Length < 2 || trimmed[0] != '/')
+            return false;
+
+        var firstSeparator = -1;
+        for (var i = 1; i < trimmed.Length; i++)
+        {
+            if (char.IsWhiteSpace(trimmed[i]))
+            {
+                firstSeparator = i;
+                break;
+            }
+        }
+
+        if (firstSeparator < 0)
+        {
+            commandName = trimmed[1..].ToLowerInvariant();
+        }
+        else
+        {
+            commandName = trimmed[1..firstSeparator].ToLowerInvariant();
+            argumentText = trimmed[(firstSeparator + 1)..].Trim();
+        }
+
+        return commandName.Length > 0;
+    }
+
+    private IChannelSlashCommandHandler? ResolveSlashCommandHandler(string commandName)
+    {
+        // Registry is registered as a singleton; constructing it validates
+        // there are no duplicate Name/Aliases registrations and throws fail-
+        // fast at startup. Resolving here keeps the turn runner backwards-
+        // compatible with deployments that didn't AddChannelIdentity / AddNyxIdChat
+        // (the registry will be absent and slash commands silently fall through).
+        var registry = _services.GetService<ChannelSlashCommandRegistry>();
+        return registry?.Find(commandName);
+    }
+
+    private async Task<ConversationTurnResult> SendBindingPromptAsync(
+        ChatActivity activity,
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
+    {
+        MessageContent reply;
+        if (!IsPrivateChat(inbound))
+        {
+            reply = new MessageContent { Text = "请与 bot 私聊任意消息以获取 NyxID 绑定卡片。" };
+        }
+        else
+        {
+            var broker = _services.GetService<INyxIdCapabilityBroker>();
+            if (broker is null)
+            {
+                _logger.LogError("Binding gate cannot start NyxID binding because INyxIdCapabilityBroker is not registered.");
+                reply = new MessageContent { Text = "NyxID 绑定入口暂不可用,请稍后重试。" };
+            }
+            else if (!TryResolveExternalSubject(inbound, registration, out var subject))
+            {
+                _logger.LogWarning(
+                    "Binding gate cannot start NyxID binding because subject cannot be resolved: platform={Platform}, sender={Sender}, registration={RegistrationId}",
+                    inbound.Platform,
+                    inbound.SenderId,
+                    registration.Id);
+                reply = new MessageContent { Text = "无法识别当前 Lark 用户身份,请稍后重试。" };
+            }
+            else
+            {
+                try
+                {
+                    var challenge = await broker.StartExternalBindingAsync(subject, ct).ConfigureAwait(false);
+                    reply = InitChannelSlashCommandHandler.BuildBindingCard(challenge.AuthorizeUrl);
+                }
+                catch (AevatarOAuthClientNotProvisionedException ex)
+                {
+                    _logger.LogInformation(
+                        ex,
+                        "Binding gate observed before aevatar OAuth client bootstrap finished; subject={Platform}:{Tenant}:{Sender}",
+                        subject.Platform,
+                        subject.Tenant,
+                        subject.ExternalUserId);
+                    reply = new MessageContent { Text = "Aevatar 正在初始化 NyxID 客户端,请 30 秒后再次发送消息。" };
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        ex,
+                        "Binding gate failed to start external binding for subject={Platform}:{Tenant}:{Sender}",
+                        subject.Platform,
+                        subject.Tenant,
+                        subject.ExternalUserId);
+                    reply = new MessageContent { Text = "启动 NyxID 绑定时遇到内部错误,请稍后重试。" };
+                }
+            }
+        }
+
+        var sentSeed = string.IsNullOrWhiteSpace(activity.Id) ? Guid.NewGuid().ToString("N") : activity.Id;
+        return await SendReplyAsync(
+            reply,
+            sentSeed,
+            activity.Conversation,
+            inbound,
+            registration,
+            runtimeContext,
+            ct).ConfigureAwait(false);
+    }
+
+    private static bool TryResolveExternalSubject(
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        out ExternalSubjectRef subject)
+    {
+        subject = new ExternalSubjectRef();
+        if (string.IsNullOrWhiteSpace(inbound.SenderId) || string.IsNullOrWhiteSpace(inbound.Platform))
+            return false;
+
+        var tenant = ResolveTenant(inbound, registration);
+        if (tenant is null)
+            return false;
+
+        subject = new ExternalSubjectRef
+        {
+            Platform = inbound.Platform.Trim().ToLowerInvariant(),
+            Tenant = tenant,
+            ExternalUserId = inbound.SenderId.Trim(),
+        };
+        return true;
     }
 
     // Pre-LLM binding gate: when identity is wired, refuse to serve unbound
     // senders with the bot owner's credentials (ADR-0018 §Decision). Returns
-    // null when binding is not enabled OR sender is bound — both cases let
-    // the existing flow continue.
-    private async Task<ConversationTurnResult?> TryEnforceBindingGateAsync(
+    // (null, null) when binding is not enabled (legacy mode); returns
+    // (prompt, null) for unbound senders so the caller short-circuits with
+    // a binding prompt/card; returns (null, bindingId) for bound senders so the LLM
+    // dispatch can carry the binding-id forward into metadata for the issue
+    // #513 phase 3 prefs override chain.
+    private async Task<(ConversationTurnResult? Blocking, string? SenderBindingId)> TryEnforceBindingGateAsync(
         ChatActivity activity,
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
@@ -277,14 +423,14 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     {
         var queryPort = _services.GetService<IExternalIdentityBindingQueryPort>();
         if (queryPort is null)
-            return null;
+            return (null, null);
 
         if (string.IsNullOrWhiteSpace(inbound.SenderId) || string.IsNullOrWhiteSpace(inbound.Platform))
-            return null;
+            return (null, null);
 
         var tenant = ResolveTenant(inbound, registration);
         if (tenant is null)
-            return null;
+            return (null, null);
 
         var subject = new ExternalSubjectRef
         {
@@ -308,53 +454,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
 
         if (existing is not null)
-            return null; // bound — continue normal flow
+            return (null, existing.Value); // bound — continue with sender binding-id
 
-        var hint = IsPrivateChat(inbound)
-            ? "请先发送 /init 完成 NyxID 绑定后再继续对话。"
-            : "请与 bot 私聊后发送 /init 完成 NyxID 绑定。";
-        var outbound = new MessageContent { Text = hint };
-        var sentSeed = string.IsNullOrWhiteSpace(activity.Id) ? Guid.NewGuid().ToString("N") : activity.Id;
-        return await SendReplyAsync(
-            outbound,
-            sentSeed,
-            activity.Conversation,
-            inbound,
-            registration,
-            runtimeContext,
-            ct);
-    }
-
-    private async Task DispatchRevokeBindingAsync(
-        ExternalSubjectRef subject,
-        string reason,
-        CancellationToken ct)
-    {
-        var actorRuntime = _services.GetService<Aevatar.Foundation.Abstractions.IActorRuntime>();
-        if (actorRuntime is null)
-        {
-            _logger.LogWarning(
-                "RevokeBinding dispatch skipped: IActorRuntime is not registered; the local projection will not reflect the unbind until another path event-sources the revoke");
-            return;
-        }
-
-        var actorId = subject.ToActorId();
-        var actor = await actorRuntime.CreateAsync<Aevatar.GAgents.Channel.Identity.ExternalIdentityBindingGAgent>(actorId, ct);
-        var envelope = new Aevatar.Foundation.Abstractions.EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new Aevatar.GAgents.Channel.Identity.RevokeBindingCommand
-            {
-                ExternalSubject = subject.Clone(),
-                Reason = reason,
-            }),
-            Route = new Aevatar.Foundation.Abstractions.EnvelopeRoute
-            {
-                Direct = new Aevatar.Foundation.Abstractions.DirectRoute { TargetActorId = actorId },
-            },
-        };
-        await actor.HandleEventAsync(envelope, ct);
+        var prompt = await SendBindingPromptAsync(activity, inbound, registration, runtimeContext, ct).ConfigureAwait(false);
+        return (prompt, null);
     }
 
     // Lark-aware private-chat detection. Other platforms map their direct-
@@ -1165,6 +1268,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ChannelBotRegistrationEntry registration,
         ChannelInboundEvent inboundEvent,
         ConversationTurnRuntimeContext runtimeContext,
+        string? senderBindingId,
         CancellationToken ct)
     {
         var request = new NeedsLlmReplyEvent
@@ -1190,6 +1294,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         foreach (var pair in await BuildReplyMetadataAsync(inboundEvent, activity, ct))
             request.Metadata[pair.Key] = pair.Value;
+
+        // Issue #513 phase 3: tag the request with the sender's binding-id so
+        // the downstream reply generator can apply the prefs override chain
+        // (sender → bot owner → provider default).
+        if (!string.IsNullOrWhiteSpace(senderBindingId))
+            request.Metadata[LLMRequestMetadataKeys.SenderBindingId] = senderBindingId;
 
         return request;
     }

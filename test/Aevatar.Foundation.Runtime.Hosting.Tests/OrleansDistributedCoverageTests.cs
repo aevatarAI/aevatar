@@ -615,10 +615,17 @@ public sealed class OrleansDistributedCoverageTests
     private sealed class RuntimeActorGrainStub : IRuntimeActorGrain
     {
         public string AgentTypeName { get; set; } = string.Empty;
+        public string AgentKind { get; set; } = string.Empty;
 
         public Task<bool> InitializeAgentAsync(string agentTypeName)
         {
             AgentTypeName = agentTypeName;
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> InitializeAgentByKindAsync(string kind)
+        {
+            AgentKind = kind;
             return Task.FromResult(true);
         }
 
@@ -657,6 +664,8 @@ public sealed class OrleansDistributedCoverageTests
         public Task<string> GetDescriptionAsync() => Task.FromResult("stub");
 
         public Task<string> GetAgentTypeNameAsync() => Task.FromResult(AgentTypeName);
+
+        public Task<string> GetAgentKindAsync() => Task.FromResult(AgentKind);
 
         public Task DeactivateAsync() => Task.CompletedTask;
 

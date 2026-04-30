@@ -3,8 +3,10 @@ using System.Text;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -939,6 +941,102 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Activity.OutboundDelivery.ReplyMessageId.Should().Be("relay-msg-normal-1");
         result.LlmReplyRequest.Activity.OutboundDelivery.CorrelationId.Should().Be("corr-normal-relay-1");
         adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldSendBindingCard_WhenUnboundPrivateSenderSendsNormalMessage()
+    {
+        var broker = new InMemoryCapabilityBroker();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<INyxIdCapabilityBroker>(broker)
+            .BuildServiceProvider();
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var interactiveDispatcher = Substitute.For<IInteractiveReplyDispatcher>();
+        interactiveDispatcher.DispatchAsync(
+                Arg.Any<ChannelId>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<MessageContent>(),
+                Arg.Any<ComposeContext>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new InteractiveReplyDispatchResult(
+                Succeeded: true,
+                MessageId: "reply-binding-card-1",
+                PlatformMessageId: "platform-binding-card-1",
+                Capability: ComposeCapability.Exact,
+                FellBackToText: false,
+                Detail: null)));
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            services,
+            interactiveReplyDispatcher: interactiveDispatcher);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello",
+                "msg-unbound-private-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                new OutboundDeliveryContext
+                {
+                    ReplyMessageId = "relay-msg-binding-1",
+                    CorrelationId = "corr-binding-1",
+                },
+                new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                }),
+            RelayRuntimeContext(
+                "corr-binding-1",
+                replyToken: "relay-token-binding-1",
+                replyMessageId: "relay-msg-binding-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.SentActivityId.Should().Be("reply-binding-card-1");
+        result.LlmReplyRequest.Should().BeNull();
+        result.Outbound.Cards.Should().ContainSingle(card => card.Title == "完成 NyxID 绑定");
+        result.Outbound.Actions.Should().ContainSingle(action =>
+            action.Kind == ActionElementKind.Link &&
+            action.IsPrimary &&
+            action.Value.Contains("test-nyxid.local/oauth/authorize"));
+        adapter.Replies.Should().BeEmpty();
+        await interactiveDispatcher.Received(1).DispatchAsync(
+            Arg.Is<ChannelId>(channel => channel.Value == "lark"),
+            "relay-msg-binding-1",
+            "relay-token-binding-1",
+            Arg.Is<MessageContent>(message =>
+                message.Cards.Count == 1 &&
+                message.Actions.Count == 1 &&
+                message.Actions[0].Value.Contains("test-nyxid.local/oauth/authorize")),
+            Arg.Any<ComposeContext>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldPromptPrivateChatWithoutSlashCommand_WhenUnboundGroupSender()
+    {
+        var broker = new InMemoryCapabilityBroker();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<INyxIdCapabilityBroker>(broker)
+            .BuildServiceProvider();
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity("hello", "msg-unbound-group-1", ConversationScope.Group, "oc_group_chat_1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().BeNull();
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("请与 bot 私聊任意消息以获取 NyxID 绑定卡片。");
+        adapter.Replies[0].ReplyText.Should().NotContain("/init");
     }
 
     [Theory]
