@@ -3,7 +3,6 @@ using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.NyxidChat.Slash;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using StudioConfig = Aevatar.Studio.Application.Studio.Abstractions.UserConfig;
@@ -19,9 +18,9 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 public sealed class ModelSlashCommandHandlerTests
 {
     private static ChannelSlashCommandContext Context(
-        IServiceProvider services,
         string subAndArgs = "",
-        string? bindingValue = "bnd_sender") => new()
+        string? bindingValue = "bnd_sender",
+        string registrationScopeId = "owner-scope") => new()
     {
         CommandName = "model",
         ArgumentText = subAndArgs,
@@ -33,23 +32,11 @@ public sealed class ModelSlashCommandHandlerTests
         },
         BindingIdValue = bindingValue,
         RegistrationId = "reg",
-        RegistrationScopeId = "owner-scope",
+        RegistrationScopeId = registrationScopeId,
         SenderId = "ou_user",
         SenderName = "Eric",
         IsPrivateChat = true,
-        Services = services,
     };
-
-    private static IServiceProvider BuildServices(
-        StubUserConfigQueryPort queryPort,
-        StubUserConfigCommandService? commandService = null)
-    {
-        var services = new ServiceCollection();
-        services.AddSingleton<IUserConfigQueryPort>(queryPort);
-        if (commandService is not null)
-            services.AddSingleton<IUserConfigCommandService>(commandService);
-        return services.BuildServiceProvider();
-    }
 
     [Fact]
     public void RequiresBinding_IsTrue()
@@ -74,9 +61,10 @@ public sealed class ModelSlashCommandHandlerTests
                 ["owner-scope"] = MakeConfig("owner-gpt"),
             },
         };
-        var handler = new ModelChannelSlashCommandHandler(NullLogger<ModelChannelSlashCommandHandler>.Instance);
+        var handler = new ModelChannelSlashCommandHandler(
+            NullLogger<ModelChannelSlashCommandHandler>.Instance, queryPort);
 
-        var reply = await handler.HandleAsync(Context(BuildServices(queryPort), subAndArgs: "list"), default);
+        var reply = await handler.HandleAsync(Context(subAndArgs: "list"), default);
 
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("sender-claude");
@@ -100,9 +88,10 @@ public sealed class ModelSlashCommandHandlerTests
                 ["owner-scope"] = MakeConfig("owner-gpt"),
             },
         };
-        var handler = new ModelChannelSlashCommandHandler(NullLogger<ModelChannelSlashCommandHandler>.Instance);
+        var handler = new ModelChannelSlashCommandHandler(
+            NullLogger<ModelChannelSlashCommandHandler>.Instance, queryPort);
 
-        var reply = await handler.HandleAsync(Context(BuildServices(queryPort)), default);
+        var reply = await handler.HandleAsync(Context(), default);
 
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("(未设置)");
@@ -121,23 +110,12 @@ public sealed class ModelSlashCommandHandlerTests
             ByScope = { ["bnd_sender"] = MakeConfig("sender-claude") },
             Ambient = MakeConfig("owner-gpt"),
         };
-        var handler = new ModelChannelSlashCommandHandler(NullLogger<ModelChannelSlashCommandHandler>.Instance);
+        var handler = new ModelChannelSlashCommandHandler(
+            NullLogger<ModelChannelSlashCommandHandler>.Instance, queryPort);
 
-        var ctx = new ChannelSlashCommandContext
-        {
-            CommandName = "model",
-            ArgumentText = "list",
-            Subject = new ExternalSubjectRef { Platform = "lark", Tenant = "t", ExternalUserId = "u" },
-            BindingIdValue = "bnd_sender",
-            RegistrationId = "reg",
-            RegistrationScopeId = string.Empty,
-            SenderId = "u",
-            SenderName = "Eric",
-            IsPrivateChat = true,
-            Services = BuildServices(queryPort),
-        };
-
-        var reply = await handler.HandleAsync(ctx, default);
+        var reply = await handler.HandleAsync(
+            Context(subAndArgs: "list", registrationScopeId: string.Empty),
+            default);
 
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("owner-gpt");
@@ -149,9 +127,10 @@ public sealed class ModelSlashCommandHandlerTests
     {
         var queryPort = new StubUserConfigQueryPort();
         var commandService = new StubUserConfigCommandService();
-        var handler = new ModelChannelSlashCommandHandler(NullLogger<ModelChannelSlashCommandHandler>.Instance);
+        var handler = new ModelChannelSlashCommandHandler(
+            NullLogger<ModelChannelSlashCommandHandler>.Instance, queryPort, commandService);
 
-        var reply = await handler.HandleAsync(Context(BuildServices(queryPort, commandService), subAndArgs: "use"), default);
+        var reply = await handler.HandleAsync(Context(subAndArgs: "use"), default);
 
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("/model use <model-name>");
@@ -166,10 +145,11 @@ public sealed class ModelSlashCommandHandlerTests
             ByScope = { ["bnd_sender"] = MakeConfig(string.Empty) },
         };
         var commandService = new StubUserConfigCommandService();
-        var handler = new ModelChannelSlashCommandHandler(NullLogger<ModelChannelSlashCommandHandler>.Instance);
+        var handler = new ModelChannelSlashCommandHandler(
+            NullLogger<ModelChannelSlashCommandHandler>.Instance, queryPort, commandService);
 
         var reply = await handler.HandleAsync(
-            Context(BuildServices(queryPort, commandService), subAndArgs: "use claude-opus-4-7"),
+            Context(subAndArgs: "use claude-opus-4-7"),
             default);
 
         reply.Should().NotBeNull();
@@ -188,9 +168,10 @@ public sealed class ModelSlashCommandHandlerTests
             ByScope = { ["bnd_sender"] = MakeConfig("sender-old") },
         };
         var commandService = new StubUserConfigCommandService();
-        var handler = new ModelChannelSlashCommandHandler(NullLogger<ModelChannelSlashCommandHandler>.Instance);
+        var handler = new ModelChannelSlashCommandHandler(
+            NullLogger<ModelChannelSlashCommandHandler>.Instance, queryPort, commandService);
 
-        var reply = await handler.HandleAsync(Context(BuildServices(queryPort, commandService), subAndArgs: "reset"), default);
+        var reply = await handler.HandleAsync(Context(subAndArgs: "reset"), default);
 
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("已清空");

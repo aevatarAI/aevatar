@@ -236,7 +236,6 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             SenderId = inbound.SenderId.Trim(),
             SenderName = (inbound.SenderName ?? string.Empty).Trim(),
             IsPrivateChat = IsPrivateChat(inbound),
-            Services = _services,
         };
 
         MessageContent? reply;

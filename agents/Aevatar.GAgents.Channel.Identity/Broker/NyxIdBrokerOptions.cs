@@ -21,7 +21,7 @@ public sealed class NyxIdBrokerOptions
     /// <summary>
     /// Lifetime of the stateless <c>state</c> token. Bounds how long a user
     /// can sit on the OAuth authorize URL before completing login. Maximum
-    /// 5 minutes per ADR-0017 §Implementation Notes #1.
+    /// 5 minutes per ADR-0018 §Implementation Notes #1.
     /// </summary>
     public TimeSpan StateTokenLifetime { get; set; } = TimeSpan.FromMinutes(5);
 }

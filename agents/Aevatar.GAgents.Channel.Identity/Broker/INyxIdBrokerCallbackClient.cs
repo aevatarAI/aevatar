@@ -7,7 +7,7 @@ namespace Aevatar.GAgents.Channel.Identity.Broker;
 /// binding flow. Distinct from <c>INyxIdCapabilityBroker</c> (which is the
 /// per-turn write-side seam used by <c>ChannelConversationTurnRunner</c>);
 /// the callback handler depends on this narrower contract so the seam is
-/// obvious in the dependency graph. See ADR-0017 §Decision (`/init` flow).
+/// obvious in the dependency graph. See ADR-0018 §Decision (`/init` flow).
 /// </summary>
 public interface INyxIdBrokerCallbackClient
 {
@@ -45,6 +45,6 @@ public interface INyxIdBrokerCallbackClient
 /// <summary>
 /// Result of an authorization-code -> binding-id exchange. <see cref="BindingId"/>
 /// may be null when NyxID has not yet enabled <c>broker_capability_enabled</c>
-/// on this client (see ADR-0017 §Decision).
+/// on this client (see ADR-0018 §Decision).
 /// </summary>
 public sealed record BrokerAuthorizationCodeResult(string? BindingId, string? IdToken, string? AccessToken);

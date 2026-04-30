@@ -2,7 +2,6 @@ using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Identity.Slash;
 using FluentAssertions;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -25,7 +24,6 @@ public sealed class SlashCommandHandlerTests
     };
 
     private static ChannelSlashCommandContext Context(
-        InMemoryCapabilityBroker broker,
         string? bindingValue = null,
         bool privateChat = true) => new()
     {
@@ -38,7 +36,6 @@ public sealed class SlashCommandHandlerTests
         SenderId = "ou_user_y",
         SenderName = "Eric",
         IsPrivateChat = privateChat,
-        Services = new ServiceCollection().AddSingleton(broker).BuildServiceProvider(),
     };
 
     [Fact]
@@ -47,7 +44,7 @@ public sealed class SlashCommandHandlerTests
         var broker = new InMemoryCapabilityBroker();
         var handler = new InitChannelSlashCommandHandler(broker, broker, NullLogger<InitChannelSlashCommandHandler>.Instance);
 
-        var reply = await handler.HandleAsync(Context(broker), default);
+        var reply = await handler.HandleAsync(Context(), default);
 
         reply.Should().NotBeNull();
         reply!.Cards.Should().HaveCount(1);
@@ -65,7 +62,7 @@ public sealed class SlashCommandHandlerTests
         var broker = new InMemoryCapabilityBroker();
         var handler = new InitChannelSlashCommandHandler(broker, broker, NullLogger<InitChannelSlashCommandHandler>.Instance);
 
-        var reply = await handler.HandleAsync(Context(broker, privateChat: false), default);
+        var reply = await handler.HandleAsync(Context(privateChat: false), default);
 
         reply.Should().NotBeNull();
         reply!.Actions.Should().BeEmpty();
@@ -78,7 +75,7 @@ public sealed class SlashCommandHandlerTests
         var broker = new InMemoryCapabilityBroker();
         var handler = new InitChannelSlashCommandHandler(broker, broker, NullLogger<InitChannelSlashCommandHandler>.Instance);
 
-        var reply = await handler.HandleAsync(Context(broker, bindingValue: "bnd_existing"), default);
+        var reply = await handler.HandleAsync(Context(bindingValue: "bnd_existing"), default);
 
         reply.Should().NotBeNull();
         reply!.Actions.Should().BeEmpty();
@@ -91,8 +88,7 @@ public sealed class SlashCommandHandlerTests
         var handler = new WhoamiChannelSlashCommandHandler();
         handler.RequiresBinding.Should().BeTrue();
 
-        var broker = new InMemoryCapabilityBroker();
-        var ctx = Context(broker, bindingValue: "bnd_1234567890abcdef");
+        var ctx = Context(bindingValue: "bnd_1234567890abcdef");
         ctx = new ChannelSlashCommandContext
         {
             CommandName = "whoami",
@@ -104,7 +100,6 @@ public sealed class SlashCommandHandlerTests
             SenderId = ctx.SenderId,
             SenderName = ctx.SenderName,
             IsPrivateChat = ctx.IsPrivateChat,
-            Services = ctx.Services,
         };
 
         var reply = await handler.HandleAsync(ctx, default);

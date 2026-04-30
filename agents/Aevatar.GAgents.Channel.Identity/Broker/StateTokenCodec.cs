@@ -15,7 +15,7 @@ namespace Aevatar.GAgents.Channel.Identity.Broker;
 /// subject, the PKCE code verifier, and an absolute expiry (UNIX seconds).
 /// Token shape: <c>base64url(kid) "." base64url(payload_proto) "." base64url(hmac)</c>.
 /// HMAC is over the literal bytes <c>kid_bytes "." payload_proto_bytes</c>
-/// — see ADR-0017 §Implementation Notes #1.
+/// — see ADR-0018 §Implementation Notes #1.
 /// </summary>
 /// <remarks>
 /// Reads its HMAC key from <see cref="IAevatarOAuthClientProvider"/> (cluster-

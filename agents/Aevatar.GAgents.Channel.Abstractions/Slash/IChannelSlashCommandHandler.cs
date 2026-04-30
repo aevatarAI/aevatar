@@ -43,8 +43,10 @@ public interface IChannelSlashCommandHandler
 /// Inputs passed to <see cref="IChannelSlashCommandHandler.HandleAsync"/>.
 /// Designed to avoid pulling <c>InboundMessage</c> (Channel.Runtime) or
 /// <c>BindingId</c> (Channel.Identity.Abstractions) into the abstraction
-/// layer — handlers that need richer context resolve services via
-/// <see cref="Services"/>.
+/// layer — only the small set of fields all handlers reasonably need is
+/// surfaced here. Handlers that need richer dependencies receive them via
+/// constructor injection (CLAUDE.md: no <c>IServiceProvider</c> as a service-
+/// locator escape hatch — PR #521 review kimi).
 /// </summary>
 public sealed class ChannelSlashCommandContext
 {
@@ -105,11 +107,4 @@ public sealed class ChannelSlashCommandContext
     /// to avoid leaking the sealed state token to other group members.
     /// </summary>
     public required bool IsPrivateChat { get; init; }
-
-    /// <summary>
-    /// Request-scoped service provider so handlers can resolve heavy
-    /// dependencies (broker, query ports, prefs store) without inflating
-    /// constructor surface.
-    /// </summary>
-    public required IServiceProvider Services { get; init; }
 }

@@ -2,7 +2,6 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.NyxidChat.Slash;
@@ -23,11 +22,27 @@ namespace Aevatar.GAgents.NyxidChat.Slash;
 /// </summary>
 public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandler
 {
+    private readonly IUserConfigQueryPort? _queryPort;
+    private readonly IUserConfigCommandService? _commandService;
     private readonly ILogger<ModelChannelSlashCommandHandler> _logger;
 
-    public ModelChannelSlashCommandHandler(ILogger<ModelChannelSlashCommandHandler> logger)
+    /// <summary>
+    /// Both UserConfig ports are nullable so deployments without the Studio
+    /// projection wired up (CLI playground, demo hosts) still register the
+    /// handler and surface a clean "not enabled" reply instead of crashing
+    /// the whole DI container at activation time. PR #521 review kimi: this
+    /// constructor takes typed deps directly so the slash-command pipeline
+    /// no longer relies on <c>IServiceProvider</c> inside the context — the
+    /// service-locator escape hatch is gone.
+    /// </summary>
+    public ModelChannelSlashCommandHandler(
+        ILogger<ModelChannelSlashCommandHandler> logger,
+        IUserConfigQueryPort? queryPort = null,
+        IUserConfigCommandService? commandService = null)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _queryPort = queryPort;
+        _commandService = commandService;
     }
 
     public string Name => "model";
@@ -45,8 +60,7 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
             return new MessageContent { Text = "请先发送 /init 完成 NyxID 绑定。" };
         }
 
-        var queryPort = context.Services.GetService<IUserConfigQueryPort>();
-        if (queryPort is null)
+        if (_queryPort is null)
         {
             _logger.LogDebug("/model invoked but IUserConfigQueryPort is not registered; falling back to read-only hint");
             return new MessageContent { Text = "当前部署未启用模型偏好,/model 暂不可用。" };
@@ -55,9 +69,9 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
         var (sub, arg) = ParseSubcommand(context.ArgumentText);
         return sub switch
         {
-            "" or "list" => await BuildListReplyAsync(queryPort, bindingId, context.RegistrationScopeId, ct).ConfigureAwait(false),
-            "use" => await HandleUseAsync(context, queryPort, bindingId, arg, ct).ConfigureAwait(false),
-            "reset" => await HandleResetAsync(context, queryPort, bindingId, ct).ConfigureAwait(false),
+            "" or "list" => await BuildListReplyAsync(_queryPort, bindingId, context.RegistrationScopeId, ct).ConfigureAwait(false),
+            "use" => await HandleUseAsync(_queryPort, bindingId, arg, ct).ConfigureAwait(false),
+            "reset" => await HandleResetAsync(_queryPort, bindingId, ct).ConfigureAwait(false),
             _ => UsageHint(),
         };
     }
@@ -110,7 +124,6 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
     }
 
     private async Task<MessageContent> HandleUseAsync(
-        ChannelSlashCommandContext context,
         IUserConfigQueryPort queryPort,
         string bindingId,
         string requestedModel,
@@ -119,8 +132,7 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
         if (string.IsNullOrWhiteSpace(requestedModel))
             return new MessageContent { Text = "用法:`/model use <model-name>`" };
 
-        var commandService = context.Services.GetService<IUserConfigCommandService>();
-        if (commandService is null)
+        if (_commandService is null)
         {
             _logger.LogDebug("/model use invoked but IUserConfigCommandService is not registered");
             return new MessageContent { Text = "当前部署未启用模型偏好写入,/model use 暂不可用。" };
@@ -148,7 +160,7 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
 
         try
         {
-            await commandService.SaveAsync(bindingId, merged, ct).ConfigureAwait(false);
+            await _commandService.SaveAsync(bindingId, merged, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -163,13 +175,11 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
     }
 
     private async Task<MessageContent> HandleResetAsync(
-        ChannelSlashCommandContext context,
         IUserConfigQueryPort queryPort,
         string bindingId,
         CancellationToken ct)
     {
-        var commandService = context.Services.GetService<IUserConfigCommandService>();
-        if (commandService is null)
+        if (_commandService is null)
             return new MessageContent { Text = "当前部署未启用模型偏好写入,/model reset 暂不可用。" };
 
         Aevatar.Studio.Application.Studio.Abstractions.UserConfig current;
@@ -194,7 +204,7 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
 
         try
         {
-            await commandService.SaveAsync(bindingId, cleared, ct).ConfigureAwait(false);
+            await _commandService.SaveAsync(bindingId, cleared, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
