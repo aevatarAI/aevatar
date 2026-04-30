@@ -260,6 +260,56 @@ public sealed class SkillDefinitionGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleExecutionCompletedAsync_WhenDefinitionDisabled_ShouldKeepCatalogStatusDisabled()
+    {
+        var captured = new List<EventEnvelope>();
+        using var provider = BuildServiceProviderWithCatalogDispatch(new InMemoryEventStore(), captured);
+        var agent = CreateAgent("skill-definition-disabled-complete", provider);
+        await agent.ActivateAsync();
+
+        var completedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        await agent.HandleExecutionCompletedAsync(new ReportSkillExecutionCompletedCommand
+        {
+            ExecutionId = "exec-1",
+            CompletedAt = completedAt,
+        });
+
+        var update = captured.Should().ContainSingle().Subject.Payload.Unpack<UserAgentCatalogExecutionUpdateCommand>();
+        update.AgentId.Should().Be("skill-definition-disabled-complete");
+        update.Status.Should().Be(SkillDefinitionDefaults.StatusDisabled);
+        update.LastRunAt.Should().Be(completedAt);
+        update.NextRunAt.Should().BeNull();
+        update.ErrorCount.Should().Be(0);
+        update.LastError.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleExecutionFailedAsync_WhenDefinitionDisabled_ShouldKeepStatusDisabledAndRecordFailure()
+    {
+        var captured = new List<EventEnvelope>();
+        using var provider = BuildServiceProviderWithCatalogDispatch(new InMemoryEventStore(), captured);
+        var agent = CreateAgent("skill-definition-disabled-failure", provider);
+        await agent.ActivateAsync();
+
+        var failedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        await agent.HandleExecutionFailedAsync(new ReportSkillExecutionFailedCommand
+        {
+            ExecutionId = "exec-2",
+            FailedAt = failedAt,
+            Error = "delivery rejected",
+            RetryAttempt = 1,
+        });
+
+        var update = captured.Should().ContainSingle().Subject.Payload.Unpack<UserAgentCatalogExecutionUpdateCommand>();
+        update.AgentId.Should().Be("skill-definition-disabled-failure");
+        update.Status.Should().Be(SkillDefinitionDefaults.StatusDisabled);
+        update.LastRunAt.Should().Be(failedAt);
+        update.NextRunAt.Should().BeNull();
+        update.ErrorCount.Should().Be(2);
+        update.LastError.Should().Be("delivery rejected");
+    }
+
+    [Fact]
     public async Task SendOutputAsync_ShouldUseTypedReceiveTarget_WhenLarkReceiveIdIsPopulated()
     {
         // Initialize with typed fields set (the shape AgentBuilderTool now writes for p2p flows).
@@ -993,6 +1043,31 @@ public sealed class SkillDefinitionGAgentTests : IAsyncLifetime
             typeof(DefaultEventSourcingBehaviorFactory<>));
         configure?.Invoke(services);
         return services.BuildServiceProvider();
+    }
+
+    private static ServiceProvider BuildServiceProviderWithCatalogDispatch(
+        IEventStore eventStore,
+        List<EventEnvelope> captured)
+    {
+        var catalogActor = Substitute.For<IActor>();
+        var runtime = Substitute.For<IActorRuntime>();
+        runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(catalogActor));
+
+        var dispatch = Substitute.For<IActorDispatchPort>();
+        dispatch.DispatchAsync(
+                UserAgentCatalogGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(captured.Add),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        return BuildServiceProvider(
+            eventStore,
+            services =>
+            {
+                services.AddSingleton(runtime);
+                services.AddSingleton(dispatch);
+            });
     }
 
     private static InitializeSkillDefinitionCommand CreateInitializeCommand() => new()

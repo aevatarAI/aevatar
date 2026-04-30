@@ -17,7 +17,21 @@ namespace Aevatar.GAgents.Scheduled;
 [LegacyClrTypeName(SkillRunnerLegacyAliases.ImplementationClr)]
 public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
 {
+    private IActorRuntime? _actorRuntime;
+    private IActorDispatchPort? _dispatchPort;
     private ChannelScheduleRunner? _scheduler;
+
+    public SkillDefinitionGAgent(
+        IActorRuntime? actorRuntime = null,
+        IActorDispatchPort? dispatchPort = null)
+    {
+        _actorRuntime = actorRuntime;
+        _dispatchPort = dispatchPort;
+    }
+
+    private IActorRuntime ActorRuntime => _actorRuntime ??= Services.GetRequiredService<IActorRuntime>();
+
+    private IActorDispatchPort DispatchPort => _dispatchPort ??= Services.GetRequiredService<IActorDispatchPort>();
 
     private ChannelScheduleRunner Scheduler => _scheduler ??= new ChannelScheduleRunner(
         callbackId: SkillDefinitionDefaults.TriggerCallbackId,
@@ -44,6 +58,8 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
             .On<SkillDefinitionInitializedEvent>(ApplyInitialized)
             .On<SkillDefinitionNextRunScheduledEvent>(ApplyNextRunScheduled)
             .On<SkillDefinitionExecutionDispatchFailedEvent>(ApplyExecutionDispatchFailed)
+            .On<SkillDefinitionExecutionCompletedEvent>(ApplyExecutionCompleted)
+            .On<SkillDefinitionExecutionFailedEvent>(ApplyExecutionFailed)
             .On<SkillDefinitionDisabledEvent>(ApplyDisabled)
             .On<SkillDefinitionEnabledEvent>(ApplyEnabled)
             // Legacy event compat: existing SkillRunnerGAgent instances that were
@@ -141,9 +157,8 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
         Exception? dispatchFailure = null;
         try
         {
-            var actorRuntime = Services.GetRequiredService<IActorRuntime>();
-            _ = await actorRuntime.GetAsync(executionId)
-                ?? await actorRuntime.CreateAsync<SkillExecutionGAgent>(executionId, CancellationToken.None);
+            _ = await ActorRuntime.GetAsync(executionId)
+                ?? await ActorRuntime.CreateAsync<SkillExecutionGAgent>(executionId, CancellationToken.None);
 
             var startCommand = new StartSkillExecutionCommand
             {
@@ -167,7 +182,6 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
             if (State.HasMaxHistoryMessages)
                 startCommand.MaxHistoryMessages = State.MaxHistoryMessages;
 
-            var dispatchPort = Services.GetRequiredService<IActorDispatchPort>();
             var envelope = new EventEnvelope
             {
                 Id = Guid.NewGuid().ToString("N"),
@@ -175,7 +189,7 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
                 Payload = Any.Pack(startCommand),
                 Route = EnvelopeRouteSemantics.CreateDirect(Id, executionId),
             };
-            await dispatchPort.DispatchAsync(executionId, envelope, CancellationToken.None);
+            await DispatchPort.DispatchAsync(executionId, envelope, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -197,7 +211,14 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
                 Timestamp.FromDateTimeOffset(now),
                 dispatchFailure.Message,
                 CancellationToken.None);
+            return;
         }
+
+        await UpdateRegistryStatusAsync(
+            SkillDefinitionDefaults.StatusRunning,
+            preserveExecutionState: true,
+            clearNextRunAt: false,
+            ct: CancellationToken.None);
     }
 
     // Backward compat: existing instances send this command type via durable callbacks.
@@ -217,7 +238,11 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
             Reason = command.Reason?.Trim() ?? string.Empty,
         });
 
-        await UpdateRegistryStatusAsync(SkillDefinitionDefaults.StatusDisabled, CancellationToken.None);
+        await UpdateRegistryStatusAsync(
+            SkillDefinitionDefaults.StatusDisabled,
+            preserveExecutionState: true,
+            clearNextRunAt: true,
+            ct: CancellationToken.None);
     }
 
     // Backward compat
@@ -238,8 +263,14 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
             });
         }
 
+        // Enable is intentionally idempotent: already-enabled actors refresh scheduling
+        // and catalog visibility without committing another lifecycle event.
         await Scheduler.ScheduleNextRunAsync(DateTimeOffset.UtcNow, CancellationToken.None);
-        await UpdateRegistryStatusAsync(SkillDefinitionDefaults.StatusRunning, CancellationToken.None);
+        await UpdateRegistryStatusAsync(
+            SkillDefinitionDefaults.StatusRunning,
+            preserveExecutionState: false,
+            clearNextRunAt: false,
+            ct: CancellationToken.None);
     }
 
     // Backward compat
@@ -247,6 +278,56 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
     public async Task HandleLegacyEnableAsync(EnableSkillRunnerCommand command)
     {
         await HandleEnableAsync(new EnableSkillDefinitionCommand { Reason = command.Reason });
+    }
+
+    [EventHandler]
+    public async Task HandleExecutionCompletedAsync(ReportSkillExecutionCompletedCommand command)
+    {
+        if (string.IsNullOrWhiteSpace(command.ExecutionId))
+        {
+            Logger.LogWarning("Skill definition {ActorId} ignored completed execution report with empty execution_id", Id);
+            return;
+        }
+
+        var completedAt = command.CompletedAt ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        await PersistDomainEventAsync(new SkillDefinitionExecutionCompletedEvent
+        {
+            ExecutionId = command.ExecutionId.Trim(),
+            CompletedAt = completedAt,
+        });
+
+        await UpdateRegistryExecutionResultAsync(
+            status: State.Enabled ? SkillDefinitionDefaults.StatusRunning : SkillDefinitionDefaults.StatusDisabled,
+            lastRunAt: completedAt,
+            errorCount: 0,
+            lastError: string.Empty,
+            ct: CancellationToken.None);
+    }
+
+    [EventHandler]
+    public async Task HandleExecutionFailedAsync(ReportSkillExecutionFailedCommand command)
+    {
+        if (string.IsNullOrWhiteSpace(command.ExecutionId))
+        {
+            Logger.LogWarning("Skill definition {ActorId} ignored failed execution report with empty execution_id", Id);
+            return;
+        }
+
+        var failedAt = command.FailedAt ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        await PersistDomainEventAsync(new SkillDefinitionExecutionFailedEvent
+        {
+            ExecutionId = command.ExecutionId.Trim(),
+            FailedAt = failedAt,
+            Error = command.Error?.Trim() ?? string.Empty,
+            RetryAttempt = command.RetryAttempt,
+        });
+
+        await UpdateRegistryExecutionResultAsync(
+            status: State.Enabled ? SkillDefinitionDefaults.StatusError : SkillDefinitionDefaults.StatusDisabled,
+            lastRunAt: failedAt,
+            errorCount: command.RetryAttempt + 1,
+            lastError: command.Error,
+            ct: CancellationToken.None);
     }
 
     private async Task UpsertRegistryAsync(string status, CancellationToken ct)
@@ -283,16 +364,27 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
             command.OwnerScope = ownerScope;
 
         await UserAgentCatalogStoreCommands.DispatchUpsertAsync(Services, Id, command, ct);
-        await UpdateRegistryStatusAsync(status, ct);
+        await UpdateRegistryStatusAsync(
+            status,
+            preserveExecutionState: false,
+            clearNextRunAt: !State.Enabled,
+            ct: ct);
     }
 
-    private async Task UpdateRegistryStatusAsync(string status, CancellationToken ct)
+    private async Task UpdateRegistryStatusAsync(
+        string status,
+        bool preserveExecutionState,
+        bool clearNextRunAt,
+        CancellationToken ct)
     {
         var command = new UserAgentCatalogExecutionUpdateCommand
         {
             AgentId = Id, Status = status,
-            NextRunAt = State.NextRunAt,
-            ErrorCount = 0, LastError = string.Empty,
+            NextRunAt = clearNextRunAt ? null : State.NextRunAt,
+            ErrorCount = 0,
+            LastError = string.Empty,
+            PreserveLastRunAt = preserveExecutionState,
+            PreserveErrorState = preserveExecutionState,
         };
         await UserAgentCatalogStoreCommands.DispatchExecutionUpdateAsync(Services, Id, command, ct);
     }
@@ -307,6 +399,25 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
             NextRunAt = State.NextRunAt,
             ErrorCount = 1,
             LastError = error,
+        };
+        await UserAgentCatalogStoreCommands.DispatchExecutionUpdateAsync(Services, Id, command, ct);
+    }
+
+    private async Task UpdateRegistryExecutionResultAsync(
+        string status,
+        Timestamp lastRunAt,
+        int errorCount,
+        string? lastError,
+        CancellationToken ct)
+    {
+        var command = new UserAgentCatalogExecutionUpdateCommand
+        {
+            AgentId = Id,
+            Status = status,
+            LastRunAt = lastRunAt,
+            NextRunAt = State.NextRunAt,
+            ErrorCount = errorCount,
+            LastError = lastError?.Trim() ?? string.Empty,
         };
         await UserAgentCatalogStoreCommands.DispatchExecutionUpdateAsync(Services, Id, command, ct);
     }
@@ -350,6 +461,14 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
     private static SkillDefinitionState ApplyExecutionDispatchFailed(
         SkillDefinitionState current,
         SkillDefinitionExecutionDispatchFailedEvent _) => current;
+
+    private static SkillDefinitionState ApplyExecutionCompleted(
+        SkillDefinitionState current,
+        SkillDefinitionExecutionCompletedEvent _) => current;
+
+    private static SkillDefinitionState ApplyExecutionFailed(
+        SkillDefinitionState current,
+        SkillDefinitionExecutionFailedEvent _) => current;
 
     private static SkillDefinitionState ApplyDisabled(SkillDefinitionState current, SkillDefinitionDisabledEvent _)
     {

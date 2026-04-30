@@ -27,6 +27,7 @@ public sealed class SkillExecutionGAgent : AIGAgentBase<SkillExecutionState>
     private readonly NyxIdApiClient? _nyxIdApiClient;
     private readonly IOwnerLlmConfigSource? _ownerLlmConfigSource;
     private readonly SkillRunnerToolFailureCounter _toolFailureCounter;
+    private IActorDispatchPort? _dispatchPort;
 
     public SkillExecutionGAgent(
         ILLMProviderFactory? llmProviderFactory = null,
@@ -36,7 +37,8 @@ public sealed class SkillExecutionGAgent : AIGAgentBase<SkillExecutionState>
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         IEnumerable<IAgentToolSource>? toolSources = null,
         NyxIdApiClient? nyxIdApiClient = null,
-        IOwnerLlmConfigSource? ownerLlmConfigSource = null)
+        IOwnerLlmConfigSource? ownerLlmConfigSource = null,
+        IActorDispatchPort? dispatchPort = null)
         : this(
             BuildToolMiddlewareChain(toolMiddlewares),
             llmProviderFactory,
@@ -45,7 +47,8 @@ public sealed class SkillExecutionGAgent : AIGAgentBase<SkillExecutionState>
             llmMiddlewares,
             toolSources,
             nyxIdApiClient,
-            ownerLlmConfigSource)
+            ownerLlmConfigSource,
+            dispatchPort)
     {
     }
 
@@ -57,7 +60,8 @@ public sealed class SkillExecutionGAgent : AIGAgentBase<SkillExecutionState>
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares,
         IEnumerable<IAgentToolSource>? toolSources,
         NyxIdApiClient? nyxIdApiClient,
-        IOwnerLlmConfigSource? ownerLlmConfigSource)
+        IOwnerLlmConfigSource? ownerLlmConfigSource,
+        IActorDispatchPort? dispatchPort)
         : base(
             llmProviderFactory,
             additionalHooks,
@@ -69,7 +73,10 @@ public sealed class SkillExecutionGAgent : AIGAgentBase<SkillExecutionState>
         _nyxIdApiClient = nyxIdApiClient;
         _ownerLlmConfigSource = ownerLlmConfigSource;
         _toolFailureCounter = toolMiddlewareChain.Counter;
+        _dispatchPort = dispatchPort;
     }
+
+    private IActorDispatchPort DispatchPort => _dispatchPort ??= Services.GetRequiredService<IActorDispatchPort>();
 
     private readonly record struct ToolMiddlewareChain(
         IReadOnlyList<IToolCallMiddleware> Middlewares,
@@ -153,26 +160,12 @@ public sealed class SkillExecutionGAgent : AIGAgentBase<SkillExecutionState>
         if (command.HasMaxHistoryMessages) started.MaxHistoryMessages = command.MaxHistoryMessages;
 
         await PersistDomainEventAsync(started);
-        if (SkillDefinitionDefaults.MaxRetryAttempts > 0)
-            await ScheduleRetryAsync(State.RetryAttempts + 1, CancellationToken.None);
 
-        var now = DateTimeOffset.UtcNow;
+        var startedAt = DateTimeOffset.UtcNow;
+        string output;
         try
         {
-            var output = await ExecuteSkillAsync(now, command.Reason, CancellationToken.None);
-
-            await PersistDomainEventAsync(new SkillExecutionCompletedEvent
-            {
-                CompletedAt = Timestamp.FromDateTimeOffset(now),
-                Output = output,
-            });
-
-            await UpdateRegistryExecutionAsync(
-                SkillDefinitionDefaults.StatusRunning,
-                Timestamp.FromDateTimeOffset(now),
-                0,
-                string.Empty,
-                CancellationToken.None);
+            output = await ExecuteSkillAsync(startedAt, command.Reason, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -184,24 +177,37 @@ public sealed class SkillExecutionGAgent : AIGAgentBase<SkillExecutionState>
 
             if (State.RetryAttempts < SkillDefinitionDefaults.MaxRetryAttempts)
             {
+                await ScheduleRetryAsync(State.RetryAttempts + 1, CancellationToken.None);
                 return;
             }
 
+            var failedAt = DateTimeOffset.UtcNow;
             await PersistDomainEventAsync(new SkillExecutionFailedEvent
             {
-                FailedAt = Timestamp.FromDateTimeOffset(now),
+                FailedAt = Timestamp.FromDateTimeOffset(failedAt),
                 Error = ex.Message,
                 RetryAttempt = State.RetryAttempts,
             });
 
             await TrySendFailureAsync(ex.Message, CancellationToken.None);
-            await UpdateRegistryExecutionAsync(
-                SkillDefinitionDefaults.StatusError,
-                Timestamp.FromDateTimeOffset(now),
-                1,
+            await ReportExecutionFailedAsync(
+                Timestamp.FromDateTimeOffset(failedAt),
                 ex.Message,
+                State.RetryAttempts,
                 CancellationToken.None);
+            return;
         }
+
+        var completedAt = DateTimeOffset.UtcNow;
+        await PersistDomainEventAsync(new SkillExecutionCompletedEvent
+        {
+            CompletedAt = Timestamp.FromDateTimeOffset(completedAt),
+            Output = output,
+        });
+
+        await ReportExecutionCompletedAsync(
+            Timestamp.FromDateTimeOffset(completedAt),
+            CancellationToken.None);
     }
 
     [EventHandler(AllowSelfHandling = true)]
@@ -224,22 +230,10 @@ public sealed class SkillExecutionGAgent : AIGAgentBase<SkillExecutionState>
             StartedAt = Timestamp.FromDateTimeOffset(now),
         });
 
+        string output;
         try
         {
-            var output = await ExecuteSkillAsync(now, "retry", CancellationToken.None);
-
-            await PersistDomainEventAsync(new SkillExecutionCompletedEvent
-            {
-                CompletedAt = Timestamp.FromDateTimeOffset(now),
-                Output = output,
-            });
-
-            await UpdateRegistryExecutionAsync(
-                SkillDefinitionDefaults.StatusRunning,
-                Timestamp.FromDateTimeOffset(now),
-                0,
-                string.Empty,
-                CancellationToken.None);
+            output = await ExecuteSkillAsync(now, "retry", CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -255,21 +249,33 @@ public sealed class SkillExecutionGAgent : AIGAgentBase<SkillExecutionState>
                 return;
             }
 
+            var failedAt = DateTimeOffset.UtcNow;
             await PersistDomainEventAsync(new SkillExecutionFailedEvent
             {
-                FailedAt = Timestamp.FromDateTimeOffset(now),
+                FailedAt = Timestamp.FromDateTimeOffset(failedAt),
                 Error = ex.Message,
                 RetryAttempt = command.RetryAttempt,
             });
 
             await TrySendFailureAsync(ex.Message, CancellationToken.None);
-            await UpdateRegistryExecutionAsync(
-                SkillDefinitionDefaults.StatusError,
-                Timestamp.FromDateTimeOffset(now),
-                command.RetryAttempt + 1,
+            await ReportExecutionFailedAsync(
+                Timestamp.FromDateTimeOffset(failedAt),
                 ex.Message,
+                command.RetryAttempt,
                 CancellationToken.None);
+            return;
         }
+
+        var completedAt = DateTimeOffset.UtcNow;
+        await PersistDomainEventAsync(new SkillExecutionCompletedEvent
+        {
+            CompletedAt = Timestamp.FromDateTimeOffset(completedAt),
+            Output = output,
+        });
+
+        await ReportExecutionCompletedAsync(
+            Timestamp.FromDateTimeOffset(completedAt),
+            CancellationToken.None);
     }
 
     private async Task ScheduleRetryAsync(int retryAttempt, CancellationToken ct)
@@ -573,21 +579,44 @@ public sealed class SkillExecutionGAgent : AIGAgentBase<SkillExecutionState>
         return $"{prompt}\nCurrent UTC time: {now:O}\nTrigger reason: {(string.IsNullOrWhiteSpace(reason) ? "manual" : reason)}";
     }
 
-    private async Task UpdateRegistryExecutionAsync(
-        string status, Timestamp? lastRunAt,
-        int errorCount, string? lastError, CancellationToken ct)
+    private Task ReportExecutionCompletedAsync(Timestamp completedAt, CancellationToken ct) =>
+        ReportToDefinitionAsync(
+            new ReportSkillExecutionCompletedCommand
+            {
+                ExecutionId = Id,
+                CompletedAt = completedAt,
+            },
+            ct);
+
+    private Task ReportExecutionFailedAsync(
+        Timestamp failedAt,
+        string error,
+        int retryAttempt,
+        CancellationToken ct) =>
+        ReportToDefinitionAsync(
+            new ReportSkillExecutionFailedCommand
+            {
+                ExecutionId = Id,
+                FailedAt = failedAt,
+                Error = error,
+                RetryAttempt = retryAttempt,
+            },
+            ct);
+
+    private async Task ReportToDefinitionAsync(IMessage command, CancellationToken ct)
     {
         var definitionId = State.DefinitionId;
         if (string.IsNullOrWhiteSpace(definitionId))
             return;
 
-        var command = new UserAgentCatalogExecutionUpdateCommand
+        var envelope = new EventEnvelope
         {
-            AgentId = definitionId, Status = status,
-            LastRunAt = lastRunAt,
-            ErrorCount = errorCount, LastError = lastError ?? string.Empty,
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(command),
+            Route = EnvelopeRouteSemantics.CreateDirect(Id, definitionId),
         };
-        await UserAgentCatalogStoreCommands.DispatchExecutionUpdateAsync(Services, definitionId, command, ct);
+        await DispatchPort.DispatchAsync(definitionId, envelope, ct);
     }
 
     private static SkillExecutionState ApplyStarted(SkillExecutionState current, SkillExecutionStartedEvent evt)

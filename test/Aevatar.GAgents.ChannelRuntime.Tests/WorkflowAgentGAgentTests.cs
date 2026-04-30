@@ -74,7 +74,7 @@ public sealed class WorkflowAgentGAgentTests : IAsyncLifetime
     [Fact]
     public async Task HandleInitializeAsync_ShouldAwaitUpsertDispatchBeforeFiringExecutionUpdate()
     {
-        // Issue #440 regression — symmetric with SkillRunnerGAgentTests'
+        // Issue #440 regression — symmetric with SkillDefinitionGAgentTests'
         // HandleInitializeAsync_ShouldAwaitUpsertDispatchBeforeFiringExecutionUpdate.
         // WorkflowAgent's UpsertRegistryAsync follows the same await-then-await pattern
         // against the catalog and is vulnerable to the same race if dispatch ever
@@ -264,7 +264,7 @@ public sealed class WorkflowAgentGAgentTests : IAsyncLifetime
     [Fact]
     public async Task HandleTriggerAsync_ShouldPinOwnerLlmConfigOverridesOnDispatchedMetadata()
     {
-        // Symmetric with SkillRunnerGAgentTests'
+        // Symmetric with SkillDefinitionGAgentTests'
         // BuildExecutionMetadata_ShouldPinOwnerLlmConfigOverrides_WhenSourceReturnsConfig:
         // workflow-backed agents (e.g. social_media) honor the bot owner's pre-configured
         // model + NyxID route + tool cap exactly the same way. Without this, the workflow's

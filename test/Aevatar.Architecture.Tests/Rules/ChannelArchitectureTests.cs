@@ -156,7 +156,7 @@ public sealed class ChannelArchitectureTests
 
         var proactiveCallerPatterns = new[]
         {
-            "SkillDefinitionGAgent",
+            "SkillExecutionGAgent",
             "WorkflowAgentGAgent",
             "AdminBroadcast",
             "ChannelBroadcast",

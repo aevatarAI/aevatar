@@ -127,6 +127,10 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             NextRunAt = command.NextRunAt,
             ErrorCount = command.ErrorCount,
             LastError = command.LastError?.Trim() ?? string.Empty,
+            PreserveStatus = command.PreserveStatus,
+            PreserveLastRunAt = command.PreserveLastRunAt,
+            PreserveNextRunAt = command.PreserveNextRunAt,
+            PreserveErrorState = command.PreserveErrorState,
         });
     }
 
@@ -189,11 +193,17 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             return next;
 
         existing.UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
-        existing.Status = evt.Status ?? string.Empty;
-        existing.LastRunAt = evt.LastRunAt;
-        existing.NextRunAt = evt.NextRunAt;
-        existing.ErrorCount = evt.ErrorCount;
-        existing.LastError = evt.LastError ?? string.Empty;
+        if (!evt.PreserveStatus)
+            existing.Status = evt.Status ?? string.Empty;
+        if (!evt.PreserveLastRunAt)
+            existing.LastRunAt = evt.LastRunAt;
+        if (!evt.PreserveNextRunAt)
+            existing.NextRunAt = evt.NextRunAt;
+        if (!evt.PreserveErrorState)
+        {
+            existing.ErrorCount = evt.ErrorCount;
+            existing.LastError = evt.LastError ?? string.Empty;
+        }
         return next;
     }
 

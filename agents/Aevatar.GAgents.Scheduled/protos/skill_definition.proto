@@ -90,6 +90,30 @@ message SkillDefinitionExecutionDispatchFailedEvent {
   string error = 4;
 }
 
+message ReportSkillExecutionCompletedCommand {
+  string execution_id = 1;
+  google.protobuf.Timestamp completed_at = 2;
+}
+
+message ReportSkillExecutionFailedCommand {
+  string execution_id = 1;
+  google.protobuf.Timestamp failed_at = 2;
+  string error = 3;
+  int32 retry_attempt = 4;
+}
+
+message SkillDefinitionExecutionCompletedEvent {
+  string execution_id = 1;
+  google.protobuf.Timestamp completed_at = 2;
+}
+
+message SkillDefinitionExecutionFailedEvent {
+  string execution_id = 1;
+  google.protobuf.Timestamp failed_at = 2;
+  string error = 3;
+  int32 retry_attempt = 4;
+}
+
 message DisableSkillDefinitionCommand {
   string reason = 1;
 }
