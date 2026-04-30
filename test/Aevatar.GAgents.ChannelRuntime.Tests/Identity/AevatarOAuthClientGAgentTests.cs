@@ -92,12 +92,18 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         await _agent.HandleEnsureProvisioned(cmd);
         var firstClientId = _agent.State.ClientId;
         var firstHmacKey = _agent.State.HmacKey;
+        var beforeRefreshState = _agent.State.Clone();
+        var beforeRefreshVersion = _agent.EventSourcing!.CurrentVersion;
 
         await _agent.HandleEnsureProvisioned(cmd);
 
         _registrar.Calls.Should().HaveCount(1, "actor must serialize the DCR side-effect");
         _agent.State.ClientId.Should().Be(firstClientId);
         _agent.State.HmacKey.Should().BeEquivalentTo(firstHmacKey);
+        _agent.State.Should().BeEquivalentTo(beforeRefreshState,
+            "projection rebuild is a state-root refresh and must not mutate OAuth client facts");
+        _agent.EventSourcing!.CurrentVersion.Should().Be(beforeRefreshVersion + 1,
+            "already-provisioned ensure must re-emit the authoritative state root so an empty projection can materialize");
     }
 
     [Fact]

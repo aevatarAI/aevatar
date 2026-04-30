@@ -39,7 +39,8 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         if (evt is not null
             && evt is not AevatarOAuthClientProvisionedEvent
             && evt is not AevatarOAuthClientHmacKeyRotatedEvent
-            && evt is not AevatarOAuthClientBrokerCapabilityObservedEvent)
+            && evt is not AevatarOAuthClientBrokerCapabilityObservedEvent
+            && evt is not AevatarOAuthClientProjectionRebuildRequestedEvent)
         {
             Logger.LogWarning(
                 "AevatarOAuthClientGAgent received unrecognised event type {EventType}; state unchanged",
@@ -51,6 +52,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             .On<AevatarOAuthClientProvisionedEvent>(ApplyProvisioned)
             .On<AevatarOAuthClientHmacKeyRotatedEvent>(ApplyHmacKeyRotated)
             .On<AevatarOAuthClientBrokerCapabilityObservedEvent>(ApplyBrokerCapabilityObserved)
+            .On<AevatarOAuthClientProjectionRebuildRequestedEvent>(static (state, _) => state)
             .OrCurrent();
     }
 
@@ -89,7 +91,18 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             {
                 await PersistDomainEventAsync(BuildHmacKeyRotatedEvent());
                 Logger.LogInformation("Seeded HMAC key for aevatar OAuth client (existing client_id)");
+                return;
             }
+
+            await PersistDomainEventAsync(new AevatarOAuthClientProjectionRebuildRequestedEvent
+            {
+                Reason = "ensure_already_provisioned",
+                RequestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            });
+            Logger.LogInformation(
+                "Requested aevatar OAuth client projection rebuild: actorId={ActorId}, authority={Authority}",
+                Id,
+                cmd.NyxidAuthority);
             return;
         }
 
