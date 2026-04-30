@@ -19,7 +19,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 ///   - End-to-end wiring: middleware registered on the agent feeds the agent's counter
 ///
 /// We deliberately don't drive the full LLM loop in these tests — see the existing
-/// SkillDefinitionGAgentTests pattern: ChatStreamAsync requires a live LLM provider, and the
+/// SkillExecutionGAgentTests pattern: ChatStreamAsync requires a live LLM provider, and the
 /// production behaviour is fully determined by the four-piece pipeline above.
 /// </summary>
 public class SkillRunnerToolFailureSafetyNetTests
@@ -247,7 +247,7 @@ public class SkillRunnerToolFailureSafetyNetTests
     {
         // (a) all-fail case from the issue's acceptance criteria. The thrown
         // InvalidOperationException is what HandleTriggerAsync catches and converts into
-        // SkillRunnerExecutionFailedEvent (after the retry budget is exhausted), so
+        // SkillExecutionFailedEvent (after the retry budget is exhausted), so
         // /agent-status reports a meaningful error_count and last_error.
         var act = () => SkillExecutionGAgent.EnsureToolStatusAllowsCompletion(failureCount: 3, successCount: 0);
 

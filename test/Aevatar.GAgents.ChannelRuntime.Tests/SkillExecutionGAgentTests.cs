@@ -6,6 +6,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using FluentAssertions;
@@ -93,7 +94,7 @@ public sealed class SkillExecutionGAgentTests : IAsyncLifetime
     public async Task SendOutputAsync_ShouldThrow_WhenLarkBusinessCodeIsNonZero()
     {
         // Lark reports business errors as HTTP 200 with `code != 0`. Ignoring the response would
-        // let HandleTriggerAsync persist SkillRunnerExecutionCompletedEvent on a silent failure.
+        // let HandleStartAsync persist SkillExecutionCompletedEvent on a silent failure.
         var outbound = new SkillRunnerOutboundConfig
         {
             ConversationId = "oc_chat_1",
@@ -474,7 +475,7 @@ public sealed class SkillExecutionGAgentTests : IAsyncLifetime
     {
         // Final guarantee: TrySendFailureAsync MUST NOT throw, ever. HandleTriggerAsync is
         // already in the failure-event-persist path; an exception here would mask the
-        // SkillRunnerExecutionFailedEvent persist (which surfaces last_error in
+        // SkillExecutionFailedEvent persist (which surfaces last_error in
         // /agent-status, the one path users have to recover regardless of Lark visibility).
         var outbound = new SkillRunnerOutboundConfig
         {
@@ -515,7 +516,7 @@ public sealed class SkillExecutionGAgentTests : IAsyncLifetime
 
         var agent = await CreateActivatedExecutionAgent(
             "skill-runner-userconfig",
-            CreateInitializeCommand().OutboundConfig,
+            CreateOutboundConfig(),
             source);
 
         var metadata = await InvokeBuildExecutionMetadataAsync(agent);
@@ -534,7 +535,7 @@ public sealed class SkillExecutionGAgentTests : IAsyncLifetime
         // compile-time defaults.
         var agent = await CreateActivatedExecutionAgent(
             "skill-runner-userconfig-no-source",
-            CreateInitializeCommand().OutboundConfig);
+            CreateOutboundConfig());
 
         var metadata = await InvokeBuildExecutionMetadataAsync(agent);
 
@@ -555,7 +556,7 @@ public sealed class SkillExecutionGAgentTests : IAsyncLifetime
 
         var agent = await CreateActivatedExecutionAgent(
             "skill-runner-userconfig-empty",
-            CreateInitializeCommand().OutboundConfig,
+            CreateOutboundConfig(),
             source);
 
         var metadata = await InvokeBuildExecutionMetadataAsync(agent);
@@ -575,13 +576,145 @@ public sealed class SkillExecutionGAgentTests : IAsyncLifetime
 
         var agent = await CreateActivatedExecutionAgent(
             "skill-runner-userconfig-throws",
-            CreateInitializeCommand().OutboundConfig,
+            CreateOutboundConfig(),
             source);
 
         var metadata = await InvokeBuildExecutionMetadataAsync(agent);
 
         metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
         metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_WhenAlreadyStarted_ShouldIgnoreDuplicateStart()
+    {
+        var agent = await CreateActivatedExecutionAgent(
+            "exec-duplicate-start",
+            CreateOutboundConfig());
+        var before = await _store.GetEventsAsync("exec-duplicate-start");
+
+        await agent.HandleStartAsync(new StartSkillExecutionCommand
+        {
+            DefinitionId = "def-test",
+            SkillContent = "duplicate start",
+            ExecutionPrompt = "Run again.",
+            OutboundConfig = CreateOutboundConfig(),
+        });
+
+        var after = await _store.GetEventsAsync("exec-duplicate-start");
+        after.Should().HaveCount(before.Count);
+    }
+
+    [Fact]
+    public async Task HandleRetryAsync_WhenExecutionAlreadyCompleted_ShouldIgnoreRetry()
+    {
+        var agent = await CreateActivatedExecutionAgent(
+            "exec-completed-retry",
+            CreateOutboundConfig(),
+            terminalEvent: new SkillExecutionCompletedEvent
+            {
+                CompletedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                Output = "done",
+            });
+        var before = await _store.GetEventsAsync("exec-completed-retry");
+
+        await agent.HandleRetryAsync(new RetrySkillExecutionCommand { RetryAttempt = 1 });
+
+        var after = await _store.GetEventsAsync("exec-completed-retry");
+        after.Should().HaveCount(before.Count);
+    }
+
+    [Fact]
+    public async Task HandleReportRetryAsync_WhenExecutionCompleted_ShouldDispatchDefinitionReportWithRunIdentity()
+    {
+        var captured = new List<EventEnvelope>();
+        var dispatch = Substitute.For<IActorDispatchPort>();
+        dispatch.DispatchAsync(
+                "def-test",
+                Arg.Do<EventEnvelope>(captured.Add),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        using var provider = BuildServiceProvider(
+            _store,
+            services => services.AddSingleton(dispatch));
+
+        var completedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        var agent = await CreateActivatedExecutionAgent(
+            "exec-report-retry",
+            CreateOutboundConfig(),
+            serviceProvider: provider,
+            definitionConfigRevision: 7,
+            definitionExecutionSequence: 3,
+            terminalEvent: new SkillExecutionCompletedEvent
+            {
+                CompletedAt = completedAt,
+                Output = "done",
+            });
+
+        await agent.HandleReportRetryAsync(new RetrySkillExecutionReportCommand { RetryAttempt = 1 });
+
+        var report = captured.Should().ContainSingle().Subject.Payload.Unpack<ReportSkillExecutionCompletedCommand>();
+        report.ExecutionId.Should().Be("exec-report-retry");
+        report.CompletedAt.Should().Be(completedAt);
+        report.DefinitionConfigRevision.Should().Be(7);
+        report.DefinitionExecutionSequence.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task HandleReportRetryAsync_WhenDefinitionDispatchFails_ShouldScheduleDurableReportRetry()
+    {
+        var dispatch = Substitute.For<IActorDispatchPort>();
+        dispatch.DispatchAsync(
+                "def-test",
+                Arg.Any<EventEnvelope>(),
+                Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromException(new InvalidOperationException("dispatch unavailable")));
+
+        var scheduled = new List<RuntimeCallbackTimeoutRequest>();
+        var scheduler = Substitute.For<IActorRuntimeCallbackScheduler>();
+        scheduler
+            .ScheduleTimeoutAsync(
+                Arg.Any<RuntimeCallbackTimeoutRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var req = call.Arg<RuntimeCallbackTimeoutRequest>();
+                scheduled.Add(req);
+                return Task.FromResult(new RuntimeCallbackLease(
+                    req.ActorId,
+                    req.CallbackId,
+                    1,
+                    RuntimeCallbackBackend.InMemory));
+            });
+
+        using var provider = BuildServiceProvider(
+            _store,
+            services =>
+            {
+                services.AddSingleton(dispatch);
+                services.AddSingleton(scheduler);
+            });
+
+        var agent = await CreateActivatedExecutionAgent(
+            "exec-report-retry-schedule",
+            CreateOutboundConfig(),
+            serviceProvider: provider,
+            definitionConfigRevision: 7,
+            definitionExecutionSequence: 3,
+            terminalEvent: new SkillExecutionCompletedEvent
+            {
+                CompletedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                Output = "done",
+            });
+
+        await agent.HandleReportRetryAsync(new RetrySkillExecutionReportCommand { RetryAttempt = 1 });
+
+        var request = scheduled.Should().ContainSingle().Subject;
+        request.ActorId.Should().Be("exec-report-retry-schedule");
+        request.CallbackId.Should().Be(SkillDefinitionDefaults.ReportRetryCallbackId);
+        request.DueTime.Should().Be(SkillDefinitionDefaults.ReportRetryBackoff);
+        var retry = request.TriggerEnvelope.Payload.Unpack<RetrySkillExecutionReportCommand>();
+        retry.RetryAttempt.Should().Be(2);
     }
 
     private static async Task<IReadOnlyDictionary<string, string>> InvokeBuildExecutionMetadataAsync(
@@ -691,13 +824,17 @@ public sealed class SkillExecutionGAgentTests : IAsyncLifetime
         }
     }
 
-    private SkillExecutionGAgent CreateExecutionAgent(string actorId, IOwnerLlmConfigSource? ownerLlmConfigSource = null)
+    private SkillExecutionGAgent CreateExecutionAgent(
+        string actorId,
+        IOwnerLlmConfigSource? ownerLlmConfigSource = null,
+        ServiceProvider? serviceProvider = null)
     {
+        var resolvedServices = serviceProvider ?? _serviceProvider;
         var agent = new SkillExecutionGAgent(ownerLlmConfigSource: ownerLlmConfigSource)
         {
-            Services = _serviceProvider,
+            Services = resolvedServices,
             EventSourcingBehaviorFactory =
-                _serviceProvider.GetRequiredService<IEventSourcingBehaviorFactory<SkillExecutionState>>(),
+                resolvedServices.GetRequiredService<IEventSourcingBehaviorFactory<SkillExecutionState>>(),
         };
         AssignActorId(agent, actorId);
         return agent;
@@ -713,7 +850,11 @@ public sealed class SkillExecutionGAgentTests : IAsyncLifetime
     private async Task<SkillExecutionGAgent> CreateActivatedExecutionAgent(
         string actorId,
         SkillRunnerOutboundConfig outboundConfig,
-        IOwnerLlmConfigSource? ownerLlmConfigSource = null)
+        IOwnerLlmConfigSource? ownerLlmConfigSource = null,
+        ServiceProvider? serviceProvider = null,
+        long? definitionConfigRevision = null,
+        long? definitionExecutionSequence = null,
+        IMessage? terminalEvent = null)
     {
         var startedEvent = new SkillExecutionStartedEvent
         {
@@ -726,19 +867,16 @@ public sealed class SkillExecutionGAgentTests : IAsyncLifetime
             ScopeId = "scope-1",
             ProviderName = SkillDefinitionDefaults.DefaultProviderName,
         };
+        if (definitionConfigRevision.HasValue)
+            startedEvent.DefinitionConfigRevision = definitionConfigRevision.Value;
+        if (definitionExecutionSequence.HasValue)
+            startedEvent.DefinitionExecutionSequence = definitionExecutionSequence.Value;
 
-        var stateEvent = new StateEvent
-        {
-            EventId = Guid.NewGuid().ToString("N"),
-            Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Version = 1,
-            EventType = SkillExecutionStartedEvent.Descriptor.FullName,
-            EventData = Google.Protobuf.WellKnownTypes.Any.Pack(startedEvent),
-            AgentId = actorId,
-        };
-        await _store.AppendAsync(actorId, [stateEvent], 0);
+        await AppendStateEventAsync(_store, actorId, startedEvent, version: 1);
+        if (terminalEvent is not null)
+            await AppendStateEventAsync(_store, actorId, terminalEvent, version: 2);
 
-        var agent = CreateExecutionAgent(actorId, ownerLlmConfigSource);
+        var agent = CreateExecutionAgent(actorId, ownerLlmConfigSource, serviceProvider);
         await agent.ActivateAsync();
         return agent;
     }
@@ -757,23 +895,11 @@ public sealed class SkillExecutionGAgentTests : IAsyncLifetime
         return services.BuildServiceProvider();
     }
 
-    private static InitializeSkillDefinitionCommand CreateInitializeCommand() => new()
+    private static SkillRunnerOutboundConfig CreateOutboundConfig() => new()
     {
-        SkillName = "daily_report",
-        TemplateName = "daily_report",
-        SkillContent = "You are a daily report runner.",
-        ExecutionPrompt = "Run the report.",
-        ScheduleCron = string.Empty,
-        ScheduleTimezone = SkillDefinitionDefaults.DefaultTimezone,
-        Enabled = true,
-        ScopeId = "scope-1",
-        ProviderName = SkillDefinitionDefaults.DefaultProviderName,
-        OutboundConfig = new SkillRunnerOutboundConfig
-        {
-            ConversationId = "oc_chat_1",
-            NyxProviderSlug = "api-lark-bot",
-            NyxApiKey = "nyx-api-key",
-        },
+        ConversationId = "oc_chat_1",
+        NyxProviderSlug = "api-lark-bot",
+        NyxApiKey = "nyx-api-key",
     };
 
     private static void AssignActorId(GAgentBase agent, string actorId)
@@ -784,6 +910,17 @@ public sealed class SkillExecutionGAgentTests : IAsyncLifetime
         setIdMethod.Should().NotBeNull();
         setIdMethod!.Invoke(agent, [actorId]);
     }
+
+    private static Task AppendStateEventAsync(InMemoryEventStore store, string actorId, IMessage evt, long version) =>
+        store.AppendAsync(actorId, [new StateEvent
+        {
+            EventId = Guid.NewGuid().ToString("N"),
+            Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Version = version,
+            EventType = evt.Descriptor.FullName,
+            EventData = Google.Protobuf.WellKnownTypes.Any.Pack(evt),
+            AgentId = actorId,
+        }], version - 1);
 
     private sealed class InMemoryEventStore : IEventStore
     {

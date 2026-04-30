@@ -36,6 +36,10 @@ message SkillDefinitionState {
   optional int32 max_tool_rounds = 19;
   optional int32 max_history_messages = 20;
   int64 config_revision = 21;
+  int64 next_execution_sequence = 22;
+  string active_execution_id = 23;
+  int64 active_execution_sequence = 24;
+  int64 latest_reported_execution_sequence = 25;
 
   reserved 8, 10, 11, 12;
 }
@@ -89,12 +93,15 @@ message SkillDefinitionExecutionDispatchFailedEvent {
   google.protobuf.Timestamp failed_at = 2;
   string reason = 3;
   string error = 4;
+  int64 execution_sequence = 5;
+  optional int64 definition_config_revision = 6;
 }
 
 message ReportSkillExecutionCompletedCommand {
   string execution_id = 1;
   google.protobuf.Timestamp completed_at = 2;
   optional int64 definition_config_revision = 3;
+  optional int64 definition_execution_sequence = 4;
 }
 
 message ReportSkillExecutionFailedCommand {
@@ -103,12 +110,14 @@ message ReportSkillExecutionFailedCommand {
   string error = 3;
   int32 retry_attempt = 4;
   optional int64 definition_config_revision = 5;
+  optional int64 definition_execution_sequence = 6;
 }
 
 message SkillDefinitionExecutionCompletedEvent {
   string execution_id = 1;
   google.protobuf.Timestamp completed_at = 2;
   optional int64 definition_config_revision = 3;
+  optional int64 definition_execution_sequence = 4;
 }
 
 message SkillDefinitionExecutionFailedEvent {
@@ -117,6 +126,15 @@ message SkillDefinitionExecutionFailedEvent {
   string error = 3;
   int32 retry_attempt = 4;
   optional int64 definition_config_revision = 5;
+  optional int64 definition_execution_sequence = 6;
+}
+
+message SkillDefinitionExecutionDispatchedEvent {
+  string execution_id = 1;
+  google.protobuf.Timestamp dispatched_at = 2;
+  string reason = 3;
+  int64 execution_sequence = 4;
+  int64 definition_config_revision = 5;
 }
 
 message DisableSkillDefinitionCommand {

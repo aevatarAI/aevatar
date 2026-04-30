@@ -14,8 +14,11 @@ public static class SkillDefinitionDefaults
     public const string StatusDisabled = "disabled";
     public const string TriggerCallbackId = "skill-runner-next-fire";
     public const string RetryCallbackId = "skill-runner-retry";
+    public const string ReportRetryCallbackId = "skill-runner-report-retry";
     public const int MaxRetryAttempts = 1;
+    public const int MaxReportRetryAttempts = 3;
     public static readonly TimeSpan RetryBackoff = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan ReportRetryBackoff = TimeSpan.FromSeconds(30);
     public static readonly TimeSpan StreamingEditThrottle = TimeSpan.FromMilliseconds(300);
 
     public static string GenerateActorId() => $"{ActorIdPrefix}-{Guid.NewGuid():N}";

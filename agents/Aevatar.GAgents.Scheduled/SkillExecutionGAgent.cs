@@ -78,6 +78,12 @@ public sealed class SkillExecutionGAgent : AIGAgentBase<SkillExecutionState>
 
     private IActorDispatchPort DispatchPort => _dispatchPort ??= Services.GetRequiredService<IActorDispatchPort>();
 
+    protected override async Task OnActivateAsync(CancellationToken ct)
+    {
+        await base.OnActivateAsync(ct);
+        _dispatchPort ??= Services.GetService<IActorDispatchPort>();
+    }
+
     private readonly record struct ToolMiddlewareChain(
         IReadOnlyList<IToolCallMiddleware> Middlewares,
         SkillRunnerToolFailureCounter Counter);
@@ -160,6 +166,8 @@ public sealed class SkillExecutionGAgent : AIGAgentBase<SkillExecutionState>
         if (command.HasMaxHistoryMessages) started.MaxHistoryMessages = command.MaxHistoryMessages;
         if (command.HasDefinitionConfigRevision)
             started.DefinitionConfigRevision = command.DefinitionConfigRevision;
+        if (command.HasDefinitionExecutionSequence)
+            started.DefinitionExecutionSequence = command.DefinitionExecutionSequence;
 
         await PersistDomainEventAsync(started);
 
@@ -196,7 +204,8 @@ public sealed class SkillExecutionGAgent : AIGAgentBase<SkillExecutionState>
                 Timestamp.FromDateTimeOffset(failedAt),
                 ex.Message,
                 State.RetryAttempts,
-                CancellationToken.None);
+                reportRetryAttempt: 0,
+                ct: CancellationToken.None);
             return;
         }
 
@@ -209,7 +218,39 @@ public sealed class SkillExecutionGAgent : AIGAgentBase<SkillExecutionState>
 
         await ReportExecutionCompletedAsync(
             Timestamp.FromDateTimeOffset(completedAt),
-            CancellationToken.None);
+            reportRetryAttempt: 0,
+            ct: CancellationToken.None);
+    }
+
+    [EventHandler(AllowSelfHandling = true)]
+    public async Task HandleReportRetryAsync(RetrySkillExecutionReportCommand command)
+    {
+        if (string.Equals(State.Status, "completed", StringComparison.Ordinal))
+        {
+            await ReportExecutionCompletedAsync(
+                State.CompletedAt ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                command.RetryAttempt,
+                CancellationToken.None);
+            return;
+        }
+
+        if (string.Equals(State.Status, "failed", StringComparison.Ordinal))
+        {
+            var error = State.Errors.Count == 0 ? string.Empty : State.Errors[State.Errors.Count - 1];
+            await ReportExecutionFailedAsync(
+                State.CompletedAt ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                error,
+                State.RetryAttempts,
+                command.RetryAttempt,
+                CancellationToken.None);
+            return;
+        }
+
+        Logger.LogInformation(
+            "Skill execution {ActorId} ignored report retry attempt {Attempt} because status is {Status}",
+            Id,
+            command.RetryAttempt,
+            string.IsNullOrWhiteSpace(State.Status) ? "(empty)" : State.Status);
     }
 
     [EventHandler(AllowSelfHandling = true)]
@@ -264,7 +305,8 @@ public sealed class SkillExecutionGAgent : AIGAgentBase<SkillExecutionState>
                 Timestamp.FromDateTimeOffset(failedAt),
                 ex.Message,
                 command.RetryAttempt,
-                CancellationToken.None);
+                reportRetryAttempt: 0,
+                ct: CancellationToken.None);
             return;
         }
 
@@ -277,7 +319,8 @@ public sealed class SkillExecutionGAgent : AIGAgentBase<SkillExecutionState>
 
         await ReportExecutionCompletedAsync(
             Timestamp.FromDateTimeOffset(completedAt),
-            CancellationToken.None);
+            reportRetryAttempt: 0,
+            ct: CancellationToken.None);
     }
 
     private async Task ScheduleRetryAsync(int retryAttempt, CancellationToken ct)
@@ -581,7 +624,7 @@ public sealed class SkillExecutionGAgent : AIGAgentBase<SkillExecutionState>
         return $"{prompt}\nCurrent UTC time: {now:O}\nTrigger reason: {(string.IsNullOrWhiteSpace(reason) ? "manual" : reason)}";
     }
 
-    private Task ReportExecutionCompletedAsync(Timestamp completedAt, CancellationToken ct)
+    private Task ReportExecutionCompletedAsync(Timestamp completedAt, int reportRetryAttempt, CancellationToken ct)
     {
         var command = new ReportSkillExecutionCompletedCommand
         {
@@ -590,14 +633,17 @@ public sealed class SkillExecutionGAgent : AIGAgentBase<SkillExecutionState>
         };
         if (State.HasDefinitionConfigRevision)
             command.DefinitionConfigRevision = State.DefinitionConfigRevision;
+        if (State.HasDefinitionExecutionSequence)
+            command.DefinitionExecutionSequence = State.DefinitionExecutionSequence;
 
-        return ReportToDefinitionAsync(command, ct);
+        return ReportToDefinitionOrScheduleRetryAsync(command, reportRetryAttempt, ct);
     }
 
     private Task ReportExecutionFailedAsync(
         Timestamp failedAt,
         string error,
         int retryAttempt,
+        int reportRetryAttempt,
         CancellationToken ct)
     {
         var command = new ReportSkillExecutionFailedCommand
@@ -609,8 +655,43 @@ public sealed class SkillExecutionGAgent : AIGAgentBase<SkillExecutionState>
         };
         if (State.HasDefinitionConfigRevision)
             command.DefinitionConfigRevision = State.DefinitionConfigRevision;
+        if (State.HasDefinitionExecutionSequence)
+            command.DefinitionExecutionSequence = State.DefinitionExecutionSequence;
 
-        return ReportToDefinitionAsync(command, ct);
+        return ReportToDefinitionOrScheduleRetryAsync(command, reportRetryAttempt, ct);
+    }
+
+    private async Task ReportToDefinitionOrScheduleRetryAsync(IMessage command, int retryAttempt, CancellationToken ct)
+    {
+        try
+        {
+            await ReportToDefinitionAsync(command, ct);
+        }
+        catch (Exception ex)
+        {
+            if (retryAttempt >= SkillDefinitionDefaults.MaxReportRetryAttempts)
+            {
+                Logger.LogError(
+                    ex,
+                    "Skill execution {ActorId} failed to report terminal state after {Attempt} retry attempts",
+                    Id,
+                    retryAttempt);
+                return;
+            }
+
+            var nextAttempt = retryAttempt + 1;
+            Logger.LogWarning(
+                ex,
+                "Skill execution {ActorId} failed to report terminal state; scheduling report retry attempt {Attempt}",
+                Id,
+                nextAttempt);
+
+            await ScheduleSelfDurableTimeoutAsync(
+                SkillDefinitionDefaults.ReportRetryCallbackId,
+                SkillDefinitionDefaults.ReportRetryBackoff,
+                new RetrySkillExecutionReportCommand { RetryAttempt = nextAttempt },
+                ct: ct);
+        }
     }
 
     private async Task ReportToDefinitionAsync(IMessage command, CancellationToken ct)
@@ -652,6 +733,10 @@ public sealed class SkillExecutionGAgent : AIGAgentBase<SkillExecutionState>
             next.DefinitionConfigRevision = evt.DefinitionConfigRevision;
         else
             next.ClearDefinitionConfigRevision();
+        if (evt.HasDefinitionExecutionSequence)
+            next.DefinitionExecutionSequence = evt.DefinitionExecutionSequence;
+        else
+            next.ClearDefinitionExecutionSequence();
         return next;
     }
 

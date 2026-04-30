@@ -36,6 +36,7 @@ message SkillExecutionState {
   optional int32 max_tool_rounds = 18;
   optional int32 max_history_messages = 19;
   optional int64 definition_config_revision = 20;
+  optional int64 definition_execution_sequence = 21;
 }
 
 message StartSkillExecutionCommand {
@@ -55,6 +56,7 @@ message StartSkillExecutionCommand {
   optional int32 max_tool_rounds = 18;
   optional int32 max_history_messages = 19;
   optional int64 definition_config_revision = 20;
+  optional int64 definition_execution_sequence = 21;
 }
 
 message SkillExecutionStartedEvent {
@@ -76,6 +78,7 @@ message SkillExecutionStartedEvent {
   optional int32 max_tool_rounds = 18;
   optional int32 max_history_messages = 19;
   optional int64 definition_config_revision = 20;
+  optional int64 definition_execution_sequence = 21;
 }
 
 message SkillExecutionCompletedEvent {
@@ -95,5 +98,9 @@ message SkillExecutionFailedEvent {
 }
 
 message RetrySkillExecutionCommand {
+  int32 retry_attempt = 1;
+}
+
+message RetrySkillExecutionReportCommand {
   int32 retry_attempt = 1;
 }

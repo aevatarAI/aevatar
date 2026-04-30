@@ -6,6 +6,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using FluentAssertions;
@@ -89,16 +90,16 @@ public sealed class SkillDefinitionGAgentTests : IAsyncLifetime
     [Fact]
     public async Task HandleInitializeAsync_ShouldAwaitUpsertDispatchBeforeFiringExecutionUpdate()
     {
-        // Issue #440 regression: pre-PR #451 the SkillRunner reached the catalog via
+        // Issue #440 regression: pre-PR #451 the scheduled agent reached the catalog via
         // OrleansActor.HandleEventAsync, which produced to a stream (fire-and-forget).
-        // Two dispatches from the same SkillRunner turn (post-init Upsert + post-trigger
+        // Two dispatches from the same SkillDefinition turn (post-init Upsert + post-trigger
         // ExecutionUpdate) could arrive at the catalog grain out of order; the
         // ExecutionUpdate would land first, hit the missing-entry guard, and be silently
         // dropped — leaving /agent-status reporting Last run / Next run as n/a.
         //
         // PR #451 wired dispatch through IActorDispatchPort.DispatchAsync, which awaits
         // grain.HandleEnvelopeAsync. The contract that protects the catalog is: the
-        // SkillRunner must AWAIT each dispatch before firing the next so the catalog
+        // SkillDefinition must AWAIT each dispatch before firing the next so the catalog
         // observes Upsert before ExecutionUpdate. To guard the contract (not the
         // synchronous shortcut a fake might enable), this test hangs the Upsert dispatch
         // on a TaskCompletionSource and asserts ExecutionUpdate is not even dispatched
@@ -177,11 +178,11 @@ public sealed class SkillDefinitionGAgentTests : IAsyncLifetime
         await upsertDispatchStarted.Task;
 
         // Critical assertion: while Upsert is hanging at the gate, ExecutionUpdate must
-        // not have been dispatched. If the SkillRunner regressed to fire-and-forget
+        // not have been dispatched. If SkillDefinition regressed to fire-and-forget
         // (`_ = DispatchAsync(...)` instead of `await DispatchAsync(...)`),
         // executionDispatchStarted would already be completed here.
         executionDispatchStarted.Task.IsCompleted.Should().BeFalse(
-            "the SkillRunner must await Upsert's dispatch task before firing ExecutionUpdate; "
+            "SkillDefinition must await Upsert's dispatch task before firing ExecutionUpdate; "
             + "regressing to fire-and-forget would let ExecutionUpdate race ahead of Upsert "
             + "and be dropped by the missing-entry guard in HandleExecutionUpdateAsync");
 
@@ -321,8 +322,9 @@ public sealed class SkillDefinitionGAgentTests : IAsyncLifetime
         await agent.HandleInitializeAsync(CreateInitializeCommand());
         var runStartRevision = agent.State.ConfigRevision;
 
-        await agent.HandleDisableAsync(new DisableSkillDefinitionCommand { Reason = "pause" });
-        await agent.HandleEnableAsync(new EnableSkillDefinitionCommand { Reason = "resume" });
+        var reconfigured = CreateInitializeCommand();
+        reconfigured.ExecutionPrompt = "Run the updated report.";
+        await agent.HandleInitializeAsync(reconfigured);
         agent.State.ConfigRevision.Should().BeGreaterThan(runStartRevision);
 
         captured.Clear();
@@ -348,6 +350,127 @@ public sealed class SkillDefinitionGAgentTests : IAsyncLifetime
         var update = captured.Should().ContainSingle().Subject.Payload.Unpack<UserAgentCatalogExecutionUpdateCommand>();
         update.AgentId.Should().Be("skill-definition-stale-completion");
         update.LastRunAt.Should().Be(completedAt);
+    }
+
+    [Fact]
+    public async Task HandleEnableAsync_ShouldPreserveExecutionHistoryAndKeepConfigRevision()
+    {
+        var captured = new List<EventEnvelope>();
+        using var provider = BuildServiceProviderWithCatalogDispatch(new InMemoryEventStore(), captured);
+        var agent = CreateAgent("skill-definition-enable-preserve", provider);
+        await agent.ActivateAsync();
+
+        await agent.HandleInitializeAsync(CreateInitializeCommand());
+        var revision = agent.State.ConfigRevision;
+
+        captured.Clear();
+        await agent.HandleDisableAsync(new DisableSkillDefinitionCommand { Reason = "pause" });
+        await agent.HandleEnableAsync(new EnableSkillDefinitionCommand { Reason = "resume" });
+
+        agent.State.ConfigRevision.Should().Be(revision);
+        var enableUpdate = captured
+            .Select(x => x.Payload.Unpack<UserAgentCatalogExecutionUpdateCommand>())
+            .Last(x => x.Status == SkillDefinitionDefaults.StatusRunning);
+        enableUpdate.PreserveLastRunAt.Should().BeTrue();
+        enableUpdate.PreserveErrorState.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task HandleExecutionCompletedAsync_WhenOlderSequenceReportsAfterNewerRun_ShouldIgnoreOlderReport()
+    {
+        var captured = new List<EventEnvelope>();
+        var store = new InMemoryEventStore();
+        var actorId = "skill-definition-overlap";
+        await AppendStateEventAsync(store, actorId, new SkillDefinitionExecutionDispatchedEvent
+        {
+            ExecutionId = "exec-a",
+            DispatchedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Reason = "schedule",
+            ExecutionSequence = 1,
+            DefinitionConfigRevision = 0,
+        }, version: 1);
+        await AppendStateEventAsync(store, actorId, new SkillDefinitionExecutionDispatchedEvent
+        {
+            ExecutionId = "exec-b",
+            DispatchedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Reason = "schedule",
+            ExecutionSequence = 2,
+            DefinitionConfigRevision = 0,
+        }, version: 2);
+
+        using var provider = BuildServiceProviderWithCatalogDispatch(store, captured);
+        var agent = CreateAgent(actorId, provider);
+        await agent.ActivateAsync();
+
+        var newerCompletedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        await agent.HandleExecutionCompletedAsync(new ReportSkillExecutionCompletedCommand
+        {
+            ExecutionId = "exec-b",
+            CompletedAt = newerCompletedAt,
+            DefinitionConfigRevision = 0,
+            DefinitionExecutionSequence = 2,
+        });
+
+        captured.Should().ContainSingle();
+        captured.Clear();
+
+        await agent.HandleExecutionCompletedAsync(new ReportSkillExecutionCompletedCommand
+        {
+            ExecutionId = "exec-a",
+            CompletedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(-1)),
+            DefinitionConfigRevision = 0,
+            DefinitionExecutionSequence = 1,
+        });
+
+        captured.Should().BeEmpty("older overlapping executions must not overwrite the newer catalog result");
+    }
+
+    [Fact]
+    public async Task HandleTriggerAsync_WhenExecutionIsActive_ShouldNotDispatchNewExecution()
+    {
+        var store = new InMemoryEventStore();
+        var actorId = "skill-definition-active-skip";
+        await AppendStateEventAsync(store, actorId, CreateInitializedEvent(), version: 1);
+        await AppendStateEventAsync(store, actorId, new SkillDefinitionExecutionDispatchedEvent
+        {
+            ExecutionId = "exec-active",
+            DispatchedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Reason = "schedule",
+            ExecutionSequence = 1,
+            DefinitionConfigRevision = 1,
+        }, version: 2);
+
+        var runtime = Substitute.For<IActorRuntime>();
+        runtime.GetAsync(Arg.Any<string>()).Returns(Task.FromResult<IActor?>(null));
+        runtime.CreateAsync<SkillExecutionGAgent>(Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Substitute.For<IActor>()));
+
+        var captured = new List<(string Target, EventEnvelope Envelope)>();
+        var dispatch = Substitute.For<IActorDispatchPort>();
+        dispatch.DispatchAsync(
+                Arg.Any<string>(),
+                Arg.Do<EventEnvelope>(envelope =>
+                    captured.Add((envelope.Route.Direct.TargetActorId ?? string.Empty, envelope))),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        using var provider = BuildServiceProvider(
+            store,
+            services =>
+            {
+                services.AddSingleton(runtime);
+                services.AddSingleton(dispatch);
+            });
+        var agent = CreateAgent(actorId, provider);
+        await agent.ActivateAsync();
+
+        await agent.HandleTriggerAsync(new TriggerSkillDefinitionCommand { Reason = "schedule" });
+
+        captured.Should().ContainSingle();
+        captured[0].Target.Should().Be(UserAgentCatalogGAgent.WellKnownId);
+        captured[0].Envelope.Payload.Is(UserAgentCatalogExecutionUpdateCommand.Descriptor).Should().BeTrue();
+        await runtime.DidNotReceiveWithAnyArgs()
+            .CreateAsync<SkillExecutionGAgent>(default, default);
     }
 
     private SkillDefinitionGAgent CreateAgent(string actorId, ServiceProvider? serviceProvider = null)
@@ -421,6 +544,25 @@ public sealed class SkillDefinitionGAgentTests : IAsyncLifetime
         },
     };
 
+    private static SkillDefinitionInitializedEvent CreateInitializedEvent()
+    {
+        var command = CreateInitializeCommand();
+        return new SkillDefinitionInitializedEvent
+        {
+            SkillName = command.SkillName,
+            TemplateName = command.TemplateName,
+            SkillContent = command.SkillContent,
+            ExecutionPrompt = command.ExecutionPrompt,
+            ScheduleCron = command.ScheduleCron,
+            ScheduleTimezone = command.ScheduleTimezone,
+            OutboundConfig = command.OutboundConfig.Clone(),
+            Enabled = command.Enabled,
+            ScopeId = command.ScopeId,
+            ProviderName = command.ProviderName,
+            Model = command.Model,
+        };
+    }
+
     private static void AssignActorId(GAgentBase agent, string actorId)
     {
         var setIdMethod = typeof(GAgentBase).GetMethod(
@@ -429,6 +571,17 @@ public sealed class SkillDefinitionGAgentTests : IAsyncLifetime
         setIdMethod.Should().NotBeNull();
         setIdMethod!.Invoke(agent, [actorId]);
     }
+
+    private static Task AppendStateEventAsync(InMemoryEventStore store, string actorId, IMessage evt, long version) =>
+        store.AppendAsync(actorId, [new StateEvent
+        {
+            EventId = Guid.NewGuid().ToString("N"),
+            Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Version = version,
+            EventType = evt.Descriptor.FullName,
+            EventData = Google.Protobuf.WellKnownTypes.Any.Pack(evt),
+            AgentId = actorId,
+        }], version - 1);
 
     private sealed class InMemoryEventStore : IEventStore
     {

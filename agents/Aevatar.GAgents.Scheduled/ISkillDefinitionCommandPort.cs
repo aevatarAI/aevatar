@@ -1,5 +1,9 @@
 namespace Aevatar.GAgents.Scheduled;
 
+/// <summary>
+/// Dispatches scheduled-skill definition commands through actor envelopes while preserving
+/// the catalog projection activation ordering needed by agent status reads.
+/// </summary>
 public interface ISkillDefinitionCommandPort
 {
     Task InitializeAsync(

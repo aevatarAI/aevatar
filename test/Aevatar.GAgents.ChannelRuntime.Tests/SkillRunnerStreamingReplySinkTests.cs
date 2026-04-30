@@ -125,7 +125,7 @@ public sealed class SkillRunnerStreamingReplySinkTests
         // Production failures arrive through `NyxIdApiClient.SendAsync` as an HTTP-400 Nyx
         // envelope (`{"error": true, "status": 400, "body": "<raw json>"}`) — the same
         // wrapping shape pinned for the non-streaming path in
-        // `SkillDefinitionGAgentTests.SendOutputAsync_ShouldRetryWithFallback_When_PrimaryRejectedAsBotNotInChat_ViaHttp400Envelope`.
+        // `SkillExecutionGAgentTests.SendOutputAsync_ShouldRetryWithFallback_When_PrimaryRejectedAsBotNotInChat_ViaHttp400Envelope`.
         // The streaming sink relies on the same `LarkProxyResponse.TryGetError` parser, but
         // pin the wrapped shape end-to-end here so a regression in either layer fails this
         // test loud (and not the more visible HTTP-200 plain-Lark-error test).
@@ -329,7 +329,7 @@ public sealed class SkillRunnerStreamingReplySinkTests
 
     /// <summary>
     /// Tests do not need to mirror the production rejection-builder shape (that lives on
-    /// <c>SkillExecutionGAgent.BuildLarkRejectionMessage</c> and is covered by <c>SkillDefinitionGAgentTests</c>);
+    /// <c>SkillExecutionGAgent.BuildLarkRejectionMessage</c> and is covered by <c>SkillExecutionGAgentTests</c>);
     /// the sink only needs the builder to produce a string containing the lark code so the
     /// finalize-time exception is identifiable.
     /// </summary>

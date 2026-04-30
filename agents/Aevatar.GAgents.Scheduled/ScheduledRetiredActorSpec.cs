@@ -264,6 +264,9 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
             return true;
         }
 
+        if (normalizedId.Contains("-exec-", StringComparison.Ordinal))
+            return false;
+
         return normalizedId.StartsWith($"{SkillDefinitionDefaults.ActorIdPrefix}-", StringComparison.Ordinal) ||
                normalizedId.StartsWith($"{WorkflowAgentDefaults.ActorIdPrefix}-", StringComparison.Ordinal);
     }

@@ -32,6 +32,9 @@ internal sealed class SkillDefinitionCommandPort : ISkillDefinitionCommandPort
         ArgumentNullException.ThrowIfNull(command);
 
         await EnsureDefinitionActorAsync(agentId, ct);
+        // TODO(#491 follow-up): move this projection activation to an explicit
+        // binder/lease path. It remains here only to preserve the existing
+        // dispatch-then-catalog-prime status-read contract during the split.
         await _catalogProjectionPort.EnsureProjectionForActorAsync(UserAgentCatalogGAgent.WellKnownId, ct);
 
         await DispatchAsync(agentId, command, ct);

@@ -565,6 +565,9 @@ bash tools/ci/workflow_runid_guard.sh
 echo "Running workflow binding boundary guard..."
 bash tools/ci/workflow_binding_boundary_guard.sh
 
+echo "Running skill runner lifecycle split guard..."
+bash tools/ci/skill_runner_lifecycle_split_guard.sh
+
 echo "Running playground asset drift guard..."
 bash tools/ci/playground_asset_drift_guard.sh
 

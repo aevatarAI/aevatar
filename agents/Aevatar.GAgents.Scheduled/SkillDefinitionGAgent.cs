@@ -49,6 +49,8 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
+        _actorRuntime ??= Services.GetService<IActorRuntime>();
+        _dispatchPort ??= Services.GetService<IActorDispatchPort>();
         await Scheduler.BootstrapOnActivateAsync(ct);
     }
 
@@ -57,6 +59,7 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
             .Match(current, evt)
             .On<SkillDefinitionInitializedEvent>(ApplyInitialized)
             .On<SkillDefinitionNextRunScheduledEvent>(ApplyNextRunScheduled)
+            .On<SkillDefinitionExecutionDispatchedEvent>(ApplyExecutionDispatched)
             .On<SkillDefinitionExecutionDispatchFailedEvent>(ApplyExecutionDispatchFailed)
             .On<SkillDefinitionExecutionCompletedEvent>(ApplyExecutionCompleted)
             .On<SkillDefinitionExecutionFailedEvent>(ApplyExecutionFailed)
@@ -153,12 +156,40 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
 
         var now = DateTimeOffset.UtcNow;
         var executionId = SkillDefinitionDefaults.GenerateExecutionId(Id);
+        var executionSequence = State.NextExecutionSequence + 1;
+
+        if (State.ActiveExecutionSequence > State.LatestReportedExecutionSequence &&
+            !string.IsNullOrWhiteSpace(State.ActiveExecutionId))
+        {
+            Logger.LogInformation(
+                "Skill definition {ActorId} skipped trigger because execution {ExecutionId} sequence {Sequence} is still active",
+                Id,
+                State.ActiveExecutionId,
+                State.ActiveExecutionSequence);
+
+            await Scheduler.ScheduleNextRunAsync(now, CancellationToken.None);
+            await UpdateRegistryStatusAsync(
+                SkillDefinitionDefaults.StatusRunning,
+                preserveExecutionState: true,
+                clearNextRunAt: false,
+                ct: CancellationToken.None);
+            return;
+        }
 
         Exception? dispatchFailure = null;
         try
         {
             _ = await ActorRuntime.GetAsync(executionId)
                 ?? await ActorRuntime.CreateAsync<SkillExecutionGAgent>(executionId, CancellationToken.None);
+
+            await PersistDomainEventAsync(new SkillDefinitionExecutionDispatchedEvent
+            {
+                ExecutionId = executionId,
+                DispatchedAt = Timestamp.FromDateTimeOffset(now),
+                Reason = command.Reason?.Trim() ?? "schedule",
+                ExecutionSequence = executionSequence,
+                DefinitionConfigRevision = State.ConfigRevision,
+            });
 
             var startCommand = new StartSkillExecutionCommand
             {
@@ -172,6 +203,7 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
                 ProviderName = State.ProviderName ?? SkillDefinitionDefaults.DefaultProviderName,
                 Model = State.Model ?? string.Empty,
                 DefinitionConfigRevision = State.ConfigRevision,
+                DefinitionExecutionSequence = executionSequence,
             };
 
             if (State.HasTemperature)
@@ -201,6 +233,8 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
                 FailedAt = Timestamp.FromDateTimeOffset(now),
                 Reason = command.Reason?.Trim() ?? "schedule",
                 Error = ex.Message,
+                ExecutionSequence = executionSequence,
+                DefinitionConfigRevision = State.ConfigRevision,
             });
             dispatchFailure = ex;
         }
@@ -269,7 +303,7 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
         await Scheduler.ScheduleNextRunAsync(DateTimeOffset.UtcNow, CancellationToken.None);
         await UpdateRegistryStatusAsync(
             SkillDefinitionDefaults.StatusRunning,
-            preserveExecutionState: false,
+            preserveExecutionState: true,
             clearNextRunAt: false,
             ct: CancellationToken.None);
     }
@@ -293,7 +327,9 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
         if (IsStaleExecutionReport(
                 command.ExecutionId,
                 command.HasDefinitionConfigRevision,
-                command.DefinitionConfigRevision))
+                command.DefinitionConfigRevision,
+                command.HasDefinitionExecutionSequence,
+                command.DefinitionExecutionSequence))
         {
             return;
         }
@@ -306,6 +342,8 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
         };
         if (command.HasDefinitionConfigRevision)
             completed.DefinitionConfigRevision = command.DefinitionConfigRevision;
+        if (command.HasDefinitionExecutionSequence)
+            completed.DefinitionExecutionSequence = command.DefinitionExecutionSequence;
 
         await PersistDomainEventAsync(completed);
 
@@ -329,7 +367,9 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
         if (IsStaleExecutionReport(
                 command.ExecutionId,
                 command.HasDefinitionConfigRevision,
-                command.DefinitionConfigRevision))
+                command.DefinitionConfigRevision,
+                command.HasDefinitionExecutionSequence,
+                command.DefinitionExecutionSequence))
         {
             return;
         }
@@ -344,6 +384,8 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
         };
         if (command.HasDefinitionConfigRevision)
             failed.DefinitionConfigRevision = command.DefinitionConfigRevision;
+        if (command.HasDefinitionExecutionSequence)
+            failed.DefinitionExecutionSequence = command.DefinitionExecutionSequence;
 
         await PersistDomainEventAsync(failed);
 
@@ -447,7 +489,12 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
         await UserAgentCatalogStoreCommands.DispatchExecutionUpdateAsync(Services, Id, command, ct);
     }
 
-    private bool IsStaleExecutionReport(string executionId, bool hasDefinitionConfigRevision, long definitionConfigRevision)
+    private bool IsStaleExecutionReport(
+        string executionId,
+        bool hasDefinitionConfigRevision,
+        long definitionConfigRevision,
+        bool hasDefinitionExecutionSequence,
+        long definitionExecutionSequence)
     {
         if (!hasDefinitionConfigRevision)
         {
@@ -463,7 +510,20 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
         }
 
         if (definitionConfigRevision == State.ConfigRevision)
-            return false;
+        {
+            if (hasDefinitionExecutionSequence)
+                return IsStaleExecutionSequence(executionId, definitionExecutionSequence);
+
+            if (State.NextExecutionSequence == 0)
+                return false;
+
+            Logger.LogInformation(
+                "Skill definition {ActorId} ignored unsequenced execution report {ExecutionId}; current execution sequence is {CurrentSequence}",
+                Id,
+                executionId.Trim(),
+                State.NextExecutionSequence);
+            return true;
+        }
 
         Logger.LogInformation(
             "Skill definition {ActorId} ignored stale execution report {ExecutionId} from config revision {ReportRevision}; current revision is {CurrentRevision}",
@@ -472,6 +532,50 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
             definitionConfigRevision,
             State.ConfigRevision);
         return true;
+    }
+
+    private bool IsStaleExecutionSequence(string executionId, long definitionExecutionSequence)
+    {
+        if (definitionExecutionSequence <= 0)
+            return State.NextExecutionSequence > 0;
+
+        if (State.ActiveExecutionSequence > 0)
+        {
+            if (definitionExecutionSequence == State.ActiveExecutionSequence)
+                return false;
+
+            Logger.LogInformation(
+                "Skill definition {ActorId} ignored execution report {ExecutionId} for sequence {ReportSequence}; active sequence is {ActiveSequence}",
+                Id,
+                executionId.Trim(),
+                definitionExecutionSequence,
+                State.ActiveExecutionSequence);
+            return true;
+        }
+
+        if (definitionExecutionSequence <= State.LatestReportedExecutionSequence)
+        {
+            Logger.LogInformation(
+                "Skill definition {ActorId} ignored duplicate or older execution report {ExecutionId} for sequence {ReportSequence}; latest reported sequence is {LatestSequence}",
+                Id,
+                executionId.Trim(),
+                definitionExecutionSequence,
+                State.LatestReportedExecutionSequence);
+            return true;
+        }
+
+        if (definitionExecutionSequence > State.NextExecutionSequence)
+        {
+            Logger.LogInformation(
+                "Skill definition {ActorId} ignored unknown future execution report {ExecutionId} for sequence {ReportSequence}; next known sequence is {KnownSequence}",
+                Id,
+                executionId.Trim(),
+                definitionExecutionSequence,
+                State.NextExecutionSequence);
+            return true;
+        }
+
+        return false;
     }
 
     private static SkillDefinitionState ApplyInitialized(SkillDefinitionState current, SkillDefinitionInitializedEvent evt)
@@ -511,24 +615,77 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
         return next;
     }
 
+    private static SkillDefinitionState ApplyExecutionDispatched(
+        SkillDefinitionState current,
+        SkillDefinitionExecutionDispatchedEvent evt)
+    {
+        var next = current.Clone();
+        next.NextExecutionSequence = Math.Max(current.NextExecutionSequence, evt.ExecutionSequence);
+        next.ActiveExecutionId = evt.ExecutionId ?? string.Empty;
+        next.ActiveExecutionSequence = evt.ExecutionSequence;
+        return next;
+    }
+
     private static SkillDefinitionState ApplyExecutionDispatchFailed(
         SkillDefinitionState current,
-        SkillDefinitionExecutionDispatchFailedEvent _) => current;
+        SkillDefinitionExecutionDispatchFailedEvent evt)
+    {
+        var next = current.Clone();
+        if (evt.ExecutionSequence > 0)
+        {
+            next.NextExecutionSequence = Math.Max(current.NextExecutionSequence, evt.ExecutionSequence);
+            next.LatestReportedExecutionSequence = Math.Max(current.LatestReportedExecutionSequence, evt.ExecutionSequence);
+            if (current.ActiveExecutionSequence == evt.ExecutionSequence)
+            {
+                next.ActiveExecutionId = string.Empty;
+                next.ActiveExecutionSequence = 0;
+            }
+        }
+
+        return next;
+    }
 
     private static SkillDefinitionState ApplyExecutionCompleted(
         SkillDefinitionState current,
-        SkillDefinitionExecutionCompletedEvent _) => current;
+        SkillDefinitionExecutionCompletedEvent evt) =>
+        ApplyTerminalExecutionReport(current, evt.ExecutionId, evt.HasDefinitionExecutionSequence, evt.DefinitionExecutionSequence);
 
     private static SkillDefinitionState ApplyExecutionFailed(
         SkillDefinitionState current,
-        SkillDefinitionExecutionFailedEvent _) => current;
+        SkillDefinitionExecutionFailedEvent evt) =>
+        ApplyTerminalExecutionReport(current, evt.ExecutionId, evt.HasDefinitionExecutionSequence, evt.DefinitionExecutionSequence);
+
+    private static SkillDefinitionState ApplyTerminalExecutionReport(
+        SkillDefinitionState current,
+        string? executionId,
+        bool hasExecutionSequence,
+        long executionSequence)
+    {
+        var next = current.Clone();
+        if (hasExecutionSequence && executionSequence > 0)
+        {
+            next.LatestReportedExecutionSequence = Math.Max(current.LatestReportedExecutionSequence, executionSequence);
+            if (current.ActiveExecutionSequence == executionSequence)
+            {
+                next.ActiveExecutionId = string.Empty;
+                next.ActiveExecutionSequence = 0;
+            }
+        }
+        else if (!string.IsNullOrWhiteSpace(executionId) &&
+                 string.Equals(current.ActiveExecutionId, executionId, StringComparison.Ordinal))
+        {
+            next.ActiveExecutionId = string.Empty;
+            next.ActiveExecutionSequence = 0;
+        }
+
+        return next;
+    }
 
     private static SkillDefinitionState ApplyDisabled(SkillDefinitionState current, SkillDefinitionDisabledEvent _)
     {
         var next = current.Clone();
         next.Enabled = false;
         next.NextRunAt = null;
-        next.ConfigRevision = current.ConfigRevision + 1;
         return next;
     }
 
@@ -536,7 +693,6 @@ public sealed class SkillDefinitionGAgent : GAgentBase<SkillDefinitionState>
     {
         var next = current.Clone();
         next.Enabled = true;
-        next.ConfigRevision = current.ConfigRevision + 1;
         return next;
     }
 

@@ -18,7 +18,7 @@ namespace Aevatar.GAgents.Scheduled;
 /// SkillRunner runs ambiently (cron, manual <c>/run-agent</c>, retries) so there is no inbound
 /// reply-token to bind to <c>/channel-relay/reply/update</c>; the closest equivalent is Lark's
 /// own edit-own-message endpoint, reached through the same <c>s/api-lark-bot</c> proxy slug
-/// that <c>SkillRunnerGAgent.SendOutputAsync</c> already uses.
+/// that <c>SkillExecutionGAgent.SendOutputAsync</c> already uses.
 /// </para>
 /// <para>
 /// Throttling rules mirror <see cref="TurnStreamingReplySink"/>:
@@ -48,7 +48,7 @@ namespace Aevatar.GAgents.Scheduled;
 /// latest accumulated text, and the LLM is still producing chunks; pulling the rug on the run
 /// because of one rate-limit blip would force a full re-execute and lose the on-screen progress.</item>
 /// <item>Final edit (or the standalone POST when no deltas ever streamed) → throws on
-/// rejection. The caller persists <c>SkillRunnerExecutionFailedEvent</c> and surfaces the hint
+/// rejection. The caller persists <c>SkillExecutionFailedEvent</c> and surfaces the hint
 /// in <c>/agent-status</c>.</item>
 /// </list>
 /// </para>
@@ -72,7 +72,7 @@ internal sealed class SkillRunnerStreamingReplySink : IDisposable
     // exception messages, or anything that flows to the user. The key authorizes outbound
     // Lark + GitHub calls on behalf of the agent owner; leaking it lets a reader impersonate
     // the agent until the key is rotated. The same constraint applies to
-    // SkillRunnerGAgent.SendOutboundAsync — both call sites read the key directly into
+    // SkillExecutionGAgent.SendOutboundAsync — both call sites read the key directly into
     // ProxyRequestAsync's `token` argument and never echo it.
     private readonly string _nyxApiKey;
     private readonly string _nyxProviderSlug;
@@ -467,7 +467,7 @@ internal sealed class SkillRunnerStreamingReplySink : IDisposable
     /// <summary>
     /// First-attempt POST to <c>open-apis/im/v1/messages</c>. On a Lark <c>230002 bot not in
     /// chat</c> rejection retries once with the captured fallback target — same recovery
-    /// behavior as <c>SkillRunnerGAgent.TrySendWithFallbackAsync</c>, kept in this sink so a
+    /// behavior as <c>SkillExecutionGAgent.TrySendWithFallbackAsync</c>, kept in this sink so a
     /// streaming-edit run never regresses cross-app same-tenant deployments.
     /// </summary>
     private async Task<(string? MessageId, int? LarkCode, string Detail)> SendInitialAsync(string text, CancellationToken ct)

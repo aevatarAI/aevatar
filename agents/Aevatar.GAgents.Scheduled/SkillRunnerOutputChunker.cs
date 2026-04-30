@@ -17,7 +17,7 @@ namespace Aevatar.GAgents.Scheduled;
 /// </para>
 /// <para>
 /// The chunker is a pure function: no I/O, no allocations beyond the result list. The actual
-/// dispatch loop lives in <c>SkillRunnerGAgent.ExecuteSkillAsync</c>, which sends chunk[0]
+/// dispatch loop lives in <c>SkillExecutionGAgent.ExecuteSkillAsync</c>, which sends chunk[0]
 /// through the streaming-edit sink (so the in-flight message lands as part 1) and chunks
 /// 1..N as fresh one-shot POSTs through <c>SendOutputAsync</c>.
 /// </para>
