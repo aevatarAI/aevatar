@@ -4629,13 +4629,11 @@ const StudioPage: React.FC = () => {
           setInventoryBusyAction('delete');
 
           try {
-            let deleteCompleted = false;
             try {
               await studioApi.deleteWorkflow(
                 workflowId,
                 resolvedStudioScopeId || undefined,
               );
-              deleteCompleted = true;
             } catch (error) {
               if (!isWorkflowNotFoundError(error)) {
                 void message.error(
@@ -4645,12 +4643,6 @@ const StudioPage: React.FC = () => {
                 );
                 return;
               }
-
-              deleteCompleted = true;
-            }
-
-            if (!deleteCompleted) {
-              return;
             }
 
             queryClient.removeQueries({

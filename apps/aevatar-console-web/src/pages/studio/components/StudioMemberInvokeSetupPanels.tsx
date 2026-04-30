@@ -6,8 +6,22 @@ import {
 } from '@ant-design/icons';
 import { Alert, Button, Drawer, Input, Tooltip, Typography } from 'antd';
 import React from 'react';
-import type { InvokeResultState } from './StudioMemberInvokePanel.currentRun';
 import { AevatarPanel } from '@/shared/ui/aevatarPageShells';
+import type { InvokeResultState } from './StudioMemberInvokePanel.currentRun';
+import {
+  contractStatusPillBaseStyle,
+  contractValueStyle,
+  getInvokeStatusTone,
+  helperTextStyle,
+  studioInvokeColors,
+  trimOptional,
+  truncateMiddle,
+} from './studioInvokeUi';
+
+export type StudioMemberInvokeContractStatus =
+  | 'ready'
+  | 'missing-member'
+  | 'missing-endpoint';
 
 type StudioMemberInvokeContractPanelProps = {
   readonly actorId: string;
@@ -16,6 +30,7 @@ type StudioMemberInvokeContractPanelProps = {
   readonly memberLabel: string;
   readonly publishedContext: string;
   readonly revisionId: string;
+  readonly status: StudioMemberInvokeContractStatus;
   readonly statusLabel: string;
 };
 
@@ -44,31 +59,21 @@ type StudioMemberInvokeComposerPanelProps = {
   readonly onPromptChange: (value: string) => void;
 };
 
-function trimOptional(value: string | null | undefined): string {
-  return value?.trim() ?? '';
-}
-
-function truncateMiddle(value: string, head = 18, tail = 12): string {
-  if (value.length <= head + tail + 3) {
-    return value;
-  }
-
-  return `${value.slice(0, head)}...${value.slice(-tail)}`;
-}
-
-function getStatusStyle(statusLabel: string): React.CSSProperties {
-  if (statusLabel === '已就绪') {
+function getStatusStyle(status: StudioMemberInvokeContractStatus): React.CSSProperties {
+  if (status === 'ready') {
+    const tone = getInvokeStatusTone('success');
     return {
-      background: '#f0fdf4',
-      border: '1px solid #86efac',
-      color: '#15803d',
+      background: tone.background,
+      border: `1px solid ${tone.border}`,
+      color: tone.color,
     };
   }
 
+  const tone = getInvokeStatusTone('idle');
   return {
-    background: '#f8fafc',
-    border: '1px solid #e5e7eb',
-    color: '#475569',
+    background: tone.background,
+    border: `1px solid ${tone.border}`,
+    color: studioInvokeColors.readyMuted,
   };
 }
 
@@ -86,23 +91,12 @@ const contractFieldStyle: React.CSSProperties = {
 };
 
 const contractLabelStyle: React.CSSProperties = {
-  color: '#64748b',
+  color: studioInvokeColors.muted,
   fontSize: 11,
   fontWeight: 700,
   letterSpacing: 0.4,
   lineHeight: '16px',
   textTransform: 'uppercase',
-};
-
-const contractValueStyle: React.CSSProperties = {
-  color: '#111827',
-  display: 'block',
-  fontSize: 13,
-  fontWeight: 600,
-  lineHeight: '20px',
-  minWidth: 0,
-  overflowWrap: 'anywhere',
-  wordBreak: 'break-word',
 };
 
 const contractCompactValueStyle: React.CSSProperties = {
@@ -115,23 +109,6 @@ const contractCompactValueStyle: React.CSSProperties = {
   wordBreak: 'normal',
 };
 
-const contractStatusPillBaseStyle: React.CSSProperties = {
-  borderRadius: 999,
-  display: 'inline-flex',
-  fontSize: 12,
-  fontWeight: 700,
-  lineHeight: '18px',
-  padding: '4px 10px',
-  width: 'fit-content',
-};
-
-const helperTextStyle: React.CSSProperties = {
-  color: '#64748b',
-  fontSize: 13,
-  lineHeight: 1.6,
-  minWidth: 0,
-};
-
 const playgroundActionsStyle: React.CSSProperties = {
   alignItems: 'center',
   display: 'flex',
@@ -141,8 +118,8 @@ const playgroundActionsStyle: React.CSSProperties = {
 };
 
 const dockComposerStyle: React.CSSProperties = {
-  background: '#ffffff',
-  borderTop: '1px solid #e5e7eb',
+  background: studioInvokeColors.panel,
+  borderTop: `1px solid ${studioInvokeColors.border}`,
   display: 'grid',
   gap: 8,
   minWidth: 0,
@@ -165,7 +142,7 @@ const promptLabelRowStyle: React.CSSProperties = {
 };
 
 const promptKickerStyle: React.CSSProperties = {
-  color: '#1677ff',
+  color: studioInvokeColors.accent,
   fontSize: 11,
   fontWeight: 800,
   letterSpacing: 1.2,
@@ -181,8 +158,8 @@ const controlsGridStyle: React.CSSProperties = {
 };
 
 const advancedDetailsStyle: React.CSSProperties = {
-  background: '#ffffff',
-  border: '1px solid #e5e7eb',
+  background: studioInvokeColors.panel,
+  border: `1px solid ${studioInvokeColors.border}`,
   borderRadius: 8,
   boxSizing: 'border-box',
   maxHeight: 260,
@@ -194,7 +171,7 @@ const advancedDetailsStyle: React.CSSProperties = {
 };
 
 const advancedSummaryStyle: React.CSSProperties = {
-  color: '#334155',
+  color: studioInvokeColors.textSoft,
   cursor: 'pointer',
   fontSize: 13,
   fontWeight: 700,
@@ -326,6 +303,7 @@ export const StudioMemberInvokeContractPanel: React.FC<
   memberLabel,
   publishedContext,
   revisionId,
+  status,
   statusLabel,
 }) => (
   <AevatarPanel
@@ -340,7 +318,7 @@ export const StudioMemberInvokeContractPanel: React.FC<
         <span
           style={{
             ...contractStatusPillBaseStyle,
-            ...getStatusStyle(statusLabel),
+            ...getStatusStyle(status),
           }}
         >
           {statusLabel}
@@ -534,14 +512,19 @@ export const StudioMemberInvokeComposerPanel: React.FC<
               Advanced typed payload
             </Button>
             <Drawer
-              destroyOnHidden
+              destroyOnClose
               open={advancedOpen}
               placement="right"
               size="large"
               title="Advanced typed payload"
               onClose={() => setAdvancedOpen(false)}
             >
-              <div aria-label="Typed invoke form">{advancedFields}</div>
+              <fieldset
+                aria-label="Typed invoke form"
+                style={{ border: 0, margin: 0, padding: 0 }}
+              >
+                {advancedFields}
+              </fieldset>
             </Drawer>
           </>
         ) : (

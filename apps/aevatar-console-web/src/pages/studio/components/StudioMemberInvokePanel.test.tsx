@@ -150,8 +150,10 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getByText('调用契约')).toBeTruthy();
     expect(screen.getByText('Status')).toBeTruthy();
     expect(screen.getByText('Run ID')).toBeTruthy();
+    expect(screen.getByText('Command ID')).toBeTruthy();
     expect(screen.getByText('Elapsed')).toBeTruthy();
-    expect(screen.getByText('Not started')).toBeTruthy();
+    expect(screen.getByText('尚未开始')).toBeTruthy();
+    expect(screen.getByText('尚未发出')).toBeTruthy();
     expect(screen.getByText('Member')).toBeTruthy();
     expect(screen.getByText('Published Context')).toBeTruthy();
     expect(screen.getByText('Revision')).toBeTruthy();

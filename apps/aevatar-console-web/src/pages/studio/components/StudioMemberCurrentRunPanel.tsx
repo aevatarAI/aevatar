@@ -6,6 +6,17 @@ import type {
   InvokeResultState,
   StudioInvokeChatMessage,
 } from './StudioMemberInvokePanel.currentRun';
+import {
+  contractStatusPillBaseStyle,
+  contractValueStyle,
+  formatHistoryTimestamp,
+  getInvokeRunStatusLabel,
+  getInvokeStatusTone,
+  helperTextStyle,
+  monoFontFamily,
+  studioInvokeColors,
+  trimPreview,
+} from './studioInvokeUi';
 
 type StudioMemberCurrentRunPanelProps = {
   readonly chatMessages: readonly StudioInvokeChatMessage[];
@@ -20,111 +31,20 @@ type StudioMemberCurrentRunPanelProps = {
   readonly transcriptAnchorRef: React.RefObject<HTMLDivElement | null>;
 };
 
-const monoFontFamily =
-  "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace";
-
-function trimPreview(value: string, limit = 180): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return '';
-  }
-
-  return trimmed.length > limit ? `${trimmed.slice(0, limit - 3)}...` : trimmed;
-}
-
-function formatHistoryTimestamp(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) {
-    return '刚刚';
-  }
-
-  return new Intl.DateTimeFormat('zh-CN', {
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    month: 'short',
-  }).format(value);
-}
-
-function getCurrentResultStatusLabel(
-  status: InvokeResultState['status'],
-): string {
-  switch (status) {
-    case 'running':
-      return '运行中';
-    case 'success':
-      return '成功';
-    case 'error':
-      return '失败';
-    default:
-      return '空闲';
-  }
-}
-
 function getCurrentResultStatusStyle(
   status: InvokeResultState['status'],
 ): React.CSSProperties {
-  if (status === 'running') {
-    return {
-      background: '#eff6ff',
-      border: '1px solid #bfdbfe',
-      color: '#1d4ed8',
-    };
-  }
-
-  if (status === 'success') {
-    return {
-      background: '#f0fdf4',
-      border: '1px solid #86efac',
-      color: '#15803d',
-    };
-  }
-
-  if (status === 'error') {
-    return {
-      background: '#fef2f2',
-      border: '1px solid #fecaca',
-      color: '#b91c1c',
-    };
-  }
-
+  const tone = getInvokeStatusTone(status);
   return {
-    background: '#f8fafc',
-    border: '1px solid #e5e7eb',
-    color: '#64748b',
+    background: tone.background,
+    border: `1px solid ${tone.border}`,
+    color: tone.color,
   };
 }
 
-const contractStatusPillBaseStyle: React.CSSProperties = {
-  borderRadius: 999,
-  display: 'inline-flex',
-  fontSize: 12,
-  fontWeight: 700,
-  lineHeight: '18px',
-  padding: '4px 10px',
-  width: 'fit-content',
-};
-
-const helperTextStyle: React.CSSProperties = {
-  color: '#64748b',
-  fontSize: 13,
-  lineHeight: 1.6,
-  minWidth: 0,
-};
-
-const contractValueStyle: React.CSSProperties = {
-  color: '#111827',
-  display: 'block',
-  fontSize: 13,
-  fontWeight: 600,
-  lineHeight: '20px',
-  minWidth: 0,
-  overflowWrap: 'anywhere',
-  wordBreak: 'break-word',
-};
-
 const requestSummaryStyle: React.CSSProperties = {
-  background: '#f8fafc',
-  border: '1px solid #e5e7eb',
+  background: studioInvokeColors.surface,
+  border: `1px solid ${studioInvokeColors.border}`,
   borderRadius: 12,
   display: 'grid',
   gap: 8,
@@ -147,7 +67,7 @@ const consolePaneStyle: React.CSSProperties = {
 
 const emptyConversationStyle: React.CSSProperties = {
   alignItems: 'center',
-  color: '#64748b',
+  color: studioInvokeColors.muted,
   display: 'flex',
   fontSize: 14,
   justifyContent: 'center',
@@ -176,7 +96,7 @@ const transcriptStyle: React.CSSProperties = {
 };
 
 const bubbleBaseStyle: React.CSSProperties = {
-  border: '1px solid #e5e7eb',
+  border: `1px solid ${studioInvokeColors.border}`,
   borderRadius: 14,
   display: 'flex',
   flexDirection: 'column',
@@ -187,10 +107,10 @@ const bubbleBaseStyle: React.CSSProperties = {
 };
 
 const plainResultStyle: React.CSSProperties = {
-  background: '#ffffff',
-  border: '1px solid #e5e7eb',
+  background: studioInvokeColors.panel,
+  border: `1px solid ${studioInvokeColors.border}`,
   borderRadius: 14,
-  color: '#111827',
+  color: studioInvokeColors.text,
   minWidth: 0,
   padding: '14px 16px',
   whiteSpace: 'pre-wrap',
@@ -198,9 +118,9 @@ const plainResultStyle: React.CSSProperties = {
 };
 
 const rawOutputStyle: React.CSSProperties = {
-  background: '#0f172a',
+  background: studioInvokeColors.rawSurface,
   borderRadius: 14,
-  color: '#e2e8f0',
+  color: studioInvokeColors.rawText,
   fontFamily: monoFontFamily,
   fontSize: 12,
   lineHeight: 1.6,
@@ -215,7 +135,7 @@ const rawOutputStyle: React.CSSProperties = {
 };
 
 const emptyConsoleTextStyle: React.CSSProperties = {
-  color: '#64748b',
+  color: studioInvokeColors.muted,
   fontSize: 14,
   lineHeight: 1.7,
   minWidth: 0,
@@ -237,9 +157,13 @@ const StudioMemberCurrentRunPanel: React.FC<StudioMemberCurrentRunPanelProps> = 
   onTabChange,
   transcriptAnchorRef,
 }) => {
-  const currentResultStatusLabel = getCurrentResultStatusLabel(
+  const currentResultStatusLabel = getInvokeRunStatusLabel(
     invokeResult.status,
   );
+  const errorDescription =
+    invokeResult.errorCode && invokeResult.error
+      ? `${invokeResult.error}（${invokeResult.errorCode}）`
+      : invokeResult.errorCode || invokeResult.error;
   const consoleItems = useMemo(
     () => [
       {
@@ -300,11 +224,11 @@ const StudioMemberCurrentRunPanel: React.FC<StudioMemberCurrentRunPanelProps> = 
                   </div>
                 ) : null}
 
-                {invokeResult.status === 'error' && invokeResult.error ? (
+                {invokeResult.status === 'error' && errorDescription ? (
                   <Alert
                     showIcon
                     message="这次调用失败了。"
-                    description={invokeResult.error}
+                    description={errorDescription}
                     type="error"
                   />
                 ) : null}
@@ -329,13 +253,17 @@ const StudioMemberCurrentRunPanel: React.FC<StudioMemberCurrentRunPanelProps> = 
                           <div
                             style={{
                               ...bubbleBaseStyle,
-                              background: isAssistant ? '#ffffff' : '#eff6ff',
-                              borderColor: isAssistant ? '#e5e7eb' : '#bfdbfe',
+                              background: isAssistant
+                                ? studioInvokeColors.panel
+                                : studioInvokeColors.assistantSoft,
+                              borderColor: isAssistant
+                                ? studioInvokeColors.border
+                                : studioInvokeColors.borderStrong,
                             }}
                           >
                             <div
                               style={{
-                                color: '#6b7280',
+                                color: studioInvokeColors.meta,
                                 fontSize: 11,
                                 fontWeight: 700,
                                 textTransform: 'uppercase',
@@ -345,7 +273,9 @@ const StudioMemberCurrentRunPanel: React.FC<StudioMemberCurrentRunPanelProps> = 
                             </div>
                             <div
                               style={{
-                                color: message.error ? '#b91c1c' : '#111827',
+                                color: message.error
+                                  ? studioInvokeColors.danger
+                                  : studioInvokeColors.text,
                                 lineHeight: 1.7,
                                 whiteSpace: 'pre-wrap',
                                 wordBreak: 'break-word',
@@ -359,8 +289,8 @@ const StudioMemberCurrentRunPanel: React.FC<StudioMemberCurrentRunPanelProps> = 
                             {message.thinking ? (
                               <div
                                 style={{
-                                  borderTop: '1px solid #e5e7eb',
-                                  color: '#6b7280',
+                                  borderTop: `1px solid ${studioInvokeColors.border}`,
+                                  color: studioInvokeColors.meta,
                                   fontSize: 12,
                                   lineHeight: 1.6,
                                   paddingTop: 8,
@@ -455,6 +385,7 @@ const StudioMemberCurrentRunPanel: React.FC<StudioMemberCurrentRunPanelProps> = 
       currentResultStatusLabel,
       currentRunHasData,
       currentRunRequest,
+      errorDescription,
       invokeResult,
       isChatEndpoint,
       transcriptAnchorRef,

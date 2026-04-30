@@ -3,46 +3,21 @@ import React from 'react';
 import { AevatarPanel, AevatarStatusTag } from '@/shared/ui/aevatarPageShells';
 import { AEVATAR_PRESSABLE_CARD_CLASS } from '@/shared/ui/interactionStandards';
 import type { InvokeHistoryEntry } from './StudioMemberInvokePanel.currentRun';
+import {
+  contractValueStyle,
+  formatHistoryTimestamp,
+  helperTextStyle,
+  studioInvokeColors,
+  trimOptional,
+  trimPreview,
+  truncateMiddle,
+} from './studioInvokeUi';
 
 type StudioMemberInvokeHistoryPanelProps = {
   readonly expandedHistoryId: string;
   readonly entries: readonly InvokeHistoryEntry[];
   readonly onSelectEntry: (entryId: string) => void;
 };
-
-function trimOptional(value: string | null | undefined): string {
-  return value?.trim() ?? '';
-}
-
-function trimPreview(value: string, limit = 180): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return '';
-  }
-
-  return trimmed.length > limit ? `${trimmed.slice(0, limit - 3)}...` : trimmed;
-}
-
-function truncateMiddle(value: string, head = 18, tail = 12): string {
-  if (value.length <= head + tail + 3) {
-    return value;
-  }
-
-  return `${value.slice(0, head)}...${value.slice(-tail)}`;
-}
-
-function formatHistoryTimestamp(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) {
-    return '刚刚';
-  }
-
-  return new Intl.DateTimeFormat('zh-CN', {
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    month: 'short',
-  }).format(value);
-}
 
 function formatDuration(startedAt: number, completedAt: number): string {
   if (!Number.isFinite(startedAt) || !Number.isFinite(completedAt)) {
@@ -57,24 +32,6 @@ function formatDuration(startedAt: number, completedAt: number): string {
   return `${(durationMs / 1000).toFixed(durationMs >= 10_000 ? 0 : 1)} s`;
 }
 
-const contractValueStyle: React.CSSProperties = {
-  color: '#111827',
-  display: 'block',
-  fontSize: 13,
-  fontWeight: 600,
-  lineHeight: '20px',
-  minWidth: 0,
-  overflowWrap: 'anywhere',
-  wordBreak: 'break-word',
-};
-
-const helperTextStyle: React.CSSProperties = {
-  color: '#64748b',
-  fontSize: 13,
-  lineHeight: 1.6,
-  minWidth: 0,
-};
-
 const runsListStyle: React.CSSProperties = {
   display: 'grid',
   gap: 10,
@@ -82,8 +39,8 @@ const runsListStyle: React.CSSProperties = {
 };
 
 const historyCardStyle: React.CSSProperties = {
-  background: '#ffffff',
-  border: '1px solid #e5e7eb',
+  background: studioInvokeColors.panel,
+  border: `1px solid ${studioInvokeColors.border}`,
   borderRadius: 12,
   cursor: 'pointer',
   display: 'grid',
@@ -95,7 +52,7 @@ const historyCardStyle: React.CSSProperties = {
 };
 
 const historyMetaStyle: React.CSSProperties = {
-  color: '#6b7280',
+  color: studioInvokeColors.meta,
   display: 'flex',
   flexWrap: 'wrap',
   fontSize: 12,
@@ -104,8 +61,8 @@ const historyMetaStyle: React.CSSProperties = {
 };
 
 const inlineDetailStyle: React.CSSProperties = {
-  background: '#f8fafc',
-  border: '1px solid #e5e7eb',
+  background: studioInvokeColors.surface,
+  border: `1px solid ${studioInvokeColors.border}`,
   borderRadius: 12,
   display: 'grid',
   gap: 10,
@@ -164,8 +121,12 @@ const StudioMemberInvokeHistoryPanel: React.FC<
                 className={AEVATAR_PRESSABLE_CARD_CLASS}
                 style={{
                   ...historyCardStyle,
-                  background: isExpanded ? '#f5f7ff' : '#ffffff',
-                  borderColor: isExpanded ? '#91caff' : '#e5e7eb',
+                  background: isExpanded
+                    ? studioInvokeColors.surfaceActive
+                    : studioInvokeColors.panel,
+                  borderColor: isExpanded
+                    ? studioInvokeColors.activeBorder
+                    : studioInvokeColors.border,
                 }}
                 type="button"
                 onClick={() => onSelectEntry(entry.id)}

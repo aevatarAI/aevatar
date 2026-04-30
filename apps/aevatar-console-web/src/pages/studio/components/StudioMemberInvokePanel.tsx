@@ -40,7 +40,15 @@ import StudioMemberInvokeHistoryPanel from './StudioMemberInvokeHistoryPanel';
 import {
   StudioMemberInvokeComposerPanel,
   StudioMemberInvokeContractPanel,
+  type StudioMemberInvokeContractStatus,
 } from './StudioMemberInvokeSetupPanels';
+import {
+  getInvokeRunStatusLabel,
+  getInvokeStatusTone,
+  studioInvokeColors,
+  trimOptional,
+  trimPreview,
+} from './studioInvokeUi';
 
 type StudioMemberInvokePanelProps = {
   readonly scopeId: string;
@@ -74,19 +82,6 @@ function createClientId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function trimOptional(value: string | null | undefined): string {
-  return value?.trim() ?? '';
-}
-
-function trimPreview(value: string, limit = 180): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return '';
-  }
-
-  return trimmed.length > limit ? `${trimmed.slice(0, limit - 3)}...` : trimmed;
-}
-
 function cloneChatMessages(
   messages: readonly StudioInvokeChatMessage[],
 ): StudioInvokeChatMessage[] {
@@ -106,6 +101,21 @@ function getContractStatusLabel(options: {
   }
 
   return '已就绪';
+}
+
+function getContractStatus(options: {
+  hasEndpoint: boolean;
+  hasMember: boolean;
+}): StudioMemberInvokeContractStatus {
+  if (!options.hasMember) {
+    return 'missing-member';
+  }
+
+  if (!options.hasEndpoint) {
+    return 'missing-endpoint';
+  }
+
+  return 'ready';
 }
 
 function getPreferredRunOutput(options: {
@@ -129,33 +139,8 @@ function formatElapsedTime(startedAt: number | null, completedAt: number | null)
   return `${minutes}:${seconds}`;
 }
 
-function getRunStatusLabel(status: InvokeResultState['status']): string {
-  switch (status) {
-    case 'running':
-      return 'Running';
-    case 'success':
-      return 'Success';
-    case 'error':
-      return 'Error';
-    default:
-      return 'Idle';
-  }
-}
-
 function getRunStatusDotStyle(status: InvokeResultState['status']): React.CSSProperties {
-  if (status === 'running') {
-    return { background: '#1677ff' };
-  }
-
-  if (status === 'success') {
-    return { background: '#22c55e' };
-  }
-
-  if (status === 'error') {
-    return { background: '#ef4444' };
-  }
-
-  return { background: '#94a3b8' };
+  return { background: getInvokeStatusTone(status).dot };
 }
 
 const surfaceStyle: React.CSSProperties = {
@@ -192,8 +177,8 @@ const runSummaryGridStyle: React.CSSProperties = {
 };
 
 const runSummaryCardStyle: React.CSSProperties = {
-  background: '#f8fafc',
-  border: '1px solid #e5e7eb',
+  background: studioInvokeColors.surface,
+  border: `1px solid ${studioInvokeColors.border}`,
   borderRadius: 8,
   display: 'grid',
   gap: 2,
@@ -202,7 +187,7 @@ const runSummaryCardStyle: React.CSSProperties = {
 };
 
 const runSummaryLabelStyle: React.CSSProperties = {
-  color: '#64748b',
+  color: studioInvokeColors.muted,
   fontSize: 11,
   fontWeight: 700,
   letterSpacing: 0.4,
@@ -211,15 +196,15 @@ const runSummaryLabelStyle: React.CSSProperties = {
 };
 
 const contractDetailsStyle: React.CSSProperties = {
-  background: '#ffffff',
-  border: '1px solid #e5e7eb',
+  background: studioInvokeColors.panel,
+  border: `1px solid ${studioInvokeColors.border}`,
   borderRadius: 8,
   minWidth: 0,
   padding: '10px 12px',
 };
 
 const contractDetailsSummaryStyle: React.CSSProperties = {
-  color: '#334155',
+  color: studioInvokeColors.textSoft,
   cursor: 'pointer',
   fontSize: 13,
   fontWeight: 700,
@@ -232,7 +217,7 @@ const contractDetailsBodyStyle: React.CSSProperties = {
 
 const runSummaryValueStyle: React.CSSProperties = {
   alignItems: 'center',
-  color: '#111827',
+  color: studioInvokeColors.text,
   display: 'flex',
   fontSize: 13,
   fontWeight: 700,
@@ -346,8 +331,6 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
 
     return requestHistory.filter((entry) => entry.serviceId === currentServiceId);
   }, [initialServiceId, requestHistory, selectedService?.serviceId]);
-  const expandedHistoryEntry =
-    visibleRequestHistory.find((entry) => entry.id === expandedHistoryId) ?? null;
   const currentRunViewModel = useMemo(() => {
     return buildStudioInvokeCurrentRunViewModel({
       activeRunCompletedAt,
@@ -379,7 +362,11 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const currentObserveSessionSeed = currentRunViewModel.observeSessionSeed;
   const currentRawOutput = currentRunViewModel.rawOutput;
   const currentContractStatusLabel = getContractStatusLabel({
-    hasEndpoint: Boolean(selectedEndpoint) && !endpointContractError,
+    hasEndpoint: Boolean(selectedEndpoint),
+    hasMember: Boolean(selectedService),
+  });
+  const currentContractStatus = getContractStatus({
+    hasEndpoint: Boolean(selectedEndpoint),
     hasMember: Boolean(selectedService),
   });
   const consoleMinHeight = screens.xl || screens.lg ? 280 : 220;
@@ -387,10 +374,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     currentRunRequest?.startedAt ?? null,
     activeRunCompletedAt,
   );
-  const runIdLabel =
-    trimOptional(invokeResult.runId) ||
-    trimOptional(invokeResult.commandId) ||
-    'Not started';
+  const runIdLabel = trimOptional(invokeResult.runId) || '尚未开始';
+  const commandIdLabel = trimOptional(invokeResult.commandId) || '尚未发出';
   const endpointLabel = selectedEndpoint?.displayName || selectedEndpointId || '—';
 
   useEffect(() => {
@@ -928,7 +913,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
           commandId: commandId || undefined,
           correlationId: correlationId || undefined,
           runId: runId || undefined,
-          threadId: correlationId || undefined,
+          threadId: actorId || undefined,
           timestamp: completedAt,
           type: 'RUN_STARTED',
         } as RuntimeEvent,
@@ -1147,13 +1132,19 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                         ...getRunStatusDotStyle(invokeResult.status),
                       }}
                     />
-                    {getRunStatusLabel(invokeResult.status)}
+                    {getInvokeRunStatusLabel(invokeResult.status)}
                   </div>
                 </div>
                 <div style={runSummaryCardStyle}>
                   <div style={runSummaryLabelStyle}>Run ID</div>
                   <div title={runIdLabel} style={runSummaryValueStyle}>
                     {runIdLabel}
+                  </div>
+                </div>
+                <div style={runSummaryCardStyle}>
+                  <div style={runSummaryLabelStyle}>Command ID</div>
+                  <div title={commandIdLabel} style={runSummaryValueStyle}>
+                    {commandIdLabel}
                   </div>
                 </div>
                 <div style={runSummaryCardStyle}>
@@ -1227,6 +1218,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                 memberLabel={currentMemberLabel}
                 publishedContext={currentPublishedContext}
                 revisionId={currentRevisionId}
+                status={currentContractStatus}
                 statusLabel={currentContractStatusLabel}
               />
             </div>

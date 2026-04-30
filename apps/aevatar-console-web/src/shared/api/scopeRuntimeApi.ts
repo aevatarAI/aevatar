@@ -564,19 +564,10 @@ function decodeScopeServiceEndpointContract(
   label = "ScopeServiceEndpointContract",
 ): ScopeServiceEndpointContract {
   const record = expectRecord(value, label);
-  const serviceId =
-    readOptionalString(record, ["serviceId", "ServiceId"]) ||
-    readOptionalString(record, ["publishedServiceId", "PublishedServiceId"]) ||
-    readOptionalString(record, ["memberId", "MemberId"]) ||
-    "";
-  if (!serviceId) {
-    throw new Error(
-      `${label}.serviceId, ${label}.publishedServiceId, or ${label}.memberId is required.`,
-    );
-  }
+  const serviceId = readOptionalString(record, ["serviceId", "ServiceId"]);
   return {
     scopeId: readString(record, ["scopeId", "ScopeId"], `${label}.scopeId`),
-    serviceId,
+    serviceId: serviceId || "",
     memberId: readOptionalString(record, ["memberId", "MemberId"]),
     publishedServiceId: readOptionalString(record, [
       "publishedServiceId",

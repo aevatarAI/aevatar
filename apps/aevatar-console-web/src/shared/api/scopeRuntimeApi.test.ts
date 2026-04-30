@@ -346,7 +346,7 @@ describe("scopeRuntimeApi", () => {
         endpointId: "command",
         memberId: "script-1",
         publishedServiceId: "script-1",
-        serviceId: "script-1",
+        serviceId: "",
         requestTypeUrl:
           "type.googleapis.com/aevatar.tools.cli.hosting.AppScriptCommand",
       }),
@@ -364,7 +364,7 @@ describe("scopeRuntimeApi", () => {
     );
   });
 
-  it("rejects endpoint contracts without service or member identity", async () => {
+  it("keeps endpoint contract identities in separate fields", async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -395,8 +395,12 @@ describe("scopeRuntimeApi", () => {
 
     await expect(
       scopeRuntimeApi.getMemberEndpointContract("scope-a", "script-1", "command"),
-    ).rejects.toThrow(
-      "ScopeServiceEndpointContract.serviceId, ScopeServiceEndpointContract.publishedServiceId, or ScopeServiceEndpointContract.memberId is required.",
+    ).resolves.toEqual(
+      expect.objectContaining({
+        memberId: undefined,
+        publishedServiceId: undefined,
+        serviceId: "",
+      }),
     );
   });
 
