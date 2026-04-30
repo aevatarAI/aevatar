@@ -188,6 +188,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         endpoints.Should().Contain("/api/scopes/{scopeId}/runs/{runId}:resume");
         endpoints.Should().Contain("/api/scopes/{scopeId}/runs/{runId}:signal");
         endpoints.Should().Contain("/api/scopes/{scopeId}/runs/{runId}:stop");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/services");
         endpoints.Should().Contain("/api/scopes/{scopeId}/services/{serviceId}/invoke/{endpointId}:stream");
         endpoints.Should().Contain("/api/scopes/{scopeId}/services/{serviceId}/revisions/{revisionId}");
         endpoints.Should().Contain("/api/scopes/{scopeId}/services/{serviceId}/revisions/{revisionId}:retire");
