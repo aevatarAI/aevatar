@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
@@ -34,27 +35,23 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
     public const string InitialHmacKid = "v1";
 
     /// <inheritdoc />
-    protected override AevatarOAuthClientState TransitionState(AevatarOAuthClientState current, IMessage evt)
-    {
-        if (evt is not null
-            && evt is not AevatarOAuthClientProvisionedEvent
-            && evt is not AevatarOAuthClientHmacKeyRotatedEvent
-            && evt is not AevatarOAuthClientBrokerCapabilityObservedEvent
-            && evt is not AevatarOAuthClientProjectionRebuildRequestedEvent)
-        {
-            Logger.LogWarning(
-                "AevatarOAuthClientGAgent received unrecognised event type {EventType}; state unchanged",
-                evt.GetType().FullName);
-        }
-
-        return StateTransitionMatcher
+    /// <remarks>
+    /// <see cref="StateTransitionMatcher"/> handles <c>Any</c>-wrapped payloads
+    /// transparently via <c>ProtobufContractCompatibility.TryUnpack</c>, so the
+    /// event-store's wrapped form ("type.googleapis.com/...") is matched the
+    /// same as a directly-typed instance. No "unrecognised event type"
+    /// pre-check fires here — the earlier guard incorrectly classified every
+    /// Any-wrapped event as unknown and produced noisy warnings on every
+    /// activation replay (one warning per persisted event).
+    /// </remarks>
+    protected override AevatarOAuthClientState TransitionState(AevatarOAuthClientState current, IMessage evt) =>
+        StateTransitionMatcher
             .Match(current, evt)
             .On<AevatarOAuthClientProvisionedEvent>(ApplyProvisioned)
             .On<AevatarOAuthClientHmacKeyRotatedEvent>(ApplyHmacKeyRotated)
             .On<AevatarOAuthClientBrokerCapabilityObservedEvent>(ApplyBrokerCapabilityObserved)
             .On<AevatarOAuthClientProjectionRebuildRequestedEvent>(static (state, _) => state)
             .OrCurrent();
-    }
 
     // ─── Commands ───
 
@@ -162,14 +159,39 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             .RegisterPublicClientAsync(cmd.NyxidAuthority, clientName, cmd.RedirectUri, CancellationToken.None)
             .ConfigureAwait(false);
 
-        await PersistDomainEventAsync(new AevatarOAuthClientProvisionedEvent
+        try
         {
-            ClientId = registration.ClientId,
-            ClientIdIssuedAtUnix = registration.IssuedAt.ToUnixTimeSeconds(),
-            NyxidAuthority = cmd.NyxidAuthority,
-            PersistedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            RedirectUri = cmd.RedirectUri,
-        });
+            await PersistDomainEventAsync(new AevatarOAuthClientProvisionedEvent
+            {
+                ClientId = registration.ClientId,
+                ClientIdIssuedAtUnix = registration.IssuedAt.ToUnixTimeSeconds(),
+                NyxidAuthority = cmd.NyxidAuthority,
+                PersistedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                RedirectUri = cmd.RedirectUri,
+            });
+        }
+        catch (EventStoreOptimisticConcurrencyException occ)
+        {
+            // Cluster-shared Garnet event store + brief two-pod overlap
+            // during a K8s rolling deploy lets two grain activations of
+            // this well-known actor each replay v=N, each call DCR (each
+            // getting its own client_id from NyxID), and each try to
+            // commit Provisioned at expectedVersion=N. One wins, one
+            // sees OCC. See issue #549 for the full causal chain.
+            //
+            // The losing handler must NOT retry the DCR — that would
+            // create another orphan client at NyxID on every backoff
+            // attempt. Refresh state from the store and check whether
+            // the peer's commit already matches what this command
+            // intended to install (same authority + same redirect URI).
+            // If yes, log the orphan client_id we just created so ops
+            // can delete it, and return success. The peer's record is
+            // the cluster-authoritative one going forward.
+            if (await TryAbsorbPeerProvisioningAsync(cmd, registration.ClientId, occ).ConfigureAwait(false))
+                return;
+            throw;
+        }
+
         Logger.LogInformation(
             "Provisioned aevatar OAuth client via DCR: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}",
             registration.ClientId,
@@ -178,9 +200,77 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
 
         if (State.HmacKey.Length == 0)
         {
-            await PersistDomainEventAsync(BuildHmacKeyRotatedEvent());
-            Logger.LogInformation("Seeded HMAC key for aevatar OAuth client");
+            try
+            {
+                await PersistDomainEventAsync(BuildHmacKeyRotatedEvent());
+                Logger.LogInformation("Seeded HMAC key for aevatar OAuth client");
+            }
+            catch (EventStoreOptimisticConcurrencyException occ)
+            {
+                // Same race shape: a peer wrote at v+2 (e.g. their own
+                // HMAC seed) between our Provisioned commit and this
+                // seed. Refresh — if HMAC is now non-empty, the peer
+                // already seeded; absorb. The cluster has one valid key.
+                if (await TryAbsorbPeerProvisioningAsync(cmd, registration.ClientId, occ).ConfigureAwait(false))
+                    return;
+                throw;
+            }
         }
+    }
+
+    /// <summary>
+    /// Refreshes <see cref="State"/> from the event store after an
+    /// <see cref="EventStoreOptimisticConcurrencyException"/> raised by a
+    /// drift-branch commit, then checks whether the peer that won the race
+    /// already installed a Provisioned record matching the command's
+    /// authority + redirect URI. Returns <c>true</c> when the cluster is
+    /// already in the desired shape (caller should treat the OCC as a
+    /// successful no-op); returns <c>false</c> when the peer's commit was
+    /// something else and the caller should rethrow so the bootstrap retry
+    /// loop re-evaluates against fresh state.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately scoped to the DCR commit path — see issue #549. The
+    /// orphan_client_id field is logged so ops can delete the loser's
+    /// NyxID client without searching by hand.
+    /// </remarks>
+    private async Task<bool> TryAbsorbPeerProvisioningAsync(
+        EnsureAevatarOAuthClientProvisionedCommand cmd,
+        string orphanClientId,
+        EventStoreOptimisticConcurrencyException occ)
+    {
+        await RefreshStateFromStoreAsync().ConfigureAwait(false);
+
+        var peerHealed = !string.IsNullOrEmpty(State.ClientId)
+            && string.Equals(State.NyxidAuthority, cmd.NyxidAuthority, StringComparison.Ordinal)
+            && string.Equals(State.RedirectUri, cmd.RedirectUri, StringComparison.Ordinal)
+            && State.HmacKey.Length > 0;
+
+        if (peerHealed)
+        {
+            Logger.LogWarning(
+                "Aevatar OAuth client OCC race resolved by peer commit; absorbing this attempt as a no-op. "
+                + "peer_client_id={PeerClientId}, orphan_client_id={OrphanClientId}, "
+                + "expected_version={Expected}, actual_version={Actual}. "
+                + "Ops should delete the orphan client at NyxID admin so it stops counting against the registration list.",
+                State.ClientId,
+                orphanClientId,
+                occ.ExpectedVersion,
+                occ.ActualVersion);
+            return true;
+        }
+
+        Logger.LogError(
+            "Aevatar OAuth client OCC race did not converge on the desired shape after replay; rethrowing so the bootstrap retry path can re-evaluate. "
+            + "stored_client_id={StoredClientId}, stored_redirect_uri={StoredRedirect}, expected_redirect_uri={ExpectedRedirect}, "
+            + "orphan_client_id={OrphanClientId}, expected_version={Expected}, actual_version={Actual}.",
+            State.ClientId,
+            State.RedirectUri,
+            cmd.RedirectUri,
+            orphanClientId,
+            occ.ExpectedVersion,
+            occ.ActualVersion);
+        return false;
     }
 
     /// <summary>

@@ -88,6 +88,24 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
     }
 
     /// <summary>
+    /// Re-reads persisted events from the event store and replaces
+    /// in-memory <see cref="State"/> with the rebuilt result. Intended for
+    /// use from event-handler bodies that have caught
+    /// <c>EventStoreOptimisticConcurrencyException</c> and need to absorb
+    /// peer-committed facts before deciding whether to retry, no-op, or
+    /// rethrow. Does not invoke <see cref="OnStateChangedAsync"/> — the
+    /// projection-publish pipeline is driven by the peer's own
+    /// <c>PersistDomainEventsAsync</c> commit, not by this re-load.
+    /// </summary>
+    protected async Task RefreshStateFromStoreAsync(CancellationToken ct = default)
+    {
+        var eventSourcing = EnsureEventSourcingConfigured();
+        var replayed = await eventSourcing.ReplayAsync(Id, ct).ConfigureAwait(false);
+        using var guard = StateGuard.BeginWriteScope();
+        _state = replayed ?? new TState();
+    }
+
+    /// <summary>
     /// Persist one domain event, then apply it to in-memory state.
     /// </summary>
     protected Task PersistDomainEventAsync<TEvent>(TEvent evt, CancellationToken ct = default)
