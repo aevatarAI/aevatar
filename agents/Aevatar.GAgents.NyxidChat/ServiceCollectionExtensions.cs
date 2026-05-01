@@ -54,7 +54,7 @@ public static class ServiceCollectionExtensions
         // Registered here (not in Channel.Identity) because the handler depends
         // on Studio.Application UserConfig ports; Channel.Identity intentionally
         // does not pull Studio dependencies.
-        services.TryAddSingleton<INyxIdLlmServiceCatalogClient, StubNyxIdLlmServiceCatalogClient>();
+        services.TryAddSingleton<INyxIdLlmServiceCatalogClient, NyxIdLlmServiceCatalogClient>();
         services.TryAddSingleton<IUserLlmOptionsService, DefaultUserLlmOptionsService>();
         services.TryAddSingleton<IUserLlmSelectionService, DefaultUserLlmSelectionService>();
         services.TryAddSingleton<IUserLlmOptionsRenderer<MessageContent>, TextUserLlmOptionsRenderer>();

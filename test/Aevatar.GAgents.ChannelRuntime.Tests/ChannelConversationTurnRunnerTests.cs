@@ -17,6 +17,7 @@ using NSubstitute;
 using Xunit;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.Scheduled;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
@@ -665,6 +666,55 @@ public sealed class ChannelConversationTurnRunnerTests
         result.SentActivityId.Should().Be("ignored:unrecognized_card_action:evt-card-unknown-1");
         result.LlmReplyRequest.Should().BeNull("unrecognized card_action must not trigger an LLM turn");
         adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldRouteLlmSelectionCardAction_WhenPayloadCarriesLlmAction()
+    {
+        var subject = new ExternalSubjectRef
+        {
+            Platform = "lark",
+            Tenant = "scope-1",
+            ExternalUserId = "ou_user_1",
+        };
+        var broker = new InMemoryCapabilityBroker();
+        broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
+        var option = new UserLlmOption(
+            ServiceId: "svc-openai",
+            ServiceSlug: "openai-work",
+            DisplayName: "OpenAI Work",
+            RouteValue: "/api/v1/proxy/s/openai-work",
+            DefaultModel: "gpt-5.4",
+            AvailableModels: ["gpt-5.4"],
+            Status: "ready",
+            Source: "user",
+            Allowed: true,
+            Description: null);
+        var optionsService = new StubUserLlmOptionsService(option);
+        var selectionService = new RecordingUserLlmSelectionService();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<IUserLlmOptionsService>(optionsService)
+            .AddSingleton<IUserLlmSelectionService>(selectionService)
+            .AddSingleton<IUserLlmOptionsRenderer<MessageContent>>(new TextUserLlmOptionsRenderer())
+            .BuildServiceProvider();
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+        var activity = BuildCardActionActivity(
+            "evt-llm-select-1",
+            (TextUserLlmOptionsRenderer.LlmActionArgument, TextUserLlmOptionsRenderer.SelectServiceAction),
+            (TextUserLlmOptionsRenderer.ServiceIdArgument, "svc-openai"));
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().BeNull();
+        result.SentActivityId.Should().Be("direct-reply:evt-llm-select-1");
+        selectionService.SelectedServiceId.Should().Be("svc-openai");
+        selectionService.Context?.BindingId.Value.Should().Be("bnd-user-1");
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("OpenAI Work");
     }
 
     [Fact]
@@ -2575,6 +2625,60 @@ public sealed class ChannelConversationTurnRunnerTests
         {
             Commands.Add(command);
             return Task.FromResult(Result);
+        }
+    }
+
+    private sealed class StubUserLlmOptionsService(UserLlmOption option) : IUserLlmOptionsService
+    {
+        public Task<UserLlmOptionsView> GetOptionsAsync(UserLlmOptionsQuery query, CancellationToken ct) =>
+            Task.FromResult(new UserLlmOptionsView(query.BindingId.Clone(), null, [option], null));
+    }
+
+    private sealed class RecordingUserLlmSelectionService : IUserLlmSelectionService
+    {
+        public string? SelectedServiceId { get; private set; }
+        public string? SelectedModel { get; private set; }
+        public string? PresetId { get; private set; }
+        public bool ResetCalled { get; private set; }
+        public UserLlmSelectionContext? Context { get; private set; }
+
+        public Task SetByServiceAsync(
+            UserLlmSelectionContext context,
+            string serviceId,
+            string? modelOverride,
+            CancellationToken ct)
+        {
+            Context = context;
+            SelectedServiceId = serviceId;
+            SelectedModel = modelOverride;
+            return Task.CompletedTask;
+        }
+
+        public Task SetModelOverrideAsync(
+            UserLlmSelectionContext context,
+            string model,
+            CancellationToken ct)
+        {
+            Context = context;
+            SelectedModel = model;
+            return Task.CompletedTask;
+        }
+
+        public Task ApplyPresetAsync(
+            UserLlmSelectionContext context,
+            string presetId,
+            CancellationToken ct)
+        {
+            Context = context;
+            PresetId = presetId;
+            return Task.CompletedTask;
+        }
+
+        public Task ResetAsync(UserLlmSelectionContext context, CancellationToken ct)
+        {
+            Context = context;
+            ResetCalled = true;
+            return Task.CompletedTask;
         }
     }
 

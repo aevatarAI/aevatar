@@ -508,15 +508,108 @@ public sealed class UserConfigProjectionAndControllerTests
         response.Result.Should().BeOfType<BadRequestObjectResult>();
     }
 
+    [Fact]
+    public async Task UserConfigController_GetLlmOptions_UsesNyxIdLlmServicesEndpoint()
+    {
+        var httpHandler = new RecordingHttpHandler("""
+        {
+          "services": [
+            {
+              "user_service_id": "svc-openai",
+              "service_slug": "openai-work",
+              "display_name": "OpenAI Work",
+              "route_value": "/api/v1/proxy/s/openai-work",
+              "default_model": "gpt-5.4",
+              "models": ["gpt-5.4"],
+              "status": "ready",
+              "source": "user",
+              "allowed": true
+            }
+          ],
+          "setup_hint": {
+            "setup_url": "https://nyxid.example/services",
+            "presets": []
+          }
+        }
+        """);
+        var queryPort = new StubUserConfigQueryPort
+        {
+            ConfigToReturn = new UserConfig("gpt-5.4", "/api/v1/proxy/s/openai-work"),
+        };
+        var controller = CreateController(
+            queryPort,
+            new RecordingUserConfigCommandService(),
+            new StubHttpClientFactory(httpHandler),
+            BuildNyxIdConfiguration(),
+            bearerToken: "user-token-1");
+
+        var response = await controller.GetLlmOptions(CancellationToken.None);
+
+        var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var payload = ok.Value.Should().BeOfType<UserLlmOptionsView>().Subject;
+        payload.Available.Should().ContainSingle().Which.ServiceId.Should().Be("svc-openai");
+        payload.Current.Should().NotBeNull();
+        payload.Current!.DisplayName.Should().Be("OpenAI Work");
+        httpHandler.Requests.Should().ContainSingle();
+        httpHandler.Requests[0].Path.Should().Be("/api/v1/llm/services");
+        httpHandler.Requests[0].Authorization.Should().Be("Bearer user-token-1");
+    }
+
+    [Fact]
+    public async Task UserConfigController_SaveLlmPreference_WithServiceId_WritesConfirmedRoute()
+    {
+        var httpHandler = new RecordingHttpHandler("""
+        {
+          "services": [
+            {
+              "user_service_id": "svc-openai",
+              "service_slug": "openai-work",
+              "display_name": "OpenAI Work",
+              "route_value": "/api/v1/proxy/s/openai-work",
+              "default_model": "gpt-5.4",
+              "models": ["gpt-5.4"],
+              "status": "ready",
+              "source": "user",
+              "allowed": true
+            }
+          ]
+        }
+        """);
+        var queryPort = new StubUserConfigQueryPort
+        {
+            ConfigToReturn = new UserConfig("old-model", "/api/v1/proxy/s/old"),
+        };
+        var commandService = new RecordingUserConfigCommandService();
+        var controller = CreateController(
+            queryPort,
+            commandService,
+            new StubHttpClientFactory(httpHandler),
+            BuildNyxIdConfiguration(),
+            bearerToken: "user-token-1");
+
+        var response = await controller.SaveLlmPreference(
+            new UserConfigController.SaveUserLlmPreferenceRequest(ServiceId: "svc-openai"),
+            CancellationToken.None);
+
+        response.Result.Should().BeOfType<OkObjectResult>();
+        commandService.SavedConfig.Should().NotBeNull();
+        commandService.SavedConfig!.PreferredLlmRoute.Should().Be("/api/v1/proxy/s/openai-work");
+        commandService.SavedConfig.DefaultModel.Should().Be("gpt-5.4");
+        httpHandler.Requests.Should().ContainSingle(request => request.Path == "/api/v1/llm/services");
+    }
+
     private static UserConfigController CreateController(
         IUserConfigQueryPort queryPort,
-        IUserConfigCommandService commandService)
+        IUserConfigCommandService commandService,
+        IHttpClientFactory? httpClientFactory = null,
+        IConfiguration? configuration = null,
+        string? bearerToken = null)
     {
         var controller = new UserConfigController(
             queryPort,
             commandService,
-            new StubHttpClientFactory(),
-            new ConfigurationBuilder().Build(),
+            httpClientFactory ?? new StubHttpClientFactory(),
+            configuration ?? new ConfigurationBuilder().Build(),
             NullLogger<UserConfigController>.Instance)
         {
             ControllerContext = new ControllerContext
@@ -525,8 +618,18 @@ public sealed class UserConfigProjectionAndControllerTests
             },
         };
 
+        if (!string.IsNullOrWhiteSpace(bearerToken))
+            controller.ControllerContext.HttpContext.Request.Headers.Authorization = $"Bearer {bearerToken}";
+
         return controller;
     }
+
+    private static IConfiguration BuildNyxIdConfiguration() => new ConfigurationBuilder()
+        .AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Aevatar:NyxId:Authority"] = "https://nyxid.example",
+        })
+        .Build();
 
     private static EventEnvelope BuildCommittedEnvelope(
         IMessage payload,
@@ -728,9 +831,9 @@ public sealed class UserConfigProjectionAndControllerTests
         }
     }
 
-    private sealed class StubHttpClientFactory : IHttpClientFactory
+    private sealed class StubHttpClientFactory(HttpMessageHandler? handler = null) : IHttpClientFactory
     {
-        public HttpClient CreateClient(string name) => new(new StaticHandler());
+        public HttpClient CreateClient(string name) => new(handler ?? new StaticHandler());
     }
 
     private sealed class StaticHandler : HttpMessageHandler
@@ -739,5 +842,25 @@ public sealed class UserConfigProjectionAndControllerTests
             HttpRequestMessage request,
             CancellationToken cancellationToken) =>
             Task.FromResult(new HttpResponseMessage());
+    }
+
+    private sealed class RecordingHttpHandler(string body) : HttpMessageHandler
+    {
+        public List<(string Path, string Method, string? Authorization, string Body)> Requests { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Requests.Add((
+                request.RequestUri?.PathAndQuery ?? string.Empty,
+                request.Method.Method,
+                request.Headers.Authorization?.ToString(),
+                request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken)));
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json"),
+            };
+        }
     }
 }

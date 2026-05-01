@@ -13,6 +13,7 @@ using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Platform.Lark;
+using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -96,6 +97,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var (bindingGateResult, senderBindingId) = await TryEnforceBindingGateAsync(activity, inbound, registration, runtimeContext, ct).ConfigureAwait(false);
         if (bindingGateResult is not null)
             return bindingGateResult;
+
+        if (await TryHandleLlmSelectionCardActionAsync(activity, inbound, registration, runtimeContext, senderBindingId, ct).ConfigureAwait(false) is { } llmSelectionResult)
+            return llmSelectionResult;
 
         var inboundEvent = ToInboundEvent(activity, registration, inbound, ResolveUserAccessToken(activity));
 
@@ -487,6 +491,191 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return registration.ScopeId.Trim();
 
         return null;
+    }
+
+    private async Task<ConversationTurnResult?> TryHandleLlmSelectionCardActionAsync(
+        ChatActivity activity,
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        ConversationTurnRuntimeContext runtimeContext,
+        string? senderBindingId,
+        CancellationToken ct)
+    {
+        if (activity.Type != ActivityType.CardAction)
+            return null;
+        if (!TryResolveLlmSelectionAction(activity.Content?.CardAction, inbound, out var action, out var value))
+            return null;
+
+        MessageContent reply;
+        if (string.IsNullOrWhiteSpace(senderBindingId))
+        {
+            if (_services.GetService<IExternalIdentityBindingQueryPort>() is null)
+            {
+                reply = new MessageContent { Text = "当前部署未启用模型偏好,此操作暂不可用。" };
+            }
+            else
+            {
+                return await SendBindingPromptAsync(activity, inbound, registration, runtimeContext, ct).ConfigureAwait(false);
+            }
+        }
+        else if (!TryResolveExternalSubject(inbound, registration, out var subject))
+        {
+            reply = new MessageContent { Text = "无法识别当前用户身份,请稍后重试 /models。" };
+        }
+        else
+        {
+            var selectionService = _services.GetService<IUserLlmSelectionService>();
+            var optionsService = _services.GetService<IUserLlmOptionsService>();
+            var renderer = _services.GetService<IUserLlmOptionsRenderer<MessageContent>>();
+            if (selectionService is null || optionsService is null || renderer is null)
+            {
+                reply = new MessageContent { Text = "当前部署未启用模型偏好,此操作暂不可用。" };
+            }
+            else
+            {
+                var bindingId = new BindingId { Value = senderBindingId.Trim() };
+                var selectionContext = new UserLlmSelectionContext(
+                    bindingId.Clone(),
+                    subject.Clone(),
+                    registration.ScopeId ?? string.Empty);
+                var query = new UserLlmOptionsQuery(
+                    bindingId.Clone(),
+                    subject.Clone(),
+                    registration.ScopeId ?? string.Empty);
+
+                reply = await ExecuteLlmSelectionCardActionAsync(
+                        action,
+                        value,
+                        selectionContext,
+                        query,
+                        selectionService,
+                        optionsService,
+                        renderer,
+                        ct)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        return await SendReplyAsync(
+            reply,
+            string.IsNullOrWhiteSpace(activity.Id) ? Guid.NewGuid().ToString("N") : activity.Id,
+            activity.Conversation,
+            inbound,
+            registration,
+            runtimeContext,
+            ct).ConfigureAwait(false);
+    }
+
+    private async Task<MessageContent> ExecuteLlmSelectionCardActionAsync(
+        string action,
+        string value,
+        UserLlmSelectionContext selectionContext,
+        UserLlmOptionsQuery query,
+        IUserLlmSelectionService selectionService,
+        IUserLlmOptionsService optionsService,
+        IUserLlmOptionsRenderer<MessageContent> renderer,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (string.Equals(action, TextUserLlmOptionsRenderer.SelectServiceAction, StringComparison.Ordinal))
+            {
+                if (string.IsNullOrWhiteSpace(value))
+                    return new MessageContent { Text = "缺少要切换的 LLM service,请重新发送 /models。" };
+
+                await selectionService.SetByServiceAsync(selectionContext, value.Trim(), modelOverride: null, ct)
+                    .ConfigureAwait(false);
+                var updated = await optionsService.GetOptionsAsync(query, ct).ConfigureAwait(false);
+                var picked = updated.Available.FirstOrDefault(option =>
+                    string.Equals(option.ServiceId, value.Trim(), StringComparison.OrdinalIgnoreCase)) ?? updated.Current;
+                return picked is null
+                    ? new MessageContent { Text = "已切换 LLM service。下一条消息会用新的设置回复。" }
+                    : renderer.RenderSelectionConfirm(picked, picked.DefaultModel);
+            }
+
+            if (string.Equals(action, TextUserLlmOptionsRenderer.ApplyPresetAction, StringComparison.Ordinal))
+            {
+                if (string.IsNullOrWhiteSpace(value))
+                    return new MessageContent { Text = "缺少要应用的 LLM preset,请重新发送 /models。" };
+
+                await selectionService.ApplyPresetAsync(selectionContext, value.Trim(), ct).ConfigureAwait(false);
+                var updated = await optionsService.GetOptionsAsync(query, ct).ConfigureAwait(false);
+                return updated.Current is null
+                    ? new MessageContent { Text = $"已应用 preset **{value.Trim()}**。下一条消息会用新的 LLM 设置回复。" }
+                    : renderer.RenderSelectionConfirm(updated.Current, updated.Current.DefaultModel);
+            }
+
+            return new MessageContent { Text = "未识别的模型设置操作,请重新发送 /models。" };
+        }
+        catch (AevatarOAuthClientNotProvisionedException)
+        {
+            return new MessageContent { Text = "NyxID 客户端正在初始化,请稍后重试 /models。" };
+        }
+        catch (BindingNotFoundException)
+        {
+            return new MessageContent { Text = "当前 NyxID 绑定不可用,请先发送 /init 重新绑定。" };
+        }
+        catch (BindingRevokedException)
+        {
+            return new MessageContent { Text = "当前 NyxID 绑定已失效,请先发送 /init 重新绑定。" };
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            return new MessageContent { Text = ex.Message };
+        }
+    }
+
+    private static bool TryResolveLlmSelectionAction(
+        CardActionSubmission? cardAction,
+        InboundMessage inbound,
+        out string action,
+        out string value)
+    {
+        action = string.Empty;
+        value = string.Empty;
+        if (cardAction is null)
+            return false;
+
+        if (!inbound.Extra.TryGetValue(TextUserLlmOptionsRenderer.LlmActionArgument, out var actionValue) ||
+            string.IsNullOrWhiteSpace(actionValue))
+        {
+            action = cardAction.ActionId switch
+            {
+                TextUserLlmOptionsRenderer.SelectServiceActionId => TextUserLlmOptionsRenderer.SelectServiceAction,
+                TextUserLlmOptionsRenderer.ApplyPresetActionId => TextUserLlmOptionsRenderer.ApplyPresetAction,
+                _ => string.Empty,
+            };
+        }
+        else
+        {
+            action = actionValue;
+        }
+
+        action = action.Trim();
+        value = action switch
+        {
+            TextUserLlmOptionsRenderer.SelectServiceAction =>
+                ResolveCardActionValue(inbound, cardAction, TextUserLlmOptionsRenderer.ServiceIdArgument),
+            TextUserLlmOptionsRenderer.ApplyPresetAction =>
+                ResolveCardActionValue(inbound, cardAction, TextUserLlmOptionsRenderer.PresetIdArgument),
+            _ => string.Empty,
+        };
+
+        return !string.IsNullOrWhiteSpace(action);
+    }
+
+    private static string ResolveCardActionValue(
+        InboundMessage inbound,
+        CardActionSubmission cardAction,
+        string argumentName)
+    {
+        if (inbound.Extra.TryGetValue(argumentName, out var argumentValue) &&
+            !string.IsNullOrWhiteSpace(argumentValue))
+        {
+            return argumentValue.Trim();
+        }
+
+        return cardAction.SubmittedValue?.Trim() ?? string.Empty;
     }
 
     public async Task<ConversationTurnResult> RunLlmReplyAsync(

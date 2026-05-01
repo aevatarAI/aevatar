@@ -240,11 +240,24 @@ public sealed class ModelSlashCommandHandlerTests
                     new UseExistingService(ChronoLlm.UserServiceId, ChronoLlm.RouteValue, ChronoLlm.DefaultModel)),
             ]);
 
-        public Task<IReadOnlyList<NyxIdLlmService>> ListAsync(UserLlmOptionsQuery query, CancellationToken ct) =>
-            Task.FromResult(Services);
+        public Task<NyxIdLlmServicesResult> GetServicesAsync(
+            UserLlmOptionsQuery query,
+            string accessToken,
+            CancellationToken ct) =>
+            Task.FromResult(new NyxIdLlmServicesResult(Services, SetupHint));
 
-        public Task<UserLlmSetupHint> GetSetupHintAsync(UserLlmOptionsQuery query, CancellationToken ct) =>
+        public Task<UserLlmSetupHint> GetSetupHintAsync(
+            UserLlmOptionsQuery query,
+            string accessToken,
+            CancellationToken ct) =>
             Task.FromResult(SetupHint);
+
+        public Task<NyxIdLlmService> ProvisionAsync(
+            UserLlmSelectionContext context,
+            string accessToken,
+            string provisionEndpointId,
+            CancellationToken ct) =>
+            Task.FromResult(ChronoLlm);
     }
 
     private sealed class StubUserConfigQueryPort : IUserConfigQueryPort

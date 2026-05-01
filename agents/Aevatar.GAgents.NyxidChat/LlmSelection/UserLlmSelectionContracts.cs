@@ -62,6 +62,10 @@ public sealed record NyxIdLlmService(
     bool Allowed,
     string? Description);
 
+public sealed record NyxIdLlmServicesResult(
+    IReadOnlyList<NyxIdLlmService> Services,
+    UserLlmSetupHint? SetupHint);
+
 public interface IUserLlmOptionsService
 {
     Task<UserLlmOptionsView> GetOptionsAsync(UserLlmOptionsQuery query, CancellationToken ct);
@@ -90,12 +94,20 @@ public interface IUserLlmSelectionService
 
 public interface INyxIdLlmServiceCatalogClient
 {
-    Task<IReadOnlyList<NyxIdLlmService>> ListAsync(
+    Task<NyxIdLlmServicesResult> GetServicesAsync(
         UserLlmOptionsQuery query,
+        string accessToken,
         CancellationToken ct);
 
     Task<UserLlmSetupHint> GetSetupHintAsync(
         UserLlmOptionsQuery query,
+        string accessToken,
+        CancellationToken ct);
+
+    Task<NyxIdLlmService> ProvisionAsync(
+        UserLlmSelectionContext context,
+        string accessToken,
+        string provisionEndpointId,
         CancellationToken ct);
 }
 

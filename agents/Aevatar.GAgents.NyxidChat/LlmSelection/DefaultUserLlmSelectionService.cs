@@ -1,3 +1,4 @@
+using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using StudioUserConfig = Aevatar.Studio.Application.Studio.Abstractions.UserConfig;
@@ -6,8 +7,12 @@ namespace Aevatar.GAgents.NyxidChat.LlmSelection;
 
 public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
 {
+    private const string StatusScope = "llm:status";
+    private const string ProxyScope = "llm:proxy";
+
     private readonly IUserLlmOptionsService _optionsService;
     private readonly INyxIdLlmServiceCatalogClient _catalogClient;
+    private readonly INyxIdCapabilityBroker? _broker;
     private readonly IUserConfigQueryPort? _queryPort;
     private readonly IUserConfigCommandService? _commandService;
 
@@ -15,12 +20,14 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
         IUserLlmOptionsService optionsService,
         INyxIdLlmServiceCatalogClient catalogClient,
         IUserConfigQueryPort? queryPort = null,
-        IUserConfigCommandService? commandService = null)
+        IUserConfigCommandService? commandService = null,
+        INyxIdCapabilityBroker? broker = null)
     {
         _optionsService = optionsService ?? throw new ArgumentNullException(nameof(optionsService));
         _catalogClient = catalogClient ?? throw new ArgumentNullException(nameof(catalogClient));
         _queryPort = queryPort;
         _commandService = commandService;
+        _broker = broker;
     }
 
     public async Task SetByServiceAsync(
@@ -36,10 +43,7 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
             string.Equals(candidate.ServiceId, serviceId.Trim(), StringComparison.OrdinalIgnoreCase));
         if (option is null)
             throw new InvalidOperationException($"LLM service '{serviceId}' is not available for this user.");
-        if (!option.Allowed)
-            throw new InvalidOperationException($"LLM service '{option.DisplayName}' is not allowed for this user.");
-        if (!string.Equals(option.Status, "ready", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException($"LLM service '{option.DisplayName}' is not ready: {option.Status}.");
+        EnsureSelectable(option);
 
         await SaveAsync(
             context,
@@ -64,7 +68,9 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(presetId);
 
-        var hint = await _catalogClient.GetSetupHintAsync(ToQuery(context), ct).ConfigureAwait(false);
+        var query = ToQuery(context);
+        var statusToken = await IssueAccessTokenAsync(context.Subject, StatusScope, ct).ConfigureAwait(false);
+        var hint = await _catalogClient.GetSetupHintAsync(query, statusToken, ct).ConfigureAwait(false);
         var preset = hint.Presets.FirstOrDefault(candidate =>
             string.Equals(candidate.Id, presetId.Trim(), StringComparison.OrdinalIgnoreCase));
         if (preset is null)
@@ -80,11 +86,40 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
                     ct).ConfigureAwait(false);
                 break;
             case ProvisionThenUse provisioning:
-                throw new NotSupportedException(
-                    $"LLM preset '{preset.Id}' requires NyxID provisioning endpoint '{provisioning.ProvisionEndpointId}', which is not wired in this phase.");
+                var proxyToken = await IssueAccessTokenAsync(context.Subject, ProxyScope, ct).ConfigureAwait(false);
+                var provisioned = await _catalogClient
+                    .ProvisionAsync(context, proxyToken, provisioning.ProvisionEndpointId, ct)
+                    .ConfigureAwait(false);
+                var provisionedOption = ToOption(provisioned);
+                EnsureSelectable(provisionedOption);
+                await SaveAsync(
+                    context,
+                    provisionedOption.RouteValue,
+                    provisionedOption.DefaultModel ?? string.Empty,
+                    ct).ConfigureAwait(false);
+                break;
             default:
                 throw new InvalidOperationException($"Unsupported LLM preset activation for '{preset.Id}'.");
         }
+    }
+
+    private async Task<string> IssueAccessTokenAsync(ExternalSubjectRef subject, string scope, CancellationToken ct)
+    {
+        if (_broker is null)
+            return string.Empty;
+
+        var handle = await _broker
+            .IssueShortLivedAsync(subject, new CapabilityScope { Value = scope }, ct)
+            .ConfigureAwait(false);
+        return handle.AccessToken;
+    }
+
+    private static void EnsureSelectable(UserLlmOption option)
+    {
+        if (!option.Allowed)
+            throw new InvalidOperationException($"LLM service '{option.DisplayName}' is not allowed for this user.");
+        if (!string.Equals(option.Status, "ready", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"LLM service '{option.DisplayName}' is not ready: {option.Status}.");
     }
 
     public async Task ResetAsync(UserLlmSelectionContext context, CancellationToken ct)
@@ -165,5 +200,29 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
     {
         var normalized = value?.Trim();
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
+
+    private static UserLlmOption ToOption(NyxIdLlmService service) => new(
+        ServiceId: NormalizeRequired(service.UserServiceId, nameof(service.UserServiceId)),
+        ServiceSlug: NormalizeRequired(service.ServiceSlug, nameof(service.ServiceSlug)),
+        DisplayName: NormalizeRequired(service.DisplayName, nameof(service.DisplayName)),
+        RouteValue: NormalizeRequired(service.RouteValue, nameof(service.RouteValue)),
+        DefaultModel: NormalizeOptional(service.DefaultModel),
+        AvailableModels: service.Models
+            .Where(model => !string.IsNullOrWhiteSpace(model))
+            .Select(model => model.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray(),
+        Status: NormalizeRequired(service.Status, nameof(service.Status)),
+        Source: NormalizeRequired(service.Source, nameof(service.Source)),
+        Allowed: service.Allowed,
+        Description: NormalizeOptional(service.Description));
+
+    private static string NormalizeRequired(string value, string name)
+    {
+        var normalized = value.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+            throw new InvalidOperationException($"{name} must not be empty.");
+        return normalized;
     }
 }

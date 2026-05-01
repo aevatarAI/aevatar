@@ -331,8 +331,22 @@ public sealed class NyxIdApiClient
 
     // ─── LLM ───
 
-    public Task<string> GetLlmStatusAsync(string token, CancellationToken ct) =>
-        GetAsync(token, "/api/v1/llm/status", ct);
+    public Task<string> GetLlmServicesAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/llm/services", ct);
+
+    public Task<string> ProvisionLlmServiceAsync(string token, string provisionEndpointId, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(provisionEndpointId);
+        var normalized = provisionEndpointId.Trim().Trim('/');
+        if (string.IsNullOrWhiteSpace(normalized) ||
+            normalized.Contains("..", StringComparison.Ordinal) ||
+            normalized.Contains("://", StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Provision endpoint id must be a relative NyxID LLM service endpoint id.", nameof(provisionEndpointId));
+        }
+
+        return PostAsync(token, $"/api/v1/llm/services/{Uri.EscapeDataString(normalized)}", "{}", ct);
+    }
 
     // ─── Providers ───
 

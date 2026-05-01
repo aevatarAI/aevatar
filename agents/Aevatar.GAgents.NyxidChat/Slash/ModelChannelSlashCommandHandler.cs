@@ -55,15 +55,30 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
         }
 
         var (sub, arg) = ParseSubcommand(context.ArgumentText);
-        return sub switch
+        try
         {
-            "" or "list" => _renderer.RenderOptions(
-                await _optionsService.GetOptionsAsync(BuildQuery(context, bindingId), ct).ConfigureAwait(false)),
-            "use" => await HandleUseAsync(context, bindingId, arg, ct).ConfigureAwait(false),
-            "preset" => await HandlePresetAsync(context, bindingId, arg, ct).ConfigureAwait(false),
-            "reset" => await HandleResetAsync(context, bindingId, ct).ConfigureAwait(false),
-            _ => UsageHint(),
-        };
+            return sub switch
+            {
+                "" or "list" => _renderer.RenderOptions(
+                    await _optionsService.GetOptionsAsync(BuildQuery(context, bindingId), ct).ConfigureAwait(false)),
+                "use" => await HandleUseAsync(context, bindingId, arg, ct).ConfigureAwait(false),
+                "preset" => await HandlePresetAsync(context, bindingId, arg, ct).ConfigureAwait(false),
+                "reset" => await HandleResetAsync(context, bindingId, ct).ConfigureAwait(false),
+                _ => UsageHint(),
+            };
+        }
+        catch (AevatarOAuthClientNotProvisionedException)
+        {
+            return new MessageContent { Text = "NyxID 客户端正在初始化,请稍后重试 /models。" };
+        }
+        catch (BindingNotFoundException)
+        {
+            return new MessageContent { Text = "当前 NyxID 绑定不可用,请先发送 /init 重新绑定。" };
+        }
+        catch (BindingRevokedException)
+        {
+            return new MessageContent { Text = "当前 NyxID 绑定已失效,请先发送 /init 重新绑定。" };
+        }
     }
 
     private async Task<MessageContent> HandleUseAsync(

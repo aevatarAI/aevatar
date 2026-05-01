@@ -23,15 +23,16 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
 
     protected override void AssertActionsPayload(object payload, MessageContent intent, ComposeContext context, ComposeCapability capability)
     {
-        // NyxID's Telegram relay does not subscribe to callback_query updates today, so the
-        // composer degrades action buttons into a plain-text bullet list of labels rather
-        // than emitting an inline_keyboard click-back surface that would never round-trip.
         var native = payload.ShouldBeOfType<TelegramOutboundMessage>();
         native.MessageType.ShouldBe("text");
-        native.IsInteractive.ShouldBeFalse();
+        native.IsInteractive.ShouldBeTrue();
         native.PlainText.ShouldContain("Confirm");
         native.PlainText.ShouldContain("Cancel");
-        native.ContentJson.ShouldNotContain("inline_keyboard");
+        using var document = JsonDocument.Parse(native.ContentJson);
+        var keyboard = document.RootElement.GetProperty("reply_markup").GetProperty("inline_keyboard");
+        keyboard[0][0].GetProperty("text").GetString().ShouldBe("Confirm");
+        keyboard[1][0].GetProperty("text").GetString().ShouldBe("Cancel");
+        keyboard[0][0].GetProperty("callback_data").GetString()!.ShouldContain("confirm");
     }
 
     protected override void AssertCardPayload(object payload, MessageContent intent, ComposeContext context, ComposeCapability capability)
@@ -62,7 +63,7 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
     }
 
     [Fact]
-    public void Compose_with_button_intent_degrades_buttons_to_plain_text_bullets()
+    public void Compose_with_button_intent_emits_inline_keyboard()
     {
         var intent = new MessageContent
         {
@@ -85,15 +86,15 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
         var payload = CreateComposer().Compose(intent, BuildContext());
 
         payload.MessageType.ShouldBe("text");
-        payload.IsInteractive.ShouldBeFalse();
-        payload.ContentJson.ShouldNotContain("inline_keyboard");
-        payload.ContentJson.ShouldNotContain("callback_data");
+        payload.IsInteractive.ShouldBeTrue();
+        payload.ContentJson.ShouldContain("inline_keyboard");
+        payload.ContentJson.ShouldContain("callback_data");
         payload.PlainText.ShouldContain("• Confirm");
         payload.PlainText.ShouldContain("• Cancel");
     }
 
     [Fact]
-    public void Evaluate_with_actions_returns_degraded_because_buttons_are_unavailable()
+    public void Evaluate_with_actions_returns_exact_when_buttons_are_available()
     {
         var intent = new MessageContent
         {
@@ -107,7 +108,7 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
         });
 
         var capability = CreateComposer().Evaluate(intent, BuildContext());
-        capability.ShouldBe(ComposeCapability.Degraded);
+        capability.ShouldBe(ComposeCapability.Exact);
     }
 
     [Fact]
@@ -141,9 +142,9 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
     }
 
     [Fact]
-    public void DefaultCapabilities_does_not_advertise_action_button_support()
+    public void DefaultCapabilities_advertises_action_button_support()
     {
-        TelegramMessageComposer.DefaultCapabilities.SupportsActionButtons.ShouldBeFalse();
+        TelegramMessageComposer.DefaultCapabilities.SupportsActionButtons.ShouldBeTrue();
     }
 
     private static ComposeContext BuildContext() => new()

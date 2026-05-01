@@ -21,15 +21,41 @@ public sealed class StubNyxIdLlmServiceCatalogClient : INyxIdLlmServiceCatalogCl
                     DefaultModel: SharedDefaultModel)),
         ]);
 
-    public Task<IReadOnlyList<NyxIdLlmService>> ListAsync(UserLlmOptionsQuery query, CancellationToken ct)
+    public Task<NyxIdLlmServicesResult> GetServicesAsync(
+        UserLlmOptionsQuery query,
+        string accessToken,
+        CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(query);
-        return Task.FromResult<IReadOnlyList<NyxIdLlmService>>([]);
+        return Task.FromResult(new NyxIdLlmServicesResult([], SetupHint));
     }
 
-    public Task<UserLlmSetupHint> GetSetupHintAsync(UserLlmOptionsQuery query, CancellationToken ct)
+    public Task<UserLlmSetupHint> GetSetupHintAsync(
+        UserLlmOptionsQuery query,
+        string accessToken,
+        CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(query);
         return Task.FromResult(SetupHint);
+    }
+
+    public Task<NyxIdLlmService> ProvisionAsync(
+        UserLlmSelectionContext context,
+        string accessToken,
+        string provisionEndpointId,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        return Task.FromResult(new NyxIdLlmService(
+            UserServiceId: SharedServiceId,
+            ServiceSlug: SharedServiceSlug,
+            DisplayName: "chrono-llm shared",
+            RouteValue: SharedRouteValue,
+            DefaultModel: SharedDefaultModel,
+            Models: [SharedDefaultModel],
+            Status: "ready",
+            Source: "shared",
+            Allowed: true,
+            Description: "Shared cluster LLM service."));
     }
 }

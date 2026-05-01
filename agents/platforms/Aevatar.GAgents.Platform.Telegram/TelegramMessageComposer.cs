@@ -19,12 +19,7 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
         Streaming = StreamingSupport.EditLoopRateLimited,
         SupportsFiles = false,
         MaxMessageLength = TelegramTextLimit,
-        // NyxID's Telegram channel adapter (backend/src/services/channel_adapters/telegram.rs)
-        // does not subscribe to `callback_query` updates and parse_inbound returns empty for
-        // them, so an inline_keyboard's callback_data round-trip never reaches Aevatar. Until
-        // the relay-side adapter grows that contract end-to-end, we cannot truthfully claim
-        // action-button support — actions degrade into a plain-text bullet list of labels.
-        SupportsActionButtons = false,
+        SupportsActionButtons = true,
         SupportsConfirmDialog = false,
         SupportsModal = false,
         SupportsMention = false,
@@ -44,6 +39,33 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
         var capabilities = context.Capabilities ?? DefaultCapabilities;
         var maxLength = ResolveTextLimit(capabilities.MaxMessageLength, TelegramTextLimit);
         var effectiveText = BuildRenderedText(intent, maxLength);
+        var buttonActions = GetButtonActions(intent);
+        if (buttonActions.Length > 0 && capabilities.SupportsActionButtons)
+        {
+            var inlineKeyboard = buttonActions
+                .Select(action => new[]
+                {
+                    new
+                    {
+                        text = action.Label.Trim(),
+                        callback_data = BuildCallbackData(action),
+                    },
+                })
+                .ToArray();
+            var contentJson = JsonSerializer.Serialize(new
+            {
+                text = effectiveText,
+                reply_markup = new
+                {
+                    inline_keyboard = inlineKeyboard,
+                },
+            });
+            return new TelegramOutboundMessage(
+                MessageType: "text",
+                ContentJson: contentJson,
+                PlainText: effectiveText,
+                IsInteractive: true);
+        }
 
         return new TelegramOutboundMessage(
             MessageType: "text",
@@ -66,9 +88,7 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
             degraded = true;
         if (intent.Attachments.Count > 0 && !capabilities.SupportsFiles)
             return ComposeCapability.Unsupported;
-        // Actions can only be expressed as text labels for Telegram today (see DefaultCapabilities
-        // comment) — flag as degraded so callers know the click-back path is unavailable.
-        if (intent.Actions.Count > 0)
+        if (intent.Actions.Count > 0 && !capabilities.SupportsActionButtons)
             degraded = true;
 
         var maxLength = ResolveTextLimit(capabilities.MaxMessageLength, TelegramTextLimit);
@@ -118,6 +138,29 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
             return escaped;
 
         return textInfo.SubstringByTextElements(0, maxLength);
+    }
+
+    private static ActionElement[] GetButtonActions(MessageContent intent) =>
+        intent.Actions
+            .Where(static action => action.Kind == ActionElementKind.Button && !string.IsNullOrWhiteSpace(action.Label))
+            .ToArray();
+
+    private static string BuildCallbackData(ActionElement action)
+    {
+        var payload = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["action_id"] = action.ActionId,
+            ["submitted_value"] = action.Value,
+        };
+        if (action.Arguments.Count > 0)
+        {
+            payload["value"] = action.Arguments.ToDictionary(
+                pair => pair.Key,
+                pair => pair.Value,
+                StringComparer.Ordinal);
+        }
+
+        return JsonSerializer.Serialize(payload);
     }
 
     private static void AppendParagraph(StringBuilder builder, string? value)

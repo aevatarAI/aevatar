@@ -242,44 +242,39 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
 
     private sealed class StreamingProxyHttpHandler : HttpMessageHandler
     {
-        private static readonly string StatusJson = """
+        private static readonly string ServicesJson = """
             {
-              "providers": [
+              "services": [
                 {
-                  "provider_slug": "openclaw",
-                  "provider_name": "OpenClaw-Node",
+                  "user_service_id": "svc-node-a",
+                  "service_slug": "openclaw",
+                  "display_name": "OpenClaw-Node",
                   "status": "ready",
-                  "proxy_url": "/api/v1/proxy/s/openclaw/node-a",
-                  "node_id": "node-a"
+                  "route_value": "/api/v1/proxy/s/openclaw/node-a",
+                  "node_id": "node-a",
+                  "allowed": true,
+                  "models": ["claude-sonnet-4-5-20250929"]
                 },
                 {
-                  "provider_slug": "openclaw",
-                  "provider_name": "OpenClaw-Node",
+                  "user_service_id": "svc-node-b",
+                  "service_slug": "openclaw",
+                  "display_name": "OpenClaw-Node",
                   "status": "ready",
-                  "proxy_url": "/api/v1/proxy/s/openclaw/node-b",
-                  "node_id": "node-b"
+                  "route_value": "/api/v1/proxy/s/openclaw/node-b",
+                  "node_id": "node-b",
+                  "allowed": true,
+                  "models": ["claude-sonnet-4-5-20250929"]
                 },
                 {
-                  "provider_slug": "openclaw",
-                  "provider_name": "OpenClaw-Node",
+                  "user_service_id": "svc-node-c",
+                  "service_slug": "openclaw",
+                  "display_name": "OpenClaw-Node",
                   "status": "ready",
-                  "proxy_url": "/api/v1/proxy/s/openclaw/node-c",
-                  "node_id": "node-c"
+                  "route_value": "/api/v1/proxy/s/openclaw/node-c",
+                  "node_id": "node-c",
+                  "allowed": true,
+                  "models": ["claude-sonnet-4-5-20250929"]
                 }
-              ]
-            }
-            """;
-
-        private static readonly string KeysJson = """
-            {
-              "keys": []
-            }
-            """;
-
-        private static readonly string ModelsJson = """
-            {
-              "data": [
-                { "id": "claude-sonnet-4-5-20250929" }
               ]
             }
             """;
@@ -287,14 +282,8 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var path = request.RequestUri?.AbsolutePath ?? string.Empty;
-            if (path.EndsWith("/api/v1/llm/status", StringComparison.Ordinal))
-                return Task.FromResult(JsonResponse(StatusJson));
-
-            if (path.EndsWith("/api/v1/keys", StringComparison.Ordinal))
-                return Task.FromResult(JsonResponse(KeysJson));
-
-            if (path.EndsWith("/models", StringComparison.Ordinal))
-                return Task.FromResult(JsonResponse(ModelsJson));
+            if (path.EndsWith("/api/v1/llm/services", StringComparison.Ordinal))
+                return Task.FromResult(JsonResponse(ServicesJson));
 
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
             {

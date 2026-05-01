@@ -1,3 +1,4 @@
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using StudioUserConfig = Aevatar.Studio.Application.Studio.Abstractions.UserConfig;
 
@@ -5,29 +6,46 @@ namespace Aevatar.GAgents.NyxidChat.LlmSelection;
 
 public sealed class DefaultUserLlmOptionsService : IUserLlmOptionsService
 {
+    private const string StatusScope = "llm:status";
+
     private readonly INyxIdLlmServiceCatalogClient _catalogClient;
+    private readonly INyxIdCapabilityBroker? _broker;
     private readonly IUserConfigQueryPort? _queryPort;
 
     public DefaultUserLlmOptionsService(
         INyxIdLlmServiceCatalogClient catalogClient,
-        IUserConfigQueryPort? queryPort = null)
+        IUserConfigQueryPort? queryPort = null,
+        INyxIdCapabilityBroker? broker = null)
     {
         _catalogClient = catalogClient ?? throw new ArgumentNullException(nameof(catalogClient));
         _queryPort = queryPort;
+        _broker = broker;
     }
 
     public async Task<UserLlmOptionsView> GetOptionsAsync(UserLlmOptionsQuery query, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(query);
 
-        var services = await _catalogClient.ListAsync(query, ct).ConfigureAwait(false);
-        var available = services.Select(ToOption).ToArray();
+        var accessToken = await IssueAccessTokenAsync(query, ct).ConfigureAwait(false);
+        var catalog = await _catalogClient.GetServicesAsync(query, accessToken, ct).ConfigureAwait(false);
+        var available = catalog.Services.Select(ToOption).ToArray();
         var current = await ResolveCurrentAsync(query, available, ct).ConfigureAwait(false);
         var setupHint = available.Length == 0
-            ? await _catalogClient.GetSetupHintAsync(query, ct).ConfigureAwait(false)
+            ? catalog.SetupHint ?? await _catalogClient.GetSetupHintAsync(query, accessToken, ct).ConfigureAwait(false)
             : null;
 
         return new UserLlmOptionsView(query.BindingId, current, available, setupHint);
+    }
+
+    private async Task<string> IssueAccessTokenAsync(UserLlmOptionsQuery query, CancellationToken ct)
+    {
+        if (_broker is null)
+            return string.Empty;
+
+        var handle = await _broker
+            .IssueShortLivedAsync(query.Subject, new CapabilityScope { Value = StatusScope }, ct)
+            .ConfigureAwait(false);
+        return handle.AccessToken;
     }
 
     private async Task<UserLlmOption?> ResolveCurrentAsync(
