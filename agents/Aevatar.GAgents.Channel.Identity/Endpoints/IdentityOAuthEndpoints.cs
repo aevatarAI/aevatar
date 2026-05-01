@@ -88,6 +88,26 @@ public static class IdentityOAuthEndpoints
         {
             exchange = await brokerCallback.ExchangeAuthorizationCodeAsync(code, verifier, ct).ConfigureAwait(false);
         }
+        catch (AevatarOAuthClientNotProvisionedException ex)
+        {
+            // The broker now refuses to exchange a code when the snapshot's
+            // redirect_uri doesn't match the resolver's output (drift state
+            // protection added in this PR). This is the same "still
+            // initializing / drift not yet healed" condition the state-token
+            // decoder surfaces above, so route it to the same retry-friendly
+            // 400 path instead of letting the generic catch return 502
+            // token_exchange_failed — that misclassifies a self-recoverable
+            // condition as a NyxID outage.
+            logger.LogWarning(
+                ex,
+                "OAuth callback rejected because the OAuth client snapshot is missing or drifted; bootstrap is still healing. correlation={CorrelationId}",
+                decode.CorrelationId);
+            return Results.BadRequest(new
+            {
+                error = "client_not_provisioned",
+                detail = "Aevatar 集群正在初始化 NyxID 客户端,请 30 秒后回到 Lark 重新发送 /init。",
+            });
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "OAuth callback authorization-code exchange failed for correlation {CorrelationId}", decode.CorrelationId);
@@ -226,12 +246,21 @@ public static class IdentityOAuthEndpoints
         try
         {
             var snapshot = await provider.GetAsync(ct).ConfigureAwait(false);
+            var resolvedRedirectUri = NyxIdRedirectUriResolver.Resolve();
+            var redirectUriDrifted = string.IsNullOrEmpty(snapshot.RedirectUri)
+                || !string.Equals(snapshot.RedirectUri, resolvedRedirectUri, StringComparison.Ordinal);
+            var status = redirectUriDrifted
+                ? "redirect_uri_drifted"
+                : snapshot.BrokerCapabilityObserved ? "ready" : "broker_capability_pending";
             return Results.Ok(new
             {
-                status = snapshot.BrokerCapabilityObserved ? "ready" : "broker_capability_pending",
+                status,
                 client_id = snapshot.ClientId,
                 client_id_issued_at = snapshot.ClientIdIssuedAt,
                 nyxid_authority = snapshot.NyxIdAuthority,
+                redirect_uri_registered = snapshot.RedirectUri,
+                redirect_uri_resolved = resolvedRedirectUri,
+                redirect_uri_drifted = redirectUriDrifted,
                 broker_capability_observed = snapshot.BrokerCapabilityObserved,
                 broker_capability_observed_at = snapshot.BrokerCapabilityObservedAt,
                 ops_handoff = snapshot.BrokerCapabilityObserved

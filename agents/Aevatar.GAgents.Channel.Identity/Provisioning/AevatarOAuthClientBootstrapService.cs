@@ -1,7 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -42,17 +41,21 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
     /// </summary>
     internal static readonly TimeSpan MaxRetryDelay = TimeSpan.FromMinutes(30);
 
+    internal static readonly TimeSpan ProvisioningObservationTimeout = TimeSpan.FromMinutes(2);
+
+    private static readonly TimeSpan ProvisioningObservationPollDelay = TimeSpan.FromSeconds(2);
+
     private readonly IAevatarOAuthClientProvider _clientProvider;
+    private readonly AevatarOAuthClientProjectionPort _projectionPort;
     private readonly IActorRuntime _actorRuntime;
     private readonly ILogger<AevatarOAuthClientBootstrapService> _logger;
-    private readonly IConfiguration _configuration;
     private readonly CancellationTokenSource _stoppingCts = new();
     private Task? _bootstrapTask;
 
     public AevatarOAuthClientBootstrapService(
         IAevatarOAuthClientProvider clientProvider,
+        AevatarOAuthClientProjectionPort projectionPort,
         IActorRuntime actorRuntime,
-        IConfiguration configuration,
         ILogger<AevatarOAuthClientBootstrapService> logger)
     {
         // Provider is registered as a singleton (so are its transitive deps);
@@ -62,8 +65,8 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
         // catches scoped → singleton at resolve time, not at AddHostedService
         // wiring time).
         _clientProvider = clientProvider ?? throw new ArgumentNullException(nameof(clientProvider));
+        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
-        _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -163,6 +166,31 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
     private async Task EnsureProvisionedAsync(CancellationToken ct)
     {
         var authority = NyxIdAuthorityResolver.Resolve(_logger);
+
+        // Activate the projection scope FIRST so the projector subscribes
+        // to the actor's committed events before we dispatch the
+        // provisioning command. Without this the AevatarOAuthClient
+        // readmodel never materializes and IAevatarOAuthClientProvider
+        // keeps throwing AevatarOAuthClientNotProvisionedException long
+        // after DCR succeeded (production regression observed
+        // 2026-04-30 in aismart-app-mainnet — the bootstrap log showed
+        // "Provisioned aevatar OAuth client via DCR" + "Seeded HMAC key"
+        // immediately after the silo started, but every /init still
+        // returned "正在初始化" because no consumer was watching the
+        // event stream).
+        await _projectionPort
+            .EnsureProjectionForActorAsync(AevatarOAuthClientGAgent.WellKnownId, ct)
+            .ConfigureAwait(false);
+
+        // Cold-boot DCR is mediated by the well-known actor (PR #521 review):
+        // every silo broadcasts EnsureAevatarOAuthClientProvisionedCommand,
+        // and the actor's single-threaded handler turns the broadcast into
+        // exactly one DCR HTTP call. Without this seam the bootstrap path
+        // races on the projection readmodel and creates orphan OAuth clients
+        // at NyxID. The redirect URI must match what the broker sends at
+        // authorize / token time — both call sites use NyxIdRedirectUriResolver.
+        var redirectUri = NyxIdRedirectUriResolver.Resolve(_logger);
+
         AevatarOAuthClientSnapshot? cached = null;
         try
         {
@@ -173,26 +201,28 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
             // expected on the first run
         }
 
+        var redirectDrifted = cached is not null && RedirectUriDrifted(cached.RedirectUri, redirectUri);
         if (cached is not null
             && string.Equals(cached.NyxIdAuthority, authority, StringComparison.Ordinal)
-            && !string.IsNullOrEmpty(cached.ClientId))
+            && !string.IsNullOrEmpty(cached.ClientId)
+            && !redirectDrifted)
         {
             _logger.LogInformation(
-                "Aevatar OAuth client already provisioned at NyxID: client_id={ClientId}, authority={Authority}, broker_capability_observed={BrokerObserved}",
+                "Aevatar OAuth client already provisioned at NyxID: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}, broker_capability_observed={BrokerObserved}",
                 cached.ClientId,
                 cached.NyxIdAuthority,
+                cached.RedirectUri ?? "<unrecorded>",
                 cached.BrokerCapabilityObserved);
             return;
         }
 
-        // Cold-boot DCR is mediated by the well-known actor (PR #521 review):
-        // every silo broadcasts EnsureAevatarOAuthClientProvisionedCommand,
-        // and the actor's single-threaded handler turns the broadcast into
-        // exactly one DCR HTTP call. Without this seam the bootstrap path
-        // races on the projection readmodel and creates orphan OAuth clients
-        // at NyxID. The redirect URI must match what the broker sends at
-        // authorize / token time — both call sites use NyxIdRedirectUriResolver.
-        var redirectUri = NyxIdRedirectUriResolver.Resolve(_configuration, _logger);
+        if (redirectDrifted)
+        {
+            _logger.LogWarning(
+                "Aevatar OAuth client redirect URI drifted (stored='{Stored}', resolved='{Resolved}'); dispatching EnsureProvisioned so the actor re-runs DCR.",
+                cached!.RedirectUri,
+                redirectUri);
+        }
         var actor = await _actorRuntime
             .CreateAsync<AevatarOAuthClientGAgent>(AevatarOAuthClientGAgent.WellKnownId, ct)
             .ConfigureAwait(false);
@@ -218,5 +248,63 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
             "Production deployments must enable broker_capability_enabled on this client at NyxID admin (one-time per cluster).",
             AevatarOAuthClientGAgent.WellKnownId,
             authority);
+
+        await WaitForProvisionedReadModelAsync(authority, redirectUri, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// True when the snapshot either predates redirect-uri tracking or no
+    /// longer matches the current resolver output. Legacy empty redirect_uri
+    /// is unknown, not trustworthy: the production incident this code heals
+    /// already has a persisted client_id at NyxID with no recorded callback
+    /// in our state, so treating empty as "match anything" would keep the
+    /// broken client forever.
+    /// </summary>
+    private static bool RedirectUriDrifted(string? stored, string resolved) =>
+        string.IsNullOrEmpty(stored)
+        || !string.Equals(stored, resolved, StringComparison.Ordinal);
+
+    private async Task WaitForProvisionedReadModelAsync(
+        string authority,
+        string redirectUri,
+        CancellationToken ct)
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(ProvisioningObservationTimeout);
+        AevatarOAuthClientSnapshot? lastSnapshot = null;
+
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            try
+            {
+                var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
+                lastSnapshot = snapshot;
+                if (string.Equals(snapshot.NyxIdAuthority, authority, StringComparison.Ordinal)
+                    && !string.IsNullOrEmpty(snapshot.ClientId)
+                    && !RedirectUriDrifted(snapshot.RedirectUri, redirectUri))
+                {
+                    _logger.LogInformation(
+                        "Aevatar OAuth client provisioning observed in readmodel: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}",
+                        snapshot.ClientId,
+                        snapshot.NyxIdAuthority,
+                        snapshot.RedirectUri);
+                    return;
+                }
+            }
+            catch (AevatarOAuthClientNotProvisionedException)
+            {
+                // Projection has not materialized the first state root yet.
+            }
+
+            await Task.Delay(ProvisioningObservationPollDelay, ct).ConfigureAwait(false);
+        }
+
+        throw new TimeoutException(
+            "Aevatar OAuth client provisioning did not become visible in the readmodel " +
+            $"within {ProvisioningObservationTimeout.TotalSeconds:n0}s " +
+            $"(authority='{authority}', expected_redirect_uri='{redirectUri}', " +
+            $"last_client_id='{lastSnapshot?.ClientId ?? "<none>"}', " +
+            $"last_redirect_uri='{lastSnapshot?.RedirectUri ?? "<none>"}').");
     }
 }

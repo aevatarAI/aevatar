@@ -1,5 +1,3 @@
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Channel.Identity;
@@ -7,22 +5,32 @@ namespace Aevatar.GAgents.Channel.Identity;
 /// <summary>
 /// Resolves the OAuth callback URL the broker registers at NyxID DCR and
 /// the URL it sends to NyxID at authorize / token-exchange time. Both call
-/// sites MUST resolve to the same URL — if DCR registers
-/// <c>http://127.0.0.1:5080/api/oauth/nyxid-callback</c> but the authorize
-/// flow uses the public hostname, NyxID rejects the token exchange with
-/// <c>invalid_redirect_uri</c>. (PR #521 Codex P1.)
-///
-/// Source priority — chosen so the same value is observable from any DI
-/// scope, including hosted services that don't have an HTTP request:
-///   1. <see cref="IConfiguration"/> key <see cref="WebHostDefaults.ServerUrlsKey"/>
-///      (when one is supplied) — what the host actually binds to.
-///   2. <c>ASPNETCORE_URLS</c> environment variable.
-///   3. <c>AEVATAR_SERVER_URLS</c> environment variable — the legacy alias
-///      production deploys still set.
-///   4. Loopback fallback (<c>http://127.0.0.1:5080</c>).
+/// sites MUST resolve to the same PUBLIC URL — DCR's redirect_uri is
+/// echoed back to the user's browser at /authorize, so it has to be a real
+/// hostname the browser can reach.
 /// </summary>
+/// <remarks>
+/// Mirrors <see cref="NyxIdAuthorityResolver"/>: hardcoded production
+/// default + env-var override for staging / dev. Production deploys are
+/// zero-config — they get the right callback URL automatically. The
+/// resolver deliberately does NOT read <c>ASPNETCORE_URLS</c> /
+/// <c>IConfiguration[ServerUrls]</c> because Kestrel listen addresses
+/// (typically <c>http://+:8080</c> in K8s) are not valid OAuth callback
+/// targets. The aismart-app-mainnet 2026-04-30 incident — where a wildcard
+/// listen address propagated into the registered redirect_uri and every
+/// /init's authorize URL was unreachable — was the original motivation
+/// for ripping that priority chain out.
+/// </remarks>
 public static class NyxIdRedirectUriResolver
 {
+    /// <summary>
+    /// Production aevatar console backend origin. Hardcoded so cluster
+    /// startup has zero config dependency: prod gets the right callback
+    /// URL automatically. Override via <see cref="OverrideEnvVar"/> for
+    /// staging / dev / test deploys.
+    /// </summary>
+    public const string DefaultPublicBaseUrl = "https://aevatar-console-backend-api.aevatar.ai";
+
     /// <summary>
     /// Path the OAuth callback endpoint is mapped under (see
     /// <c>IdentityOAuthEndpoints.MapIdentityOAuthEndpoints</c>).
@@ -30,77 +38,72 @@ public static class NyxIdRedirectUriResolver
     public const string CallbackPath = "/api/oauth/nyxid-callback";
 
     /// <summary>
-    /// Loopback default used when no host URL is configured (typical for
-    /// local dev / unit tests).
+    /// Optional env-var override for non-production clusters. Production
+    /// deploys do NOT set this; they rely on
+    /// <see cref="DefaultPublicBaseUrl"/>. Staging / dev clusters that
+    /// run on a different hostname set this to their own origin.
     /// </summary>
-    public const string LoopbackBaseUrl = "http://127.0.0.1:5080";
+    public const string OverrideEnvVar = "AEVATAR_OAUTH_REDIRECT_BASE_URL";
 
     /// <summary>
-    /// Resolve the absolute callback URL. <paramref name="configuration"/>
-    /// may be null when the caller doesn't have access to the host config
-    /// (e.g. broker constructor). The env-var fallbacks pick up the same
-    /// hostname production sets so DCR + authorize agree.
-    /// When all sources are unset and the environment is not developer-
-    /// shaped, emits a warning via <paramref name="logger"/> so a staging
-    /// or production cluster that forgets to set ASPNETCORE_URLS does not
-    /// silently register a non-functional loopback redirect URI at NyxID
-    /// DCR (parity with <see cref="NyxIdAuthorityResolver"/>; PR #521 review
-    /// glm-5.1).
+    /// Returns the absolute callback URL DCR + authorize must use. Reads
+    /// <see cref="OverrideEnvVar"/> if set; otherwise returns the
+    /// hardcoded production default. A wildcard / unspecified-host
+    /// override (e.g. <c>http://+:8080</c>) is rejected with a warning
+    /// so a misconfigured non-prod cluster does not silently register a
+    /// non-functional redirect URI.
     /// </summary>
-    public static string Resolve(IConfiguration? configuration = null, ILogger? logger = null)
+    public static string Resolve(ILogger? logger = null)
     {
-        var firstUrl = ResolveServerBaseUrl(configuration, logger);
-        return $"{firstUrl.TrimEnd('/')}{CallbackPath}";
+        var baseUrl = ResolveBaseUrl(logger);
+        return $"{baseUrl.TrimEnd('/')}{CallbackPath}";
     }
 
-    private static string ResolveServerBaseUrl(IConfiguration? configuration, ILogger? logger)
+    private static string ResolveBaseUrl(ILogger? logger)
     {
-        var configured = configuration?[WebHostDefaults.ServerUrlsKey];
-        if (TryFirstUrl(configured, out var fromConfig))
-            return fromConfig;
+        var raw = Environment.GetEnvironmentVariable(OverrideEnvVar);
+        if (string.IsNullOrWhiteSpace(raw))
+            return DefaultPublicBaseUrl;
 
-        if (TryFirstUrl(Environment.GetEnvironmentVariable("ASPNETCORE_URLS"), out var fromAspNet))
-            return fromAspNet;
-
-        if (TryFirstUrl(Environment.GetEnvironmentVariable("AEVATAR_SERVER_URLS"), out var fromAevatar))
-            return fromAevatar;
-
-        var environmentName = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")
-            ?? Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT")
-            ?? string.Empty;
-        var looksLikeDev = string.IsNullOrEmpty(environmentName)
-            || environmentName.StartsWith("dev", StringComparison.OrdinalIgnoreCase)
-            || environmentName.StartsWith("local", StringComparison.OrdinalIgnoreCase);
-        if (!looksLikeDev)
+        var trimmed = raw.Trim();
+        if (IsWildcardListenAddress(trimmed))
         {
             logger?.LogWarning(
-                "Redirect URI falling back to loopback '{Loopback}' because none of " +
-                "configuration[{ServerUrlsKey}] / ASPNETCORE_URLS / AEVATAR_SERVER_URLS " +
-                "is set; environment={Environment}. Staging / production clusters MUST set " +
-                "one of these or NyxID DCR will register a non-functional loopback redirect URI.",
-                LoopbackBaseUrl,
-                WebHostDefaults.ServerUrlsKey,
-                environmentName);
+                "Ignoring {EnvVar}='{Value}': it is a Kestrel listen address (wildcard / unspecified host) " +
+                "and not a valid OAuth callback target. Falling back to the production default '{Default}'. " +
+                "Set {EnvVar} to a publicly-reachable origin (e.g. https://staging.example.com) for non-prod clusters.",
+                OverrideEnvVar,
+                trimmed,
+                DefaultPublicBaseUrl,
+                OverrideEnvVar);
+            return DefaultPublicBaseUrl;
         }
-        return LoopbackBaseUrl;
+
+        return trimmed;
     }
 
-    private static bool TryFirstUrl(string? raw, out string url)
+    /// <summary>
+    /// Detects Kestrel listen-address shapes that cannot serve as an OAuth
+    /// redirect URI: <c>+</c>, <c>*</c>, <c>0.0.0.0</c>, IPv6 unspecified
+    /// <c>[::]</c>. Match is intentionally narrow — anything with a real
+    /// hostname (incl. loopback) is accepted.
+    /// </summary>
+    private static bool IsWildcardListenAddress(string url)
     {
-        if (string.IsNullOrWhiteSpace(raw))
+        // Uri.TryCreate accepts "http://+:8080" and parses host as "+";
+        // be defensive against parser tightening in future runtimes.
+        if (url.Contains("://+", StringComparison.Ordinal)
+            || url.Contains("://*", StringComparison.Ordinal))
         {
-            url = string.Empty;
-            return false;
+            return true;
         }
 
-        var first = raw.Split(';', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim();
-        if (string.IsNullOrWhiteSpace(first))
-        {
-            url = string.Empty;
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var parsed))
             return false;
-        }
 
-        url = first;
-        return true;
+        var host = parsed.Host;
+        return host is "+" or "*" or "0.0.0.0"
+            || string.Equals(host, "[::]", StringComparison.Ordinal)
+            || string.Equals(host, "::", StringComparison.Ordinal);
     }
 }

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
@@ -34,25 +35,23 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
     public const string InitialHmacKid = "v1";
 
     /// <inheritdoc />
-    protected override AevatarOAuthClientState TransitionState(AevatarOAuthClientState current, IMessage evt)
-    {
-        if (evt is not null
-            && evt is not AevatarOAuthClientProvisionedEvent
-            && evt is not AevatarOAuthClientHmacKeyRotatedEvent
-            && evt is not AevatarOAuthClientBrokerCapabilityObservedEvent)
-        {
-            Logger.LogWarning(
-                "AevatarOAuthClientGAgent received unrecognised event type {EventType}; state unchanged",
-                evt.GetType().FullName);
-        }
-
-        return StateTransitionMatcher
+    /// <remarks>
+    /// <see cref="StateTransitionMatcher"/> handles <c>Any</c>-wrapped payloads
+    /// transparently via <c>ProtobufContractCompatibility.TryUnpack</c>, so the
+    /// event-store's wrapped form ("type.googleapis.com/...") is matched the
+    /// same as a directly-typed instance. No "unrecognised event type"
+    /// pre-check fires here — the earlier guard incorrectly classified every
+    /// Any-wrapped event as unknown and produced noisy warnings on every
+    /// activation replay (one warning per persisted event).
+    /// </remarks>
+    protected override AevatarOAuthClientState TransitionState(AevatarOAuthClientState current, IMessage evt) =>
+        StateTransitionMatcher
             .Match(current, evt)
             .On<AevatarOAuthClientProvisionedEvent>(ApplyProvisioned)
             .On<AevatarOAuthClientHmacKeyRotatedEvent>(ApplyHmacKeyRotated)
             .On<AevatarOAuthClientBrokerCapabilityObservedEvent>(ApplyBrokerCapabilityObserved)
+            .On<AevatarOAuthClientProjectionRebuildRequestedEvent>(static (state, _) => state)
             .OrCurrent();
-    }
 
     // ─── Commands ───
 
@@ -79,18 +78,65 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             return;
         }
 
-        var alreadyProvisioned = !string.IsNullOrEmpty(State.ClientId)
+        var sameClient = !string.IsNullOrEmpty(State.ClientId)
             && string.Equals(State.NyxidAuthority, cmd.NyxidAuthority, StringComparison.Ordinal);
-        if (alreadyProvisioned)
+
+        // Redirect URI drift: re-DCR when the persisted callback no longer
+        // matches what the resolver hands us. Original prod incident
+        // (aismart-app-mainnet 2026-04-30): the cluster registered against
+        // NyxID with the Kestrel wildcard `http://+:8080/...` because the
+        // resolver mistakenly read ASPNETCORE_URLS. After the resolver fix
+        // the env now produces the correct public URL, but the actor's
+        // existing client_id at NyxID is still bound to the wrong callback
+        // — every /init authorizes to a non-routable host. Empty stored
+        // redirect_uri is legacy/unknown, not a valid match: the broken
+        // production state already has a client_id and no recorded callback,
+        // so we must re-DCR once and persist the public redirect URI.
+        var redirectUriDrifted = sameClient
+            && (string.IsNullOrEmpty(State.RedirectUri)
+                || !string.Equals(State.RedirectUri, cmd.RedirectUri, StringComparison.Ordinal));
+
+        if (sameClient && !redirectUriDrifted)
         {
             // Seed HMAC key on first activation against an existing client_id
             // (defence-in-depth against partial state loaded from snapshots).
+            // Returning here is intentional: HmacKeyRotatedEvent itself
+            // re-publishes the state root, so the projector materializes the
+            // readmodel without needing an additional rebuild trigger.
             if (State.HmacKey.Length == 0)
             {
                 await PersistDomainEventAsync(BuildHmacKeyRotatedEvent());
                 Logger.LogInformation("Seeded HMAC key for aevatar OAuth client (existing client_id)");
+                return;
             }
+
+            // Steady-state branch: nothing changed at NyxID, but a freshly-
+            // booted silo may have an empty projection (codex PR #539 P1 —
+            // happens after the projection-scope-activation fix is deployed
+            // to a cluster whose actor was already provisioned by an earlier
+            // build that never activated the scope). Persist a no-op rebuild
+            // event so the now-attached projector has a state-root
+            // publication to materialize. Apply is identity, so the OAuth
+            // client facts are not mutated.
+            await PersistDomainEventAsync(new AevatarOAuthClientProjectionRebuildRequestedEvent
+            {
+                Reason = "ensure_already_provisioned",
+                RequestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            });
+            Logger.LogInformation(
+                "Requested aevatar OAuth client projection rebuild: actorId={ActorId}, authority={Authority}",
+                Id,
+                cmd.NyxidAuthority);
             return;
+        }
+
+        if (redirectUriDrifted)
+        {
+            Logger.LogWarning(
+                "Aevatar OAuth client redirect URI drifted: stored='{Stored}', resolved='{Resolved}'. " +
+                "Re-running DCR to register a new client_id at NyxID with the corrected callback target.",
+                State.RedirectUri,
+                cmd.RedirectUri);
         }
 
         var registrar = Services.GetService<NyxIdDynamicClientRegistrationClient>();
@@ -113,23 +159,117 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             .RegisterPublicClientAsync(cmd.NyxidAuthority, clientName, cmd.RedirectUri, CancellationToken.None)
             .ConfigureAwait(false);
 
-        await PersistDomainEventAsync(new AevatarOAuthClientProvisionedEvent
-        {
-            ClientId = registration.ClientId,
-            ClientIdIssuedAtUnix = registration.IssuedAt.ToUnixTimeSeconds(),
-            NyxidAuthority = cmd.NyxidAuthority,
-            PersistedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-        });
+        // Cluster-shared Garnet event store + brief two-pod overlap during
+        // a K8s rolling deploy lets two grain activations of this well-
+        // known actor each replay v=N, each call DCR (each getting its own
+        // client_id from NyxID), and each try to commit Provisioned at
+        // expectedVersion=N. One wins, one sees OCC. See issue #549.
+        //
+        // Pass an absorber callback to PersistDomainEventAsync rather than
+        // catching OCC ourselves: the framework refreshes State from the
+        // store before invoking the callback, and there is no protected
+        // "replay state" helper a future handler could misuse outside an
+        // active commit path (PR #552 review codex/glm-5.1).
+        await PersistDomainEventAsync(
+            new AevatarOAuthClientProvisionedEvent
+            {
+                ClientId = registration.ClientId,
+                ClientIdIssuedAtUnix = registration.IssuedAt.ToUnixTimeSeconds(),
+                NyxidAuthority = cmd.NyxidAuthority,
+                PersistedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                RedirectUri = cmd.RedirectUri,
+            },
+            onOptimisticConcurrencyConflict: occ => AbsorbPeerDcrProvisioningAsync(cmd, registration.ClientId, occ));
+
+        // The loser absorber path returned (peer committed the same
+        // shape). Detect that by comparing State.ClientId — if it is the
+        // peer's id, this handler must NOT continue with the post-
+        // Provisioned HMAC seed against state we did not produce.
+        if (!string.Equals(State.ClientId, registration.ClientId, StringComparison.Ordinal))
+            return;
+
         Logger.LogInformation(
-            "Provisioned aevatar OAuth client via DCR: client_id={ClientId}, authority={Authority}",
+            "Provisioned aevatar OAuth client via DCR: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}",
             registration.ClientId,
-            cmd.NyxidAuthority);
+            cmd.NyxidAuthority,
+            cmd.RedirectUri);
 
         if (State.HmacKey.Length == 0)
         {
-            await PersistDomainEventAsync(BuildHmacKeyRotatedEvent());
+            // Distinct race shape from the DCR commit OCC: this handler
+            // ALREADY successfully committed Provisioned, so
+            // registration.ClientId is the active cluster client — not
+            // an orphan. A peer wrote at v+2 between our Provisioned
+            // commit and this seed (e.g. their own HMAC seed). Absorb
+            // without orphan messaging when the post-replay state has a
+            // non-empty HMAC.
+            await PersistDomainEventAsync(
+                BuildHmacKeyRotatedEvent(),
+                onOptimisticConcurrencyConflict: AbsorbPeerHmacSeedAsync);
             Logger.LogInformation("Seeded HMAC key for aevatar OAuth client");
         }
+    }
+
+    private Task<bool> AbsorbPeerDcrProvisioningAsync(
+        EnsureAevatarOAuthClientProvisionedCommand cmd,
+        string orphanClientId,
+        EventStoreOptimisticConcurrencyException occ)
+    {
+        // Framework already refreshed State from the store before invoking
+        // this callback. A peer healed the drift iff the cluster's stored
+        // record now matches the command's intended shape.
+        var peerHealed = !string.IsNullOrEmpty(State.ClientId)
+            && string.Equals(State.NyxidAuthority, cmd.NyxidAuthority, StringComparison.Ordinal)
+            && string.Equals(State.RedirectUri, cmd.RedirectUri, StringComparison.Ordinal)
+            && State.HmacKey.Length > 0;
+
+        if (peerHealed)
+        {
+            Logger.LogWarning(
+                "Aevatar OAuth client OCC race resolved by peer commit; absorbing this attempt as a no-op. "
+                + "peer_client_id={PeerClientId}, orphan_client_id={OrphanClientId}, "
+                + "expected_version={Expected}, actual_version={Actual}. "
+                + "Ops should delete the orphan client at NyxID admin so it stops counting against the registration list.",
+                State.ClientId,
+                orphanClientId,
+                occ.ExpectedVersion,
+                occ.ActualVersion);
+            return Task.FromResult(true);
+        }
+
+        Logger.LogError(
+            "Aevatar OAuth client OCC race did not converge on the desired shape after replay; rethrowing so the bootstrap retry path can re-evaluate. "
+            + "stored_client_id={StoredClientId}, stored_redirect_uri={StoredRedirect}, expected_redirect_uri={ExpectedRedirect}, "
+            + "orphan_client_id={OrphanClientId}, expected_version={Expected}, actual_version={Actual}.",
+            State.ClientId,
+            State.RedirectUri,
+            cmd.RedirectUri,
+            orphanClientId,
+            occ.ExpectedVersion,
+            occ.ActualVersion);
+        return Task.FromResult(false);
+    }
+
+    private Task<bool> AbsorbPeerHmacSeedAsync(EventStoreOptimisticConcurrencyException occ)
+    {
+        if (State.HmacKey.Length > 0)
+        {
+            Logger.LogWarning(
+                "Aevatar OAuth client HMAC-seed OCC race absorbed: peer activation already seeded a key. "
+                + "active_client_id={ClientId}, expected_version={Expected}, actual_version={Actual}.",
+                State.ClientId,
+                occ.ExpectedVersion,
+                occ.ActualVersion);
+            return Task.FromResult(true);
+        }
+
+        Logger.LogError(
+            "Aevatar OAuth client HMAC-seed OCC fired but the post-replay state has no HMAC key; rethrowing so the bootstrap retry path can complete the seed. "
+            + "active_client_id={ClientId}, expected_version={Expected}, actual_version={Actual}.",
+            State.ClientId,
+            occ.ExpectedVersion,
+            occ.ActualVersion);
+        return Task.FromResult(false);
     }
 
     /// <summary>
@@ -266,6 +406,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         next.ClientId = evt.ClientId ?? string.Empty;
         next.ClientIdIssuedAtUnix = evt.ClientIdIssuedAtUnix;
         next.NyxidAuthority = evt.NyxidAuthority ?? string.Empty;
+        next.RedirectUri = evt.RedirectUri ?? string.Empty;
         // Re-provisioning resets the broker observation: a new client_id
         // starts with broker_capability_enabled=false until ops flips it.
         next.BrokerCapabilityObserved = false;
