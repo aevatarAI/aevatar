@@ -55,6 +55,9 @@ public static class ServiceCollectionExtensions
         // on Studio.Application UserConfig ports; Channel.Identity intentionally
         // does not pull Studio dependencies.
         services.TryAddSingleton<INyxIdLlmServiceCatalogClient, NyxIdLlmServiceCatalogClient>();
+        // These are consumed by singleton turn-runner/slash handlers. They create
+        // short scopes internally for UserConfig ports instead of capturing
+        // potentially scoped query/command services at construction time.
         services.TryAddSingleton<IUserLlmOptionsService, DefaultUserLlmOptionsService>();
         services.TryAddSingleton<IUserLlmSelectionService, DefaultUserLlmSelectionService>();
         services.TryAddSingleton<IUserLlmOptionsRenderer<MessageContent>, TextUserLlmOptionsRenderer>();

@@ -3,6 +3,7 @@ using System.Text;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
@@ -19,6 +20,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.Scheduled;
+using Aevatar.Studio.Application.Studio.Abstractions;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -2460,7 +2462,16 @@ public sealed class ChannelConversationTurnRunnerTests
             // optional ctor param). Tests build their own ServiceProvider; pull the registered
             // source out of the test-supplied container so the existing tests that AddSingleton
             // a stub still resolve correctly without re-introducing a per-execution GetService.
-            ownerLlmConfigSource: services.GetService<IOwnerLlmConfigSource>());
+            ownerLlmConfigSource: services.GetService<IOwnerLlmConfigSource>(),
+            identityBindingQueryPort: services.GetService<IExternalIdentityBindingQueryPort>(),
+            slashCommandRegistry: services.GetService<ChannelSlashCommandRegistry>(),
+            capabilityBroker: services.GetService<INyxIdCapabilityBroker>(),
+            userLlmSelectionService: services.GetService<IUserLlmSelectionService>(),
+            userLlmOptionsService: services.GetService<IUserLlmOptionsService>(),
+            userLlmOptionsRenderer: services.GetService<IUserLlmOptionsRenderer<MessageContent>>(),
+            userConfigQueryPort: services.GetService<IUserConfigQueryPort>(),
+            replyService: services.GetService<ChannelPlatformReplyService>(),
+            workflowResumeService: services.GetService<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>());
     }
 
     private static ConversationTurnRuntimeContext RelayRuntimeContext(
@@ -2631,7 +2642,7 @@ public sealed class ChannelConversationTurnRunnerTests
     private sealed class StubUserLlmOptionsService(UserLlmOption option) : IUserLlmOptionsService
     {
         public Task<UserLlmOptionsView> GetOptionsAsync(UserLlmOptionsQuery query, CancellationToken ct) =>
-            Task.FromResult(new UserLlmOptionsView(query.BindingId.Clone(), null, [option], null));
+            Task.FromResult(new UserLlmOptionsView(null, [option], null));
     }
 
     private sealed class RecordingUserLlmSelectionService : IUserLlmSelectionService

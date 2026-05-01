@@ -1,3 +1,5 @@
+using Aevatar.Studio.Application.Studio.Abstractions;
+
 namespace Aevatar.GAgents.NyxidChat.LlmSelection;
 
 public sealed class StubNyxIdLlmServiceCatalogClient : INyxIdLlmServiceCatalogClient

@@ -1,5 +1,6 @@
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.Studio.Application.Studio.Abstractions;
 
 namespace Aevatar.GAgents.NyxidChat.LlmSelection;
 
@@ -12,59 +13,6 @@ public sealed record UserLlmSelectionContext(
     BindingId BindingId,
     ExternalSubjectRef Subject,
     string RegistrationScopeId);
-
-public sealed record UserLlmOptionsView(
-    BindingId BindingId,
-    UserLlmOption? Current,
-    IReadOnlyList<UserLlmOption> Available,
-    UserLlmSetupHint? SetupHint);
-
-public sealed record UserLlmOption(
-    string ServiceId,
-    string ServiceSlug,
-    string DisplayName,
-    string RouteValue,
-    string? DefaultModel,
-    IReadOnlyList<string> AvailableModels,
-    string Status,
-    string Source,
-    bool Allowed,
-    string? Description);
-
-public sealed record UserLlmSetupHint(
-    string SetupUrl,
-    IReadOnlyList<UserLlmPreset> Presets);
-
-public sealed record UserLlmPreset(
-    string Id,
-    string Title,
-    string Description,
-    UserLlmPresetActivation Activation);
-
-public abstract record UserLlmPresetActivation;
-
-public sealed record UseExistingService(
-    string ServiceId,
-    string RouteValue,
-    string? DefaultModel) : UserLlmPresetActivation;
-
-public sealed record ProvisionThenUse(string ProvisionEndpointId) : UserLlmPresetActivation;
-
-public sealed record NyxIdLlmService(
-    string UserServiceId,
-    string ServiceSlug,
-    string DisplayName,
-    string RouteValue,
-    string? DefaultModel,
-    IReadOnlyList<string> Models,
-    string Status,
-    string Source,
-    bool Allowed,
-    string? Description);
-
-public sealed record NyxIdLlmServicesResult(
-    IReadOnlyList<NyxIdLlmService> Services,
-    UserLlmSetupHint? SetupHint);
 
 public interface IUserLlmOptionsService
 {

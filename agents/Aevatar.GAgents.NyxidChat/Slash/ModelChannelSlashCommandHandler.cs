@@ -2,6 +2,7 @@ using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.NyxidChat.Slash;

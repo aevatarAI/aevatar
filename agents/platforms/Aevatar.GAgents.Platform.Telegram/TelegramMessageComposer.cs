@@ -9,6 +9,7 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
 {
     private const int TelegramTextLimit = 4096;
     private const int TelegramCaptionLimit = 1024;
+    private const int TelegramCallbackDataLimit = 64;
 
     public static readonly ChannelCapabilities DefaultCapabilities = new()
     {
@@ -39,17 +40,13 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
         var capabilities = context.Capabilities ?? DefaultCapabilities;
         var maxLength = ResolveTextLimit(capabilities.MaxMessageLength, TelegramTextLimit);
         var effectiveText = BuildRenderedText(intent, maxLength);
-        var buttonActions = GetButtonActions(intent);
-        if (buttonActions.Length > 0 && capabilities.SupportsActionButtons)
+        var inlineKeyboardActions = GetInlineKeyboardActions(intent);
+        if (inlineKeyboardActions.Length > 0 && capabilities.SupportsActionButtons)
         {
-            var inlineKeyboard = buttonActions
+            var inlineKeyboard = inlineKeyboardActions
                 .Select(action => new[]
                 {
-                    new
-                    {
-                        text = action.Label.Trim(),
-                        callback_data = BuildCallbackData(action),
-                    },
+                    BuildInlineKeyboardButton(action),
                 })
                 .ToArray();
             var contentJson = JsonSerializer.Serialize(new
@@ -114,9 +111,14 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
         // Render available action labels as a bullet list so the user can still see what
         // the agent intended to offer, even though clicks cannot round-trip through the
         // current Nyx Telegram relay contract.
-        var buttonActions = intent.Actions
-            .Where(static action => action.Kind == ActionElementKind.Button && !string.IsNullOrWhiteSpace(action.Label))
-            .Select(static action => $"• {action.Label.Trim()}")
+        var buttonActions = GetInlineKeyboardActions(intent)
+            .Select(static action =>
+            {
+                var label = action.Label!.Trim();
+                return action.Kind == ActionElementKind.Link && !string.IsNullOrWhiteSpace(action.Value)
+                    ? $"• {label}: {action.Value.Trim()}"
+                    : $"• {label}";
+            })
             .ToArray();
         if (buttonActions.Length > 0)
         {
@@ -140,28 +142,69 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
         return textInfo.SubstringByTextElements(0, maxLength);
     }
 
-    private static ActionElement[] GetButtonActions(MessageContent intent) =>
+    private static ActionElement[] GetInlineKeyboardActions(MessageContent intent) =>
         intent.Actions
-            .Where(static action => action.Kind == ActionElementKind.Button && !string.IsNullOrWhiteSpace(action.Label))
+            .Where(static action =>
+                action.Kind is ActionElementKind.Button or ActionElementKind.Link &&
+                !string.IsNullOrWhiteSpace(action.Label) &&
+                (action.Kind != ActionElementKind.Link || IsValidTelegramUrl(action.Value)))
             .ToArray();
+
+    private static Dictionary<string, string> BuildInlineKeyboardButton(ActionElement action)
+    {
+        var button = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["text"] = action.Label!.Trim(),
+        };
+
+        if (action.Kind == ActionElementKind.Link)
+            button["url"] = action.Value!.Trim();
+        else
+            button["callback_data"] = BuildCallbackData(action);
+
+        return button;
+    }
 
     private static string BuildCallbackData(ActionElement action)
     {
         var payload = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
-            ["action_id"] = action.ActionId,
-            ["submitted_value"] = action.Value,
+            ["a"] = action.ActionId,
+            ["s"] = action.Value,
         };
         if (action.Arguments.Count > 0)
         {
-            payload["value"] = action.Arguments.ToDictionary(
+            payload["v"] = action.Arguments.ToDictionary(
                 pair => pair.Key,
                 pair => pair.Value,
                 StringComparer.Ordinal);
         }
 
-        return JsonSerializer.Serialize(payload);
+        var callbackData = JsonSerializer.Serialize(payload);
+        if (callbackData.Length <= TelegramCallbackDataLimit)
+            return callbackData;
+
+        payload.Remove("v");
+        callbackData = JsonSerializer.Serialize(payload);
+        if (callbackData.Length <= TelegramCallbackDataLimit)
+            return callbackData;
+
+        payload.Remove("s");
+        callbackData = JsonSerializer.Serialize(payload);
+        if (callbackData.Length <= TelegramCallbackDataLimit)
+            return callbackData;
+
+        var actionId = action.ActionId?.Trim();
+        return string.IsNullOrWhiteSpace(actionId)
+            ? "action"
+            : actionId.Length <= TelegramCallbackDataLimit
+                ? actionId
+                : actionId[..TelegramCallbackDataLimit];
     }
+
+    private static bool IsValidTelegramUrl(string? value) =>
+        Uri.TryCreate(value?.Trim(), UriKind.Absolute, out var uri) &&
+        uri.Scheme is "http" or "https";
 
     private static void AppendParagraph(StringBuilder builder, string? value)
     {

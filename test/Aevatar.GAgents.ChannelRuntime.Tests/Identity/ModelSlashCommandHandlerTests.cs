@@ -4,6 +4,7 @@ using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.NyxidChat.Slash;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using StudioConfig = Aevatar.Studio.Application.Studio.Abstractions.UserConfig;
@@ -166,6 +167,39 @@ public sealed class ModelSlashCommandHandlerTests
     }
 
     [Fact]
+    public async Task Preset_ProvisionThenUse_PreservesCurrentModel_WhenProvisionedServiceHasNoDefaultModel()
+    {
+        var provisioned = ChronoLlm with { DefaultModel = null };
+        var catalog = new StubCatalogClient
+        {
+            Services = [],
+            ProvisionedService = provisioned,
+            SetupHint = new UserLlmSetupHint(
+                "https://nyxid.example/services",
+                [
+                    new UserLlmPreset(
+                        "chrono-provision",
+                        "Provision chrono",
+                        "Provision shared service",
+                        new ProvisionThenUse("chrono/shared")),
+                ]),
+        };
+        var queryPort = new StubUserConfigQueryPort
+        {
+            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "current-model", route: OpenAi.RouteValue) },
+        };
+        var commandService = new StubUserConfigCommandService();
+        var handler = CreateHandler(catalog, queryPort, commandService);
+
+        var reply = await handler.HandleAsync(Context(subAndArgs: "preset chrono-provision"), default);
+
+        reply.Should().NotBeNull();
+        var saved = commandService.SavedConfigs.Should().ContainSingle().Subject;
+        saved.Config.PreferredLlmRoute.Should().Be(provisioned.RouteValue);
+        saved.Config.DefaultModel.Should().Be("current-model");
+    }
+
+    [Fact]
     public async Task Reset_ClearsSenderRouteAndModel()
     {
         var queryPort = new StubUserConfigQueryPort
@@ -206,8 +240,13 @@ public sealed class ModelSlashCommandHandlerTests
         queryPort ??= new StubUserConfigQueryPort();
         commandService ??= new StubUserConfigCommandService();
 
-        var options = new DefaultUserLlmOptionsService(catalog, queryPort);
-        var selection = new DefaultUserLlmSelectionService(options, catalog, queryPort, commandService);
+        var provider = new ServiceCollection()
+            .AddSingleton<IUserConfigQueryPort>(queryPort)
+            .AddSingleton<IUserConfigCommandService>(commandService)
+            .BuildServiceProvider();
+        var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
+        var options = new DefaultUserLlmOptionsService(catalog, scopeFactory);
+        var selection = new DefaultUserLlmSelectionService(options, catalog, scopeFactory);
         return new ModelChannelSlashCommandHandler(
             NullLogger<ModelChannelSlashCommandHandler>.Instance,
             options,
@@ -229,6 +268,7 @@ public sealed class ModelSlashCommandHandlerTests
     private sealed class StubCatalogClient : INyxIdLlmServiceCatalogClient
     {
         public IReadOnlyList<NyxIdLlmService> Services { get; init; } = [ChronoLlm, OpenAi];
+        public NyxIdLlmService ProvisionedService { get; init; } = ChronoLlm;
 
         public UserLlmSetupHint SetupHint { get; init; } = new(
             "https://nyxid.example/services",
@@ -257,7 +297,7 @@ public sealed class ModelSlashCommandHandlerTests
             string accessToken,
             string provisionEndpointId,
             CancellationToken ct) =>
-            Task.FromResult(ChronoLlm);
+            Task.FromResult(ProvisionedService);
     }
 
     private sealed class StubUserConfigQueryPort : IUserConfigQueryPort

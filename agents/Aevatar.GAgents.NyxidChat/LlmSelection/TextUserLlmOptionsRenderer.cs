@@ -1,4 +1,5 @@
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.Studio.Application.Studio.Abstractions;
 
 namespace Aevatar.GAgents.NyxidChat.LlmSelection;
 
@@ -30,7 +31,7 @@ public sealed class TextUserLlmOptionsRenderer : IUserLlmOptionsRenderer<Message
         for (var i = 0; i < view.Available.Count; i++)
         {
             var option = view.Available[i];
-            var marker = ReferenceEquals(option, view.Current) ? " ✓" : string.Empty;
+            var marker = IsCurrent(option, view.Current) ? " ✓" : string.Empty;
             var status = option.Allowed
                 ? option.Status
                 : $"{option.Status}, not allowed";
@@ -167,6 +168,11 @@ public sealed class TextUserLlmOptionsRenderer : IUserLlmOptionsRenderer<Message
             : $" / {current.DefaultModel}";
         return $"- 当前:{current.DisplayName}{model}";
     }
+
+    private static bool IsCurrent(UserLlmOption option, UserLlmOption? current) =>
+        current is not null &&
+        string.Equals(option.ServiceId, current.ServiceId, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(option.RouteValue, current.RouteValue, StringComparison.OrdinalIgnoreCase);
 
     private static ActionElement BuildSelectServiceAction(UserLlmOption option) => new()
     {

@@ -283,6 +283,8 @@ public sealed class NyxIdApiClientCoverageTests
     [Theory]
     [InlineData(" ")]
     [InlineData("../secrets")]
+    [InlineData("//evil")]
+    [InlineData("chrono//evil")]
     [InlineData("https://evil.example/provision")]
     public async Task ProvisionLlmServiceAsync_ShouldRejectUnsafeEndpointIds(string endpointId)
     {

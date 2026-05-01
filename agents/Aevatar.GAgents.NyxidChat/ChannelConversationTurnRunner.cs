@@ -24,7 +24,7 @@ namespace Aevatar.GAgents.NyxidChat;
 
 public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 {
-    private readonly IServiceProvider _services;
+    private readonly IServiceProvider _toolServiceProvider;
     private readonly IChannelBotRegistrationQueryPort _registrationQueryPort;
     private readonly IChannelBotRegistrationQueryByNyxIdentityPort? _registrationQueryByNyxIdentityPort;
     private readonly IEnumerable<IPlatformAdapter> _platformAdapters;
@@ -32,6 +32,15 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private readonly NyxIdRelayOutboundPort _relayOutboundPort;
     private readonly IInteractiveReplyDispatcher? _interactiveReplyDispatcher;
     private readonly IOwnerLlmConfigSource? _ownerLlmConfigSource;
+    private readonly IExternalIdentityBindingQueryPort? _identityBindingQueryPort;
+    private readonly ChannelSlashCommandRegistry? _slashCommandRegistry;
+    private readonly INyxIdCapabilityBroker? _capabilityBroker;
+    private readonly IUserLlmSelectionService? _userLlmSelectionService;
+    private readonly IUserLlmOptionsService? _userLlmOptionsService;
+    private readonly IUserLlmOptionsRenderer<MessageContent>? _userLlmOptionsRenderer;
+    private readonly IUserConfigQueryPort? _userConfigQueryPort;
+    private readonly ChannelPlatformReplyService? _replyService;
+    private readonly ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? _workflowResumeService;
     private readonly ILogger<ChannelConversationTurnRunner> _logger;
 
     public ChannelConversationTurnRunner(
@@ -43,9 +52,18 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         NyxIdRelayOutboundPort relayOutboundPort,
         IInteractiveReplyDispatcher? interactiveReplyDispatcher,
         ILogger<ChannelConversationTurnRunner> logger,
-        IOwnerLlmConfigSource? ownerLlmConfigSource = null)
+        IOwnerLlmConfigSource? ownerLlmConfigSource = null,
+        IExternalIdentityBindingQueryPort? identityBindingQueryPort = null,
+        ChannelSlashCommandRegistry? slashCommandRegistry = null,
+        INyxIdCapabilityBroker? capabilityBroker = null,
+        IUserLlmSelectionService? userLlmSelectionService = null,
+        IUserLlmOptionsService? userLlmOptionsService = null,
+        IUserLlmOptionsRenderer<MessageContent>? userLlmOptionsRenderer = null,
+        IUserConfigQueryPort? userConfigQueryPort = null,
+        ChannelPlatformReplyService? replyService = null,
+        ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? workflowResumeService = null)
     {
-        _services = services ?? throw new ArgumentNullException(nameof(services));
+        _toolServiceProvider = services ?? throw new ArgumentNullException(nameof(services));
         _registrationQueryPort = registrationQueryPort ?? throw new ArgumentNullException(nameof(registrationQueryPort));
         _registrationQueryByNyxIdentityPort = registrationQueryByNyxIdentityPort;
         _platformAdapters = platformAdapters ?? throw new ArgumentNullException(nameof(platformAdapters));
@@ -53,6 +71,15 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _relayOutboundPort = relayOutboundPort ?? throw new ArgumentNullException(nameof(relayOutboundPort));
         _interactiveReplyDispatcher = interactiveReplyDispatcher;
         _ownerLlmConfigSource = ownerLlmConfigSource;
+        _identityBindingQueryPort = identityBindingQueryPort;
+        _slashCommandRegistry = slashCommandRegistry;
+        _capabilityBroker = capabilityBroker;
+        _userLlmSelectionService = userLlmSelectionService;
+        _userLlmOptionsService = userLlmOptionsService;
+        _userLlmOptionsRenderer = userLlmOptionsRenderer;
+        _userConfigQueryPort = userConfigQueryPort;
+        _replyService = replyService;
+        _workflowResumeService = workflowResumeService;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -142,9 +169,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     // (/init, /unbind, /whoami, /model, ...) are routed before the LLM so the
     // bot owner's bot-shared mode is bypassed for unbound senders. Handlers
     // are discovered as IEnumerable<IChannelSlashCommandHandler> from DI;
-    // identity ports are resolved lazily through the service provider so
+    // identity ports are constructor-injected as optional capabilities so
     // deployments that have not enabled binding fall through to the legacy
-    // flow without the runner constructor changing. Phase 6 (issue #513):
+    // flow. Phase 6 (issue #513):
     // each handler declares RequiresBinding so unbound senders trying to use
     // a binding-only command (e.g. /model use) get the same hint as the LLM-
     // turn binding gate instead of a stack trace.
@@ -158,7 +185,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (!TryParseSlashCommand(inbound.Text, out var commandName, out var argumentText))
             return null;
 
-        var queryPort = _services.GetService<IExternalIdentityBindingQueryPort>();
+        var queryPort = _identityBindingQueryPort;
         if (queryPort is null)
         {
             _logger.LogDebug(
@@ -310,13 +337,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
     private IChannelSlashCommandHandler? ResolveSlashCommandHandler(string commandName)
     {
-        // Registry is registered as a singleton; constructing it validates
-        // there are no duplicate Name/Aliases registrations and throws fail-
-        // fast at startup. Resolving here keeps the turn runner backwards-
-        // compatible with deployments that didn't AddChannelIdentity / AddNyxIdChat
-        // (the registry will be absent and slash commands silently fall through).
-        var registry = _services.GetService<ChannelSlashCommandRegistry>();
-        return registry?.Find(commandName);
+        // Registry construction validates duplicate Name/Aliases registrations
+        // fail-fast at startup. When deployments do not enable slash commands,
+        // the optional registry is absent and slash commands fall through.
+        return _slashCommandRegistry?.Find(commandName);
     }
 
     private async Task<ConversationTurnResult> SendBindingPromptAsync(
@@ -333,7 +357,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
         else
         {
-            var broker = _services.GetService<INyxIdCapabilityBroker>();
+            var broker = _capabilityBroker;
             if (broker is null)
             {
                 _logger.LogError("Binding gate cannot start NyxID binding because INyxIdCapabilityBroker is not registered.");
@@ -425,7 +449,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
     {
-        var queryPort = _services.GetService<IExternalIdentityBindingQueryPort>();
+        var queryPort = _identityBindingQueryPort;
         if (queryPort is null)
             return (null, null);
 
@@ -509,7 +533,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         MessageContent reply;
         if (string.IsNullOrWhiteSpace(senderBindingId))
         {
-            if (_services.GetService<IExternalIdentityBindingQueryPort>() is null)
+            if (_identityBindingQueryPort is null)
             {
                 reply = new MessageContent { Text = "当前部署未启用模型偏好,此操作暂不可用。" };
             }
@@ -524,9 +548,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
         else
         {
-            var selectionService = _services.GetService<IUserLlmSelectionService>();
-            var optionsService = _services.GetService<IUserLlmOptionsService>();
-            var renderer = _services.GetService<IUserLlmOptionsRenderer<MessageContent>>();
+            var selectionService = _userLlmSelectionService;
+            var optionsService = _userLlmOptionsService;
+            var renderer = _userLlmOptionsRenderer;
             if (selectionService is null || optionsService is null || renderer is null)
             {
                 reply = new MessageContent { Text = "当前部署未启用模型偏好,此操作暂不可用。" };
@@ -619,7 +643,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             return new MessageContent { Text = "当前 NyxID 绑定已失效,请先发送 /init 重新绑定。" };
         }
-        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or NotSupportedException)
         {
             return new MessageContent { Text = ex.Message };
         }
@@ -906,11 +930,11 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var relayDecisionMatched = NyxRelayAgentBuilderFlow.TryResolve(
             inboundEvent,
             out decision,
-            _services.GetService<ChannelSlashCommandRegistry>());
+            _slashCommandRegistry);
         if (!relayDecisionMatched &&
             ((decision = await AgentBuilderCardFlow.TryResolveAsync(
                     inboundEvent,
-                    _services.GetService<IUserConfigQueryPort>(),
+                    _userConfigQueryPort,
                     ct)) is null))
         {
             // No slash-command/card flow matched.
@@ -930,7 +954,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     inboundEvent,
                     ResolveUserAccessToken(activity),
                     ct);
-                var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_services);
+                var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
                 var toolResult = await tool.ExecuteAsync(decision.ToolArgumentsJson!, ct);
                 replyContent = relayDecisionMatched
                     ? NyxRelayAgentBuilderFlow.FormatToolResult(decision, toolResult)
@@ -1057,7 +1081,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(TimeSpan.FromSeconds(30));
-        var replyService = _services.GetService<ChannelPlatformReplyService>();
+        var replyService = _replyService;
         var delivery = replyService is not null
             ? await replyService.DeliverAsync(adapter, replyText, inbound, registration, cts.Token)
             : await adapter.SendReplyAsync(replyText, inbound, registration, _nyxClient, cts.Token);
@@ -1253,8 +1277,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return null;
         }
 
-        var resumeService = _services.GetService<
-            ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();
+        var resumeService = _workflowResumeService;
         if (resumeService is null)
         {
             _logger.LogError(

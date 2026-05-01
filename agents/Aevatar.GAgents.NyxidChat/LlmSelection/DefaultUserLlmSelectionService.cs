@@ -1,6 +1,10 @@
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Services;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using StudioUserConfig = Aevatar.Studio.Application.Studio.Abstractions.UserConfig;
 
 namespace Aevatar.GAgents.NyxidChat.LlmSelection;
@@ -13,21 +17,21 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
     private readonly IUserLlmOptionsService _optionsService;
     private readonly INyxIdLlmServiceCatalogClient _catalogClient;
     private readonly INyxIdCapabilityBroker? _broker;
-    private readonly IUserConfigQueryPort? _queryPort;
-    private readonly IUserConfigCommandService? _commandService;
+    private readonly IServiceScopeFactory? _scopeFactory;
+    private readonly ILogger<DefaultUserLlmSelectionService> _logger;
 
     public DefaultUserLlmSelectionService(
         IUserLlmOptionsService optionsService,
         INyxIdLlmServiceCatalogClient catalogClient,
-        IUserConfigQueryPort? queryPort = null,
-        IUserConfigCommandService? commandService = null,
-        INyxIdCapabilityBroker? broker = null)
+        IServiceScopeFactory? scopeFactory = null,
+        INyxIdCapabilityBroker? broker = null,
+        ILogger<DefaultUserLlmSelectionService>? logger = null)
     {
         _optionsService = optionsService ?? throw new ArgumentNullException(nameof(optionsService));
         _catalogClient = catalogClient ?? throw new ArgumentNullException(nameof(catalogClient));
-        _queryPort = queryPort;
-        _commandService = commandService;
+        _scopeFactory = scopeFactory;
         _broker = broker;
+        _logger = logger ?? NullLogger<DefaultUserLlmSelectionService>.Instance;
     }
 
     public async Task SetByServiceAsync(
@@ -49,7 +53,8 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
             context,
             option.RouteValue,
             NormalizeOptional(modelOverride) ?? option.DefaultModel ?? string.Empty,
-            ct).ConfigureAwait(false);
+            preserveCurrentModelWhenMissing: false,
+            ct: ct).ConfigureAwait(false);
     }
 
     public Task SetModelOverrideAsync(
@@ -82,21 +87,23 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
                 await SaveAsync(
                     context,
                     existing.RouteValue,
-                    existing.DefaultModel ?? string.Empty,
-                    ct).ConfigureAwait(false);
+                    existing.DefaultModel,
+                    preserveCurrentModelWhenMissing: true,
+                    ct: ct).ConfigureAwait(false);
                 break;
             case ProvisionThenUse provisioning:
                 var proxyToken = await IssueAccessTokenAsync(context.Subject, ProxyScope, ct).ConfigureAwait(false);
                 var provisioned = await _catalogClient
                     .ProvisionAsync(context, proxyToken, provisioning.ProvisionEndpointId, ct)
                     .ConfigureAwait(false);
-                var provisionedOption = ToOption(provisioned);
+                var provisionedOption = NyxIdLlmServiceMapping.ToOption(provisioned);
                 EnsureSelectable(provisionedOption);
                 await SaveAsync(
                     context,
                     provisionedOption.RouteValue,
-                    provisionedOption.DefaultModel ?? string.Empty,
-                    ct).ConfigureAwait(false);
+                    provisionedOption.DefaultModel,
+                    preserveCurrentModelWhenMissing: true,
+                    ct: ct).ConfigureAwait(false);
                 break;
             default:
                 throw new InvalidOperationException($"Unsupported LLM preset activation for '{preset.Id}'.");
@@ -143,13 +150,16 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
     private async Task SaveAsync(
         UserLlmSelectionContext context,
         string preferredRoute,
-        string defaultModel,
+        string? defaultModel,
+        bool preserveCurrentModelWhenMissing,
         CancellationToken ct)
     {
         var current = await ReadCurrentAsync(context, ct).ConfigureAwait(false);
+        var resolvedDefaultModel = NormalizeOptional(defaultModel) ??
+                                   (preserveCurrentModelWhenMissing ? current.DefaultModel : string.Empty);
         var merged = current with
         {
-            DefaultModel = defaultModel.Trim(),
+            DefaultModel = resolvedDefaultModel,
             PreferredLlmRoute = preferredRoute.Trim(),
         };
         await SaveConfigAsync(context, merged, ct).ConfigureAwait(false);
@@ -157,25 +167,43 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
 
     private async Task<StudioUserConfig> ReadCurrentAsync(UserLlmSelectionContext context, CancellationToken ct)
     {
-        if (_queryPort is null)
+        if (_scopeFactory is null)
+            return new StudioUserConfig(string.Empty);
+
+        using var scope = _scopeFactory.CreateScope();
+        var queryPort = scope.ServiceProvider.GetService<IUserConfigQueryPort>();
+        if (queryPort is null)
             return new StudioUserConfig(string.Empty);
 
         try
         {
-            return await _queryPort.GetAsync(RequireBindingId(context), ct).ConfigureAwait(false);
+            return await queryPort.GetAsync(RequireBindingId(context), ct).ConfigureAwait(false);
         }
-        catch
+        catch (OperationCanceledException)
         {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to read current LLM selection for binding {BindingId}",
+                context.BindingId.Value);
             return new StudioUserConfig(string.Empty);
         }
     }
 
-    private Task SaveConfigAsync(UserLlmSelectionContext context, StudioUserConfig config, CancellationToken ct)
+    private async Task SaveConfigAsync(UserLlmSelectionContext context, StudioUserConfig config, CancellationToken ct)
     {
-        if (_commandService is null)
+        if (_scopeFactory is null)
             throw new InvalidOperationException("User LLM preference writes are not enabled in this deployment.");
 
-        return _commandService.SaveAsync(RequireBindingId(context), config, ct);
+        using var scope = _scopeFactory.CreateScope();
+        var commandService = scope.ServiceProvider.GetService<IUserConfigCommandService>();
+        if (commandService is null)
+            throw new InvalidOperationException("User LLM preference writes are not enabled in this deployment.");
+
+        await commandService.SaveAsync(RequireBindingId(context), config, ct).ConfigureAwait(false);
     }
 
     private static UserLlmOptionsQuery ToQuery(UserLlmSelectionContext context)
@@ -202,27 +230,4 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
-    private static UserLlmOption ToOption(NyxIdLlmService service) => new(
-        ServiceId: NormalizeRequired(service.UserServiceId, nameof(service.UserServiceId)),
-        ServiceSlug: NormalizeRequired(service.ServiceSlug, nameof(service.ServiceSlug)),
-        DisplayName: NormalizeRequired(service.DisplayName, nameof(service.DisplayName)),
-        RouteValue: NormalizeRequired(service.RouteValue, nameof(service.RouteValue)),
-        DefaultModel: NormalizeOptional(service.DefaultModel),
-        AvailableModels: service.Models
-            .Where(model => !string.IsNullOrWhiteSpace(model))
-            .Select(model => model.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray(),
-        Status: NormalizeRequired(service.Status, nameof(service.Status)),
-        Source: NormalizeRequired(service.Source, nameof(service.Source)),
-        Allowed: service.Allowed,
-        Description: NormalizeOptional(service.Description));
-
-    private static string NormalizeRequired(string value, string name)
-    {
-        var normalized = value.Trim();
-        if (string.IsNullOrWhiteSpace(normalized))
-            throw new InvalidOperationException($"{name} must not be empty.");
-        return normalized;
-    }
 }

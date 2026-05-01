@@ -32,7 +32,7 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
         var keyboard = document.RootElement.GetProperty("reply_markup").GetProperty("inline_keyboard");
         keyboard[0][0].GetProperty("text").GetString().ShouldBe("Confirm");
         keyboard[1][0].GetProperty("text").GetString().ShouldBe("Cancel");
-        keyboard[0][0].GetProperty("callback_data").GetString()!.ShouldContain("confirm");
+        keyboard[0][0].GetProperty("callback_data").GetString()!.ShouldContain("\"a\":\"confirm\"");
     }
 
     protected override void AssertCardPayload(object payload, MessageContent intent, ComposeContext context, ComposeCapability capability)
@@ -91,6 +91,61 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
         payload.ContentJson.ShouldContain("callback_data");
         payload.PlainText.ShouldContain("• Confirm");
         payload.PlainText.ShouldContain("• Cancel");
+    }
+
+    [Fact]
+    public void Compose_with_button_uses_telegram_safe_callback_data()
+    {
+        var intent = new MessageContent { Text = "Choose" };
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = "llm_select_service",
+            Label = "Select",
+            Value = "chrono-llm-shared",
+            Arguments =
+            {
+                ["llm_action"] = "select_service",
+                ["service_id"] = "chrono-llm-shared",
+            },
+        });
+
+        var payload = CreateComposer().Compose(intent, BuildContext());
+
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        var callbackData = document.RootElement
+            .GetProperty("reply_markup")
+            .GetProperty("inline_keyboard")[0][0]
+            .GetProperty("callback_data")
+            .GetString();
+        callbackData.ShouldNotBeNull();
+        callbackData!.Length.ShouldBeLessThanOrEqualTo(64);
+        callbackData.ShouldContain("\"a\":\"llm_select_service\"");
+        callbackData.ShouldContain("\"s\":\"chrono-llm-shared\"");
+    }
+
+    [Fact]
+    public void Compose_with_link_action_emits_url_button()
+    {
+        var intent = new MessageContent { Text = "Setup" };
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Link,
+            ActionId = "open",
+            Label = "Open NyxID",
+            Value = "https://nyxid.example/services",
+        });
+
+        var payload = CreateComposer().Compose(intent, BuildContext());
+
+        payload.IsInteractive.ShouldBeTrue();
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        var button = document.RootElement
+            .GetProperty("reply_markup")
+            .GetProperty("inline_keyboard")[0][0];
+        button.GetProperty("text").GetString().ShouldBe("Open NyxID");
+        button.GetProperty("url").GetString().ShouldBe("https://nyxid.example/services");
+        button.TryGetProperty("callback_data", out _).ShouldBeFalse();
     }
 
     [Fact]

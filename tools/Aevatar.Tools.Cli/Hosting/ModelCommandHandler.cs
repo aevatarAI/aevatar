@@ -50,6 +50,18 @@ internal static class ModelCommandHandler
                 var option = ResolveOption(requested, options.Available);
                 if (option is not null)
                 {
+                    if (!option.Allowed)
+                    {
+                        Console.Error.WriteLine($"LLM service '{option.DisplayName}' is not allowed for this user. Run `aevatar model list` to inspect available services.");
+                        return 6;
+                    }
+
+                    if (!string.Equals(option.Status, "ready", StringComparison.OrdinalIgnoreCase))
+                    {
+                        Console.Error.WriteLine($"LLM service '{option.DisplayName}' is not ready: {option.Status}.");
+                        return 6;
+                    }
+
                     await client.SaveUserLlmPreferenceAsync(
                         token,
                         new { serviceId = option.ServiceId },
@@ -190,12 +202,15 @@ internal static class ModelCommandHandler
                     ? " *"
                     : string.Empty;
             Console.WriteLine(
-                $"  {i + 1}. {option.DisplayName}{FormatModelSuffix(option.DefaultModel)} [{option.Source}, {option.Status}]{marker}");
+                $"  {i + 1}. {option.DisplayName}{FormatModelSuffix(option.DefaultModel)} [{option.Source}, {FormatStatus(option)}]{marker}");
         }
     }
 
     private static string FormatModelSuffix(string? model) =>
         string.IsNullOrWhiteSpace(model) ? string.Empty : $" / {model.Trim()}";
+
+    private static string FormatStatus(CliLlmOption option) =>
+        option.Allowed ? option.Status : $"{option.Status}, not allowed";
 
     private static CliLlmOption? ResolveOption(string requested, IReadOnlyList<CliLlmOption> available)
     {
@@ -245,7 +260,8 @@ internal static class ModelCommandHandler
         DisplayName: ReadString(element, "displayName"),
         DefaultModel: ReadOptionalString(element, "defaultModel"),
         Status: ReadString(element, "status"),
-        Source: ReadString(element, "source"));
+        Source: ReadString(element, "source"),
+        Allowed: ReadOptionalBool(element, "allowed") ?? false);
 
     private static CliLlmSetupHint ParseSetupHint(JsonElement element)
     {
@@ -273,6 +289,16 @@ internal static class ModelCommandHandler
             ? property.GetString()
             : null;
 
+    private static bool? ReadOptionalBool(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var property)
+            ? property.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                _ => null,
+            }
+            : null;
+
     private sealed record CliLlmOptions(
         CliLlmOption? Current,
         IReadOnlyList<CliLlmOption> Available,
@@ -284,7 +310,8 @@ internal static class ModelCommandHandler
         string DisplayName,
         string? DefaultModel,
         string Status,
-        string Source);
+        string Source,
+        bool Allowed);
 
     private sealed record CliLlmSetupHint(string? SetupUrl, IReadOnlyList<CliLlmPreset> Presets);
 

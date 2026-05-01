@@ -1,5 +1,9 @@
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Services;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using StudioUserConfig = Aevatar.Studio.Application.Studio.Abstractions.UserConfig;
 
 namespace Aevatar.GAgents.NyxidChat.LlmSelection;
@@ -10,16 +14,19 @@ public sealed class DefaultUserLlmOptionsService : IUserLlmOptionsService
 
     private readonly INyxIdLlmServiceCatalogClient _catalogClient;
     private readonly INyxIdCapabilityBroker? _broker;
-    private readonly IUserConfigQueryPort? _queryPort;
+    private readonly IServiceScopeFactory? _scopeFactory;
+    private readonly ILogger<DefaultUserLlmOptionsService> _logger;
 
     public DefaultUserLlmOptionsService(
         INyxIdLlmServiceCatalogClient catalogClient,
-        IUserConfigQueryPort? queryPort = null,
-        INyxIdCapabilityBroker? broker = null)
+        IServiceScopeFactory? scopeFactory = null,
+        INyxIdCapabilityBroker? broker = null,
+        ILogger<DefaultUserLlmOptionsService>? logger = null)
     {
         _catalogClient = catalogClient ?? throw new ArgumentNullException(nameof(catalogClient));
-        _queryPort = queryPort;
+        _scopeFactory = scopeFactory;
         _broker = broker;
+        _logger = logger ?? NullLogger<DefaultUserLlmOptionsService>.Instance;
     }
 
     public async Task<UserLlmOptionsView> GetOptionsAsync(UserLlmOptionsQuery query, CancellationToken ct)
@@ -28,13 +35,11 @@ public sealed class DefaultUserLlmOptionsService : IUserLlmOptionsService
 
         var accessToken = await IssueAccessTokenAsync(query, ct).ConfigureAwait(false);
         var catalog = await _catalogClient.GetServicesAsync(query, accessToken, ct).ConfigureAwait(false);
-        var available = catalog.Services.Select(ToOption).ToArray();
+        var available = catalog.Services.Select(NyxIdLlmServiceMapping.ToOption).ToArray();
         var current = await ResolveCurrentAsync(query, available, ct).ConfigureAwait(false);
-        var setupHint = available.Length == 0
-            ? catalog.SetupHint ?? await _catalogClient.GetSetupHintAsync(query, accessToken, ct).ConfigureAwait(false)
-            : null;
+        var setupHint = available.Length == 0 ? catalog.SetupHint : null;
 
-        return new UserLlmOptionsView(query.BindingId, current, available, setupHint);
+        return new UserLlmOptionsView(current, available, setupHint);
     }
 
     private async Task<string> IssueAccessTokenAsync(UserLlmOptionsQuery query, CancellationToken ct)
@@ -53,16 +58,29 @@ public sealed class DefaultUserLlmOptionsService : IUserLlmOptionsService
         IReadOnlyList<UserLlmOption> available,
         CancellationToken ct)
     {
-        if (_queryPort is null || string.IsNullOrWhiteSpace(query.BindingId.Value))
+        if (_scopeFactory is null || string.IsNullOrWhiteSpace(query.BindingId.Value))
+            return null;
+
+        using var scope = _scopeFactory.CreateScope();
+        var queryPort = scope.ServiceProvider.GetService<IUserConfigQueryPort>();
+        if (queryPort is null)
             return null;
 
         StudioUserConfig config;
         try
         {
-            config = await _queryPort.GetAsync(query.BindingId.Value.Trim(), ct).ConfigureAwait(false);
+            config = await queryPort.GetAsync(query.BindingId.Value.Trim(), ct).ConfigureAwait(false);
         }
-        catch
+        catch (OperationCanceledException)
         {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to resolve current LLM selection for binding {BindingId}",
+                query.BindingId.Value);
             return null;
         }
 
@@ -74,33 +92,4 @@ public sealed class DefaultUserLlmOptionsService : IUserLlmOptionsService
             string.Equals(option.RouteValue, route, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static UserLlmOption ToOption(NyxIdLlmService service) => new(
-        ServiceId: NormalizeRequired(service.UserServiceId, nameof(service.UserServiceId)),
-        ServiceSlug: NormalizeRequired(service.ServiceSlug, nameof(service.ServiceSlug)),
-        DisplayName: NormalizeRequired(service.DisplayName, nameof(service.DisplayName)),
-        RouteValue: NormalizeRequired(service.RouteValue, nameof(service.RouteValue)),
-        DefaultModel: NormalizeOptional(service.DefaultModel),
-        AvailableModels: service.Models
-            .Where(model => !string.IsNullOrWhiteSpace(model))
-            .Select(model => model.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray(),
-        Status: NormalizeRequired(service.Status, nameof(service.Status)),
-        Source: NormalizeRequired(service.Source, nameof(service.Source)),
-        Allowed: service.Allowed,
-        Description: NormalizeOptional(service.Description));
-
-    private static string NormalizeRequired(string value, string name)
-    {
-        var normalized = value.Trim();
-        if (string.IsNullOrWhiteSpace(normalized))
-            throw new InvalidOperationException($"{name} must not be empty.");
-        return normalized;
-    }
-
-    private static string? NormalizeOptional(string? value)
-    {
-        var normalized = value?.Trim();
-        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
-    }
 }

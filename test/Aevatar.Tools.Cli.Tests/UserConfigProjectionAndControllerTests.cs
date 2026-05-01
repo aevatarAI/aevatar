@@ -7,7 +7,9 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Hosting.Controllers;
+using Aevatar.Studio.Hosting.NyxId;
 using Aevatar.Studio.Projection.DependencyInjection;
 using Aevatar.Studio.Projection.Metadata;
 using Aevatar.Studio.Projection.Orchestration;
@@ -557,6 +559,45 @@ public sealed class UserConfigProjectionAndControllerTests
     }
 
     [Fact]
+    public async Task UserConfigController_GetLlmOptions_FallsBackToNyxIdLlmStatusEndpoint()
+    {
+        var httpHandler = new RecordingHttpHandler(
+            (HttpStatusCode.NotFound, """{"error":"not_found"}"""),
+            (HttpStatusCode.OK, """
+            {
+              "providers": [
+                {
+                  "provider_slug": "openai",
+                  "provider_name": "OpenAI Gateway",
+                  "status": "ready",
+                  "proxy_url": "https://nyxid.example/api/v1/llm/openai/v1"
+                }
+              ],
+              "supported_models": ["gpt-5.4"]
+            }
+            """));
+        var controller = CreateController(
+            new StubUserConfigQueryPort(),
+            new RecordingUserConfigCommandService(),
+            new StubHttpClientFactory(httpHandler),
+            BuildNyxIdConfiguration(),
+            bearerToken: "user-token-1");
+
+        var response = await controller.GetLlmOptions(CancellationToken.None);
+
+        var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var payload = ok.Value.Should().BeOfType<UserLlmOptionsView>().Subject;
+        var option = payload.Available.Should().ContainSingle().Subject;
+        option.ServiceId.Should().Be("openai");
+        option.RouteValue.Should().Be("/api/v1/llm/openai/v1");
+        option.Source.Should().Be(NyxIdLlmProviderSource.GatewayProvider);
+        option.Allowed.Should().BeTrue();
+        httpHandler.Requests.Select(request => request.Path)
+            .Should()
+            .Equal("/api/v1/llm/services", "/api/v1/llm/status");
+    }
+
+    [Fact]
     public async Task UserConfigController_SaveLlmPreference_WithServiceId_WritesConfirmedRoute()
     {
         var httpHandler = new RecordingHttpHandler("""
@@ -616,6 +657,16 @@ public sealed class UserConfigProjectionAndControllerTests
               "allowed": true
             },
             {
+              "userServiceId": "svc-openai-backup",
+              "serviceSlug": "openai-work",
+              "displayName": "OpenAI Work Backup",
+              "routeValue": "/api/v1/proxy/s/openai-work-backup",
+              "models": ["gpt-5.5"],
+              "status": "ready",
+              "source": "user",
+              "allowed": true
+            },
+            {
               "userServiceId": "svc-anthropic",
               "serviceSlug": "anthropic-work",
               "serviceName": "Anthropic Work",
@@ -646,8 +697,8 @@ public sealed class UserConfigProjectionAndControllerTests
         payload.GatewayUrl.Should().Be("https://nyxid.example/api/v1/llm/gateway/v1");
         payload.Providers.Should().HaveCount(2);
         payload.Providers![1].ProviderName.Should().Be("Anthropic Work");
-        payload.ModelsByProvider!["openai-work"].Should().Equal("gpt-4.1", "gpt-5.4");
-        payload.SupportedModels.Should().Equal("gpt-4.1", "gpt-5.4", "claude-sonnet-4-5");
+        payload.ModelsByProvider!["openai-work"].Should().Equal("gpt-4.1", "gpt-5.4", "gpt-5.5");
+        payload.SupportedModels.Should().Equal("gpt-4.1", "gpt-5.4", "gpt-5.5", "claude-sonnet-4-5");
     }
 
     [Fact]
@@ -986,11 +1037,20 @@ public sealed class UserConfigProjectionAndControllerTests
         IConfiguration? configuration = null,
         string? bearerToken = null)
     {
+        var effectiveHttpClientFactory = httpClientFactory ?? new StubHttpClientFactory();
+        var effectiveConfiguration = configuration ?? new ConfigurationBuilder().Build();
+        var llmPreferenceService = new UserLlmPreferenceService(
+            queryPort,
+            commandService,
+            new NyxIdLlmCatalogHttpClient(
+                effectiveHttpClientFactory,
+                effectiveConfiguration,
+                NullLogger<NyxIdLlmCatalogHttpClient>.Instance));
         var controller = new UserConfigController(
             queryPort,
             commandService,
-            httpClientFactory ?? new StubHttpClientFactory(),
-            configuration ?? new ConfigurationBuilder().Build(),
+            llmPreferenceService,
+            effectiveConfiguration,
             NullLogger<UserConfigController>.Instance)
         {
             ControllerContext = new ControllerContext

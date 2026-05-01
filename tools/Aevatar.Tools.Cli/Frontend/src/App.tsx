@@ -5241,17 +5241,15 @@ function CloudConfigSection(props: {
               setUserConfigState(prev => ({ ...prev, loading: true }));
               const trimmedModel = userConfigState.defaultModel.trim();
               const trimmedRoute = normalizeUserLlmRoute(userConfigState.preferredLlmRoute);
-              await Promise.all([
-                api.userConfig.save({
-                  runtimeMode: runtimeConfig.runtimeMode,
-                  localRuntimeBaseUrl: normalizeRuntimeUrl(runtimeConfig.localRuntimeUrl, DEFAULT_LOCAL_RUNTIME_URL),
-                  remoteRuntimeBaseUrl: normalizeRuntimeUrl(runtimeConfig.remoteRuntimeUrl, DEFAULT_REMOTE_RUNTIME_URL),
-                }),
-                api.userConfig.saveLlmPreference({
-                  routeValue: trimmedRoute,
-                  ...(trimmedModel ? { model: trimmedModel } : {}),
-                }),
-              ]);
+              await api.userConfig.save({
+                runtimeMode: runtimeConfig.runtimeMode,
+                localRuntimeBaseUrl: normalizeRuntimeUrl(runtimeConfig.localRuntimeUrl, DEFAULT_LOCAL_RUNTIME_URL),
+                remoteRuntimeBaseUrl: normalizeRuntimeUrl(runtimeConfig.remoteRuntimeUrl, DEFAULT_REMOTE_RUNTIME_URL),
+              });
+              await api.userConfig.saveLlmPreference({
+                routeValue: trimmedRoute,
+                ...(trimmedModel ? { model: trimmedModel } : {}),
+              });
               flash('LLM config saved', 'success');
             } catch (error: any) {
               flash(error?.message || 'Failed to save LLM config', 'error');
