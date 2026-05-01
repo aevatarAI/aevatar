@@ -48,6 +48,7 @@ public static class IdentityOAuthEndpoints
         [FromServices] IExternalIdentityBindingQueryPort queryPort,
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] IProjectionReadinessPort projectionReadiness,
+        [FromServices] ExternalIdentityBindingProjectionPort bindingProjectionPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -88,6 +89,26 @@ public static class IdentityOAuthEndpoints
         {
             exchange = await brokerCallback.ExchangeAuthorizationCodeAsync(code, verifier, ct).ConfigureAwait(false);
         }
+        catch (AevatarOAuthClientNotProvisionedException ex)
+        {
+            // The broker now refuses to exchange a code when the snapshot's
+            // redirect_uri doesn't match the resolver's output (drift state
+            // protection added in this PR). This is the same "still
+            // initializing / drift not yet healed" condition the state-token
+            // decoder surfaces above, so route it to the same retry-friendly
+            // 400 path instead of letting the generic catch return 502
+            // token_exchange_failed — that misclassifies a self-recoverable
+            // condition as a NyxID outage.
+            logger.LogWarning(
+                ex,
+                "OAuth callback rejected because the OAuth client snapshot is missing or drifted; bootstrap is still healing. correlation={CorrelationId}",
+                decode.CorrelationId);
+            return Results.BadRequest(new
+            {
+                error = "client_not_provisioned",
+                detail = "Aevatar 集群正在初始化 NyxID 客户端,请 30 秒后回到 Lark 重新发送 /init。",
+            });
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "OAuth callback authorization-code exchange failed for correlation {CorrelationId}", decode.CorrelationId);
@@ -119,6 +140,18 @@ public static class IdentityOAuthEndpoints
         }
 
         var actorId = subject.ToActorId();
+
+        // Activate the binding projection scope BEFORE any readmodel query
+        // or actor dispatch. Without an active scope, the projector never
+        // subscribes to this actor's committed events and the readmodel
+        // stays empty — the next two checks (ResolveAsync below; the
+        // post-dispatch WaitForBindingStateAsync) would both miss the
+        // binding and the user gets stuck on the binding card forever.
+        // Same lifecycle pattern AevatarOAuthClientBootstrapService uses
+        // for the cluster-singleton OAuth client (issue #549 follow-up
+        // observed 2026-05-01).
+        await bindingProjectionPort.EnsureProjectionForActorAsync(actorId, ct).ConfigureAwait(false);
+
         if (await queryPort.ResolveAsync(subject, ct).ConfigureAwait(false) is not null)
         {
             // Concurrent /init protection: if the subject is already bound,
@@ -192,6 +225,36 @@ public static class IdentityOAuthEndpoints
         }
         catch (TimeoutException)
         {
+            // Distinguish two timeout shapes (PR #555 review): the actor's
+            // discard branch (legacy already-bound) keeps State.BindingId =
+            // existing != incoming, so WaitForBindingStateAsync NEVER matches
+            // — but the rebuild event we now emit has materialized the
+            // existing binding into the readmodel, so a final ResolveAsync
+            // here distinguishes:
+            //   1. ResolveAsync returns active binding != exchange.BindingId
+            //      → actor took the discard path; the incoming binding NyxID
+            //        just issued is an orphan. Revoke it and return the same
+            //        already_bound shape the up-front check above produces.
+            //   2. ResolveAsync still returns null → readmodel really has not
+            //      caught up yet; surface the existing pending-propagation
+            //      hint so the user retries.
+            // Without this branch the legacy heal path would (a) leave
+            // bnd_incoming as a permanent orphan at NyxID on every /init
+            // retry and (b) frustrate the user with binding_pending_propagation
+            // even though their existing binding is now visible.
+            var resolvedAfterTimeout = await queryPort.ResolveAsync(subject, ct).ConfigureAwait(false);
+            if (resolvedAfterTimeout is not null
+                && !string.Equals(resolvedAfterTimeout.Value, exchange.BindingId, StringComparison.Ordinal))
+            {
+                logger.LogInformation(
+                    "OAuth callback observed legacy already-bound on actor={ActorId}: existing={ExistingBindingId}, incoming={IncomingBindingId}; revoking the incoming binding so it does not orphan at NyxID.",
+                    actorId,
+                    resolvedAfterTimeout.Value,
+                    exchange.BindingId);
+                await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+                return Results.Ok(new { status = "already_bound", detail = "已绑定 NyxID 账号,可以回到 Lark 继续对话" });
+            }
+
             logger.LogWarning(
                 "Projection readiness timed out for actor={ActorId}, expected binding={BindingId}",
                 actorId,
@@ -229,9 +292,12 @@ public static class IdentityOAuthEndpoints
             var resolvedRedirectUri = NyxIdRedirectUriResolver.Resolve();
             var redirectUriDrifted = string.IsNullOrEmpty(snapshot.RedirectUri)
                 || !string.Equals(snapshot.RedirectUri, resolvedRedirectUri, StringComparison.Ordinal);
+            var status = redirectUriDrifted
+                ? "redirect_uri_drifted"
+                : snapshot.BrokerCapabilityObserved ? "ready" : "broker_capability_pending";
             return Results.Ok(new
             {
-                status = snapshot.BrokerCapabilityObserved ? "ready" : "broker_capability_pending",
+                status,
                 client_id = snapshot.ClientId,
                 client_id_issued_at = snapshot.ClientIdIssuedAt,
                 nyxid_authority = snapshot.NyxIdAuthority,

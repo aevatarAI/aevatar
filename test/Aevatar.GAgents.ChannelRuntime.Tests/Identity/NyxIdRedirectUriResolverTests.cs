@@ -13,6 +13,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 /// the production default and only accepts <c>AEVATAR_OAUTH_REDIRECT_BASE_URL</c>
 /// as override; wildcard hosts are filtered.
 /// </summary>
+[Collection(NyxIdRedirectUriEnvCollection.Name)]
 public sealed class NyxIdRedirectUriResolverTests : IDisposable
 {
     private readonly string? _savedOverride;

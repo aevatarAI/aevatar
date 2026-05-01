@@ -81,13 +81,16 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         ExternalSubjectRefExtensions.EnsureValid(externalSubject);
 
         var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
+        var redirectUri = ResolveRedirectUri();
+        EnsureRedirectUriCurrent(snapshot, redirectUri);
+
         var pkce = PkceHelper.GeneratePair();
         var correlationId = Guid.NewGuid().ToString("N");
         var stateToken = await _stateTokenCodec
             .EncodeAsync(correlationId, externalSubject, pkce.CodeVerifier, ct)
             .ConfigureAwait(false);
 
-        var url = BuildAuthorizeUrl(snapshot, stateToken, pkce.CodeChallenge);
+        var url = BuildAuthorizeUrl(snapshot, redirectUri, stateToken, pkce.CodeChallenge);
         var expiresAt = _timeProvider.GetUtcNow().Add(_options.StateTokenLifetime).ToUnixTimeSeconds();
         return new BindingChallenge
         {
@@ -243,6 +246,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
 
         var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
         var redirectUri = ResolveRedirectUri();
+        EnsureRedirectUriCurrent(snapshot, redirectUri);
 
         var form = new List<KeyValuePair<string, string>>
         {
@@ -284,9 +288,12 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         return new BrokerAuthorizationCodeResult(payload.BindingId, payload.IdToken, payload.AccessToken);
     }
 
-    private string BuildAuthorizeUrl(AevatarOAuthClientSnapshot snapshot, string stateToken, string codeChallenge)
+    private string BuildAuthorizeUrl(
+        AevatarOAuthClientSnapshot snapshot,
+        string redirectUri,
+        string stateToken,
+        string codeChallenge)
     {
-        var redirectUri = ResolveRedirectUri();
         var queryParts = new List<string>
         {
             "response_type=code",
@@ -298,6 +305,18 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             "code_challenge_method=S256",
         };
         return $"{snapshot.NyxIdAuthority.TrimEnd('/')}{AuthorizeEndpoint}?{string.Join("&", queryParts)}";
+    }
+
+    private static void EnsureRedirectUriCurrent(AevatarOAuthClientSnapshot snapshot, string resolvedRedirectUri)
+    {
+        if (!string.IsNullOrEmpty(snapshot.RedirectUri)
+            && string.Equals(snapshot.RedirectUri, resolvedRedirectUri, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        throw new AevatarOAuthClientNotProvisionedException(
+            "Aevatar OAuth client redirect_uri is not current. Bootstrap must re-run DCR before issuing NyxID authorize URLs.");
     }
 
     private static bool IsInvalidGrant(string body)
