@@ -58,6 +58,19 @@ message ExternalIdentityBindingRevokedEvent {
   string reason = 3;
 }
 
+// Persisted when an inbound CommitBindingCommand is discarded because the
+// actor already holds an active binding_id, OR when a deploy needs to re-
+// publish the authoritative state root for a legacy binding actor whose
+// projection scope was never activated. Apply is identity — the binding
+// facts are not mutated. The projector still sees a state-root publication
+// and materializes the existing binding into the readmodel, fixing the
+// 2026-05-01 production regression where the binding scope was missing
+// (issue #549 follow-up).
+message ExternalIdentityBindingProjectionRebuildRequestedEvent {
+  string reason = 1;
+  google.protobuf.Timestamp requested_at = 2;
+}
+
 // Stateless OAuth `state` token payload (HMAC-sealed, never in grain state).
 // Carries the correlation id, the originating external subject, the PKCE
 // verifier, and the absolute expiry. See ADR-0018 §Implementation Notes #1.

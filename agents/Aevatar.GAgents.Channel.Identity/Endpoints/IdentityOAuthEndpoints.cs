@@ -48,6 +48,7 @@ public static class IdentityOAuthEndpoints
         [FromServices] IExternalIdentityBindingQueryPort queryPort,
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] IProjectionReadinessPort projectionReadiness,
+        [FromServices] ExternalIdentityBindingProjectionPort bindingProjectionPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -139,6 +140,18 @@ public static class IdentityOAuthEndpoints
         }
 
         var actorId = subject.ToActorId();
+
+        // Activate the binding projection scope BEFORE any readmodel query
+        // or actor dispatch. Without an active scope, the projector never
+        // subscribes to this actor's committed events and the readmodel
+        // stays empty — the next two checks (ResolveAsync below; the
+        // post-dispatch WaitForBindingStateAsync) would both miss the
+        // binding and the user gets stuck on the binding card forever.
+        // Same lifecycle pattern AevatarOAuthClientBootstrapService uses
+        // for the cluster-singleton OAuth client (issue #549 follow-up
+        // observed 2026-05-01).
+        await bindingProjectionPort.EnsureProjectionForActorAsync(actorId, ct).ConfigureAwait(false);
+
         if (await queryPort.ResolveAsync(subject, ct).ConfigureAwait(false) is not null)
         {
             // Concurrent /init protection: if the subject is already bound,

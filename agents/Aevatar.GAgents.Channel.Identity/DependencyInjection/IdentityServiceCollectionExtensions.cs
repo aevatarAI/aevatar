@@ -75,6 +75,15 @@ public static class IdentityServiceCollectionExtensions
             ExternalIdentityBindingDocumentMetadataProvider>();
         services.TryAddSingleton<IExternalIdentityBindingQueryPort, ExternalIdentityBindingProjectionQueryPort>();
         services.TryAddSingleton<IProjectionReadinessPort, ExternalIdentityBindingProjectionReadinessPort>();
+        // Projection scope activator for the per-binding actor — callback
+        // handler calls EnsureProjectionForActorAsync(bindingActorId) before
+        // dispatching CommitBindingCommand so the projector subscribes to
+        // the actor's committed events and the readmodel materializes.
+        // Without this the binding readmodel stays empty, the readiness
+        // wait in /api/oauth/nyxid-callback times out, and the next
+        // inbound message's gate keeps re-sending the binding card. See
+        // issue #549 follow-up observed 2026-05-01.
+        services.TryAddSingleton<ExternalIdentityBindingProjectionPort>();
 
         // ─── Cluster-singleton OAuth client projection ───
         services.AddProjectionMaterializationRuntimeCore<
