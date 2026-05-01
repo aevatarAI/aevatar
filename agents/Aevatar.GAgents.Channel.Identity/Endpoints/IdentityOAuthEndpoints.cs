@@ -225,6 +225,36 @@ public static class IdentityOAuthEndpoints
         }
         catch (TimeoutException)
         {
+            // Distinguish two timeout shapes (PR #555 review): the actor's
+            // discard branch (legacy already-bound) keeps State.BindingId =
+            // existing != incoming, so WaitForBindingStateAsync NEVER matches
+            // — but the rebuild event we now emit has materialized the
+            // existing binding into the readmodel, so a final ResolveAsync
+            // here distinguishes:
+            //   1. ResolveAsync returns active binding != exchange.BindingId
+            //      → actor took the discard path; the incoming binding NyxID
+            //        just issued is an orphan. Revoke it and return the same
+            //        already_bound shape the up-front check above produces.
+            //   2. ResolveAsync still returns null → readmodel really has not
+            //      caught up yet; surface the existing pending-propagation
+            //      hint so the user retries.
+            // Without this branch the legacy heal path would (a) leave
+            // bnd_incoming as a permanent orphan at NyxID on every /init
+            // retry and (b) frustrate the user with binding_pending_propagation
+            // even though their existing binding is now visible.
+            var resolvedAfterTimeout = await queryPort.ResolveAsync(subject, ct).ConfigureAwait(false);
+            if (resolvedAfterTimeout is not null
+                && !string.Equals(resolvedAfterTimeout.Value, exchange.BindingId, StringComparison.Ordinal))
+            {
+                logger.LogInformation(
+                    "OAuth callback observed legacy already-bound on actor={ActorId}: existing={ExistingBindingId}, incoming={IncomingBindingId}; revoking the incoming binding so it does not orphan at NyxID.",
+                    actorId,
+                    resolvedAfterTimeout.Value,
+                    exchange.BindingId);
+                await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+                return Results.Ok(new { status = "already_bound", detail = "已绑定 NyxID 账号,可以回到 Lark 继续对话" });
+            }
+
             logger.LogWarning(
                 "Projection readiness timed out for actor={ActorId}, expected binding={BindingId}",
                 actorId,
