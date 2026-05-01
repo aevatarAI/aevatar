@@ -1,5 +1,6 @@
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
+using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.NyxidChat.Slash;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
@@ -10,13 +11,34 @@ using StudioConfig = Aevatar.Studio.Application.Studio.Abstractions.UserConfig;
 namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 
 /// <summary>
-/// Pins the user-visible behaviour of /model (issue #513 phase 5):
-///   - <c>/model</c> shows current sender model + bot owner default
-///   - <c>/model use &lt;name&gt;</c> writes user-config-&lt;binding-id&gt;
-///   - <c>/model reset</c> clears the sender override
+/// Pins the deterministic /model selection path for issue #556.
 /// </summary>
 public sealed class ModelSlashCommandHandlerTests
 {
+    private static readonly NyxIdLlmService ChronoLlm = new(
+        UserServiceId: "svc-chrono",
+        ServiceSlug: "chrono-llm",
+        DisplayName: "chrono-llm shared",
+        RouteValue: "/api/v1/proxy/s/chrono-llm",
+        DefaultModel: "gpt-5.4",
+        Models: ["gpt-5.4"],
+        Status: "ready",
+        Source: "shared",
+        Allowed: true,
+        Description: "Shared service");
+
+    private static readonly NyxIdLlmService OpenAi = new(
+        UserServiceId: "svc-openai",
+        ServiceSlug: "openai-work",
+        DisplayName: "OpenAI (work)",
+        RouteValue: "/api/v1/proxy/s/openai-work",
+        DefaultModel: "gpt-4o",
+        Models: ["gpt-4o"],
+        Status: "ready",
+        Source: "user",
+        Allowed: true,
+        Description: "Work key");
+
     private static ChannelSlashCommandContext Context(
         string subAndArgs = "",
         string? bindingValue = "bnd_sender",
@@ -39,174 +61,201 @@ public sealed class ModelSlashCommandHandlerTests
     };
 
     [Fact]
-    public void RequiresBinding_IsTrue()
+    public void RequiresBinding_AndAliases_AreDeclared()
     {
-        var handler = new ModelChannelSlashCommandHandler(NullLogger<ModelChannelSlashCommandHandler>.Instance);
+        var handler = CreateHandler();
+
         handler.RequiresBinding.Should().BeTrue();
+        handler.Aliases.Should().Equal("models", "llm");
+        handler.Usage.ArgumentSyntax.Should().Contain("use");
     }
 
     [Fact]
-    public async Task List_ShowsSenderAndOwnerModels()
+    public async Task List_RendersAvailableServices()
     {
-        // Owner default lives under the registration scope, NOT the ambient
-        // overload — channel inbound has no Studio HTTP request behind it,
-        // so the ambient resolver would return `default` / unrelated state
-        // (PR #521 codex review #11). The handler now reads
-        // queryPort.GetAsync(context.RegistrationScopeId, ct).
         var queryPort = new StubUserConfigQueryPort
         {
-            ByScope =
-            {
-                ["bnd_sender"] = MakeConfig("sender-claude"),
-                ["owner-scope"] = MakeConfig("owner-gpt"),
-            },
+            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "gpt-5.4", route: ChronoLlm.RouteValue) },
         };
-        var handler = new ModelChannelSlashCommandHandler(
-            NullLogger<ModelChannelSlashCommandHandler>.Instance, queryPort);
+        var handler = CreateHandler(queryPort: queryPort);
 
         var reply = await handler.HandleAsync(Context(subAndArgs: "list"), default);
 
         reply.Should().NotBeNull();
-        reply!.Text.Should().Contain("sender-claude");
-        reply.Text.Should().Contain("owner-gpt");
+        reply!.Text.Should().Contain("chrono-llm shared");
+        reply.Text.Should().Contain("OpenAI (work)");
         reply.Text.Should().Contain("/model use");
-        // Pin the scope semantics: ambient overload must NOT be used for
-        // owner-default lookup on the channel inbound path.
-        queryPort.AmbientCalls.Should().Be(0);
-        queryPort.ScopedCalls.Should().Contain("owner-scope");
+        reply.Text.Should().Contain("✓");
     }
 
     [Fact]
-    public async Task List_HandlesMissingSenderConfig()
+    public async Task List_RendersSetupHint_WhenCatalogIsEmpty()
     {
-        var queryPort = new StubUserConfigQueryPort
-        {
-            ByScope =
-            {
-                // No sender override — only bot owner default under the
-                // registration scope.
-                ["owner-scope"] = MakeConfig("owner-gpt"),
-            },
-        };
-        var handler = new ModelChannelSlashCommandHandler(
-            NullLogger<ModelChannelSlashCommandHandler>.Instance, queryPort);
+        var catalog = new StubCatalogClient { Services = [] };
+        var handler = CreateHandler(catalog);
 
         var reply = await handler.HandleAsync(Context(), default);
 
         reply.Should().NotBeNull();
-        reply!.Text.Should().Contain("(未设置)");
-        reply.Text.Should().Contain("owner-gpt");
+        reply!.Text.Should().Contain("还没接入任何 LLM service");
+        reply.Text.Should().Contain("/model preset");
+        reply.Text.Should().Contain("chrono-llm");
     }
 
     [Fact]
-    public async Task List_FallsBackToAmbient_WhenRegistrationScopeIdEmpty()
+    public async Task Use_Number_WritesRouteAndModel()
     {
-        // Defence: a misconfigured registration with an empty scope must
-        // not throw IUserConfigQueryPort.GetAsync(string) on a blank id;
-        // fall back to the ambient overload so /model list still renders
-        // *something* useful instead of a stack trace.
-        var queryPort = new StubUserConfigQueryPort
-        {
-            ByScope = { ["bnd_sender"] = MakeConfig("sender-claude") },
-            Ambient = MakeConfig("owner-gpt"),
-        };
-        var handler = new ModelChannelSlashCommandHandler(
-            NullLogger<ModelChannelSlashCommandHandler>.Instance, queryPort);
-
-        var reply = await handler.HandleAsync(
-            Context(subAndArgs: "list", registrationScopeId: string.Empty),
-            default);
-
-        reply.Should().NotBeNull();
-        reply!.Text.Should().Contain("owner-gpt");
-        queryPort.AmbientCalls.Should().Be(1);
-    }
-
-    [Fact]
-    public async Task Use_WithoutModelName_ReturnsUsage()
-    {
-        var queryPort = new StubUserConfigQueryPort();
         var commandService = new StubUserConfigCommandService();
-        var handler = new ModelChannelSlashCommandHandler(
-            NullLogger<ModelChannelSlashCommandHandler>.Instance, queryPort, commandService);
+        var handler = CreateHandler(commandService: commandService);
 
-        var reply = await handler.HandleAsync(Context(subAndArgs: "use"), default);
-
-        reply.Should().NotBeNull();
-        reply!.Text.Should().Contain("/model use <model-name>");
-        commandService.SavedConfigs.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task Use_WritesSenderModel()
-    {
-        var queryPort = new StubUserConfigQueryPort
-        {
-            ByScope = { ["bnd_sender"] = MakeConfig(string.Empty) },
-        };
-        var commandService = new StubUserConfigCommandService();
-        var handler = new ModelChannelSlashCommandHandler(
-            NullLogger<ModelChannelSlashCommandHandler>.Instance, queryPort, commandService);
-
-        var reply = await handler.HandleAsync(
-            Context(subAndArgs: "use claude-opus-4-7"),
-            default);
+        var reply = await handler.HandleAsync(Context(subAndArgs: "use 2"), default);
 
         reply.Should().NotBeNull();
-        reply!.Text.Should().Contain("claude-opus-4-7");
-        commandService.SavedConfigs.Should().ContainSingle();
-        var saved = commandService.SavedConfigs[0];
+        reply!.Text.Should().Contain("OpenAI (work)");
+        var saved = commandService.SavedConfigs.Should().ContainSingle().Subject;
         saved.ScopeId.Should().Be("bnd_sender");
-        saved.Config.DefaultModel.Should().Be("claude-opus-4-7");
+        saved.Config.PreferredLlmRoute.Should().Be(OpenAi.RouteValue);
+        saved.Config.DefaultModel.Should().Be("gpt-4o");
     }
 
     [Fact]
-    public async Task Reset_ClearsSenderModel()
+    public async Task Use_ServiceName_WritesMatchingRoute()
+    {
+        var commandService = new StubUserConfigCommandService();
+        var handler = CreateHandler(commandService: commandService);
+
+        var reply = await handler.HandleAsync(Context(subAndArgs: "use openai"), default);
+
+        reply.Should().NotBeNull();
+        commandService.SavedConfigs.Should().ContainSingle()
+            .Subject.Config.PreferredLlmRoute.Should().Be(OpenAi.RouteValue);
+    }
+
+    [Fact]
+    public async Task Use_RawModel_WritesModelOnlyAndPreservesRoute()
     {
         var queryPort = new StubUserConfigQueryPort
         {
-            ByScope = { ["bnd_sender"] = MakeConfig("sender-old") },
+            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "old-model", route: ChronoLlm.RouteValue) },
         };
         var commandService = new StubUserConfigCommandService();
-        var handler = new ModelChannelSlashCommandHandler(
-            NullLogger<ModelChannelSlashCommandHandler>.Instance, queryPort, commandService);
+        var handler = CreateHandler(queryPort: queryPort, commandService: commandService);
+
+        var reply = await handler.HandleAsync(Context(subAndArgs: "use claude-sonnet-4"), default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("claude-sonnet-4");
+        var saved = commandService.SavedConfigs.Should().ContainSingle().Subject;
+        saved.Config.PreferredLlmRoute.Should().Be(ChronoLlm.RouteValue);
+        saved.Config.DefaultModel.Should().Be("claude-sonnet-4");
+    }
+
+    [Fact]
+    public async Task Preset_UseExistingService_WritesRouteAndModel()
+    {
+        var catalog = new StubCatalogClient { Services = [] };
+        var commandService = new StubUserConfigCommandService();
+        var handler = CreateHandler(catalog, commandService: commandService);
+
+        var reply = await handler.HandleAsync(Context(subAndArgs: "preset chrono-shared"), default);
+
+        reply.Should().NotBeNull();
+        var saved = commandService.SavedConfigs.Should().ContainSingle().Subject;
+        saved.Config.PreferredLlmRoute.Should().Be(ChronoLlm.RouteValue);
+        saved.Config.DefaultModel.Should().Be(ChronoLlm.DefaultModel);
+    }
+
+    [Fact]
+    public async Task Reset_ClearsSenderRouteAndModel()
+    {
+        var queryPort = new StubUserConfigQueryPort
+        {
+            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "old-model", route: ChronoLlm.RouteValue) },
+        };
+        var commandService = new StubUserConfigCommandService();
+        var handler = CreateHandler(queryPort: queryPort, commandService: commandService);
 
         var reply = await handler.HandleAsync(Context(subAndArgs: "reset"), default);
 
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("已清空");
         var saved = commandService.SavedConfigs.Should().ContainSingle().Subject;
-        saved.ScopeId.Should().Be("bnd_sender");
         saved.Config.DefaultModel.Should().BeEmpty();
+        saved.Config.PreferredLlmRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
     }
 
-    private static StudioConfig MakeConfig(string defaultModel) => new(
+    [Fact]
+    public async Task Use_NumberOutsideAvailableRange_ReturnsFriendlyMessage()
+    {
+        var commandService = new StubUserConfigCommandService();
+        var handler = CreateHandler(commandService: commandService);
+
+        var reply = await handler.HandleAsync(Context(subAndArgs: "use 7"), default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("没有编号 7");
+        commandService.SavedConfigs.Should().BeEmpty();
+    }
+
+    private static ModelChannelSlashCommandHandler CreateHandler(
+        StubCatalogClient? catalog = null,
+        StubUserConfigQueryPort? queryPort = null,
+        StubUserConfigCommandService? commandService = null)
+    {
+        catalog ??= new StubCatalogClient();
+        queryPort ??= new StubUserConfigQueryPort();
+        commandService ??= new StubUserConfigCommandService();
+
+        var options = new DefaultUserLlmOptionsService(catalog, queryPort);
+        var selection = new DefaultUserLlmSelectionService(options, catalog, queryPort, commandService);
+        return new ModelChannelSlashCommandHandler(
+            NullLogger<ModelChannelSlashCommandHandler>.Instance,
+            options,
+            selection,
+            new TextUserLlmOptionsRenderer());
+    }
+
+    private static StudioConfig MakeConfig(
+        string defaultModel,
+        string route = UserConfigLlmRouteDefaults.Gateway) => new(
         DefaultModel: defaultModel,
-        PreferredLlmRoute: UserConfigLlmRouteDefaults.Gateway,
+        PreferredLlmRoute: route,
         RuntimeMode: UserConfigRuntimeDefaults.LocalMode,
         LocalRuntimeBaseUrl: UserConfigRuntimeDefaults.LocalRuntimeBaseUrl,
         RemoteRuntimeBaseUrl: UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl,
         GithubUsername: null,
         MaxToolRounds: 0);
 
+    private sealed class StubCatalogClient : INyxIdLlmServiceCatalogClient
+    {
+        public IReadOnlyList<NyxIdLlmService> Services { get; init; } = [ChronoLlm, OpenAi];
+
+        public UserLlmSetupHint SetupHint { get; init; } = new(
+            "https://nyxid.example/services",
+            [
+                new UserLlmPreset(
+                    "chrono-shared",
+                    "使用 chrono-llm 共享额度",
+                    "无需自带 key",
+                    new UseExistingService(ChronoLlm.UserServiceId, ChronoLlm.RouteValue, ChronoLlm.DefaultModel)),
+            ]);
+
+        public Task<IReadOnlyList<NyxIdLlmService>> ListAsync(UserLlmOptionsQuery query, CancellationToken ct) =>
+            Task.FromResult(Services);
+
+        public Task<UserLlmSetupHint> GetSetupHintAsync(UserLlmOptionsQuery query, CancellationToken ct) =>
+            Task.FromResult(SetupHint);
+    }
+
     private sealed class StubUserConfigQueryPort : IUserConfigQueryPort
     {
         public Dictionary<string, StudioConfig> ByScope { get; } = new(StringComparer.Ordinal);
-        public StudioConfig Ambient { get; set; } = new(string.Empty);
-        public int AmbientCalls { get; private set; }
-        public List<string> ScopedCalls { get; } = new();
 
-        public Task<StudioConfig> GetAsync(CancellationToken ct = default)
-        {
-            AmbientCalls++;
-            return Task.FromResult(Ambient);
-        }
+        public Task<StudioConfig> GetAsync(CancellationToken ct = default) =>
+            Task.FromResult(new StudioConfig(string.Empty));
 
-        public Task<StudioConfig> GetAsync(string scopeId, CancellationToken ct = default)
-        {
-            ScopedCalls.Add(scopeId);
-            return Task.FromResult(ByScope.TryGetValue(scopeId, out var cfg) ? cfg : new StudioConfig(string.Empty));
-        }
+        public Task<StudioConfig> GetAsync(string scopeId, CancellationToken ct = default) =>
+            Task.FromResult(ByScope.TryGetValue(scopeId, out var cfg) ? cfg : new StudioConfig(string.Empty));
     }
 
     private sealed class StubUserConfigCommandService : IUserConfigCommandService

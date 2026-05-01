@@ -41,6 +41,22 @@ public sealed class ChannelSlashCommandRegistryTests
     }
 
     [Fact]
+    public void ListDescriptors_ReturnsOneUsagePerHandler()
+    {
+        var registry = new ChannelSlashCommandRegistry(new IChannelSlashCommandHandler[]
+        {
+            new StubHandler("init", usage: new ChannelSlashCommandUsage("init", string.Empty, "Bind")),
+            new StubHandler("model", aliases: new[] { "models" }, usage: new ChannelSlashCommandUsage("model", "use <name>", "Pick model")),
+        });
+
+        registry.ListDescriptors().Should().BeEquivalentTo(new[]
+        {
+            new ChannelSlashCommandUsage("init", string.Empty, "Bind"),
+            new ChannelSlashCommandUsage("model", "use <name>", "Pick model"),
+        }, options => options.WithStrictOrdering());
+    }
+
+    [Fact]
     public void Throws_OnDuplicateName()
     {
         var act = () => new ChannelSlashCommandRegistry(new IChannelSlashCommandHandler[]
@@ -79,16 +95,22 @@ public sealed class ChannelSlashCommandRegistryTests
     {
         private readonly string _name;
         private readonly IReadOnlyList<string> _aliases;
+        private readonly ChannelSlashCommandUsage? _usage;
 
-        public StubHandler(string name, IReadOnlyList<string>? aliases = null)
+        public StubHandler(
+            string name,
+            IReadOnlyList<string>? aliases = null,
+            ChannelSlashCommandUsage? usage = null)
         {
             _name = name;
             _aliases = aliases ?? Array.Empty<string>();
+            _usage = usage;
         }
 
         public string Name => _name;
         public IReadOnlyList<string> Aliases => _aliases;
         public bool RequiresBinding => false;
+        public ChannelSlashCommandUsage Usage => _usage ?? new ChannelSlashCommandUsage(_name, string.Empty, string.Empty);
 
         public Task<MessageContent?> HandleAsync(ChannelSlashCommandContext context, CancellationToken ct) =>
             Task.FromResult<MessageContent?>(null);

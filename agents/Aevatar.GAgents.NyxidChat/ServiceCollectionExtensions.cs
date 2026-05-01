@@ -1,8 +1,10 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.NyxidChat.Slash;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -52,6 +54,10 @@ public static class ServiceCollectionExtensions
         // Registered here (not in Channel.Identity) because the handler depends
         // on Studio.Application UserConfig ports; Channel.Identity intentionally
         // does not pull Studio dependencies.
+        services.TryAddSingleton<INyxIdLlmServiceCatalogClient, StubNyxIdLlmServiceCatalogClient>();
+        services.TryAddSingleton<IUserLlmOptionsService, DefaultUserLlmOptionsService>();
+        services.TryAddSingleton<IUserLlmSelectionService, DefaultUserLlmSelectionService>();
+        services.TryAddSingleton<IUserLlmOptionsRenderer<MessageContent>, TextUserLlmOptionsRenderer>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelSlashCommandHandler, ModelChannelSlashCommandHandler>());
 
         return services;

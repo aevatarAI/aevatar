@@ -714,7 +714,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         CancellationToken ct)
     {
         AgentBuilderFlowDecision? decision = null;
-        var relayDecisionMatched = NyxRelayAgentBuilderFlow.TryResolve(inboundEvent, out decision);
+        var relayDecisionMatched = NyxRelayAgentBuilderFlow.TryResolve(
+            inboundEvent,
+            out decision,
+            _services.GetService<ChannelSlashCommandRegistry>());
         if (!relayDecisionMatched &&
             ((decision = await AgentBuilderCardFlow.TryResolveAsync(
                     inboundEvent,
