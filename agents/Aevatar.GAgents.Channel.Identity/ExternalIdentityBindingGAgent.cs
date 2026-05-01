@@ -19,27 +19,22 @@ namespace Aevatar.GAgents.Channel.Identity;
 public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalIdentityBindingState>
 {
     /// <inheritdoc />
-    protected override ExternalIdentityBindingState TransitionState(ExternalIdentityBindingState current, IMessage evt)
-    {
-        // Log unrecognised event types so a proto schema drift (or stale
-        // event store entry from a removed event type) surfaces in operator
-        // dashboards rather than silently being dropped via OrCurrent().
-        // Production deployments should treat these as a regression signal.
-        if (evt is not null
-            && evt is not ExternalIdentityBoundEvent
-            && evt is not ExternalIdentityBindingRevokedEvent)
-        {
-            Logger.LogWarning(
-                "ExternalIdentityBindingGAgent received unrecognised event type {EventType}; state unchanged",
-                evt.GetType().FullName);
-        }
-
-        return StateTransitionMatcher
+    /// <remarks>
+    /// <see cref="StateTransitionMatcher"/> handles <c>Any</c>-wrapped payloads
+    /// transparently via <c>ProtobufContractCompatibility.TryUnpack</c>, so the
+    /// event-store's wrapped form ("type.googleapis.com/...") is matched the
+    /// same as a directly-typed instance. No "unrecognised event type"
+    /// pre-check fires here — the earlier guard incorrectly classified every
+    /// Any-wrapped event as unknown and produced noisy warnings on every
+    /// activation replay.
+    /// </remarks>
+    protected override ExternalIdentityBindingState TransitionState(ExternalIdentityBindingState current, IMessage evt) =>
+        StateTransitionMatcher
             .Match(current, evt)
             .On<ExternalIdentityBoundEvent>(ApplyBound)
             .On<ExternalIdentityBindingRevokedEvent>(ApplyRevoked)
+            .On<ExternalIdentityBindingProjectionRebuildRequestedEvent>(static (state, _) => state)
             .OrCurrent();
-    }
 
     // ─── Commands ───
 
@@ -82,8 +77,23 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
 
         if (!string.IsNullOrEmpty(State.BindingId))
         {
+            // Steady-state branch: persist a no-op rebuild request so the
+            // projector materializes the existing binding into the readmodel.
+            // Without this, a legacy binding actor whose projection scope
+            // was never activated (issue #549 follow-up: the binding scope
+            // missed an EnsureProjectionForActorAsync wiring while every
+            // other GAgent had one) leaves the readmodel empty, the OAuth
+            // callback's readiness wait times out, and the next inbound
+            // message's binding gate keeps re-sending the user back to /init.
+            // Apply is identity, so the binding facts are not mutated by
+            // this event.
+            await PersistDomainEventAsync(new ExternalIdentityBindingProjectionRebuildRequestedEvent
+            {
+                Reason = "commit_already_bound",
+                RequestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            });
             Logger.LogInformation(
-                "CommitBinding discarded: already bound for {Platform}:{Tenant}:{User} (existing={ExistingBindingId}, incoming={IncomingBindingId})",
+                "CommitBinding discarded: already bound for {Platform}:{Tenant}:{User} (existing={ExistingBindingId}, incoming={IncomingBindingId}); rebuild requested so the projector materializes the existing binding",
                 cmd.ExternalSubject.Platform,
                 cmd.ExternalSubject.Tenant,
                 cmd.ExternalSubject.ExternalUserId,
