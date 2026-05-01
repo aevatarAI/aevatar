@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -279,15 +280,17 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
         string accessToken,
         CancellationToken ct)
     {
-        var statusUrl = $"{authorityBase}/api/v1/llm/services";
-        using var request = new HttpRequestMessage(HttpMethod.Get, statusUrl);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-
-        using var response = await _httpClientFactory.CreateClient().SendAsync(request, ct);
-        if (!response.IsSuccessStatusCode)
+        using var response = await SendNyxIdLlmCatalogRequestAsync(authorityBase, accessToken, "/api/v1/llm/services", ct);
+        if (!response.IsSuccessStatusCode &&
+            response.StatusCode != HttpStatusCode.NotFound)
             return [];
 
-        var body = await response.Content.ReadAsStringAsync(ct);
+        var body = response.StatusCode == HttpStatusCode.NotFound
+            ? await FetchLegacyLlmStatusAsync(authorityBase, accessToken, ct)
+            : await response.Content.ReadAsStringAsync(ct);
+        if (string.IsNullOrWhiteSpace(body))
+            return [];
+
         return ParseLlmServices(body)
             .Select(NormalizeProviderStatus)
             .Where(provider =>
@@ -296,6 +299,29 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
                 !string.IsNullOrWhiteSpace(provider.ProviderSlug) &&
                 !string.IsNullOrWhiteSpace(provider.ProxyUrl))
             .ToList();
+    }
+
+    private async Task<string?> FetchLegacyLlmStatusAsync(
+        string authorityBase,
+        string accessToken,
+        CancellationToken ct)
+    {
+        using var response = await SendNyxIdLlmCatalogRequestAsync(authorityBase, accessToken, "/api/v1/llm/status", ct);
+        return response.IsSuccessStatusCode
+            ? await response.Content.ReadAsStringAsync(ct)
+            : null;
+    }
+
+    private async Task<HttpResponseMessage> SendNyxIdLlmCatalogRequestAsync(
+        string authorityBase,
+        string accessToken,
+        string path,
+        CancellationToken ct)
+    {
+        var statusUrl = $"{authorityBase}{path}";
+        using var request = new HttpRequestMessage(HttpMethod.Get, statusUrl);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        return await _httpClientFactory.CreateClient().SendAsync(request, ct).ConfigureAwait(false);
     }
 
     private static IReadOnlyList<StreamingProxyNyxProviderStatus> ParseLlmServices(string body)
@@ -323,7 +349,40 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
             return ParseLlmServicesArray(itemsElement);
         }
 
+        if (root.TryGetProperty("providers", out var providersElement) &&
+            providersElement.ValueKind == JsonValueKind.Array)
+        {
+            return ParseLegacyLlmStatus(root, providersElement);
+        }
+
         return [];
+    }
+
+    private static IReadOnlyList<StreamingProxyNyxProviderStatus> ParseLegacyLlmStatus(
+        JsonElement root,
+        JsonElement providersElement)
+    {
+        var supportedModels = ReadStringArray(root, "supported_models", "supportedModels");
+        var modelsByProvider = ReadStringMapArray(root, "models_by_provider", "modelsByProvider");
+        var providers = ParseLlmServicesArray(providersElement)
+            .Select(NormalizeProviderStatus)
+            .ToList();
+
+        foreach (var provider in providers)
+        {
+            if (provider.Models is { Count: > 0 } ||
+                string.IsNullOrWhiteSpace(provider.ProviderSlug))
+            {
+                continue;
+            }
+
+            provider.Models = modelsByProvider.TryGetValue(provider.ProviderSlug, out var providerModels) &&
+                              providerModels.Count > 0
+                ? providerModels.ToList()
+                : supportedModels.ToList();
+        }
+
+        return providers;
     }
 
     private static IReadOnlyList<StreamingProxyNyxProviderStatus> ParseLlmServicesArray(JsonElement element)
@@ -339,6 +398,63 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
         }
 
         return services;
+    }
+
+    private static IReadOnlyList<string> ReadStringArray(JsonElement element, params string[] propertyNames)
+    {
+        foreach (var propertyName in propertyNames)
+        {
+            if (!element.TryGetProperty(propertyName, out var property) ||
+                property.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            return property
+                .EnumerateArray()
+                .Where(item => item.ValueKind == JsonValueKind.String)
+                .Select(item => item.GetString()?.Trim())
+                .Where(item => !string.IsNullOrWhiteSpace(item))
+                .Select(item => item!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        return [];
+    }
+
+    private static Dictionary<string, IReadOnlyList<string>> ReadStringMapArray(
+        JsonElement element,
+        params string[] propertyNames)
+    {
+        foreach (var propertyName in propertyNames)
+        {
+            if (!element.TryGetProperty(propertyName, out var property) ||
+                property.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var result = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in property.EnumerateObject())
+            {
+                if (entry.Value.ValueKind != JsonValueKind.Array)
+                    continue;
+
+                result[entry.Name] = entry.Value
+                    .EnumerateArray()
+                    .Where(item => item.ValueKind == JsonValueKind.String)
+                    .Select(item => item.GetString()?.Trim())
+                    .Where(item => !string.IsNullOrWhiteSpace(item))
+                    .Select(item => item!)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            }
+
+            return result;
+        }
+
+        return new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
     }
 
     private async Task<NyxIdUserLlmPreferences> GetPreferencesAsync(CancellationToken ct)
@@ -548,6 +664,7 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
             provider.Id,
             TryGetAdditionalString(provider.AdditionalProperties, "userServiceId"));
         provider.Allowed ??= TryGetAdditionalBool(provider.AdditionalProperties, "allowed");
+        provider.Allowed ??= string.Equals(provider.Status, "ready", StringComparison.OrdinalIgnoreCase);
         return provider;
     }
 

@@ -208,6 +208,28 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
         leftEvents.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task EnsureParticipantsJoinedAsync_ShouldFallbackToLegacyStatus_WhenServicesEndpointIsMissing()
+    {
+        var handler = new StreamingProxyHttpHandler(servicesNotFound: true);
+        var (coordinator, actor, store, _) = CreateCoordinator(null, null, handler);
+
+        var participants = await coordinator.EnsureParticipantsJoinedAsync(
+            "scope-1",
+            "room-1",
+            actor,
+            store,
+            "test-token",
+            CancellationToken.None);
+
+        handler.RequestPaths.Should().Equal("/api/v1/llm/services", "/api/v1/llm/status");
+        participants.Should().ContainSingle();
+        participants.Single().RoutePreference.Should().Be("/api/v1/proxy/s/openclaw/legacy");
+        participants.Single().Model.Should().Be("legacy-model");
+        store.ListParticipants("room-1").Should().ContainSingle(entry =>
+            entry.AgentId.Contains("svc-legacy", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static (StreamingProxyNyxParticipantCoordinator Coordinator, RecordingActor Actor, RecordingParticipantStore Store, RecordingLlmProvider Provider) CreateCoordinator()
         => CreateCoordinator(null);
 
@@ -217,9 +239,10 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
 
     private static (StreamingProxyNyxParticipantCoordinator Coordinator, RecordingActor Actor, RecordingParticipantStore Store, RecordingLlmProvider Provider) CreateCoordinator(
         Func<LLMRequest, LLMResponse>? responseFactory,
-        Func<LLMRequest, IReadOnlyList<LLMStreamChunk>>? streamFactory)
+        Func<LLMRequest, IReadOnlyList<LLMStreamChunk>>? streamFactory,
+        StreamingProxyHttpHandler? handler = null)
     {
-        var handler = new StreamingProxyHttpHandler();
+        handler ??= new StreamingProxyHttpHandler();
         var httpClient = new HttpClient(handler);
         var httpClientFactory = new StubHttpClientFactory(httpClient);
         var provider = new RecordingLlmProvider(responseFactory, streamFactory);
@@ -240,7 +263,7 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
         return (coordinator, new RecordingActor("room-1"), new RecordingParticipantStore(), provider);
     }
 
-    private sealed class StreamingProxyHttpHandler : HttpMessageHandler
+    private sealed class StreamingProxyHttpHandler(bool servicesNotFound = false) : HttpMessageHandler
     {
         private static readonly string ServicesJson = """
             {
@@ -279,11 +302,42 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
             }
             """;
 
+        private static readonly string LegacyStatusJson = """
+            {
+              "providers": [
+                {
+                  "user_service_id": "svc-legacy",
+                  "provider_slug": "openclaw",
+                  "provider_name": "OpenClaw Legacy",
+                  "status": "ready",
+                  "proxy_url": "/api/v1/proxy/s/openclaw/legacy"
+                }
+              ],
+              "models_by_provider": {
+                "openclaw": ["legacy-model"]
+              },
+              "supported_models": ["fallback-model"]
+            }
+            """;
+
+        public List<string> RequestPaths { get; } = [];
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+            RequestPaths.Add(path);
             if (path.EndsWith("/api/v1/llm/services", StringComparison.Ordinal))
-                return Task.FromResult(JsonResponse(ServicesJson));
+            {
+                return Task.FromResult(servicesNotFound
+                    ? new HttpResponseMessage(HttpStatusCode.NotFound)
+                    {
+                        Content = new StringContent("""{"error":"not found"}""", Encoding.UTF8, "application/json"),
+                    }
+                    : JsonResponse(ServicesJson));
+            }
+
+            if (path.EndsWith("/api/v1/llm/status", StringComparison.Ordinal))
+                return Task.FromResult(JsonResponse(LegacyStatusJson));
 
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
             {

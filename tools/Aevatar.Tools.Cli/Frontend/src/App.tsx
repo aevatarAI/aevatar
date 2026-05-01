@@ -334,6 +334,17 @@ function resolveUserRuntimeConfig(userConfigData?: any) {
   };
 }
 
+function buildUserConfigRollbackPayload(userConfigData?: any) {
+  const runtimeConfig = resolveUserRuntimeConfig(userConfigData);
+  return {
+    defaultModel: String(userConfigData?.defaultModel || '').trim(),
+    preferredLlmRoute: normalizeUserLlmRoute(userConfigData?.preferredLlmRoute),
+    runtimeMode: runtimeConfig.runtimeMode,
+    localRuntimeBaseUrl: runtimeConfig.localRuntimeUrl,
+    remoteRuntimeBaseUrl: runtimeConfig.remoteRuntimeUrl,
+  };
+}
+
 function getActiveRuntimeUrl(runtime: Pick<StudioSettingsState, 'runtimeMode' | 'localRuntimeUrl' | 'remoteRuntimeUrl'>) {
   return runtime.runtimeMode === 'remote'
     ? normalizeRuntimeUrl(runtime.remoteRuntimeUrl, DEFAULT_REMOTE_RUNTIME_URL)
@@ -5237,8 +5248,12 @@ function CloudConfigSection(props: {
         </div>
         <button
           onClick={async () => {
+            let previousConfig: any = null;
+            let runtimeSaved = false;
+            let rollbackApplied = false;
             try {
               setUserConfigState(prev => ({ ...prev, loading: true }));
+              previousConfig = await api.userConfig.get();
               const trimmedModel = userConfigState.defaultModel.trim();
               const trimmedRoute = normalizeUserLlmRoute(userConfigState.preferredLlmRoute);
               await api.userConfig.save({
@@ -5246,13 +5261,24 @@ function CloudConfigSection(props: {
                 localRuntimeBaseUrl: normalizeRuntimeUrl(runtimeConfig.localRuntimeUrl, DEFAULT_LOCAL_RUNTIME_URL),
                 remoteRuntimeBaseUrl: normalizeRuntimeUrl(runtimeConfig.remoteRuntimeUrl, DEFAULT_REMOTE_RUNTIME_URL),
               });
+              runtimeSaved = true;
               await api.userConfig.saveLlmPreference({
                 routeValue: trimmedRoute,
                 ...(trimmedModel ? { model: trimmedModel } : {}),
               });
               flash('LLM config saved', 'success');
             } catch (error: any) {
-              flash(error?.message || 'Failed to save LLM config', 'error');
+              if (runtimeSaved && previousConfig) {
+                try {
+                  await api.userConfig.save(buildUserConfigRollbackPayload(previousConfig));
+                  rollbackApplied = true;
+                } catch (rollbackError) {
+                  console.warn('[Aevatar App] Failed to roll back user config after LLM preference save failed.', rollbackError);
+                }
+              }
+
+              const message = error?.message || 'Failed to save LLM config';
+              flash(rollbackApplied ? `${message}. Runtime changes were rolled back.` : message, 'error');
             } finally {
               setUserConfigState(prev => ({ ...prev, loading: false }));
             }
