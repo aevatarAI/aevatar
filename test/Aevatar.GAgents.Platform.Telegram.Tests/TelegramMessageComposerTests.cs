@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Testing;
@@ -23,15 +24,16 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
 
     protected override void AssertActionsPayload(object payload, MessageContent intent, ComposeContext context, ComposeCapability capability)
     {
-        // NyxID's Telegram relay does not subscribe to callback_query updates today, so the
-        // composer degrades action buttons into a plain-text bullet list of labels rather
-        // than emitting an inline_keyboard click-back surface that would never round-trip.
         var native = payload.ShouldBeOfType<TelegramOutboundMessage>();
         native.MessageType.ShouldBe("text");
-        native.IsInteractive.ShouldBeFalse();
+        native.IsInteractive.ShouldBeTrue();
         native.PlainText.ShouldContain("Confirm");
         native.PlainText.ShouldContain("Cancel");
-        native.ContentJson.ShouldNotContain("inline_keyboard");
+        using var document = JsonDocument.Parse(native.ContentJson);
+        var keyboard = document.RootElement.GetProperty("reply_markup").GetProperty("inline_keyboard");
+        keyboard[0][0].GetProperty("text").GetString().ShouldBe("Confirm");
+        keyboard[1][0].GetProperty("text").GetString().ShouldBe("Cancel");
+        keyboard[0][0].GetProperty("callback_data").GetString()!.ShouldContain("\"a\":\"confirm\"");
     }
 
     protected override void AssertCardPayload(object payload, MessageContent intent, ComposeContext context, ComposeCapability capability)
@@ -62,7 +64,7 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
     }
 
     [Fact]
-    public void Compose_with_button_intent_degrades_buttons_to_plain_text_bullets()
+    public void Compose_with_button_intent_emits_inline_keyboard()
     {
         var intent = new MessageContent
         {
@@ -85,15 +87,95 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
         var payload = CreateComposer().Compose(intent, BuildContext());
 
         payload.MessageType.ShouldBe("text");
-        payload.IsInteractive.ShouldBeFalse();
-        payload.ContentJson.ShouldNotContain("inline_keyboard");
-        payload.ContentJson.ShouldNotContain("callback_data");
+        payload.IsInteractive.ShouldBeTrue();
+        payload.ContentJson.ShouldContain("inline_keyboard");
+        payload.ContentJson.ShouldContain("callback_data");
         payload.PlainText.ShouldContain("• Confirm");
         payload.PlainText.ShouldContain("• Cancel");
     }
 
     [Fact]
-    public void Evaluate_with_actions_returns_degraded_because_buttons_are_unavailable()
+    public void Compose_with_button_uses_telegram_safe_callback_data()
+    {
+        var intent = new MessageContent { Text = "Choose" };
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = "ls",
+            Label = "Select",
+            Value = "123e4567-e89b-12d3-a456-426614174000",
+            Arguments =
+            {
+                ["llm_action"] = "select_service",
+                ["service_id"] = "123e4567-e89b-12d3-a456-426614174000",
+            },
+        });
+
+        var payload = CreateComposer().Compose(intent, BuildContext());
+
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        var callbackData = document.RootElement
+            .GetProperty("reply_markup")
+            .GetProperty("inline_keyboard")[0][0]
+            .GetProperty("callback_data")
+            .GetString();
+        callbackData.ShouldNotBeNull();
+        Encoding.UTF8.GetByteCount(callbackData!).ShouldBeLessThanOrEqualTo(64);
+        callbackData.ShouldContain("\"a\":\"ls\"");
+        callbackData.ShouldContain("\"s\":\"123e4567-e89b-12d3-a456-426614174000\"");
+    }
+
+    [Fact]
+    public void Compose_omits_button_when_callback_data_cannot_carry_submitted_value()
+    {
+        var longServiceId = new string('x', 80);
+        var intent = new MessageContent { Text = "Choose" };
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = "ls",
+            Label = "Select",
+            Value = longServiceId,
+            Arguments =
+            {
+                ["service_id"] = longServiceId,
+            },
+        });
+
+        var payload = CreateComposer().Compose(intent, BuildContext());
+
+        payload.IsInteractive.ShouldBeFalse();
+        payload.ContentJson.ShouldNotContain("inline_keyboard");
+        payload.ContentJson.ShouldNotContain("callback_data");
+        CreateComposer().Evaluate(intent, BuildContext()).ShouldBe(ComposeCapability.Degraded);
+    }
+
+    [Fact]
+    public void Compose_with_link_action_emits_url_button()
+    {
+        var intent = new MessageContent { Text = "Setup" };
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Link,
+            ActionId = "open",
+            Label = "Open NyxID",
+            Value = "https://nyxid.example/services",
+        });
+
+        var payload = CreateComposer().Compose(intent, BuildContext());
+
+        payload.IsInteractive.ShouldBeTrue();
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        var button = document.RootElement
+            .GetProperty("reply_markup")
+            .GetProperty("inline_keyboard")[0][0];
+        button.GetProperty("text").GetString().ShouldBe("Open NyxID");
+        button.GetProperty("url").GetString().ShouldBe("https://nyxid.example/services");
+        button.TryGetProperty("callback_data", out _).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Evaluate_with_actions_returns_exact_when_buttons_are_available()
     {
         var intent = new MessageContent
         {
@@ -107,7 +189,7 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
         });
 
         var capability = CreateComposer().Evaluate(intent, BuildContext());
-        capability.ShouldBe(ComposeCapability.Degraded);
+        capability.ShouldBe(ComposeCapability.Exact);
     }
 
     [Fact]
@@ -141,9 +223,9 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
     }
 
     [Fact]
-    public void DefaultCapabilities_does_not_advertise_action_button_support()
+    public void DefaultCapabilities_advertises_action_button_support()
     {
-        TelegramMessageComposer.DefaultCapabilities.SupportsActionButtons.ShouldBeFalse();
+        TelegramMessageComposer.DefaultCapabilities.SupportsActionButtons.ShouldBeTrue();
     }
 
     private static ComposeContext BuildContext() => new()

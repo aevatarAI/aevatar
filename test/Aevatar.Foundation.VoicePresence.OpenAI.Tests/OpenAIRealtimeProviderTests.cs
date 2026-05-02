@@ -190,6 +190,7 @@ public class OpenAIRealtimeProviderTests
     [Fact]
     public async Task Slow_callback_should_keep_latest_events_when_channel_is_bounded()
     {
+        var firstCallbackStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var session = new FakeSession(
         [
             new OpenAIRealtimeResponseCreatedEvent("resp-1"),
@@ -197,7 +198,7 @@ public class OpenAIRealtimeProviderTests
             new OpenAIRealtimeOutputAudioDeltaEvent("resp-1", [2]),
             new OpenAIRealtimeOutputAudioDeltaEvent("resp-1", [3]),
             new OpenAIRealtimeDisconnectedEvent("done"),
-        ]);
+        ], afterFirstEvent: firstCallbackStarted.Task);
         var provider = CreateProvider(session, new OpenAIRealtimeProviderOptions
         {
             EventQueueCapacity = 2,
@@ -211,7 +212,10 @@ public class OpenAIRealtimeProviderTests
         {
             seen.Add(evt);
             if (Interlocked.Increment(ref invocationCount) == 1)
+            {
+                firstCallbackStarted.TrySetResult();
                 await gate.Task.WaitAsync(ct);
+            }
 
             if (evt.EventCase == VoiceProviderEvent.EventOneofCase.Disconnected)
                 disconnected.TrySetResult();
@@ -506,10 +510,14 @@ public class OpenAIRealtimeProviderTests
     private sealed class FakeSession : IOpenAIRealtimeSession
     {
         private readonly IReadOnlyList<OpenAIRealtimeSessionEvent> _events;
+        private readonly Task? _afterFirstEvent;
 
-        public FakeSession(IReadOnlyList<OpenAIRealtimeSessionEvent>? events = null)
+        public FakeSession(
+            IReadOnlyList<OpenAIRealtimeSessionEvent>? events = null,
+            Task? afterFirstEvent = null)
         {
             _events = events ?? [];
+            _afterFirstEvent = afterFirstEvent;
         }
 
         public List<RealtimeConversationSessionOptions> ConfiguredOptions { get; } = [];
@@ -563,10 +571,13 @@ public class OpenAIRealtimeProviderTests
         public async IAsyncEnumerable<OpenAIRealtimeSessionEvent> ReceiveEventsAsync(
             [EnumeratorCancellation] CancellationToken ct)
         {
-            foreach (var evt in _events)
+            for (var i = 0; i < _events.Count; i++)
             {
                 ct.ThrowIfCancellationRequested();
-                yield return evt;
+                yield return _events[i];
+                if (i == 0 && _afterFirstEvent is not null)
+                    await _afterFirstEvent.WaitAsync(ct);
+
                 await Task.Yield();
             }
 

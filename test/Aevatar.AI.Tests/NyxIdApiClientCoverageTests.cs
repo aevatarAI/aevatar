@@ -1,7 +1,10 @@
 using System.Net;
 using System.Reflection;
 using System.Text;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.Tools;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -233,6 +236,99 @@ public sealed class NyxIdApiClientCoverageTests
         handler.LastRequest.Should().NotBeNull();
         var ua = handler.LastRequest!.Headers.UserAgent.ToString();
         ua.Should().Be("custom-skill-runner/1.2.3");
+    }
+
+    [Fact]
+    public async Task GetLlmServicesAsync_ShouldCallNyxIdLlmServicesEndpoint()
+    {
+        var handler = new CaptureHandler(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"services":[]}""", Encoding.UTF8, "application/json"),
+        });
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler),
+            NullLogger<NyxIdApiClient>.Instance);
+
+        var response = await client.GetLlmServicesAsync("token-1", CancellationToken.None);
+
+        response.Should().Be("""{"services":[]}""");
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.Method.Should().Be(HttpMethod.Get);
+        handler.LastRequest.RequestUri!.AbsolutePath.Should().Be("/api/v1/llm/services");
+        handler.LastRequest.Headers.Authorization!.ToString().Should().Be("Bearer token-1");
+    }
+
+    [Fact]
+    public async Task ProvisionLlmServiceAsync_ShouldPostRelativeEndpointId()
+    {
+        var handler = new CaptureHandler(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"service":{"id":"svc-1"}}""", Encoding.UTF8, "application/json"),
+        });
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler),
+            NullLogger<NyxIdApiClient>.Instance);
+
+        var response = await client.ProvisionLlmServiceAsync("token-1", " /chrono-llm/shared/ ", CancellationToken.None);
+
+        response.Should().Contain("svc-1");
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.Method.Should().Be(HttpMethod.Post);
+        handler.LastRequest.RequestUri!.AbsolutePath.Should().Be("/api/v1/llm/services/chrono-llm%2Fshared");
+        handler.LastRequestBody.Should().Be("{}");
+    }
+
+    [Theory]
+    [InlineData(" ")]
+    [InlineData("../secrets")]
+    [InlineData("//evil")]
+    [InlineData("chrono//evil")]
+    [InlineData("https://evil.example/provision")]
+    public async Task ProvisionLlmServiceAsync_ShouldRejectUnsafeEndpointIds(string endpointId)
+    {
+        var client = CreateClient("""{"service":{"id":"svc-1"}}""");
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.ProvisionLlmServiceAsync("token-1", endpointId, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task NyxIdLlmStatusTool_ShouldUseServicesEndpointAndRequireToken()
+    {
+        var previous = AgentToolRequestContext.CurrentMetadata;
+        try
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+            var missingTokenTool = new NyxIdLlmStatusTool(CreateClient("""{"services":[]}"""));
+            var missingToken = await missingTokenTool.ExecuteAsync("{}", CancellationToken.None);
+            missingToken.Should().Contain("No NyxID access token");
+
+            var handler = new CaptureHandler(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"services":[{"id":"svc-1"}]}""", Encoding.UTF8, "application/json"),
+            });
+            var client = new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler),
+                NullLogger<NyxIdApiClient>.Instance);
+            var tool = new NyxIdLlmStatusTool(client);
+            AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+            {
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-1",
+            };
+
+            var response = await tool.ExecuteAsync("{}", CancellationToken.None);
+
+            response.Should().Contain("svc-1");
+            handler.LastRequest.Should().NotBeNull();
+            handler.LastRequest!.RequestUri!.AbsolutePath.Should().Be("/api/v1/llm/services");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = previous;
+        }
     }
 
     [Fact]

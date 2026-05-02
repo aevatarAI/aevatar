@@ -169,10 +169,18 @@ public sealed class NyxIdRelayTransport
         if (root.ValueKind != JsonValueKind.Object)
             return null;
 
-        if (TryReadString(root, "action_id", out var actionId))
+        if (TryReadString(root, "action_id", out var actionId) ||
+            TryReadString(root, "a", out actionId))
+        {
             submission.ActionId = actionId;
-        if (TryReadString(root, "submitted_value", out var submittedValue))
+        }
+
+        if (TryReadString(root, "submitted_value", out var submittedValue) ||
+            TryReadString(root, "s", out submittedValue))
+        {
             submission.SubmittedValue = submittedValue;
+        }
+
         if (string.IsNullOrEmpty(submission.SourceMessageId) &&
             TryReadString(root, "source_message_id", out var sourceMessageId))
         {
@@ -181,6 +189,8 @@ public sealed class NyxIdRelayTransport
 
         if (root.TryGetProperty("value", out var valueElement))
             CopyScalarMap(valueElement, submission.Arguments);
+        if (root.TryGetProperty("v", out var compactValueElement))
+            CopyScalarMap(compactValueElement, submission.Arguments);
         if (root.TryGetProperty("form_value", out var formValueElement))
             CopyScalarMap(formValueElement, submission.FormFields);
         if (root.TryGetProperty("arguments", out var argumentsElement))

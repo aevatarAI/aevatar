@@ -663,13 +663,28 @@ app.MapGet("/api/workflows/{name}/run", async (string name, string? input, bool?
     await runtime.DestroyAsync(actor.Id);
 });
 
-// GET /api/llm/status — LLM availability
-app.MapGet("/api/llm/status", () => Results.Json(new
+// GET /api/llm/services — local demo LLM services
+app.MapGet("/api/llm/services", () => Results.Json(new
 {
     available = llmAvailable,
-    provider = llmAvailable ? providerName : null,
-    model = llmAvailable ? modelName : null,
-    providers = llmAvailable ? availableProviderNames.ToArray() : Array.Empty<string>(),
+    current = llmAvailable
+        ? new
+        {
+            serviceSlug = providerName,
+            displayName = providerName,
+            defaultModel = modelName,
+        }
+        : null,
+    services = llmAvailable
+        ? availableProviderNames.Select(name => new
+        {
+            serviceSlug = name,
+            displayName = name,
+            defaultModel = string.Equals(name, providerName, StringComparison.OrdinalIgnoreCase) ? modelName : null,
+            status = "ready",
+            allowed = true,
+        }).Cast<object>().ToArray()
+        : Array.Empty<object>(),
 }));
 
 // GET /api/primitives — module catalog with parameter docs

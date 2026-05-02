@@ -208,6 +208,28 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
         leftEvents.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task EnsureParticipantsJoinedAsync_ShouldFallbackToLegacyStatus_WhenServicesEndpointIsMissing()
+    {
+        var handler = new StreamingProxyHttpHandler(servicesNotFound: true);
+        var (coordinator, actor, store, _) = CreateCoordinator(null, null, handler);
+
+        var participants = await coordinator.EnsureParticipantsJoinedAsync(
+            "scope-1",
+            "room-1",
+            actor,
+            store,
+            "test-token",
+            CancellationToken.None);
+
+        handler.RequestPaths.Should().Equal("/api/v1/llm/services", "/api/v1/llm/status");
+        participants.Should().ContainSingle();
+        participants.Single().RoutePreference.Should().Be("/api/v1/proxy/s/openclaw/legacy");
+        participants.Single().Model.Should().Be("legacy-model");
+        store.ListParticipants("room-1").Should().ContainSingle(entry =>
+            entry.AgentId.Contains("svc-legacy", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static (StreamingProxyNyxParticipantCoordinator Coordinator, RecordingActor Actor, RecordingParticipantStore Store, RecordingLlmProvider Provider) CreateCoordinator()
         => CreateCoordinator(null);
 
@@ -217,9 +239,10 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
 
     private static (StreamingProxyNyxParticipantCoordinator Coordinator, RecordingActor Actor, RecordingParticipantStore Store, RecordingLlmProvider Provider) CreateCoordinator(
         Func<LLMRequest, LLMResponse>? responseFactory,
-        Func<LLMRequest, IReadOnlyList<LLMStreamChunk>>? streamFactory)
+        Func<LLMRequest, IReadOnlyList<LLMStreamChunk>>? streamFactory,
+        StreamingProxyHttpHandler? handler = null)
     {
-        var handler = new StreamingProxyHttpHandler();
+        handler ??= new StreamingProxyHttpHandler();
         var httpClient = new HttpClient(handler);
         var httpClientFactory = new StubHttpClientFactory(httpClient);
         var provider = new RecordingLlmProvider(responseFactory, streamFactory);
@@ -240,61 +263,81 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
         return (coordinator, new RecordingActor("room-1"), new RecordingParticipantStore(), provider);
     }
 
-    private sealed class StreamingProxyHttpHandler : HttpMessageHandler
+    private sealed class StreamingProxyHttpHandler(bool servicesNotFound = false) : HttpMessageHandler
     {
-        private static readonly string StatusJson = """
+        private static readonly string ServicesJson = """
             {
-              "providers": [
+              "services": [
                 {
-                  "provider_slug": "openclaw",
-                  "provider_name": "OpenClaw-Node",
+                  "user_service_id": "svc-node-a",
+                  "service_slug": "openclaw",
+                  "display_name": "OpenClaw-Node",
                   "status": "ready",
-                  "proxy_url": "/api/v1/proxy/s/openclaw/node-a",
-                  "node_id": "node-a"
+                  "route_value": "/api/v1/proxy/s/openclaw/node-a",
+                  "node_id": "node-a",
+                  "allowed": true,
+                  "models": ["claude-sonnet-4-5-20250929"]
                 },
                 {
-                  "provider_slug": "openclaw",
-                  "provider_name": "OpenClaw-Node",
+                  "user_service_id": "svc-node-b",
+                  "service_slug": "openclaw",
+                  "display_name": "OpenClaw-Node",
                   "status": "ready",
-                  "proxy_url": "/api/v1/proxy/s/openclaw/node-b",
-                  "node_id": "node-b"
+                  "route_value": "/api/v1/proxy/s/openclaw/node-b",
+                  "node_id": "node-b",
+                  "allowed": true,
+                  "models": ["claude-sonnet-4-5-20250929"]
                 },
                 {
-                  "provider_slug": "openclaw",
-                  "provider_name": "OpenClaw-Node",
+                  "user_service_id": "svc-node-c",
+                  "service_slug": "openclaw",
+                  "display_name": "OpenClaw-Node",
                   "status": "ready",
-                  "proxy_url": "/api/v1/proxy/s/openclaw/node-c",
-                  "node_id": "node-c"
+                  "route_value": "/api/v1/proxy/s/openclaw/node-c",
+                  "node_id": "node-c",
+                  "allowed": true,
+                  "models": ["claude-sonnet-4-5-20250929"]
                 }
               ]
             }
             """;
 
-        private static readonly string KeysJson = """
+        private static readonly string LegacyStatusJson = """
             {
-              "keys": []
+              "providers": [
+                {
+                  "user_service_id": "svc-legacy",
+                  "provider_slug": "openclaw",
+                  "provider_name": "OpenClaw Legacy",
+                  "status": "ready",
+                  "proxy_url": "/api/v1/proxy/s/openclaw/legacy"
+                }
+              ],
+              "models_by_provider": {
+                "openclaw": ["legacy-model"]
+              },
+              "supported_models": ["fallback-model"]
             }
             """;
 
-        private static readonly string ModelsJson = """
-            {
-              "data": [
-                { "id": "claude-sonnet-4-5-20250929" }
-              ]
-            }
-            """;
+        public List<string> RequestPaths { get; } = [];
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+            RequestPaths.Add(path);
+            if (path.EndsWith("/api/v1/llm/services", StringComparison.Ordinal))
+            {
+                return Task.FromResult(servicesNotFound
+                    ? new HttpResponseMessage(HttpStatusCode.NotFound)
+                    {
+                        Content = new StringContent("""{"error":"not found"}""", Encoding.UTF8, "application/json"),
+                    }
+                    : JsonResponse(ServicesJson));
+            }
+
             if (path.EndsWith("/api/v1/llm/status", StringComparison.Ordinal))
-                return Task.FromResult(JsonResponse(StatusJson));
-
-            if (path.EndsWith("/api/v1/keys", StringComparison.Ordinal))
-                return Task.FromResult(JsonResponse(KeysJson));
-
-            if (path.EndsWith("/models", StringComparison.Ordinal))
-                return Task.FromResult(JsonResponse(ModelsJson));
+                return Task.FromResult(JsonResponse(LegacyStatusJson));
 
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
             {

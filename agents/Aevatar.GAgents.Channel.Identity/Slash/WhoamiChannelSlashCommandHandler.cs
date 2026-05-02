@@ -14,6 +14,11 @@ public sealed class WhoamiChannelSlashCommandHandler : IChannelSlashCommandHandl
 
     public bool RequiresBinding => true;
 
+    public ChannelSlashCommandUsage Usage => new(
+        Name,
+        string.Empty,
+        "查看当前聊天用户的 NyxID 绑定状态");
+
     public Task<MessageContent?> HandleAsync(ChannelSlashCommandContext context, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(context);
