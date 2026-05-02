@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.GAgents.NyxidChat.Slash;
 
 /// <summary>
-/// /model — deterministic, no-LLM path for listing and selecting the
+/// /model and /route — deterministic, no-LLM path for listing and selecting the
 /// inbound sender's NyxID-backed LLM route/model preference.
 /// </summary>
 public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandler
@@ -32,13 +32,13 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
 
     public string Name => "model";
 
-    public IReadOnlyList<string> Aliases => ["models", "llm"];
+    public IReadOnlyList<string> Aliases => ["models", "llm", "route"];
 
     public bool RequiresBinding => true;
 
     public ChannelSlashCommandUsage Usage => new(
         Name,
-        "list | use <service-number|service-name|model-name> | preset <preset-id> | reset",
+        "list | use <service-number|service-name> [model-name] | preset <preset-id> | reset",
         "查看和切换当前 NyxID 绑定用户的 LLM service/model 偏好");
 
     public async Task<MessageContent?> HandleAsync(ChannelSlashCommandContext context, CancellationToken ct)
@@ -80,6 +80,11 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
         {
             return new MessageContent { Text = "当前 NyxID 绑定已失效,请先发送 /init 重新绑定。" };
         }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or HttpRequestException or NotSupportedException)
+        {
+            _logger.LogWarning(ex, "/model failed to read or update NyxID LLM selection");
+            return new MessageContent { Text = $"读取或更新 NyxID LLM service 设置失败:{ex.Message}" };
+        }
     }
 
     private async Task<MessageContent> HandleUseAsync(
@@ -89,12 +94,21 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(argument))
-            return new MessageContent { Text = "用法:`/model use <service-number|service-name|model-name>`" };
+            return new MessageContent { Text = "用法:`/route use <service-number|service-name> [model-name]` 或 `/model use <model-name>`" };
 
         var query = BuildQuery(context, bindingId);
         var selectionContext = BuildSelectionContext(context, bindingId);
         var view = await _optionsService!.GetOptionsAsync(query, ct).ConfigureAwait(false);
         var requested = argument.Trim();
+
+        if (TryResolveOptionAndModel(requested, view.Available, out var combinedOption, out var modelOverride, out var combinedError))
+        {
+            if (combinedError is not null)
+                return new MessageContent { Text = combinedError };
+
+            return await ApplyServiceAsync(selectionContext, combinedOption!, modelOverride, ct)
+                .ConfigureAwait(false);
+        }
 
         if (TryResolveNumberedOption(requested, view.Available, out var numberedOption, out var numberError))
         {
@@ -187,6 +201,67 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
         return new MessageContent { Text = "已清空你的 service/model 偏好,后续消息使用 bot 默认设置。" };
     }
 
+    private static bool TryResolveOptionAndModel(
+        string requested,
+        IReadOnlyList<UserLlmOption> available,
+        out UserLlmOption? option,
+        out string? model,
+        out string? error)
+    {
+        option = null;
+        model = null;
+        error = null;
+
+        var split = SplitFirstToken(requested);
+        if (split is null)
+            return false;
+
+        var (serviceToken, modelToken) = split.Value;
+        if (TryResolveNumberedOption(serviceToken, available, out var numberedOption, out var numberError))
+        {
+            if (numberError is not null)
+            {
+                error = numberError;
+                return true;
+            }
+
+            option = numberedOption;
+            model = modelToken;
+            return true;
+        }
+
+        var namedOption = FindOption(serviceToken, available);
+        if (namedOption is null)
+            return false;
+
+        option = namedOption;
+        model = modelToken;
+        return true;
+    }
+
+    private static (string ServiceToken, string ModelToken)? SplitFirstToken(string requested)
+    {
+        var trimmed = requested.Trim();
+        var separator = -1;
+        for (var i = 0; i < trimmed.Length; i++)
+        {
+            if (char.IsWhiteSpace(trimmed[i]))
+            {
+                separator = i;
+                break;
+            }
+        }
+
+        if (separator <= 0)
+            return null;
+
+        var serviceToken = trimmed[..separator].Trim();
+        var modelToken = trimmed[(separator + 1)..].Trim();
+        return string.IsNullOrWhiteSpace(serviceToken) || string.IsNullOrWhiteSpace(modelToken)
+            ? null
+            : (serviceToken, modelToken);
+    }
+
     private static bool TryResolveNumberedOption(
         string requested,
         IReadOnlyList<UserLlmOption> available,
@@ -255,8 +330,9 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
     {
         Text = string.Join('\n',
             "未识别的子命令。可用:",
-            "- `/model` 或 `/models`:查看当前 LLM service 设置",
-            "- `/model use <编号|service-name|model-name>`:切换 service 或只覆盖 model",
+            "- `/model`、`/models` 或 `/route`:查看当前可用 LLM service/route",
+            "- `/route use <编号|service-name> [model-name]`:切换 service,可同时指定 model",
+            "- `/model use <model-name>`:只覆盖当前 route 下的 model",
             "- `/model preset <preset-id>`:使用 setup preset",
             "- `/model reset`:清空你的偏好,回退到 bot 默认"),
     };

@@ -45,7 +45,8 @@ public sealed class TextUserLlmOptionsRenderer : IUserLlmOptionsRenderer<Message
 
         lines.Add("");
         lines.Add("用法:");
-        lines.Add("- `/model use <编号|service-name|model-name>` 切换 service 或只覆盖 model");
+        lines.Add("- `/route use <编号|service-name> [model-name]` 切换 service,可同时指定 model");
+        lines.Add("- `/model use <model-name>` 只覆盖当前 route 下的 model");
         lines.Add("- `/model preset <preset-id>` 使用 setup preset");
         lines.Add("- `/model reset` 清空你的 service/model 偏好,回退到 bot 默认");
 

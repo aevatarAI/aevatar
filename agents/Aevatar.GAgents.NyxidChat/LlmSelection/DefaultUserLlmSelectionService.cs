@@ -11,8 +11,7 @@ namespace Aevatar.GAgents.NyxidChat.LlmSelection;
 
 public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
 {
-    private const string StatusScope = "llm:status";
-    private const string ProxyScope = "llm:proxy";
+    private const string NyxIdLlmApiScope = "proxy";
 
     private readonly IUserLlmOptionsService _optionsService;
     private readonly INyxIdLlmServiceCatalogClient _catalogClient;
@@ -74,7 +73,7 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
         ArgumentException.ThrowIfNullOrWhiteSpace(presetId);
 
         var query = ToQuery(context);
-        var statusToken = await IssueAccessTokenAsync(context.Subject, StatusScope, ct).ConfigureAwait(false);
+        var statusToken = await IssueAccessTokenAsync(context.Subject, NyxIdLlmApiScope, ct).ConfigureAwait(false);
         var hint = await _catalogClient.GetSetupHintAsync(query, statusToken, ct).ConfigureAwait(false);
         var preset = hint.Presets.FirstOrDefault(candidate =>
             string.Equals(candidate.Id, presetId.Trim(), StringComparison.OrdinalIgnoreCase));
@@ -92,7 +91,7 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
                     ct: ct).ConfigureAwait(false);
                 break;
             case ProvisionThenUse provisioning:
-                var proxyToken = await IssueAccessTokenAsync(context.Subject, ProxyScope, ct).ConfigureAwait(false);
+                var proxyToken = await IssueAccessTokenAsync(context.Subject, NyxIdLlmApiScope, ct).ConfigureAwait(false);
                 var provisioned = await _catalogClient
                     .ProvisionAsync(context, proxyToken, provisioning.ProvisionEndpointId, ct)
                     .ConfigureAwait(false);

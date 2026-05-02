@@ -1,3 +1,5 @@
+using Aevatar.GAgents.Channel.Identity;
+
 namespace Aevatar.GAgents.Channel.Identity.Broker;
 
 /// <summary>
@@ -14,9 +16,10 @@ public sealed class NyxIdBrokerOptions
     /// MUST include <c>openid</c> (for OIDC <c>id_token</c> + <c>sub</c>) and
     /// <c>urn:nyxid:scope:broker_binding</c> (which tells NyxID#549 to
     /// return <c>binding_id</c> instead of <c>refresh_token</c> on
-    /// authorization-code exchange).
+    /// authorization-code exchange), and <c>proxy</c> so later broker
+    /// token-exchange calls can mint a token accepted by NyxID LLM routes.
     /// </summary>
-    public string Scope { get; set; } = "openid urn:nyxid:scope:broker_binding";
+    public string Scope { get; set; } = AevatarOAuthClientScopes.AuthorizationScope;
 
     /// <summary>
     /// Lifetime of the stateless <c>state</c> token. Bounds how long a user

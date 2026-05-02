@@ -202,16 +202,20 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
         }
 
         var redirectDrifted = cached is not null && RedirectUriDrifted(cached.RedirectUri, redirectUri);
+        var oauthScopeDrifted = cached is not null &&
+                                !AevatarOAuthClientScopes.ContainsRequiredScopes(cached.OauthScope);
         if (cached is not null
             && string.Equals(cached.NyxIdAuthority, authority, StringComparison.Ordinal)
             && !string.IsNullOrEmpty(cached.ClientId)
-            && !redirectDrifted)
+            && !redirectDrifted
+            && !oauthScopeDrifted)
         {
             _logger.LogInformation(
-                "Aevatar OAuth client already provisioned at NyxID: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}, broker_capability_observed={BrokerObserved}",
+                "Aevatar OAuth client already provisioned at NyxID: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}, oauth_scope={OauthScope}, broker_capability_observed={BrokerObserved}",
                 cached.ClientId,
                 cached.NyxIdAuthority,
                 cached.RedirectUri ?? "<unrecorded>",
+                cached.OauthScope ?? "<unrecorded>",
                 cached.BrokerCapabilityObserved);
             return;
         }
@@ -222,6 +226,13 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
                 "Aevatar OAuth client redirect URI drifted (stored='{Stored}', resolved='{Resolved}'); dispatching EnsureProvisioned so the actor re-runs DCR.",
                 cached!.RedirectUri,
                 redirectUri);
+        }
+        if (oauthScopeDrifted)
+        {
+            _logger.LogWarning(
+                "Aevatar OAuth client scope drifted (stored='{Stored}', required='{Required}'); dispatching EnsureProvisioned so the actor re-runs DCR.",
+                cached!.OauthScope ?? "<unrecorded>",
+                AevatarOAuthClientScopes.AuthorizationScope);
         }
         var actor = await _actorRuntime
             .CreateAsync<AevatarOAuthClientGAgent>(AevatarOAuthClientGAgent.WellKnownId, ct)
@@ -282,13 +293,15 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
                 lastSnapshot = snapshot;
                 if (string.Equals(snapshot.NyxIdAuthority, authority, StringComparison.Ordinal)
                     && !string.IsNullOrEmpty(snapshot.ClientId)
-                    && !RedirectUriDrifted(snapshot.RedirectUri, redirectUri))
+                    && !RedirectUriDrifted(snapshot.RedirectUri, redirectUri)
+                    && AevatarOAuthClientScopes.ContainsRequiredScopes(snapshot.OauthScope))
                 {
                     _logger.LogInformation(
-                        "Aevatar OAuth client provisioning observed in readmodel: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}",
+                        "Aevatar OAuth client provisioning observed in readmodel: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}, oauth_scope={OauthScope}",
                         snapshot.ClientId,
                         snapshot.NyxIdAuthority,
-                        snapshot.RedirectUri);
+                        snapshot.RedirectUri,
+                        snapshot.OauthScope);
                     return;
                 }
             }
@@ -305,6 +318,7 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
             $"within {ProvisioningObservationTimeout.TotalSeconds:n0}s " +
             $"(authority='{authority}', expected_redirect_uri='{redirectUri}', " +
             $"last_client_id='{lastSnapshot?.ClientId ?? "<none>"}', " +
-            $"last_redirect_uri='{lastSnapshot?.RedirectUri ?? "<none>"}').");
+            $"last_redirect_uri='{lastSnapshot?.RedirectUri ?? "<none>"}', " +
+            $"last_oauth_scope='{lastSnapshot?.OauthScope ?? "<none>"}').");
     }
 }
