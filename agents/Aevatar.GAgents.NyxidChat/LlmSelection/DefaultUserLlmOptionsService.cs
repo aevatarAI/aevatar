@@ -10,7 +10,7 @@ namespace Aevatar.GAgents.NyxidChat.LlmSelection;
 
 public sealed class DefaultUserLlmOptionsService : IUserLlmOptionsService
 {
-    private const string StatusScope = "llm:status";
+    private const string NyxIdLlmApiScope = "proxy";
 
     private readonly INyxIdLlmServiceCatalogClient _catalogClient;
     private readonly INyxIdCapabilityBroker? _broker;
@@ -48,7 +48,7 @@ public sealed class DefaultUserLlmOptionsService : IUserLlmOptionsService
             return string.Empty;
 
         var handle = await _broker
-            .IssueShortLivedAsync(query.Subject, new CapabilityScope { Value = StatusScope }, ct)
+            .IssueShortLivedAsync(query.Subject, new CapabilityScope { Value = NyxIdLlmApiScope }, ct)
             .ConfigureAwait(false);
         return handle.AccessToken;
     }
