@@ -667,6 +667,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             {
                 TextUserLlmOptionsRenderer.SelectServiceActionId => TextUserLlmOptionsRenderer.SelectServiceAction,
                 TextUserLlmOptionsRenderer.ApplyPresetActionId => TextUserLlmOptionsRenderer.ApplyPresetAction,
+                TextUserLlmOptionsRenderer.LegacySelectServiceActionId => TextUserLlmOptionsRenderer.SelectServiceAction,
+                TextUserLlmOptionsRenderer.LegacyApplyPresetActionId => TextUserLlmOptionsRenderer.ApplyPresetAction,
                 _ => string.Empty,
             };
         }

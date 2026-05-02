@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Testing;
@@ -100,13 +101,13 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
         intent.Actions.Add(new ActionElement
         {
             Kind = ActionElementKind.Button,
-            ActionId = "llm_select_service",
+            ActionId = "ls",
             Label = "Select",
-            Value = "chrono-llm-shared",
+            Value = "123e4567-e89b-12d3-a456-426614174000",
             Arguments =
             {
                 ["llm_action"] = "select_service",
-                ["service_id"] = "chrono-llm-shared",
+                ["service_id"] = "123e4567-e89b-12d3-a456-426614174000",
             },
         });
 
@@ -119,9 +120,34 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
             .GetProperty("callback_data")
             .GetString();
         callbackData.ShouldNotBeNull();
-        callbackData!.Length.ShouldBeLessThanOrEqualTo(64);
-        callbackData.ShouldContain("\"a\":\"llm_select_service\"");
-        callbackData.ShouldContain("\"s\":\"chrono-llm-shared\"");
+        Encoding.UTF8.GetByteCount(callbackData!).ShouldBeLessThanOrEqualTo(64);
+        callbackData.ShouldContain("\"a\":\"ls\"");
+        callbackData.ShouldContain("\"s\":\"123e4567-e89b-12d3-a456-426614174000\"");
+    }
+
+    [Fact]
+    public void Compose_omits_button_when_callback_data_cannot_carry_submitted_value()
+    {
+        var longServiceId = new string('x', 80);
+        var intent = new MessageContent { Text = "Choose" };
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = "ls",
+            Label = "Select",
+            Value = longServiceId,
+            Arguments =
+            {
+                ["service_id"] = longServiceId,
+            },
+        });
+
+        var payload = CreateComposer().Compose(intent, BuildContext());
+
+        payload.IsInteractive.ShouldBeFalse();
+        payload.ContentJson.ShouldNotContain("inline_keyboard");
+        payload.ContentJson.ShouldNotContain("callback_data");
+        CreateComposer().Evaluate(intent, BuildContext()).ShouldBe(ComposeCapability.Degraded);
     }
 
     [Fact]

@@ -5,8 +5,10 @@ namespace Aevatar.GAgents.NyxidChat.LlmSelection;
 
 public sealed class TextUserLlmOptionsRenderer : IUserLlmOptionsRenderer<MessageContent>
 {
-    public const string SelectServiceActionId = "llm_select_service";
-    public const string ApplyPresetActionId = "llm_apply_preset";
+    public const string SelectServiceActionId = "ls";
+    public const string ApplyPresetActionId = "lp";
+    public const string LegacySelectServiceActionId = "llm_select_service";
+    public const string LegacyApplyPresetActionId = "llm_apply_preset";
     public const string LlmActionArgument = "llm_action";
     public const string SelectServiceAction = "select_service";
     public const string ApplyPresetAction = "apply_preset";

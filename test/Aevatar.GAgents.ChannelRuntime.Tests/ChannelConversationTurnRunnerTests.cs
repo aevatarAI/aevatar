@@ -720,6 +720,51 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldHandleCompactLlmCardAction_WithSubmittedValue()
+    {
+        var subject = new ExternalSubjectRef
+        {
+            Platform = "lark",
+            Tenant = "scope-1",
+            ExternalUserId = "ou_user_1",
+        };
+        var broker = new InMemoryCapabilityBroker();
+        broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
+        var option = new UserLlmOption(
+            ServiceId: "123e4567-e89b-12d3-a456-426614174000",
+            ServiceSlug: "openai-work",
+            DisplayName: "OpenAI Work",
+            RouteValue: "/api/v1/proxy/s/openai-work",
+            DefaultModel: "gpt-5.4",
+            AvailableModels: ["gpt-5.4"],
+            Status: "ready",
+            Source: "user",
+            Allowed: true,
+            Description: null);
+        var optionsService = new StubUserLlmOptionsService(option);
+        var selectionService = new RecordingUserLlmSelectionService();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<IUserLlmOptionsService>(optionsService)
+            .AddSingleton<IUserLlmSelectionService>(selectionService)
+            .AddSingleton<IUserLlmOptionsRenderer<MessageContent>>(new TextUserLlmOptionsRenderer())
+            .BuildServiceProvider();
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+        var activity = BuildCardActionActivity("evt-llm-select-compact-1");
+        activity.Content.CardAction!.ActionId = TextUserLlmOptionsRenderer.SelectServiceActionId;
+        activity.Content.CardAction.SubmittedValue = option.ServiceId;
+
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        selectionService.SelectedServiceId.Should().Be(option.ServiceId);
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("OpenAI Work");
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldMapWorkflowResumeValidationErrors()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
