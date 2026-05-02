@@ -13,6 +13,8 @@ namespace Aevatar.GAgents.NyxidChat.Slash;
 /// </summary>
 public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandler
 {
+    private static readonly char[] WhitespaceSeparators = [' ', '\t', '\r', '\n'];
+
     private readonly IUserLlmOptionsService? _optionsService;
     private readonly IUserLlmSelectionService? _selectionService;
     private readonly IUserLlmOptionsRenderer<MessageContent>? _renderer;
@@ -80,10 +82,14 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
         {
             return new MessageContent { Text = "当前 NyxID 绑定已失效,请先发送 /init 重新绑定。" };
         }
+        catch (BindingScopeMismatchException)
+        {
+            return new MessageContent { Text = "当前 NyxID 绑定缺少 LLM route 权限,请先发送 /init 重新绑定。" };
+        }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or HttpRequestException or NotSupportedException)
         {
             _logger.LogWarning(ex, "/model failed to read or update NyxID LLM selection");
-            return new MessageContent { Text = $"读取或更新 NyxID LLM service 设置失败:{ex.Message}" };
+            return new MessageContent { Text = BuildUserFacingFailureMessage(ex) };
         }
     }
 
@@ -101,7 +107,7 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
         var view = await _optionsService!.GetOptionsAsync(query, ct).ConfigureAwait(false);
         var requested = argument.Trim();
 
-        if (TryResolveOptionAndModel(requested, view.Available, out var combinedOption, out var modelOverride, out var combinedError))
+        if (TryResolveServiceSelection(requested, view.Available, out var combinedOption, out var modelOverride, out var combinedError))
         {
             if (combinedError is not null)
                 return new MessageContent { Text = combinedError };
@@ -109,19 +115,6 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
             return await ApplyServiceAsync(selectionContext, combinedOption!, modelOverride, ct)
                 .ConfigureAwait(false);
         }
-
-        if (TryResolveNumberedOption(requested, view.Available, out var numberedOption, out var numberError))
-        {
-            if (numberError is not null)
-                return new MessageContent { Text = numberError };
-
-            return await ApplyServiceAsync(selectionContext, numberedOption!, modelOverride: null, ct)
-                .ConfigureAwait(false);
-        }
-
-        var matched = FindOption(requested, view.Available);
-        if (matched is not null)
-            return await ApplyServiceAsync(selectionContext, matched, modelOverride: null, ct).ConfigureAwait(false);
 
         try
         {
@@ -201,7 +194,7 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
         return new MessageContent { Text = "已清空你的 service/model 偏好,后续消息使用 bot 默认设置。" };
     }
 
-    private static bool TryResolveOptionAndModel(
+    private static bool TryResolveServiceSelection(
         string requested,
         IReadOnlyList<UserLlmOption> available,
         out UserLlmOption? option,
@@ -212,20 +205,53 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
         model = null;
         error = null;
 
-        var split = SplitFirstToken(requested);
-        if (split is null)
-            return false;
-
-        var (serviceToken, modelToken) = split.Value;
-        if (TryResolveNumberedOption(serviceToken, available, out var numberedOption, out var numberError))
+        if (TryResolveNumberedOption(requested, available, out var directNumberedOption, out var directNumberError))
         {
-            if (numberError is not null)
+            if (directNumberError is not null)
             {
-                error = numberError;
+                error = directNumberError;
                 return true;
             }
 
-            option = numberedOption;
+            option = directNumberedOption;
+            return true;
+        }
+
+        var exact = FindExactOption(requested, available);
+        if (exact is not null)
+        {
+            option = exact;
+            return true;
+        }
+
+        var named = FindOption(requested, available);
+        if (named is not null)
+        {
+            option = named;
+            return true;
+        }
+
+        if (TryResolveExactOptionPrefix(requested, available, out var prefixOption, out var prefixModel))
+        {
+            option = prefixOption;
+            model = prefixModel;
+            return true;
+        }
+
+        var split = SplitFirstToken(requested);
+        if (split is null)
+            return false;
+        var (serviceToken, modelToken) = split.Value;
+
+        if (TryResolveNumberedOption(serviceToken, available, out var splitNumberedOption, out var splitNumberError))
+        {
+            if (splitNumberError is not null)
+            {
+                error = splitNumberError;
+                return true;
+            }
+
+            option = splitNumberedOption;
             model = modelToken;
             return true;
         }
@@ -241,25 +267,16 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
 
     private static (string ServiceToken, string ModelToken)? SplitFirstToken(string requested)
     {
-        var trimmed = requested.Trim();
-        var separator = -1;
-        for (var i = 0; i < trimmed.Length; i++)
-        {
-            if (char.IsWhiteSpace(trimmed[i]))
-            {
-                separator = i;
-                break;
-            }
-        }
-
-        if (separator <= 0)
+        var parts = requested.Split(
+            WhitespaceSeparators,
+            2,
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length != 2)
             return null;
 
-        var serviceToken = trimmed[..separator].Trim();
-        var modelToken = trimmed[(separator + 1)..].Trim();
-        return string.IsNullOrWhiteSpace(serviceToken) || string.IsNullOrWhiteSpace(modelToken)
+        return string.IsNullOrWhiteSpace(parts[0]) || string.IsNullOrWhiteSpace(parts[1])
             ? null
-            : (serviceToken, modelToken);
+            : (parts[0], parts[1]);
     }
 
     private static bool TryResolveNumberedOption(
@@ -285,10 +302,7 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
 
     private static UserLlmOption? FindOption(string requested, IReadOnlyList<UserLlmOption> available)
     {
-        var exact = available.FirstOrDefault(option =>
-            string.Equals(option.ServiceId, requested, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(option.ServiceSlug, requested, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(option.DisplayName, requested, StringComparison.OrdinalIgnoreCase));
+        var exact = FindExactOption(requested, available);
         if (exact is not null)
             return exact;
 
@@ -300,6 +314,61 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
             .ToArray();
         return fuzzy.Length == 1 ? fuzzy[0] : null;
     }
+
+    private static UserLlmOption? FindExactOption(string requested, IReadOnlyList<UserLlmOption> available) =>
+        available.FirstOrDefault(option =>
+            string.Equals(option.ServiceId, requested, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(option.ServiceSlug, requested, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(option.DisplayName, requested, StringComparison.OrdinalIgnoreCase));
+
+    private static bool TryResolveExactOptionPrefix(
+        string requested,
+        IReadOnlyList<UserLlmOption> available,
+        out UserLlmOption? option,
+        out string? model)
+    {
+        option = null;
+        model = null;
+
+        foreach (var candidate in available
+                     .SelectMany(service => ServiceTokens(service).Select(token => (Service: service, Token: token)))
+                     .OrderByDescending(candidate => candidate.Token.Length))
+        {
+            if (candidate.Token.Length >= requested.Length)
+                continue;
+            if (!requested.StartsWith(candidate.Token, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (!char.IsWhiteSpace(requested[candidate.Token.Length]))
+                continue;
+
+            var modelToken = requested[candidate.Token.Length..].Trim();
+            if (string.IsNullOrWhiteSpace(modelToken))
+                continue;
+
+            option = candidate.Service;
+            model = modelToken;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<string> ServiceTokens(UserLlmOption option)
+    {
+        if (!string.IsNullOrWhiteSpace(option.ServiceId))
+            yield return option.ServiceId.Trim();
+        if (!string.IsNullOrWhiteSpace(option.ServiceSlug))
+            yield return option.ServiceSlug.Trim();
+        if (!string.IsNullOrWhiteSpace(option.DisplayName))
+            yield return option.DisplayName.Trim();
+    }
+
+    private static string BuildUserFacingFailureMessage(Exception ex) => ex switch
+    {
+        HttpRequestException => "读取或更新 NyxID LLM service 设置失败,请稍后重试。",
+        NotSupportedException => "当前部署暂不支持这个 NyxID LLM 操作。",
+        _ => "读取或更新 NyxID LLM service 设置失败,请稍后重试。",
+    };
 
     private static UserLlmOptionsQuery BuildQuery(ChannelSlashCommandContext context, string bindingId) => new(
         new BindingId { Value = bindingId.Trim() },

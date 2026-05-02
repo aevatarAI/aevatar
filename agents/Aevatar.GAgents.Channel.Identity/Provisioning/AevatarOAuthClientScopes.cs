@@ -12,29 +12,42 @@ public static class AevatarOAuthClientScopes
 
     public static bool ContainsRequiredScopes(string? scope)
     {
+        return ContainsScope(scope, OpenId)
+               && ContainsScope(scope, BrokerBinding)
+               && ContainsScope(scope, Proxy);
+    }
+
+    private static bool ContainsScope(string? scope, string expected)
+    {
         if (string.IsNullOrWhiteSpace(scope))
             return false;
 
-        var scopes = scope
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .ToHashSet(StringComparer.Ordinal);
-        return scopes.Contains(OpenId) && scopes.Contains(BrokerBinding) && scopes.Contains(Proxy);
+        var remaining = scope.AsSpan();
+        while (!remaining.IsEmpty)
+        {
+            remaining = remaining.TrimStart();
+            var separator = IndexOfWhitespace(remaining);
+            var token = separator < 0 ? remaining : remaining[..separator];
+
+            if (token.Equals(expected.AsSpan(), StringComparison.Ordinal))
+                return true;
+
+            if (separator < 0)
+                return false;
+            remaining = remaining[(separator + 1)..];
+        }
+
+        return false;
     }
 
-    public static string EnsureRequiredScopes(string? scope)
+    private static int IndexOfWhitespace(ReadOnlySpan<char> value)
     {
-        var scopes = string.IsNullOrWhiteSpace(scope)
-            ? []
-            : scope.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
-        AppendMissing(scopes, OpenId);
-        AppendMissing(scopes, BrokerBinding);
-        AppendMissing(scopes, Proxy);
-        return string.Join(' ', scopes);
-    }
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (char.IsWhiteSpace(value[i]))
+                return i;
+        }
 
-    private static void AppendMissing(List<string> scopes, string required)
-    {
-        if (!scopes.Contains(required, StringComparer.Ordinal))
-            scopes.Add(required);
+        return -1;
     }
 }

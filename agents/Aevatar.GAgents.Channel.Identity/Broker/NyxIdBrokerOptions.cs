@@ -12,12 +12,10 @@ namespace Aevatar.GAgents.Channel.Identity.Broker;
 public sealed class NyxIdBrokerOptions
 {
     /// <summary>
-    /// Space-separated OAuth scopes requested at <c>/oauth/authorize</c>.
-    /// MUST include <c>openid</c> (for OIDC <c>id_token</c> + <c>sub</c>) and
-    /// <c>urn:nyxid:scope:broker_binding</c> (which tells NyxID#549 to
-    /// return <c>binding_id</c> instead of <c>refresh_token</c> on
-    /// authorization-code exchange), and <c>proxy</c> so later broker
-    /// token-exchange calls can mint a token accepted by NyxID LLM routes.
+    /// Deprecated compatibility hook. The effective OAuth scope requested at
+    /// <c>/oauth/authorize</c> and registered through DCR is always
+    /// <see cref="AevatarOAuthClientScopes.AuthorizationScope"/> so the broker
+    /// cannot drift between registered scopes and requested scopes.
     /// </summary>
     public string Scope { get; set; } = AevatarOAuthClientScopes.AuthorizationScope;
 

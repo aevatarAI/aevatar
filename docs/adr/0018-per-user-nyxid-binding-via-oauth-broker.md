@@ -20,7 +20,7 @@ NyxID 在 [PR #578](https://github.com/ChronoAIProject/NyxID/pull/578) (commit `
 
 **Aevatar 端最终态(PR #521):**
 
-- DCR 自举注册公共客户端,scope 含 `urn:nyxid:scope:broker_binding` 与 `proxy`，后者允许后续 token-exchange 铸出可访问 NyxID LLM 路由的短期 token
+- DCR 自举注册公共客户端,scope 含 `urn:nyxid:scope:broker_binding`
 - token-exchange 仅传 `client_id`,不传 `client_secret`(根本没有)
 - DELETE binding 走 `?client_id=` query 参数
 - 不存任何 NyxID 颁发的 secret;唯一持久态密钥是本地自生成的 state-token HMAC key(`AevatarOAuthClientGAgent.State.HmacKey`),不出集群边界
@@ -73,7 +73,7 @@ aevatar grain state、projection、log、metric 持有 zero long-lived user secr
      "{nyxid}/oauth/authorize?client_id=aevatar-channel-binding
       &redirect_uri=https://aevatar/api/oauth/nyxid-callback
       &response_type=code&code_challenge=...&code_challenge_method=S256
-      &scope=openid+urn:nyxid:scope:broker_binding+proxy&state=<state_token>"
+      &scope=openid+urn:nyxid:scope:broker_binding&state=<state_token>"
   -> 用户登录 → NyxID 302 回 aevatar /api/oauth/nyxid-callback?code=...&state=...
   -> aevatar callback handler:
        验 state_token HMAC + exp -> 解出 ExternalSubjectRef + pkce_verifier

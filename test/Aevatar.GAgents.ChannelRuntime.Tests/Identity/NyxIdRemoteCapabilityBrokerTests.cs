@@ -1,3 +1,4 @@
+using System.Net;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
@@ -105,13 +106,48 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         query["code_challenge_method"].Should().ContainSingle().Which.Should().Be("S256");
     }
 
-    private static NyxIdRemoteCapabilityBroker NewBroker(AevatarOAuthClientSnapshot snapshot)
+    [Fact]
+    public async Task StartExternalBindingAsync_UsesCanonicalScope_WhenOptionsScopeAddsExtraScopes()
+    {
+        var expectedRedirectUri = NyxIdRedirectUriResolver.Resolve();
+        var broker = NewBroker(
+            NewSnapshot(expectedRedirectUri),
+            options: new NyxIdBrokerOptions
+            {
+                Scope = $"{AevatarOAuthClientScopes.AuthorizationScope} email",
+            });
+
+        var challenge = await broker.StartExternalBindingAsync(SampleSubject());
+
+        var query = QueryHelpers.ParseQuery(new Uri(challenge.AuthorizeUrl).Query);
+        query["scope"].Should().ContainSingle().Which.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
+    }
+
+    [Fact]
+    public async Task IssueShortLivedByBindingIdAsync_ThrowsScopeMismatch_WhenNyxIdReturnsInvalidScope()
+    {
+        var broker = NewBroker(
+            NewSnapshot(NyxIdRedirectUriResolver.Resolve()),
+            httpHandler: StubHandler.Text(HttpStatusCode.BadRequest, """{"error":"invalid_scope"}"""));
+
+        var act = () => broker.IssueShortLivedByBindingIdAsync(
+            SampleSubject(),
+            "bnd-user",
+            new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy });
+
+        await act.Should().ThrowAsync<BindingScopeMismatchException>();
+    }
+
+    private static NyxIdRemoteCapabilityBroker NewBroker(
+        AevatarOAuthClientSnapshot snapshot,
+        NyxIdBrokerOptions? options = null,
+        HttpMessageHandler? httpHandler = null)
     {
         var provider = new FakeOAuthClientProvider(snapshot);
         return new NyxIdRemoteCapabilityBroker(
-            new FakeHttpClientFactory(),
+            new FakeHttpClientFactory(httpHandler),
             provider,
-            Options.Create(new NyxIdBrokerOptions()),
+            Options.Create(options ?? new NyxIdBrokerOptions()),
             new StateTokenCodec(provider),
             new EmptyBindingQueryPort(),
             new FakeTimeProvider(DateTimeOffset.Parse("2026-04-30T10:00:00Z")),
@@ -155,6 +191,36 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
 
     private sealed class FakeHttpClientFactory : IHttpClientFactory
     {
-        public HttpClient CreateClient(string name) => new();
+        private readonly HttpMessageHandler? _handler;
+
+        public FakeHttpClientFactory(HttpMessageHandler? handler = null) => _handler = handler;
+
+        public HttpClient CreateClient(string name) => _handler is null
+            ? new HttpClient()
+            : new HttpClient(_handler, disposeHandler: false);
+    }
+
+    private sealed class StubHandler : HttpMessageHandler
+    {
+        private readonly HttpStatusCode _statusCode;
+        private readonly string _body;
+
+        private StubHandler(HttpStatusCode statusCode, string body)
+        {
+            _statusCode = statusCode;
+            _body = body;
+        }
+
+        public static StubHandler Text(HttpStatusCode statusCode, string body) => new(statusCode, body);
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new HttpResponseMessage(_statusCode)
+            {
+                Content = new StringContent(_body),
+            });
+        }
     }
 }

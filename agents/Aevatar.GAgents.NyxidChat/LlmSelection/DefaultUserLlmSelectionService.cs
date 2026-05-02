@@ -1,4 +1,5 @@
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Services;
@@ -11,8 +12,6 @@ namespace Aevatar.GAgents.NyxidChat.LlmSelection;
 
 public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
 {
-    private const string NyxIdLlmApiScope = "proxy";
-
     private readonly IUserLlmOptionsService _optionsService;
     private readonly INyxIdLlmServiceCatalogClient _catalogClient;
     private readonly INyxIdCapabilityBroker? _broker;
@@ -73,7 +72,7 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
         ArgumentException.ThrowIfNullOrWhiteSpace(presetId);
 
         var query = ToQuery(context);
-        var statusToken = await IssueAccessTokenAsync(context.Subject, NyxIdLlmApiScope, ct).ConfigureAwait(false);
+        var statusToken = await IssueAccessTokenAsync(context.Subject, AevatarOAuthClientScopes.Proxy, ct).ConfigureAwait(false);
         var hint = await _catalogClient.GetSetupHintAsync(query, statusToken, ct).ConfigureAwait(false);
         var preset = hint.Presets.FirstOrDefault(candidate =>
             string.Equals(candidate.Id, presetId.Trim(), StringComparison.OrdinalIgnoreCase));
@@ -91,7 +90,7 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
                     ct: ct).ConfigureAwait(false);
                 break;
             case ProvisionThenUse provisioning:
-                var proxyToken = await IssueAccessTokenAsync(context.Subject, NyxIdLlmApiScope, ct).ConfigureAwait(false);
+                var proxyToken = await IssueAccessTokenAsync(context.Subject, AevatarOAuthClientScopes.Proxy, ct).ConfigureAwait(false);
                 var provisioned = await _catalogClient
                     .ProvisionAsync(context, proxyToken, provisioning.ProvisionEndpointId, ct)
                     .ConfigureAwait(false);

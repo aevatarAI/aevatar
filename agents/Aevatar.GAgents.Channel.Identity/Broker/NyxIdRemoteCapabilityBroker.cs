@@ -203,8 +203,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             if ((int)response.StatusCode == 400 && IsInvalidGrant(body))
                 throw new BindingRevokedException(externalSubject, "NyxID returned invalid_grant on token-exchange.");
             if ((int)response.StatusCode == 400 && IsInvalidScope(body))
-                throw new InvalidOperationException(
-                    "NyxID binding is missing the requested scope; ask the sender to run /init again.");
+                throw new BindingScopeMismatchException(externalSubject, "NyxID returned invalid_scope on token-exchange.");
             _logger.LogError(
                 "NyxID token-exchange failed: status={StatusCode}, body={Body}",
                 (int)response.StatusCode,
@@ -303,7 +302,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             "response_type=code",
             $"client_id={Uri.EscapeDataString(snapshot.ClientId)}",
             $"redirect_uri={Uri.EscapeDataString(redirectUri)}",
-            $"scope={Uri.EscapeDataString(AevatarOAuthClientScopes.EnsureRequiredScopes(_options.Scope))}",
+            $"scope={Uri.EscapeDataString(AevatarOAuthClientScopes.AuthorizationScope)}",
             $"state={Uri.EscapeDataString(stateToken)}",
             $"code_challenge={Uri.EscapeDataString(codeChallenge)}",
             "code_challenge_method=S256",

@@ -38,9 +38,11 @@ public interface INyxIdCapabilityBroker
     /// token-exchange. Throws <see cref="BindingNotFoundException"/> when no
     /// active binding exists for <paramref name="externalSubject"/>; throws
     /// <see cref="BindingRevokedException"/> when NyxID reports
-    /// <c>invalid_grant</c> on a previously-bound subject. Callers MUST
-    /// event-source revoke the local binding actor on the latter and prompt
-    /// the sender to re-run <c>/init</c>.
+    /// <c>invalid_grant</c> on a previously-bound subject; throws
+    /// <see cref="BindingScopeMismatchException"/> when NyxID reports
+    /// <c>invalid_scope</c> for an existing binding. Callers MUST event-source
+    /// revoke the local binding actor on invalid_grant and prompt the sender
+    /// to re-run <c>/init</c> for both user-remediable cases.
     /// </summary>
     /// <exception cref="BindingNotFoundException">
     /// No active binding exists for the subject (never bound, or readmodel
@@ -48,6 +50,10 @@ public interface INyxIdCapabilityBroker
     /// </exception>
     /// <exception cref="BindingRevokedException">
     /// NyxID reports the binding as revoked (HTTP 400 <c>invalid_grant</c>).
+    /// </exception>
+    /// <exception cref="BindingScopeMismatchException">
+    /// NyxID reports the binding is missing the requested scope (HTTP 400
+    /// <c>invalid_scope</c>).
     /// </exception>
     Task<CapabilityHandle> IssueShortLivedAsync(
         ExternalSubjectRef externalSubject,

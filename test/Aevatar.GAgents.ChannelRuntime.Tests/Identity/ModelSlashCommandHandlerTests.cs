@@ -1,4 +1,5 @@
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
@@ -103,7 +104,7 @@ public sealed class ModelSlashCommandHandlerTests
 
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("读取或更新 NyxID LLM service 设置失败");
-        reply.Text.Should().Contain("NyxID LLM catalog unavailable");
+        reply.Text.Should().NotContain("NyxID LLM catalog unavailable");
     }
 
     [Fact]
@@ -114,7 +115,20 @@ public sealed class ModelSlashCommandHandlerTests
 
         await handler.HandleAsync(Context(), default);
 
-        broker.RequestedScopes.Should().ContainSingle().Which.Should().Be("proxy");
+        broker.RequestedScopes.Should().ContainSingle().Which.Should().Be(AevatarOAuthClientScopes.Proxy);
+    }
+
+    [Fact]
+    public async Task List_ReturnsRebindMessage_WhenBindingScopeMissing()
+    {
+        var handler = CreateHandler(broker: new ThrowingCapabilityBroker(
+            new BindingScopeMismatchException(Context().Subject)));
+
+        var reply = await handler.HandleAsync(Context(), default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("缺少 LLM route 权限");
+        reply.Text.Should().Contain("/init");
     }
 
     [Fact]
@@ -174,6 +188,21 @@ public sealed class ModelSlashCommandHandlerTests
         var saved = commandService.SavedConfigs.Should().ContainSingle().Subject;
         saved.Config.PreferredLlmRoute.Should().Be(ChronoLlm.RouteValue);
         saved.Config.DefaultModel.Should().Be("gpt-5.5");
+    }
+
+    [Fact]
+    public async Task Use_DisplayNameWithSpaces_WritesMatchingRouteWithoutModelOverride()
+    {
+        var commandService = new StubUserConfigCommandService();
+        var handler = CreateHandler(commandService: commandService);
+
+        var reply = await handler.HandleAsync(Context(subAndArgs: "use OpenAI (work)"), default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("OpenAI (work)");
+        var saved = commandService.SavedConfigs.Should().ContainSingle().Subject;
+        saved.Config.PreferredLlmRoute.Should().Be(OpenAi.RouteValue);
+        saved.Config.DefaultModel.Should().Be(OpenAi.DefaultModel);
     }
 
     [Fact]
@@ -394,6 +423,29 @@ public sealed class ModelSlashCommandHandlerTests
                 Scope = scope.Value,
             });
         }
+    }
+
+    private sealed class ThrowingCapabilityBroker : INyxIdCapabilityBroker
+    {
+        private readonly Exception _exception;
+
+        public ThrowingCapabilityBroker(Exception exception) => _exception = exception;
+
+        public Task<BindingChallenge> StartExternalBindingAsync(
+            ExternalSubjectRef externalSubject,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task RevokeBindingAsync(
+            ExternalSubjectRef externalSubject,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<CapabilityHandle> IssueShortLivedAsync(
+            ExternalSubjectRef externalSubject,
+            CapabilityScope scope,
+            CancellationToken ct = default) =>
+            Task.FromException<CapabilityHandle>(_exception);
     }
 
     private sealed class StubUserConfigQueryPort : IUserConfigQueryPort
