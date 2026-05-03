@@ -1177,6 +1177,117 @@ public sealed class ConversationGAgentDedupTests
         completed.Outbound.Text.ShouldBe("hello partial");
     }
 
+    [Fact]
+    public async Task HandleLlmReplyReadyAsync_WhenStreamingStartedThenLlmFailed_EditsPlaceholderInsteadOfReusingToken()
+    {
+        // Production scenario (issue observed 2026-05-03): user sends a message,
+        // streaming sink fires the first chunk via /reply (consuming the reply
+        // token, placing a "..." placeholder), the LLM call then 429's before
+        // any real chunk arrives. Pre-fix the failure path fell through to
+        // RunLlmReplyAsync which issued a fresh /reply against the dead token
+        // and got 401, leaving the user staring at "..." forever with no error
+        // text. Self-heal: TryCompleteStreamedReplyAsync's Failed branch must
+        // EDIT the placeholder via RunStreamChunkAsync with the failure text
+        // instead of reusing the consumed reply token.
+        var callCount = 0;
+        string? lastEditedText = null;
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (chunk, pmid) =>
+            {
+                callCount++;
+                lastEditedText = chunk.AccumulatedText;
+                if (callCount == 1)
+                    return ConversationStreamChunkResult.Succeeded("om_placeholder_consumed");
+                // Second call is the failure-edit initiated from the Failed
+                // branch; it succeeds in production because /reply/update
+                // works on the existing message regardless of the reply token.
+                return ConversationStreamChunkResult.Succeeded(pmid ?? "om_placeholder_consumed");
+            },
+        };
+        var (agent, store) = CreateAgent(runner, "conv-stream-failed-edit");
+        SeedReplyToken(agent, "act-stream-failed", "token-1", "relay-msg-1");
+
+        // First chunk lands the placeholder + consumes the reply token.
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-failed", "relay-msg-1", "..."));
+
+        var ready = new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-stream-failed",
+            RegistrationId = "reg-1",
+            SourceActorId = "llm-inbox",
+            Activity = CreateRelayActivity("act-stream-failed", "relay-msg-1"),
+            // Inbox runtime classifies the LLM exception into a user-facing
+            // message and stuffs it into Outbound.Text on the Failed event.
+            Outbound = new MessageContent { Text = "Sorry, the upstream model is rate limited (HTTP 429). Please try again in a moment." },
+            TerminalState = LlmReplyTerminalState.Failed,
+            ErrorCode = "llm_reply_failed",
+            ErrorSummary = "Upstream LLM rate limited.",
+            ReadyAtUnixMs = 100,
+        };
+        await agent.HandleLlmReplyReadyAsync(ready);
+
+        // Must NOT fall through to RunLlmReplyAsync (would 401 on the dead token).
+        runner.LlmReplyCount.ShouldBe(0);
+        // Two RunStreamChunkAsync calls: first chunk + failure-edit.
+        callCount.ShouldBe(2);
+        // The placeholder was edited with the classified failure text.
+        lastEditedText.ShouldContain("rate limited");
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Last().EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
+        var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(events.Last().EventData.Value);
+        completed.Outbound.Text.ShouldContain("rate limited");
+        completed.SentActivityId.ShouldStartWith("nyx-relay-stream:");
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyReadyAsync_WhenStreamingStartedAndFailedEditAlsoFails_PersistsLastFlushedAsTerminalWithoutReusingToken()
+    {
+        // Defence in depth for the Failed branch: if even the in-place edit
+        // is rejected (e.g. Lark refuses an edit of a message past its window),
+        // we still must NOT fall through to RunLlmReplyAsync. Persist what
+        // the user already sees (the streaming partial / placeholder) and
+        // stop — anything else would 401 on the dead token.
+        var callCount = 0;
+        var runner = new RecordingTurnRunner
+        {
+            StreamChunkResultFactory = (_, _) =>
+            {
+                callCount++;
+                if (callCount == 1)
+                    return ConversationStreamChunkResult.Succeeded("om_placeholder_consumed");
+                return ConversationStreamChunkResult.Failed("relay_reply_edit_unsupported", "lark refused", editUnsupported: true);
+            },
+        };
+        var (agent, store) = CreateAgent(runner, "conv-stream-failed-edit-deny");
+        SeedReplyToken(agent, "act-stream-failed-deny", "token-1", "relay-msg-1");
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateStreamChunk("act-stream-failed-deny", "relay-msg-1", "first partial"));
+
+        var ready = new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-stream-failed-deny",
+            RegistrationId = "reg-1",
+            SourceActorId = "llm-inbox",
+            Activity = CreateRelayActivity("act-stream-failed-deny", "relay-msg-1"),
+            Outbound = new MessageContent { Text = "Sorry, the LLM call failed." },
+            TerminalState = LlmReplyTerminalState.Failed,
+            ErrorCode = "llm_reply_failed",
+            ErrorSummary = "Upstream failure.",
+            ReadyAtUnixMs = 100,
+        };
+        await agent.HandleLlmReplyReadyAsync(ready);
+
+        runner.LlmReplyCount.ShouldBe(0);
+        var events = await store.GetEventsAsync(agent.Id);
+        var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(events.Last().EventData.Value);
+        // User keeps the last flushed partial since the edit attempt failed too.
+        completed.Outbound.Text.ShouldBe("first partial");
+    }
+
     private static LlmReplyStreamChunkEvent CreateStreamChunk(string correlationId, string replyMessageId, string accumulatedText) =>
         new()
         {
