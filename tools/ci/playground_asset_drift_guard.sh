@@ -50,6 +50,12 @@ normalize_index_html() {
   ' "${source_file}" > "${output_file}"
 }
 
+normalize_js() {
+  local source_file="$1"
+  local output_file="$2"
+  perl -pe 's/[ \t]+$//' "${source_file}" > "${output_file}"
+}
+
 compare_files() {
   local label="$1"
   local left_file="$2"
@@ -76,10 +82,9 @@ echo "Building CLI playground assets into temporary directory..."
 pnpm -C "${CLI_FRONTEND_DIR}" exec tsc -b >/dev/null
 pnpm -C "${CLI_FRONTEND_DIR}" exec vite build --outDir "${CLI_PLAYGROUND_DIR}" >/dev/null
 
-compare_files \
-  "app.js" \
-  "${CLI_PLAYGROUND_DIR}/app.js" \
-  "${DEMO_PLAYGROUND_DIR}/app.js"
+normalize_js "${CLI_PLAYGROUND_DIR}/app.js" "${tmp_dir}/cli-app.js"
+normalize_js "${DEMO_PLAYGROUND_DIR}/app.js" "${tmp_dir}/demo-app.js"
+compare_files "app.js (normalized)" "${tmp_dir}/cli-app.js" "${tmp_dir}/demo-app.js"
 
 normalize_css "${CLI_PLAYGROUND_DIR}/app.css" "${tmp_dir}/cli-app.css"
 normalize_css "${DEMO_PLAYGROUND_DIR}/app.css" "${tmp_dir}/demo-app.css"

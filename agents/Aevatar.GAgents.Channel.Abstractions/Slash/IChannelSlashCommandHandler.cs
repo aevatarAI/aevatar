@@ -1,6 +1,17 @@
 namespace Aevatar.GAgents.Channel.Abstractions.Slash;
 
 /// <summary>
+/// User-facing slash command usage descriptor consumed by shared help surfaces.
+/// </summary>
+/// <param name="Name">Canonical command name without the leading slash.</param>
+/// <param name="ArgumentSyntax">Argument syntax rendered after the command name.</param>
+/// <param name="Summary">Short description of the command.</param>
+public sealed record ChannelSlashCommandUsage(
+    string Name,
+    string ArgumentSyntax,
+    string Summary);
+
+/// <summary>
 /// Pluggable slash-command handler registered through DI. Producers (e.g.
 /// Channel.Identity for /init / /unbind / /whoami, NyxidChat for /model) ship
 /// their own implementations; the inbound runner discovers them via
@@ -29,6 +40,11 @@ public interface IChannelSlashCommandHandler
     /// binding so user-scoped state has somewhere to attach.
     /// </summary>
     bool RequiresBinding { get; }
+
+    /// <summary>
+    /// User-facing usage descriptor used by shared help surfaces.
+    /// </summary>
+    ChannelSlashCommandUsage Usage => new(Name, string.Empty, $"Run /{Name}");
 
     /// <summary>
     /// Produce a reply for the matched command. Returning <c>null</c> tells

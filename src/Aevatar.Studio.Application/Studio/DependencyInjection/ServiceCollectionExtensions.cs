@@ -20,6 +20,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<SettingsService>();
         services.TryAddSingleton<IStudioMemberService, StudioMemberService>();
         services.TryAddSingleton<IStudioTeamService, StudioTeamService>();
+        services.TryAddSingleton<IUserLlmPreferenceService, UserLlmPreferenceService>();
 
         // Override the platform's deterministic resolver so existing
         // member-first invoke / runs / binding routes resolve to the same

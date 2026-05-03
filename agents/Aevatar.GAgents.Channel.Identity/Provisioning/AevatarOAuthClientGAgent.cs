@@ -95,8 +95,9 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         var redirectUriDrifted = sameClient
             && (string.IsNullOrEmpty(State.RedirectUri)
                 || !string.Equals(State.RedirectUri, cmd.RedirectUri, StringComparison.Ordinal));
+        var oauthScopeDrifted = sameClient && !AevatarOAuthClientScopes.ContainsRequiredScopes(State.OauthScope);
 
-        if (sameClient && !redirectUriDrifted)
+        if (sameClient && !redirectUriDrifted && !oauthScopeDrifted)
         {
             // Seed HMAC key on first activation against an existing client_id
             // (defence-in-depth against partial state loaded from snapshots).
@@ -138,6 +139,14 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
                 State.RedirectUri,
                 cmd.RedirectUri);
         }
+        if (oauthScopeDrifted)
+        {
+            Logger.LogWarning(
+                "Aevatar OAuth client scope drifted: stored='{Stored}', required='{Required}'. " +
+                "Re-running DCR to register a new client_id at NyxID with proxy-capable scopes.",
+                State.OauthScope,
+                AevatarOAuthClientScopes.AuthorizationScope);
+        }
 
         var registrar = Services.GetService<NyxIdDynamicClientRegistrationClient>();
         if (registrar is null)
@@ -178,6 +187,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
                 NyxidAuthority = cmd.NyxidAuthority,
                 PersistedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                 RedirectUri = cmd.RedirectUri,
+                OauthScope = AevatarOAuthClientScopes.AuthorizationScope,
             },
             onOptimisticConcurrencyConflict: occ => AbsorbPeerDcrProvisioningAsync(cmd, registration.ClientId, occ));
 
@@ -221,6 +231,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         var peerHealed = !string.IsNullOrEmpty(State.ClientId)
             && string.Equals(State.NyxidAuthority, cmd.NyxidAuthority, StringComparison.Ordinal)
             && string.Equals(State.RedirectUri, cmd.RedirectUri, StringComparison.Ordinal)
+            && AevatarOAuthClientScopes.ContainsRequiredScopes(State.OauthScope)
             && State.HmacKey.Length > 0;
 
         if (peerHealed)
@@ -306,6 +317,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
                 ClientIdIssuedAtUnix = cmd.ClientIdIssuedAtUnix,
                 NyxidAuthority = cmd.NyxidAuthority,
                 PersistedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                OauthScope = cmd.OauthScope ?? string.Empty,
             });
             Logger.LogInformation(
                 "Provisioned aevatar OAuth client: client_id={ClientId}, authority={Authority}",
@@ -407,6 +419,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         next.ClientIdIssuedAtUnix = evt.ClientIdIssuedAtUnix;
         next.NyxidAuthority = evt.NyxidAuthority ?? string.Empty;
         next.RedirectUri = evt.RedirectUri ?? string.Empty;
+        next.OauthScope = evt.OauthScope ?? string.Empty;
         // Re-provisioning resets the broker observation: a new client_id
         // starts with broker_capability_enabled=false until ops flips it.
         next.BrokerCapabilityObserved = false;

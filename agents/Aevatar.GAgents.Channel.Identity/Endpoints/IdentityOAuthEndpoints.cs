@@ -48,6 +48,7 @@ public static class IdentityOAuthEndpoints
         [FromServices] IExternalIdentityBindingQueryPort queryPort,
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] IProjectionReadinessPort projectionReadiness,
+        [FromServices] ExternalIdentityBindingProjectionPort bindingProjectionPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -134,11 +135,23 @@ public static class IdentityOAuthEndpoints
             return Results.Json(new
             {
                 status = "broker_capability_disabled",
-                detail = "Aevatar 已注册到 NyxID,但 OAuth client 未授予 broker capability — DCR 自举正常路径下 scope 会包含 urn:nyxid:scope:broker_binding。请检查 /api/oauth/aevatar-client/status 是否显示 client_id 与 allowed_scopes 一致;若是手动创建的 client,请通过 NyxID admin 把 broker_binding scope 加入 allowed_scopes 后再重试 /init。",
+                detail = "Aevatar 已注册到 NyxID,但 OAuth client 未授予 broker capability — DCR 自举正常路径下 scope 会包含 urn:nyxid:scope:broker_binding 与 proxy。请检查 /api/oauth/aevatar-client/status 是否显示 client_id 与 allowed_scopes 一致;若是手动创建的 client,请通过 NyxID admin 把 broker_binding/proxy scope 加入 allowed_scopes 后再重试 /init。",
             }, statusCode: StatusCodes.Status409Conflict);
         }
 
         var actorId = subject.ToActorId();
+
+        // Activate the binding projection scope BEFORE any readmodel query
+        // or actor dispatch. Without an active scope, the projector never
+        // subscribes to this actor's committed events and the readmodel
+        // stays empty — the next two checks (ResolveAsync below; the
+        // post-dispatch WaitForBindingStateAsync) would both miss the
+        // binding and the user gets stuck on the binding card forever.
+        // Same lifecycle pattern AevatarOAuthClientBootstrapService uses
+        // for the cluster-singleton OAuth client (issue #549 follow-up
+        // observed 2026-05-01).
+        await bindingProjectionPort.EnsureProjectionForActorAsync(actorId, ct).ConfigureAwait(false);
+
         if (await queryPort.ResolveAsync(subject, ct).ConfigureAwait(false) is not null)
         {
             // Concurrent /init protection: if the subject is already bound,
@@ -212,6 +225,36 @@ public static class IdentityOAuthEndpoints
         }
         catch (TimeoutException)
         {
+            // Distinguish two timeout shapes (PR #555 review): the actor's
+            // discard branch (legacy already-bound) keeps State.BindingId =
+            // existing != incoming, so WaitForBindingStateAsync NEVER matches
+            // — but the rebuild event we now emit has materialized the
+            // existing binding into the readmodel, so a final ResolveAsync
+            // here distinguishes:
+            //   1. ResolveAsync returns active binding != exchange.BindingId
+            //      → actor took the discard path; the incoming binding NyxID
+            //        just issued is an orphan. Revoke it and return the same
+            //        already_bound shape the up-front check above produces.
+            //   2. ResolveAsync still returns null → readmodel really has not
+            //      caught up yet; surface the existing pending-propagation
+            //      hint so the user retries.
+            // Without this branch the legacy heal path would (a) leave
+            // bnd_incoming as a permanent orphan at NyxID on every /init
+            // retry and (b) frustrate the user with binding_pending_propagation
+            // even though their existing binding is now visible.
+            var resolvedAfterTimeout = await queryPort.ResolveAsync(subject, ct).ConfigureAwait(false);
+            if (resolvedAfterTimeout is not null
+                && !string.Equals(resolvedAfterTimeout.Value, exchange.BindingId, StringComparison.Ordinal))
+            {
+                logger.LogInformation(
+                    "OAuth callback observed legacy already-bound on actor={ActorId}: existing={ExistingBindingId}, incoming={IncomingBindingId}; revoking the incoming binding so it does not orphan at NyxID.",
+                    actorId,
+                    resolvedAfterTimeout.Value,
+                    exchange.BindingId);
+                await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+                return Results.Ok(new { status = "already_bound", detail = "已绑定 NyxID 账号,可以回到 Lark 继续对话" });
+            }
+
             logger.LogWarning(
                 "Projection readiness timed out for actor={ActorId}, expected binding={BindingId}",
                 actorId,
@@ -249,8 +292,10 @@ public static class IdentityOAuthEndpoints
             var resolvedRedirectUri = NyxIdRedirectUriResolver.Resolve();
             var redirectUriDrifted = string.IsNullOrEmpty(snapshot.RedirectUri)
                 || !string.Equals(snapshot.RedirectUri, resolvedRedirectUri, StringComparison.Ordinal);
+            var oauthScopeDrifted = !AevatarOAuthClientScopes.ContainsRequiredScopes(snapshot.OauthScope);
             var status = redirectUriDrifted
                 ? "redirect_uri_drifted"
+                : oauthScopeDrifted ? "oauth_scope_drifted"
                 : snapshot.BrokerCapabilityObserved ? "ready" : "broker_capability_pending";
             return Results.Ok(new
             {
@@ -261,11 +306,16 @@ public static class IdentityOAuthEndpoints
                 redirect_uri_registered = snapshot.RedirectUri,
                 redirect_uri_resolved = resolvedRedirectUri,
                 redirect_uri_drifted = redirectUriDrifted,
+                oauth_scope_registered = snapshot.OauthScope,
+                oauth_scope_required = AevatarOAuthClientScopes.AuthorizationScope,
+                oauth_scope_drifted = oauthScopeDrifted,
                 broker_capability_observed = snapshot.BrokerCapabilityObserved,
                 broker_capability_observed_at = snapshot.BrokerCapabilityObservedAt,
-                ops_handoff = snapshot.BrokerCapabilityObserved
-                    ? null
-                    : "Operator must enable broker_capability_enabled on this OAuth client at NyxID admin (one-time per cluster).",
+                ops_handoff = oauthScopeDrifted
+                    ? "Bootstrap must re-run DCR so the OAuth client includes the proxy scope required by LLM route selection."
+                    : snapshot.BrokerCapabilityObserved
+                        ? null
+                        : "Operator must enable broker_capability_enabled on this OAuth client at NyxID admin (one-time per cluster).",
             });
         }
         catch (AevatarOAuthClientNotProvisionedException)

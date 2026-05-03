@@ -432,6 +432,35 @@ export const settings = {
 export const userConfig = {
   get:    ()          => request<any>('/user-config'),
   save:   (data: any) => request<any>('/user-config', { method: 'PUT', body: JSON.stringify(data) }),
+  llmOptions: ()     => request<{
+    current?: {
+      serviceId: string;
+      serviceSlug: string;
+      displayName: string;
+      routeValue: string;
+      defaultModel?: string | null;
+      availableModels?: string[];
+      status: string;
+      source: string;
+      allowed: boolean;
+    } | null;
+    available?: {
+      serviceId: string;
+      serviceSlug: string;
+      displayName: string;
+      routeValue: string;
+      defaultModel?: string | null;
+      availableModels?: string[];
+      status: string;
+      source: string;
+      allowed: boolean;
+    }[];
+    setupHint?: {
+      setupUrl?: string | null;
+      presets?: { id: string; title: string; description?: string }[];
+    } | null;
+  }>('/user-config/llm/options'),
+  saveLlmPreference: (data: any) => request<any>('/user-config/llm/preference', { method: 'PUT', body: JSON.stringify(data) }),
   models: ()          => request<{
     providers?: { provider_slug: string; provider_name: string; status: string; proxy_url: string; source?: string }[];
     gateway_url?: string;

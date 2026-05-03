@@ -78,6 +78,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         _registrar.Calls[0].RedirectUri.Should().Be("https://aevatar.test/api/oauth/nyxid-callback");
         _agent.State.ClientId.Should().Be(_registrar.NextClientId);
         _agent.State.NyxidAuthority.Should().Be("https://nyxid.test");
+        _agent.State.OauthScope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
         _agent.State.HmacKey.Length.Should().Be(32);
     }
 
@@ -180,6 +181,28 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         });
 
         _registrar.Calls.Should().HaveCount(1, "matching redirect URI must not re-DCR");
+    }
+
+    [Fact]
+    public async Task HandleEnsureProvisioned_ReDcrs_WhenLegacyScopeIsMissingProxy()
+    {
+        var redirectUri = "https://aevatar-console-backend-api.aevatar.ai/api/oauth/nyxid-callback";
+        var cmd = new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = redirectUri,
+        };
+
+        await _agent.HandleEnsureProvisioned(cmd);
+        _agent.State.OauthScope = "openid urn:nyxid:scope:broker_binding";
+
+        _registrar.NextClientId = "client-after-scope-heal";
+        await _agent.HandleEnsureProvisioned(cmd);
+
+        _registrar.Calls.Should().HaveCount(2,
+            "legacy clients without proxy scope cannot mint NyxID LLM API tokens");
+        _agent.State.ClientId.Should().Be("client-after-scope-heal");
+        _agent.State.OauthScope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
     }
 
     [Fact]
@@ -330,6 +353,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
                 ClientIdIssuedAtUnix = 1700000001,
                 NyxidAuthority = "https://nyxid.test",
                 RedirectUri = resolvedRedirect,
+                OauthScope = AevatarOAuthClientScopes.AuthorizationScope,
                 PersistedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             };
             await store.AppendAsync(

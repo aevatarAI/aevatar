@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Aevatar.GAgents.Channel.Identity;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -33,6 +34,8 @@ public sealed class NyxIdDynamicClientRegistrationClientTests
         result.IssuedAt.ToUnixTimeSeconds().Should().Be(1700000123);
         handler.Last.Should().NotBeNull();
         handler.Last!.RequestUri!.AbsoluteUri.Should().Be("https://nyxid.test/oauth/register");
+        var request = await handler.Last.Content!.ReadFromJsonAsync<JsonElement>();
+        request.GetProperty("scope").GetString().Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
     }
 
     [Fact]

@@ -331,8 +331,32 @@ public sealed class NyxIdApiClient
 
     // ─── LLM ───
 
-    public Task<string> GetLlmStatusAsync(string token, CancellationToken ct) =>
-        GetAsync(token, "/api/v1/llm/status", ct);
+    public async Task<string> GetLlmServicesAsync(string token, CancellationToken ct)
+    {
+        var response = await GetAsync(token, "/api/v1/llm/services", ct).ConfigureAwait(false);
+        return TryParseErrorStatus(response, out var status) && status == 404
+            ? await GetAsync(token, "/api/v1/llm/status", ct).ConfigureAwait(false)
+            : response;
+    }
+
+    public Task<string> ProvisionLlmServiceAsync(string token, string provisionEndpointId, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(provisionEndpointId);
+        var candidate = provisionEndpointId.Trim();
+        if (string.IsNullOrWhiteSpace(candidate) ||
+            candidate.Contains("..", StringComparison.Ordinal) ||
+            candidate.Contains("://", StringComparison.Ordinal) ||
+            candidate.Contains("//", StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Provision endpoint id must be a relative NyxID LLM service endpoint id.", nameof(provisionEndpointId));
+        }
+
+        var normalized = candidate.Trim('/');
+        if (string.IsNullOrWhiteSpace(normalized))
+            throw new ArgumentException("Provision endpoint id must be a relative NyxID LLM service endpoint id.", nameof(provisionEndpointId));
+
+        return PostAsync(token, $"/api/v1/llm/services/{Uri.EscapeDataString(normalized)}", "{}", ct);
+    }
 
     // ─── Providers ───
 
@@ -763,6 +787,33 @@ public sealed class NyxIdApiClient
         {
             detail = $"invalid_error_envelope response_length={response.Length}";
             return true;
+        }
+    }
+
+    private static bool TryParseErrorStatus(string response, out int status)
+    {
+        status = 0;
+        if (string.IsNullOrWhiteSpace(response))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("error", out var errorProp) ||
+                errorProp.ValueKind != JsonValueKind.True ||
+                !root.TryGetProperty("status", out var statusProp) ||
+                statusProp.ValueKind != JsonValueKind.Number)
+            {
+                return false;
+            }
+
+            status = statusProp.GetInt32();
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 }

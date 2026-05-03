@@ -207,9 +207,11 @@ type RuntimeMode = 'remote' | 'local';
 type UserLlmRoute = string;
 
 type UserConfigProviderStatus = {
+  service_id?: string;
   provider_slug: string;
   provider_name: string;
   status: string;
+  proxy_url?: string;
   source?: string;
 };
 
@@ -329,6 +331,17 @@ function resolveUserRuntimeConfig(userConfigData?: any) {
     localRuntimeUrl,
     remoteRuntimeUrl,
     activeRuntimeUrl: runtimeMode === 'remote' ? remoteRuntimeUrl : localRuntimeUrl,
+  };
+}
+
+function buildUserConfigRollbackPayload(userConfigData?: any) {
+  const runtimeConfig = resolveUserRuntimeConfig(userConfigData);
+  return {
+    defaultModel: String(userConfigData?.defaultModel || '').trim(),
+    preferredLlmRoute: normalizeUserLlmRoute(userConfigData?.preferredLlmRoute),
+    runtimeMode: runtimeConfig.runtimeMode,
+    localRuntimeBaseUrl: runtimeConfig.localRuntimeUrl,
+    remoteRuntimeBaseUrl: runtimeConfig.remoteRuntimeUrl,
   };
 }
 
@@ -5112,13 +5125,31 @@ function CloudConfigSection(props: {
     (async () => {
       setUserConfigState(prev => ({ ...prev, modelsLoading: true }));
       try {
-        const result = await api.userConfig.models();
+        const result = await api.userConfig.llmOptions();
         if (!cancelled) {
+          const available = Array.isArray(result?.available) ? result.available : [];
+          const providers = available.map(option => ({
+            service_id: option.serviceId,
+            provider_slug: option.serviceSlug,
+            provider_name: option.displayName,
+            status: option.status,
+            proxy_url: option.routeValue,
+            source: option.source,
+          }));
+          const modelsByProvider = Object.fromEntries(available.map(option => [
+            option.serviceSlug,
+            Array.isArray(option.availableModels) ? option.availableModels : [],
+          ]));
+          const supportedModels = Array.from(new Set(available.flatMap(option =>
+            Array.isArray(option.availableModels) ? option.availableModels : [],
+          )));
           setUserConfigState(prev => ({
             ...prev,
-            providers: result?.providers ?? [],
-            supportedModels: result?.supported_models ?? [],
-            modelsByProvider: result?.models_by_provider ?? {},
+            ...(result?.current?.defaultModel ? { defaultModel: result.current.defaultModel } : {}),
+            ...(result?.current?.routeValue ? { preferredLlmRoute: normalizeUserLlmRoute(result.current.routeValue) } : {}),
+            providers,
+            supportedModels,
+            modelsByProvider,
             modelsLoading: false,
           }));
         }
@@ -5166,7 +5197,7 @@ function CloudConfigSection(props: {
     const seen = new Set(options.map(option => option.value));
     for (const provider of serviceProviders) {
       const slug = provider.provider_slug;
-      const route = routePathFromProviderSlug(slug);
+      const route = normalizeUserLlmRoute(provider.proxy_url || routePathFromProviderSlug(slug));
       if (!slug || seen.has(route)) continue;
       seen.add(route);
       options.push({
@@ -5191,7 +5222,8 @@ function CloudConfigSection(props: {
     const query = filterText.trim().toLowerCase();
     const providerOrder = effectiveRoute === USER_LLM_ROUTE_GATEWAY
       ? gatewayProviders
-      : userConfigState.providers.filter(provider => routePathFromProviderSlug(provider.provider_slug) === effectiveRoute);
+      : userConfigState.providers.filter(provider =>
+        normalizeUserLlmRoute(provider.proxy_url || routePathFromProviderSlug(provider.provider_slug)) === effectiveRoute);
 
     return providerOrder
       .map(provider => ({
@@ -5216,20 +5248,37 @@ function CloudConfigSection(props: {
         </div>
         <button
           onClick={async () => {
+            let previousConfig: any = null;
+            let runtimeSaved = false;
+            let rollbackApplied = false;
             try {
               setUserConfigState(prev => ({ ...prev, loading: true }));
+              previousConfig = await api.userConfig.get();
               const trimmedModel = userConfigState.defaultModel.trim();
               const trimmedRoute = normalizeUserLlmRoute(userConfigState.preferredLlmRoute);
               await api.userConfig.save({
-                ...(trimmedModel ? { defaultModel: trimmedModel } : {}),
-                ...(trimmedRoute ? { preferredLlmRoute: trimmedRoute } : {}),
                 runtimeMode: runtimeConfig.runtimeMode,
                 localRuntimeBaseUrl: normalizeRuntimeUrl(runtimeConfig.localRuntimeUrl, DEFAULT_LOCAL_RUNTIME_URL),
                 remoteRuntimeBaseUrl: normalizeRuntimeUrl(runtimeConfig.remoteRuntimeUrl, DEFAULT_REMOTE_RUNTIME_URL),
               });
+              runtimeSaved = true;
+              await api.userConfig.saveLlmPreference({
+                routeValue: trimmedRoute,
+                ...(trimmedModel ? { model: trimmedModel } : {}),
+              });
               flash('LLM config saved', 'success');
             } catch (error: any) {
-              flash(error?.message || 'Failed to save LLM config', 'error');
+              if (runtimeSaved && previousConfig) {
+                try {
+                  await api.userConfig.save(buildUserConfigRollbackPayload(previousConfig));
+                  rollbackApplied = true;
+                } catch (rollbackError) {
+                  console.warn('[Aevatar App] Failed to roll back user config after LLM preference save failed.', rollbackError);
+                }
+              }
+
+              const message = error?.message || 'Failed to save LLM config';
+              flash(rollbackApplied ? `${message}. Runtime changes were rolled back.` : message, 'error');
             } finally {
               setUserConfigState(prev => ({ ...prev, loading: false }));
             }
