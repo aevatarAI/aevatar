@@ -95,11 +95,12 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
             {
                 RunId = runId,
                 StepId = request.StepId,
-                SuspensionType = Name,
+                SuspensionType = WorkflowSuspensionType.SecureInput,
                 Prompt = prompt,
                 TimeoutSeconds = timeoutSeconds,
                 VariableName = requestVariableName,
             };
+            suspended.ExpectedOptions.Add(WorkflowSuspensionType.SecureInput.DefaultExpectedOptions());
             WorkflowSuspensionRequestSupport.ApplyDeliveryTarget(suspended, request);
             suspended.Metadata["variable"] = requestVariableName;
             suspended.Metadata["secure"] = "true";

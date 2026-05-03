@@ -150,17 +150,26 @@ message SubWorkflowInvocationCompletedEvent
   string output = 4;
   string error = 5;
 }
+enum WorkflowSuspensionType
+{
+  WORKFLOW_SUSPENSION_TYPE_UNSPECIFIED = 0;
+  WORKFLOW_SUSPENSION_TYPE_HUMAN_APPROVAL = 1;
+  WORKFLOW_SUSPENSION_TYPE_HUMAN_INPUT = 2;
+  WORKFLOW_SUSPENSION_TYPE_SECURE_INPUT = 3;
+}
 message WorkflowSuspendedEvent
 {
+  reserved 3;
   string run_id = 1;
   string step_id = 2;
-  string suspension_type = 3;
   string prompt = 4;
   int32 timeout_seconds = 5;
   string variable_name = 6;
   map<string, string> metadata = 7;
   string content = 8;
   string delivery_target_id = 9;
+  WorkflowSuspensionType suspension_type = 10;
+  repeated string expected_options = 11;
 }
 message WorkflowResumedEvent
 {

@@ -26,7 +26,7 @@ public sealed class WorkflowHumanInteractionProjectorTests
                 {
                     RunId = "run-1",
                     StepId = "approval-1",
-                    SuspensionType = "human_approval",
+                    SuspensionType = WorkflowSuspensionType.HumanApproval,
                     Prompt = "Need approval",
                     Content = "Please review the summary.",
                     DeliveryTargetId = "agent-delivery-1",
@@ -65,7 +65,7 @@ public sealed class WorkflowHumanInteractionProjectorTests
                 {
                     RunId = "run-2",
                     StepId = "input-1",
-                    SuspensionType = "human_input",
+                    SuspensionType = WorkflowSuspensionType.HumanInput,
                     Prompt = "Need extra details",
                 }),
             },
@@ -90,7 +90,7 @@ public sealed class WorkflowHumanInteractionProjectorTests
                 {
                     RunId = "run-3",
                     StepId = "approval-3",
-                    SuspensionType = "human_approval",
+                    SuspensionType = WorkflowSuspensionType.HumanApproval,
                     Prompt = "Need approval",
                     DeliveryTargetId = "agent-delivery-3",
                 }),
@@ -98,6 +98,36 @@ public sealed class WorkflowHumanInteractionProjectorTests
             CancellationToken.None);
 
         port.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldUseEventExpectedOptions_OverDefaults()
+    {
+        var port = new RecordingHumanInteractionPort();
+        var projector = new WorkflowHumanInteractionProjector(port);
+
+        var suspended = new WorkflowSuspendedEvent
+        {
+            RunId = "run-options",
+            StepId = "approval-options",
+            SuspensionType = WorkflowSuspensionType.HumanApproval,
+            Prompt = "Need approval",
+            DeliveryTargetId = "agent-delivery-options",
+        };
+        suspended.ExpectedOptions.Add(new[] { "accept", "veto" });
+
+        await projector.ProjectAsync(
+            BuildContext(),
+            new EventEnvelope
+            {
+                Id = "evt-human-options",
+                Route = EnvelopeRouteSemantics.CreateObserverPublication("workflow-human-interaction-test"),
+                Payload = Any.Pack(suspended),
+            },
+            CancellationToken.None);
+
+        port.Calls.Should().ContainSingle();
+        port.Calls[0].request.Options.Should().Equal("accept", "veto");
     }
 
     [Fact]

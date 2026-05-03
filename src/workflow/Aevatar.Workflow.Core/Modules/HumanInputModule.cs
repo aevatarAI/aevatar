@@ -74,11 +74,12 @@ public sealed class HumanInputModule : IEventModule<IWorkflowExecutionContext>
             {
                 RunId = runId,
                 StepId = request.StepId,
-                SuspensionType = "human_input",
+                SuspensionType = WorkflowSuspensionType.HumanInput,
                 Prompt = prompt,
                 TimeoutSeconds = timeoutSeconds,
                 VariableName = variable,
             };
+            suspended.ExpectedOptions.Add(WorkflowSuspensionType.HumanInput.DefaultExpectedOptions());
             WorkflowSuspensionRequestSupport.ApplyContent(suspended, request.Input);
             WorkflowSuspensionRequestSupport.ApplyDeliveryTarget(suspended, request);
 
