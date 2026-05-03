@@ -53,6 +53,49 @@ export AEVATAR_Orleans__SiloPort=11111
 export AEVATAR_Orleans__GatewayPort=30000
 ```
 
+## NyxID spec catalog token
+
+`nyxid_search_capabilities` 与 `nyxid_proxy_execute` 依赖
+`NyxIdSpecCatalog` 从 NyxID 拉取 OpenAPI spec。NyxID 的
+`/api/v1/docs/openapi.json` 要求真实用户 token；未配置 token 时 catalog
+会保持为空，specialized NyxID tools 仍可用，但 generic capability discovery
+不可用。
+
+生产部署必须通过 Secret / 环境变量注入：
+
+```bash
+export AEVATAR_Aevatar__NyxId__SpecFetchToken="<real-user-nyxid-api-key>"
+```
+
+如果部署平台直接使用 .NET 裸环境变量，也可以注入等价的
+`Aevatar__NyxId__SpecFetchToken`。Mainnet host 会把它绑定到
+`Aevatar:NyxId:SpecFetchToken`。
+
+缺少 token、token 被 NyxID 拒绝或 spec 成功返回但 catalog 为空时，
+`/health/ready` 会返回 not-ready，并在 `components` 中出现 `nyxid-catalog`：
+
+```json
+{
+  "name": "nyxid-catalog",
+  "status": "unhealthy",
+  "message": "NyxID spec fetch token is missing; generic capability discovery is unavailable."
+}
+```
+
+若 token 已配置但启动时 NyxID / 网络短暂不可用，readiness 会保持 ready，
+并在同一组件的 `lastRefreshError` / `lastRefreshFailureKind` 里暴露临时失败；
+后台 refresh 成功后会更新 operation count。
+
+若已经加载过可用 catalog，后续 refresh 返回空 spec 会被视为软失败：
+host 保留上一版 catalog 继续服务，`nyxid-catalog` 组件保持 ready，并通过
+`lastRefreshFailureKind=EmptySpec` 暴露上游 spec 异常。
+
+部署后冒烟：
+
+```bash
+curl -fsS http://127.0.0.1:5080/health/ready | jq '.components[] | select(.name == "nyxid-catalog")'
+```
+
 ## 本地持久化开发模式（Orleans + Garnet）
 
 如果只是想快速起一个本地开发后端，并且希望避免“写侧还在、读侧已丢失”的不对称状态，优先使用脚本默认的 `local` 模式。脚本会优先使用 `~/.dotnet/dotnet`，避免系统 `dotnet` 与仓库 `global.json` 的 SDK 版本不匹配：

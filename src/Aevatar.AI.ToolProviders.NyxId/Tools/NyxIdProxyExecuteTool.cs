@@ -70,7 +70,15 @@ public sealed class NyxIdProxyExecuteTool : IAgentTool
             o => string.Equals(o.OperationId, operationId, StringComparison.OrdinalIgnoreCase));
 
         if (op == null)
+        {
+            NyxIdToolProviderMetrics.RecordSpecCatalogLookupMiss(
+                NyxIdToolProviderMetrics.SpecCatalogLookupMissReasonUnknownOperation);
+            _logger.LogWarning(
+                "NyxIdProxyExecute: spec catalog lookup miss for operation {OperationId}; operationCount={OperationCount}",
+                operationId,
+                _catalog.Operations.Length);
             return $"{{\"error\":\"Operation '{operationId}' not found in spec catalog. Use nyxid_search_capabilities to find valid operations.\"}}";
+        }
 
         var path = op.Path;
         var warnings = new List<string>();

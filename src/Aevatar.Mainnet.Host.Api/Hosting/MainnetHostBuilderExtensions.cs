@@ -23,6 +23,7 @@ using Aevatar.GAgents.Platform.Telegram;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
+using Aevatar.Hosting;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
 using Microsoft.AspNetCore.Builder;
@@ -108,6 +109,7 @@ public static class MainnetHostBuilderExtensions
                         ?? builder.Configuration["Aevatar:Authentication:Authority"];
             o.SpecFetchToken = builder.Configuration["Aevatar:NyxId:SpecFetchToken"];
         });
+        builder.Services.AddAevatarHealthContributor(NyxIdCatalogHealthContributor.Create());
         builder.Services.AddLarkTools(o =>
         {
             o.ProviderSlug = builder.Configuration["Aevatar:Lark:NyxProviderSlug"] ?? "api-lark-bot";

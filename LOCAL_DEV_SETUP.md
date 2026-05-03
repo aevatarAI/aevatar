@@ -73,17 +73,29 @@ chmod +x local-dev.sh tools/local-dev.sh
 - 配置文件 (`~/.aevatar/secrets.json`)
 - 通过配置工具: `dotnet run --project tools/Aevatar.Tools.Cli -- config`
 
-### 3. 服务管理
+### 3. NyxID spec catalog token
+Mainnet API 的 `nyxid_search_capabilities` 与 `nyxid_proxy_execute` 依赖
+NyxID OpenAPI spec catalog。若 `Aevatar:NyxId:Authority` 已配置但未提供
+`Aevatar:NyxId:SpecFetchToken`，服务仍可启动，但 `/health/ready` 会报告
+`nyxid-catalog` unhealthy，generic capability discovery 不可用。
+
+本地需要验证这两类工具或 readiness 时，设置：
+
+```bash
+export AEVATAR_Aevatar__NyxId__SpecFetchToken="<real-user-nyxid-api-key>"
+```
+
+### 4. 服务管理
 - 启动/停止服务
 - 后台运行，日志保存到 `logs/` 目录
 - PID 文件管理，支持优雅停止
 
-### 4. 日志查看
+### 5. 日志查看
 - 实时查看日志
 - 跟踪多个服务日志
 - 日志轮转和清理
 
-### 5. 状态监控
+### 6. 状态监控
 - 检查服务运行状态
 - 查看基础设施状态
 - 验证配置
@@ -216,10 +228,10 @@ echo $DEEPSEEK_API_KEY
 
 ### 内存模式
 ```bash
-# Workflow API（默认端口5000，可自定义）
+# Workflow API（默认端口5100，可自定义）
 ASPNETCORE_URLS=http://0.0.0.0:5100 dotnet run --project src/workflow/Aevatar.Workflow.Host.Api
 
-# Mainnet API（默认端口5000，可自定义）
+# Mainnet API（默认端口5100，可自定义）
 ASPNETCORE_URLS=http://0.0.0.0:5100 dotnet run --project src/Aevatar.Mainnet.Host.Api
 ```
 
@@ -235,7 +247,7 @@ ASPNETCORE_ENVIRONMENT=Production ASPNETCORE_URLS=http://0.0.0.0:5100 dotnet run
 
 ## 注意事项
 
-1. **端口配置**：默认使用端口5100（同时避开 5000 与 5050）
+1. **端口配置**：默认使用仓库允许的开发端口5100
 2. **内存模式**：数据不会持久化，服务停止后数据丢失
 3. **分布式模式**：需要足够的系统资源（建议 8GB+ RAM）
 4. **首次启动**：分布式模式首次启动可能需要较长时间下载 Docker 镜像
@@ -264,7 +276,7 @@ ASPNETCORE_ENVIRONMENT=Production ASPNETCORE_URLS=http://0.0.0.0:5100 dotnet run
 
 - 2026-03-17: 简单脚本版本
   - 新增 `local-dev/boot.sh` 简单命令行脚本
-  - 默认端口改为5100（同时避开 5000/5050）
+  - 默认端口改为仓库允许的开发端口5100
   - 所有脚本文档端口统一更新为5100
 
 - 2026-03-17: 初始版本发布
