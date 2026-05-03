@@ -1086,17 +1086,20 @@ jest.mock("@/shared/studio/api", () => ({
       );
 
       return {
+        status: "accepted",
+        bindingRunId: "bind-member-workflow-1",
         scopeId: input.scopeId,
-        serviceId: "default",
-        displayName: input.displayName || "workspace-demo",
-        targetKind: "workflow",
-        targetName: input.displayName || "workspace-demo",
-        revisionId: "rev-2",
-        workflowName: input.displayName || "workspace-demo",
-        definitionActorIdPrefix: "scope-workflow:scope-1:default",
-        expectedActorId: "scope-workflow:scope-1:default:dep-1",
+        memberId: input.memberId,
       };
     }),
+    getMemberBindingRun: jest.fn(async (scopeId: string, memberId: string, bindingRunId: string) => ({
+      bindingRunId,
+      scopeId,
+      memberId,
+      status: "succeeded",
+      failure: null,
+      updatedAt: "2026-04-27T08:15:01Z",
+    })),
     bindScopeGAgent: jest.fn(async (input: {
       scopeId: string;
       displayName?: string;

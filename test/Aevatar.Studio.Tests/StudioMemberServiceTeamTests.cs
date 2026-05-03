@@ -156,8 +156,8 @@ public sealed class StudioMemberServiceTeamTests
         new(
             commandPort ?? new RecordingMemberCommandPort(),
             memberQueryPort ?? new InMemoryMemberQueryPort(NewDetail()),
+            new InertBindingRunQueryPort(),
             teamQueryPort ?? new InMemoryTeamQueryPort(NewTeamSummary()),
-            new ThrowingScopeBindingPort(),
             new ThrowingServiceLifecycleQueryPort(),
             new ThrowingServiceCommandPort());
 
@@ -223,6 +223,16 @@ public sealed class StudioMemberServiceTeamTests
             Task.FromResult(_team);
     }
 
+    private sealed class InertBindingRunQueryPort : IStudioMemberBindingRunQueryPort
+    {
+        public Task<StudioMemberBindingRunStatusResponse?> GetAsync(
+            string scopeId,
+            string memberId,
+            string bindingRunId,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("binding run query port should not be called");
+    }
+
     private sealed class ThrowingTeamQueryPort : IStudioTeamQueryPort
     {
         public Task<StudioTeamRosterResponse> ListAsync(
@@ -261,6 +271,11 @@ public sealed class StudioMemberServiceTeamTests
         public Task UpdateImplementationAsync(
             string scopeId, string memberId,
             StudioMemberImplementationRefResponse implementation, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task StartBindingRunAsync(
+            StudioMemberBindingRunStartRequest request,
+            CancellationToken ct = default) =>
             Task.CompletedTask;
 
         public Task RecordBindingAsync(

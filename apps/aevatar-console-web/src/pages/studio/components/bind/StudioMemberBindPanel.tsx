@@ -29,8 +29,8 @@ import {
   describeStudioMemberBindingRevisionContext,
   describeStudioMemberBindingRevisionTarget,
   formatStudioMemberBindingImplementationKind,
-  getStudioMemberBindingCurrentRevision,
   type StudioAuthSession,
+  type StudioMemberBindingRunStatusResponse,
 } from '@/shared/studio/models';
 import { studioApi } from '@/shared/studio/api';
 import { AevatarPanel, AevatarStatusTag } from '@/shared/ui/aevatarPageShells';
@@ -52,7 +52,7 @@ type StudioMemberBindPanelProps = {
   readonly memberId?: string;
   readonly initialServiceId?: string;
   readonly onContinueToInvoke?: (serviceId: string, endpointId: string) => void;
-  readonly onBindPendingCandidate?: (() => Promise<void>) | null;
+  readonly onBindPendingCandidate?: (() => Promise<PendingBindNotice | void>) | null;
   readonly onSelectionChange?: (selection: {
     serviceId: string;
     endpointId: string;
@@ -70,6 +70,11 @@ type StudioMemberBindPanelProps = {
   readonly services: readonly ServiceCatalogSnapshot[];
 };
 
+type PendingBindNotice = {
+  readonly message: string;
+  readonly type: 'success' | 'info' | 'warning' | 'error';
+};
+
 type SnippetTab = 'curl' | 'fetch' | 'sdk';
 
 type SmokeTestResult = {
@@ -80,6 +85,55 @@ type SmokeTestResult = {
   readonly runId: string;
   readonly status: 'idle' | 'running' | 'success' | 'error';
 };
+
+function isStudioMemberBindingRunTerminal(
+  run: StudioMemberBindingRunStatusResponse | null | undefined,
+): boolean {
+  return Boolean(
+    run && ['succeeded', 'failed', 'rejected'].includes(run.status),
+  );
+}
+
+function describeStudioMemberBindingRunStatus(
+  run: StudioMemberBindingRunStatusResponse,
+): PendingBindNotice {
+  if (run.status === 'succeeded') {
+    return {
+      message: 'Binding completed. Studio is refreshing the published contract.',
+      type: 'success',
+    };
+  }
+
+  if (run.status === 'failed' || run.status === 'rejected') {
+    return {
+      message:
+        run.failure?.message ||
+        (run.status === 'rejected'
+          ? 'Binding request was rejected by the member authority.'
+          : 'Binding failed while publishing the member contract.'),
+      type: 'error',
+    };
+  }
+
+  if (run.status === 'platform_binding_pending') {
+    return {
+      message: 'Binding accepted. Studio is publishing the platform contract.',
+      type: 'info',
+    };
+  }
+
+  if (run.status === 'admitted') {
+    return {
+      message: 'Binding admitted. Studio is starting platform publication.',
+      type: 'info',
+    };
+  }
+
+  return {
+    message: 'Binding accepted. Studio is waiting for the member authority to advance the run.',
+    type: 'info',
+  };
+}
 
 const monoFontFamily =
   "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace";
@@ -352,10 +406,8 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
     createIdleSmokeTestResult(),
   );
   const [pendingBindBusy, setPendingBindBusy] = useState(false);
-  const [pendingBindNotice, setPendingBindNotice] = useState<{
-    readonly message: string;
-    readonly type: 'success' | 'error';
-  } | null>(null);
+  const [pendingBindNotice, setPendingBindNotice] =
+    useState<PendingBindNotice | null>(null);
   const runsCurrentWorkflowDraft = Boolean(buildWorkflowYamls);
   const normalizedMemberId = trimOptional(memberId);
 
@@ -456,20 +508,29 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
       scopeRuntimeApi.getServiceRevisions(scopeId, selectedService?.serviceId || ''),
   });
   const memberBindingStatusQuery = useQuery({
-    enabled: Boolean(scopeId && normalizedMemberId && selectedService?.serviceId),
+    enabled: Boolean(scopeId && normalizedMemberId),
     queryKey: ['studio-bind', 'member-binding', scopeId, normalizedMemberId],
     queryFn: () => studioApi.getMemberBinding(scopeId, normalizedMemberId),
+    refetchInterval: (query) => {
+      const data = query.state.data as
+        | Awaited<ReturnType<typeof studioApi.getMemberBinding>>
+        | undefined;
+      return data?.currentBindingRun &&
+        !isStudioMemberBindingRunTerminal(data.currentBindingRun)
+        ? 1_500
+        : false;
+    },
   });
-  const revisionCatalogQuery = normalizedMemberId
-    ? memberBindingStatusQuery
-    : revisionsQuery;
+  const revisionCatalogQuery = revisionsQuery;
   const currentPublishedRevision = useMemo(
     () =>
-      normalizedMemberId
-        ? getStudioMemberBindingCurrentRevision(memberBindingStatusQuery.data)
-        : getScopeServiceCurrentRevision(revisionsQuery.data),
-    [memberBindingStatusQuery.data, normalizedMemberId, revisionsQuery.data],
+      getScopeServiceCurrentRevision(revisionsQuery.data),
+    [revisionsQuery.data],
   );
+  const currentBindingRun = memberBindingStatusQuery.data?.currentBindingRun ?? null;
+  const currentBindingRunNotice = currentBindingRun
+    ? describeStudioMemberBindingRunStatus(currentBindingRun)
+    : null;
 
   const bindContract = useMemo<StudioBindContract | null>(
     () =>
@@ -705,13 +766,15 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
     setPendingBindBusy(true);
     setPendingBindNotice(null);
     try {
-      await onBindPendingCandidate();
+      const resultNotice = await onBindPendingCandidate();
       if (bindSurfaceIdentityRef.current !== requestBindIdentity) {
         return;
       }
       setPendingBindNotice({
-        message: `${pendingBindingCandidate.displayName} is now bound. Review the invoke contract below.`,
-        type: 'success',
+        message:
+          resultNotice?.message ||
+          `${pendingBindingCandidate.displayName} is now bound. Review the invoke contract below.`,
+        type: resultNotice?.type || 'success',
       });
     } catch (error) {
       if (bindSurfaceIdentityRef.current !== requestBindIdentity) {
@@ -798,6 +861,14 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   showIcon
                   message={pendingBindNotice.message}
                   type={pendingBindNotice.type}
+                />
+              ) : null}
+              {currentBindingRunNotice ? (
+                <Alert
+                  showIcon
+                  message={currentBindingRunNotice.message}
+                  description={`Run ${currentBindingRun?.bindingRunId}`}
+                  type={currentBindingRunNotice.type}
                 />
               ) : null}
               <div style={{ display: 'flex', justifyContent: 'flex-start' }}>

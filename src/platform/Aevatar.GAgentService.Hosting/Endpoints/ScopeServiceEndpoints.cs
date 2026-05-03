@@ -54,8 +54,6 @@ public static class ScopeServiceEndpoints
         group.MapPut("/{scopeId}/binding", HandleUpsertBindingAsync);
         group.MapGet("/{scopeId}/binding", HandleGetBindingAsync);
         group.MapGet("/{scopeId}/members/{memberId}/published-service", HandleGetMemberPublishedServiceAsync);
-        group.MapPut("/{scopeId}/members/{memberId}/binding", HandleUpsertMemberBindingAsync);
-        group.MapGet("/{scopeId}/members/{memberId}/binding", HandleGetMemberBindingAsync);
         group.MapPost("/{scopeId}/binding/revisions/{revisionId}:activate", HandleActivateBindingRevisionAsync);
         group.MapGet("/{scopeId}/revisions", HandleGetDefaultServiceRevisionsAsync);
         group.MapGet("/{scopeId}/revisions/{revisionId}", HandleGetDefaultServiceRevisionAsync);

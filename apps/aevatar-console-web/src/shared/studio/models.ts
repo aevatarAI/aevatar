@@ -460,10 +460,50 @@ export interface StudioMemberBindingContract {
   readonly boundAt: string;
 }
 
+export type StudioMemberBindingRunStatus =
+  | 'accepted'
+  | 'admission_pending'
+  | 'admitted'
+  | 'platform_binding_pending'
+  | 'succeeded'
+  | 'failed'
+  | 'rejected'
+  | 'unknown';
+
+export interface StudioMemberBindingFailure {
+  readonly code: string;
+  readonly message?: string | null;
+  readonly failedAt?: string | null;
+}
+
+export interface StudioMemberBindingRunStatusResponse {
+  readonly status: StudioMemberBindingRunStatus;
+  readonly bindingRunId: string;
+  readonly scopeId: string;
+  readonly memberId: string;
+  readonly platformBindingCommandId?: string | null;
+  readonly lastSuccessfulBinding?: StudioMemberBindingContract | null;
+  readonly failure?: StudioMemberBindingFailure | null;
+  readonly updatedAt?: string | null;
+}
+
+export interface StudioMemberBindingAcceptedResponse {
+  readonly status: StudioMemberBindingRunStatus;
+  readonly bindingRunId: string;
+  readonly scopeId: string;
+  readonly memberId: string;
+}
+
 export interface StudioMemberDetail {
   readonly summary: StudioMemberSummary;
   readonly implementationRef?: StudioMemberImplementationRef | null;
   readonly lastBinding?: StudioMemberBindingContract | null;
+  readonly currentBindingRun?: StudioMemberBindingRunStatusResponse | null;
+}
+
+export interface StudioMemberBindingViewResponse {
+  readonly lastBinding?: StudioMemberBindingContract | null;
+  readonly currentBindingRun?: StudioMemberBindingRunStatusResponse | null;
 }
 
 export interface StudioMemberRoster {
@@ -475,7 +515,7 @@ export interface StudioMemberRoster {
 export type StudioMemberBindingTargetKind = StudioScopeBindingTargetKind;
 export type StudioMemberBindingResult = StudioScopeBindingResult;
 export type StudioMemberBindingRevision = StudioScopeBindingRevision;
-export type StudioMemberBindingStatus = StudioScopeBindingStatus;
+export type StudioMemberBindingStatus = StudioMemberBindingViewResponse;
 export type StudioMemberBindingActivationResult =
   StudioScopeBindingActivationResult;
 export type StudioMemberBindingRetirementResult =

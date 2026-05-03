@@ -71,6 +71,7 @@ public sealed class StudioMemberCurrentStateProjector
 
         ApplyImplementationRef(document, state.ImplementationRef);
         ApplyLastBinding(document, state.LastBinding);
+        ApplyBindingStatus(document, state.Binding);
 
         // Team membership (ADR-0017). Mirror the actor's optional team_id
         // into the document — absence means "unassigned" on both the actor
@@ -121,5 +122,25 @@ public sealed class StudioMemberCurrentStateProjector
             lastBinding.ImplementationKind);
         if (lastBinding.BoundAtUtc != null)
             document.LastBoundAt = lastBinding.BoundAtUtc;
+    }
+
+    private static void ApplyBindingStatus(
+        StudioMemberCurrentStateDocument document,
+        StudioMemberBindingAuthorityState? binding)
+    {
+        if (binding == null)
+            return;
+
+        document.BindingCurrentRunId = binding.CurrentBindingRunId ?? string.Empty;
+        document.BindingCurrentStatus = MemberImplementationKindMapper.ToWireName(binding.CurrentStatus);
+        document.BindingLastTerminalRunId = binding.LastTerminalBindingRunId ?? string.Empty;
+        document.BindingUpdatedAt = binding.UpdatedAtUtc;
+
+        if (binding.LastFailure != null)
+        {
+            document.BindingFailureCode = binding.LastFailure.Code ?? string.Empty;
+            document.BindingFailureMessage = binding.LastFailure.Message ?? string.Empty;
+            document.BindingFailureAt = binding.LastFailure.FailedAtUtc;
+        }
     }
 }

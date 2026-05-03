@@ -45,4 +45,16 @@ public static class MemberImplementationKindMapper
         StudioMemberLifecycleStage.BindReady => MemberLifecycleStageNames.BindReady,
         _ => string.Empty,
     };
+
+    public static string ToWireName(StudioMemberBindingRunStatus status) => status switch
+    {
+        StudioMemberBindingRunStatus.Accepted => StudioMemberBindingRunStatusNames.Accepted,
+        StudioMemberBindingRunStatus.AdmissionPending => StudioMemberBindingRunStatusNames.AdmissionPending,
+        StudioMemberBindingRunStatus.Admitted => StudioMemberBindingRunStatusNames.Admitted,
+        StudioMemberBindingRunStatus.PlatformBindingPending => StudioMemberBindingRunStatusNames.PlatformBindingPending,
+        StudioMemberBindingRunStatus.Succeeded => StudioMemberBindingRunStatusNames.Succeeded,
+        StudioMemberBindingRunStatus.Failed => StudioMemberBindingRunStatusNames.Failed,
+        StudioMemberBindingRunStatus.Rejected => StudioMemberBindingRunStatusNames.Rejected,
+        _ => string.Empty,
+    };
 }

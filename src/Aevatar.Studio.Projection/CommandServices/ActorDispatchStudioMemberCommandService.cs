@@ -19,6 +19,7 @@ namespace Aevatar.Studio.Projection.CommandServices;
 internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCommandPort
 {
     private const string DirectRoute = "aevatar.studio.projection.studio-member";
+    private const string BindingRunDirectRoute = "aevatar.studio.projection.studio-member-binding-run";
 
     private readonly IStudioActorBootstrap _bootstrap;
     private readonly IActorDispatchPort _dispatchPort;
@@ -224,6 +225,43 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
     }
 
+    public async Task StartBindingRunAsync(
+        StudioMemberBindingRunStartRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var normalizedBindingRunId = StudioMemberConventions.NormalizeBindingRunId(request.BindingRunId);
+        var normalizedScopeId = StudioMemberConventions.NormalizeScopeId(request.ScopeId);
+        var normalizedMemberId = StudioMemberConventions.NormalizeMemberId(request.MemberId);
+        var actorId = StudioMemberConventions.BuildBindingRunActorId(normalizedBindingRunId);
+        var actor = await _bootstrap.EnsureAsync<StudioMemberBindingRunGAgent>(actorId, ct);
+        await _bootstrap.EnsureAsync<StudioMemberGAgent>(
+            StudioMemberConventions.BuildActorId(normalizedScopeId, normalizedMemberId),
+            ct);
+
+        var payload = new StudioMemberBindingRunRequested
+        {
+            Request = BuildBindingRequest(
+                normalizedBindingRunId,
+                normalizedScopeId,
+                normalizedMemberId,
+                request.ImplementationKind,
+                request.Binding),
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(payload),
+            Route = EnvelopeRouteSemantics.CreateDirect(BindingRunDirectRoute, actor.Id),
+        };
+
+        await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
+    }
+
     public async Task RecordBindingAsync(
         string scopeId,
         string memberId,
@@ -247,12 +285,13 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
                 $"member '{normalizedMemberId}' bind: revisionId is required to record binding.");
         }
 
-        var evt = new StudioMemberBoundEvent
+        var evt = new StudioMemberBindingCompletedEvent
         {
+            BindingRunId = Guid.NewGuid().ToString("N"),
             PublishedServiceId = publishedServiceId,
             RevisionId = revisionId,
             ImplementationKind = MemberImplementationKindMapper.Parse(implementationKindName),
-            BoundAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 
         await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
@@ -290,6 +329,63 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         }
 
         return message;
+    }
+
+    private static StudioMemberBindingRequest BuildBindingRequest(
+        string bindingRunId,
+        string scopeId,
+        string memberId,
+        string implementationKindName,
+        UpdateStudioMemberBindingRequest binding)
+    {
+        var request = new StudioMemberBindingRequest
+        {
+            BindingRunId = bindingRunId,
+            ScopeId = scopeId,
+            MemberId = memberId,
+            RequestHash = string.Empty,
+        };
+        if (!string.IsNullOrWhiteSpace(binding.RevisionId))
+            request.RevisionId = binding.RevisionId;
+
+        switch (implementationKindName)
+        {
+            case MemberImplementationKindNames.Workflow:
+                request.Workflow = new StudioMemberWorkflowBindingRequest();
+                request.Workflow.WorkflowYamls.Add(binding.Workflow?.WorkflowYamls ?? []);
+                break;
+            case MemberImplementationKindNames.Script:
+                request.Script = new StudioMemberScriptBindingRequest
+                {
+                    ScriptId = binding.Script?.ScriptId ?? string.Empty,
+                };
+                if (!string.IsNullOrWhiteSpace(binding.Script?.ScriptRevision))
+                    request.Script.ScriptRevision = binding.Script.ScriptRevision;
+                break;
+            case MemberImplementationKindNames.GAgent:
+                request.Gagent = new StudioMemberGAgentBindingRequest
+                {
+                    ActorTypeName = binding.GAgent?.ActorTypeName ?? string.Empty,
+                };
+                foreach (var endpoint in binding.GAgent?.Endpoints ?? [])
+                {
+                    request.Gagent.Endpoints.Add(new StudioMemberGAgentEndpointBindingRequest
+                    {
+                        EndpointId = endpoint.EndpointId,
+                        DisplayName = endpoint.DisplayName,
+                        Kind = endpoint.Kind,
+                        RequestTypeUrl = endpoint.RequestTypeUrl,
+                        ResponseTypeUrl = endpoint.ResponseTypeUrl,
+                        Description = endpoint.Description ?? string.Empty,
+                    });
+                }
+                break;
+            default:
+                throw new InvalidOperationException(
+                    $"Unknown implementationKind '{implementationKindName}'.");
+        }
+
+        return request;
     }
 
     private async Task DispatchAsync(string scopeId, string memberId, IMessage payload, CancellationToken ct)

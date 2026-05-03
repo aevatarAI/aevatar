@@ -69,6 +69,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterElasticsearch<StreamingProxyParticipantCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<UserConfigCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<StudioMemberCurrentStateDocument>(services, configuration);
+            RegisterElasticsearch<StudioMemberBindingRunCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<StudioTeamCurrentStateDocument>(services, configuration);
         }
         else
@@ -82,6 +83,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterInMemory<StreamingProxyParticipantCurrentStateDocument>(services);
             RegisterInMemory<UserConfigCurrentStateDocument>(services);
             RegisterInMemory<StudioMemberCurrentStateDocument>(services);
+            RegisterInMemory<StudioMemberBindingRunCurrentStateDocument>(services);
             RegisterInMemory<StudioTeamCurrentStateDocument>(services);
         }
 
@@ -132,6 +134,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
                && HasDocumentReaderForProvider<StreamingProxyParticipantCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<UserConfigCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StudioMemberCurrentStateDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<StudioMemberBindingRunCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StudioTeamCurrentStateDocument>(services, providerKind);
     }
 
@@ -216,6 +219,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             ChatHistoryIndexState.Descriptor,
             ChatConversationState.Descriptor,
             StudioMemberState.Descriptor,
+            StudioMemberBindingRunState.Descriptor,
             StudioTeamState.Descriptor);
     }
 

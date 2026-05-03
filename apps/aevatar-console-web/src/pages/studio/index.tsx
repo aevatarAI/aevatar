@@ -109,6 +109,8 @@ import type { ServiceCatalogSnapshot } from '@/shared/models/services';
 import type {
   StudioExecutionDetail,
   StudioExecutionSummary,
+  StudioMemberBindingAcceptedResponse,
+  StudioMemberBindingRunStatusResponse,
   StudioMemberBindingRevision,
   StudioMemberSummary,
   StudioValidationFinding,
@@ -204,6 +206,32 @@ type StudioNotice = {
   readonly type: 'success' | 'info' | 'warning' | 'error';
   readonly message: string;
 };
+
+const MEMBER_BINDING_RUN_POLL_INTERVAL_MS = 900;
+const MEMBER_BINDING_RUN_POLL_ATTEMPTS = 8;
+
+function waitForStudioMemberBindingRunTick(): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, MEMBER_BINDING_RUN_POLL_INTERVAL_MS);
+  });
+}
+
+function isStudioMemberBindingRunTerminal(
+  run: StudioMemberBindingRunStatusResponse,
+): boolean {
+  return ['succeeded', 'failed', 'rejected'].includes(run.status);
+}
+
+function buildStudioMemberBindingFailureMessage(
+  run: StudioMemberBindingRunStatusResponse,
+): string {
+  return (
+    run.failure?.message ||
+    (run.status === 'rejected'
+      ? 'Binding request was rejected by the member authority.'
+      : 'Binding failed while publishing the member contract.')
+  );
+}
 
 type OrderedStudioShellMemberItem = StudioShellMemberItem & {
   readonly insertionOrder: number;
@@ -3839,33 +3867,94 @@ const StudioPage: React.FC = () => {
     selectedWorkflowId,
     studioScopeMembers,
   ]);
-  const handleBindPendingCandidate = useCallback(async () => {
+  const waitForMemberBindingRun = useCallback(
+    async (
+      receipt: StudioMemberBindingAcceptedResponse,
+    ): Promise<StudioMemberBindingRunStatusResponse | null> => {
+      let latestRun: StudioMemberBindingRunStatusResponse | null = null;
+
+      for (let attempt = 0; attempt < MEMBER_BINDING_RUN_POLL_ATTEMPTS; attempt += 1) {
+        if (attempt > 0) {
+          await waitForStudioMemberBindingRunTick();
+        }
+
+        try {
+          latestRun = await studioApi.getMemberBindingRun(
+            receipt.scopeId,
+            receipt.memberId,
+            receipt.bindingRunId,
+          );
+        } catch (error) {
+          // The run status is read-model backed, so the first request can
+          // legitimately arrive before projection catches up to the accepted ACK.
+          if (attempt === MEMBER_BINDING_RUN_POLL_ATTEMPTS - 1) {
+            throw error;
+          }
+          continue;
+        }
+
+        if (isStudioMemberBindingRunTerminal(latestRun)) {
+          return latestRun;
+        }
+      }
+
+      return latestRun;
+    },
+    [],
+  );
+
+  const handleBindPendingCandidate = useCallback(async (): Promise<StudioNotice | void> => {
     if (!buildPendingBindCandidate || !resolvedStudioScopeId) {
       throw new Error('Resolve the current scope before binding this member.');
     }
 
     const resolvedBuildMemberId = trimOptional(buildPendingMemberSummary?.memberId);
-    const result =
-      buildPendingBindCandidate.kind === 'workflow'
-        ? resolvedBuildMemberId
-          ? await studioApi.bindMemberWorkflow({
-              scopeId: resolvedStudioScopeId,
-              memberId: resolvedBuildMemberId,
-              displayName: buildPendingBindCandidate.displayName,
-              workflowYamls: await buildWorkflowYamlBundle(),
-            })
-          : await studioApi.bindScopeWorkflow({
-              scopeId: resolvedStudioScopeId,
-              displayName: buildPendingBindCandidate.displayName,
-              workflowYamls: await buildWorkflowYamlBundle(),
-            })
-        : await studioApi.bindScopeScript({
-            scopeId: resolvedStudioScopeId,
-            displayName: buildPendingBindCandidate.displayName,
-            serviceId: buildPendingBindCandidate.scriptId,
-            scriptId: buildPendingBindCandidate.scriptId,
-            scriptRevision: buildPendingBindCandidate.scriptRevision,
-          });
+    let result = null;
+    let memberBindingRun: StudioMemberBindingRunStatusResponse | null = null;
+    if (buildPendingBindCandidate.kind === 'workflow') {
+      if (resolvedBuildMemberId) {
+        const receipt = await studioApi.bindMemberWorkflow({
+          scopeId: resolvedStudioScopeId,
+          memberId: resolvedBuildMemberId,
+          displayName: buildPendingBindCandidate.displayName,
+          workflowYamls: await buildWorkflowYamlBundle(),
+        });
+        await queryClient.invalidateQueries({
+          queryKey: [
+            'studio-bind',
+            'member-binding',
+            resolvedStudioScopeId,
+            resolvedBuildMemberId,
+          ],
+        });
+        memberBindingRun = await waitForMemberBindingRun(receipt);
+        await queryClient.invalidateQueries({
+          queryKey: [
+            'studio-bind',
+            'member-binding',
+            resolvedStudioScopeId,
+            resolvedBuildMemberId,
+          ],
+        });
+        if (memberBindingRun?.status === 'failed' || memberBindingRun?.status === 'rejected') {
+          throw new Error(buildStudioMemberBindingFailureMessage(memberBindingRun));
+        }
+      } else {
+        result = await studioApi.bindScopeWorkflow({
+          scopeId: resolvedStudioScopeId,
+          displayName: buildPendingBindCandidate.displayName,
+          workflowYamls: await buildWorkflowYamlBundle(),
+        });
+      }
+    } else {
+      result = await studioApi.bindScopeScript({
+        scopeId: resolvedStudioScopeId,
+        displayName: buildPendingBindCandidate.displayName,
+        serviceId: buildPendingBindCandidate.scriptId,
+        scriptId: buildPendingBindCandidate.scriptId,
+        scriptRevision: buildPendingBindCandidate.scriptRevision,
+      });
+    }
     await queryClient.invalidateQueries({
       queryKey: ['studio-scope-members', resolvedStudioScopeId],
     });
@@ -3873,11 +3962,11 @@ const StudioPage: React.FC = () => {
     const optimisticBoundServiceId =
       trimOptional(buildPendingMemberSummary?.publishedServiceId) ||
       trimOptional(buildPendingBindCandidate.displayName) ||
-      trimOptional(result.displayName) ||
-      trimOptional(result.targetName) ||
-      trimOptional(result.workflowName);
+      trimOptional(result?.displayName) ||
+      trimOptional(result?.targetName) ||
+      trimOptional(result?.workflowName);
     const boundServiceId =
-      trimOptional(result.serviceId) ||
+      trimOptional(result?.serviceId) ||
       resolveBoundServiceIdFromCatalog({
         services: servicesResult.data ?? [],
         candidates: [
@@ -3885,10 +3974,10 @@ const StudioPage: React.FC = () => {
           buildPendingBindCandidate.kind === 'script'
             ? buildPendingBindCandidate.scriptId
             : '',
-          result.displayName,
-          result.targetName,
-          result.workflowName,
-          result.script?.scriptId,
+          result?.displayName,
+          result?.targetName,
+          result?.workflowName,
+          result?.script?.scriptId,
         ],
       }) ||
       optimisticBoundServiceId;
@@ -3944,6 +4033,13 @@ const StudioPage: React.FC = () => {
         }),
       );
     }
+
+    if (memberBindingRun && memberBindingRun.status !== 'succeeded') {
+      return {
+        message: `${buildPendingBindCandidate.displayName} binding was accepted. Studio will keep refreshing the run status.`,
+        type: 'info',
+      };
+    }
   }, [
     activeBuildFocusKey,
     buildPendingMemberSummary,
@@ -3958,6 +4054,7 @@ const StudioPage: React.FC = () => {
     selectedWorkflowMemberKey,
     scopeServicesQuery,
     studioScopeMembers,
+    waitForMemberBindingRun,
   ]);
 
   const openWorkspaceWorkflow = useCallback((workflowId: string) => {

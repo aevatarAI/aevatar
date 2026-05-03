@@ -31,7 +31,8 @@ public sealed class ProjectionStudioMemberQueryPortTests
             implementationKind: StudioMemberImplementationKind.Workflow,
             lifecycle: StudioMemberLifecycleStage.BuildReady,
             includeImplementationRef: true,
-            includeLastBinding: true);
+            includeLastBinding: true,
+            includeBindingStatus: true);
 
         var reader = new StubDocumentReader([document]);
         var port = new ProjectionStudioMemberQueryPort(reader);
@@ -48,6 +49,9 @@ public sealed class ProjectionStudioMemberQueryPortTests
         detail.ImplementationRef.WorkflowRevision.Should().Be("v2");
         detail.LastBinding.Should().NotBeNull();
         detail.LastBinding!.RevisionId.Should().Be("rev-bind");
+        detail.CurrentBindingRun.Should().NotBeNull();
+        detail.CurrentBindingRun!.BindingRunId.Should().Be("bind-1");
+        detail.CurrentBindingRun.Status.Should().Be(StudioMemberBindingRunStatusNames.PlatformBindingPending);
     }
 
     [Fact]
@@ -176,7 +180,8 @@ public sealed class ProjectionStudioMemberQueryPortTests
         StudioMemberImplementationKind implementationKind = StudioMemberImplementationKind.Workflow,
         StudioMemberLifecycleStage lifecycle = StudioMemberLifecycleStage.Created,
         bool includeImplementationRef = false,
-        bool includeLastBinding = false)
+        bool includeLastBinding = false,
+        bool includeBindingStatus = false)
     {
         var actorId = StudioMemberConventions.BuildActorId(scopeId, memberId);
         var publishedServiceId = StudioMemberConventions.BuildPublishedServiceId(memberId);
@@ -211,6 +216,13 @@ public sealed class ProjectionStudioMemberQueryPortTests
             doc.LastBoundRevisionId = "rev-bind";
             doc.LastBoundImplementationKind = ToWireKind(implementationKind);
             doc.LastBoundAt = now;
+        }
+
+        if (includeBindingStatus)
+        {
+            doc.BindingCurrentRunId = "bind-1";
+            doc.BindingCurrentStatus = StudioMemberBindingRunStatusNames.PlatformBindingPending;
+            doc.BindingUpdatedAt = now;
         }
 
         return doc;

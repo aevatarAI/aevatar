@@ -12,6 +12,7 @@ namespace Aevatar.GAgents.StudioMember;
 public static class StudioMemberConventions
 {
     public const string ActorIdPrefix = "studio-member";
+    public const string BindingRunActorIdPrefix = "studio-member-binding-run";
     public const string PublishedServiceIdPrefix = "member";
 
     /// <summary>
@@ -36,6 +37,12 @@ public static class StudioMemberConventions
         return $"{PublishedServiceIdPrefix}-{normalizedMemberId}";
     }
 
+    public static string BuildBindingRunActorId(string bindingRunId)
+    {
+        var normalizedBindingRunId = NormalizeBindingRunId(bindingRunId);
+        return $"{BindingRunActorIdPrefix}:{normalizedBindingRunId}";
+    }
+
     public static string NormalizeScopeId(string? scopeId)
     {
         var trimmed = scopeId?.Trim();
@@ -55,6 +62,17 @@ public static class StudioMemberConventions
         if (ContainsActorIdSeparator(trimmed))
             throw new ArgumentException(
                 "memberId must not contain ':' (it is the actor-id separator).", nameof(memberId));
+        return trimmed;
+    }
+
+    public static string NormalizeBindingRunId(string? bindingRunId)
+    {
+        var trimmed = bindingRunId?.Trim();
+        if (string.IsNullOrEmpty(trimmed))
+            throw new ArgumentException("bindingRunId is required.", nameof(bindingRunId));
+        if (ContainsActorIdSeparator(trimmed))
+            throw new ArgumentException(
+                "bindingRunId must not contain ':' (it is the actor-id separator).", nameof(bindingRunId));
         return trimmed;
     }
 

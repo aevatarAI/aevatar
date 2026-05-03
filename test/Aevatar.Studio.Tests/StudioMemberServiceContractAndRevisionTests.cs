@@ -69,8 +69,8 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertBindingRunQueryPort(),
             new InertTeamQueryPort(),
-            new InertScopeBindingCommandPort(),
             lifecycle,
             commandPort);
 
@@ -107,8 +107,8 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertBindingRunQueryPort(),
             new InertTeamQueryPort(),
-            new InertScopeBindingCommandPort(),
             lifecycle,
             new RecordingServiceCommandPort());
 
@@ -124,8 +124,8 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertBindingRunQueryPort(),
             new InertTeamQueryPort(),
-            new InertScopeBindingCommandPort(),
             new InMemoryServiceLifecycleQueryPort(),
             new RecordingServiceCommandPort());
 
@@ -146,8 +146,8 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertBindingRunQueryPort(),
             new InertTeamQueryPort(),
-            new InertScopeBindingCommandPort(),
             lifecycle,
             new RecordingServiceCommandPort());
 
@@ -176,8 +176,8 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertBindingRunQueryPort(),
             new InertTeamQueryPort(),
-            new InertScopeBindingCommandPort(),
             lifecycle,
             commandPort);
 
@@ -221,8 +221,8 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertBindingRunQueryPort(),
             new InertTeamQueryPort(),
-            new InertScopeBindingCommandPort(),
             lifecycle,
             commandPort);
 
@@ -253,8 +253,8 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertBindingRunQueryPort(),
             new InertTeamQueryPort(),
-            new InertScopeBindingCommandPort(),
             lifecycle,
             commandPort);
 
@@ -283,8 +283,8 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertBindingRunQueryPort(),
             new InertTeamQueryPort(),
-            new InertScopeBindingCommandPort(),
             lifecycle,
             commandPort);
 
@@ -320,8 +320,8 @@ public sealed class StudioMemberServiceContractAndRevisionTests
         var service = new StudioMemberService(
             new InertMemberCommandPort(),
             queryPort,
+            new InertBindingRunQueryPort(),
             new InertTeamQueryPort(),
-            new InertScopeBindingCommandPort(),
             lifecycle,
             commandPort);
 
@@ -411,6 +411,16 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             Task.FromResult(_detail);
     }
 
+    private sealed class InertBindingRunQueryPort : IStudioMemberBindingRunQueryPort
+    {
+        public Task<StudioMemberBindingRunStatusResponse?> GetAsync(
+            string scopeId,
+            string memberId,
+            string bindingRunId,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("contract/activate/retire flows must not query binding runs.");
+    }
+
     // Bind / impl-update commands are not exercised here; we route through
     // the member query port and platform service ports directly. Any
     // accidental fan-out into this surface should fail loudly.
@@ -424,6 +434,11 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             string scopeId, string memberId,
             StudioMemberImplementationRefResponse implementation, CancellationToken ct = default) =>
             throw new InvalidOperationException("contract/activate/retire flows must not update implementation refs.");
+
+        public Task StartBindingRunAsync(
+            StudioMemberBindingRunStartRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("contract/activate/retire flows must not start binding runs.");
 
         public Task RecordBindingAsync(
             string scopeId, string memberId, string publishedServiceId,

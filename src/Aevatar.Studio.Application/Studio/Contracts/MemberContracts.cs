@@ -25,6 +25,17 @@ public static class MemberLifecycleStageNames
     public const string BindReady = "bind_ready";
 }
 
+public static class StudioMemberBindingRunStatusNames
+{
+    public const string Accepted = "accepted";
+    public const string AdmissionPending = "admission_pending";
+    public const string Admitted = "admitted";
+    public const string PlatformBindingPending = "platform_binding_pending";
+    public const string Succeeded = "succeeded";
+    public const string Failed = "failed";
+    public const string Rejected = "rejected";
+}
+
 /// <summary>
 /// Wire-format status values returned in
 /// <see cref="StudioMemberBindingRevisionActionResponse.Status"/>. Centralizing
@@ -75,7 +86,10 @@ public sealed record StudioMemberSummaryResponse(
 public sealed record StudioMemberDetailResponse(
     StudioMemberSummaryResponse Summary,
     StudioMemberImplementationRefResponse? ImplementationRef,
-    StudioMemberBindingContractResponse? LastBinding);
+    StudioMemberBindingContractResponse? LastBinding)
+{
+    public StudioMemberBindingRunStatusResponse? CurrentBindingRun { get; init; }
+}
 
 public sealed record StudioMemberBindingContractResponse(
     string PublishedServiceId,
@@ -90,7 +104,26 @@ public sealed record StudioMemberBindingContractResponse(
 /// "member missing" (typed 404 STUDIO_MEMBER_NOT_FOUND).
 /// </summary>
 public sealed record StudioMemberBindingViewResponse(
-    StudioMemberBindingContractResponse? LastBinding);
+    StudioMemberBindingContractResponse? LastBinding)
+{
+    public StudioMemberBindingRunStatusResponse? CurrentBindingRun { get; init; }
+}
+
+public sealed record StudioMemberBindingFailureResponse(
+    string Code,
+    string Message,
+    DateTimeOffset FailedAt);
+
+public sealed record StudioMemberBindingRunStatusResponse(
+    string BindingRunId,
+    string ScopeId,
+    string MemberId,
+    string Status,
+    StudioMemberBindingFailureResponse? Failure = null,
+    DateTimeOffset? UpdatedAt = null)
+{
+    public string? PlatformBindingCommandId { get; init; }
+}
 
 public sealed record StudioMemberRosterResponse(
     string ScopeId,
@@ -169,6 +202,19 @@ public sealed record StudioMemberBindingResponse(
     string ImplementationKind,
     string ScopeId,
     string ExpectedActorId);
+
+public sealed record StudioMemberBindingAcceptedResponse(
+    string Status,
+    string BindingRunId,
+    string ScopeId,
+    string MemberId);
+
+public sealed record StudioMemberBindingRunStartRequest(
+    string BindingRunId,
+    string ScopeId,
+    string MemberId,
+    string ImplementationKind,
+    UpdateStudioMemberBindingRequest Binding);
 
 /// <summary>
 /// Member-first endpoint contract. Mirrors the existing scope-default
