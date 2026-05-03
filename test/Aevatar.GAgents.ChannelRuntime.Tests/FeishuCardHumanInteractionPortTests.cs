@@ -77,7 +77,7 @@ public sealed class FeishuCardHumanInteractionPortTests
     {
         // Reviewer (PR #412 second-pass review): the 230002→fallback retry was added to
         // `FeishuCardHumanInteractionPort.SendMessageAsync` but coverage for the catalog-backed
-        // path lives only in `SkillRunnerGAgentTests`. If `UserAgentCatalogProjector.Materialize`
+        // path lives only in `SkillDefinitionGAgentTests`. If `UserAgentCatalogProjector.Materialize`
         // / `UserAgentCatalogQueryPort.ToEntry` ever drop the new
         // `LarkReceiveIdFallback` / `LarkReceiveIdTypeFallback` mirror, the existing port tests
         // (which only assert primary success) would still pass while production cards stop

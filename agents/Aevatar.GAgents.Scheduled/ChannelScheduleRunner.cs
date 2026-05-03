@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.GAgents.Scheduled;
 
 /// <summary>
-/// Encapsulates cron-driven self-scheduling duplicated across SkillRunnerGAgent / WorkflowAgentGAgent.
+/// Encapsulates cron-driven self-scheduling duplicated across SkillDefinitionGAgent / WorkflowAgentGAgent.
 /// Owns the durable-callback lease; bound via delegates to the hosting GAgent's protected schedule /
 /// cancel / persist helpers so we stay on the composition side of the "ISchedulable + extensions" RFC.
 /// </summary>

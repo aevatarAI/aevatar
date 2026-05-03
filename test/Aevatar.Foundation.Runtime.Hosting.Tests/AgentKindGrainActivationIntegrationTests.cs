@@ -7,6 +7,7 @@ using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
+using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -148,6 +149,31 @@ public sealed class AgentKindGrainActivationIntegrationTests
     }
 
     [Fact]
+    public async Task InitializeAgentAsync_WithRetiredSkillRunnerClrName_BindsSkillDefinitionKind()
+    {
+        var actorId = $"skill-runner-{Guid.NewGuid():N}";
+        var host = await StartSiloHostAsync();
+
+        try
+        {
+            var grainFactory = host.Services.GetRequiredService<IGrainFactory>();
+            var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
+
+            var initialized = await grain.InitializeAgentAsync(
+                "Aevatar.GAgents.Scheduled.SkillRunnerGAgent, Aevatar.GAgents.Scheduled");
+            initialized.Should().BeTrue();
+
+            (await grain.GetAgentKindAsync()).Should().Be("scheduled.skill-definition");
+            (await grain.GetDescriptionAsync()).Should().Be($"SkillDefinitionGAgent:{actorId}");
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task InitializeAgentByKindAsync_ReturnsFalseForUnknownKind()
     {
         var actorId = $"actor-{Guid.NewGuid():N}";
@@ -190,7 +216,11 @@ public sealed class AgentKindGrainActivationIntegrationTests
                     // Register the integration-fixture kind on top of the
                     // default registry wired by AddAevatarFoundationRuntimeOrleans.
                     services.AddAevatarAgentKindRegistry(builder =>
-                        builder.Register<IntegrationFixtureCanonicalAgent>());
+                    {
+                        builder.Register<IntegrationFixtureCanonicalAgent>();
+                        builder.Register<SkillDefinitionGAgent>();
+                        builder.Register<SkillExecutionGAgent>();
+                    });
                 });
             })
             .Build();

@@ -193,7 +193,7 @@ public sealed class AgentBuilderToolTests
     {
         var services = new ServiceCollection();
         services.AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>());
-        services.AddSingleton(Substitute.For<ISkillRunnerCommandPort>());
+        services.AddSingleton(Substitute.For<ISkillDefinitionCommandPort>());
         services.AddSingleton(Substitute.For<IWorkflowAgentCommandPort>());
         services.AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>());
         services.AddSingleton(new NyxIdApiClient(
@@ -243,12 +243,12 @@ public sealed class AgentBuilderToolTests
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-1",
-                AgentType = SkillRunnerDefaults.AgentType,
+                AgentType = SkillDefinitionDefaults.AgentType,
                 TemplateName = "daily_report",
-                Status = SkillRunnerDefaults.StatusRunning,
+                Status = SkillDefinitionDefaults.StatusRunning,
             }));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -327,7 +327,7 @@ public sealed class AgentBuilderToolTests
 
             await skillRunnerPort.Received(1).InitializeAsync(
                 "skill-runner-1",
-                Arg.Is<InitializeSkillRunnerCommand>(c =>
+                Arg.Is<InitializeSkillDefinitionCommand>(c =>
                     c.TemplateName == "daily_report" &&
                     c.ScopeId == "scope-1" &&
                     c.OutboundConfig.ConversationId == "oc_chat_1" &&
@@ -380,12 +380,12 @@ public sealed class AgentBuilderToolTests
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-union-1",
-                AgentType = SkillRunnerDefaults.AgentType,
+                AgentType = SkillDefinitionDefaults.AgentType,
                 TemplateName = "daily_report",
-                Status = SkillRunnerDefaults.StatusRunning,
+                Status = SkillDefinitionDefaults.StatusRunning,
             }));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -459,7 +459,7 @@ public sealed class AgentBuilderToolTests
 
             await skillRunnerPort.Received(1).InitializeAsync(
                 "skill-runner-union-1",
-                Arg.Is<InitializeSkillRunnerCommand>(c =>
+                Arg.Is<InitializeSkillDefinitionCommand>(c =>
                     c.OutboundConfig.LarkReceiveId == "oc_dm_chat_1" &&
                     c.OutboundConfig.LarkReceiveIdType == "chat_id"),
                 Arg.Any<bool>(),
@@ -490,7 +490,7 @@ public sealed class AgentBuilderToolTests
         queryPort.GetStateVersionForCallerAsync(Arg.Any<string>(), Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -583,7 +583,7 @@ public sealed class AgentBuilderToolTests
             // dispatch so we don't leave a broken agent in the catalog.
             await skillRunnerPort.DidNotReceive().InitializeAsync(
                 Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<InitializeSkillDefinitionCommand>(),
                 Arg.Any<bool>(),
                 Arg.Any<CancellationToken>());
 
@@ -626,7 +626,7 @@ public sealed class AgentBuilderToolTests
         queryPort.GetStateVersionForCallerAsync(Arg.Any<string>(), Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -716,7 +716,7 @@ public sealed class AgentBuilderToolTests
             // leave a broken agent in the catalog that runs every cron tick to no effect.
             await skillRunnerPort.DidNotReceive().InitializeAsync(
                 Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<InitializeSkillDefinitionCommand>(),
                 Arg.Any<bool>(),
                 Arg.Any<CancellationToken>());
 
@@ -744,7 +744,7 @@ public sealed class AgentBuilderToolTests
         queryPort.GetStateVersionForCallerAsync(Arg.Any<string>(), Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -820,7 +820,7 @@ public sealed class AgentBuilderToolTests
 
             await skillRunnerPort.DidNotReceive().InitializeAsync(
                 Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<InitializeSkillDefinitionCommand>(),
                 Arg.Any<bool>(),
                 Arg.Any<CancellationToken>());
 
@@ -851,12 +851,12 @@ public sealed class AgentBuilderToolTests
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-search-empty",
-                AgentType = SkillRunnerDefaults.AgentType,
+                AgentType = SkillDefinitionDefaults.AgentType,
                 TemplateName = "daily_report",
-                Status = SkillRunnerDefaults.StatusRunning,
+                Status = SkillDefinitionDefaults.StatusRunning,
             }));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -951,7 +951,7 @@ public sealed class AgentBuilderToolTests
         queryPort.GetStateVersionForCallerAsync(Arg.Any<string>(), Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -1047,7 +1047,7 @@ public sealed class AgentBuilderToolTests
         queryPort.GetStateVersionForCallerAsync(Arg.Any<string>(), Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -1130,7 +1130,7 @@ public sealed class AgentBuilderToolTests
 
             await skillRunnerPort.DidNotReceive().InitializeAsync(
                 Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<InitializeSkillDefinitionCommand>(),
                 Arg.Any<bool>(),
                 Arg.Any<CancellationToken>());
 
@@ -1161,12 +1161,12 @@ public sealed class AgentBuilderToolTests
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-fallback-1",
-                AgentType = SkillRunnerDefaults.AgentType,
+                AgentType = SkillDefinitionDefaults.AgentType,
                 TemplateName = "daily_report",
-                Status = SkillRunnerDefaults.StatusRunning,
+                Status = SkillDefinitionDefaults.StatusRunning,
             }));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -1272,12 +1272,12 @@ public sealed class AgentBuilderToolTests
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-no-fallback-1",
-                AgentType = SkillRunnerDefaults.AgentType,
+                AgentType = SkillDefinitionDefaults.AgentType,
                 TemplateName = "daily_report",
-                Status = SkillRunnerDefaults.StatusRunning,
+                Status = SkillDefinitionDefaults.StatusRunning,
             }));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -1366,12 +1366,12 @@ public sealed class AgentBuilderToolTests
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-pref-1",
-                AgentType = SkillRunnerDefaults.AgentType,
+                AgentType = SkillDefinitionDefaults.AgentType,
                 TemplateName = "daily_report",
-                Status = SkillRunnerDefaults.StatusRunning,
+                Status = SkillDefinitionDefaults.StatusRunning,
             }));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -1457,7 +1457,7 @@ public sealed class AgentBuilderToolTests
 
             await skillRunnerPort.Received(1).InitializeAsync(
                 "skill-runner-pref-1",
-                Arg.Is<InitializeSkillRunnerCommand>(c =>
+                Arg.Is<InitializeSkillDefinitionCommand>(c =>
                     c.SkillContent.Contains("Primary GitHub username: saved-user", StringComparison.Ordinal) &&
                     c.ExecutionPrompt.Contains("saved-user", StringComparison.Ordinal)),
                 Arg.Any<bool>(),
@@ -1493,12 +1493,12 @@ public sealed class AgentBuilderToolTests
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-bob-1",
-                AgentType = SkillRunnerDefaults.AgentType,
+                AgentType = SkillDefinitionDefaults.AgentType,
                 TemplateName = "daily_report",
-                Status = SkillRunnerDefaults.StatusRunning,
+                Status = SkillDefinitionDefaults.StatusRunning,
             }));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -1590,7 +1590,7 @@ public sealed class AgentBuilderToolTests
 
             await skillRunnerPort.Received(1).InitializeAsync(
                 "skill-runner-bob-1",
-                Arg.Is<InitializeSkillRunnerCommand>(c =>
+                Arg.Is<InitializeSkillDefinitionCommand>(c =>
                     c.SkillContent.Contains("Primary GitHub username: bob-gh-from-nyx", StringComparison.Ordinal) &&
                     !c.SkillContent.Contains("alice-gh", StringComparison.Ordinal)),
                 Arg.Any<bool>(),
@@ -1620,12 +1620,12 @@ public sealed class AgentBuilderToolTests
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-derived-1",
-                AgentType = SkillRunnerDefaults.AgentType,
+                AgentType = SkillDefinitionDefaults.AgentType,
                 TemplateName = "daily_report",
-                Status = SkillRunnerDefaults.StatusRunning,
+                Status = SkillDefinitionDefaults.StatusRunning,
             }));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -1700,7 +1700,7 @@ public sealed class AgentBuilderToolTests
 
             await skillRunnerPort.Received(1).InitializeAsync(
                 "skill-runner-derived-1",
-                Arg.Is<InitializeSkillRunnerCommand>(c =>
+                Arg.Is<InitializeSkillDefinitionCommand>(c =>
                     c.SkillContent.Contains("Primary GitHub username: derived-user", StringComparison.Ordinal) &&
                     c.ExecutionPrompt.Contains("derived-user", StringComparison.Ordinal)),
                 Arg.Any<bool>(),
@@ -1718,7 +1718,7 @@ public sealed class AgentBuilderToolTests
     public async Task ExecuteAsync_CreateAgent_DailyReport_ReturnsCredentialsRequired_WhenUsernameCannotBeResolved()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
@@ -1791,7 +1791,7 @@ public sealed class AgentBuilderToolTests
 
             await skillRunnerPort.DidNotReceive().InitializeAsync(
                 Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<InitializeSkillDefinitionCommand>(),
                 Arg.Any<bool>(),
                 Arg.Any<CancellationToken>());
         }
@@ -1811,12 +1811,12 @@ public sealed class AgentBuilderToolTests
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-save-1",
-                AgentType = SkillRunnerDefaults.AgentType,
+                AgentType = SkillDefinitionDefaults.AgentType,
                 TemplateName = "daily_report",
-                Status = SkillRunnerDefaults.StatusRunning,
+                Status = SkillDefinitionDefaults.StatusRunning,
             }));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -1910,7 +1910,7 @@ public sealed class AgentBuilderToolTests
     public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_RequiredProxyServices_AreMissing()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -1984,7 +1984,7 @@ public sealed class AgentBuilderToolTests
             handler.Requests.Should().NotContain(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys");
             await skillRunnerPort.DidNotReceive().InitializeAsync(
                 Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<InitializeSkillDefinitionCommand>(),
                 Arg.Any<bool>(),
                 Arg.Any<CancellationToken>());
         }
@@ -2001,7 +2001,7 @@ public sealed class AgentBuilderToolTests
         // `is_active: false`, surface `service_inactive` rather than persisting an api-key
         // that NyxID's enforcement will reject at proxy time.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -2077,7 +2077,7 @@ public sealed class AgentBuilderToolTests
         // call later as `org_role_insufficient`. Surface `service_org_viewer_only` so the
         // user knows to ask an admin or connect a personal credential.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -2162,12 +2162,12 @@ public sealed class AgentBuilderToolTests
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-id-pin",
-                AgentType = SkillRunnerDefaults.AgentType,
+                AgentType = SkillDefinitionDefaults.AgentType,
                 TemplateName = "daily_report",
-                Status = SkillRunnerDefaults.StatusRunning,
+                Status = SkillDefinitionDefaults.StatusRunning,
             }));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -2268,12 +2268,12 @@ public sealed class AgentBuilderToolTests
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-fnf",
-                AgentType = SkillRunnerDefaults.AgentType,
+                AgentType = SkillDefinitionDefaults.AgentType,
                 TemplateName = "daily_report",
-                Status = SkillRunnerDefaults.StatusRunning,
+                Status = SkillDefinitionDefaults.StatusRunning,
             }));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -2346,7 +2346,7 @@ public sealed class AgentBuilderToolTests
 
             await skillRunnerPort.Received(1).InitializeAsync(
                 "skill-runner-fnf",
-                Arg.Is<InitializeSkillRunnerCommand>(c =>
+                Arg.Is<InitializeSkillDefinitionCommand>(c =>
                     // Primary slug stays on the caller-provided default — failure-notification
                     // is a separate routing path, not a re-route of the main report.
                     c.OutboundConfig.NyxProviderSlug == "api-lark-bot" &&
@@ -2387,12 +2387,12 @@ public sealed class AgentBuilderToolTests
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-same",
-                AgentType = SkillRunnerDefaults.AgentType,
+                AgentType = SkillDefinitionDefaults.AgentType,
                 TemplateName = "daily_report",
-                Status = SkillRunnerDefaults.StatusRunning,
+                Status = SkillDefinitionDefaults.StatusRunning,
             }));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -2461,7 +2461,7 @@ public sealed class AgentBuilderToolTests
 
             await skillRunnerPort.Received(1).InitializeAsync(
                 "skill-runner-same",
-                Arg.Is<InitializeSkillRunnerCommand>(c =>
+                Arg.Is<InitializeSkillDefinitionCommand>(c =>
                     c.OutboundConfig.NyxProviderSlug == "api-lark-bot" &&
                     string.IsNullOrEmpty(c.OutboundConfig.FailureNotificationProviderSlug)),
                 Arg.Any<bool>(),
@@ -2490,12 +2490,12 @@ public sealed class AgentBuilderToolTests
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-missing",
-                AgentType = SkillRunnerDefaults.AgentType,
+                AgentType = SkillDefinitionDefaults.AgentType,
                 TemplateName = "daily_report",
-                Status = SkillRunnerDefaults.StatusRunning,
+                Status = SkillDefinitionDefaults.StatusRunning,
             }));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -2566,7 +2566,7 @@ public sealed class AgentBuilderToolTests
 
             await skillRunnerPort.Received(1).InitializeAsync(
                 "skill-runner-missing",
-                Arg.Is<InitializeSkillRunnerCommand>(c =>
+                Arg.Is<InitializeSkillDefinitionCommand>(c =>
                     string.IsNullOrEmpty(c.OutboundConfig.FailureNotificationProviderSlug)),
                 Arg.Any<bool>(),
                 Arg.Any<CancellationToken>());
@@ -2604,12 +2604,12 @@ public sealed class AgentBuilderToolTests
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-dup",
-                AgentType = SkillRunnerDefaults.AgentType,
+                AgentType = SkillDefinitionDefaults.AgentType,
                 TemplateName = "daily_report",
-                Status = SkillRunnerDefaults.StatusRunning,
+                Status = SkillDefinitionDefaults.StatusRunning,
             }));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -2699,7 +2699,7 @@ public sealed class AgentBuilderToolTests
     public async Task ExecuteAsync_CreateAgent_DailyReport_ReturnsOAuthRequirementBeforeCreatingAgent()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -2775,7 +2775,7 @@ public sealed class AgentBuilderToolTests
 
             await skillRunnerPort.DidNotReceive().InitializeAsync(
                 Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<InitializeSkillDefinitionCommand>(),
                 Arg.Any<bool>(),
                 Arg.Any<CancellationToken>());
             handler.Requests.Should().NotContain(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys");
@@ -2790,7 +2790,7 @@ public sealed class AgentBuilderToolTests
     public async Task ExecuteAsync_CreateAgent_DailyReport_ReturnsCredentialsRequirementBeforeOAuth()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -2862,7 +2862,7 @@ public sealed class AgentBuilderToolTests
             handler.Requests.Should().NotContain(x => x.Method == HttpMethod.Post && x.Path == "/api/v1/api-keys");
             await skillRunnerPort.DidNotReceive().InitializeAsync(
                 Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<InitializeSkillDefinitionCommand>(),
                 Arg.Any<bool>(),
                 Arg.Any<CancellationToken>());
         }
@@ -2887,7 +2887,7 @@ public sealed class AgentBuilderToolTests
                 Status = WorkflowAgentDefaults.StatusRunning,
             }));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -3059,7 +3059,7 @@ public sealed class AgentBuilderToolTests
                 Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-1",
-                    AgentType = SkillRunnerDefaults.AgentType,
+                    AgentType = SkillDefinitionDefaults.AgentType,
                     TemplateName = "daily_report",
                     ApiKeyId = "key-1",
                     OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
@@ -3068,7 +3068,7 @@ public sealed class AgentBuilderToolTests
         queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogEntry>>(Array.Empty<UserAgentCatalogEntry>()));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         catalogCommandPort.TombstoneAsync("skill-runner-1", Arg.Any<CancellationToken>())
@@ -3146,7 +3146,7 @@ public sealed class AgentBuilderToolTests
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-stuck",
-                AgentType = SkillRunnerDefaults.AgentType,
+                AgentType = SkillDefinitionDefaults.AgentType,
                 TemplateName = "daily_report",
                 ApiKeyId = "key-stuck",
                 OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
@@ -3160,7 +3160,7 @@ public sealed class AgentBuilderToolTests
             .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogEntry>>(
                 [new UserAgentCatalogEntry { AgentId = "skill-runner-stuck", OwnerScope = OwnerScope.ForNyxIdNative("user-1") }]));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         // Tombstone is dispatched but the projection has not yet caught up; the
@@ -3239,11 +3239,11 @@ public sealed class AgentBuilderToolTests
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-1",
-                AgentType = SkillRunnerDefaults.AgentType,
+                AgentType = SkillDefinitionDefaults.AgentType,
                 TemplateName = "daily_report",
             }));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -3300,12 +3300,12 @@ public sealed class AgentBuilderToolTests
             .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-1",
-                AgentType = SkillRunnerDefaults.AgentType,
+                AgentType = SkillDefinitionDefaults.AgentType,
                 TemplateName = "daily_report",
-                Status = SkillRunnerDefaults.StatusDisabled,
+                Status = SkillDefinitionDefaults.StatusDisabled,
             }));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -3364,7 +3364,7 @@ public sealed class AgentBuilderToolTests
                 Status = WorkflowAgentDefaults.StatusRunning,
             }));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -3445,17 +3445,17 @@ public sealed class AgentBuilderToolTests
                 Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-fast",
-                    AgentType = SkillRunnerDefaults.AgentType,
+                    AgentType = SkillDefinitionDefaults.AgentType,
                     TemplateName = "daily_report",
-                    Status = SkillRunnerDefaults.StatusRunning,
+                    Status = SkillDefinitionDefaults.StatusRunning,
                 }),
                 // Wait helper's first poll sees the materialized disable.
                 Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-fast",
-                    AgentType = SkillRunnerDefaults.AgentType,
+                    AgentType = SkillDefinitionDefaults.AgentType,
                     TemplateName = "daily_report",
-                    Status = SkillRunnerDefaults.StatusDisabled,
+                    Status = SkillDefinitionDefaults.StatusDisabled,
                 }));
         // Caller's pre-dispatch baseline read returns 42; helper's post-
         // dispatch poll sees 43 (the projection materialized the disable on
@@ -3465,7 +3465,7 @@ public sealed class AgentBuilderToolTests
                 Task.FromResult<long?>(42L),
                 Task.FromResult<long?>(43L));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -3502,7 +3502,7 @@ public sealed class AgentBuilderToolTests
             stopwatch.Stop();
 
             using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusDisabled);
+            doc.RootElement.GetProperty("status").GetString().Should().Be(SkillDefinitionDefaults.StatusDisabled);
             // 1 s ceiling: any regression that prevents a dual-gate first-poll
             // exit would burn the full ProjectionWaitAttempts ×
             // ProjectionWaitDelayMilliseconds budget (15 s by default).
@@ -3533,9 +3533,9 @@ public sealed class AgentBuilderToolTests
                 Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-stale",
-                    AgentType = SkillRunnerDefaults.AgentType,
+                    AgentType = SkillDefinitionDefaults.AgentType,
                     TemplateName = "daily_report",
-                    Status = SkillRunnerDefaults.StatusRunning,
+                    Status = SkillDefinitionDefaults.StatusRunning,
                 }),
                 // Helper's terminal fallback (after budget exhausts) returns
                 // a stale-but-expected-looking Disabled. With status-only
@@ -3546,16 +3546,16 @@ public sealed class AgentBuilderToolTests
                 Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-stale",
-                    AgentType = SkillRunnerDefaults.AgentType,
+                    AgentType = SkillDefinitionDefaults.AgentType,
                     TemplateName = "daily_report",
-                    Status = SkillRunnerDefaults.StatusDisabled,
+                    Status = SkillDefinitionDefaults.StatusDisabled,
                 }));
         // Caller baseline = 7; replica's view never advances past 7. Helper
         // must keep iterating; we shrink the budget so the test finishes fast.
         queryPort.GetStateVersionForCallerAsync("skill-runner-stale", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(7L));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -3613,7 +3613,7 @@ public sealed class AgentBuilderToolTests
             // confirmed/unconfirmed branching makes this test fail by
             // surfacing "Scheduling paused" + status=Disabled despite the
             // dual gate having been violated.
-            doc.RootElement.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusRunning);
+            doc.RootElement.GetProperty("status").GetString().Should().Be(SkillDefinitionDefaults.StatusRunning);
             var note = doc.RootElement.GetProperty("note").GetString();
             note.Should().Contain("Disable submitted")
                 .And.Contain("/agent-status")
@@ -3634,18 +3634,18 @@ public sealed class AgentBuilderToolTests
                 Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-1",
-                    AgentType = SkillRunnerDefaults.AgentType,
+                    AgentType = SkillDefinitionDefaults.AgentType,
                     TemplateName = "daily_report",
-                    Status = SkillRunnerDefaults.StatusRunning,
+                    Status = SkillDefinitionDefaults.StatusRunning,
                     ScheduleCron = "0 9 * * *",
                     ScheduleTimezone = "UTC",
                 }),
                 Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-1",
-                    AgentType = SkillRunnerDefaults.AgentType,
+                    AgentType = SkillDefinitionDefaults.AgentType,
                     TemplateName = "daily_report",
-                    Status = SkillRunnerDefaults.StatusDisabled,
+                    Status = SkillDefinitionDefaults.StatusDisabled,
                     ScheduleCron = "0 9 * * *",
                     ScheduleTimezone = "UTC",
                 }));
@@ -3656,7 +3656,7 @@ public sealed class AgentBuilderToolTests
                 Task.FromResult<long?>(5L),
                 Task.FromResult<long?>(6L));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -3691,7 +3691,7 @@ public sealed class AgentBuilderToolTests
                 """);
 
             using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusDisabled);
+            doc.RootElement.GetProperty("status").GetString().Should().Be(SkillDefinitionDefaults.StatusDisabled);
             doc.RootElement.GetProperty("note").GetString().Should().Contain("Scheduling paused");
 
             await skillRunnerPort.Received(1).DisableAsync(
@@ -3714,18 +3714,18 @@ public sealed class AgentBuilderToolTests
                 Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-1",
-                    AgentType = SkillRunnerDefaults.AgentType,
+                    AgentType = SkillDefinitionDefaults.AgentType,
                     TemplateName = "daily_report",
-                    Status = SkillRunnerDefaults.StatusDisabled,
+                    Status = SkillDefinitionDefaults.StatusDisabled,
                     ScheduleCron = "0 9 * * *",
                     ScheduleTimezone = "UTC",
                 }),
                 Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
                 {
                     AgentId = "skill-runner-1",
-                    AgentType = SkillRunnerDefaults.AgentType,
+                    AgentType = SkillDefinitionDefaults.AgentType,
                     TemplateName = "daily_report",
-                    Status = SkillRunnerDefaults.StatusRunning,
+                    Status = SkillDefinitionDefaults.StatusRunning,
                     ScheduleCron = "0 9 * * *",
                     ScheduleTimezone = "UTC",
                 }));
@@ -3736,7 +3736,7 @@ public sealed class AgentBuilderToolTests
                 Task.FromResult<long?>(5L),
                 Task.FromResult<long?>(6L));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -3771,7 +3771,7 @@ public sealed class AgentBuilderToolTests
                 """);
 
             using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusRunning);
+            doc.RootElement.GetProperty("status").GetString().Should().Be(SkillDefinitionDefaults.StatusRunning);
             doc.RootElement.GetProperty("note").GetString().Should().Contain("Scheduling resumed");
 
             await skillRunnerPort.Received(1).EnableAsync(
@@ -3816,7 +3816,7 @@ public sealed class AgentBuilderToolTests
                 Task.FromResult<long?>(5L),
                 Task.FromResult<long?>(6L));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -3877,7 +3877,7 @@ public sealed class AgentBuilderToolTests
         queryPort.GetStateVersionForCallerAsync(Arg.Any<string>(), Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -3972,7 +3972,7 @@ public sealed class AgentBuilderToolTests
         queryPort.GetStateVersionForCallerAsync(Arg.Any<string>(), Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<long?>(null));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -4055,7 +4055,7 @@ public sealed class AgentBuilderToolTests
         // the existing ResolveProxyServiceIdsAsync path returns `service_not_connected` BEFORE
         // we mint the api-key. This is the "user has not added Twitter at NyxID at all" signal.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         var workflowCommandPort = Substitute.For<IScopeWorkflowCommandPort>();
@@ -4146,7 +4146,7 @@ public sealed class AgentBuilderToolTests
                 Status = WorkflowAgentDefaults.StatusRunning,
             }));
 
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var skillRunnerPort = Substitute.For<ISkillDefinitionCommandPort>();
         var workflowAgentPort = Substitute.For<IWorkflowAgentCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 

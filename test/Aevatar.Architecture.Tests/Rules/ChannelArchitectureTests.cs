@@ -146,7 +146,7 @@ public sealed class ChannelArchitectureTests
     [Fact]
     public void ProactiveCallers_MustNot_Invoke_ContinueConversationAsync_Directly()
     {
-        // Rule: proactive actor-to-actor paths (SkillRunnerGAgent, WorkflowAgentGAgent, admin endpoint
+        // Rule: proactive actor-to-actor paths (SkillExecutionGAgent, WorkflowAgentGAgent, admin endpoint
         // controllers, workflow triggers) must dispatch through ConversationGAgent command envelopes
         // rather than directly invoking IChannelOutboundPort.ContinueConversationAsync.
         //
@@ -156,7 +156,7 @@ public sealed class ChannelArchitectureTests
 
         var proactiveCallerPatterns = new[]
         {
-            "SkillRunnerGAgent",
+            "SkillExecutionGAgent",
             "WorkflowAgentGAgent",
             "AdminBroadcast",
             "ChannelBroadcast",

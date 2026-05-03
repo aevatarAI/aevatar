@@ -1,11 +1,13 @@
 using System.Net;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using FluentAssertions;
@@ -16,18 +18,16 @@ using Aevatar.GAgents.Scheduled;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
-public sealed class SkillRunnerGAgentTests : IAsyncLifetime
+public sealed class SkillExecutionGAgentTests : IAsyncLifetime
 {
     private InMemoryEventStore _store = null!;
     private ServiceProvider _serviceProvider = null!;
-    private SkillRunnerGAgent _agent = null!;
 
-    public async Task InitializeAsync()
+    public Task InitializeAsync()
     {
         _store = new InMemoryEventStore();
         _serviceProvider = BuildServiceProvider(_store);
-        _agent = CreateAgent("skill-runner-test");
-        await _agent.ActivateAsync();
+        return Task.CompletedTask;
     }
 
     public Task DisposeAsync()
@@ -37,241 +37,13 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleInitializeAsync_WhenSamplingFieldsAreOmitted_ShouldKeepThemUnset()
-    {
-        await _agent.HandleInitializeAsync(CreateInitializeCommand());
-
-        var persisted = await _store.GetEventsAsync("skill-runner-test");
-        var initialized = persisted.Should().ContainSingle().Subject.EventData.Unpack<SkillRunnerInitializedEvent>();
-        initialized.HasTemperature.Should().BeFalse();
-        initialized.HasMaxTokens.Should().BeFalse();
-
-        _agent.State.HasTemperature.Should().BeFalse();
-        _agent.State.HasMaxTokens.Should().BeFalse();
-        _agent.State.MaxToolRounds.Should().Be(SkillRunnerDefaults.DefaultMaxToolRounds);
-        _agent.State.MaxHistoryMessages.Should().Be(SkillRunnerDefaults.DefaultMaxHistoryMessages);
-        _agent.EffectiveConfig.Temperature.Should().BeNull();
-        _agent.EffectiveConfig.MaxTokens.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task HandleInitializeAsync_WhenTemperatureIsExplicitZero_ShouldPreserveIt()
-    {
-        var command = CreateInitializeCommand();
-        command.Temperature = 0;
-
-        await _agent.HandleInitializeAsync(command);
-
-        var persisted = await _store.GetEventsAsync("skill-runner-test");
-        var initialized = persisted.Should().ContainSingle().Subject.EventData.Unpack<SkillRunnerInitializedEvent>();
-        initialized.HasTemperature.Should().BeTrue();
-        initialized.Temperature.Should().Be(0);
-
-        _agent.State.HasTemperature.Should().BeTrue();
-        _agent.State.Temperature.Should().Be(0);
-        _agent.EffectiveConfig.Temperature.Should().Be(0);
-    }
-
-    [Fact]
-    public async Task HandleInitializeAsync_WhenMaxTokensIsExplicitZero_ShouldPreserveStateAndSuppressEffectiveConfig()
-    {
-        var command = CreateInitializeCommand();
-        command.MaxTokens = 0;
-
-        await _agent.HandleInitializeAsync(command);
-
-        var persisted = await _store.GetEventsAsync("skill-runner-test");
-        var initialized = persisted.Should().ContainSingle().Subject.EventData.Unpack<SkillRunnerInitializedEvent>();
-        initialized.HasMaxTokens.Should().BeTrue();
-        initialized.MaxTokens.Should().Be(0);
-
-        _agent.State.HasMaxTokens.Should().BeTrue();
-        _agent.State.MaxTokens.Should().Be(0);
-        _agent.EffectiveConfig.MaxTokens.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task HandleInitializeAsync_ShouldAwaitUpsertDispatchBeforeFiringExecutionUpdate()
-    {
-        // Issue #440 regression: pre-PR #451 the SkillRunner reached the catalog via
-        // OrleansActor.HandleEventAsync, which produced to a stream (fire-and-forget).
-        // Two dispatches from the same SkillRunner turn (post-init Upsert + post-trigger
-        // ExecutionUpdate) could arrive at the catalog grain out of order; the
-        // ExecutionUpdate would land first, hit the missing-entry guard, and be silently
-        // dropped — leaving /agent-status reporting Last run / Next run as n/a.
-        //
-        // PR #451 wired dispatch through IActorDispatchPort.DispatchAsync, which awaits
-        // grain.HandleEnvelopeAsync. The contract that protects the catalog is: the
-        // SkillRunner must AWAIT each dispatch before firing the next so the catalog
-        // observes Upsert before ExecutionUpdate. To guard the contract (not the
-        // synchronous shortcut a fake might enable), this test hangs the Upsert dispatch
-        // on a TaskCompletionSource and asserts ExecutionUpdate is not even dispatched
-        // until the gate releases. A regression that drops the await — or anything that
-        // returns control before the catalog observes Upsert — would let ExecutionUpdate
-        // race ahead while Upsert is still hanging, and the assertion catches it.
-
-        var upsertGate = new TaskCompletionSource();
-        var upsertDispatchStarted = new TaskCompletionSource();
-        var executionDispatchStarted = new TaskCompletionSource();
-
-        var scheduler = Substitute.For<Foundation.Abstractions.Runtime.Callbacks.IActorRuntimeCallbackScheduler>();
-        scheduler
-            .ScheduleTimeoutAsync(
-                Arg.Any<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackTimeoutRequest>(),
-                Arg.Any<CancellationToken>())
-            .Returns(call =>
-            {
-                var req = call.Arg<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackTimeoutRequest>();
-                return Task.FromResult(new Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease(
-                    req.ActorId, req.CallbackId, 1L,
-                    Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackBackend.InMemory));
-            });
-        scheduler.CancelAsync(
-                Arg.Any<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease>(),
-                Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
-
-        var catalogProxy = Substitute.For<IActor>();
-        var runtime = Substitute.For<IActorRuntime>();
-        runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(catalogProxy));
-
-        UserAgentCatalogGAgent? catalog = null;
-        var dispatch = Substitute.For<IActorDispatchPort>();
-        dispatch.DispatchAsync(
-                UserAgentCatalogGAgent.WellKnownId,
-                Arg.Any<EventEnvelope>(),
-                Arg.Any<CancellationToken>())
-            .Returns(call => DispatchGated(
-                call.Arg<EventEnvelope>(),
-                call.Arg<CancellationToken>(),
-                catalog!,
-                upsertGate,
-                upsertDispatchStarted,
-                executionDispatchStarted));
-
-        using var provider = BuildServiceProvider(
-            new InMemoryEventStore(),
-            services =>
-            {
-                services.AddSingleton(runtime);
-                services.AddSingleton(dispatch);
-                services.AddSingleton(scheduler);
-            });
-
-        catalog = new UserAgentCatalogGAgent
-        {
-            Services = provider,
-            EventSourcingBehaviorFactory =
-                provider.GetRequiredService<IEventSourcingBehaviorFactory<UserAgentCatalogState>>(),
-        };
-        AssignActorId(catalog, UserAgentCatalogGAgent.WellKnownId);
-        await catalog.ActivateAsync();
-
-        var agent = CreateAgent("skill-runner-440-regression", provider);
-        await agent.ActivateAsync();
-
-        var init = CreateInitializeCommand();
-        init.ScheduleCron = "0 9 * * *";
-        init.ScheduleTimezone = "UTC";
-
-        // Kick off init in the background. Upsert will hit the gate and yield; control
-        // returns to the test before ExecutionUpdate has a chance to dispatch.
-        var initTask = agent.HandleInitializeAsync(init);
-        await upsertDispatchStarted.Task;
-
-        // Critical assertion: while Upsert is hanging at the gate, ExecutionUpdate must
-        // not have been dispatched. If the SkillRunner regressed to fire-and-forget
-        // (`_ = DispatchAsync(...)` instead of `await DispatchAsync(...)`),
-        // executionDispatchStarted would already be completed here.
-        executionDispatchStarted.Task.IsCompleted.Should().BeFalse(
-            "the SkillRunner must await Upsert's dispatch task before firing ExecutionUpdate; "
-            + "regressing to fire-and-forget would let ExecutionUpdate race ahead of Upsert "
-            + "and be dropped by the missing-entry guard in HandleExecutionUpdateAsync");
-
-        // Release Upsert; ExecutionUpdate must now fire and the catalog must observe both.
-        upsertGate.SetResult();
-        await initTask;
-
-        executionDispatchStarted.Task.IsCompleted.Should().BeTrue(
-            "ExecutionUpdate must dispatch after Upsert completes so /agent-status shows Next run");
-        catalog.State.Entries.Should().ContainSingle();
-        var entry = catalog.State.Entries[0];
-        entry.AgentId.Should().Be("skill-runner-440-regression");
-        entry.Status.Should().Be(SkillRunnerDefaults.StatusRunning);
-        entry.ScheduleCron.Should().Be("0 9 * * *");
-        entry.NextRunAt.Should().NotBeNull(
-            "init's post-Upsert ExecutionUpdate must land at the catalog so /agent-status shows Next run");
-    }
-
-    private static async Task DispatchGated(
-        EventEnvelope envelope,
-        CancellationToken ct,
-        UserAgentCatalogGAgent catalog,
-        TaskCompletionSource upsertGate,
-        TaskCompletionSource upsertDispatchStarted,
-        TaskCompletionSource executionDispatchStarted)
-    {
-        if (envelope.Payload.Is(UserAgentCatalogUpsertCommand.Descriptor))
-        {
-            upsertDispatchStarted.TrySetResult();
-            await upsertGate.Task;
-        }
-        else if (envelope.Payload.Is(UserAgentCatalogExecutionUpdateCommand.Descriptor))
-        {
-            executionDispatchStarted.TrySetResult();
-        }
-
-        await catalog.HandleEventAsync(envelope, ct);
-    }
-
-    [Fact]
-    public async Task HandleInitializeAsync_ShouldDispatchCatalogCommandsThroughDispatchPort()
-    {
-        var catalogActor = Substitute.For<IActor>();
-        var runtime = Substitute.For<IActorRuntime>();
-        runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(catalogActor));
-
-        var dispatch = Substitute.For<IActorDispatchPort>();
-        var captured = new List<EventEnvelope>();
-        dispatch.DispatchAsync(
-                UserAgentCatalogGAgent.WellKnownId,
-                Arg.Do<EventEnvelope>(captured.Add),
-                Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
-
-        using var provider = BuildServiceProvider(
-            new InMemoryEventStore(),
-            services =>
-            {
-                services.AddSingleton(runtime);
-                services.AddSingleton(dispatch);
-            });
-        var agent = CreateAgent("skill-runner-dispatch-test", provider);
-        await agent.ActivateAsync();
-
-        await agent.HandleInitializeAsync(CreateInitializeCommand());
-
-        captured.Should().HaveCount(2);
-        captured[0].Payload.Is(UserAgentCatalogUpsertCommand.Descriptor).Should().BeTrue();
-        captured[1].Payload.Is(UserAgentCatalogExecutionUpdateCommand.Descriptor).Should().BeTrue();
-        captured.Should().OnlyContain(envelope =>
-            envelope.Route.PublisherActorId == "skill-runner-dispatch-test" &&
-            envelope.Route.Direct.TargetActorId == UserAgentCatalogGAgent.WellKnownId);
-        await catalogActor.DidNotReceive()
-            .HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
     public async Task SendOutputAsync_ShouldUseTypedReceiveTarget_WhenLarkReceiveIdIsPopulated()
     {
         // Initialize with typed fields set (the shape AgentBuilderTool now writes for p2p flows).
         // Even though the legacy ConversationId is an `oc_*` chat id (which Lark would also accept
         // with chat_id), the typed open_id target should be sent verbatim — this is what fixes the
         // production 400 where the relay's ConversationId fell through to ou_*.
-        var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        var outbound = new SkillRunnerOutboundConfig
         {
             ConversationId = "oc_chat_legacy",
             NyxProviderSlug = "api-lark-bot",
@@ -279,12 +51,12 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             LarkReceiveId = "ou_user_1",
             LarkReceiveIdType = "open_id",
         };
-        await _agent.HandleInitializeAsync(initialize);
+        var agent = await CreateActivatedExecutionAgent("exec-typed-target", outbound);
 
         var handler = new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_1"}}""");
-        AttachNyxIdApiClient(_agent, handler);
+        AttachNyxIdApiClient(agent, handler);
 
-        await InvokeSendOutputAsync(_agent, "scheduled report body");
+        await InvokeSendOutputAsync(agent, "scheduled report body");
 
         handler.LastRequest.Should().NotBeNull();
         handler.LastRequest!.RequestUri!.ToString()
@@ -300,19 +72,18 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // Backward compatibility: state persisted before the typed lark_receive_id fields existed
         // still resolves through the prefix heuristic on ConversationId. The send still succeeds
         // (no exception); the sender emits a Debug breadcrumb that is not visible to xUnit.
-        var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        var outbound = new SkillRunnerOutboundConfig
         {
             ConversationId = "ou_legacy_user",
             NyxProviderSlug = "api-lark-bot",
             NyxApiKey = "nyx-api-key",
         };
-        await _agent.HandleInitializeAsync(initialize);
+        var agent = await CreateActivatedExecutionAgent("exec-legacy-fallback", outbound);
 
         var handler = new RecordingHandler("""{"code":0,"msg":"success"}""");
-        AttachNyxIdApiClient(_agent, handler);
+        AttachNyxIdApiClient(agent, handler);
 
-        await InvokeSendOutputAsync(_agent, "legacy report body");
+        await InvokeSendOutputAsync(agent, "legacy report body");
 
         handler.LastRequest!.RequestUri!.ToString()
             .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages?receive_id_type=open_id");
@@ -324,9 +95,8 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     public async Task SendOutputAsync_ShouldThrow_WhenLarkBusinessCodeIsNonZero()
     {
         // Lark reports business errors as HTTP 200 with `code != 0`. Ignoring the response would
-        // let HandleTriggerAsync persist SkillRunnerExecutionCompletedEvent on a silent failure.
-        var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        // let HandleStartAsync persist SkillExecutionCompletedEvent on a silent failure.
+        var outbound = new SkillRunnerOutboundConfig
         {
             ConversationId = "oc_chat_1",
             NyxProviderSlug = "api-lark-bot",
@@ -334,12 +104,12 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             LarkReceiveId = "ou_user_1",
             LarkReceiveIdType = "open_id",
         };
-        await _agent.HandleInitializeAsync(initialize);
+        var agent = await CreateActivatedExecutionAgent("exec-lark-biz-err", outbound);
 
         var handler = new RecordingHandler("""{"code":230002,"msg":"invalid receive_id"}""");
-        AttachNyxIdApiClient(_agent, handler);
+        AttachNyxIdApiClient(agent, handler);
 
-        Func<Task> act = () => InvokeSendOutputAsync(_agent, "report");
+        Func<Task> act = () => InvokeSendOutputAsync(agent, "report");
 
         var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
         assertion.WithMessage("*code=230002*");
@@ -351,8 +121,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     {
         // HTTP non-2xx from NyxID gets packaged into a Nyx envelope that ProxyRequestAsync returns
         // verbatim. Ignoring it would mask transport / auth failures.
-        var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        var outbound = new SkillRunnerOutboundConfig
         {
             ConversationId = "oc_chat_1",
             NyxProviderSlug = "api-lark-bot",
@@ -360,12 +129,12 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             LarkReceiveId = "ou_user_1",
             LarkReceiveIdType = "open_id",
         };
-        await _agent.HandleInitializeAsync(initialize);
+        var agent = await CreateActivatedExecutionAgent("exec-nyx-envelope-err", outbound);
 
         var handler = new RecordingHandler("""{"error":true,"message":"upstream timeout"}""");
-        AttachNyxIdApiClient(_agent, handler);
+        AttachNyxIdApiClient(agent, handler);
 
-        Func<Task> act = () => InvokeSendOutputAsync(_agent, "report");
+        Func<Task> act = () => InvokeSendOutputAsync(agent, "report");
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*upstream timeout*");
@@ -380,8 +149,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // `99992361 open_id cross app` and the user sees the bare error in `/agent-status`'s
         // `last_error` with no clue what to do. Surface explicit "delete and recreate" guidance
         // so the failure becomes self-documenting.
-        var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        var outbound = new SkillRunnerOutboundConfig
         {
             ConversationId = "oc_chat_1",
             NyxProviderSlug = "api-lark-bot",
@@ -389,13 +157,13 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             LarkReceiveId = "ou_relay_app_user_1",
             LarkReceiveIdType = "open_id",
         };
-        await _agent.HandleInitializeAsync(initialize);
+        var agent = await CreateActivatedExecutionAgent("exec-cross-app-openid", outbound);
 
         var handler = new RecordingHandler(
             """{"code":99992361,"msg":"open_id cross app","error":{"message":"Refer to the documentation"}}""");
-        AttachNyxIdApiClient(_agent, handler);
+        AttachNyxIdApiClient(agent, handler);
 
-        Func<Task> act = () => InvokeSendOutputAsync(_agent, "report");
+        Func<Task> act = () => InvokeSendOutputAsync(agent, "report");
 
         var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
         assertion.WithMessage("*code=99992361*");
@@ -417,8 +185,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // `larkCode=null` because it didn't parse the nested `body`, so the BotNotInChat
         // retry branch never fired in the actual production path. Pin the wrapped envelope
         // shape end-to-end.
-        var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        var outbound = new SkillRunnerOutboundConfig
         {
             ConversationId = "oc_dm_chat_1",
             NyxProviderSlug = "api-lark-bot",
@@ -428,16 +195,16 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             LarkReceiveIdFallback = "on_user_1",
             LarkReceiveIdTypeFallback = "union_id",
         };
-        await _agent.HandleInitializeAsync(initialize);
+        var agent = await CreateActivatedExecutionAgent("exec-fallback-http400", outbound);
 
         // First (primary) attempt: NyxIdApiClient.SendAsync HTTP-400 envelope wrapping Lark
         // 230002. Second (fallback) attempt: clean success.
         var handler = new SequencedHandler(
             """{"error": true, "status": 400, "body": "{\"code\":230002,\"msg\":\"Bot is not in the chat\"}"}""",
             """{"code":0,"msg":"success"}""");
-        AttachNyxIdApiClient(_agent, handler);
+        AttachNyxIdApiClient(agent, handler);
 
-        await InvokeSendOutputAsync(_agent, "report");
+        await InvokeSendOutputAsync(agent, "report");
 
         handler.Requests.Should().HaveCount(2);
         handler.Requests[0].RequestUri!.Query.Should().Contain("receive_id_type=chat_id");
@@ -453,8 +220,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // recreate-the-agent hint (PR #412) only fires when the parser surfaces the nested
         // Lark code; previously it never did. Pin both the recovery hint and the nested-body
         // unwrap together.
-        var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        var outbound = new SkillRunnerOutboundConfig
         {
             ConversationId = "oc_dm_chat_1",
             NyxProviderSlug = "api-lark-bot",
@@ -462,13 +228,13 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             LarkReceiveId = "on_relay_tenant_user_1",
             LarkReceiveIdType = "union_id",
         };
-        await _agent.HandleInitializeAsync(initialize);
+        var agent = await CreateActivatedExecutionAgent("exec-cross-tenant-http400", outbound);
 
         var handler = new RecordingHandler(
             """{"error": true, "status": 400, "body": "{\"code\":99992364,\"msg\":\"user id cross tenant\"}"}""");
-        AttachNyxIdApiClient(_agent, handler);
+        AttachNyxIdApiClient(agent, handler);
 
-        Func<Task> act = () => InvokeSendOutputAsync(_agent, "report");
+        Func<Task> act = () => InvokeSendOutputAsync(agent, "report");
 
         var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
         assertion.WithMessage("*99992364*");
@@ -487,8 +253,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // union_id at create time as a fallback; assert the runtime retries once with the
         // fallback typed pair when the primary attempt fails with 230002, and that the retry
         // body uses the fallback `receive_id` / `receive_id_type`.
-        var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        var outbound = new SkillRunnerOutboundConfig
         {
             ConversationId = "oc_dm_chat_1",
             NyxProviderSlug = "api-lark-bot",
@@ -498,14 +263,14 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             LarkReceiveIdFallback = "on_user_1",
             LarkReceiveIdTypeFallback = "union_id",
         };
-        await _agent.HandleInitializeAsync(initialize);
+        var agent = await CreateActivatedExecutionAgent("exec-fallback-bot-not-in-chat", outbound);
 
         var handler = new SequencedHandler(
             """{"code":230002,"msg":"Bot is not in the chat"}""",
             """{"code":0,"msg":"success"}""");
-        AttachNyxIdApiClient(_agent, handler);
+        AttachNyxIdApiClient(agent, handler);
 
-        await InvokeSendOutputAsync(_agent, "report");
+        await InvokeSendOutputAsync(agent, "report");
 
         handler.Requests.Should().HaveCount(2);
         handler.Requests[0].RequestUri!.Query.Should().Contain("receive_id_type=chat_id");
@@ -520,8 +285,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // Only `230002 bot not in chat` triggers the fallback retry. Other Lark codes (e.g.
         // 99992364 cross_tenant) propagate immediately so the user sees the actionable
         // recovery hint for the actual failure mode rather than a misleading retry.
-        var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        var outbound = new SkillRunnerOutboundConfig
         {
             ConversationId = "oc_dm_chat_1",
             NyxProviderSlug = "api-lark-bot",
@@ -531,13 +295,13 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             LarkReceiveIdFallback = "on_user_1",
             LarkReceiveIdTypeFallback = "union_id",
         };
-        await _agent.HandleInitializeAsync(initialize);
+        var agent = await CreateActivatedExecutionAgent("exec-no-retry-diff-code", outbound);
 
         var handler = new SequencedHandler(
             """{"code":99992364,"msg":"user id cross tenant"}""");
-        AttachNyxIdApiClient(_agent, handler);
+        AttachNyxIdApiClient(agent, handler);
 
-        Func<Task> act = () => InvokeSendOutputAsync(_agent, "report");
+        Func<Task> act = () => InvokeSendOutputAsync(agent, "report");
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*99992364*");
@@ -552,8 +316,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // union_id is rejected. This PR pivots to chat_id-first; the cross_tenant error code is
         // surfaced with the same recreate guidance so legacy agents (still pinned to union_id)
         // give users a way to recover without reading source.
-        var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        var outbound = new SkillRunnerOutboundConfig
         {
             ConversationId = "oc_chat_1",
             NyxProviderSlug = "api-lark-bot",
@@ -561,13 +324,13 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             LarkReceiveId = "on_relay_tenant_user_1",
             LarkReceiveIdType = "union_id",
         };
-        await _agent.HandleInitializeAsync(initialize);
+        var agent = await CreateActivatedExecutionAgent("exec-cross-tenant-userid", outbound);
 
         var handler = new RecordingHandler(
             """{"code":99992364,"msg":"user id cross tenant","error":{"log_id":"L1"}}""");
-        AttachNyxIdApiClient(_agent, handler);
+        AttachNyxIdApiClient(agent, handler);
 
-        Func<Task> act = () => InvokeSendOutputAsync(_agent, "report");
+        Func<Task> act = () => InvokeSendOutputAsync(agent, "report");
 
         var assertion = await act.Should().ThrowAsync<InvalidOperationException>();
         assertion.WithMessage("*code=99992364*");
@@ -588,8 +351,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // captured at agent-create time — by definition reachable, since the user just
         // messaged it. This test pins that the routing actually changes the proxy slug in
         // the outbound URL while the receive_id, body, and api key stay identical.
-        var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        var outbound = new SkillRunnerOutboundConfig
         {
             ConversationId = "oc_dm_chat_1",
             NyxProviderSlug = "api-lark-bot",
@@ -598,12 +360,12 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             LarkReceiveIdType = "open_id",
             FailureNotificationProviderSlug = "api-lark-bot-channel-loning",
         };
-        await _agent.HandleInitializeAsync(initialize);
+        var agent = await CreateActivatedExecutionAgent("exec-failure-slug", outbound);
 
         var handler = new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_failure"}}""");
-        AttachNyxIdApiClient(_agent, handler);
+        AttachNyxIdApiClient(agent, handler);
 
-        await InvokeTrySendFailureAsync(_agent, "Lark message delivery rejected (code=99992364): user id cross tenant.");
+        await InvokeTrySendFailureAsync(agent, "Lark message delivery rejected (code=99992364): user id cross tenant.");
 
         handler.LastRequest.Should().NotBeNull();
         handler.LastRequest!.RequestUri!.ToString()
@@ -614,7 +376,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // sees the actionable hint in chat, not just an unsubscribe ping.
         var contentJson = body.RootElement.GetProperty("content").GetString();
         contentJson.Should().Contain("99992364");
-        contentJson.Should().Contain("Skill runner failed");
+        contentJson.Should().Contain("Skill execution failed");
     }
 
     [Fact]
@@ -624,8 +386,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // (in user-services) but become inactive (token revoked, bot uninstalled, etc.) by
         // the time the agent fires. If its send rejects, we still try the primary slug as
         // a last-resort attempt — better than the user seeing nothing.
-        var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        var outbound = new SkillRunnerOutboundConfig
         {
             ConversationId = "oc_dm_chat_1",
             NyxProviderSlug = "api-lark-bot",
@@ -634,16 +395,16 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             LarkReceiveIdType = "open_id",
             FailureNotificationProviderSlug = "api-lark-bot-channel-revoked",
         };
-        await _agent.HandleInitializeAsync(initialize);
+        var agent = await CreateActivatedExecutionAgent("exec-failure-slug-rejects", outbound);
 
         var handler = new SequencedHandler(
             // Failure-notification slug rejects with a Nyx envelope error (e.g. 401 on the proxy)
             """{"error":true,"message":"upstream auth failed"}""",
             // Primary slug succeeds — best-effort recovery.
             """{"code":0,"msg":"success","data":{"message_id":"om_primary_failure"}}""");
-        AttachNyxIdApiClient(_agent, handler);
+        AttachNyxIdApiClient(agent, handler);
 
-        await InvokeTrySendFailureAsync(_agent, "report rejected at primary");
+        await InvokeTrySendFailureAsync(agent, "report rejected at primary");
 
         handler.Requests.Should().HaveCount(2);
         handler.Requests[0].RequestUri!.ToString()
@@ -659,8 +420,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // benefit — same proxy = same rejection mode. AgentBuilderTool leaves the field
         // empty in this case, but pin the runtime guard too so a future
         // mis-capture doesn't pay double-POST cost just to fail twice.
-        var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        var outbound = new SkillRunnerOutboundConfig
         {
             ConversationId = "oc_dm_chat_1",
             NyxProviderSlug = "api-lark-bot",
@@ -669,12 +429,12 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             LarkReceiveIdType = "open_id",
             FailureNotificationProviderSlug = "api-lark-bot",
         };
-        await _agent.HandleInitializeAsync(initialize);
+        var agent = await CreateActivatedExecutionAgent("exec-failure-slug-equal", outbound);
 
         var handler = new RecordingHandler("""{"code":0,"msg":"success"}""");
-        AttachNyxIdApiClient(_agent, handler);
+        AttachNyxIdApiClient(agent, handler);
 
-        await InvokeTrySendFailureAsync(_agent, "primary failed");
+        await InvokeTrySendFailureAsync(agent, "primary failed");
 
         // Exactly one POST — no double-attempt against the same slug.
         handler.LastRequest.Should().NotBeNull();
@@ -690,8 +450,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // existing single-attempt behavior — this test is the regression guard against the
         // failure-notification fallback ever introducing a hidden dependency on the new
         // field being populated.
-        var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        var outbound = new SkillRunnerOutboundConfig
         {
             ConversationId = "oc_dm_chat_1",
             NyxProviderSlug = "api-lark-bot",
@@ -700,12 +459,12 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             LarkReceiveIdType = "open_id",
             // FailureNotificationProviderSlug intentionally not set (legacy state shape).
         };
-        await _agent.HandleInitializeAsync(initialize);
+        var agent = await CreateActivatedExecutionAgent("exec-failure-slug-empty", outbound);
 
         var handler = new RecordingHandler("""{"code":0,"msg":"success"}""");
-        AttachNyxIdApiClient(_agent, handler);
+        AttachNyxIdApiClient(agent, handler);
 
-        await InvokeTrySendFailureAsync(_agent, "primary failed");
+        await InvokeTrySendFailureAsync(agent, "primary failed");
 
         handler.LastRequest.Should().NotBeNull();
         handler.LastRequest!.RequestUri!.ToString()
@@ -717,10 +476,9 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     {
         // Final guarantee: TrySendFailureAsync MUST NOT throw, ever. HandleTriggerAsync is
         // already in the failure-event-persist path; an exception here would mask the
-        // SkillRunnerExecutionFailedEvent persist (which surfaces last_error in
+        // SkillExecutionFailedEvent persist (which surfaces last_error in
         // /agent-status, the one path users have to recover regardless of Lark visibility).
-        var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
+        var outbound = new SkillRunnerOutboundConfig
         {
             ConversationId = "oc_dm_chat_1",
             NyxProviderSlug = "api-lark-bot",
@@ -729,15 +487,15 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             LarkReceiveIdType = "open_id",
             FailureNotificationProviderSlug = "api-lark-bot-channel-loning",
         };
-        await _agent.HandleInitializeAsync(initialize);
+        var agent = await CreateActivatedExecutionAgent("exec-failure-slug-both-reject", outbound);
 
         var handler = new SequencedHandler(
             """{"error":true,"message":"failure-slug down"}""",
             """{"code":99992364,"msg":"user id cross tenant"}""");
-        AttachNyxIdApiClient(_agent, handler);
+        AttachNyxIdApiClient(agent, handler);
 
         // Should complete (not throw) even though both attempts fail.
-        Func<Task> act = () => InvokeTrySendFailureAsync(_agent, "both broken");
+        Func<Task> act = () => InvokeTrySendFailureAsync(agent, "both broken");
 
         await act.Should().NotThrowAsync();
         handler.Requests.Should().HaveCount(2);
@@ -757,9 +515,10 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             PreferredLlmRoute: "/api/v1/proxy/s/chrono-llm",
             MaxToolRounds: 7));
 
-        var agent = CreateAgent("skill-runner-userconfig", _serviceProvider, source);
-        await agent.ActivateAsync();
-        await agent.HandleInitializeAsync(CreateInitializeCommand());
+        var agent = await CreateActivatedExecutionAgent(
+            "skill-runner-userconfig",
+            CreateOutboundConfig(),
+            source);
 
         var metadata = await InvokeBuildExecutionMetadataAsync(agent);
 
@@ -775,9 +534,11 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // No host wiring (e.g. tests that don't compose Studio + the bridge): valid metadata
         // still comes out, no override keys leak, NyxIdLLMProvider falls through to its
         // compile-time defaults.
-        await _agent.HandleInitializeAsync(CreateInitializeCommand());
+        var agent = await CreateActivatedExecutionAgent(
+            "skill-runner-userconfig-no-source",
+            CreateOutboundConfig());
 
-        var metadata = await InvokeBuildExecutionMetadataAsync(_agent);
+        var metadata = await InvokeBuildExecutionMetadataAsync(agent);
 
         metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
         metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
@@ -794,9 +555,10 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // path against the authority and produces an invalid URL.
         var source = new StubOwnerLlmConfigSource(OwnerLlmConfig.Empty);
 
-        var agent = CreateAgent("skill-runner-userconfig-empty", _serviceProvider, source);
-        await agent.ActivateAsync();
-        await agent.HandleInitializeAsync(CreateInitializeCommand());
+        var agent = await CreateActivatedExecutionAgent(
+            "skill-runner-userconfig-empty",
+            CreateOutboundConfig(),
+            source);
 
         var metadata = await InvokeBuildExecutionMetadataAsync(agent);
 
@@ -813,9 +575,10 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // failure, never bubbles it up to the trigger handler.
         var source = new ThrowingOwnerLlmConfigSource();
 
-        var agent = CreateAgent("skill-runner-userconfig-throws", _serviceProvider, source);
-        await agent.ActivateAsync();
-        await agent.HandleInitializeAsync(CreateInitializeCommand());
+        var agent = await CreateActivatedExecutionAgent(
+            "skill-runner-userconfig-throws",
+            CreateOutboundConfig(),
+            source);
 
         var metadata = await InvokeBuildExecutionMetadataAsync(agent);
 
@@ -823,10 +586,196 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
     }
 
-    private static async Task<IReadOnlyDictionary<string, string>> InvokeBuildExecutionMetadataAsync(
-        SkillRunnerGAgent agent)
+    [Fact]
+    public async Task HandleStartAsync_WhenLlmCompletes_ShouldPersistCompletionAndReportDefinition()
     {
-        var method = typeof(SkillRunnerGAgent).GetMethod(
+        var llm = new StubLlmProviderFactory("daily report complete");
+        var captured = new List<EventEnvelope>();
+        var dispatch = Substitute.For<IActorDispatchPort>();
+        dispatch.DispatchAsync(
+                "def-test",
+                Arg.Do<EventEnvelope>(captured.Add),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        using var provider = BuildServiceProvider(
+            _store,
+            services => services.AddSingleton(dispatch));
+        var agent = CreateExecutionAgent(
+            "exec-start-complete",
+            serviceProvider: provider,
+            llmProviderFactory: llm);
+        await agent.ActivateAsync();
+
+        var scheduledAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        await agent.HandleStartAsync(new StartSkillExecutionCommand
+        {
+            DefinitionId = "def-test",
+            ScheduledAt = scheduledAt,
+            Reason = "manual",
+            SkillContent = "You are a test skill.",
+            ExecutionPrompt = "Run the test.",
+            OutboundConfig = CreateOutboundConfig(),
+            ScopeId = "scope-1",
+            ProviderName = llm.Name,
+            Model = "test-model",
+            DefinitionConfigRevision = 7,
+            DefinitionExecutionSequence = 3,
+        });
+
+        llm.StreamCalls.Should().Be(1);
+        agent.State.Status.Should().Be("completed");
+        agent.State.ScheduledAt.Should().Be(scheduledAt);
+        agent.State.Output.Should().Be("daily report complete");
+
+        var events = await _store.GetEventsAsync("exec-start-complete");
+        events.Should().Contain(x => x.EventData.Is(SkillExecutionStartedEvent.Descriptor));
+        events.Should().Contain(x => x.EventData.Is(SkillExecutionCompletedEvent.Descriptor));
+        events.Should().NotContain(x => x.EventData.Is(SkillExecutionFailedEvent.Descriptor));
+
+        var report = captured.Should().ContainSingle().Subject.Payload.Unpack<ReportSkillExecutionCompletedCommand>();
+        report.ExecutionId.Should().Be("exec-start-complete");
+        report.CompletedAt.Should().NotBeNull();
+        report.DefinitionConfigRevision.Should().Be(7);
+        report.DefinitionExecutionSequence.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_WhenAlreadyStarted_ShouldIgnoreDuplicateStart()
+    {
+        var agent = await CreateActivatedExecutionAgent(
+            "exec-duplicate-start",
+            CreateOutboundConfig());
+        var before = await _store.GetEventsAsync("exec-duplicate-start");
+
+        await agent.HandleStartAsync(new StartSkillExecutionCommand
+        {
+            DefinitionId = "def-test",
+            SkillContent = "duplicate start",
+            ExecutionPrompt = "Run again.",
+            OutboundConfig = CreateOutboundConfig(),
+        });
+
+        var after = await _store.GetEventsAsync("exec-duplicate-start");
+        after.Should().HaveCount(before.Count);
+    }
+
+    [Fact]
+    public async Task HandleRetryAsync_WhenExecutionAlreadyCompleted_ShouldIgnoreRetry()
+    {
+        var agent = await CreateActivatedExecutionAgent(
+            "exec-completed-retry",
+            CreateOutboundConfig(),
+            terminalEvent: new SkillExecutionCompletedEvent
+            {
+                CompletedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                Output = "done",
+            });
+        var before = await _store.GetEventsAsync("exec-completed-retry");
+
+        await agent.HandleRetryAsync(new RetrySkillExecutionCommand { RetryAttempt = 1 });
+
+        var after = await _store.GetEventsAsync("exec-completed-retry");
+        after.Should().HaveCount(before.Count);
+    }
+
+    [Fact]
+    public async Task HandleReportRetryAsync_WhenExecutionCompleted_ShouldDispatchDefinitionReportWithRunIdentity()
+    {
+        var captured = new List<EventEnvelope>();
+        var dispatch = Substitute.For<IActorDispatchPort>();
+        dispatch.DispatchAsync(
+                "def-test",
+                Arg.Do<EventEnvelope>(captured.Add),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        using var provider = BuildServiceProvider(
+            _store,
+            services => services.AddSingleton(dispatch));
+
+        var completedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        var agent = await CreateActivatedExecutionAgent(
+            "exec-report-retry",
+            CreateOutboundConfig(),
+            serviceProvider: provider,
+            definitionConfigRevision: 7,
+            definitionExecutionSequence: 3,
+            terminalEvent: new SkillExecutionCompletedEvent
+            {
+                CompletedAt = completedAt,
+                Output = "done",
+            });
+
+        await agent.HandleReportRetryAsync(new RetrySkillExecutionReportCommand { RetryAttempt = 1 });
+
+        var report = captured.Should().ContainSingle().Subject.Payload.Unpack<ReportSkillExecutionCompletedCommand>();
+        report.ExecutionId.Should().Be("exec-report-retry");
+        report.CompletedAt.Should().Be(completedAt);
+        report.DefinitionConfigRevision.Should().Be(7);
+        report.DefinitionExecutionSequence.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task HandleReportRetryAsync_WhenDefinitionDispatchFails_ShouldScheduleDurableReportRetry()
+    {
+        var dispatch = Substitute.For<IActorDispatchPort>();
+        dispatch.DispatchAsync(
+                "def-test",
+                Arg.Any<EventEnvelope>(),
+                Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromException(new InvalidOperationException("dispatch unavailable")));
+
+        var scheduled = new List<RuntimeCallbackTimeoutRequest>();
+        var scheduler = Substitute.For<IActorRuntimeCallbackScheduler>();
+        scheduler
+            .ScheduleTimeoutAsync(
+                Arg.Any<RuntimeCallbackTimeoutRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var req = call.Arg<RuntimeCallbackTimeoutRequest>();
+                scheduled.Add(req);
+                return Task.FromResult(new RuntimeCallbackLease(
+                    req.ActorId,
+                    req.CallbackId,
+                    1,
+                    RuntimeCallbackBackend.InMemory));
+            });
+
+        using var provider = BuildServiceProvider(
+            _store,
+            services =>
+            {
+                services.AddSingleton(dispatch);
+                services.AddSingleton(scheduler);
+            });
+
+        var agent = await CreateActivatedExecutionAgent(
+            "exec-report-retry-schedule",
+            CreateOutboundConfig(),
+            serviceProvider: provider,
+            definitionConfigRevision: 7,
+            definitionExecutionSequence: 3,
+            terminalEvent: new SkillExecutionCompletedEvent
+            {
+                CompletedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                Output = "done",
+            });
+
+        await agent.HandleReportRetryAsync(new RetrySkillExecutionReportCommand { RetryAttempt = 1 });
+
+        var request = scheduled.Should().ContainSingle().Subject;
+        request.ActorId.Should().Be("exec-report-retry-schedule");
+        request.CallbackId.Should().Be(SkillDefinitionDefaults.ReportRetryCallbackId);
+        request.DueTime.Should().Be(SkillDefinitionDefaults.ReportRetryBackoff);
+        var retry = request.TriggerEnvelope.Payload.Unpack<RetrySkillExecutionReportCommand>();
+        retry.RetryAttempt.Should().Be(2);
+    }
+
+    private static async Task<IReadOnlyDictionary<string, string>> InvokeBuildExecutionMetadataAsync(
+        SkillExecutionGAgent agent)
+    {
+        var method = typeof(SkillExecutionGAgent).GetMethod(
             "BuildExecutionMetadataAsync",
             BindingFlags.Instance | BindingFlags.NonPublic);
         method.Should().NotBeNull();
@@ -851,25 +800,21 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             throw new InvalidOperationException("projection unavailable");
     }
 
-    private static void AttachNyxIdApiClient(SkillRunnerGAgent agent, HttpMessageHandler handler)
+    private static void AttachNyxIdApiClient(SkillExecutionGAgent agent, HttpMessageHandler handler)
     {
         var client = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-        var field = typeof(SkillRunnerGAgent).GetField(
+        var field = typeof(SkillExecutionGAgent).GetField(
             "_nyxIdApiClient",
             BindingFlags.Instance | BindingFlags.NonPublic);
         field.Should().NotBeNull();
         field!.SetValue(agent, client);
     }
 
-    private static Task InvokeSendOutputAsync(SkillRunnerGAgent agent, string output)
+    private static Task InvokeSendOutputAsync(SkillExecutionGAgent agent, string output)
     {
-        // Disambiguate against the 3-arg `SendOutputAsync(output, providerSlugOverride, ct)`
-        // overload introduced for the failure-notification fallback (#423 §C). The 2-arg
-        // overload still routes through the primary `NyxProviderSlug`, which is what every
-        // existing test exercises.
-        var method = typeof(SkillRunnerGAgent).GetMethod(
+        var method = typeof(SkillExecutionGAgent).GetMethod(
             "SendOutputAsync",
             BindingFlags.Instance | BindingFlags.NonPublic,
             binder: null,
@@ -879,9 +824,9 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         return (Task)method!.Invoke(agent, [output, CancellationToken.None])!;
     }
 
-    private static Task InvokeTrySendFailureAsync(SkillRunnerGAgent agent, string error)
+    private static Task InvokeTrySendFailureAsync(SkillExecutionGAgent agent, string error)
     {
-        var method = typeof(SkillRunnerGAgent).GetMethod(
+        var method = typeof(SkillExecutionGAgent).GetMethod(
             "TrySendFailureAsync",
             BindingFlags.Instance | BindingFlags.NonPublic);
         method.Should().NotBeNull();
@@ -934,19 +879,63 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         }
     }
 
-    private SkillRunnerGAgent CreateAgent(
+    private SkillExecutionGAgent CreateExecutionAgent(
         string actorId,
+        IOwnerLlmConfigSource? ownerLlmConfigSource = null,
         ServiceProvider? serviceProvider = null,
-        IOwnerLlmConfigSource? ownerLlmConfigSource = null)
+        ILLMProviderFactory? llmProviderFactory = null)
     {
         var resolvedServices = serviceProvider ?? _serviceProvider;
-        var agent = new SkillRunnerGAgent(ownerLlmConfigSource: ownerLlmConfigSource)
+        var agent = new SkillExecutionGAgent(
+            llmProviderFactory: llmProviderFactory,
+            ownerLlmConfigSource: ownerLlmConfigSource)
         {
             Services = resolvedServices,
             EventSourcingBehaviorFactory =
-                resolvedServices.GetRequiredService<IEventSourcingBehaviorFactory<SkillRunnerState>>(),
+                resolvedServices.GetRequiredService<IEventSourcingBehaviorFactory<SkillExecutionState>>(),
         };
         AssignActorId(agent, actorId);
+        return agent;
+    }
+
+    /// <summary>
+    /// Creates a <see cref="SkillExecutionGAgent"/>, seeds a
+    /// <see cref="SkillExecutionStartedEvent"/> into the event store so the agent's state
+    /// is fully populated with the given outbound config after activation (via event replay),
+    /// then activates it. This avoids calling <c>HandleStartAsync</c> which would trigger
+    /// the actual LLM execution path.
+    /// </summary>
+    private async Task<SkillExecutionGAgent> CreateActivatedExecutionAgent(
+        string actorId,
+        SkillRunnerOutboundConfig outboundConfig,
+        IOwnerLlmConfigSource? ownerLlmConfigSource = null,
+        ServiceProvider? serviceProvider = null,
+        long? definitionConfigRevision = null,
+        long? definitionExecutionSequence = null,
+        IMessage? terminalEvent = null)
+    {
+        var startedEvent = new SkillExecutionStartedEvent
+        {
+            DefinitionId = "def-test",
+            StartedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Reason = "test",
+            SkillContent = "You are a test skill.",
+            ExecutionPrompt = "Run the test.",
+            OutboundConfig = outboundConfig.Clone(),
+            ScopeId = "scope-1",
+            ProviderName = SkillDefinitionDefaults.DefaultProviderName,
+        };
+        if (definitionConfigRevision.HasValue)
+            startedEvent.DefinitionConfigRevision = definitionConfigRevision.Value;
+        if (definitionExecutionSequence.HasValue)
+            startedEvent.DefinitionExecutionSequence = definitionExecutionSequence.Value;
+
+        await AppendStateEventAsync(_store, actorId, startedEvent, version: 1);
+        if (terminalEvent is not null)
+            await AppendStateEventAsync(_store, actorId, terminalEvent, version: 2);
+
+        var agent = CreateExecutionAgent(actorId, ownerLlmConfigSource, serviceProvider);
+        await agent.ActivateAsync();
         return agent;
     }
 
@@ -964,23 +953,42 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         return services.BuildServiceProvider();
     }
 
-    private static InitializeSkillRunnerCommand CreateInitializeCommand() => new()
+    private sealed class StubLlmProviderFactory(string response) : ILLMProviderFactory, ILLMProvider
     {
-        SkillName = "daily_report",
-        TemplateName = "daily_report",
-        SkillContent = "You are a daily report runner.",
-        ExecutionPrompt = "Run the report.",
-        ScheduleCron = string.Empty,
-        ScheduleTimezone = SkillRunnerDefaults.DefaultTimezone,
-        Enabled = true,
-        ScopeId = "scope-1",
-        ProviderName = SkillRunnerDefaults.DefaultProviderName,
-        OutboundConfig = new SkillRunnerOutboundConfig
+        public string Name => "stub";
+
+        public int StreamCalls { get; private set; }
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default) =>
+            throw new InvalidOperationException("SkillExecutionGAgent must use ChatStreamAsync on the interactive path.");
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
         {
-            ConversationId = "oc_chat_1",
-            NyxProviderSlug = "api-lark-bot",
-            NyxApiKey = "nyx-api-key",
-        },
+            StreamCalls++;
+            ct.ThrowIfCancellationRequested();
+            yield return new LLMStreamChunk
+            {
+                DeltaContent = response,
+                FinishReason = "stop",
+                IsLast = true,
+            };
+            await Task.CompletedTask;
+        }
+    }
+
+    private static SkillRunnerOutboundConfig CreateOutboundConfig() => new()
+    {
+        ConversationId = "oc_chat_1",
+        NyxProviderSlug = "api-lark-bot",
+        NyxApiKey = "nyx-api-key",
     };
 
     private static void AssignActorId(GAgentBase agent, string actorId)
@@ -991,6 +999,17 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         setIdMethod.Should().NotBeNull();
         setIdMethod!.Invoke(agent, [actorId]);
     }
+
+    private static Task AppendStateEventAsync(InMemoryEventStore store, string actorId, IMessage evt, long version) =>
+        store.AppendAsync(actorId, [new StateEvent
+        {
+            EventId = Guid.NewGuid().ToString("N"),
+            Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Version = version,
+            EventType = evt.Descriptor.FullName,
+            EventData = Google.Protobuf.WellKnownTypes.Any.Pack(evt),
+            AgentId = actorId,
+        }], version - 1);
 
     private sealed class InMemoryEventStore : IEventStore
     {

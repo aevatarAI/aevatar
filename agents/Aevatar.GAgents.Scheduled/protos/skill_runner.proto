@@ -7,7 +7,7 @@ option csharp_namespace = "Aevatar.GAgents.Scheduled";
 import "google/protobuf/timestamp.proto";
 import "user_agent_catalog.proto";
 
-// ─── Skill Runner (persistent scheduled agent) ───
+// ─── Legacy Skill Runner compatibility contracts ───
 
 message SkillRunnerOutboundConfig {
   string conversation_id = 1;
@@ -19,11 +19,11 @@ message SkillRunnerOutboundConfig {
   // Deprecated: superseded by owner_scope.platform. Issue #466.
   string platform = 6 [deprecated = true];
   // Authoritative Lark outbound delivery target captured at create time. When
-  // both fields are present, SkillRunnerGAgent.SendOutputAsync uses them
+  // both fields are present, SkillExecutionGAgent.SendOutputAsync uses them
   // verbatim; conversation_id stays for LLM metadata propagation only.
   string lark_receive_id = 7;
   string lark_receive_id_type = 8;
-  // Secondary outbound delivery target. Used by SkillRunnerGAgent.SendOutputAsync
+  // Secondary outbound delivery target. Used by SkillExecutionGAgent.SendOutputAsync
   // when the primary chat_id-typed send is rejected with Lark `230002 bot not in
   // chat` — the failure mode for cross-app same-tenant deployments where the
   // outbound app is not a member of the inbound DM. See
@@ -41,7 +41,7 @@ message SkillRunnerOutboundConfig {
   // existed, (b) the inbound slug equals the primary slug (no benefit), or
   // (c) the inbound slug is not registered as a per-user UserService row
   // and therefore cannot be added to the agent API key's allowed_service_ids.
-  // SkillRunnerGAgent.TrySendFailureAsync attempts the failure-notification
+  // SkillExecutionGAgent.TrySendFailureAsync attempts the failure-notification
   // slug FIRST when set, then falls back to the primary slug.
   string failure_notification_provider_slug = 12;
 }
@@ -108,7 +108,7 @@ message SkillRunnerInitializedEvent {
 message TriggerSkillRunnerExecutionCommand {
   string reason = 1;
   // 0 = first attempt, 1 = backoff retry after a failed first attempt.
-  // Bounded by SkillRunnerDefaults.MaxRetryAttempts; retries are event-ified
+  // Bounded by SkillDefinitionDefaults.MaxRetryAttempts; retries are event-ified
   // via ScheduleSelfDurableTimeoutAsync and never block the actor turn.
   int32 retry_attempt = 2;
 }

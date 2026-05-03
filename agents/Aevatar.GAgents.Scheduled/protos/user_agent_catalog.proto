@@ -128,6 +128,10 @@ message UserAgentCatalogExecutionUpdateCommand {
   google.protobuf.Timestamp next_run_at = 4;
   int32 error_count = 5;
   string last_error = 6;
+  bool preserve_status = 7;
+  bool preserve_last_run_at = 8;
+  bool preserve_next_run_at = 9;
+  bool preserve_error_state = 10;
 }
 
 message UserAgentCatalogCompactTombstonesCommand {
@@ -150,6 +154,10 @@ message UserAgentCatalogExecutionUpdatedEvent {
   google.protobuf.Timestamp next_run_at = 4;
   int32 error_count = 5;
   string last_error = 6;
+  bool preserve_status = 7;
+  bool preserve_last_run_at = 8;
+  bool preserve_next_run_at = 9;
+  bool preserve_error_state = 10;
 }
 
 message UserAgentCatalogTombstonesCompactedEvent {

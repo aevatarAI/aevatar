@@ -214,7 +214,7 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
         if (!string.IsNullOrWhiteSpace(State.NyxProviderSlug))
             metadata[ChannelMetadataKeys.LarkOutboundProxySlug] = State.NyxProviderSlug;
 
-        // Mirror SkillRunnerGAgent.BuildExecutionMetadataAsync — same shared helper, same
+        // Mirror SkillExecutionGAgent.BuildExecutionMetadataAsync — same shared helper, same
         // model/route/tool-cap pinning. Workflow-backed agents (e.g. social_media) need the
         // same UserConfig discipline so their LLM steps don't fall through to gateway+gpt-5.4
         // when the bot owner pre-configured a custom NyxID service like `chrono-llm`. The

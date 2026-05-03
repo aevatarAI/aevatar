@@ -9,16 +9,14 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class SchedulableStateTests
 {
     [Fact]
-    public void SkillRunnerState_ExposesScheduleStateThroughISchedulable()
+    public void SkillDefinitionState_ExposesScheduleStateThroughISchedulable()
     {
-        var state = new SkillRunnerState
+        var state = new SkillDefinitionState
         {
             Enabled = true,
             ScheduleCron = "0 9 * * *",
             ScheduleTimezone = "Asia/Singapore",
             NextRunAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 20, 1, 0, 0, TimeSpan.Zero)),
-            LastRunAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 19, 1, 0, 0, TimeSpan.Zero)),
-            ErrorCount = 2,
         };
 
         var schedule = ((ISchedulable)state).Schedule;
@@ -27,8 +25,6 @@ public sealed class SchedulableStateTests
         schedule.Cron.Should().Be("0 9 * * *");
         schedule.Timezone.Should().Be("Asia/Singapore");
         schedule.NextRunAt.Should().Be(state.NextRunAt);
-        schedule.LastRunAt.Should().Be(state.LastRunAt);
-        schedule.ErrorCount.Should().Be(2);
     }
 
     [Fact]

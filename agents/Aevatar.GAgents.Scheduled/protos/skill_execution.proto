@@ -1,0 +1,106 @@
+syntax = "proto3";
+
+package aevatar.gagents.scheduled;
+
+option csharp_namespace = "Aevatar.GAgents.Scheduled";
+
+import "google/protobuf/timestamp.proto";
+import "skill_runner.proto";
+
+// ─── Skill Execution (session-scoped, one per cron fire — issue #491) ───
+
+message SkillExecutionState {
+  string definition_id = 1;
+  google.protobuf.Timestamp scheduled_at = 2;
+  google.protobuf.Timestamp started_at = 3;
+  google.protobuf.Timestamp completed_at = 4;
+  string output = 5;
+  repeated string errors = 6;
+  int32 retry_attempts = 7;
+  string status = 8;
+
+  // field 9 reserved for a future execution ownership token; config snapshot
+  // fields intentionally start at 10 to keep the first block focused on
+  // lifecycle timestamps/status.
+  reserved 9;
+
+  // Config snapshot from the definition actor at spawn time.
+  string skill_content = 10;
+  string execution_prompt = 11;
+  SkillRunnerOutboundConfig outbound_config = 12;
+  string scope_id = 13;
+  string provider_name = 14;
+  string model = 15;
+  optional double temperature = 16;
+  optional int32 max_tokens = 17;
+  optional int32 max_tool_rounds = 18;
+  optional int32 max_history_messages = 19;
+  optional int64 definition_config_revision = 20;
+  optional int64 definition_execution_sequence = 21;
+}
+
+message StartSkillExecutionCommand {
+  string definition_id = 1;
+  google.protobuf.Timestamp scheduled_at = 2;
+  string reason = 3;
+
+  // Config snapshot from the definition actor.
+  string skill_content = 10;
+  string execution_prompt = 11;
+  SkillRunnerOutboundConfig outbound_config = 12;
+  string scope_id = 13;
+  string provider_name = 14;
+  string model = 15;
+  optional double temperature = 16;
+  optional int32 max_tokens = 17;
+  optional int32 max_tool_rounds = 18;
+  optional int32 max_history_messages = 19;
+  optional int64 definition_config_revision = 20;
+  optional int64 definition_execution_sequence = 21;
+}
+
+message SkillExecutionStartedEvent {
+  string definition_id = 1;
+  google.protobuf.Timestamp scheduled_at = 2;
+  google.protobuf.Timestamp started_at = 3;
+  string reason = 4;
+
+  // Config snapshot from the definition actor, persisted so state is fully
+  // populated before execution begins and survives replay.
+  string skill_content = 10;
+  string execution_prompt = 11;
+  SkillRunnerOutboundConfig outbound_config = 12;
+  string scope_id = 13;
+  string provider_name = 14;
+  string model = 15;
+  optional double temperature = 16;
+  optional int32 max_tokens = 17;
+  optional int32 max_tool_rounds = 18;
+  optional int32 max_history_messages = 19;
+  optional int64 definition_config_revision = 20;
+  optional int64 definition_execution_sequence = 21;
+}
+
+message SkillExecutionCompletedEvent {
+  google.protobuf.Timestamp completed_at = 1;
+  string output = 2;
+}
+
+message SkillExecutionRetryStartedEvent {
+  int32 retry_attempt = 1;
+  google.protobuf.Timestamp started_at = 2;
+}
+
+message SkillExecutionFailedEvent {
+  google.protobuf.Timestamp failed_at = 1;
+  string error = 2;
+  int32 retry_attempt = 3;
+}
+
+message RetrySkillExecutionCommand {
+  int32 retry_attempt = 1;
+}
+
+message RetrySkillExecutionReportCommand {
+  int32 retry_attempt = 1;
+}

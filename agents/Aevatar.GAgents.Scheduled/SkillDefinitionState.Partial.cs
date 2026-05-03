@@ -2,7 +2,7 @@ using Aevatar.GAgents.Channel.Abstractions;
 
 namespace Aevatar.GAgents.Scheduled;
 
-public sealed partial class SkillRunnerState : ISchedulable
+public sealed partial class SkillDefinitionState : ISchedulable
 {
     /// <inheritdoc />
     ScheduleState ISchedulable.Schedule => new()
@@ -11,7 +11,5 @@ public sealed partial class SkillRunnerState : ISchedulable
         Cron = ScheduleCron ?? string.Empty,
         Timezone = ScheduleTimezone ?? string.Empty,
         NextRunAt = NextRunAt,
-        LastRunAt = LastRunAt,
-        ErrorCount = ErrorCount,
     };
 }

@@ -119,7 +119,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
             new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-old",
-                AgentType = SkillRunnerDefaults.AgentType,
+                AgentType = SkillDefinitionDefaults.AgentType,
             },
             new UserAgentCatalogEntry
             {
@@ -129,12 +129,12 @@ public sealed class RetiredActorCleanupHostedServiceTests
             new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-current",
-                AgentType = SkillRunnerDefaults.AgentType,
+                AgentType = SkillDefinitionDefaults.AgentType,
             },
             new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-proxy",
-                AgentType = SkillRunnerDefaults.AgentType,
+                AgentType = SkillDefinitionDefaults.AgentType,
             },
         ]);
         await AppendSingleEventAsync(eventStore, "skill-runner-old");
@@ -185,7 +185,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
             new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-already-migrated",
-                AgentType = SkillRunnerDefaults.AgentType,
+                AgentType = SkillDefinitionDefaults.AgentType,
             },
         ]);
         await AppendSingleEventAsync(eventStore, "skill-runner-already-migrated");
@@ -225,7 +225,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
             {
                 Id = "skill-runner-snapshotted",
                 ActorId = "agent-registry-store",
-                AgentType = SkillRunnerDefaults.AgentType,
+                AgentType = SkillDefinitionDefaults.AgentType,
             },
             new UserAgentCatalogDocument
             {
@@ -304,7 +304,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
             new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-recent",
-                AgentType = SkillRunnerDefaults.AgentType,
+                AgentType = SkillDefinitionDefaults.AgentType,
             },
         ]);
         await AppendSingleEventAsync(eventStore, "skill-runner-recent");

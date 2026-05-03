@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using Aevatar.GAgents.Scheduled;
@@ -105,6 +106,43 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
         _agent.State.Entries.Should().ContainSingle();
         _agent.State.Entries[0].OwnerScope!.MatchesStrictly(scope).Should().BeTrue(
             "an upsert without OwnerScope on an existing entry inherits the existing scope");
+    }
+
+    [Fact]
+    public async Task HandleExecutionUpdateAsync_WhenPreserveFlagsSet_ShouldKeepOwnedFields()
+    {
+        var lastRunAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddHours(-2));
+        var nextRunAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddHours(1));
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "agent-preserve",
+            Status = "error",
+        });
+        await _agent.HandleExecutionUpdateAsync(new UserAgentCatalogExecutionUpdateCommand
+        {
+            AgentId = "agent-preserve",
+            Status = "error",
+            LastRunAt = lastRunAt,
+            NextRunAt = nextRunAt,
+            ErrorCount = 3,
+            LastError = "previous failure",
+        });
+
+        await _agent.HandleExecutionUpdateAsync(new UserAgentCatalogExecutionUpdateCommand
+        {
+            AgentId = "agent-preserve",
+            Status = "disabled",
+            PreserveLastRunAt = true,
+            PreserveNextRunAt = true,
+            PreserveErrorState = true,
+        });
+
+        var entry = _agent.State.Entries.Should().ContainSingle(x => x.AgentId == "agent-preserve").Subject;
+        entry.Status.Should().Be("disabled");
+        entry.LastRunAt.Should().Be(lastRunAt);
+        entry.NextRunAt.Should().Be(nextRunAt);
+        entry.ErrorCount.Should().Be(3);
+        entry.LastError.Should().Be("previous failure");
     }
 
     [Fact]

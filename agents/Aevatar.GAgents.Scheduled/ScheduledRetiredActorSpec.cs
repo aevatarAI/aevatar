@@ -258,13 +258,16 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
         if (string.IsNullOrWhiteSpace(normalizedId))
             return false;
 
-        if (string.Equals(agentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal) ||
+        if (string.Equals(agentType, SkillDefinitionDefaults.AgentType, StringComparison.Ordinal) ||
             string.Equals(agentType, WorkflowAgentDefaults.AgentType, StringComparison.Ordinal))
         {
             return true;
         }
 
-        return normalizedId.StartsWith($"{SkillRunnerDefaults.ActorIdPrefix}-", StringComparison.Ordinal) ||
+        if (normalizedId.Contains("-exec-", StringComparison.Ordinal))
+            return false;
+
+        return normalizedId.StartsWith($"{SkillDefinitionDefaults.ActorIdPrefix}-", StringComparison.Ordinal) ||
                normalizedId.StartsWith($"{WorkflowAgentDefaults.ActorIdPrefix}-", StringComparison.Ordinal);
     }
 }

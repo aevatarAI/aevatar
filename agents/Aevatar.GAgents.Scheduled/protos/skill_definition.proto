@@ -1,0 +1,154 @@
+syntax = "proto3";
+
+package aevatar.gagents.scheduled;
+
+option csharp_namespace = "Aevatar.GAgents.Scheduled";
+
+import "google/protobuf/timestamp.proto";
+import "skill_runner.proto";
+
+// ─── Skill Definition (long-lived fact owner for scheduled skills — issue #491) ───
+//
+// Field numbers intentionally match the original SkillRunnerState layout so
+// existing persisted state deserializes cleanly into the new message.  Fields
+// 8 (last_run_at), 10 (error_count), 11 (last_output), 12 (last_error) are
+// omitted — per-execution fields now live in SkillExecutionState.
+
+message SkillDefinitionState {
+  string skill_name = 1;
+  string template_name = 2;
+  string skill_content = 3;
+  string execution_prompt = 4;
+  string schedule_cron = 5;
+  string schedule_timezone = 6;
+  SkillRunnerOutboundConfig outbound_config = 7;
+  // field 8 reserved (was last_run_at — now in SkillExecutionState)
+  google.protobuf.Timestamp next_run_at = 9;
+  // field 10 reserved (was error_count — now in SkillExecutionState)
+  // field 11 reserved (was last_output — now in SkillExecutionState)
+  // field 12 reserved (was last_error — now in SkillExecutionState)
+  bool enabled = 13;
+  string scope_id = 14;
+  string provider_name = 15;
+  string model = 16;
+  optional double temperature = 17;
+  optional int32 max_tokens = 18;
+  optional int32 max_tool_rounds = 19;
+  optional int32 max_history_messages = 20;
+  int64 config_revision = 21;
+  int64 next_execution_sequence = 22;
+  string active_execution_id = 23;
+  int64 active_execution_sequence = 24;
+  int64 latest_reported_execution_sequence = 25;
+
+  reserved 8, 10, 11, 12;
+}
+
+message InitializeSkillDefinitionCommand {
+  string skill_name = 1;
+  string template_name = 2;
+  string skill_content = 3;
+  string execution_prompt = 4;
+  string schedule_cron = 5;
+  string schedule_timezone = 6;
+  SkillRunnerOutboundConfig outbound_config = 7;
+  bool enabled = 8;
+  string scope_id = 9;
+  string provider_name = 10;
+  string model = 11;
+  optional double temperature = 12;
+  optional int32 max_tokens = 13;
+  optional int32 max_tool_rounds = 14;
+  optional int32 max_history_messages = 15;
+}
+
+message SkillDefinitionInitializedEvent {
+  string skill_name = 1;
+  string template_name = 2;
+  string skill_content = 3;
+  string execution_prompt = 4;
+  string schedule_cron = 5;
+  string schedule_timezone = 6;
+  SkillRunnerOutboundConfig outbound_config = 7;
+  bool enabled = 8;
+  string scope_id = 9;
+  string provider_name = 10;
+  string model = 11;
+  optional double temperature = 12;
+  optional int32 max_tokens = 13;
+  optional int32 max_tool_rounds = 14;
+  optional int32 max_history_messages = 15;
+}
+
+message TriggerSkillDefinitionCommand {
+  string reason = 1;
+}
+
+message SkillDefinitionNextRunScheduledEvent {
+  google.protobuf.Timestamp next_run_at = 1;
+}
+
+message SkillDefinitionExecutionDispatchFailedEvent {
+  string execution_id = 1;
+  google.protobuf.Timestamp failed_at = 2;
+  string reason = 3;
+  string error = 4;
+  int64 execution_sequence = 5;
+  optional int64 definition_config_revision = 6;
+}
+
+message ReportSkillExecutionCompletedCommand {
+  string execution_id = 1;
+  google.protobuf.Timestamp completed_at = 2;
+  optional int64 definition_config_revision = 3;
+  optional int64 definition_execution_sequence = 4;
+}
+
+message ReportSkillExecutionFailedCommand {
+  string execution_id = 1;
+  google.protobuf.Timestamp failed_at = 2;
+  string error = 3;
+  int32 retry_attempt = 4;
+  optional int64 definition_config_revision = 5;
+  optional int64 definition_execution_sequence = 6;
+}
+
+message SkillDefinitionExecutionCompletedEvent {
+  string execution_id = 1;
+  google.protobuf.Timestamp completed_at = 2;
+  optional int64 definition_config_revision = 3;
+  optional int64 definition_execution_sequence = 4;
+}
+
+message SkillDefinitionExecutionFailedEvent {
+  string execution_id = 1;
+  google.protobuf.Timestamp failed_at = 2;
+  string error = 3;
+  int32 retry_attempt = 4;
+  optional int64 definition_config_revision = 5;
+  optional int64 definition_execution_sequence = 6;
+}
+
+message SkillDefinitionExecutionDispatchedEvent {
+  string execution_id = 1;
+  google.protobuf.Timestamp dispatched_at = 2;
+  string reason = 3;
+  int64 execution_sequence = 4;
+  int64 definition_config_revision = 5;
+}
+
+message DisableSkillDefinitionCommand {
+  string reason = 1;
+}
+
+message EnableSkillDefinitionCommand {
+  string reason = 1;
+}
+
+message SkillDefinitionDisabledEvent {
+  string reason = 1;
+}
+
+message SkillDefinitionEnabledEvent {
+  string reason = 1;
+}

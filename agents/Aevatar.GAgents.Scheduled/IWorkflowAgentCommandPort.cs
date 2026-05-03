@@ -2,7 +2,7 @@ namespace Aevatar.GAgents.Scheduled;
 
 /// <summary>
 /// Application-service surface for WorkflowAgent lifecycle. Mirrors
-/// <see cref="ISkillRunnerCommandPort"/>: owns actor lifecycle, catalog
+/// <see cref="ISkillDefinitionCommandPort"/>: owns actor lifecycle, catalog
 /// projection priming, and envelope dispatch through
 /// <see cref="Aevatar.Foundation.Abstractions.IActorDispatchPort"/> so LLM
 /// tools and admin endpoints stop reaching for <c>actor.HandleEventAsync</c>.

@@ -62,7 +62,7 @@ public static class AgentBuilderCardContent
         content.Actions.Add(BuildTextInput(
             "schedule_timezone",
             "Time Zone",
-            SkillRunnerDefaults.DefaultTimezone));
+            SkillDefinitionDefaults.DefaultTimezone));
 
         var submit = BuildFormSubmit(
             "submit_daily_report",
@@ -125,7 +125,7 @@ public static class AgentBuilderCardContent
         content.Actions.Add(BuildTextInput(
             "schedule_timezone",
             "Time Zone",
-            SkillRunnerDefaults.DefaultTimezone));
+            SkillDefinitionDefaults.DefaultTimezone));
 
         var submit = BuildFormSubmit(
             "submit_social_media",

@@ -4,15 +4,15 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.Scheduled;
 
-internal sealed class SkillRunnerCommandPort : ISkillRunnerCommandPort
+internal sealed class SkillDefinitionCommandPort : ISkillDefinitionCommandPort
 {
-    private const string PublisherActorId = "scheduled.skill-runner";
+    private const string PublisherActorId = "scheduled.skill-definition";
 
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _actorDispatchPort;
     private readonly UserAgentCatalogProjectionPort _catalogProjectionPort;
 
-    public SkillRunnerCommandPort(
+    public SkillDefinitionCommandPort(
         IActorRuntime actorRuntime,
         IActorDispatchPort actorDispatchPort,
         UserAgentCatalogProjectionPort catalogProjectionPort)
@@ -24,52 +24,52 @@ internal sealed class SkillRunnerCommandPort : ISkillRunnerCommandPort
 
     public async Task InitializeAsync(
         string agentId,
-        InitializeSkillRunnerCommand command,
+        InitializeSkillDefinitionCommand command,
         bool runImmediately,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
         ArgumentNullException.ThrowIfNull(command);
 
-        await EnsureSkillRunnerActorAsync(agentId, ct);
-        // Prime the catalog projection scope BEFORE dispatch — a late prime
-        // can't recover an event the projector already missed when the
-        // SkillRunner emits its initialize → catalog upsert chain.
+        await EnsureDefinitionActorAsync(agentId, ct);
+        // TODO(#491 follow-up): move this projection activation to an explicit
+        // binder/lease path. It remains here only to preserve the existing
+        // dispatch-then-catalog-prime status-read contract during the split.
         await _catalogProjectionPort.EnsureProjectionForActorAsync(UserAgentCatalogGAgent.WellKnownId, ct);
 
         await DispatchAsync(agentId, command, ct);
 
         if (runImmediately)
         {
-            await DispatchAsync(agentId, new TriggerSkillRunnerExecutionCommand { Reason = "create_agent" }, ct);
+            await DispatchAsync(agentId, new TriggerSkillDefinitionCommand { Reason = "create_agent" }, ct);
         }
     }
 
     public async Task TriggerAsync(string agentId, string reason, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
-        await EnsureSkillRunnerActorAsync(agentId, ct);
-        await DispatchAsync(agentId, new TriggerSkillRunnerExecutionCommand { Reason = reason ?? string.Empty }, ct);
+        await EnsureDefinitionActorAsync(agentId, ct);
+        await DispatchAsync(agentId, new TriggerSkillDefinitionCommand { Reason = reason ?? string.Empty }, ct);
     }
 
     public async Task DisableAsync(string agentId, string reason, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
-        await EnsureSkillRunnerActorAsync(agentId, ct);
-        await DispatchAsync(agentId, new DisableSkillRunnerCommand { Reason = reason ?? string.Empty }, ct);
+        await EnsureDefinitionActorAsync(agentId, ct);
+        await DispatchAsync(agentId, new DisableSkillDefinitionCommand { Reason = reason ?? string.Empty }, ct);
     }
 
     public async Task EnableAsync(string agentId, string reason, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
-        await EnsureSkillRunnerActorAsync(agentId, ct);
-        await DispatchAsync(agentId, new EnableSkillRunnerCommand { Reason = reason ?? string.Empty }, ct);
+        await EnsureDefinitionActorAsync(agentId, ct);
+        await DispatchAsync(agentId, new EnableSkillDefinitionCommand { Reason = reason ?? string.Empty }, ct);
     }
 
-    private async Task EnsureSkillRunnerActorAsync(string agentId, CancellationToken ct)
+    private async Task EnsureDefinitionActorAsync(string agentId, CancellationToken ct)
     {
         _ = await _actorRuntime.GetAsync(agentId)
-            ?? await _actorRuntime.CreateAsync<SkillRunnerGAgent>(agentId, ct);
+            ?? await _actorRuntime.CreateAsync<SkillDefinitionGAgent>(agentId, ct);
     }
 
     private Task DispatchAsync<TCommand>(string agentId, TCommand command, CancellationToken ct)
