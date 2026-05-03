@@ -7,7 +7,7 @@ owner: Loning
 # Stream Processing Architecture Assessment — 2026-05-03
 
 **Audit scope**: full survey of every long-lived stream / bidirectional connection / async chunk pump in the repo.
-**Driving question** (CEO, 2026-05-03)：能否用一个统一的 `StreamProxyGAgent` 把所有外部长连接流转换成内部可处理的对象与结构，兼容多种流？
+**Driving question** (Auric, 2026-05-03)：能否用一个统一的 `StreamProxyGAgent` 把所有外部长连接流转换成内部可处理的对象与结构，兼容多种流？
 **Method**: 全仓 ripgrep 测绘 SSE writer / IAsyncEnumerable / Channel / WebSocket / WebRTC / IEventSink / IActorEventSubscriptionProvider 的所有命中，逐文件读关键抽象与实现。
 **Companion**: 与 [2026-05-03-architecture-audit-detailed.md §3.3](2026-05-03-architecture-audit-detailed.md) 的 "Actor Stream Port" 修复方向直接对应。
 
@@ -44,7 +44,7 @@ owner: Loning
 
 ## 2. 已经收敛得最远的一条路：VoicePresence
 
-VoicePresence 是这次评估里**唯一一条把 transport / dispatch / subscribe 三件事拼起来**的路径。它差一步就到 CEO 想要的形状。
+VoicePresence 是这次评估里**唯一一条把 transport / dispatch / subscribe 三件事拼起来**的路径。它差一步就到 Auric 想要的形状。
 
 ### 2.1 已对的部分
 
@@ -114,9 +114,9 @@ public readonly record struct VoiceTransportFrame {
 
 ---
 
-## 4. 命名歧义警告：现有 `StreamingProxyGAgent` ≠ CEO 想要的 `StreamProxyGAgent`
+## 4. 命名歧义警告：现有 `StreamingProxyGAgent` ≠ Auric 想要的 `StreamProxyGAgent`
 
-| | 现有 `StreamingProxyGAgent`（agents/Aevatar.GAgents.StreamingProxy/）| CEO 提议的 `StreamProxyGAgent` |
+| | 现有 `StreamingProxyGAgent`（agents/Aevatar.GAgents.StreamingProxy/）| Auric 提议的 `StreamProxyGAgent` |
 |---|---|---|
 | 角色 | 多参与者**群聊房间**消息 broker | 外部长连接流的**统一 transport 适配 actor** |
 | 状态 | `Messages[]` `Participants[]` `TerminalSessions{}`（房间事实）| 每个 session 的 frame 序号、对端能力、codec、心跳 |
