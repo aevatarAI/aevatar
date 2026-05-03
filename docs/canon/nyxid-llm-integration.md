@@ -26,6 +26,26 @@ NyxID 验证 Token → 查找该用户的 API Key → 注入 → 转发给上游
 
 ---
 
+## Channel Route 选择
+
+Lark bot 等 channel surface 通过 `/model`、`/models`、`/llm`、`/route` 暴露同一组 LLM route 命令：
+
+- `/route`：列出当前 NyxID 绑定用户可作为 LLM provider 的 ready service
+- `/route use <编号|service-name> [model-name]`：保存 service route，可同时指定 model
+- `/model use <model-name>`：只覆盖当前 route 下的 model
+- `/model preset <preset-id>`：按 NyxID 返回的 setup preset 使用或创建 service
+- `/model reset`：清空用户偏好，回退到 bot 默认配置
+
+这些命令不读取 Aevatar 内部密钥，也不使用独立的 `llm:status` scope。Aevatar 通过 per-user NyxID binding 做 broker token-exchange，请求 `proxy` scope 的短期 token，然后调用 NyxID LLM service catalog / route API。集群自举注册的 OAuth client 以及 `/oauth/authorize` 必须使用同一 canonical scope：
+
+```text
+openid urn:nyxid:scope:broker_binding proxy
+```
+
+如果旧 binding 对应的 OAuth client 未包含 `proxy`，NyxID 会在 token-exchange 返回 `invalid_scope`。用户可重新发送 `/init` 完成绑定刷新；Aevatar 不会降级到 bot-owner credential 或缓存 token。
+
+---
+
 ## NyxID 端配置（管理员）
 
 ### 1. 创建 LLM Provider

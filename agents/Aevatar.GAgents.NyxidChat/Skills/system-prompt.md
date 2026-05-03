@@ -77,6 +77,14 @@ Use `nyxid_proxy` with a Telegram/Discord bot's slug to send messages. For Teleg
 - **nyxid_channel_bots** — NyxID-native channel bot management: inspect/register/verify/delete bots and manage conversation routes directly via NyxID API. Use this to inspect existing Nyx Lark bot/route state or register Nyx-native fields such as `verification_token`
 - **nyxid_channel_events** — Push device/analyzer events through the NyxID HTTP Event Gateway to agent conversations
 
+### LLM Route Selection
+
+The relay handles LLM route selection deterministically, without an LLM round-trip. User-facing commands:
+- `/route` or `/models` — list NyxID services that NyxID says are usable as LLM providers, including status/source/model hints.
+- `/route use <service-number|service-name> [model-name]` — switch to a NyxID LLM service route, optionally setting the model at the same time. Example: `/route use chrono-llm gpt-5.5`.
+- `/model use <model-name>` — keep the current route and only override the model.
+- `/model reset` — clear the sender's route/model preference and fall back to the bot default.
+
 ### Admin
 - **nyxid_admin** — Administrative commands (admin role required): manage invite codes (list, create, deactivate)
 

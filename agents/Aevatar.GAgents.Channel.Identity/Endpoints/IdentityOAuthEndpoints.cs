@@ -135,7 +135,7 @@ public static class IdentityOAuthEndpoints
             return Results.Json(new
             {
                 status = "broker_capability_disabled",
-                detail = "Aevatar 已注册到 NyxID,但 OAuth client 未授予 broker capability — DCR 自举正常路径下 scope 会包含 urn:nyxid:scope:broker_binding。请检查 /api/oauth/aevatar-client/status 是否显示 client_id 与 allowed_scopes 一致;若是手动创建的 client,请通过 NyxID admin 把 broker_binding scope 加入 allowed_scopes 后再重试 /init。",
+                detail = "Aevatar 已注册到 NyxID,但 OAuth client 未授予 broker capability — DCR 自举正常路径下 scope 会包含 urn:nyxid:scope:broker_binding 与 proxy。请检查 /api/oauth/aevatar-client/status 是否显示 client_id 与 allowed_scopes 一致;若是手动创建的 client,请通过 NyxID admin 把 broker_binding/proxy scope 加入 allowed_scopes 后再重试 /init。",
             }, statusCode: StatusCodes.Status409Conflict);
         }
 
@@ -292,8 +292,10 @@ public static class IdentityOAuthEndpoints
             var resolvedRedirectUri = NyxIdRedirectUriResolver.Resolve();
             var redirectUriDrifted = string.IsNullOrEmpty(snapshot.RedirectUri)
                 || !string.Equals(snapshot.RedirectUri, resolvedRedirectUri, StringComparison.Ordinal);
+            var oauthScopeDrifted = !AevatarOAuthClientScopes.ContainsRequiredScopes(snapshot.OauthScope);
             var status = redirectUriDrifted
                 ? "redirect_uri_drifted"
+                : oauthScopeDrifted ? "oauth_scope_drifted"
                 : snapshot.BrokerCapabilityObserved ? "ready" : "broker_capability_pending";
             return Results.Ok(new
             {
@@ -304,11 +306,16 @@ public static class IdentityOAuthEndpoints
                 redirect_uri_registered = snapshot.RedirectUri,
                 redirect_uri_resolved = resolvedRedirectUri,
                 redirect_uri_drifted = redirectUriDrifted,
+                oauth_scope_registered = snapshot.OauthScope,
+                oauth_scope_required = AevatarOAuthClientScopes.AuthorizationScope,
+                oauth_scope_drifted = oauthScopeDrifted,
                 broker_capability_observed = snapshot.BrokerCapabilityObserved,
                 broker_capability_observed_at = snapshot.BrokerCapabilityObservedAt,
-                ops_handoff = snapshot.BrokerCapabilityObserved
-                    ? null
-                    : "Operator must enable broker_capability_enabled on this OAuth client at NyxID admin (one-time per cluster).",
+                ops_handoff = oauthScopeDrifted
+                    ? "Bootstrap must re-run DCR so the OAuth client includes the proxy scope required by LLM route selection."
+                    : snapshot.BrokerCapabilityObserved
+                        ? null
+                        : "Operator must enable broker_capability_enabled on this OAuth client at NyxID admin (one-time per cluster).",
             });
         }
         catch (AevatarOAuthClientNotProvisionedException)

@@ -1,4 +1,6 @@
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.NyxidChat.Slash;
@@ -67,7 +69,7 @@ public sealed class ModelSlashCommandHandlerTests
         var handler = CreateHandler();
 
         handler.RequiresBinding.Should().BeTrue();
-        handler.Aliases.Should().Equal("models", "llm");
+        handler.Aliases.Should().Equal("models", "llm", "route");
         handler.Usage.ArgumentSyntax.Should().Contain("use");
     }
 
@@ -85,8 +87,48 @@ public sealed class ModelSlashCommandHandlerTests
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("chrono-llm shared");
         reply.Text.Should().Contain("OpenAI (work)");
-        reply.Text.Should().Contain("/model use");
+        reply.Text.Should().Contain("/route use");
         reply.Text.Should().Contain("✓");
+    }
+
+    [Fact]
+    public async Task List_ReturnsFriendlyMessage_WhenCatalogLookupFails()
+    {
+        var catalog = new StubCatalogClient
+        {
+            GetServicesError = new InvalidOperationException("NyxID LLM catalog unavailable"),
+        };
+        var handler = CreateHandler(catalog);
+
+        var reply = await handler.HandleAsync(Context(), default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("读取或更新 NyxID LLM service 设置失败");
+        reply.Text.Should().NotContain("NyxID LLM catalog unavailable");
+    }
+
+    [Fact]
+    public async Task List_RequestsProxyScope_ForNyxIdLlmApi()
+    {
+        var broker = new RecordingCapabilityBroker();
+        var handler = CreateHandler(broker: broker);
+
+        await handler.HandleAsync(Context(), default);
+
+        broker.RequestedScopes.Should().ContainSingle().Which.Should().Be(AevatarOAuthClientScopes.Proxy);
+    }
+
+    [Fact]
+    public async Task List_ReturnsRebindMessage_WhenBindingScopeMissing()
+    {
+        var handler = CreateHandler(broker: new ThrowingCapabilityBroker(
+            new BindingScopeMismatchException(Context().Subject)));
+
+        var reply = await handler.HandleAsync(Context(), default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("缺少 LLM route 权限");
+        reply.Text.Should().Contain("/init");
     }
 
     [Fact]
@@ -130,6 +172,53 @@ public sealed class ModelSlashCommandHandlerTests
         reply.Should().NotBeNull();
         commandService.SavedConfigs.Should().ContainSingle()
             .Subject.Config.PreferredLlmRoute.Should().Be(OpenAi.RouteValue);
+    }
+
+    [Fact]
+    public async Task Use_ServiceNameAndModel_WritesRouteAndModelOverride()
+    {
+        var commandService = new StubUserConfigCommandService();
+        var handler = CreateHandler(commandService: commandService);
+
+        var reply = await handler.HandleAsync(Context(subAndArgs: "use chrono-llm gpt-5.5"), default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("chrono-llm shared");
+        reply.Text.Should().Contain("gpt-5.5");
+        var saved = commandService.SavedConfigs.Should().ContainSingle().Subject;
+        saved.Config.PreferredLlmRoute.Should().Be(ChronoLlm.RouteValue);
+        saved.Config.DefaultModel.Should().Be("gpt-5.5");
+    }
+
+    [Fact]
+    public async Task Use_DisplayNameWithSpaces_WritesMatchingRouteWithoutModelOverride()
+    {
+        var commandService = new StubUserConfigCommandService();
+        var handler = CreateHandler(commandService: commandService);
+
+        var reply = await handler.HandleAsync(Context(subAndArgs: "use OpenAI (work)"), default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("OpenAI (work)");
+        var saved = commandService.SavedConfigs.Should().ContainSingle().Subject;
+        saved.Config.PreferredLlmRoute.Should().Be(OpenAi.RouteValue);
+        saved.Config.DefaultModel.Should().Be(OpenAi.DefaultModel);
+    }
+
+    [Fact]
+    public async Task Use_NumberAndModel_WritesRouteAndModelOverride()
+    {
+        var commandService = new StubUserConfigCommandService();
+        var handler = CreateHandler(commandService: commandService);
+
+        var reply = await handler.HandleAsync(Context(subAndArgs: "use 2 gpt-5.5"), default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("OpenAI (work)");
+        reply.Text.Should().Contain("gpt-5.5");
+        var saved = commandService.SavedConfigs.Should().ContainSingle().Subject;
+        saved.Config.PreferredLlmRoute.Should().Be(OpenAi.RouteValue);
+        saved.Config.DefaultModel.Should().Be("gpt-5.5");
     }
 
     [Fact]
@@ -234,7 +323,8 @@ public sealed class ModelSlashCommandHandlerTests
     private static ModelChannelSlashCommandHandler CreateHandler(
         StubCatalogClient? catalog = null,
         StubUserConfigQueryPort? queryPort = null,
-        StubUserConfigCommandService? commandService = null)
+        StubUserConfigCommandService? commandService = null,
+        INyxIdCapabilityBroker? broker = null)
     {
         catalog ??= new StubCatalogClient();
         queryPort ??= new StubUserConfigQueryPort();
@@ -245,8 +335,8 @@ public sealed class ModelSlashCommandHandlerTests
             .AddSingleton<IUserConfigCommandService>(commandService)
             .BuildServiceProvider();
         var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
-        var options = new DefaultUserLlmOptionsService(catalog, scopeFactory);
-        var selection = new DefaultUserLlmSelectionService(options, catalog, scopeFactory);
+        var options = new DefaultUserLlmOptionsService(catalog, scopeFactory, broker);
+        var selection = new DefaultUserLlmSelectionService(options, catalog, scopeFactory, broker);
         return new ModelChannelSlashCommandHandler(
             NullLogger<ModelChannelSlashCommandHandler>.Instance,
             options,
@@ -269,6 +359,7 @@ public sealed class ModelSlashCommandHandlerTests
     {
         public IReadOnlyList<NyxIdLlmService> Services { get; init; } = [ChronoLlm, OpenAi];
         public NyxIdLlmService ProvisionedService { get; init; } = ChronoLlm;
+        public Exception? GetServicesError { get; init; }
 
         public UserLlmSetupHint SetupHint { get; init; } = new(
             "https://nyxid.example/services",
@@ -283,8 +374,13 @@ public sealed class ModelSlashCommandHandlerTests
         public Task<NyxIdLlmServicesResult> GetServicesAsync(
             UserLlmOptionsQuery query,
             string accessToken,
-            CancellationToken ct) =>
-            Task.FromResult(new NyxIdLlmServicesResult(Services, SetupHint));
+            CancellationToken ct)
+        {
+            if (GetServicesError is not null)
+                return Task.FromException<NyxIdLlmServicesResult>(GetServicesError);
+
+            return Task.FromResult(new NyxIdLlmServicesResult(Services, SetupHint));
+        }
 
         public Task<UserLlmSetupHint> GetSetupHintAsync(
             UserLlmOptionsQuery query,
@@ -298,6 +394,58 @@ public sealed class ModelSlashCommandHandlerTests
             string provisionEndpointId,
             CancellationToken ct) =>
             Task.FromResult(ProvisionedService);
+    }
+
+    private sealed class RecordingCapabilityBroker : INyxIdCapabilityBroker
+    {
+        public List<string> RequestedScopes { get; } = new();
+
+        public Task<BindingChallenge> StartExternalBindingAsync(
+            ExternalSubjectRef externalSubject,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task RevokeBindingAsync(
+            ExternalSubjectRef externalSubject,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<CapabilityHandle> IssueShortLivedAsync(
+            ExternalSubjectRef externalSubject,
+            CapabilityScope scope,
+            CancellationToken ct = default)
+        {
+            RequestedScopes.Add(scope.Value);
+            return Task.FromResult(new CapabilityHandle
+            {
+                AccessToken = "token-for-model-list",
+                ExpiresAtUnix = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeSeconds(),
+                Scope = scope.Value,
+            });
+        }
+    }
+
+    private sealed class ThrowingCapabilityBroker : INyxIdCapabilityBroker
+    {
+        private readonly Exception _exception;
+
+        public ThrowingCapabilityBroker(Exception exception) => _exception = exception;
+
+        public Task<BindingChallenge> StartExternalBindingAsync(
+            ExternalSubjectRef externalSubject,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task RevokeBindingAsync(
+            ExternalSubjectRef externalSubject,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<CapabilityHandle> IssueShortLivedAsync(
+            ExternalSubjectRef externalSubject,
+            CapabilityScope scope,
+            CancellationToken ct = default) =>
+            Task.FromException<CapabilityHandle>(_exception);
     }
 
     private sealed class StubUserConfigQueryPort : IUserConfigQueryPort
