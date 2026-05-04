@@ -242,10 +242,15 @@ public sealed class MEAILLMProvider : ILLMProvider
                 meaiMsg.Contents.Add(new FunctionResultContent(msg.ToolCallId, BuildToolResultPayload(msg)));
             }
 
+            if (msg.Role == "assistant" && !string.IsNullOrEmpty(msg.ReasoningContent))
+                meaiMsg.Contents.Add(new TextReasoningContent(msg.ReasoningContent));
+
             // Handle assistant tool calls
             if (msg.ToolCalls is { Count: > 0 })
             {
                 meaiMsg.Contents.Clear();
+                if (!string.IsNullOrEmpty(msg.ReasoningContent))
+                    meaiMsg.Contents.Add(new TextReasoningContent(msg.ReasoningContent));
                 if (msg.ContentParts is { Count: > 0 })
                     AppendContentParts(meaiMsg, msg.ContentParts);
                 else if (msg.Content != null)
@@ -440,6 +445,7 @@ public sealed class MEAILLMProvider : ILLMProvider
         // ChatResponse.Messages contains all reply messages
         var lastMessage = response.Messages.LastOrDefault();
         var content = ExtractMessageText(lastMessage);
+        var reasoningContent = ExtractReasoningContent(lastMessage);
         List<ToolCall>? toolCalls = null;
         List<ContentPart>? contentParts = null;
 
@@ -478,6 +484,7 @@ public sealed class MEAILLMProvider : ILLMProvider
         return new LLMResponse
         {
             Content = content,
+            ReasoningContent = reasoningContent,
             ContentParts = contentParts,
             ToolCalls = toolCalls,
             Usage = usage,
@@ -505,6 +512,22 @@ public sealed class MEAILLMProvider : ILLMProvider
         return textParts.Count == 0
             ? message.Text
             : string.Concat(textParts);
+    }
+
+    private static string? ExtractReasoningContent(Microsoft.Extensions.AI.ChatMessage? message)
+    {
+        if (message?.Contents is not { Count: > 0 })
+            return null;
+
+        var reasoningParts = message.Contents
+            .OfType<TextReasoningContent>()
+            .Select(part => part.Text)
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .ToList();
+
+        return reasoningParts.Count == 0
+            ? null
+            : string.Concat(reasoningParts);
     }
 
     private static ToolCall ConvertFunctionCall(FunctionCallContent functionCall)
