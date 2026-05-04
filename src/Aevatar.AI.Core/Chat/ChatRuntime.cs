@@ -352,12 +352,12 @@ public sealed class ChatRuntime
 
                                     if (fallbackBlocked)
                                     {
-                                        AppendAssistantMessage(messages, pendingHistoryMessages, parsed.CleanedContent, reasoningContent: null, toolCalls: null);
+                                        AppendAssistantMessage(messages, pendingHistoryMessages, parsed.CleanedContent, roundResult.ReasoningContent, toolCalls: null);
                                         finalContent = parsed.CleanedContent;
                                         break;
                                     }
 
-                                    AppendAssistantMessage(messages, pendingHistoryMessages, parsed.CleanedContent, reasoningContent: null, toolCalls: null);
+                                    AppendAssistantMessage(messages, pendingHistoryMessages, parsed.CleanedContent, roundResult.ReasoningContent, toolCalls: null);
 
                                     var textToolCallMsg = new ChatMessage
                                     {
@@ -850,6 +850,9 @@ public sealed class ChatRuntime
     private static IReadOnlyList<LLMStreamChunk> BuildSyntheticChunks(LLMResponse response)
     {
         var chunks = new List<LLMStreamChunk>();
+
+        if (!string.IsNullOrEmpty(response.ReasoningContent))
+            chunks.Add(new LLMStreamChunk { DeltaReasoningContent = response.ReasoningContent });
 
         if (!string.IsNullOrEmpty(response.Content))
             chunks.Add(new LLMStreamChunk { DeltaContent = response.Content });

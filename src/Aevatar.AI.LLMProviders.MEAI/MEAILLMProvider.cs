@@ -242,10 +242,15 @@ public sealed class MEAILLMProvider : ILLMProvider
                 meaiMsg.Contents.Add(new FunctionResultContent(msg.ToolCallId, BuildToolResultPayload(msg)));
             }
 
+            if (msg.Role == "assistant" && !string.IsNullOrEmpty(msg.ReasoningContent))
+                meaiMsg.Contents.Add(new TextReasoningContent(msg.ReasoningContent));
+
             // Handle assistant tool calls
             if (msg.ToolCalls is { Count: > 0 })
             {
                 meaiMsg.Contents.Clear();
+                if (!string.IsNullOrEmpty(msg.ReasoningContent))
+                    meaiMsg.Contents.Add(new TextReasoningContent(msg.ReasoningContent));
                 if (msg.ContentParts is { Count: > 0 })
                     AppendContentParts(meaiMsg, msg.ContentParts);
                 else if (msg.Content != null)
