@@ -198,7 +198,10 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
 
     private async Task<UserMemoryState?> ReadProjectedStateAsync(CancellationToken ct)
     {
-        var actorId = ResolveWriteActorId();
+        var actorId = TryResolveWriteActorId();
+        if (actorId is null)
+            return null;
+
         var document = await _documentReader.GetAsync(actorId, ct);
         if (document?.StateRoot == null ||
             !document.StateRoot.Is(UserMemoryState.Descriptor))
@@ -209,10 +212,19 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
 
     // ── Actor resolution ──
 
+    private string? TryResolveScopeId()
+        => _scopeResolver.Resolve()?.ScopeId;
+
     private string ResolveScopeId()
-        => _scopeResolver.Resolve()?.ScopeId
+        => TryResolveScopeId()
            ?? throw new InvalidOperationException(
                "User memory store requires an authenticated user scope. No scope could be resolved.");
+
+    private string? TryResolveWriteActorId()
+    {
+        var scopeId = TryResolveScopeId();
+        return scopeId is null ? null : WriteActorIdPrefix + scopeId;
+    }
 
     private string ResolveWriteActorId() => WriteActorIdPrefix + ResolveScopeId();
 
