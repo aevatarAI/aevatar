@@ -470,6 +470,107 @@ public class ToolCallLoopTests
         ToolCallLoop.IsLengthTruncated("").Should().BeFalse();
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenNoToolCalls_ShouldPropagateReasoningContent()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse { Content = "answer", ReasoningContent = "thinking-step" },
+        ]);
+        var loop = new ToolCallLoop(new ToolManager());
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 2, CancellationToken.None);
+
+        result.Should().Be("answer");
+        messages.Should().ContainSingle(m => m.Role == "assistant");
+        var assistant = messages.Single(m => m.Role == "assistant");
+        assistant.Content.Should().Be("answer");
+        assistant.ReasoningContent.Should().Be("thinking-step");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenToolCallThenFollowUp_ShouldPropagateReasoningOnBothRounds()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                Content = "will use tool",
+                ReasoningContent = "first-thought",
+                ToolCalls =
+                [
+                    new ToolCall { Id = "tc-1", Name = "echo", ArgumentsJson = "{}" },
+                ],
+            },
+            new LLMResponse { Content = "final", ReasoningContent = "second-thought" },
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("echo", _ => "ok"));
+        var loop = new ToolCallLoop(tools);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 3, CancellationToken.None);
+
+        result.Should().Be("final");
+        var finalAssistant = messages.Last(m => m.Role == "assistant");
+        finalAssistant.ReasoningContent.Should().Be("second-thought");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenLengthRecovery_ShouldPropagateReasoningContent()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                Content = "partial",
+                ReasoningContent = "thinking-partial",
+                FinishReason = "length",
+            },
+            new LLMResponse
+            {
+                Content = " continued",
+                ReasoningContent = "thinking-continued",
+            },
+        ]);
+        var loop = new ToolCallLoop(new ToolManager());
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 3, CancellationToken.None);
+
+        result.Should().Be("partial continued");
+        var partialAssistant = messages.First(m => m.Role == "assistant");
+        partialAssistant.ReasoningContent.Should().Be("thinking-partial");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenMaxRoundsExhausted_ShouldPropagateReasoningInFinalCall()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls = [new ToolCall { Id = "tc-1", Name = "echo", ArgumentsJson = "{}" }],
+            },
+            new LLMResponse { Content = "summary", ReasoningContent = "final-thought" },
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("echo", _ => "ok"));
+        var loop = new ToolCallLoop(tools);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 1, CancellationToken.None);
+
+        result.Should().Be("summary");
+        var lastAssistant = messages.Last(m => m.Role == "assistant");
+        lastAssistant.ReasoningContent.Should().Be("final-thought");
+    }
+
     [Theory]
     [InlineData("base64")]
     [InlineData("data")]

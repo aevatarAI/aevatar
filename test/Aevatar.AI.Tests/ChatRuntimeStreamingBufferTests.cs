@@ -350,6 +350,37 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
+    public async Task ChatStreamAsync_WhenLlmMiddlewareTerminates_ShouldEmitReasoningContentChunk()
+    {
+        var provider = new StreamingProvider(["ignored"]);
+        var runtime = CreateRuntime(
+            provider,
+            streamBufferCapacity: 2,
+            llmMiddlewares:
+            [
+                new DelegateLlmCallMiddleware((context, _) =>
+                {
+                    context.Terminate = true;
+                    context.Response = new LLMResponse
+                    {
+                        Content = "answer",
+                        ReasoningContent = "thinking-step",
+                    };
+                    return Task.CompletedTask;
+                }),
+            ]);
+        var chunks = new List<LLMStreamChunk>();
+
+        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+            chunks.Add(chunk);
+
+        chunks.Should().Contain(x => x.DeltaReasoningContent == "thinking-step");
+        chunks.Should().Contain(x => x.DeltaContent == "answer");
+        chunks.Should().Contain(x => x.IsLast);
+        provider.StreamCallCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task ChatStreamAsync_WhenProviderEmitsEmptyNonTerminalChunk_ShouldFilterItOut()
     {
         var provider = new StreamingProvider(

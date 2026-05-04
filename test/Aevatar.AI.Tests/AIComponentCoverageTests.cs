@@ -53,6 +53,98 @@ public class AIComponentCoverageTests
     }
 
     [Fact]
+    public void ChatHistory_ShouldPreserveReasoningContentOnExportImport()
+    {
+        var history = new ChatHistory();
+        history.Add(new AevatarChatMessage { Role = "assistant", Content = "hello", ReasoningContent = "thinking..." });
+        history.Add(new AevatarChatMessage { Role = "user", Content = "follow-up" });
+
+        var exported = history.Export();
+        exported[0].ReasoningContent.Should().Be("thinking...");
+        exported[1].ReasoningContent.Should().BeNull();
+
+        var imported = new ChatHistory();
+        imported.Import(exported);
+        imported.Messages[0].ReasoningContent.Should().Be("thinking...");
+        imported.Messages[1].ReasoningContent.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task MEAILLMProvider_ConvertMessages_ShouldIncludeReasoningContent()
+    {
+        IReadOnlyList<MeaiChatMessage>? capturedMessages = null;
+        var client = new StubChatClient
+        {
+            OnGetResponse = (messages, _, _) =>
+            {
+                capturedMessages = messages.ToList();
+                return Task.FromResult(new ChatResponse(new MeaiChatMessage(ChatRole.Assistant, "ok")));
+            },
+        };
+
+        var provider = new MEAILLMProvider("meai-reasoning-outbound", client);
+        await provider.ChatAsync(new LLMRequest
+        {
+            Messages =
+            [
+                new AevatarChatMessage { Role = "user", Content = "hi" },
+                new AevatarChatMessage { Role = "assistant", Content = "thought", ReasoningContent = "reasoning-text" },
+            ],
+        });
+
+        capturedMessages.Should().NotBeNull();
+        capturedMessages!.Should().HaveCount(2);
+        var assistantMsg = capturedMessages[1];
+        assistantMsg.Role.Should().Be(ChatRole.Assistant);
+        assistantMsg.Contents.OfType<TextReasoningContent>().Should().ContainSingle()
+            .Which.Text.Should().Be("reasoning-text");
+    }
+
+    [Fact]
+    public async Task MEAILLMProvider_ConvertMessages_ShouldIncludeReasoningContentWithToolCalls()
+    {
+        IReadOnlyList<MeaiChatMessage>? capturedMessages = null;
+        var client = new StubChatClient
+        {
+            OnGetResponse = (messages, _, _) =>
+            {
+                capturedMessages = messages.ToList();
+                return Task.FromResult(new ChatResponse(new MeaiChatMessage(ChatRole.Assistant, "ok")));
+            },
+        };
+
+        var provider = new MEAILLMProvider("meai-reasoning-tools", client);
+        await provider.ChatAsync(new LLMRequest
+        {
+            Messages =
+            [
+                new AevatarChatMessage { Role = "user", Content = "hi" },
+                new AevatarChatMessage
+                {
+                    Role = "assistant",
+                    Content = "using tool",
+                    ReasoningContent = "thinking about tools",
+                    ToolCalls =
+                    [
+                        new Aevatar.AI.Abstractions.LLMProviders.ToolCall
+                        {
+                            Id = "tc1", Name = "search", ArgumentsJson = "{}",
+                        },
+                    ],
+                },
+                new AevatarChatMessage { Role = "tool", ToolCallId = "tc1", Content = "result" },
+            ],
+        });
+
+        capturedMessages.Should().NotBeNull();
+        var assistantWithTools = capturedMessages![1];
+        assistantWithTools.Role.Should().Be(ChatRole.Assistant);
+        assistantWithTools.Contents.OfType<TextReasoningContent>().Should().ContainSingle()
+            .Which.Text.Should().Be("thinking about tools");
+        assistantWithTools.Contents.OfType<FunctionCallContent>().Should().ContainSingle();
+    }
+
+    [Fact]
     public void PromptTemplate_Render_ShouldApplyDefaultsAndRuntimeAndExamples()
     {
         var template = new PromptTemplate
