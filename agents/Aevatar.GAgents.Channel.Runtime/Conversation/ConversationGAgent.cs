@@ -647,9 +647,6 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         ChatActivity? referenceActivity,
         ConversationTurnRuntimeContext runtimeContext)
     {
-        if (evt.TerminalState != LlmReplyTerminalState.Completed)
-            return false;
-
         var correlationId = NormalizeOptional(evt.CorrelationId);
         if (correlationId is null)
             return false;
@@ -663,6 +660,58 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             return false;
 
         var platformMessageId = state.PlatformMessageId!;
+
+        // Streaming-start already consumed the reply token. On Failed, falling through to
+        // RunLlmReplyAsync would issue a fresh /reply against the dead token and surface
+        // as `401 Reply token already used` to NyxID — leaving the user staring at the
+        // streaming partial (often just "...") forever with no error explanation. Self-heal
+        // by editing the existing placeholder in place with the classified failure text;
+        // turn is then terminal (no retry, no second /reply).
+        if (evt.TerminalState == LlmReplyTerminalState.Failed)
+        {
+            var failureText = NormalizeOptional(evt.Outbound?.Text)
+                ?? NormalizeOptional(evt.ErrorSummary)
+                ?? "Sorry, the reply failed. Please try again.";
+            var runner = ResolveRunner();
+            var failureChunk = new LlmReplyStreamChunkEvent
+            {
+                CorrelationId = evt.CorrelationId,
+                RegistrationId = evt.RegistrationId,
+                Activity = referenceActivity?.Clone() ?? evt.Activity?.Clone() ?? new ChatActivity(),
+                AccumulatedText = failureText,
+                ChunkAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            };
+            var failureResult = await runner.RunStreamChunkAsync(
+                failureChunk,
+                platformMessageId,
+                runtimeContext,
+                CancellationToken.None);
+            if (failureResult.Success)
+            {
+                Logger.LogWarning(
+                    "LLM reply failed after streaming-start; updated placeholder with failure text. correlation={CorrelationId}, errorCode={ErrorCode}, platformMessageId={PlatformMessageId}",
+                    evt.CorrelationId,
+                    evt.ErrorCode,
+                    platformMessageId);
+                await PersistStreamedCompletionAsync(evt, commandId, referenceActivity, platformMessageId, failureText, state.EditCount + 1);
+                return true;
+            }
+
+            // Edit failed too (rare — Lark may reject a message edit for unrelated reasons).
+            // Falling back to /reply would still hit the dead token, so persist the last
+            // flushed partial as terminal. The user sees the partial (potentially empty)
+            // but we don't spin on a guaranteed 401.
+            Logger.LogWarning(
+                "Streaming LLM failure-update could not edit placeholder; persisting last flushed partial as terminal. correlation={CorrelationId}, code={Code}, platformMessageId={PlatformMessageId}",
+                evt.CorrelationId,
+                failureResult.ErrorCode,
+                platformMessageId);
+            await PersistStreamedCompletionAsync(evt, commandId, referenceActivity, platformMessageId, state.LastFlushedText, state.EditCount);
+            return true;
+        }
+
+        if (evt.TerminalState != LlmReplyTerminalState.Completed)
+            return false;
         var finalText = evt.Outbound?.Text ?? string.Empty;
         if (string.IsNullOrWhiteSpace(finalText))
         {

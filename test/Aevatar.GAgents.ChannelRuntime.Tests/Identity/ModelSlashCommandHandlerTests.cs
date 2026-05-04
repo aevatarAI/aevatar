@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
@@ -6,8 +7,10 @@ using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.NyxidChat.Slash;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
+using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
 using Xunit;
 using StudioConfig = Aevatar.Studio.Application.Studio.Abstractions.UserConfig;
 
@@ -119,16 +122,120 @@ public sealed class ModelSlashCommandHandlerTests
     }
 
     [Fact]
-    public async Task List_ReturnsRebindMessage_WhenBindingScopeMissing()
+    public async Task List_SelfHealsAndRebindsMessage_WhenBindingScopeMissing()
     {
-        var handler = CreateHandler(broker: new ThrowingCapabilityBroker(
-            new BindingScopeMismatchException(Context().Subject)));
+        // NyxID rejects the binding's scope set: the binding was issued before
+        // aevatar's DCR started requesting `proxy`, so the broker can no longer
+        // mint LLM-API tokens for it. Self-heal by revoking the local actor so
+        // /init is unblocked, AND tell the user.
+        var actorRuntime = new RecordingActorRuntime();
+        var handler = CreateHandler(
+            broker: new ThrowingCapabilityBroker(new BindingScopeMismatchException(Context().Subject)),
+            actorRuntime: actorRuntime);
 
         var reply = await handler.HandleAsync(Context(), default);
 
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("缺少 LLM route 权限");
+        reply.Text.Should().Contain("已自动清理");
         reply.Text.Should().Contain("/init");
+        AssertRevokeBindingDispatched(actorRuntime, expectedReason: "auto_self_heal_scope_mismatch");
+    }
+
+    [Fact]
+    public async Task List_SelfHealsAndRebindsMessage_WhenBindingRevokedRemotely()
+    {
+        // NyxID itself returned binding_revoked (e.g. user revoked at NyxID admin
+        // or the binding tied to a re-DCR'd cluster client_id was invalidated).
+        // Wipe the local readmodel so /init isn't blocked by stale state.
+        var actorRuntime = new RecordingActorRuntime();
+        var handler = CreateHandler(
+            broker: new ThrowingCapabilityBroker(new BindingRevokedException(Context().Subject)),
+            actorRuntime: actorRuntime);
+
+        var reply = await handler.HandleAsync(Context(), default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("失效");
+        reply.Text.Should().Contain("已自动清理");
+        reply.Text.Should().Contain("/init");
+        AssertRevokeBindingDispatched(actorRuntime, expectedReason: "auto_self_heal_remote_revoked");
+    }
+
+    [Fact]
+    public async Task List_SelfHealsAndRebindsMessage_WhenBindingNotFoundRemotely()
+    {
+        var actorRuntime = new RecordingActorRuntime();
+        var handler = CreateHandler(
+            broker: new ThrowingCapabilityBroker(new BindingNotFoundException(Context().Subject)),
+            actorRuntime: actorRuntime);
+
+        var reply = await handler.HandleAsync(Context(), default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("不可用");
+        reply.Text.Should().Contain("已自动清理");
+        reply.Text.Should().Contain("/init");
+        AssertRevokeBindingDispatched(actorRuntime, expectedReason: "auto_self_heal_remote_not_found");
+    }
+
+    [Fact]
+    public async Task List_DegradesToUnbindGuidance_WhenSelfHealActorRuntimeMissing()
+    {
+        // Deployments without IActorRuntime registered (CLI playground, certain
+        // demo hosts) cannot dispatch the local revoke. The handler MUST NOT
+        // claim "本地已自动清理" in that case — that would send the user to
+        // /init, which would still see the stale local binding and refuse,
+        // recreating the loop this PR exists to break (PR #561 review eanzhao
+        // / chatgpt-codex). Surface the degraded message that explicitly
+        // points at /unbind so the user has a path that works.
+        var handler = CreateHandler(
+            broker: new ThrowingCapabilityBroker(new BindingRevokedException(Context().Subject)),
+            actorRuntime: null);
+
+        var reply = await handler.HandleAsync(Context(), default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("失效");
+        reply.Text.Should().Contain("/unbind");
+        reply.Text.Should().NotContain("已自动清理");
+    }
+
+    [Fact]
+    public async Task List_DegradesToUnbindGuidance_WhenSelfHealDispatchKeepsThrowing()
+    {
+        // Even when IActorRuntime IS registered, runtime / Orleans hiccups can
+        // make every dispatch attempt throw. The handler retries once (mirrors
+        // UnbindChannelSlashCommandHandler's PR #521 v4-pro review fix); if
+        // both attempts fail, the local readmodel is still stale, so we MUST
+        // tell the user to /unbind manually instead of falsely claiming
+        // auto-clean succeeded.
+        var actorRuntime = new ThrowingActorRuntime();
+        var handler = CreateHandler(
+            broker: new ThrowingCapabilityBroker(new BindingRevokedException(Context().Subject)),
+            actorRuntime: actorRuntime);
+
+        var reply = await handler.HandleAsync(Context(), default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("失效");
+        reply.Text.Should().Contain("/unbind");
+        reply.Text.Should().NotContain("已自动清理");
+        actorRuntime.AttemptCount.Should().Be(2, "self-heal must attempt the local revoke twice before degrading");
+    }
+
+    private static void AssertRevokeBindingDispatched(RecordingActorRuntime runtime, string expectedReason)
+    {
+        runtime.Dispatched.Should().ContainSingle("self-heal must dispatch exactly one local revoke");
+        var (actorId, envelope) = runtime.Dispatched[0];
+        actorId.Should().Be(Context().Subject.ToActorId());
+        envelope.Route.Direct.TargetActorId.Should().Be(actorId);
+
+        var revoke = envelope.Payload.Unpack<RevokeBindingCommand>();
+        revoke.Reason.Should().Be(expectedReason);
+        revoke.ExternalSubject.Platform.Should().Be("lark");
+        revoke.ExternalSubject.Tenant.Should().Be("tenant");
+        revoke.ExternalSubject.ExternalUserId.Should().Be("ou_user");
     }
 
     [Fact]
@@ -324,7 +431,8 @@ public sealed class ModelSlashCommandHandlerTests
         StubCatalogClient? catalog = null,
         StubUserConfigQueryPort? queryPort = null,
         StubUserConfigCommandService? commandService = null,
-        INyxIdCapabilityBroker? broker = null)
+        INyxIdCapabilityBroker? broker = null,
+        IActorRuntime? actorRuntime = null)
     {
         catalog ??= new StubCatalogClient();
         queryPort ??= new StubUserConfigQueryPort();
@@ -341,7 +449,63 @@ public sealed class ModelSlashCommandHandlerTests
             NullLogger<ModelChannelSlashCommandHandler>.Instance,
             options,
             selection,
-            new TextUserLlmOptionsRenderer());
+            new TextUserLlmOptionsRenderer(),
+            actorRuntime);
+    }
+
+    /// <summary>
+    /// Records every <see cref="EventEnvelope"/> the handler dispatches so
+    /// tests can assert the binding self-heal fires <c>RevokeBindingCommand</c>
+    /// to the local actor when NyxID rejects the binding.
+    /// </summary>
+    private sealed class RecordingActorRuntime : IActorRuntime
+    {
+        public List<(string ActorId, EventEnvelope Envelope)> Dispatched { get; } = [];
+
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent
+        {
+            var actor = Substitute.For<IActor>();
+            actor.Id.Returns(id ?? string.Empty);
+            actor.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    Dispatched.Add((id ?? string.Empty, call.Arg<EventEnvelope>()));
+                    return Task.CompletedTask;
+                });
+            return Task.FromResult(actor);
+        }
+
+        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default)
+            => throw new NotImplementedException();
+        public Task DestroyAsync(string id, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IActor?> GetAsync(string id) => throw new NotImplementedException();
+        public Task<bool> ExistsAsync(string id) => throw new NotImplementedException();
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) => throw new NotImplementedException();
+    }
+
+    /// <summary>
+    /// Forces every <see cref="CreateAsync"/> call to throw, simulating a
+    /// transient Orleans / runtime hiccup so tests can pin the retry-once-
+    /// then-degrade contract on the binding self-heal path.
+    /// </summary>
+    private sealed class ThrowingActorRuntime : IActorRuntime
+    {
+        public int AttemptCount { get; private set; }
+
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent
+        {
+            AttemptCount++;
+            throw new InvalidOperationException("simulated runtime dispatch failure");
+        }
+
+        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default)
+            => throw new NotImplementedException();
+        public Task DestroyAsync(string id, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IActor?> GetAsync(string id) => throw new NotImplementedException();
+        public Task<bool> ExistsAsync(string id) => throw new NotImplementedException();
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) => throw new NotImplementedException();
     }
 
     private static StudioConfig MakeConfig(

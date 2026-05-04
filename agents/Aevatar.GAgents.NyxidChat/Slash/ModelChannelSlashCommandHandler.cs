@@ -1,8 +1,11 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
+using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.NyxidChat.Slash;
@@ -18,18 +21,21 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
     private readonly IUserLlmOptionsService? _optionsService;
     private readonly IUserLlmSelectionService? _selectionService;
     private readonly IUserLlmOptionsRenderer<MessageContent>? _renderer;
+    private readonly IActorRuntime? _actorRuntime;
     private readonly ILogger<ModelChannelSlashCommandHandler> _logger;
 
     public ModelChannelSlashCommandHandler(
         ILogger<ModelChannelSlashCommandHandler> logger,
         IUserLlmOptionsService? optionsService = null,
         IUserLlmSelectionService? selectionService = null,
-        IUserLlmOptionsRenderer<MessageContent>? renderer = null)
+        IUserLlmOptionsRenderer<MessageContent>? renderer = null,
+        IActorRuntime? actorRuntime = null)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _optionsService = optionsService;
         _selectionService = selectionService;
         _renderer = renderer;
+        _actorRuntime = actorRuntime;
     }
 
     public string Name => "model";
@@ -76,21 +82,142 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
         }
         catch (BindingNotFoundException)
         {
-            return new MessageContent { Text = "当前 NyxID 绑定不可用,请先发送 /init 重新绑定。" };
+            return await SelfHealRevokedBindingAsync(
+                context,
+                reason: "auto_self_heal_remote_not_found",
+                cleanedMessage: "NyxID 端 binding 已不可用,本地已自动清理。请发送 /init 完成新绑定。",
+                degradedMessage: "NyxID 端 binding 已不可用,但本地状态同步失败。请发送 /unbind 后再发送 /init 重新绑定。",
+                ct).ConfigureAwait(false);
         }
         catch (BindingRevokedException)
         {
-            return new MessageContent { Text = "当前 NyxID 绑定已失效,请先发送 /init 重新绑定。" };
+            return await SelfHealRevokedBindingAsync(
+                context,
+                reason: "auto_self_heal_remote_revoked",
+                cleanedMessage: "NyxID 端 binding 已失效,本地已自动清理。请发送 /init 完成新绑定。",
+                degradedMessage: "NyxID 端 binding 已失效,但本地状态同步失败。请发送 /unbind 后再发送 /init 重新绑定。",
+                ct).ConfigureAwait(false);
         }
         catch (BindingScopeMismatchException)
         {
-            return new MessageContent { Text = "当前 NyxID 绑定缺少 LLM route 权限,请先发送 /init 重新绑定。" };
+            return await SelfHealRevokedBindingAsync(
+                context,
+                reason: "auto_self_heal_scope_mismatch",
+                cleanedMessage: "当前 NyxID 绑定缺少 LLM route 权限,本地已自动清理。请发送 /init 完成新绑定。",
+                degradedMessage: "当前 NyxID 绑定缺少 LLM route 权限,但本地状态同步失败。请发送 /unbind 后再发送 /init 重新绑定。",
+                ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or HttpRequestException or NotSupportedException)
         {
             _logger.LogWarning(ex, "/model failed to read or update NyxID LLM selection");
             return new MessageContent { Text = BuildUserFacingFailureMessage(ex) };
         }
+    }
+
+    /// <summary>
+    /// Auto-revoke the local binding actor when NyxID has reported the
+    /// binding is gone (revoked / not_found / scope-mismatch). Without this
+    /// the user is stuck in a loop: <c>/init</c> sees the local readmodel
+    /// still says "bound" and refuses; <c>/model</c> + <c>/route</c> exercise
+    /// the broker, get the rejection, and tell the user to <c>/init</c> —
+    /// which refuses again. Self-healing flips the local actor's state to
+    /// revoked so the next <c>/init</c> goes through cleanly.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Mirrors the dispatch shape <see cref="UnbindChannelSlashCommandHandler"/>
+    /// uses for explicit /unbind, including the single retry on transient
+    /// dispatch failure. Differs in that the NyxID-side revoke is already
+    /// done (NyxID is the one telling us the binding is gone), so we only
+    /// need to flip the local actor — no second broker call.
+    /// </para>
+    /// <para>
+    /// Returns <paramref name="cleanedMessage"/> ONLY when the local revoke
+    /// envelope was actually dispatched. When <see cref="IActorRuntime"/> is
+    /// not registered, or both dispatch attempts threw, returns
+    /// <paramref name="degradedMessage"/> instead — claiming "本地已自动清理"
+    /// in those paths would lie to the user, sending them to <c>/init</c>
+    /// which would still see the stale local binding and refuse, recreating
+    /// the same loop this self-heal exists to break (PR #561 review).
+    /// </para>
+    /// </remarks>
+    private async Task<MessageContent> SelfHealRevokedBindingAsync(
+        ChannelSlashCommandContext context,
+        string reason,
+        string cleanedMessage,
+        string degradedMessage,
+        CancellationToken ct)
+    {
+        var cleaned = await TryDispatchLocalBindingRevokeAsync(context, reason, ct).ConfigureAwait(false);
+        return new MessageContent { Text = cleaned ? cleanedMessage : degradedMessage };
+    }
+
+    private async Task<bool> TryDispatchLocalBindingRevokeAsync(
+        ChannelSlashCommandContext context,
+        string reason,
+        CancellationToken ct)
+    {
+        if (_actorRuntime is null)
+        {
+            _logger.LogWarning(
+                "/model encountered NyxID-side binding rejection ({Reason}) but IActorRuntime is not registered; cannot self-heal local actor. subject={Platform}:{Tenant}:{User}",
+                reason,
+                context.Subject.Platform, context.Subject.Tenant, context.Subject.ExternalUserId);
+            return false;
+        }
+
+        var actorId = context.Subject.ToActorId();
+        // Single retry mirrors UnbindChannelSlashCommandHandler — without it a
+        // one-off Orleans dispatch hiccup leaves the user thinking they're
+        // unbound while the readmodel still says they're bound (PR #521 review
+        // v4-pro on /unbind).
+        Exception? lastError = null;
+        for (var attempt = 1; attempt <= 2; attempt++)
+        {
+            try
+            {
+                var actor = await _actorRuntime
+                    .CreateAsync<ExternalIdentityBindingGAgent>(actorId, ct)
+                    .ConfigureAwait(false);
+                var envelope = new EventEnvelope
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    Payload = Any.Pack(new RevokeBindingCommand
+                    {
+                        ExternalSubject = context.Subject.Clone(),
+                        Reason = reason,
+                    }),
+                    Route = new EnvelopeRoute
+                    {
+                        Direct = new DirectRoute { TargetActorId = actorId },
+                    },
+                };
+                await actor.HandleEventAsync(envelope, ct).ConfigureAwait(false);
+                _logger.LogWarning(
+                    "/model self-healed local binding actor={ActorId} after NyxID-side rejection: reason={Reason}, attempt={Attempt}/2, subject={Platform}:{Tenant}:{User}",
+                    actorId,
+                    reason,
+                    attempt,
+                    context.Subject.Platform, context.Subject.Tenant, context.Subject.ExternalUserId);
+                return true;
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                lastError = ex;
+                _logger.LogWarning(ex,
+                    "/model: local binding self-heal dispatch failed on attempt {Attempt}/2 for actor={ActorId}, reason={Reason}",
+                    attempt,
+                    actorId,
+                    reason);
+            }
+        }
+
+        _logger.LogError(lastError,
+            "/model failed to self-heal local binding actor={ActorId} after 2 attempts; reason={Reason}. User has been told to /unbind manually.",
+            actorId,
+            reason);
+        return false;
     }
 
     private async Task<MessageContent> HandleUseAsync(
