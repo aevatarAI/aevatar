@@ -125,11 +125,11 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
 
     public async Task<bool> RemoveEntryAsync(string id, CancellationToken ct = default)
     {
+        var actor = await EnsureWriteActorAsync(ct);
         var state = await ReadProjectedStateAsync(ct);
         if (state is null || !state.Entries.Any(e => string.Equals(e.Id, id, StringComparison.Ordinal)))
             return false;
 
-        var actor = await EnsureWriteActorAsync(ct);
         var evt = new MemoryEntryRemovedEvent { EntryId = id };
         await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, ct);
         return true;
@@ -137,17 +137,7 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
 
     public async Task<string> BuildPromptSectionAsync(int maxChars = 2000, CancellationToken ct = default)
     {
-        UserMemoryDocument doc;
-        try
-        {
-            doc = await GetAsync(ct);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogWarning(ex, "Failed to load user memory for prompt injection");
-            return string.Empty;
-        }
-
+        var doc = await GetAsync(ct);
         if (doc.Entries.Count == 0)
             return string.Empty;
 
@@ -198,7 +188,10 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
 
     private async Task<UserMemoryState?> ReadProjectedStateAsync(CancellationToken ct)
     {
-        var actorId = ResolveWriteActorId();
+        var actorId = TryResolveWriteActorId();
+        if (actorId is null)
+            return null;
+
         var document = await _documentReader.GetAsync(actorId, ct);
         if (document?.StateRoot == null ||
             !document.StateRoot.Is(UserMemoryState.Descriptor))
@@ -209,10 +202,19 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
 
     // ── Actor resolution ──
 
+    private string? TryResolveScopeId()
+        => _scopeResolver.Resolve()?.ScopeId;
+
     private string ResolveScopeId()
-        => _scopeResolver.Resolve()?.ScopeId
+        => TryResolveScopeId()
            ?? throw new InvalidOperationException(
                "User memory store requires an authenticated user scope. No scope could be resolved.");
+
+    private string? TryResolveWriteActorId()
+    {
+        var scopeId = TryResolveScopeId();
+        return scopeId is null ? null : WriteActorIdPrefix + scopeId;
+    }
 
     private string ResolveWriteActorId() => WriteActorIdPrefix + ResolveScopeId();
 
