@@ -180,12 +180,15 @@ public sealed class ModelSlashCommandHandlerTests
     }
 
     [Fact]
-    public async Task List_StillReturnsUserMessage_WhenSelfHealActorRuntimeMissing()
+    public async Task List_DegradesToUnbindGuidance_WhenSelfHealActorRuntimeMissing()
     {
         // Deployments without IActorRuntime registered (CLI playground, certain
-        // demo hosts) should still surface the user-facing message — the
-        // self-heal degrades to "tell the user, hope they /unbind" rather than
-        // crashing the slash command.
+        // demo hosts) cannot dispatch the local revoke. The handler MUST NOT
+        // claim "本地已自动清理" in that case — that would send the user to
+        // /init, which would still see the stale local binding and refuse,
+        // recreating the loop this PR exists to break (PR #561 review eanzhao
+        // / chatgpt-codex). Surface the degraded message that explicitly
+        // points at /unbind so the user has a path that works.
         var handler = CreateHandler(
             broker: new ThrowingCapabilityBroker(new BindingRevokedException(Context().Subject)),
             actorRuntime: null);
@@ -194,6 +197,31 @@ public sealed class ModelSlashCommandHandlerTests
 
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("失效");
+        reply.Text.Should().Contain("/unbind");
+        reply.Text.Should().NotContain("已自动清理");
+    }
+
+    [Fact]
+    public async Task List_DegradesToUnbindGuidance_WhenSelfHealDispatchKeepsThrowing()
+    {
+        // Even when IActorRuntime IS registered, runtime / Orleans hiccups can
+        // make every dispatch attempt throw. The handler retries once (mirrors
+        // UnbindChannelSlashCommandHandler's PR #521 v4-pro review fix); if
+        // both attempts fail, the local readmodel is still stale, so we MUST
+        // tell the user to /unbind manually instead of falsely claiming
+        // auto-clean succeeded.
+        var actorRuntime = new ThrowingActorRuntime();
+        var handler = CreateHandler(
+            broker: new ThrowingCapabilityBroker(new BindingRevokedException(Context().Subject)),
+            actorRuntime: actorRuntime);
+
+        var reply = await handler.HandleAsync(Context(), default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("失效");
+        reply.Text.Should().Contain("/unbind");
+        reply.Text.Should().NotContain("已自动清理");
+        actorRuntime.AttemptCount.Should().Be(2, "self-heal must attempt the local revoke twice before degrading");
     }
 
     private static void AssertRevokeBindingDispatched(RecordingActorRuntime runtime, string expectedReason)
@@ -445,6 +473,30 @@ public sealed class ModelSlashCommandHandlerTests
                     return Task.CompletedTask;
                 });
             return Task.FromResult(actor);
+        }
+
+        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default)
+            => throw new NotImplementedException();
+        public Task DestroyAsync(string id, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IActor?> GetAsync(string id) => throw new NotImplementedException();
+        public Task<bool> ExistsAsync(string id) => throw new NotImplementedException();
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) => throw new NotImplementedException();
+    }
+
+    /// <summary>
+    /// Forces every <see cref="CreateAsync"/> call to throw, simulating a
+    /// transient Orleans / runtime hiccup so tests can pin the retry-once-
+    /// then-degrade contract on the binding self-heal path.
+    /// </summary>
+    private sealed class ThrowingActorRuntime : IActorRuntime
+    {
+        public int AttemptCount { get; private set; }
+
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent
+        {
+            AttemptCount++;
+            throw new InvalidOperationException("simulated runtime dispatch failure");
         }
 
         public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default)
