@@ -125,11 +125,11 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
 
     public async Task<bool> RemoveEntryAsync(string id, CancellationToken ct = default)
     {
+        var actor = await EnsureWriteActorAsync(ct);
         var state = await ReadProjectedStateAsync(ct);
         if (state is null || !state.Entries.Any(e => string.Equals(e.Id, id, StringComparison.Ordinal)))
             return false;
 
-        var actor = await EnsureWriteActorAsync(ct);
         var evt = new MemoryEntryRemovedEvent { EntryId = id };
         await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, ct);
         return true;
@@ -137,17 +137,7 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
 
     public async Task<string> BuildPromptSectionAsync(int maxChars = 2000, CancellationToken ct = default)
     {
-        UserMemoryDocument doc;
-        try
-        {
-            doc = await GetAsync(ct);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogWarning(ex, "Failed to load user memory for prompt injection");
-            return string.Empty;
-        }
-
+        var doc = await GetAsync(ct);
         if (doc.Entries.Count == 0)
             return string.Empty;
 
