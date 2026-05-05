@@ -46,7 +46,8 @@ public sealed class NyxIdLlmCatalogHttpClient : IUserLlmCatalogPort
         }
 
         EnsureSuccess(response, "NyxID LLM services");
-        return NyxIdLlmServiceCatalogParser.ParseServicesResult(response.Body);
+        var result = NyxIdLlmServiceCatalogParser.ParseServicesResult(response.Body);
+        return await MergeProxyRouteCandidatesAsync(result, bearerToken, ct).ConfigureAwait(false);
     }
 
     public async Task<NyxIdLlmService> ProvisionAsync(
@@ -109,6 +110,41 @@ public sealed class NyxIdLlmCatalogHttpClient : IUserLlmCatalogPort
             response.StatusCode,
             response.Body.Length > 500 ? response.Body[..500] : response.Body);
         throw new InvalidOperationException($"{operation} request failed.");
+    }
+
+    private async Task<NyxIdLlmServicesResult> MergeProxyRouteCandidatesAsync(
+        NyxIdLlmServicesResult result,
+        string bearerToken,
+        CancellationToken ct)
+    {
+        try
+        {
+            var response = await SendNyxIdAsync(
+                HttpMethod.Get,
+                "/api/v1/proxy/services?per_page=100",
+                bearerToken,
+                body: null,
+                ct).ConfigureAwait(false);
+            if ((int)response.StatusCode is < 200 or > 299)
+            {
+                _logger.LogWarning(
+                    "NyxID proxy services endpoint returned {StatusCode}: {Body}",
+                    response.StatusCode,
+                    response.Body.Length > 500 ? response.Body[..500] : response.Body);
+                return result;
+            }
+
+            return NyxIdLlmServiceCatalogParser.MergeProxyRouteCandidates(result, response.Body);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to merge NyxID proxy services into LLM route catalog");
+            return result;
+        }
     }
 
     private string? ResolveNyxIdAuthorityBase()

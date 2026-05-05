@@ -5,6 +5,8 @@ namespace Aevatar.Studio.Application.Studio.Services;
 
 public static class NyxIdLlmServiceCatalogParser
 {
+    private const string ReadyStatus = "ready";
+
     public static NyxIdLlmServicesResult ParseServicesResult(string response)
     {
         using var document = ParseSuccessDocument(response);
@@ -29,6 +31,47 @@ public static class NyxIdLlmServiceCatalogParser
         return new NyxIdLlmServicesResult(services, setupHint);
     }
 
+    public static NyxIdLlmServicesResult MergeProxyRouteCandidates(
+        NyxIdLlmServicesResult result,
+        string proxyServicesResponse)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+
+        var proxyCandidates = ParseProxyRouteCandidates(proxyServicesResponse);
+        if (proxyCandidates.Count == 0)
+            return result;
+
+        var merged = result.Services.ToList();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var service in merged)
+            AddServiceKeys(seen, service);
+
+        foreach (var candidate in proxyCandidates)
+        {
+            if (HasAnyServiceKey(seen, candidate))
+                continue;
+
+            merged.Add(candidate);
+            AddServiceKeys(seen, candidate);
+        }
+
+        return result with { Services = merged };
+    }
+
+    public static IReadOnlyList<NyxIdLlmService> ParseProxyRouteCandidates(string response)
+    {
+        using var document = ParseSuccessDocument(response);
+        var services = new List<NyxIdLlmService>();
+        foreach (var item in EnumerateProxyServiceEntries(document.RootElement))
+        {
+            var service = TryParseProxyRouteCandidate(item);
+            if (service is not null)
+                services.Add(service);
+        }
+
+        return services;
+    }
+
     public static NyxIdLlmService ParseProvisionedService(string response)
     {
         using var document = ParseSuccessDocument(response);
@@ -40,6 +83,92 @@ public static class NyxIdLlmServiceCatalogParser
         }
 
         return ParseService(root);
+    }
+
+    private static IEnumerable<JsonElement> EnumerateProxyServiceEntries(JsonElement root)
+    {
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in root.EnumerateArray())
+                yield return item;
+            yield break;
+        }
+
+        if (root.ValueKind != JsonValueKind.Object)
+            yield break;
+
+        foreach (var propertyName in new[] { "services", "custom_services", "customServices", "items", "data" })
+        {
+            if (TryGetProperty(root, propertyName) is not { ValueKind: JsonValueKind.Array } array)
+                continue;
+
+            foreach (var item in array.EnumerateArray())
+                yield return item;
+        }
+    }
+
+    private static NyxIdLlmService? TryParseProxyRouteCandidate(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var slug = ReadOptionalString(
+            element,
+            "slug",
+            "service_slug",
+            "serviceSlug",
+            "provider_slug",
+            "providerSlug");
+        if (string.IsNullOrWhiteSpace(slug))
+            return null;
+
+        var displayName = ReadOptionalString(
+            element,
+            "display_name",
+            "displayName",
+            "name",
+            "service_name",
+            "serviceName",
+            "provider_name",
+            "providerName")
+            ?? slug;
+
+        if (!LooksLikeLlmRouteCandidate(element, slug, displayName))
+            return null;
+
+        var routeValue = NormalizeProxyRouteValue(
+            ReadOptionalString(
+                element,
+                "proxy_url_slug",
+                "proxyUrlSlug",
+                "proxy_url",
+                "proxyUrl",
+                "route_value",
+                "routeValue"),
+            slug);
+        if (string.IsNullOrWhiteSpace(routeValue))
+            return null;
+
+        var status = ResolveProxyStatus(element);
+        var models = ReadStringArray(element, "models", "available_models", "availableModels");
+        return new NyxIdLlmService(
+            UserServiceId: ReadOptionalString(
+                    element,
+                    "user_service_id",
+                    "userServiceId",
+                    "service_id",
+                    "serviceId",
+                    "id")
+                ?? slug,
+            ServiceSlug: slug.Trim(),
+            DisplayName: displayName.Trim(),
+            RouteValue: routeValue,
+            DefaultModel: ReadOptionalString(element, "default_model", "defaultModel"),
+            Models: models,
+            Status: status,
+            Source: NyxIdLlmProviderSource.ProxyService,
+            Allowed: string.Equals(status, ReadyStatus, StringComparison.OrdinalIgnoreCase),
+            Description: ReadOptionalString(element, "description"));
     }
 
     public static string NormalizeProvisionEndpointId(string provisionEndpointId)
@@ -224,6 +353,112 @@ public static class NyxIdLlmServiceCatalogParser
             _ => throw new InvalidOperationException($"Unsupported NyxID LLM preset activation type '{type}'."),
         };
     }
+
+    private static bool LooksLikeLlmRouteCandidate(JsonElement element, string slug, string displayName)
+    {
+        var signals = new[]
+        {
+            slug,
+            displayName,
+            ReadOptionalString(element, "service_category", "serviceCategory", "category"),
+            ReadOptionalString(element, "description", "summary"),
+            ReadOptionalString(element, "docs_url", "docsUrl"),
+            ReadOptionalString(element, "openapi_url", "openapiUrl"),
+        };
+
+        return signals.Any(ContainsLlmRouteSignal);
+    }
+
+    private static bool ContainsLlmRouteSignal(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        var normalized = value.Trim().ToLowerInvariant();
+        return normalized.Contains("llm", StringComparison.Ordinal) ||
+               normalized.Contains("openai", StringComparison.Ordinal) ||
+               normalized.Contains("chat/completions", StringComparison.Ordinal) ||
+               normalized.Contains("chat completions", StringComparison.Ordinal) ||
+               normalized.Contains("chat completion", StringComparison.Ordinal) ||
+               normalized.Contains("completions api", StringComparison.Ordinal) ||
+               normalized.Contains("large language model", StringComparison.Ordinal) ||
+               normalized.Contains("language model", StringComparison.Ordinal);
+    }
+
+    private static string? NormalizeProxyRouteValue(string? value, string slug)
+    {
+        var normalized = value?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+            normalized = slug.Trim();
+
+        if (Uri.TryCreate(normalized, UriKind.Absolute, out var absolute))
+            normalized = Uri.UnescapeDataString(absolute.AbsolutePath);
+
+        if (normalized.StartsWith("//", StringComparison.Ordinal) ||
+            normalized.Contains("://", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        normalized = StripRouteTemplateSuffix(normalized.Trim());
+        if (string.IsNullOrWhiteSpace(normalized))
+            return null;
+
+        if (normalized.StartsWith("/", StringComparison.Ordinal))
+            return normalized;
+
+        return normalized.Contains('/', StringComparison.Ordinal)
+            ? "/" + normalized
+            : $"/api/v1/proxy/s/{normalized}";
+    }
+
+    private static string StripRouteTemplateSuffix(string value)
+    {
+        var normalized = value.TrimEnd('/');
+        var templateIndex = normalized.LastIndexOf("/{", StringComparison.Ordinal);
+        if (templateIndex >= 0 && normalized.EndsWith("}", StringComparison.Ordinal))
+            normalized = normalized[..templateIndex];
+
+        if (normalized.EndsWith("/*", StringComparison.Ordinal))
+            normalized = normalized[..^2];
+
+        return normalized.TrimEnd('/');
+    }
+
+    private static string ResolveProxyStatus(JsonElement element)
+    {
+        var status = ReadOptionalString(element, "status");
+        if (!string.IsNullOrWhiteSpace(status))
+            return status.Trim();
+
+        var connected = ReadOptionalBool(element, "connected") == true;
+        var hasNodeBinding = ReadOptionalBool(element, "has_node_binding", "hasNodeBinding") == true;
+        var requiresConnection = ReadOptionalBool(element, "requires_connection", "requiresConnection");
+        return connected || hasNodeBinding || requiresConnection == false
+            ? ReadyStatus
+            : "not_connected";
+    }
+
+    private static void AddServiceKeys(ISet<string> seen, NyxIdLlmService service)
+    {
+        AddIfPresent(seen, service.RouteValue);
+        AddIfPresent(seen, service.UserServiceId);
+        AddIfPresent(seen, service.ServiceSlug);
+    }
+
+    private static bool HasAnyServiceKey(ISet<string> seen, NyxIdLlmService service) =>
+        ContainsIfPresent(seen, service.RouteValue) ||
+        ContainsIfPresent(seen, service.UserServiceId) ||
+        ContainsIfPresent(seen, service.ServiceSlug);
+
+    private static void AddIfPresent(ISet<string> seen, string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+            seen.Add(value.Trim());
+    }
+
+    private static bool ContainsIfPresent(ISet<string> seen, string? value) =>
+        !string.IsNullOrWhiteSpace(value) && seen.Contains(value.Trim());
 
     private static JsonElement? TryGetProperty(JsonElement element, params string[] names)
     {

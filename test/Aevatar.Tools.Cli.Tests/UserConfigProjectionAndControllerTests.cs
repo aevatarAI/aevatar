@@ -553,9 +553,10 @@ public sealed class UserConfigProjectionAndControllerTests
         payload.Available.Should().ContainSingle().Which.ServiceId.Should().Be("svc-openai");
         payload.Current.Should().NotBeNull();
         payload.Current!.DisplayName.Should().Be("OpenAI Work");
-        httpHandler.Requests.Should().ContainSingle();
-        httpHandler.Requests[0].Path.Should().Be("/api/v1/llm/services");
-        httpHandler.Requests[0].Authorization.Should().Be("Bearer user-token-1");
+        httpHandler.Requests.Select(request => request.Path)
+            .Should()
+            .Equal("/api/v1/llm/services", "/api/v1/proxy/services?per_page=100");
+        httpHandler.Requests.Should().OnlyContain(request => request.Authorization == "Bearer user-token-1");
     }
 
     [Fact]
@@ -594,7 +595,83 @@ public sealed class UserConfigProjectionAndControllerTests
         option.Allowed.Should().BeTrue();
         httpHandler.Requests.Select(request => request.Path)
             .Should()
-            .Equal("/api/v1/llm/services", "/api/v1/llm/status");
+            .Equal(
+                "/api/v1/llm/services",
+                "/api/v1/llm/status",
+                "/api/v1/proxy/services?per_page=100");
+    }
+
+    [Fact]
+    public async Task UserConfigController_GetLlmOptions_MergesProxyLlmRouteCandidates()
+    {
+        var httpHandler = new RecordingHttpHandler(
+            (HttpStatusCode.OK, """
+            {
+              "services": [
+                {
+                  "user_service_id": "svc-openai",
+                  "service_slug": "openai-work",
+                  "display_name": "OpenAI Work",
+                  "route_value": "/api/v1/proxy/s/openai-work",
+                  "default_model": "gpt-5.4",
+                  "models": ["gpt-5.4"],
+                  "status": "ready",
+                  "source": "user",
+                  "allowed": true
+                }
+              ]
+            }
+            """),
+            (HttpStatusCode.OK, """
+            {
+              "services": [
+                {
+                  "id": "svc-chrono",
+                  "name": "Chrono LLM",
+                  "slug": "chrono-llm",
+                  "description": "Shared OpenAI-compatible route",
+                  "connected": false,
+                  "requires_connection": false,
+                  "has_node_binding": true,
+                  "proxy_url_slug": "https://nyxid.example/api/v1/proxy/s/chrono-llm/{path}"
+                },
+                {
+                  "id": "svc-github",
+                  "name": "GitHub",
+                  "slug": "api-github",
+                  "description": "Code hosting API",
+                  "connected": true,
+                  "requires_connection": false,
+                  "proxy_url_slug": "https://nyxid.example/api/v1/proxy/s/api-github/{path}"
+                }
+              ]
+            }
+            """));
+        var controller = CreateController(
+            new StubUserConfigQueryPort(),
+            new RecordingUserConfigCommandService(),
+            new StubHttpClientFactory(httpHandler),
+            BuildNyxIdConfiguration(),
+            bearerToken: "user-token-1");
+
+        var response = await controller.GetLlmOptions(CancellationToken.None);
+
+        var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var payload = ok.Value.Should().BeOfType<UserLlmOptionsView>().Subject;
+        payload.Available.Should().HaveCount(2);
+        var chrono = payload.Available.Should()
+            .Contain(option => option.ServiceSlug == "chrono-llm")
+            .Which;
+        chrono.ServiceId.Should().Be("svc-chrono");
+        chrono.DisplayName.Should().Be("Chrono LLM");
+        chrono.RouteValue.Should().Be("/api/v1/proxy/s/chrono-llm");
+        chrono.Source.Should().Be(NyxIdLlmProviderSource.ProxyService);
+        chrono.Status.Should().Be("ready");
+        chrono.Allowed.Should().BeTrue();
+        payload.Available.Should().NotContain(option => option.ServiceSlug == "api-github");
+        httpHandler.Requests.Select(request => request.Path)
+            .Should()
+            .Equal("/api/v1/llm/services", "/api/v1/proxy/services?per_page=100");
     }
 
     [Fact]
@@ -993,9 +1070,12 @@ public sealed class UserConfigProjectionAndControllerTests
         commandService.SavedConfig.DefaultModel.Should().Be("chrono-default");
         httpHandler.Requests.Select(request => request.Path)
             .Should()
-            .Equal("/api/v1/llm/services", "/api/v1/llm/services/chrono-llm%2Fshared");
-        httpHandler.Requests[1].Method.Should().Be("POST");
-        httpHandler.Requests[1].Body.Should().Be("{}");
+            .Equal(
+                "/api/v1/llm/services",
+                "/api/v1/proxy/services?per_page=100",
+                "/api/v1/llm/services/chrono-llm%2Fshared");
+        httpHandler.Requests[2].Method.Should().Be("POST");
+        httpHandler.Requests[2].Body.Should().Be("{}");
     }
 
     [Fact]
