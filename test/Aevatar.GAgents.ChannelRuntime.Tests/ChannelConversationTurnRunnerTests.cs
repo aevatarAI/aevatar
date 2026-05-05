@@ -1041,7 +1041,7 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
-    public async Task RunInboundAsync_ShouldSendBindingCard_WhenUnboundPrivateSenderSendsNormalMessage()
+    public async Task RunInboundAsync_ShouldRequestLlmReply_WhenUnboundPrivateSenderSendsNormalMessage()
     {
         var broker = new InMemoryCapabilityBroker();
         var services = new ServiceCollection()
@@ -1093,28 +1093,65 @@ public sealed class ChannelConversationTurnRunnerTests
             CancellationToken.None);
 
         result.Success.Should().BeTrue();
-        result.SentActivityId.Should().Be("reply-binding-card-1");
-        result.LlmReplyRequest.Should().BeNull();
-        result.Outbound.Cards.Should().ContainSingle(card => card.Title == "完成 NyxID 绑定");
-        result.Outbound.Actions.Should().ContainSingle(action =>
-            action.Kind == ActionElementKind.Link &&
-            action.IsPrimary &&
-            action.Value.Contains("test-nyxid.local/oauth/authorize"));
+        result.SentActivityId.Should().BeNullOrEmpty();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.ReplyToken.Should().Be("relay-token-binding-1");
+        result.LlmReplyRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.SenderBindingId);
+        result.LlmReplyRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.SenderNyxIdAccessToken);
+        result.Outbound.Cards.Should().BeEmpty();
+        result.Outbound.Actions.Should().BeEmpty();
         adapter.Replies.Should().BeEmpty();
-        await interactiveDispatcher.Received(1).DispatchAsync(
-            Arg.Is<ChannelId>(channel => channel.Value == "lark"),
-            "relay-msg-binding-1",
-            "relay-token-binding-1",
-            Arg.Is<MessageContent>(message =>
-                message.Cards.Count == 1 &&
-                message.Actions.Count == 1 &&
-                message.Actions[0].Value.Contains("test-nyxid.local/oauth/authorize")),
-            Arg.Any<ComposeContext>(),
-            Arg.Any<CancellationToken>());
+        await interactiveDispatcher.DidNotReceiveWithAnyArgs().DispatchAsync(
+            default!,
+            default!,
+            default!,
+            default!,
+            default!,
+            default);
     }
 
     [Fact]
-    public async Task RunInboundAsync_ShouldPromptPrivateChatWithoutSlashCommand_WhenUnboundGroupSender()
+    public async Task RunInboundAsync_ShouldAttachSenderBindingAndToken_WhenBoundSenderSendsNormalMessage()
+    {
+        var broker = new InMemoryCapabilityBroker();
+        broker.SeedBinding(
+            new ExternalSubjectRef
+            {
+                Platform = "lark",
+                Tenant = "scope-1",
+                ExternalUserId = "ou_user_1",
+            },
+            new BindingId { Value = "bnd-user-1" });
+
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<INyxIdCapabilityBroker>(broker)
+            .BuildServiceProvider();
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello",
+                "msg-bound-private-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                transportExtras: new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Metadata[LLMRequestMetadataKeys.SenderBindingId].Should().Be("bnd-user-1");
+        result.LlmReplyRequest.Metadata[LLMRequestMetadataKeys.SenderNyxIdAccessToken].Should().Be("test-access-token-for-bnd-user-1");
+        adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldRequestLlmReply_WhenUnboundGroupSenderSendsNormalMessage()
     {
         var broker = new InMemoryCapabilityBroker();
         var services = new ServiceCollection()
@@ -1130,10 +1167,10 @@ public sealed class ChannelConversationTurnRunnerTests
             CancellationToken.None);
 
         result.Success.Should().BeTrue();
-        result.LlmReplyRequest.Should().BeNull();
-        adapter.Replies.Should().ContainSingle();
-        adapter.Replies[0].ReplyText.Should().Contain("请与 bot 私聊任意消息以获取 NyxID 绑定卡片。");
-        adapter.Replies[0].ReplyText.Should().NotContain("/init");
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.SenderBindingId);
+        result.LlmReplyRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.SenderNyxIdAccessToken);
+        adapter.Replies.Should().BeEmpty();
     }
 
     [Theory]

@@ -251,6 +251,110 @@ public sealed class ConversationReplyGeneratorTests
         metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("5");
     }
 
+    [Fact]
+    public async Task GenerateReplyAsync_RetriesWithOwnerPrefsWhenSenderRouteFails()
+    {
+        var providerFactory = new RecordingProviderFactory
+        {
+            FailuresBeforeSuccess = 1,
+        };
+        var prefsStore = new ScopedStubPreferencesStore
+        {
+            ByBinding =
+            {
+                ["bnd_sender"] = new NyxIdUserLlmPreferences(
+                    "sender-model",
+                    "/api/v1/proxy/s/sender",
+                    MaxToolRounds: 7),
+            },
+        };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, preferencesStore: prefsStore);
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-sender-route-failure",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>
+            {
+                [LLMRequestMetadataKeys.ModelOverride] = "owner-model",
+                [LLMRequestMetadataKeys.NyxIdRoutePreference] = "/api/v1/proxy/s/owner",
+                [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "5",
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "owner-token",
+                [LLMRequestMetadataKeys.NyxIdOrgToken] = "owner-token",
+                [LLMRequestMetadataKeys.SenderBindingId] = "bnd_sender",
+                [LLMRequestMetadataKeys.SenderNyxIdAccessToken] = "sender-token",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Should().Be("ok");
+        providerFactory.Requests.Should().HaveCount(2);
+        var senderMetadata = providerFactory.Requests[0].Metadata!;
+        senderMetadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("sender-model");
+        senderMetadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/api/v1/proxy/s/sender");
+        senderMetadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("7");
+        senderMetadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("sender-token");
+        senderMetadata[LLMRequestMetadataKeys.NyxIdOrgToken].Should().Be("sender-token");
+        senderMetadata.Should().NotContainKey(LLMRequestMetadataKeys.SenderNyxIdAccessToken);
+
+        var ownerMetadata = providerFactory.Requests[1].Metadata!;
+        ownerMetadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("owner-model");
+        ownerMetadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/api/v1/proxy/s/owner");
+        ownerMetadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("5");
+        ownerMetadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("owner-token");
+        ownerMetadata[LLMRequestMetadataKeys.NyxIdOrgToken].Should().Be("owner-token");
+        ownerMetadata.Should().NotContainKey(LLMRequestMetadataKeys.SenderBindingId);
+        ownerMetadata.Should().NotContainKey(LLMRequestMetadataKeys.SenderNyxIdAccessToken);
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_UsesOwnerPrefsImmediatelyWhenSenderRouteHasNoToken()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var prefsStore = new ScopedStubPreferencesStore
+        {
+            ByBinding =
+            {
+                ["bnd_sender"] = new NyxIdUserLlmPreferences(
+                    "sender-model",
+                    "/api/v1/proxy/s/sender",
+                    MaxToolRounds: 7),
+            },
+        };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, preferencesStore: prefsStore);
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-no-sender-token",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>
+            {
+                [LLMRequestMetadataKeys.ModelOverride] = "owner-model",
+                [LLMRequestMetadataKeys.NyxIdRoutePreference] = "/api/v1/proxy/s/owner",
+                [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "5",
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "owner-token",
+                [LLMRequestMetadataKeys.NyxIdOrgToken] = "owner-token",
+                [LLMRequestMetadataKeys.SenderBindingId] = "bnd_sender",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        var ownerMetadata = providerFactory.Requests.Should().ContainSingle().Subject.Metadata!;
+        ownerMetadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("owner-model");
+        ownerMetadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/api/v1/proxy/s/owner");
+        ownerMetadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("5");
+        ownerMetadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("owner-token");
+        ownerMetadata[LLMRequestMetadataKeys.NyxIdOrgToken].Should().Be("owner-token");
+        ownerMetadata.Should().NotContainKey(LLMRequestMetadataKeys.SenderBindingId);
+        ownerMetadata.Should().NotContainKey(LLMRequestMetadataKeys.SenderNyxIdAccessToken);
+    }
+
     private sealed class ScopedStubPreferencesStore : INyxIdUserLlmPreferencesStore
     {
         public Dictionary<string, NyxIdUserLlmPreferences> ByBinding { get; } = new(StringComparer.Ordinal);
@@ -293,6 +397,8 @@ public sealed class ConversationReplyGeneratorTests
 
         public List<LLMRequest> Requests { get; } = [];
 
+        public int FailuresBeforeSuccess { get; init; }
+
         public ILLMProvider GetProvider(string name) => this;
 
         public ILLMProvider GetDefault() => this;
@@ -310,6 +416,9 @@ public sealed class ConversationReplyGeneratorTests
             [EnumeratorCancellation] CancellationToken ct = default)
         {
             Requests.Add(request);
+            if (Requests.Count <= FailuresBeforeSuccess)
+                throw new InvalidOperationException("simulated sender route failure");
+
             yield return new LLMStreamChunk
             {
                 DeltaContent = "ok",

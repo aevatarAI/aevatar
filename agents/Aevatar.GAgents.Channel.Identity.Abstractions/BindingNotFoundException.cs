@@ -12,9 +12,9 @@ namespace Aevatar.GAgents.Channel.Identity.Abstractions;
 /// <remarks>
 /// Caller behaviour:
 /// <list type="bullet">
-///   <item>Outbound / turn path: prompt the sender to run <c>/init</c>.</item>
-///   <item>Do NOT fall back to bot-owner credentials or any cached token
-///   (ADR-0018 §Implementation Notes #4).</item>
+///   <item>Binding-required commands: prompt the sender to run <c>/init</c>.</item>
+///   <item>Normal LLM turns: treat the sender config as unavailable and fall
+///   back to the bot owner's LLM credentials.</item>
 /// </list>
 /// </remarks>
 public sealed class BindingNotFoundException : Exception

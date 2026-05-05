@@ -83,8 +83,8 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
             // was never activated (issue #549 follow-up: the binding scope
             // missed an EnsureProjectionForActorAsync wiring while every
             // other GAgent had one) leaves the readmodel empty, the OAuth
-            // callback's readiness wait times out, and the next inbound
-            // message's binding gate keeps re-sending the user back to /init.
+            // callback's readiness wait times out, and binding-required
+            // commands keep re-sending the user back to /init.
             // Apply is identity, so the binding facts are not mutated by
             // this event.
             await PersistDomainEventAsync(new ExternalIdentityBindingProjectionRebuildRequestedEvent

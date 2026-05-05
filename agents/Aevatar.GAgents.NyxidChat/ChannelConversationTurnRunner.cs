@@ -7,6 +7,7 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
+using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Slash;
 using Aevatar.GAgents.Channel.NyxIdRelay;
@@ -24,6 +25,8 @@ namespace Aevatar.GAgents.NyxidChat;
 
 public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 {
+    private sealed record ResolvedSenderBinding(string BindingId, ExternalSubjectRef Subject);
+
     private readonly IServiceProvider _toolServiceProvider;
     private readonly IChannelBotRegistrationQueryPort _registrationQueryPort;
     private readonly IChannelBotRegistrationQueryByNyxIdentityPort? _registrationQueryByNyxIdentityPort;
@@ -113,19 +116,13 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (await TryHandleSlashCommandAsync(activity, inbound, registration, runtimeContext, ct) is { } slashResult)
             return slashResult;
 
-        // Pre-LLM binding gate: when broker mode is wired, an unbound sender
-        // MUST be prompted to bind NyxID rather than served by the bot owner's
-        // credentials (codex L65 security: ADR-0018 §Decision "未绑定 sender
-        // 一律强制绑定,不回落到 bot owner"). Falls through transparently
-        // when identity ports are not registered (legacy bot-owner-shared
-        // deployments). The gate also returns the resolved binding-id so the
-        // LLM dispatch can apply the sender prefs override chain (issue #513
-        // phase 3) without paying for a second projection lookup.
-        var (bindingGateResult, senderBindingId) = await TryEnforceBindingGateAsync(activity, inbound, registration, runtimeContext, ct).ConfigureAwait(false);
-        if (bindingGateResult is not null)
-            return bindingGateResult;
+        // Normal LLM messages do not force /init. If the sender is bound we
+        // carry that binding forward so the reply generator can try the
+        // sender's own NyxID LLM prefs first; otherwise the inbox/generator
+        // will use the bot owner's ambient LLM config.
+        var senderBinding = await TryResolveSenderBindingAsync(inbound, registration, ct).ConfigureAwait(false);
 
-        if (await TryHandleLlmSelectionCardActionAsync(activity, inbound, registration, runtimeContext, senderBindingId, ct).ConfigureAwait(false) is { } llmSelectionResult)
+        if (await TryHandleLlmSelectionCardActionAsync(activity, inbound, registration, runtimeContext, senderBinding?.BindingId, ct).ConfigureAwait(false) is { } llmSelectionResult)
             return llmSelectionResult;
 
         var inboundEvent = ToInboundEvent(activity, registration, inbound, ResolveUserAccessToken(activity));
@@ -157,7 +154,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
 
         return ConversationTurnResult.LlmReplyRequested(
-            await BuildLlmReplyRequestAsync(activity, registration, inboundEvent, runtimeContext, senderBindingId, ct).ConfigureAwait(false));
+            await BuildLlmReplyRequestAsync(activity, registration, inboundEvent, runtimeContext, senderBinding, ct).ConfigureAwait(false));
     }
 
     public Task<ConversationTurnResult> RunInboundAsync(ChatActivity activity, CancellationToken ct) =>
@@ -165,16 +162,16 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
     // ─── Slash command dispatch ───
     //
-    // ADR-0018 §Decision: when per-user binding is enabled, slash commands
-    // (/init, /unbind, /whoami, /model, ...) are routed before the LLM so the
-    // bot owner's bot-shared mode is bypassed for unbound senders. Handlers
+    // Slash commands (/init, /unbind, /whoami, /model, ...) are routed before
+    // the LLM so binding/configuration commands can own their per-user
+    // semantics without being swallowed by the chat model. Handlers
     // are discovered as IEnumerable<IChannelSlashCommandHandler> from DI;
     // identity ports are constructor-injected as optional capabilities so
     // deployments that have not enabled binding fall through to the legacy
     // flow. Phase 6 (issue #513):
     // each handler declares RequiresBinding so unbound senders trying to use
-    // a binding-only command (e.g. /model use) get the same hint as the LLM-
-    // turn binding gate instead of a stack trace.
+    // a binding-only command (e.g. /model use) get a binding hint instead of
+    // a stack trace; normal LLM turns still have owner fallback.
     private async Task<ConversationTurnResult?> TryHandleSlashCommandAsync(
         ChatActivity activity,
         InboundMessage inbound,
@@ -435,57 +432,45 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         return true;
     }
 
-    // Pre-LLM binding gate: when identity is wired, refuse to serve unbound
-    // senders with the bot owner's credentials (ADR-0018 §Decision). Returns
-    // (null, null) when binding is not enabled (legacy mode); returns
-    // (prompt, null) for unbound senders so the caller short-circuits with
-    // a binding prompt/card; returns (null, bindingId) for bound senders so the LLM
-    // dispatch can carry the binding-id forward into metadata for the issue
-    // #513 phase 3 prefs override chain.
-    private async Task<(ConversationTurnResult? Blocking, string? SenderBindingId)> TryEnforceBindingGateAsync(
-        ChatActivity activity,
+    // Normal LLM messages are allowed to use the bot owner's LLM config when
+    // the sender has no NyxID binding. Binding is only required by commands
+    // that configure or inspect per-user state (/models, /model use, ...).
+    private async Task<ResolvedSenderBinding?> TryResolveSenderBindingAsync(
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
-        ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
     {
         var queryPort = _identityBindingQueryPort;
         if (queryPort is null)
-            return (null, null);
+            return null;
 
-        if (string.IsNullOrWhiteSpace(inbound.SenderId) || string.IsNullOrWhiteSpace(inbound.Platform))
-            return (null, null);
-
-        var tenant = ResolveTenant(inbound, registration);
-        if (tenant is null)
-            return (null, null);
-
-        var subject = new ExternalSubjectRef
-        {
-            Platform = inbound.Platform.Trim().ToLowerInvariant(),
-            Tenant = tenant,
-            ExternalUserId = inbound.SenderId.Trim(),
-        };
+        if (!TryResolveExternalSubject(inbound, registration, out var subject))
+            return null;
 
         BindingId? existing;
         try
         {
             existing = await queryPort.ResolveAsync(subject, ct);
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
-            // Resolve failure should fail closed (refuse to serve with
-            // bot-owner credentials) rather than fail open. Log and treat as
-            // unbound.
-            _logger.LogError(ex, "Binding gate resolve failed for sender {Sender}; treating as unbound", inbound.SenderId);
-            existing = null;
+            _logger.LogWarning(
+                ex,
+                "Failed to resolve sender NyxID binding; falling back to bot owner LLM config. subject={Platform}:{Tenant}:{User}",
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            return null;
         }
 
         if (existing is not null)
-            return (null, existing.Value); // bound — continue with sender binding-id
+            return new ResolvedSenderBinding(existing.Value, subject.Clone());
 
-        var prompt = await SendBindingPromptAsync(activity, inbound, registration, runtimeContext, ct).ConfigureAwait(false);
-        return (prompt, null);
+        return null;
     }
 
     // Lark-aware private-chat detection. Other platforms map their direct-
@@ -1485,7 +1470,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ChannelBotRegistrationEntry registration,
         ChannelInboundEvent inboundEvent,
         ConversationTurnRuntimeContext runtimeContext,
-        string? senderBindingId,
+        ResolvedSenderBinding? senderBinding,
         CancellationToken ct)
     {
         var request = new NeedsLlmReplyEvent
@@ -1512,13 +1497,55 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         foreach (var pair in await BuildReplyMetadataAsync(inboundEvent, activity, ct))
             request.Metadata[pair.Key] = pair.Value;
 
-        // Issue #513 phase 3: tag the request with the sender's binding-id so
-        // the downstream reply generator can apply the prefs override chain
-        // (sender → bot owner → provider default).
-        if (!string.IsNullOrWhiteSpace(senderBindingId))
-            request.Metadata[LLMRequestMetadataKeys.SenderBindingId] = senderBindingId;
+        // Tag the request with the sender's binding-id and a short-lived token
+        // so the downstream reply generator can try the sender's own LLM
+        // route first. Missing token/binding is not an error: the generator
+        // falls back to the bot owner's upstream-pinned LLM config.
+        if (senderBinding is not null)
+        {
+            request.Metadata[LLMRequestMetadataKeys.SenderBindingId] = senderBinding.BindingId;
+            var senderAccessToken = await TryIssueSenderLlmAccessTokenAsync(senderBinding.Subject, ct).ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(senderAccessToken))
+                request.Metadata[LLMRequestMetadataKeys.SenderNyxIdAccessToken] = senderAccessToken;
+        }
 
         return request;
+    }
+
+    private async Task<string?> TryIssueSenderLlmAccessTokenAsync(
+        ExternalSubjectRef subject,
+        CancellationToken ct)
+    {
+        var broker = _capabilityBroker;
+        if (broker is null)
+            return null;
+
+        try
+        {
+            var handle = await broker
+                .IssueShortLivedAsync(
+                    subject,
+                    new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy },
+                    ct)
+                .ConfigureAwait(false);
+            return string.IsNullOrWhiteSpace(handle.AccessToken)
+                ? null
+                : handle.AccessToken.Trim();
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to issue sender NyxID LLM token; falling back to bot owner LLM config. subject={Platform}:{Tenant}:{User}",
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            return null;
+        }
     }
 
     private static string ResolveRoutingConversationId(ConversationReference? conversation)
