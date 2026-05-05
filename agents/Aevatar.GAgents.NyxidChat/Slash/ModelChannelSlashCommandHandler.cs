@@ -17,32 +17,26 @@ namespace Aevatar.GAgents.NyxidChat.Slash;
 public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandler
 {
     private static readonly char[] WhitespaceSeparators = [' ', '\t', '\r', '\n'];
-    private static readonly TimeSpan SelfHealProjectionWaitTimeout = TimeSpan.FromSeconds(3);
+    private const string SelfHealPublisherActorId = "nyxid-chat.model.self-heal";
 
     private readonly IUserLlmOptionsService? _optionsService;
     private readonly IUserLlmSelectionService? _selectionService;
     private readonly IUserLlmOptionsRenderer<MessageContent>? _renderer;
-    private readonly IActorRuntime? _actorRuntime;
-    private readonly ExternalIdentityBindingProjectionPort? _bindingProjectionPort;
-    private readonly IProjectionReadinessPort? _projectionReadinessPort;
+    private readonly IActorDispatchPort _actorDispatchPort;
     private readonly ILogger<ModelChannelSlashCommandHandler> _logger;
 
     public ModelChannelSlashCommandHandler(
         ILogger<ModelChannelSlashCommandHandler> logger,
+        IActorDispatchPort actorDispatchPort,
         IUserLlmOptionsService? optionsService = null,
         IUserLlmSelectionService? selectionService = null,
-        IUserLlmOptionsRenderer<MessageContent>? renderer = null,
-        IActorRuntime? actorRuntime = null,
-        ExternalIdentityBindingProjectionPort? bindingProjectionPort = null,
-        IProjectionReadinessPort? projectionReadinessPort = null)
+        IUserLlmOptionsRenderer<MessageContent>? renderer = null)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _optionsService = optionsService;
         _selectionService = selectionService;
         _renderer = renderer;
-        _actorRuntime = actorRuntime;
-        _bindingProjectionPort = bindingProjectionPort;
-        _projectionReadinessPort = projectionReadinessPort;
     }
 
     public string Name => "model";
@@ -92,8 +86,8 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
             return await SelfHealRevokedBindingAsync(
                 context,
                 reason: "auto_self_heal_remote_not_found",
-                cleanedMessage: "NyxID 端 binding 已不可用,本地已自动清理。请发送 /init 完成新绑定。",
-                degradedMessage: "NyxID 端 binding 已不可用,但本地状态同步失败。请发送 /unbind 后再发送 /init 重新绑定。",
+                submittedMessage: "NyxID 端 binding 已不可用,本地清理已提交。请稍后发送 /init 完成新绑定。",
+                degradedMessage: "NyxID 端 binding 已不可用,本地清理提交失败。请稍后重试 /models,或发送 /unbind 后再发送 /init 重新绑定。",
                 ct).ConfigureAwait(false);
         }
         catch (BindingRevokedException)
@@ -101,8 +95,8 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
             return await SelfHealRevokedBindingAsync(
                 context,
                 reason: "auto_self_heal_remote_revoked",
-                cleanedMessage: "NyxID 端 binding 已失效,本地已自动清理。请发送 /init 完成新绑定。",
-                degradedMessage: "NyxID 端 binding 已失效,但本地状态同步失败。请发送 /unbind 后再发送 /init 重新绑定。",
+                submittedMessage: "NyxID 端 binding 已失效,本地清理已提交。请稍后发送 /init 完成新绑定。",
+                degradedMessage: "NyxID 端 binding 已失效,本地清理提交失败。请稍后重试 /models,或发送 /unbind 后再发送 /init 重新绑定。",
                 ct).ConfigureAwait(false);
         }
         catch (BindingScopeMismatchException)
@@ -110,8 +104,8 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
             return await SelfHealRevokedBindingAsync(
                 context,
                 reason: "auto_self_heal_scope_mismatch",
-                cleanedMessage: "当前 NyxID 绑定缺少 LLM route 权限,本地已自动清理。请发送 /init 完成新绑定。",
-                degradedMessage: "当前 NyxID 绑定缺少 LLM route 权限,但本地状态同步失败。请发送 /unbind 后再发送 /init 重新绑定。",
+                submittedMessage: "当前 NyxID 绑定缺少 LLM route 权限,本地清理已提交。请稍后发送 /init 完成新绑定。",
+                degradedMessage: "当前 NyxID 绑定缺少 LLM route 权限,本地清理提交失败。请稍后重试 /models,或发送 /unbind 后再发送 /init 重新绑定。",
                 ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or HttpRequestException or NotSupportedException)
@@ -122,44 +116,26 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
     }
 
     /// <summary>
-    /// Auto-revoke the local binding actor when NyxID has reported the
-    /// binding is gone (revoked / not_found / scope-mismatch). Without this
-    /// the user is stuck in a loop: <c>/init</c> sees the local readmodel
-    /// still says "bound" and refuses; <c>/model</c> + <c>/route</c> exercise
-    /// the broker, get the rejection, and tell the user to <c>/init</c> —
-    /// which refuses again. Self-healing flips the local actor's state to
-    /// revoked so the next <c>/init</c> goes through cleanly.
+    /// Submits a local binding revoke when NyxID reports the binding is gone
+    /// (revoked / not_found / scope-mismatch). This is intentionally dispatch
+    /// only: the slash request path must not activate projection scopes or
+    /// wait for read-model materialization. The user is told cleanup has been
+    /// submitted and can retry <c>/init</c> after the projection catches up.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// Mirrors the dispatch shape <see cref="UnbindChannelSlashCommandHandler"/>
-    /// uses for explicit /unbind, including the single retry on transient
-    /// dispatch failure. Differs in that the NyxID-side revoke is already
-    /// done (NyxID is the one telling us the binding is gone), so we only
-    /// need to flip the local actor — no second broker call.
-    /// </para>
-    /// <para>
-    /// Returns <paramref name="cleanedMessage"/> ONLY when the binding
-    /// projection scope is active and the local revoke envelope was actually
-    /// dispatched. When <see cref="IActorRuntime"/> or
-    /// <see cref="ExternalIdentityBindingProjectionPort"/> /
-    /// <see cref="IProjectionReadinessPort"/> is not registered, the readmodel
-    /// does not observe the cleanup, or both attempts threw, returns
-    /// <paramref name="degradedMessage"/> instead — claiming "本地已自动清理" in
-    /// those paths would lie to the user, sending them to <c>/init</c> which
-    /// would still see the stale local binding and refuse, recreating the same
-    /// loop this self-heal exists to break (PR #561 review).
-    /// </para>
+    /// Differs from explicit <c>/unbind</c> because the NyxID-side revoke is
+    /// already known; we only need to flip the local actor, with one retry for
+    /// transient dispatch failure.
     /// </remarks>
     private async Task<MessageContent> SelfHealRevokedBindingAsync(
         ChannelSlashCommandContext context,
         string reason,
-        string cleanedMessage,
+        string submittedMessage,
         string degradedMessage,
         CancellationToken ct)
     {
-        var cleaned = await TryDispatchLocalBindingRevokeAsync(context, reason, ct).ConfigureAwait(false);
-        return new MessageContent { Text = cleaned ? cleanedMessage : degradedMessage };
+        var submitted = await TryDispatchLocalBindingRevokeAsync(context, reason, ct).ConfigureAwait(false);
+        return new MessageContent { Text = submitted ? submittedMessage : degradedMessage };
     }
 
     private async Task<bool> TryDispatchLocalBindingRevokeAsync(
@@ -167,63 +143,15 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
         string reason,
         CancellationToken ct)
     {
-        if (_actorRuntime is null)
-        {
-            _logger.LogWarning(
-                "/model encountered NyxID-side binding rejection ({Reason}) but IActorRuntime is not registered; cannot self-heal local actor. subject={Platform}:{Tenant}:{User}",
-                reason,
-                context.Subject.Platform, context.Subject.Tenant, context.Subject.ExternalUserId);
-            return false;
-        }
-
         var actorId = context.Subject.ToActorId();
-        if (_bindingProjectionPort is null)
-        {
-            _logger.LogWarning(
-                "/model encountered NyxID-side binding rejection ({Reason}) but ExternalIdentityBindingProjectionPort is not registered; cannot guarantee local readmodel cleanup. actor={ActorId}, subject={Platform}:{Tenant}:{User}",
-                reason,
-                actorId,
-                context.Subject.Platform, context.Subject.Tenant, context.Subject.ExternalUserId);
-            return false;
-        }
-        if (_projectionReadinessPort is null)
-        {
-            _logger.LogWarning(
-                "/model encountered NyxID-side binding rejection ({Reason}) but IProjectionReadinessPort is not registered; cannot verify local readmodel cleanup. actor={ActorId}, subject={Platform}:{Tenant}:{User}",
-                reason,
-                actorId,
-                context.Subject.Platform, context.Subject.Tenant, context.Subject.ExternalUserId);
-            return false;
-        }
 
-        // Single retry mirrors UnbindChannelSlashCommandHandler — without it a
-        // one-off Orleans dispatch hiccup leaves the user thinking they're
-        // unbound while the readmodel still says they're bound (PR #521 review
-        // v4-pro on /unbind). Projection activation is part of the attempt:
-        // without an active scope, the revoke/rebuild event commits but the
-        // binding readmodel remains stale. Readiness is also part of the
-        // success condition: the user only sees "本地已自动清理" after the read
-        // side no longer reports an active binding.
+        // Single retry mirrors /unbind: a one-off dispatch hiccup should not
+        // leave the user permanently stuck with a stale local binding.
         Exception? lastError = null;
         for (var attempt = 1; attempt <= 2; attempt++)
         {
             try
             {
-                var lease = await _bindingProjectionPort
-                    .EnsureProjectionForActorAsync(actorId, ct)
-                    .ConfigureAwait(false);
-                if (lease is null)
-                {
-                    _logger.LogWarning(
-                        "/model: binding projection activation returned null for actor={ActorId}, reason={Reason}",
-                        actorId,
-                        reason);
-                    return false;
-                }
-
-                var actor = await _actorRuntime
-                    .CreateAsync<ExternalIdentityBindingGAgent>(actorId, ct)
-                    .ConfigureAwait(false);
                 var envelope = new EventEnvelope
                 {
                     Id = Guid.NewGuid().ToString("N"),
@@ -233,21 +161,13 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
                         ExternalSubject = context.Subject.Clone(),
                         Reason = reason,
                     }),
-                    Route = new EnvelopeRoute
-                    {
-                        Direct = new DirectRoute { TargetActorId = actorId },
-                    },
+                    Route = EnvelopeRouteSemantics.CreateDirect(SelfHealPublisherActorId, actorId),
                 };
-                await actor.HandleEventAsync(envelope, ct).ConfigureAwait(false);
-                await _projectionReadinessPort
-                    .WaitForBindingStateAsync(
-                        context.Subject,
-                        expectedBindingId: null,
-                        SelfHealProjectionWaitTimeout,
-                        ct)
+                await _actorDispatchPort
+                    .DispatchAsync(actorId, envelope, ct)
                     .ConfigureAwait(false);
                 _logger.LogWarning(
-                    "/model self-healed local binding actor={ActorId} after NyxID-side rejection: reason={Reason}, attempt={Attempt}/2, subject={Platform}:{Tenant}:{User}",
+                    "/model submitted local binding self-heal actor={ActorId} after NyxID-side rejection: reason={Reason}, attempt={Attempt}/2, subject={Platform}:{Tenant}:{User}",
                     actorId,
                     reason,
                     attempt,

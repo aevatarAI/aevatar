@@ -366,23 +366,59 @@ public static class NyxIdLlmServiceCatalogParser
             ReadOptionalString(element, "openapi_url", "openapiUrl"),
         };
 
-        return signals.Any(ContainsLlmRouteSignal);
+        if (signals.Any(ContainsNegativeLlmRouteSignal))
+            return false;
+
+        if (signals.Any(ContainsStrongLlmRouteSignal))
+            return true;
+
+        return signals
+            .SelectMany(EnumerateWeakLlmRouteSignals)
+            .Distinct(StringComparer.Ordinal)
+            .Count() >= 2;
     }
 
-    private static bool ContainsLlmRouteSignal(string? value)
+    private static bool ContainsStrongLlmRouteSignal(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
             return false;
 
         var normalized = value.Trim().ToLowerInvariant();
         return normalized.Contains("llm", StringComparison.Ordinal) ||
-               normalized.Contains("openai", StringComparison.Ordinal) ||
                normalized.Contains("chat/completions", StringComparison.Ordinal) ||
                normalized.Contains("chat completions", StringComparison.Ordinal) ||
                normalized.Contains("chat completion", StringComparison.Ordinal) ||
                normalized.Contains("completions api", StringComparison.Ordinal) ||
                normalized.Contains("large language model", StringComparison.Ordinal) ||
                normalized.Contains("language model", StringComparison.Ordinal);
+    }
+
+    private static IEnumerable<string> EnumerateWeakLlmRouteSignals(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            yield break;
+
+        var normalized = value.Trim().ToLowerInvariant();
+        if (normalized.Contains("openai", StringComparison.Ordinal))
+            yield return "openai";
+        if (normalized.Contains("gpt", StringComparison.Ordinal))
+            yield return "gpt";
+        if (normalized.Contains("claude", StringComparison.Ordinal))
+            yield return "claude";
+    }
+
+    private static bool ContainsNegativeLlmRouteSignal(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        var normalized = value.Trim().ToLowerInvariant();
+        return normalized.Contains("not an llm", StringComparison.Ordinal) ||
+               normalized.Contains("not a llm", StringComparison.Ordinal) ||
+               normalized.Contains("not llm", StringComparison.Ordinal) ||
+               normalized.Contains("non-llm", StringComparison.Ordinal) ||
+               normalized.Contains("not a language model", StringComparison.Ordinal) ||
+               normalized.Contains("not a large language model", StringComparison.Ordinal);
     }
 
     private static string? NormalizeProxyRouteValue(string? value, string slug)

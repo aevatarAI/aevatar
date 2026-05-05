@@ -246,10 +246,14 @@ public sealed class ActorBackedStoreAdapterTests
     {
         private readonly Dictionary<string, TDoc> _docs = new(StringComparer.Ordinal);
 
+        public Exception? GetError { get; set; }
+
         public void Set(string key, TDoc document) => _docs[key] = document;
 
-        public Task<TDoc?> GetAsync(string key, CancellationToken ct = default)
-            => Task.FromResult(_docs.GetValueOrDefault(key));
+        public Task<TDoc?> GetAsync(string key, CancellationToken ct = default) =>
+            GetError is null
+                ? Task.FromResult(_docs.GetValueOrDefault(key))
+                : Task.FromException<TDoc?>(GetError);
 
         public Task<ProjectionDocumentQueryResult<TDoc>> QueryAsync(
             ProjectionDocumentQuery query, CancellationToken ct = default)
@@ -1126,8 +1130,9 @@ public sealed class ActorBackedStoreAdapterTests
         var removed = await store.RemoveEntryAsync("missing");
 
         removed.Should().BeFalse();
-        var actor = runtime.Actors["user-memory-user-1"];
-        actor.ReceivedEnvelopes.Should().BeEmpty("no remove command should be dispatched when entry is missing");
+        runtime.Actors.Should().NotContainKey(
+            "user-memory-user-1",
+            "missing deletes should not create or activate a write actor");
     }
 
     [Fact]
@@ -1163,6 +1168,22 @@ public sealed class ActorBackedStoreAdapterTests
         prompt.Should().Contain("- Prefers concise answers");
         prompt.Should().Contain("</user-memory>");
         prompt.Length.Should().BeLessThanOrEqualTo(85);
+    }
+
+    [Fact]
+    public async Task UserMemoryStore_BuildPromptSectionAsync_ReadFailure_ReturnsEmpty()
+    {
+        var runtime = new FakeActorRuntime();
+        var reader = EmptyReader<UserMemoryCurrentStateDocument>();
+        reader.GetError = new InvalidOperationException("projection unavailable");
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "user-1" };
+        var logger = NullLogger<ActorBackedUserMemoryStore>.Instance;
+        var store = new ActorBackedUserMemoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, reader, logger);
+
+        var prompt = await store.BuildPromptSectionAsync();
+
+        prompt.Should().BeEmpty();
+        runtime.Actors.Should().BeEmpty();
     }
 
     [Fact]

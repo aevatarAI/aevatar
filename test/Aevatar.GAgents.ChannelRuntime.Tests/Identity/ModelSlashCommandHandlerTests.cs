@@ -1,4 +1,3 @@
-using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
@@ -8,10 +7,8 @@ using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.NyxidChat.Slash;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
-using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
-using NSubstitute;
 using Xunit;
 using StudioConfig = Aevatar.Studio.Application.Studio.Abstractions.UserConfig;
 
@@ -129,18 +126,18 @@ public sealed class ModelSlashCommandHandlerTests
         // aevatar's DCR started requesting `proxy`, so the broker can no longer
         // mint LLM-API tokens for it. Self-heal by revoking the local actor so
         // /init is unblocked, AND tell the user.
-        var actorRuntime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort();
         var handler = CreateHandler(
             broker: new ThrowingCapabilityBroker(new BindingScopeMismatchException(Context().Subject)),
-            actorRuntime: actorRuntime);
+            actorDispatchPort: dispatchPort);
 
         var reply = await handler.HandleAsync(Context(), default);
 
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("缺少 LLM route 权限");
-        reply.Text.Should().Contain("已自动清理");
+        reply.Text.Should().Contain("清理已提交");
         reply.Text.Should().Contain("/init");
-        AssertRevokeBindingDispatched(actorRuntime, expectedReason: "auto_self_heal_scope_mismatch");
+        AssertRevokeBindingDispatched(dispatchPort, expectedReason: "auto_self_heal_scope_mismatch");
     }
 
     [Fact]
@@ -149,139 +146,62 @@ public sealed class ModelSlashCommandHandlerTests
         // NyxID itself returned binding_revoked (e.g. user revoked at NyxID admin
         // or the binding tied to a re-DCR'd cluster client_id was invalidated).
         // Wipe the local readmodel so /init isn't blocked by stale state.
-        var actorRuntime = new RecordingActorRuntime();
-        var projectionActivation = new RecordingBindingProjectionActivation();
-        var readiness = new RecordingProjectionReadinessPort();
+        var dispatchPort = new RecordingActorDispatchPort();
         var handler = CreateHandler(
             broker: new ThrowingCapabilityBroker(new BindingRevokedException(Context().Subject)),
-            actorRuntime: actorRuntime,
-            bindingProjectionPort: NewProjectionPort(projectionActivation),
-            projectionReadinessPort: readiness);
+            actorDispatchPort: dispatchPort);
 
         var reply = await handler.HandleAsync(Context(), default);
 
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("失效");
-        reply.Text.Should().Contain("已自动清理");
+        reply.Text.Should().Contain("清理已提交");
         reply.Text.Should().Contain("/init");
-        projectionActivation.Requests.Should().ContainSingle()
-            .Which.RootActorId.Should().Be(Context().Subject.ToActorId());
-        readiness.Requests.Should().ContainSingle()
-            .Which.ExpectedBindingId.Should().BeNull();
-        AssertRevokeBindingDispatched(actorRuntime, expectedReason: "auto_self_heal_remote_revoked");
+        AssertRevokeBindingDispatched(dispatchPort, expectedReason: "auto_self_heal_remote_revoked");
     }
 
     [Fact]
     public async Task List_SelfHealsAndRebindsMessage_WhenBindingNotFoundRemotely()
     {
-        var actorRuntime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort();
         var handler = CreateHandler(
             broker: new ThrowingCapabilityBroker(new BindingNotFoundException(Context().Subject)),
-            actorRuntime: actorRuntime);
+            actorDispatchPort: dispatchPort);
 
         var reply = await handler.HandleAsync(Context(), default);
 
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("不可用");
-        reply.Text.Should().Contain("已自动清理");
+        reply.Text.Should().Contain("清理已提交");
         reply.Text.Should().Contain("/init");
-        AssertRevokeBindingDispatched(actorRuntime, expectedReason: "auto_self_heal_remote_not_found");
-    }
-
-    [Fact]
-    public async Task List_DegradesToUnbindGuidance_WhenSelfHealActorRuntimeMissing()
-    {
-        // Deployments without IActorRuntime registered (CLI playground, certain
-        // demo hosts) cannot dispatch the local revoke. The handler MUST NOT
-        // claim "本地已自动清理" in that case — that would send the user to
-        // /init, which would still see the stale local binding and refuse,
-        // recreating the loop this PR exists to break (PR #561 review eanzhao
-        // / chatgpt-codex). Surface the degraded message that explicitly
-        // points at /unbind so the user has a path that works.
-        var handler = CreateHandler(
-            broker: new ThrowingCapabilityBroker(new BindingRevokedException(Context().Subject)),
-            actorRuntime: null);
-
-        var reply = await handler.HandleAsync(Context(), default);
-
-        reply.Should().NotBeNull();
-        reply!.Text.Should().Contain("失效");
-        reply.Text.Should().Contain("/unbind");
-        reply.Text.Should().NotContain("已自动清理");
-    }
-
-    [Fact]
-    public async Task List_DegradesToUnbindGuidance_WhenBindingProjectionPortMissing()
-    {
-        // Dispatching the revoke without activating the binding projection
-        // only updates actor state; the readmodel gate would still see the old
-        // active binding. In that case the handler must not claim auto-clean
-        // succeeded.
-        var actorRuntime = new RecordingActorRuntime();
-        var handler = CreateHandler(
-            broker: new ThrowingCapabilityBroker(new BindingRevokedException(Context().Subject)),
-            actorRuntime: actorRuntime,
-            useDefaultBindingProjectionPort: false);
-
-        var reply = await handler.HandleAsync(Context(), default);
-
-        reply.Should().NotBeNull();
-        reply!.Text.Should().Contain("失效");
-        reply.Text.Should().Contain("/unbind");
-        reply.Text.Should().NotContain("已自动清理");
-        actorRuntime.Dispatched.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task List_DegradesToUnbindGuidance_WhenReadmodelCleanupIsNotObserved()
-    {
-        // A committed revoke is not enough: if the readmodel stays stale, the
-        // next /init will still say "already bound". The handler must only
-        // claim auto-clean after readiness observes no active binding.
-        var actorRuntime = new RecordingActorRuntime();
-        var handler = CreateHandler(
-            broker: new ThrowingCapabilityBroker(new BindingRevokedException(Context().Subject)),
-            actorRuntime: actorRuntime,
-            projectionReadinessPort: new ThrowingProjectionReadinessPort());
-
-        var reply = await handler.HandleAsync(Context(), default);
-
-        reply.Should().NotBeNull();
-        reply!.Text.Should().Contain("失效");
-        reply.Text.Should().Contain("/unbind");
-        reply.Text.Should().NotContain("已自动清理");
-        actorRuntime.Dispatched.Should().HaveCount(2, "self-heal retries once when readmodel cleanup is not observed");
+        AssertRevokeBindingDispatched(dispatchPort, expectedReason: "auto_self_heal_remote_not_found");
     }
 
     [Fact]
     public async Task List_DegradesToUnbindGuidance_WhenSelfHealDispatchKeepsThrowing()
     {
-        // Even when IActorRuntime IS registered, runtime / Orleans hiccups can
-        // make every dispatch attempt throw. The handler retries once (mirrors
-        // UnbindChannelSlashCommandHandler's PR #521 v4-pro review fix); if
-        // both attempts fail, the local readmodel is still stale, so we MUST
-        // tell the user to /unbind manually instead of falsely claiming
-        // auto-clean succeeded.
-        var actorRuntime = new ThrowingActorRuntime();
+        var dispatchPort = new ThrowingActorDispatchPort();
         var handler = CreateHandler(
             broker: new ThrowingCapabilityBroker(new BindingRevokedException(Context().Subject)),
-            actorRuntime: actorRuntime);
+            actorDispatchPort: dispatchPort);
 
         var reply = await handler.HandleAsync(Context(), default);
 
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("失效");
+        reply.Text.Should().Contain("清理提交失败");
         reply.Text.Should().Contain("/unbind");
-        reply.Text.Should().NotContain("已自动清理");
-        actorRuntime.AttemptCount.Should().Be(2, "self-heal must attempt the local revoke twice before degrading");
+        reply.Text.Should().NotContain("清理已提交");
+        dispatchPort.AttemptCount.Should().Be(2, "self-heal must attempt the local revoke twice before degrading");
     }
 
-    private static void AssertRevokeBindingDispatched(RecordingActorRuntime runtime, string expectedReason)
+    private static void AssertRevokeBindingDispatched(RecordingActorDispatchPort dispatchPort, string expectedReason)
     {
-        runtime.Dispatched.Should().ContainSingle("self-heal must dispatch exactly one local revoke");
-        var (actorId, envelope) = runtime.Dispatched[0];
+        dispatchPort.Dispatched.Should().ContainSingle("self-heal must dispatch exactly one local revoke");
+        var (actorId, envelope) = dispatchPort.Dispatched[0];
         actorId.Should().Be(Context().Subject.ToActorId());
         envelope.Route.Direct.TargetActorId.Should().Be(actorId);
+        envelope.Route.PublisherActorId.Should().Be("nyxid-chat.model.self-heal");
 
         var revoke = envelope.Payload.Unpack<RevokeBindingCommand>();
         revoke.Reason.Should().Be(expectedReason);
@@ -484,17 +404,12 @@ public sealed class ModelSlashCommandHandlerTests
         StubUserConfigQueryPort? queryPort = null,
         StubUserConfigCommandService? commandService = null,
         INyxIdCapabilityBroker? broker = null,
-        IActorRuntime? actorRuntime = null,
-        ExternalIdentityBindingProjectionPort? bindingProjectionPort = null,
-        IProjectionReadinessPort? projectionReadinessPort = null,
-        bool useDefaultBindingProjectionPort = true)
+        IActorDispatchPort? actorDispatchPort = null)
     {
         catalog ??= new StubCatalogClient();
         queryPort ??= new StubUserConfigQueryPort();
         commandService ??= new StubUserConfigCommandService();
-        if (bindingProjectionPort is null && useDefaultBindingProjectionPort && actorRuntime is not null)
-            bindingProjectionPort = NewProjectionPort();
-        projectionReadinessPort ??= actorRuntime is null ? null : new RecordingProjectionReadinessPort();
+        actorDispatchPort ??= new RecordingActorDispatchPort();
 
         var provider = new ServiceCollection()
             .AddSingleton<IUserConfigQueryPort>(queryPort)
@@ -505,115 +420,32 @@ public sealed class ModelSlashCommandHandlerTests
         var selection = new DefaultUserLlmSelectionService(options, catalog, scopeFactory, broker);
         return new ModelChannelSlashCommandHandler(
             NullLogger<ModelChannelSlashCommandHandler>.Instance,
+            actorDispatchPort,
             options,
             selection,
-            new TextUserLlmOptionsRenderer(),
-            actorRuntime,
-            bindingProjectionPort,
-            projectionReadinessPort);
+            new TextUserLlmOptionsRenderer());
     }
 
-    private static ExternalIdentityBindingProjectionPort NewProjectionPort(
-        RecordingBindingProjectionActivation? activation = null) =>
-        new(activation ?? new RecordingBindingProjectionActivation());
-
-    /// <summary>
-    /// Records every <see cref="EventEnvelope"/> the handler dispatches so
-    /// tests can assert the binding self-heal fires <c>RevokeBindingCommand</c>
-    /// to the local actor when NyxID rejects the binding.
-    /// </summary>
-    private sealed class RecordingActorRuntime : IActorRuntime
+    private sealed class RecordingActorDispatchPort : IActorDispatchPort
     {
         public List<(string ActorId, EventEnvelope Envelope)> Dispatched { get; } = [];
 
-        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
-            var actor = Substitute.For<IActor>();
-            actor.Id.Returns(id ?? string.Empty);
-            actor.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
-                .Returns(call =>
-                {
-                    Dispatched.Add((id ?? string.Empty, call.Arg<EventEnvelope>()));
-                    return Task.CompletedTask;
-                });
-            return Task.FromResult(actor);
-        }
-
-        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default)
-            => throw new NotImplementedException();
-        public Task DestroyAsync(string id, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task<IActor?> GetAsync(string id) => throw new NotImplementedException();
-        public Task<bool> ExistsAsync(string id) => throw new NotImplementedException();
-        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task UnlinkAsync(string childId, CancellationToken ct = default) => throw new NotImplementedException();
-    }
-
-    /// <summary>
-    /// Forces every <see cref="CreateAsync"/> call to throw, simulating a
-    /// transient Orleans / runtime hiccup so tests can pin the retry-once-
-    /// then-degrade contract on the binding self-heal path.
-    /// </summary>
-    private sealed class ThrowingActorRuntime : IActorRuntime
-    {
-        public int AttemptCount { get; private set; }
-
-        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent
-        {
-            AttemptCount++;
-            throw new InvalidOperationException("simulated runtime dispatch failure");
-        }
-
-        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default)
-            => throw new NotImplementedException();
-        public Task DestroyAsync(string id, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task<IActor?> GetAsync(string id) => throw new NotImplementedException();
-        public Task<bool> ExistsAsync(string id) => throw new NotImplementedException();
-        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task UnlinkAsync(string childId, CancellationToken ct = default) => throw new NotImplementedException();
-    }
-
-    private sealed class RecordingBindingProjectionActivation
-        : IProjectionScopeActivationService<ExternalIdentityBindingMaterializationRuntimeLease>
-    {
-        public List<ProjectionScopeStartRequest> Requests { get; } = [];
-
-        public Task<ExternalIdentityBindingMaterializationRuntimeLease> EnsureAsync(
-            ProjectionScopeStartRequest request,
-            CancellationToken ct = default)
-        {
-            Requests.Add(request);
-            return Task.FromResult(new ExternalIdentityBindingMaterializationRuntimeLease(
-                new ExternalIdentityBindingMaterializationContext
-                {
-                    RootActorId = request.RootActorId,
-                    ProjectionKind = request.ProjectionKind,
-                }));
-        }
-    }
-
-    private sealed class RecordingProjectionReadinessPort : IProjectionReadinessPort
-    {
-        public List<(ExternalSubjectRef Subject, string? ExpectedBindingId)> Requests { get; } = [];
-
-        public Task WaitForBindingStateAsync(
-            ExternalSubjectRef externalSubject,
-            string? expectedBindingId,
-            TimeSpan timeout,
-            CancellationToken ct = default)
-        {
-            Requests.Add((externalSubject.Clone(), expectedBindingId));
+            Dispatched.Add((actorId, envelope));
             return Task.CompletedTask;
         }
     }
 
-    private sealed class ThrowingProjectionReadinessPort : IProjectionReadinessPort
+    private sealed class ThrowingActorDispatchPort : IActorDispatchPort
     {
-        public Task WaitForBindingStateAsync(
-            ExternalSubjectRef externalSubject,
-            string? expectedBindingId,
-            TimeSpan timeout,
-            CancellationToken ct = default) =>
-            throw new TimeoutException("simulated projection cleanup timeout");
+        public int AttemptCount { get; private set; }
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            AttemptCount++;
+            throw new InvalidOperationException("simulated dispatch failure");
+        }
     }
 
     private static StudioConfig MakeConfig(

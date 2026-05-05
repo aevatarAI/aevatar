@@ -38,6 +38,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     // and the user access token (~15 min TTL) used for the LLM call is definitely gone.
     // Drop them rather than burn an LLM round and reply hours late.
     private static readonly TimeSpan PendingLlmReplyRequestMaxAge = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan StreamingFailureUpdateTimeout = TimeSpan.FromSeconds(10);
 
     // Mirror of DeferredLlmDispatchRetryDelay for the inbound-turn retry pipeline.
     // The same reminder-granularity floor applies: any requested retry shorter than this
@@ -681,11 +682,12 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 AccumulatedText = failureText,
                 ChunkAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             };
+            using var failureUpdateCts = new CancellationTokenSource(StreamingFailureUpdateTimeout);
             var failureResult = await runner.RunStreamChunkAsync(
                 failureChunk,
                 platformMessageId,
                 runtimeContext,
-                CancellationToken.None);
+                failureUpdateCts.Token);
             if (failureResult.Success)
             {
                 Logger.LogWarning(

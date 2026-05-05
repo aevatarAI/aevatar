@@ -643,6 +643,24 @@ public sealed class UserConfigProjectionAndControllerTests
                   "connected": true,
                   "requires_connection": false,
                   "proxy_url_slug": "https://nyxid.example/api/v1/proxy/s/api-github/{path}"
+                },
+                {
+                  "id": "svc-openai-webhook",
+                  "name": "OpenAI webhook management",
+                  "slug": "api-openai-webhook",
+                  "description": "Webhook management API",
+                  "connected": true,
+                  "requires_connection": false,
+                  "proxy_url_slug": "https://nyxid.example/api/v1/proxy/s/api-openai-webhook/{path}"
+                },
+                {
+                  "id": "svc-not-llm",
+                  "name": "OpenAI admin",
+                  "slug": "admin-openai",
+                  "description": "Not an LLM endpoint",
+                  "connected": true,
+                  "requires_connection": false,
+                  "proxy_url_slug": "https://nyxid.example/api/v1/proxy/s/admin-openai/{path}"
                 }
               ]
             }
@@ -669,6 +687,8 @@ public sealed class UserConfigProjectionAndControllerTests
         chrono.Status.Should().Be("ready");
         chrono.Allowed.Should().BeTrue();
         payload.Available.Should().NotContain(option => option.ServiceSlug == "api-github");
+        payload.Available.Should().NotContain(option => option.ServiceSlug == "api-openai-webhook");
+        payload.Available.Should().NotContain(option => option.ServiceSlug == "admin-openai");
         httpHandler.Requests.Select(request => request.Path)
             .Should()
             .Equal("/api/v1/llm/services", "/api/v1/proxy/services?per_page=100");

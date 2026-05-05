@@ -292,6 +292,9 @@ public sealed class MEAILLMProvider : ILLMProvider
 
         var rawMessage = BuildOpenAIAssistantMessage(sourceMessage);
 
+        // OpenAI SDK currently exposes no typed reasoning_content property for
+        // assistant history messages. Keep the raw patch isolated here and
+        // pinned by AIComponentCoverageTests before touching SDK versions.
 #pragma warning disable SCME0001
         rawMessage.Patch.Set("$.reasoning_content"u8, sourceMessage.ReasoningContent);
 #pragma warning restore SCME0001

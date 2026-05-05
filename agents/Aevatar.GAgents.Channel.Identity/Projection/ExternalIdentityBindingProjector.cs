@@ -3,6 +3,8 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.GAgents.Channel.Identity;
 
@@ -19,13 +21,16 @@ public sealed class ExternalIdentityBindingProjector
 {
     private readonly IProjectionWriteDispatcher<ExternalIdentityBindingDocument> _writeDispatcher;
     private readonly IProjectionClock _clock;
+    private readonly ILogger<ExternalIdentityBindingProjector> _logger;
 
     public ExternalIdentityBindingProjector(
         IProjectionWriteDispatcher<ExternalIdentityBindingDocument> writeDispatcher,
-        IProjectionClock clock)
+        IProjectionClock clock,
+        ILogger<ExternalIdentityBindingProjector>? logger = null)
     {
         _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
+        _logger = logger ?? NullLogger<ExternalIdentityBindingProjector>.Instance;
     }
 
     public async ValueTask ProjectAsync(
@@ -58,6 +63,11 @@ public sealed class ExternalIdentityBindingProjector
 
         if (string.IsNullOrEmpty(document.BindingId))
         {
+            _logger.LogWarning(
+                "Deleting external identity binding document {DocumentId} because projected BindingId is empty. event={EventId}, version={Version}",
+                document.Id,
+                document.LastEventId,
+                document.StateVersion);
             await _writeDispatcher.DeleteAsync(document.Id, ct);
             return;
         }

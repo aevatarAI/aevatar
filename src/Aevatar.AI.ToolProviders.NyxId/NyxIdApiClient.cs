@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -245,7 +246,7 @@ public sealed class NyxIdApiClient
     // ─── Proxy (additions) ───
 
     public Task<string> DiscoverProxyServicesAsync(string token, CancellationToken ct) =>
-        GetAsync(token, "/api/v1/proxy/services?per_page=100", ct);
+        GetAsync(token, NyxIdLlmCatalogRoutes.ProxyServicesPath, ct);
 
     // ─── API Keys (additions) ───
 

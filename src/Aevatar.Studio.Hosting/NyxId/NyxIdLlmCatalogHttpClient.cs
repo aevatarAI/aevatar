@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Services;
 using Microsoft.Extensions.Configuration;
@@ -121,7 +122,7 @@ public sealed class NyxIdLlmCatalogHttpClient : IUserLlmCatalogPort
         {
             var response = await SendNyxIdAsync(
                 HttpMethod.Get,
-                "/api/v1/proxy/services?per_page=100",
+                NyxIdLlmCatalogRoutes.ProxyServicesPath,
                 bearerToken,
                 body: null,
                 ct).ConfigureAwait(false);

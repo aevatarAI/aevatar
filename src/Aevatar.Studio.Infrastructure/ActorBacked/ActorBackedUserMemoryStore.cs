@@ -125,11 +125,12 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
 
     public async Task<bool> RemoveEntryAsync(string id, CancellationToken ct = default)
     {
-        var actor = await EnsureWriteActorAsync(ct);
-        var state = await ReadProjectedStateAsync(ct);
+        var actorId = ResolveWriteActorId();
+        var state = await ReadProjectedStateAsync(actorId, ct);
         if (state is null || !state.Entries.Any(e => string.Equals(e.Id, id, StringComparison.Ordinal)))
             return false;
 
+        var actor = await EnsureWriteActorAsync(actorId, ct);
         var evt = new MemoryEntryRemovedEvent { EntryId = id };
         await ActorCommandDispatcher.SendAsync(_dispatchPort, actor, evt, ct);
         return true;
@@ -137,7 +138,21 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
 
     public async Task<string> BuildPromptSectionAsync(int maxChars = 2000, CancellationToken ct = default)
     {
-        var doc = await GetAsync(ct);
+        UserMemoryDocument doc;
+        try
+        {
+            doc = await GetAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to read user memory prompt section; continuing without user memory.");
+            return string.Empty;
+        }
+
         if (doc.Entries.Count == 0)
             return string.Empty;
 
@@ -192,6 +207,11 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
         if (actorId is null)
             return null;
 
+        return await ReadProjectedStateAsync(actorId, ct);
+    }
+
+    private async Task<UserMemoryState?> ReadProjectedStateAsync(string actorId, CancellationToken ct)
+    {
         var document = await _documentReader.GetAsync(actorId, ct);
         if (document?.StateRoot == null ||
             !document.StateRoot.Is(UserMemoryState.Descriptor))
@@ -219,7 +239,10 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
     private string ResolveWriteActorId() => WriteActorIdPrefix + ResolveScopeId();
 
     private Task<IActor> EnsureWriteActorAsync(CancellationToken ct) =>
-        _bootstrap.EnsureAsync<UserMemoryGAgent>(ResolveWriteActorId(), ct);
+        EnsureWriteActorAsync(ResolveWriteActorId(), ct);
+
+    private Task<IActor> EnsureWriteActorAsync(string actorId, CancellationToken ct) =>
+        _bootstrap.EnsureAsync<UserMemoryGAgent>(actorId, ct);
 
     private static string GenerateId()
     {
