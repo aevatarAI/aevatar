@@ -151,10 +151,12 @@ public sealed class ModelSlashCommandHandlerTests
         // Wipe the local readmodel so /init isn't blocked by stale state.
         var actorRuntime = new RecordingActorRuntime();
         var projectionActivation = new RecordingBindingProjectionActivation();
+        var readiness = new RecordingProjectionReadinessPort();
         var handler = CreateHandler(
             broker: new ThrowingCapabilityBroker(new BindingRevokedException(Context().Subject)),
             actorRuntime: actorRuntime,
-            bindingProjectionPort: NewProjectionPort(projectionActivation));
+            bindingProjectionPort: NewProjectionPort(projectionActivation),
+            projectionReadinessPort: readiness);
 
         var reply = await handler.HandleAsync(Context(), default);
 
@@ -164,6 +166,8 @@ public sealed class ModelSlashCommandHandlerTests
         reply.Text.Should().Contain("/init");
         projectionActivation.Requests.Should().ContainSingle()
             .Which.RootActorId.Should().Be(Context().Subject.ToActorId());
+        readiness.Requests.Should().ContainSingle()
+            .Which.ExpectedBindingId.Should().BeNull();
         AssertRevokeBindingDispatched(actorRuntime, expectedReason: "auto_self_heal_remote_revoked");
     }
 
@@ -226,6 +230,27 @@ public sealed class ModelSlashCommandHandlerTests
         reply.Text.Should().Contain("/unbind");
         reply.Text.Should().NotContain("已自动清理");
         actorRuntime.Dispatched.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task List_DegradesToUnbindGuidance_WhenReadmodelCleanupIsNotObserved()
+    {
+        // A committed revoke is not enough: if the readmodel stays stale, the
+        // next /init will still say "already bound". The handler must only
+        // claim auto-clean after readiness observes no active binding.
+        var actorRuntime = new RecordingActorRuntime();
+        var handler = CreateHandler(
+            broker: new ThrowingCapabilityBroker(new BindingRevokedException(Context().Subject)),
+            actorRuntime: actorRuntime,
+            projectionReadinessPort: new ThrowingProjectionReadinessPort());
+
+        var reply = await handler.HandleAsync(Context(), default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("失效");
+        reply.Text.Should().Contain("/unbind");
+        reply.Text.Should().NotContain("已自动清理");
+        actorRuntime.Dispatched.Should().HaveCount(2, "self-heal retries once when readmodel cleanup is not observed");
     }
 
     [Fact]
@@ -461,6 +486,7 @@ public sealed class ModelSlashCommandHandlerTests
         INyxIdCapabilityBroker? broker = null,
         IActorRuntime? actorRuntime = null,
         ExternalIdentityBindingProjectionPort? bindingProjectionPort = null,
+        IProjectionReadinessPort? projectionReadinessPort = null,
         bool useDefaultBindingProjectionPort = true)
     {
         catalog ??= new StubCatalogClient();
@@ -468,6 +494,7 @@ public sealed class ModelSlashCommandHandlerTests
         commandService ??= new StubUserConfigCommandService();
         if (bindingProjectionPort is null && useDefaultBindingProjectionPort && actorRuntime is not null)
             bindingProjectionPort = NewProjectionPort();
+        projectionReadinessPort ??= actorRuntime is null ? null : new RecordingProjectionReadinessPort();
 
         var provider = new ServiceCollection()
             .AddSingleton<IUserConfigQueryPort>(queryPort)
@@ -482,7 +509,8 @@ public sealed class ModelSlashCommandHandlerTests
             selection,
             new TextUserLlmOptionsRenderer(),
             actorRuntime,
-            bindingProjectionPort);
+            bindingProjectionPort,
+            projectionReadinessPort);
     }
 
     private static ExternalIdentityBindingProjectionPort NewProjectionPort(
@@ -561,6 +589,31 @@ public sealed class ModelSlashCommandHandlerTests
                     ProjectionKind = request.ProjectionKind,
                 }));
         }
+    }
+
+    private sealed class RecordingProjectionReadinessPort : IProjectionReadinessPort
+    {
+        public List<(ExternalSubjectRef Subject, string? ExpectedBindingId)> Requests { get; } = [];
+
+        public Task WaitForBindingStateAsync(
+            ExternalSubjectRef externalSubject,
+            string? expectedBindingId,
+            TimeSpan timeout,
+            CancellationToken ct = default)
+        {
+            Requests.Add((externalSubject.Clone(), expectedBindingId));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowingProjectionReadinessPort : IProjectionReadinessPort
+    {
+        public Task WaitForBindingStateAsync(
+            ExternalSubjectRef externalSubject,
+            string? expectedBindingId,
+            TimeSpan timeout,
+            CancellationToken ct = default) =>
+            throw new TimeoutException("simulated projection cleanup timeout");
     }
 
     private static StudioConfig MakeConfig(

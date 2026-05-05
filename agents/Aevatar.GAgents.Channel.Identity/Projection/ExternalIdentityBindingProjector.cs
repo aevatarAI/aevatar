@@ -56,6 +56,12 @@ public sealed class ExternalIdentityBindingProjector
             UpdatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow),
         };
 
+        if (string.IsNullOrEmpty(document.BindingId))
+        {
+            await _writeDispatcher.DeleteAsync(document.Id, ct);
+            return;
+        }
+
         await _writeDispatcher.UpsertAsync(document, ct);
     }
 }
