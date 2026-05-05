@@ -74,16 +74,25 @@ message EnsureAevatarOAuthClientProvisionedCommand {
 }
 
 // Issued by tests / manual operator scripts that already hold a client_id
-// (e.g. seeded fixture, post-rotation retag). Bootstrap NEVER uses this —
-// it always sends EnsureAevatarOAuthClientProvisionedCommand instead so the
-// actor mediates the DCR call.
+// (e.g. seeded fixture, post-rotation retag, post-incident rebuild). Bootstrap
+// NEVER uses this — it always sends EnsureAevatarOAuthClientProvisionedCommand
+// instead so the actor mediates the DCR call.
 message ProvisionAevatarOAuthClientCommand {
   string client_id = 1;
   int64 client_id_issued_at_unix = 2;
   string nyxid_authority = 3;
   // Optional diagnostic scope for manually provisioned clients. Bootstrap
-  // never uses this command path; an empty value means unknown.
+  // never uses this command path; an empty value means unknown. The
+  // operator-rebuild path must set this to AevatarOAuthClientScopes
+  // .AuthorizationScope so the next bootstrap does not detect drift and
+  // re-DCR the freshly-pinned client.
   string oauth_scope = 4;
+  // Optional redirect URI. The operator-rebuild path (POST /api/oauth/
+  // aevatar-client/rebuild) must set this to the resolver output so the next
+  // bootstrap does not detect redirect drift and re-DCR the freshly-pinned
+  // client. Tests / fixture seeds may leave it empty when they don't care
+  // about drift detection on a subsequent bootstrap pass.
+  string redirect_uri = 5;
 }
 
 // Issued by ops to force a fresh HMAC key rotation. Old tokens signed with

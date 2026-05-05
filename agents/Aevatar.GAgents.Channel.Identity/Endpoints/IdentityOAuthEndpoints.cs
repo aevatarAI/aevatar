@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -9,6 +11,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgents.Channel.Identity.Endpoints;
 
@@ -19,6 +22,8 @@ namespace Aevatar.GAgents.Channel.Identity.Endpoints;
 public static class IdentityOAuthEndpoints
 {
     private static readonly TimeSpan ProjectionWaitTimeout = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan RebuildObservationTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan RebuildObservationPollDelay = TimeSpan.FromMilliseconds(250);
     private const int MaxWebhookBodyBytes = 64 * 1024;
 
     public static IEndpointRouteBuilder MapIdentityOAuthEndpoints(this IEndpointRouteBuilder app)
@@ -32,6 +37,14 @@ public static class IdentityOAuthEndpoints
             .WithTags("ChannelIdentity")
             .AllowAnonymous();
         app.MapGet("/api/oauth/aevatar-client/status", HandleAevatarOAuthClientStatusAsync)
+            .WithTags("ChannelIdentity")
+            .AllowAnonymous();
+        // Operator-only: rebuild the cluster-singleton OAuth client snapshot
+        // to point at an admin-supplied client_id (issue #549 production
+        // unblock). Auth is by static admin token header — see
+        // AevatarOAuthAdminOptions. AllowAnonymous because the auth check is
+        // done inline; no ASP.NET auth handler is wired for this module.
+        app.MapPost("/api/oauth/aevatar-client/rebuild", HandleAevatarOAuthClientRebuildAsync)
             .WithTags("ChannelIdentity")
             .AllowAnonymous();
 
@@ -326,6 +339,241 @@ public static class IdentityOAuthEndpoints
                 detail = "Bootstrap service has not yet completed NyxID dynamic client registration. Wait or check the host startup logs.",
             }, statusCode: StatusCodes.Status503ServiceUnavailable);
         }
+    }
+
+    // ─── Operator rebuild ───
+
+    /// <summary>
+    /// Body for <c>POST /api/oauth/aevatar-client/rebuild</c>. The operator
+    /// supplies a fresh <c>client_id</c> (typically created via NyxID admin
+    /// after a wedge — see issue #549) and the actor pins its snapshot to
+    /// it. <see cref="RedirectUri"/> + <see cref="OauthScope"/> default to
+    /// the resolver / canonical scopes when omitted so the next bootstrap
+    /// pass observes no drift and does not re-DCR away the operator's pin.
+    /// </summary>
+    public sealed record RebuildAevatarOAuthClientRequest(
+        string? client_id,
+        string? redirect_uri,
+        string? oauth_scope,
+        long? client_id_issued_at_unix);
+
+    internal static Task<IResult> HandleAevatarOAuthClientRebuildAsync(
+        HttpContext http,
+        [FromBody] RebuildAevatarOAuthClientRequest? body,
+        [FromServices] IOptions<AevatarOAuthAdminOptions> adminOptions,
+        [FromServices] IAevatarOAuthClientProvider provider,
+        [FromServices] AevatarOAuthClientProjectionPort projectionPort,
+        [FromServices] IActorRuntime actorRuntime,
+        [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken ct) =>
+        HandleAevatarOAuthClientRebuildCoreAsync(
+            http,
+            body,
+            adminOptions,
+            provider,
+            projectionPort,
+            actorRuntime,
+            loggerFactory,
+            observationTimeout: RebuildObservationTimeout,
+            observationPollDelay: RebuildObservationPollDelay,
+            ct);
+
+    /// <summary>
+    /// Implementation seam exposed for tests so the readmodel-propagation
+    /// timeout can be tightened without waiting the full operator-grade
+    /// 30-second budget on every assertion. Production routes call the
+    /// thin overload above with the canonical defaults.
+    /// </summary>
+    internal static async Task<IResult> HandleAevatarOAuthClientRebuildCoreAsync(
+        HttpContext http,
+        RebuildAevatarOAuthClientRequest? body,
+        IOptions<AevatarOAuthAdminOptions> adminOptions,
+        IAevatarOAuthClientProvider provider,
+        AevatarOAuthClientProjectionPort projectionPort,
+        IActorRuntime actorRuntime,
+        ILoggerFactory loggerFactory,
+        TimeSpan observationTimeout,
+        TimeSpan observationPollDelay,
+        CancellationToken ct)
+    {
+        var logger = loggerFactory.CreateLogger("Aevatar.Channel.Identity.OAuthRebuild");
+
+        var configuredToken = adminOptions.Value.RebuildToken;
+        if (string.IsNullOrEmpty(configuredToken))
+        {
+            logger.LogWarning(
+                "Rebuild endpoint invoked but ChannelIdentity:Admin:RebuildToken is unset; refusing fail-secure.");
+            return Results.Json(new
+            {
+                error = "rebuild_not_configured",
+                detail = "ChannelIdentity:Admin:RebuildToken is unset. Configure it (env var ChannelIdentity__Admin__RebuildToken) and redeploy before retrying.",
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        if (!http.Request.Headers.TryGetValue(AevatarOAuthAdminOptions.RebuildTokenHeader, out var presented)
+            || !ConstantTimeEquals(configuredToken, presented.ToString()))
+        {
+            logger.LogWarning(
+                "Rebuild endpoint rejected: missing or invalid {Header}.",
+                AevatarOAuthAdminOptions.RebuildTokenHeader);
+            return Results.Unauthorized();
+        }
+
+        if (body is null || string.IsNullOrWhiteSpace(body.client_id))
+        {
+            return Results.BadRequest(new
+            {
+                error = "client_id_required",
+                detail = "Body must include client_id (the NyxID-issued OAuth client_id this cluster should pin to).",
+            });
+        }
+
+        var authority = NyxIdAuthorityResolver.Resolve(logger);
+        var redirectUri = string.IsNullOrWhiteSpace(body.redirect_uri)
+            ? NyxIdRedirectUriResolver.Resolve(logger)
+            : body.redirect_uri.Trim();
+        var oauthScope = string.IsNullOrWhiteSpace(body.oauth_scope)
+            ? AevatarOAuthClientScopes.AuthorizationScope
+            : body.oauth_scope.Trim();
+        var issuedAtUnix = body.client_id_issued_at_unix
+            ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        if (!AevatarOAuthClientScopes.ContainsRequiredScopes(oauthScope))
+        {
+            return Results.BadRequest(new
+            {
+                error = "oauth_scope_invalid",
+                detail = $"oauth_scope must contain the canonical scopes ('{AevatarOAuthClientScopes.AuthorizationScope}'). Otherwise the next bootstrap pass would detect drift and re-DCR away the pinned client_id.",
+            });
+        }
+
+        // Activate the projection scope first so the projector subscribes to
+        // the actor's committed events before we dispatch the provision
+        // command — same pattern as AevatarOAuthClientBootstrapService.
+        // Without this the readmodel never updates and the wait loop below
+        // times out even though the actor committed correctly.
+        await projectionPort
+            .EnsureProjectionForActorAsync(AevatarOAuthClientGAgent.WellKnownId, ct)
+            .ConfigureAwait(false);
+
+        Aevatar.Foundation.Abstractions.IActor actor;
+        try
+        {
+            actor = await actorRuntime
+                .CreateAsync<AevatarOAuthClientGAgent>(AevatarOAuthClientGAgent.WellKnownId, ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Rebuild endpoint failed to activate AevatarOAuthClientGAgent.");
+            return Results.Json(new
+            {
+                error = "actor_activation_failed",
+                detail = "Failed to activate the cluster-singleton OAuth client actor. Check silo logs.",
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        var provisionEnvelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(new ProvisionAevatarOAuthClientCommand
+            {
+                ClientId = body.client_id!.Trim(),
+                ClientIdIssuedAtUnix = issuedAtUnix,
+                NyxidAuthority = authority,
+                OauthScope = oauthScope,
+                RedirectUri = redirectUri,
+            }),
+            Route = new EnvelopeRoute
+            {
+                Direct = new DirectRoute { TargetActorId = AevatarOAuthClientGAgent.WellKnownId },
+            },
+        };
+        await actor.HandleEventAsync(provisionEnvelope, ct).ConfigureAwait(false);
+
+        logger.LogWarning(
+            "Operator rebuild dispatched for AevatarOAuthClientGAgent: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}.",
+            body.client_id,
+            authority,
+            redirectUri);
+
+        var observed = await WaitForRebuildObservedAsync(
+                provider,
+                expectedClientId: body.client_id!.Trim(),
+                expectedAuthority: authority,
+                expectedRedirectUri: redirectUri,
+                expectedOauthScope: oauthScope,
+                timeout: observationTimeout,
+                pollDelay: observationPollDelay,
+                ct)
+            .ConfigureAwait(false);
+        if (observed is null)
+        {
+            return Results.Json(new
+            {
+                status = "rebuild_pending_propagation",
+                detail = $"Provision command dispatched but readmodel has not yet caught up within {observationTimeout.TotalSeconds:n0}s. Re-poll /api/oauth/aevatar-client/status; it will reflect the new client_id once the projection materializes.",
+            }, statusCode: StatusCodes.Status202Accepted);
+        }
+
+        return Results.Ok(new
+        {
+            status = "rebuilt",
+            client_id = observed.ClientId,
+            client_id_issued_at = observed.ClientIdIssuedAt,
+            nyxid_authority = observed.NyxIdAuthority,
+            redirect_uri_registered = observed.RedirectUri,
+            oauth_scope_registered = observed.OauthScope,
+            broker_capability_observed = observed.BrokerCapabilityObserved,
+            detail = "OAuth client rebuilt. New /init flows will use the supplied client_id; the previous client_id is now an orphan at NyxID — delete it via NyxID admin to keep the registration list clean.",
+        });
+    }
+
+    private static async Task<AevatarOAuthClientSnapshot?> WaitForRebuildObservedAsync(
+        IAevatarOAuthClientProvider provider,
+        string expectedClientId,
+        string expectedAuthority,
+        string expectedRedirectUri,
+        string expectedOauthScope,
+        TimeSpan timeout,
+        TimeSpan pollDelay,
+        CancellationToken ct)
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(timeout);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            try
+            {
+                var snapshot = await provider.GetAsync(ct).ConfigureAwait(false);
+                if (string.Equals(snapshot.ClientId, expectedClientId, StringComparison.Ordinal)
+                    && string.Equals(snapshot.NyxIdAuthority, expectedAuthority, StringComparison.Ordinal)
+                    && string.Equals(snapshot.RedirectUri, expectedRedirectUri, StringComparison.Ordinal)
+                    && string.Equals(snapshot.OauthScope, expectedOauthScope, StringComparison.Ordinal))
+                {
+                    return snapshot;
+                }
+            }
+            catch (AevatarOAuthClientNotProvisionedException)
+            {
+                // Projection has not yet materialized the very first state
+                // root for this actor — possible on a brand-new cluster
+                // where rebuild is the first provisioning event.
+            }
+
+            await Task.Delay(pollDelay, ct).ConfigureAwait(false);
+        }
+        return null;
+    }
+
+    private static bool ConstantTimeEquals(string left, string? right)
+    {
+        if (right is null) return false;
+        var leftBytes = Encoding.UTF8.GetBytes(left);
+        var rightBytes = Encoding.UTF8.GetBytes(right);
+        return CryptographicOperations.FixedTimeEquals(leftBytes, rightBytes);
     }
 
     // ─── Broker revocation webhook ───

@@ -289,9 +289,19 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
     /// production bootstrap path uses
     /// <see cref="HandleEnsureProvisioned"/> instead so the actor (not the
     /// caller) mediates the DCR call. Idempotent: re-issuing the same
-    /// triple is a no-op. Always seeds a fresh HMAC key when the state has
-    /// none — bootstrap and provisioning are single-step.
+    /// snapshot (client_id + authority + redirect_uri + oauth_scope) is a
+    /// no-op. Always seeds a fresh HMAC key when the state has none —
+    /// bootstrap and provisioning are single-step.
     /// </summary>
+    /// <remarks>
+    /// The same-snapshot check covers redirect_uri + oauth_scope on top of
+    /// client_id + authority because the operator-rebuild path
+    /// (<c>POST /api/oauth/aevatar-client/rebuild</c>, issue #549) must be
+    /// able to heal a wedged actor whose state has the right client_id but
+    /// stale or empty redirect_uri / oauth_scope — leaving those drifted
+    /// would let the next bootstrap re-DCR and replace the operator's
+    /// freshly-pinned client_id with a new (orphan-creating) one.
+    /// </remarks>
     [EventHandler]
     public async Task HandleProvision(ProvisionAevatarOAuthClientCommand cmd)
     {
@@ -307,9 +317,13 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             return;
         }
 
-        var sameClient = string.Equals(State.ClientId, cmd.ClientId, StringComparison.Ordinal)
-            && string.Equals(State.NyxidAuthority, cmd.NyxidAuthority, StringComparison.Ordinal);
-        if (!sameClient)
+        var redirectUri = cmd.RedirectUri ?? string.Empty;
+        var oauthScope = cmd.OauthScope ?? string.Empty;
+        var sameSnapshot = string.Equals(State.ClientId, cmd.ClientId, StringComparison.Ordinal)
+            && string.Equals(State.NyxidAuthority, cmd.NyxidAuthority, StringComparison.Ordinal)
+            && string.Equals(State.RedirectUri, redirectUri, StringComparison.Ordinal)
+            && string.Equals(State.OauthScope, oauthScope, StringComparison.Ordinal);
+        if (!sameSnapshot)
         {
             await PersistDomainEventAsync(new AevatarOAuthClientProvisionedEvent
             {
@@ -317,12 +331,14 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
                 ClientIdIssuedAtUnix = cmd.ClientIdIssuedAtUnix,
                 NyxidAuthority = cmd.NyxidAuthority,
                 PersistedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                OauthScope = cmd.OauthScope ?? string.Empty,
+                OauthScope = oauthScope,
+                RedirectUri = redirectUri,
             });
             Logger.LogInformation(
-                "Provisioned aevatar OAuth client: client_id={ClientId}, authority={Authority}",
+                "Provisioned aevatar OAuth client: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}",
                 cmd.ClientId,
-                cmd.NyxidAuthority);
+                cmd.NyxidAuthority,
+                string.IsNullOrEmpty(redirectUri) ? "<unspecified>" : redirectUri);
         }
 
         if (State.HmacKey.Length == 0)
