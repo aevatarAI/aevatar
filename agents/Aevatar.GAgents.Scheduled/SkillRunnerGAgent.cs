@@ -414,6 +414,18 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     /// </summary>
     private SkillRunnerStreamingReplySink? TryCreateStreamingSink()
     {
+        // Issue #439 (PR #569 review, codex P1 on SkillRunnerGAgent.cs:351): when the run
+        // is gated by EnsureToolStatusAllowsCompletion (RequiresNyxidProxySuccess set),
+        // streaming each delta would POST/PUT the partial text to Lark live — i.e. a
+        // hallucinated daily report would already be visible in the user's DM by the
+        // time the guard fires, and each retry would repost it. Disable live streaming
+        // for those skills so the message only POSTs through the chunked-dispatch path
+        // AFTER the guard has confirmed at least one nyxid_proxy success. Trade-off: the
+        // user no longer sees the report grow live, but output integrity wins over the
+        // streaming-edit UX for fetch-and-summarize skills.
+        if (State.RequiresNyxidProxySuccess)
+            return null;
+
         var client = _nyxIdApiClient ?? Services.GetService<NyxIdApiClient>();
         if (client is null)
         {
@@ -831,7 +843,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         next.ScopeId = evt.ScopeId ?? string.Empty;
         next.ProviderName = NormalizeProviderName(evt.ProviderName);
         next.Model = evt.Model ?? string.Empty;
-        next.RequiresNyxidProxySuccess = evt.RequiresNyxidProxySuccess;
+        // Legacy actors created before proto field 16 existed replay an init event whose
+        // RequiresNyxidProxySuccess deserializes as false, which would let them keep the
+        // pre-#439 zero-tool-call fake-success path — making post-fix behavior depend on
+        // creation time rather than template semantics. Derive the effective flag from
+        // the template name so known fetch-and-summarize skills get the safety net on
+        // replay regardless of when the actor was created. New templates that need this
+        // protection should be added to RequiresProxySuccessByTemplate.
+        next.RequiresNyxidProxySuccess = evt.RequiresNyxidProxySuccess
+            || RequiresProxySuccessByTemplate(evt.TemplateName);
 
         // Missing sampling fields intentionally use upstream model defaults;
         // missing runner limits fall back to SkillRunner defaults.
@@ -889,6 +909,16 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         next.Enabled = true;
         return next;
     }
+
+    /// <summary>
+    /// Templates whose runs MUST observe at least one successful nyxid_proxy call to be
+    /// considered successful. Used by <see cref="ApplyInitialized"/> as the legacy-actor
+    /// default when the persisted init event predates proto field 16. Add new templates
+    /// here when they're fetch-and-summarize style (the LLM bypassing tools and producing
+    /// text from prior context is a fake-success failure mode for them).
+    /// </summary>
+    internal static bool RequiresProxySuccessByTemplate(string? templateName) =>
+        string.Equals(templateName, "daily_report", StringComparison.Ordinal);
 
     private static string NormalizeProviderName(string? providerName) =>
         string.IsNullOrWhiteSpace(providerName) ? SkillRunnerDefaults.DefaultProviderName : providerName.Trim();

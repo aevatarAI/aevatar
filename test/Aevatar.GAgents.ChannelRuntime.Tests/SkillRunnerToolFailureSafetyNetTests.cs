@@ -332,6 +332,28 @@ public class SkillRunnerToolFailureSafetyNetTests
         act.Should().NotThrow();
     }
 
+    // ─── Legacy actor default (PR #569 review) ───
+
+    [Theory]
+    [InlineData("daily_report", true)]
+    [InlineData("DAILY_REPORT", false)]   // case-sensitive: only the canonical name opts in
+    [InlineData("social_media", false)]   // workflow template — no nyxid_proxy fanout
+    [InlineData("future_pure_llm", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void RequiresProxySuccessByTemplate_DerivesDefaultFromTemplateName(
+        string? templateName, bool expected)
+    {
+        // Closes the gap flagged on PR #569 (codex P1 + eanzhao on SkillRunnerGAgent.cs:834):
+        // actors created before proto field 16 existed replay an init event whose
+        // RequiresNyxidProxySuccess deserializes as false. Without a template-derived default,
+        // those actors keep the pre-#439 zero-tool-call fake-success behavior even after this
+        // fix ships, so production behavior would depend on creation time rather than
+        // template semantics. ApplyInitialized ORs the explicit flag with this helper, so a
+        // legacy daily_report actor that replays today is gated by the safety net on activation.
+        SkillRunnerGAgent.RequiresProxySuccessByTemplate(templateName).Should().Be(expected);
+    }
+
     [Fact]
     public void Policy_AllFailures_FlagOn_AllFailMessageWins()
     {
