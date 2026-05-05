@@ -22,7 +22,13 @@ namespace Aevatar.GAgents.Channel.Identity.Endpoints;
 public static class IdentityOAuthEndpoints
 {
     private static readonly TimeSpan ProjectionWaitTimeout = TimeSpan.FromSeconds(3);
-    private static readonly TimeSpan RebuildObservationTimeout = TimeSpan.FromSeconds(30);
+    // 15s leaves comfortable margin under typical reverse-proxy idle-timeout
+    // budgets (Cloudflare 100s, AWS ALB 60s default, stricter corporate
+    // proxies 30s) so the operator does not hit a 504 race on the happy path
+    // even when the readmodel takes a few seconds to materialize. Callers
+    // that hit the timeout still get a 202 with a poll URL — see issue #549
+    // PR #570 review (mimo-v2.5-pro / glm-5.1).
+    private static readonly TimeSpan RebuildObservationTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan RebuildObservationPollDelay = TimeSpan.FromMilliseconds(250);
     private const int MaxWebhookBodyBytes = 64 * 1024;
 
@@ -347,14 +353,16 @@ public static class IdentityOAuthEndpoints
     /// Body for <c>POST /api/oauth/aevatar-client/rebuild</c>. The operator
     /// supplies a fresh <c>client_id</c> (typically created via NyxID admin
     /// after a wedge — see issue #549) and the actor pins its snapshot to
-    /// it. <see cref="RedirectUri"/> + <see cref="OauthScope"/> default to
-    /// the resolver / canonical scopes when omitted so the next bootstrap
-    /// pass observes no drift and does not re-DCR away the operator's pin.
+    /// it. <c>redirect_uri</c> and <c>oauth_scope</c> are NOT operator-
+    /// supplied fields: the endpoint always uses
+    /// <see cref="NyxIdRedirectUriResolver"/> and
+    /// <see cref="AevatarOAuthClientScopes.AuthorizationScope"/> respectively,
+    /// otherwise the next bootstrap pass would observe drift and re-DCR
+    /// away the freshly-pinned client (PR #570 review consensus on the
+    /// drift bug + URL-validation surface).
     /// </summary>
     public sealed record RebuildAevatarOAuthClientRequest(
         string? client_id,
-        string? redirect_uri,
-        string? oauth_scope,
         long? client_id_issued_at_unix);
 
     internal static Task<IResult> HandleAevatarOAuthClientRebuildAsync(
@@ -429,22 +437,35 @@ public static class IdentityOAuthEndpoints
         }
 
         var authority = NyxIdAuthorityResolver.Resolve(logger);
-        var redirectUri = string.IsNullOrWhiteSpace(body.redirect_uri)
-            ? NyxIdRedirectUriResolver.Resolve(logger)
-            : body.redirect_uri.Trim();
-        var oauthScope = string.IsNullOrWhiteSpace(body.oauth_scope)
-            ? AevatarOAuthClientScopes.AuthorizationScope
-            : body.oauth_scope.Trim();
-        var issuedAtUnix = body.client_id_issued_at_unix
-            ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var redirectUri = NyxIdRedirectUriResolver.Resolve(logger);
+        var oauthScope = AevatarOAuthClientScopes.AuthorizationScope;
 
-        if (!AevatarOAuthClientScopes.ContainsRequiredScopes(oauthScope))
+        // Validate Unix-seconds before dispatching: AevatarOAuthClient
+        // ProjectionProvider later calls DateTimeOffset.FromUnixTimeSeconds
+        // on the persisted value, which throws ArgumentOutOfRangeException
+        // for values like long.MaxValue. Surface the bad input as a 400
+        // here instead of letting the read path crash on the next status
+        // poll (codex P1 on PR #570).
+        long issuedAtUnix;
+        if (body.client_id_issued_at_unix is { } supplied)
         {
-            return Results.BadRequest(new
+            try
             {
-                error = "oauth_scope_invalid",
-                detail = $"oauth_scope must contain the canonical scopes ('{AevatarOAuthClientScopes.AuthorizationScope}'). Otherwise the next bootstrap pass would detect drift and re-DCR away the pinned client_id.",
-            });
+                _ = DateTimeOffset.FromUnixTimeSeconds(supplied);
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                return Results.BadRequest(new
+                {
+                    error = "client_id_issued_at_unix_invalid",
+                    detail = "client_id_issued_at_unix must be a Unix-seconds value within DateTimeOffset range.",
+                });
+            }
+            issuedAtUnix = supplied;
+        }
+        else
+        {
+            issuedAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         }
 
         // Activate the projection scope first so the projector subscribes to
@@ -473,6 +494,14 @@ public static class IdentityOAuthEndpoints
             }, statusCode: StatusCodes.Status503ServiceUnavailable);
         }
 
+        // The dispatch shape mirrors AevatarOAuthClientBootstrapService —
+        // direct envelope construction + actor.HandleEventAsync — and is a
+        // known CLAUDE.md edge: the rebuild path deliberately skips the
+        // EnsureProvisioned/DCR-mediation flow because the operator already
+        // holds the client_id (no DCR call needed). A future refactor that
+        // extracts both call sites behind an IAevatarOAuthClientAdminService
+        // is tracked as a follow-up to PR #570 — that change should move
+        // bootstrap and rebuild together so they keep sharing one code path.
         var provisionEnvelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
@@ -568,11 +597,22 @@ public static class IdentityOAuthEndpoints
         return null;
     }
 
+    /// <summary>
+    /// Length-tolerant constant-time string compare. <c>FixedTimeEquals</c>
+    /// itself returns false on length mismatch in O(1), which leaks the
+    /// configured token's length to a timing observer — for an admin
+    /// break-glass surface keyed on a high-entropy token this residual leak
+    /// is acceptable (the attacker still has to brute-force the content).
+    /// The earlier shape returned early on <c>right is null</c>; the call
+    /// site short-circuits via <c>TryGetValue</c> so right is never null in
+    /// practice, but we still treat null as empty to keep the helper's
+    /// signature constant-time-uniform for future callers (PR #570 review,
+    /// 4-model consensus).
+    /// </summary>
     private static bool ConstantTimeEquals(string left, string? right)
     {
-        if (right is null) return false;
         var leftBytes = Encoding.UTF8.GetBytes(left);
-        var rightBytes = Encoding.UTF8.GetBytes(right);
+        var rightBytes = Encoding.UTF8.GetBytes(right ?? string.Empty);
         return CryptographicOperations.FixedTimeEquals(leftBytes, rightBytes);
     }
 

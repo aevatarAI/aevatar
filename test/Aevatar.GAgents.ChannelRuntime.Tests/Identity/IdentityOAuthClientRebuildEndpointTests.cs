@@ -24,9 +24,9 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 /// without DB access. The endpoint must (a) refuse fail-secure when no
 /// admin token is configured, (b) reject without a matching token, (c)
 /// validate body fields, (d) dispatch ProvisionAevatarOAuthClientCommand
-/// with redirect_uri + oauth_scope so the next bootstrap pass observes
-/// no drift, and (e) wait for the readmodel to reflect the pin before
-/// declaring success.
+/// with the canonical redirect_uri + oauth_scope (operator cannot override
+/// — see PR #570 review), and (e) wait for the readmodel to reflect the
+/// pin before declaring success.
 /// </summary>
 public sealed class IdentityOAuthClientRebuildEndpointTests
 {
@@ -90,8 +90,6 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
             adminTokenHeader: AdminToken,
             body: new IdentityOAuthEndpoints.RebuildAevatarOAuthClientRequest(
                 client_id: null,
-                redirect_uri: "https://aevatar.test/api/oauth/nyxid-callback",
-                oauth_scope: AevatarOAuthClientScopes.AuthorizationScope,
                 client_id_issued_at_unix: null),
             provider: provider,
             actorRuntime: runtime);
@@ -101,26 +99,31 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
     }
 
     [Fact]
-    public async Task Returns400_WhenOauthScopeMissingCanonicalScopes()
+    public async Task Returns400_WhenIssuedAtUnixOutOfRange()
     {
+        // Pin codex P1: AevatarOAuthClientProjectionProvider.GetAsync
+        // calls DateTimeOffset.FromUnixTimeSeconds on the persisted value
+        // and throws ArgumentOutOfRangeException for values like
+        // long.MaxValue. The endpoint must surface the bad input as 400
+        // here so the read path does not crash on the next status poll.
         var (provider, runtime) = NewProviderReflectingDispatch();
         var result = await InvokeRebuildAsync(
             adminTokenConfigured: AdminToken,
             adminTokenHeader: AdminToken,
             body: new IdentityOAuthEndpoints.RebuildAevatarOAuthClientRequest(
                 client_id: OperatorClientId,
-                redirect_uri: "https://aevatar.test/api/oauth/nyxid-callback",
-                oauth_scope: "openid",
-                client_id_issued_at_unix: null),
+                client_id_issued_at_unix: long.MaxValue),
             provider: provider,
             actorRuntime: runtime);
 
         var doc = await ReadJsonAsync(result);
-        doc.RootElement.GetProperty("error").GetString().Should().Be("oauth_scope_invalid");
+        doc.RootElement.GetProperty("error").GetString().Should().Be("client_id_issued_at_unix_invalid");
+        runtime.Captured.Should().BeEmpty(
+            "rejected request must not dispatch the actor command");
     }
 
     [Fact]
-    public async Task DispatchesProvisionCommand_WithOperatorSnapshot()
+    public async Task DispatchesProvisionCommand_WithCanonicalSnapshot()
     {
         var (provider, runtime) = NewProviderReflectingDispatch();
         var result = await InvokeRebuildAsync(
@@ -128,8 +131,6 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
             adminTokenHeader: AdminToken,
             body: new IdentityOAuthEndpoints.RebuildAevatarOAuthClientRequest(
                 client_id: OperatorClientId,
-                redirect_uri: "https://aevatar.test/api/oauth/nyxid-callback",
-                oauth_scope: AevatarOAuthClientScopes.AuthorizationScope,
                 client_id_issued_at_unix: 1700000000),
             provider: provider,
             actorRuntime: runtime);
@@ -140,7 +141,10 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
         var cmd = envelope.Payload.Unpack<ProvisionAevatarOAuthClientCommand>();
         cmd.ClientId.Should().Be(OperatorClientId);
         cmd.ClientIdIssuedAtUnix.Should().Be(1700000000);
-        cmd.RedirectUri.Should().Be("https://aevatar.test/api/oauth/nyxid-callback");
+        // Endpoint always uses the resolver / canonical scope — operator
+        // cannot override, otherwise the next bootstrap pass would observe
+        // drift and re-DCR the pinned client (PR #570 review consensus).
+        cmd.RedirectUri.Should().Be(NyxIdRedirectUriResolver.Resolve());
         cmd.OauthScope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
         cmd.NyxidAuthority.Should().NotBeNullOrWhiteSpace();
 
@@ -154,7 +158,7 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
     {
         // Provider always returns the OLD snapshot — readmodel never
         // catches up. Endpoint must report rebuild_pending_propagation
-        // instead of waiting forever. Production budget is 30s; the test
+        // instead of waiting forever. Production budget is 15s; the test
         // tightens it via the CoreAsync seam so the assertion runs in
         // sub-second wall time.
         var provider = Substitute.For<IAevatarOAuthClientProvider>();
@@ -177,6 +181,11 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
         var text = await new StreamReader(ctx.Response.Body, Encoding.UTF8).ReadToEndAsync();
         var doc = JsonDocument.Parse(text);
         doc.RootElement.GetProperty("status").GetString().Should().Be("rebuild_pending_propagation");
+        // Pin mimo P1: even the timeout path must have dispatched the
+        // command — otherwise a regression that drops the dispatch could
+        // pass with a stale provider and never trigger this assertion.
+        runtime.Captured.Should().HaveCount(1,
+            "timeout path must still have dispatched the provision command before the wait loop began");
     }
 
     // ─── Test plumbing ───
@@ -184,8 +193,6 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
     private static IdentityOAuthEndpoints.RebuildAevatarOAuthClientRequest SampleBody() =>
         new(
             client_id: OperatorClientId,
-            redirect_uri: "https://aevatar.test/api/oauth/nyxid-callback",
-            oauth_scope: AevatarOAuthClientScopes.AuthorizationScope,
             client_id_issued_at_unix: 1700000000);
 
     private static AevatarOAuthClientSnapshot SuccessSnapshotFor(

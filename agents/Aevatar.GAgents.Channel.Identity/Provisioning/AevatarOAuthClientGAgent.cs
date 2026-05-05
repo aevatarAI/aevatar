@@ -317,8 +317,16 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             return;
         }
 
-        var redirectUri = cmd.RedirectUri ?? string.Empty;
-        var oauthScope = cmd.OauthScope ?? string.Empty;
+        // Empty cmd field = "field not supplied by this caller", NOT "set
+        // to empty". Otherwise a legacy / pre-redirect_uri caller (e.g.
+        // ProvisionAevatarOAuthClientCommand v1 wire-compatibility, manual
+        // operator scripts that only know client_id + authority) would
+        // overwrite previously-persisted redirect_uri / oauth_scope with
+        // "" — and the next bootstrap pass would observe the cleared
+        // value, detect drift, re-DCR the freshly-pinned client, and
+        // rotate it away. Codex P1 on PR #570.
+        var redirectUri = string.IsNullOrEmpty(cmd.RedirectUri) ? State.RedirectUri : cmd.RedirectUri;
+        var oauthScope = string.IsNullOrEmpty(cmd.OauthScope) ? State.OauthScope : cmd.OauthScope;
         var sameSnapshot = string.Equals(State.ClientId, cmd.ClientId, StringComparison.Ordinal)
             && string.Equals(State.NyxidAuthority, cmd.NyxidAuthority, StringComparison.Ordinal)
             && string.Equals(State.RedirectUri, redirectUri, StringComparison.Ordinal)
