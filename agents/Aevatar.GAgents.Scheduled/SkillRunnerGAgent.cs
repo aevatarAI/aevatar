@@ -164,6 +164,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             ScopeId = command.ScopeId?.Trim() ?? string.Empty,
             ProviderName = NormalizeProviderName(command.ProviderName),
             Model = command.Model?.Trim() ?? string.Empty,
+            RequiresNyxidProxySuccess = command.RequiresNyxidProxySuccess,
         };
 
         if (command.HasTemperature)
@@ -329,13 +330,25 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             if (string.IsNullOrWhiteSpace(output))
                 output = "No update generated.";
 
-            // Issue #439 safety net (PR #471): if EVERY nyxid_proxy tool call in this run
-            // failed, the LLM's plain-text output is structurally indistinguishable from a
-            // real "no activity" report. Throw before delivery so HandleTriggerAsync's catch
-            // path persists `SkillRunnerExecutionFailedEvent` instead of recording a fake
-            // success — must fire BEFORE chunked dispatch so we don't post part-1 of a
-            // report that we're about to flag as failed.
-            EnsureToolStatusAllowsCompletion(_toolFailureCounter.FailureCount, _toolFailureCounter.SuccessCount);
+            // Issue #439 safety net (PR #471 + this PR): refuse to record fake-success runs.
+            // Two failure modes are caught here:
+            //   * all-fail — every nyxid_proxy call failed, the LLM's plain-text output is
+            //     structurally indistinguishable from a real "no activity" report;
+            //   * never-called — when State.RequiresNyxidProxySuccess is set, a run that
+            //     completes with zero successful nyxid_proxy calls means the LLM bypassed
+            //     tools entirely and produced text from prior context (the original #439
+            //     symptom: 52 commits in 24h reported as "No meaningful public GitHub
+            //     activity"). The original safety net only covered the all-fail case
+            //     (failureCount > 0); this gap was flagged in PR #471 review and is closed
+            //     here for fetch-and-summarize templates that opt in.
+            // Throw before delivery so HandleTriggerAsync's catch path persists
+            // SkillRunnerExecutionFailedEvent instead of a clean SkillRunnerExecutionCompletedEvent —
+            // must fire BEFORE chunked dispatch so we don't post part-1 of a report
+            // we're about to flag as failed.
+            EnsureToolStatusAllowsCompletion(
+                _toolFailureCounter.FailureCount,
+                _toolFailureCounter.SuccessCount,
+                State.RequiresNyxidProxySuccess);
 
             // Issue #423 §C — chunked delivery for outputs that exceed the Lark body cap.
             // For ≤30 KB outputs the chunker returns a single-element list and the dispatch
@@ -448,25 +461,49 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     }
 
     /// <summary>
-    /// Runner-layer safety net for issue #439: when every nyxid_proxy call in a run failed,
-    /// the LLM's plain-text output is structurally indistinguishable from a real "no
-    /// activity" report — the prompt-layer §9 Source health footer can be silently dropped
-    /// by a weaker model, and the runner has no other way to tell. Throwing here routes
-    /// through HandleTriggerAsync's existing catch path, which preserves the retry budget
-    /// and (after retries are exhausted) persists SkillRunnerExecutionFailedEvent so
-    /// <c>/agent-status</c> reports a non-zero <c>error_count</c> with a meaningful
-    /// <c>last_error</c> instead of a fake-success run.
-    /// Mixed runs (any successful nyxid_proxy call) still complete normally — partial data
-    /// is more useful to the user than a blanket failure, and the prompt-layer Source
-    /// health footer surfaces the failed queries.
+    /// Runner-layer safety net for issue #439. Two fake-success modes are caught here:
+    /// <list type="bullet">
+    ///   <item><description>
+    ///     <b>all-fail</b> (<paramref name="failureCount"/> &gt; 0, <paramref name="successCount"/> == 0):
+    ///     every nyxid_proxy call failed, but the LLM's plain-text output is structurally
+    ///     indistinguishable from a real "no activity" report. The prompt-layer §9 Source
+    ///     health footer can be dropped by a weaker model, and the runner has no other way
+    ///     to tell.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <b>never-called</b> (<paramref name="requiresNyxidProxySuccess"/> == true,
+    ///     <paramref name="successCount"/> == 0): the LLM bypassed tools entirely and produced
+    ///     text from prior context. For fetch-and-summarize skills like daily_report this is
+    ///     exactly the original #439 symptom (52 commits in 24h reported as "No meaningful
+    ///     public GitHub activity"). Skills that don't depend on tool data (e.g. pure LLM
+    ///     transformations) leave the flag false and pass through.
+    ///   </description></item>
+    /// </list>
+    /// Throwing here routes through HandleTriggerAsync's existing catch path, which preserves
+    /// the retry budget and (after retries are exhausted) persists SkillRunnerExecutionFailedEvent
+    /// so <c>/agent-status</c> reports a non-zero <c>error_count</c> with a meaningful
+    /// <c>last_error</c> instead of a fake-success run. Mixed runs (any successful nyxid_proxy
+    /// call) still complete normally — partial data is more useful than a blanket failure, and
+    /// the prompt-layer Source health footer surfaces the failed queries.
     /// </summary>
-    internal static void EnsureToolStatusAllowsCompletion(int failureCount, int successCount)
+    internal static void EnsureToolStatusAllowsCompletion(
+        int failureCount,
+        int successCount,
+        bool requiresNyxidProxySuccess)
     {
         if (failureCount > 0 && successCount == 0)
         {
             throw new InvalidOperationException(
                 $"All {failureCount} nyxid_proxy tool call(s) in this run failed; refusing to record an empty-day report as a successful execution. " +
                 "Inspect the previous attempt's tool output for the underlying NyxID/upstream error envelope.");
+        }
+
+        if (requiresNyxidProxySuccess && successCount == 0)
+        {
+            throw new InvalidOperationException(
+                "Skill requires at least one successful nyxid_proxy tool call but completed with zero. " +
+                "The LLM produced output without fetching source data (e.g. hallucinated a daily report from prior context). " +
+                "Refusing to record this run as a successful execution.");
         }
     }
 
@@ -794,6 +831,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         next.ScopeId = evt.ScopeId ?? string.Empty;
         next.ProviderName = NormalizeProviderName(evt.ProviderName);
         next.Model = evt.Model ?? string.Empty;
+        next.RequiresNyxidProxySuccess = evt.RequiresNyxidProxySuccess;
 
         // Missing sampling fields intentionally use upstream model defaults;
         // missing runner limits fall back to SkillRunner defaults.

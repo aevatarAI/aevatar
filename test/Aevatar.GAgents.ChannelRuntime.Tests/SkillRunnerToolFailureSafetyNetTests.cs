@@ -249,7 +249,8 @@ public class SkillRunnerToolFailureSafetyNetTests
         // InvalidOperationException is what HandleTriggerAsync catches and converts into
         // SkillRunnerExecutionFailedEvent (after the retry budget is exhausted), so
         // /agent-status reports a meaningful error_count and last_error.
-        var act = () => SkillRunnerGAgent.EnsureToolStatusAllowsCompletion(failureCount: 3, successCount: 0);
+        var act = () => SkillRunnerGAgent.EnsureToolStatusAllowsCompletion(
+            failureCount: 3, successCount: 0, requiresNyxidProxySuccess: false);
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*All 3 nyxid_proxy tool call(s)*failed*");
@@ -261,7 +262,8 @@ public class SkillRunnerToolFailureSafetyNetTests
         // (b) mixed case: partial data is more useful than a blanket failure. The
         // prompt-layer §9 Source health footer surfaces which queries failed; the runner
         // simply lets the run complete normally.
-        var act = () => SkillRunnerGAgent.EnsureToolStatusAllowsCompletion(failureCount: 2, successCount: 4);
+        var act = () => SkillRunnerGAgent.EnsureToolStatusAllowsCompletion(
+            failureCount: 2, successCount: 4, requiresNyxidProxySuccess: false);
 
         act.Should().NotThrow();
     }
@@ -272,23 +274,76 @@ public class SkillRunnerToolFailureSafetyNetTests
         // (c) genuine empty-day case: every nyxid_proxy call returned 2xx with no matching
         // items, so the runner records the LLM's "No measurable activity" output as a
         // legitimate success.
-        var act = () => SkillRunnerGAgent.EnsureToolStatusAllowsCompletion(failureCount: 0, successCount: 7);
+        var act = () => SkillRunnerGAgent.EnsureToolStatusAllowsCompletion(
+            failureCount: 0, successCount: 7, requiresNyxidProxySuccess: false);
 
         act.Should().NotThrow();
     }
 
     [Fact]
-    public void Policy_NoToolCallsAtAll_Allows()
+    public void Policy_NoToolCallsAtAll_FlagOff_Allows()
     {
         // Skills that don't fan out to nyxid_proxy at all (e.g. pure LLM transformations)
-        // must not be tripped by the safety net. Note: this also lets a pathological run
-        // through where the LLM ignored all tools and hallucinated a report. The reviewer
-        // flagged this for the daily-report skill specifically; addressing "expected tool
-        // never called" is out of scope for this PR — it would need per-skill policy that
-        // doesn't generalize to other scheduled skills.
-        var act = () => SkillRunnerGAgent.EnsureToolStatusAllowsCompletion(failureCount: 0, successCount: 0);
+        // leave RequiresNyxidProxySuccess false and pass through. The flag-on case below
+        // covers the daily_report path that was flagged in PR #471 review as the remaining
+        // hallucinated-report failure mode.
+        var act = () => SkillRunnerGAgent.EnsureToolStatusAllowsCompletion(
+            failureCount: 0, successCount: 0, requiresNyxidProxySuccess: false);
 
         act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void Policy_NoToolCallsAtAll_FlagOn_Throws()
+    {
+        // Closes the gap left by the original safety net (PR #471 review): when a
+        // fetch-and-summarize skill like daily_report completes with zero successful
+        // nyxid_proxy calls, the LLM produced text from prior context — the original
+        // #439 symptom (52 commits in 24h reported as "No meaningful public GitHub
+        // activity") with no tool errors to count.
+        var act = () => SkillRunnerGAgent.EnsureToolStatusAllowsCompletion(
+            failureCount: 0, successCount: 0, requiresNyxidProxySuccess: true);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*requires at least one successful nyxid_proxy tool call*");
+    }
+
+    [Fact]
+    public void Policy_MixedSuccessAndFailure_FlagOn_Allows()
+    {
+        // Flag is only consulted when successCount == 0. Any successful nyxid_proxy call
+        // means the LLM did fetch real source data, so partial-data behavior matches the
+        // flag-off mixed case (delegated to prompt §9).
+        var act = () => SkillRunnerGAgent.EnsureToolStatusAllowsCompletion(
+            failureCount: 2, successCount: 4, requiresNyxidProxySuccess: true);
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void Policy_GenuinelyEmpty_FlagOn_Allows()
+    {
+        // Genuine empty-day stays a success regardless of the flag — every nyxid_proxy
+        // call returned 2xx with no matching items, the LLM did fetch source data, and
+        // "No measurable activity" is the correct prompt fallback.
+        var act = () => SkillRunnerGAgent.EnsureToolStatusAllowsCompletion(
+            failureCount: 0, successCount: 7, requiresNyxidProxySuccess: true);
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void Policy_AllFailures_FlagOn_AllFailMessageWins()
+    {
+        // When both the all-fail and never-called branches would fire (failureCount > 0,
+        // successCount == 0, flag = true), the all-fail message is more actionable — it
+        // names the count of failed tool calls so the operator knows where to look. Pin
+        // that ordering so a future refactor doesn't accidentally swap them.
+        var act = () => SkillRunnerGAgent.EnsureToolStatusAllowsCompletion(
+            failureCount: 3, successCount: 0, requiresNyxidProxySuccess: true);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*All 3 nyxid_proxy tool call(s)*failed*");
     }
 
     // ─── End-to-end wiring ───

@@ -67,6 +67,13 @@ message SkillRunnerState {
   optional int32 max_tokens = 18;
   optional int32 max_tool_rounds = 19;
   optional int32 max_history_messages = 20;
+  // When true, a run that completes with zero successful nyxid_proxy calls is
+  // treated as a failure (the LLM bypassed tools and produced output from prior
+  // context, which for fetch-and-summarize skills like daily_report means the
+  // report was hallucinated). Issue #439 review follow-up — closes the gap left
+  // by the original safety net, which only fired when ≥1 nyxid_proxy call had
+  // failed. Skills that don't fan out to nyxid_proxy at all leave this false.
+  bool requires_nyxid_proxy_success = 21;
 }
 
 message InitializeSkillRunnerCommand {
@@ -85,6 +92,8 @@ message InitializeSkillRunnerCommand {
   optional int32 max_tokens = 13;
   optional int32 max_tool_rounds = 14;
   optional int32 max_history_messages = 15;
+  // See SkillRunnerState.requires_nyxid_proxy_success for semantics.
+  bool requires_nyxid_proxy_success = 16;
 }
 
 message SkillRunnerInitializedEvent {
@@ -103,6 +112,8 @@ message SkillRunnerInitializedEvent {
   optional int32 max_tokens = 13;
   optional int32 max_tool_rounds = 14;
   optional int32 max_history_messages = 15;
+  // See SkillRunnerState.requires_nyxid_proxy_success for semantics.
+  bool requires_nyxid_proxy_success = 16;
 }
 
 message TriggerSkillRunnerExecutionCommand {

@@ -136,6 +136,14 @@ public sealed class AgentBuilderToolTests
         // and must explicitly skip the CI section (no global Actions run endpoint exists).
         skillContent.Should().Contain("/search/commits?q=author:{username}+author-date:>={iso_date}");
         skillContent.Should().Contain("CI section is omitted in no-repo mode");
+
+        // Issue #439 follow-up: daily_report is a fetch-and-summarize skill, so the spec
+        // must opt in to the runner-layer never-called safety net. A run that completes
+        // with zero successful nyxid_proxy calls means the LLM hallucinated the report
+        // from prior context — exactly the original #439 symptom — and must be downgraded
+        // to SkillRunnerExecutionFailedEvent. Pin so a future template refactor doesn't
+        // silently drop the flag.
+        spec.RequiresNyxidProxySuccess.Should().BeTrue();
     }
 
     [Fact]
