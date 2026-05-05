@@ -104,6 +104,35 @@ public class ExternalIdentityBindingProjectorTests
         doc.RevokedAtUtcValue.Should().NotBeNull();
     }
 
+    [Fact]
+    public async Task ProjectAsync_WritesEmptyBindingDocumentAsInactive()
+    {
+        var dispatcher = new RecordingDispatcher();
+        var projector = new ExternalIdentityBindingProjector(dispatcher, new FixedClock(DateTimeOffset.UtcNow));
+        var subject = SampleSubject();
+        var context = new ExternalIdentityBindingMaterializationContext
+        {
+            RootActorId = subject.ToActorId(),
+            ProjectionKind = "external-identity-binding",
+        };
+
+        var state = new ExternalIdentityBindingState
+        {
+            ExternalSubject = subject,
+            BindingId = string.Empty,
+            BoundAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(-5)),
+        };
+        var envelope = TestEnvelopeBuilder.BuildCommittedEnvelope(state, version: 3, eventId: "ev-3");
+
+        await projector.ProjectAsync(context, envelope);
+
+        dispatcher.Upserts.Should().HaveCount(1);
+        var doc = dispatcher.Upserts[0];
+        doc.IsActive.Should().BeFalse();
+        doc.BindingId.Should().BeEmpty();
+        doc.RevokedAtUtcValue.Should().BeNull();
+    }
+
     private sealed class FixedClock : IProjectionClock
     {
         public FixedClock(DateTimeOffset now) => UtcNow = now;

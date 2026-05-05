@@ -118,11 +118,13 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
     }
 
     /// <summary>
-    /// Revokes the active binding. NO-OP when state has no active binding
-    /// (e.g. concurrent /unbind, or revoke-after-revoke from <c>invalid_grant</c>
-    /// retry). Caller must have already invoked the NyxID-side revoke
-    /// (or observed <c>invalid_grant</c>) — this command only transitions
-    /// local state.
+    /// Revokes the active binding. When state has no active binding (for
+    /// example concurrent /unbind, revoke-after-revoke from
+    /// <c>invalid_grant</c>, or remote-side self-heal after projection drift),
+    /// emits a no-op rebuild event so the readmodel is overwritten from the
+    /// actor's authoritative empty state. Caller must have already invoked
+    /// the NyxID-side revoke (or observed <c>invalid_grant</c>) — this command
+    /// only transitions local state.
     /// </summary>
     [EventHandler]
     public async Task HandleRevokeBinding(RevokeBindingCommand cmd)
@@ -138,18 +140,6 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
         if (!IsCommandSubjectMatchingActor(cmd.ExternalSubject))
             return;
 
-        if (string.IsNullOrEmpty(State.BindingId))
-        {
-            Logger.LogInformation(
-                "RevokeBinding skipped: no active binding for {Platform}:{Tenant}:{User}",
-                cmd.ExternalSubject.Platform,
-                cmd.ExternalSubject.Tenant,
-                cmd.ExternalSubject.ExternalUserId);
-            return;
-        }
-
-        var revokedBindingId = State.BindingId;
-
         // Use the explicit "unspecified" sentinel so the persisted audit
         // trail distinguishes "caller did not supply a reason" from a
         // missing/empty value. The event Reason field is non-nullable in
@@ -157,6 +147,29 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
         // the boundary here rather than relying on per-call interpretation
         // (kimi-k2p6 L109 / L124 5/5 consensus).
         var reason = string.IsNullOrWhiteSpace(cmd.Reason) ? "unspecified" : cmd.Reason;
+
+        if (string.IsNullOrEmpty(State.BindingId))
+        {
+            // Remote revocation self-heal can land here when the actor state
+            // is already empty but the readmodel still contains an old active
+            // binding. Persisting an identity event republishes the committed
+            // state root, allowing the projector to overwrite that stale
+            // document without inventing query-time repair logic.
+            await PersistDomainEventAsync(new ExternalIdentityBindingProjectionRebuildRequestedEvent
+            {
+                Reason = $"revoke_without_active_binding:{reason}",
+                RequestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            });
+            Logger.LogInformation(
+                "RevokeBinding found no active binding for {Platform}:{Tenant}:{User}; rebuild requested so the projector materializes the authoritative empty state (reason={Reason})",
+                cmd.ExternalSubject.Platform,
+                cmd.ExternalSubject.Tenant,
+                cmd.ExternalSubject.ExternalUserId,
+                reason);
+            return;
+        }
+
+        var revokedBindingId = State.BindingId;
 
         await PersistDomainEventAsync(new ExternalIdentityBindingRevokedEvent
         {
