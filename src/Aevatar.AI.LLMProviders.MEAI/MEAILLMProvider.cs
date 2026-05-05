@@ -13,6 +13,9 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using OpenAIAssistantChatMessage = OpenAI.Chat.AssistantChatMessage;
+using OpenAIChatMessageContentPart = OpenAI.Chat.ChatMessageContentPart;
+using OpenAIChatToolCall = OpenAI.Chat.ChatToolCall;
 
 namespace Aevatar.AI.LLMProviders.MEAI;
 
@@ -273,10 +276,101 @@ public sealed class MEAILLMProvider : ILLMProvider
                 }
             }
 
+            AttachOpenAIRawRepresentationForReasoning(meaiMsg, msg);
             result.Add(meaiMsg);
         }
 
         return result;
+    }
+
+    private static void AttachOpenAIRawRepresentationForReasoning(
+        Microsoft.Extensions.AI.ChatMessage meaiMessage,
+        Aevatar.AI.Abstractions.LLMProviders.ChatMessage sourceMessage)
+    {
+        if (sourceMessage.Role != "assistant" || string.IsNullOrEmpty(sourceMessage.ReasoningContent))
+            return;
+
+        var rawMessage = BuildOpenAIAssistantMessage(sourceMessage);
+
+#pragma warning disable SCME0001
+        rawMessage.Patch.Set("$.reasoning_content"u8, sourceMessage.ReasoningContent);
+#pragma warning restore SCME0001
+
+        meaiMessage.RawRepresentation = rawMessage;
+    }
+
+    private static OpenAIAssistantChatMessage BuildOpenAIAssistantMessage(
+        Aevatar.AI.Abstractions.LLMProviders.ChatMessage sourceMessage)
+    {
+        var contentParts = BuildOpenAITextContentParts(sourceMessage);
+        var toolCalls = BuildOpenAIToolCalls(sourceMessage);
+
+        OpenAIAssistantChatMessage rawMessage;
+        if (contentParts.Count > 0)
+        {
+            rawMessage = new OpenAIAssistantChatMessage(contentParts);
+            foreach (var toolCall in toolCalls)
+                rawMessage.ToolCalls.Add(toolCall);
+            return rawMessage;
+        }
+
+        rawMessage = toolCalls.Count > 0
+            ? new OpenAIAssistantChatMessage(toolCalls)
+            : new OpenAIAssistantChatMessage(string.Empty);
+        return rawMessage;
+    }
+
+    private static List<OpenAIChatMessageContentPart> BuildOpenAITextContentParts(
+        Aevatar.AI.Abstractions.LLMProviders.ChatMessage sourceMessage)
+    {
+        var contentParts = new List<OpenAIChatMessageContentPart>();
+        if (sourceMessage.ContentParts is { Count: > 0 })
+        {
+            foreach (var part in sourceMessage.ContentParts)
+            {
+                if (part.Kind == ContentPartKind.Text && part.Text != null)
+                    contentParts.Add(OpenAIChatMessageContentPart.CreateTextPart(part.Text));
+            }
+        }
+
+        if (contentParts.Count == 0 && sourceMessage.Content != null)
+            contentParts.Add(OpenAIChatMessageContentPart.CreateTextPart(sourceMessage.Content));
+
+        return contentParts;
+    }
+
+    private static List<OpenAIChatToolCall> BuildOpenAIToolCalls(
+        Aevatar.AI.Abstractions.LLMProviders.ChatMessage sourceMessage)
+    {
+        var toolCalls = new List<OpenAIChatToolCall>();
+        if (sourceMessage.ToolCalls is not { Count: > 0 })
+            return toolCalls;
+
+        foreach (var toolCall in sourceMessage.ToolCalls)
+        {
+            toolCalls.Add(OpenAIChatToolCall.CreateFunctionToolCall(
+                toolCall.Id,
+                toolCall.Name,
+                BinaryData.FromString(NormalizeToolArgumentsJson(toolCall.ArgumentsJson))));
+        }
+
+        return toolCalls;
+    }
+
+    private static string NormalizeToolArgumentsJson(string? argumentsJson)
+    {
+        if (string.IsNullOrWhiteSpace(argumentsJson))
+            return "{}";
+
+        try
+        {
+            using var _ = JsonDocument.Parse(argumentsJson);
+            return argumentsJson;
+        }
+        catch (JsonException)
+        {
+            return "{}";
+        }
     }
 
     private static void AppendContentParts(

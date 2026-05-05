@@ -488,7 +488,7 @@ public sealed class ChatRuntime
                             : null;
                         if (finalParsed?.ToolCalls.Count > 0)
                         {
-                            AppendAssistantMessage(messages, pendingHistoryMessages, finalParsed.CleanedContent, reasoningContent: null, toolCalls: null);
+                            AppendAssistantMessage(messages, pendingHistoryMessages, finalParsed.CleanedContent, finalRound.ReasoningContent, toolCalls: null);
 
                             var finalToolCallMsg = new ChatMessage
                             {

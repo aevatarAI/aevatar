@@ -1,6 +1,7 @@
 using System.Collections.Frozen;
 using System.Runtime.CompilerServices;
 using System.Reflection;
+using System.ClientModel.Primitives;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
@@ -98,6 +99,13 @@ public class AIComponentCoverageTests
         assistantMsg.Role.Should().Be(ChatRole.Assistant);
         assistantMsg.Contents.OfType<TextReasoningContent>().Should().ContainSingle()
             .Which.Text.Should().Be("reasoning-text");
+        assistantMsg.RawRepresentation.Should().BeAssignableTo<OpenAI.Chat.AssistantChatMessage>();
+
+        var openAiMessages = OpenAI.Chat.MicrosoftExtensionsAIChatExtensions
+            .AsOpenAIChatMessages(capturedMessages!)
+            .ToList();
+        var assistantJson = ModelReaderWriter.Write(openAiMessages[1]).ToString();
+        assistantJson.Should().Contain("\"reasoning_content\":\"reasoning-text\"");
     }
 
     [Fact]
@@ -142,6 +150,15 @@ public class AIComponentCoverageTests
         assistantWithTools.Contents.OfType<TextReasoningContent>().Should().ContainSingle()
             .Which.Text.Should().Be("thinking about tools");
         assistantWithTools.Contents.OfType<FunctionCallContent>().Should().ContainSingle();
+        assistantWithTools.RawRepresentation.Should().BeAssignableTo<OpenAI.Chat.AssistantChatMessage>();
+
+        var openAiMessages = OpenAI.Chat.MicrosoftExtensionsAIChatExtensions
+            .AsOpenAIChatMessages(capturedMessages!)
+            .ToList();
+        var assistantJson = ModelReaderWriter.Write(openAiMessages[1]).ToString();
+        assistantJson.Should().Contain("\"reasoning_content\":\"thinking about tools\"");
+        assistantJson.Should().Contain("\"tool_calls\"");
+        assistantJson.Should().Contain("\"name\":\"search\"");
     }
 
     [Fact]
