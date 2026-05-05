@@ -22,6 +22,7 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
     private readonly IUserLlmSelectionService? _selectionService;
     private readonly IUserLlmOptionsRenderer<MessageContent>? _renderer;
     private readonly IActorRuntime? _actorRuntime;
+    private readonly ExternalIdentityBindingProjectionPort? _bindingProjectionPort;
     private readonly ILogger<ModelChannelSlashCommandHandler> _logger;
 
     public ModelChannelSlashCommandHandler(
@@ -29,13 +30,15 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
         IUserLlmOptionsService? optionsService = null,
         IUserLlmSelectionService? selectionService = null,
         IUserLlmOptionsRenderer<MessageContent>? renderer = null,
-        IActorRuntime? actorRuntime = null)
+        IActorRuntime? actorRuntime = null,
+        ExternalIdentityBindingProjectionPort? bindingProjectionPort = null)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _optionsService = optionsService;
         _selectionService = selectionService;
         _renderer = renderer;
         _actorRuntime = actorRuntime;
+        _bindingProjectionPort = bindingProjectionPort;
     }
 
     public string Name => "model";
@@ -132,13 +135,15 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
     /// need to flip the local actor — no second broker call.
     /// </para>
     /// <para>
-    /// Returns <paramref name="cleanedMessage"/> ONLY when the local revoke
-    /// envelope was actually dispatched. When <see cref="IActorRuntime"/> is
-    /// not registered, or both dispatch attempts threw, returns
-    /// <paramref name="degradedMessage"/> instead — claiming "本地已自动清理"
-    /// in those paths would lie to the user, sending them to <c>/init</c>
-    /// which would still see the stale local binding and refuse, recreating
-    /// the same loop this self-heal exists to break (PR #561 review).
+    /// Returns <paramref name="cleanedMessage"/> ONLY when the binding
+    /// projection scope is active and the local revoke envelope was actually
+    /// dispatched. When <see cref="IActorRuntime"/> or
+    /// <see cref="ExternalIdentityBindingProjectionPort"/> is not registered,
+    /// or both attempts threw, returns <paramref name="degradedMessage"/>
+    /// instead — claiming "本地已自动清理" in those paths would lie to the user,
+    /// sending them to <c>/init</c> which would still see the stale local
+    /// binding and refuse, recreating the same loop this self-heal exists to
+    /// break (PR #561 review).
     /// </para>
     /// </remarks>
     private async Task<MessageContent> SelfHealRevokedBindingAsync(
@@ -167,15 +172,39 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
         }
 
         var actorId = context.Subject.ToActorId();
+        if (_bindingProjectionPort is null)
+        {
+            _logger.LogWarning(
+                "/model encountered NyxID-side binding rejection ({Reason}) but ExternalIdentityBindingProjectionPort is not registered; cannot guarantee local readmodel cleanup. actor={ActorId}, subject={Platform}:{Tenant}:{User}",
+                reason,
+                actorId,
+                context.Subject.Platform, context.Subject.Tenant, context.Subject.ExternalUserId);
+            return false;
+        }
+
         // Single retry mirrors UnbindChannelSlashCommandHandler — without it a
         // one-off Orleans dispatch hiccup leaves the user thinking they're
         // unbound while the readmodel still says they're bound (PR #521 review
-        // v4-pro on /unbind).
+        // v4-pro on /unbind). Projection activation is part of the attempt:
+        // without an active scope, the revoke/rebuild event commits but the
+        // binding readmodel remains stale.
         Exception? lastError = null;
         for (var attempt = 1; attempt <= 2; attempt++)
         {
             try
             {
+                var lease = await _bindingProjectionPort
+                    .EnsureProjectionForActorAsync(actorId, ct)
+                    .ConfigureAwait(false);
+                if (lease is null)
+                {
+                    _logger.LogWarning(
+                        "/model: binding projection activation returned null for actor={ActorId}, reason={Reason}",
+                        actorId,
+                        reason);
+                    return false;
+                }
+
                 var actor = await _actorRuntime
                     .CreateAsync<ExternalIdentityBindingGAgent>(actorId, ct)
                     .ConfigureAwait(false);

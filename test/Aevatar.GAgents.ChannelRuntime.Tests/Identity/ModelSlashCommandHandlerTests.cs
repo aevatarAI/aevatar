@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
@@ -149,9 +150,11 @@ public sealed class ModelSlashCommandHandlerTests
         // or the binding tied to a re-DCR'd cluster client_id was invalidated).
         // Wipe the local readmodel so /init isn't blocked by stale state.
         var actorRuntime = new RecordingActorRuntime();
+        var projectionActivation = new RecordingBindingProjectionActivation();
         var handler = CreateHandler(
             broker: new ThrowingCapabilityBroker(new BindingRevokedException(Context().Subject)),
-            actorRuntime: actorRuntime);
+            actorRuntime: actorRuntime,
+            bindingProjectionPort: NewProjectionPort(projectionActivation));
 
         var reply = await handler.HandleAsync(Context(), default);
 
@@ -159,6 +162,8 @@ public sealed class ModelSlashCommandHandlerTests
         reply!.Text.Should().Contain("失效");
         reply.Text.Should().Contain("已自动清理");
         reply.Text.Should().Contain("/init");
+        projectionActivation.Requests.Should().ContainSingle()
+            .Which.RootActorId.Should().Be(Context().Subject.ToActorId());
         AssertRevokeBindingDispatched(actorRuntime, expectedReason: "auto_self_heal_remote_revoked");
     }
 
@@ -199,6 +204,28 @@ public sealed class ModelSlashCommandHandlerTests
         reply!.Text.Should().Contain("失效");
         reply.Text.Should().Contain("/unbind");
         reply.Text.Should().NotContain("已自动清理");
+    }
+
+    [Fact]
+    public async Task List_DegradesToUnbindGuidance_WhenBindingProjectionPortMissing()
+    {
+        // Dispatching the revoke without activating the binding projection
+        // only updates actor state; the readmodel gate would still see the old
+        // active binding. In that case the handler must not claim auto-clean
+        // succeeded.
+        var actorRuntime = new RecordingActorRuntime();
+        var handler = CreateHandler(
+            broker: new ThrowingCapabilityBroker(new BindingRevokedException(Context().Subject)),
+            actorRuntime: actorRuntime,
+            useDefaultBindingProjectionPort: false);
+
+        var reply = await handler.HandleAsync(Context(), default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("失效");
+        reply.Text.Should().Contain("/unbind");
+        reply.Text.Should().NotContain("已自动清理");
+        actorRuntime.Dispatched.Should().BeEmpty();
     }
 
     [Fact]
@@ -432,11 +459,15 @@ public sealed class ModelSlashCommandHandlerTests
         StubUserConfigQueryPort? queryPort = null,
         StubUserConfigCommandService? commandService = null,
         INyxIdCapabilityBroker? broker = null,
-        IActorRuntime? actorRuntime = null)
+        IActorRuntime? actorRuntime = null,
+        ExternalIdentityBindingProjectionPort? bindingProjectionPort = null,
+        bool useDefaultBindingProjectionPort = true)
     {
         catalog ??= new StubCatalogClient();
         queryPort ??= new StubUserConfigQueryPort();
         commandService ??= new StubUserConfigCommandService();
+        if (bindingProjectionPort is null && useDefaultBindingProjectionPort && actorRuntime is not null)
+            bindingProjectionPort = NewProjectionPort();
 
         var provider = new ServiceCollection()
             .AddSingleton<IUserConfigQueryPort>(queryPort)
@@ -450,8 +481,13 @@ public sealed class ModelSlashCommandHandlerTests
             options,
             selection,
             new TextUserLlmOptionsRenderer(),
-            actorRuntime);
+            actorRuntime,
+            bindingProjectionPort);
     }
+
+    private static ExternalIdentityBindingProjectionPort NewProjectionPort(
+        RecordingBindingProjectionActivation? activation = null) =>
+        new(activation ?? new RecordingBindingProjectionActivation());
 
     /// <summary>
     /// Records every <see cref="EventEnvelope"/> the handler dispatches so
@@ -506,6 +542,25 @@ public sealed class ModelSlashCommandHandlerTests
         public Task<bool> ExistsAsync(string id) => throw new NotImplementedException();
         public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => throw new NotImplementedException();
         public Task UnlinkAsync(string childId, CancellationToken ct = default) => throw new NotImplementedException();
+    }
+
+    private sealed class RecordingBindingProjectionActivation
+        : IProjectionScopeActivationService<ExternalIdentityBindingMaterializationRuntimeLease>
+    {
+        public List<ProjectionScopeStartRequest> Requests { get; } = [];
+
+        public Task<ExternalIdentityBindingMaterializationRuntimeLease> EnsureAsync(
+            ProjectionScopeStartRequest request,
+            CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            return Task.FromResult(new ExternalIdentityBindingMaterializationRuntimeLease(
+                new ExternalIdentityBindingMaterializationContext
+                {
+                    RootActorId = request.RootActorId,
+                    ProjectionKind = request.ProjectionKind,
+                }));
+        }
     }
 
     private static StudioConfig MakeConfig(
