@@ -159,7 +159,7 @@ public static class IdentityOAuthEndpoints
             // orphan. Best-effort revoke at NyxID before responding so the
             // orphan does not accumulate at NyxID with no local reference.
             await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
-            return Results.Ok(new { status = "already_bound", detail = "已绑定 NyxID 账号,可以回到 Lark 继续对话" });
+            return RenderBoundSuccessHtml(displayName: null, alreadyBound: true);
         }
 
         var actor = await TryActivateActorAsync(actorRuntime, actorId, logger, ct).ConfigureAwait(false);
@@ -252,7 +252,7 @@ public static class IdentityOAuthEndpoints
                     resolvedAfterTimeout.Value,
                     exchange.BindingId);
                 await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
-                return Results.Ok(new { status = "already_bound", detail = "已绑定 NyxID 账号,可以回到 Lark 继续对话" });
+                return RenderBoundSuccessHtml(displayName: null, alreadyBound: true);
             }
 
             logger.LogWarning(
@@ -271,13 +271,7 @@ public static class IdentityOAuthEndpoints
             "Bound external identity {Platform}:{Tenant}:{User} -> binding_id={BindingId}",
             subject.Platform, subject.Tenant, subject.ExternalUserId, exchange.BindingId);
 
-        return Results.Ok(new
-        {
-            status = "bound",
-            detail = displayName is null
-                ? "已绑定 NyxID 账号,可以回到 Lark 继续对话"
-                : $"已绑定 NyxID 账号({displayName}),可以回到 Lark 继续对话",
-        });
+        return RenderBoundSuccessHtml(displayName, alreadyBound: false);
     }
 
     // ─── Status endpoint ───
@@ -485,5 +479,61 @@ public static class IdentityOAuthEndpoints
             case 3: padded += "="; break;
         }
         return Convert.FromBase64String(padded);
+    }
+
+    /// <summary>
+    /// Render the user-facing success page returned in the OAuth-callback
+    /// response. Issue #513 phase 1 asked for a "callback success → please pick
+    /// a model" prompt. The full version is a card update pushed back into
+    /// Lark, which requires capturing the /init card's adapter-owned message
+    /// id and passing it through the OAuth state token — substantial new
+    /// design surface left as a follow-up. This page is the browser-side
+    /// substitute the user sees immediately after the OAuth redirect, and it
+    /// names the next-step commands (<c>/model</c>, <c>/whoami</c>) explicitly
+    /// so the user is not left guessing what to type back in Lark.
+    /// </summary>
+    /// <remarks>
+    /// Display name comes from the id_token "name" / sub claim; HTML-encoded
+    /// before interpolation so a malicious id_token cannot inject markup.
+    /// Other error paths in the callback intentionally keep returning JSON for
+    /// ops/programmatic consumers.
+    /// </remarks>
+    internal static IResult RenderBoundSuccessHtml(string? displayName, bool alreadyBound)
+    {
+        var badge = alreadyBound ? "已绑定" : "绑定成功";
+        var heading = alreadyBound ? "NyxID 账号已绑定" : "已绑定 NyxID 账号";
+        var displayLine = string.IsNullOrWhiteSpace(displayName)
+            ? string.Empty
+            : $"<p>账号:{System.Net.WebUtility.HtmlEncode(displayName)}</p>";
+        var body = alreadyBound
+            ? "<p>当前账号已经完成绑定,无需重复操作。可以关闭此页,回到 Lark 继续对话。</p>"
+            : "<p>可以关闭此页,回到 Lark 继续对话。</p>";
+
+        var html = $@"<!DOCTYPE html>
+<html lang=""zh-CN"">
+<head>
+<meta charset=""UTF-8"">
+<meta name=""viewport"" content=""width=device-width, initial-scale=1"">
+<title>NyxID 绑定 — {badge}</title>
+<style>
+body {{ font-family: -apple-system, ""Segoe UI"", ""PingFang SC"", ""Microsoft YaHei"", sans-serif; max-width: 480px; margin: 60px auto; padding: 0 20px; color: #1d1d1f; line-height: 1.6; }}
+.badge {{ display: inline-block; padding: 4px 10px; background: #d1f5d3; color: #146c2e; border-radius: 999px; font-size: 13px; font-weight: 500; }}
+h1 {{ font-size: 22px; margin: 16px 0 8px; }}
+.hint {{ background: #f5f5f7; padding: 16px 20px; border-radius: 8px; margin-top: 24px; }}
+.hint code {{ background: #fff; padding: 2px 6px; border-radius: 4px; font-family: ui-monospace, ""SFMono-Regular"", Menlo, monospace; }}
+</style>
+</head>
+<body>
+<span class=""badge"">{badge}</span>
+<h1>{heading}</h1>
+{displayLine}
+{body}
+<div class=""hint"">
+<strong>下一步</strong><br>
+回到 Lark 后,发送 <code>/model</code> 选择想用的模型,或 <code>/whoami</code> 查看当前绑定状态。
+</div>
+</body>
+</html>";
+        return Results.Content(html, "text/html; charset=utf-8");
     }
 }

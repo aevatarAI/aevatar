@@ -355,6 +355,109 @@ public sealed class ConversationReplyGeneratorTests
         ownerMetadata.Should().NotContainKey(LLMRequestMetadataKeys.SenderNyxIdAccessToken);
     }
 
+    // ─── Issue #513 phase 3 — explicit 3 binding × 3 owner-prefs override matrix ───
+    //
+    // The four [Fact] tests above pin specific scenarios (owner-only,
+    // sender-overrides-model, sender-store-throws, route-failure-retry). This
+    // [Theory] adds the explicit 3×3 matrix the issue calls out: the binding
+    // axis (unbound / bound-with-empty-prefs / bound-with-model-only) is
+    // crossed with the owner-prefs axis (none / partial=model-only / full).
+    // Sender prefs in the bound-set row deliberately set ONLY DefaultModel so
+    // we exercise the "sender supplies a subset, owner fills the rest" path
+    // without crossing the route-applied + no-sender-token branch (which
+    // silently swaps in the owner snapshot — orthogonal to the matrix and
+    // already covered by UsesOwnerPrefsImmediatelyWhenSenderRouteHasNoToken).
+    public const string MatrixUnbound = "unbound";
+    public const string MatrixBoundEmpty = "bound_empty_prefs";
+    public const string MatrixBoundModelOnly = "bound_model_only";
+    public const string MatrixOwnerNone = "owner_none";
+    public const string MatrixOwnerPartial = "owner_partial_model_only";
+    public const string MatrixOwnerFull = "owner_full";
+
+    [Theory]
+    [InlineData(MatrixUnbound, MatrixOwnerNone, null, null, null)]
+    [InlineData(MatrixUnbound, MatrixOwnerPartial, "owner-model", null, null)]
+    [InlineData(MatrixUnbound, MatrixOwnerFull, "owner-model", "/api/v1/proxy/s/owner", "9")]
+    [InlineData(MatrixBoundEmpty, MatrixOwnerNone, null, null, null)]
+    [InlineData(MatrixBoundEmpty, MatrixOwnerPartial, "owner-model", null, null)]
+    [InlineData(MatrixBoundEmpty, MatrixOwnerFull, "owner-model", "/api/v1/proxy/s/owner", "9")]
+    [InlineData(MatrixBoundModelOnly, MatrixOwnerNone, "sender-model", null, null)]
+    [InlineData(MatrixBoundModelOnly, MatrixOwnerPartial, "sender-model", null, null)]
+    [InlineData(MatrixBoundModelOnly, MatrixOwnerFull, "sender-model", "/api/v1/proxy/s/owner", "9")]
+    public async Task GenerateReplyAsync_OverrideMatrix_BindingTimesOwnerPrefs(
+        string bindingState,
+        string ownerState,
+        string? expectedModel,
+        string? expectedRoute,
+        string? expectedRounds)
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var prefsStore = new ScopedStubPreferencesStore();
+
+        switch (bindingState)
+        {
+            case MatrixBoundEmpty:
+                // Lookup returns the default empty record (no entry in
+                // ByBinding), so SetIfFilled writes nothing.
+                break;
+            case MatrixBoundModelOnly:
+                prefsStore.ByBinding["bnd_sender"] = new NyxIdUserLlmPreferences(
+                    DefaultModel: "sender-model",
+                    PreferredRoute: string.Empty,
+                    MaxToolRounds: 0);
+                break;
+        }
+
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (bindingState != MatrixUnbound)
+            metadata[LLMRequestMetadataKeys.SenderBindingId] = "bnd_sender";
+
+        switch (ownerState)
+        {
+            case MatrixOwnerPartial:
+                metadata[LLMRequestMetadataKeys.ModelOverride] = "owner-model";
+                break;
+            case MatrixOwnerFull:
+                metadata[LLMRequestMetadataKeys.ModelOverride] = "owner-model";
+                metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = "/api/v1/proxy/s/owner";
+                metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride] = "9";
+                break;
+        }
+
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, preferencesStore: prefsStore);
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = $"msg-{bindingState}-{ownerState}",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            metadata,
+            streamingSink: null,
+            CancellationToken.None);
+
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        var effective = request.Metadata!;
+
+        AssertKey(effective, LLMRequestMetadataKeys.ModelOverride, expectedModel);
+        AssertKey(effective, LLMRequestMetadataKeys.NyxIdRoutePreference, expectedRoute);
+        AssertKey(effective, LLMRequestMetadataKeys.MaxToolRoundsOverride, expectedRounds);
+
+        if (bindingState == MatrixUnbound)
+            prefsStore.Lookups.Should().BeEmpty(
+                "no binding-id in metadata → generator must not consult the prefs store");
+        else
+            prefsStore.Lookups.Should().ContainSingle().Which.Should().Be("bnd_sender");
+    }
+
+    private static void AssertKey(IReadOnlyDictionary<string, string> metadata, string key, string? expected)
+    {
+        if (expected is null)
+            metadata.Should().NotContainKey(key);
+        else
+            metadata.Should().ContainKey(key).WhoseValue.Should().Be(expected);
+    }
+
     private sealed class ScopedStubPreferencesStore : INyxIdUserLlmPreferencesStore
     {
         public Dictionary<string, NyxIdUserLlmPreferences> ByBinding { get; } = new(StringComparer.Ordinal);
