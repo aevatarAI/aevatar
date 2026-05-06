@@ -363,6 +363,7 @@ public sealed class AgentBuilderTool : IAgentTool
             MaxToolRounds = SkillRunnerDefaults.DefaultMaxToolRounds,
             MaxHistoryMessages = SkillRunnerDefaults.DefaultMaxHistoryMessages,
             OutboundConfig = outboundConfig,
+            RequiresNyxidProxySuccess = templateSpec.RequiresNyxidProxySuccess,
         };
 
         var runImmediatelyRequested = args.Bool("run_immediately") == true;

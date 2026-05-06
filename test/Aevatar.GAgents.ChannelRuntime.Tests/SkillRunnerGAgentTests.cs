@@ -91,6 +91,60 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleInitializeAsync_DailyReportLegacyEvent_DerivesProxySuccessRequiredFromTemplate()
+    {
+        // PR #569 review (codex P1 + eanzhao on SkillRunnerGAgent.cs:834): legacy actors
+        // created before proto field 16 existed replay an init event whose
+        // RequiresNyxidProxySuccess deserializes as false. ApplyInitialized must derive
+        // the effective flag from the template name so a daily_report actor that replays
+        // post-deploy is gated by the safety net regardless of when it was created.
+        var command = CreateInitializeCommand();
+        command.RequiresNyxidProxySuccess = false; // simulate legacy event
+        command.TemplateName = "daily_report";
+
+        await _agent.HandleInitializeAsync(command);
+
+        _agent.State.RequiresNyxidProxySuccess.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task HandleInitializeAsync_NonFetchTemplate_DoesNotDeriveProxySuccessFromTemplate()
+    {
+        // The legacy default applies only to known fetch-and-summarize templates. Skills
+        // that don't depend on tool data (future pure-LLM transformations) must not be
+        // falsely failed when they legitimately fan out zero nyxid_proxy calls.
+        var command = CreateInitializeCommand();
+        command.RequiresNyxidProxySuccess = false;
+        command.TemplateName = "future_pure_llm_template";
+
+        await _agent.HandleInitializeAsync(command);
+
+        _agent.State.RequiresNyxidProxySuccess.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task TryCreateStreamingSink_WhenRequiresNyxidProxySuccess_ReturnsNull()
+    {
+        // PR #569 review (codex P1 on SkillRunnerGAgent.cs:351): when the run is gated by
+        // EnsureToolStatusAllowsCompletion, streaming each delta to Lark would post the
+        // hallucinated text live before the guard ran, then repost it on each retry.
+        // TryCreateStreamingSink must short-circuit so chunked dispatch (which only fires
+        // AFTER the guard) is the only path that reaches Lark for daily_report runs.
+        AttachNyxIdApiClient(_agent, new RecordingHandler("""{"code":0,"msg":"success"}"""));
+        var command = CreateInitializeCommand(); // template=daily_report → flag derived true
+        await _agent.HandleInitializeAsync(command);
+        _agent.State.RequiresNyxidProxySuccess.Should().BeTrue();
+
+        var method = typeof(SkillRunnerGAgent).GetMethod(
+            "TryCreateStreamingSink",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        method.Should().NotBeNull();
+        var sink = method!.Invoke(_agent, []);
+
+        sink.Should().BeNull();
+    }
+
+    [Fact]
     public async Task HandleInitializeAsync_ShouldAwaitUpsertDispatchBeforeFiringExecutionUpdate()
     {
         // Issue #440 regression: pre-PR #451 the SkillRunner reached the catalog via

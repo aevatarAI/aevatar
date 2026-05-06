@@ -53,7 +53,14 @@ public static class AgentBuilderTemplates
             skillPrompt,
             executionPrompt,
             ["api-github", "api-lark-bot"],
-            repoList);
+            repoList,
+            // daily_report is a fetch-and-summarize skill: every legitimate run must hit
+            // the GitHub proxy at least once. A run that finishes with zero nyxid_proxy
+            // successes means the LLM bypassed tools and produced text from prior context,
+            // which is exactly the fake-success path issue #439 was filed for. The runner-
+            // layer safety net reads this flag in EnsureToolStatusAllowsCompletion and
+            // downgrades a 0/0 run to SkillRunnerExecutionFailedEvent.
+            RequiresNyxidProxySuccess: true);
         return true;
     }
 
@@ -303,7 +310,8 @@ public sealed record DailyReportTemplateSpec(
     string SkillContent,
     string ExecutionPrompt,
     IReadOnlyList<string> RequiredServiceSlugs,
-    IReadOnlyList<string> Repositories);
+    IReadOnlyList<string> Repositories,
+    bool RequiresNyxidProxySuccess);
 
 public sealed record SocialMediaTemplateSpec(
     string WorkflowId,
