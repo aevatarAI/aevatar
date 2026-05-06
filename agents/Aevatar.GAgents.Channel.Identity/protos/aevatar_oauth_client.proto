@@ -55,6 +55,10 @@ message AevatarOAuthClientState {
   // forever. Empty means legacy/unknown and forces one re-DCR on the next
   // EnsureProvisioned command so existing broken clients are healed.
   string redirect_uri = 12;
+  // OAuth authorization scopes registered/requested for this client. Empty
+  // means legacy/unknown and forces one re-DCR on the next EnsureProvisioned
+  // command so existing clients missing the proxy scope are healed.
+  string oauth_scope = 13;
 }
 
 // Issued by the bootstrap startup service from every silo on cluster cold-
@@ -77,6 +81,9 @@ message ProvisionAevatarOAuthClientCommand {
   string client_id = 1;
   int64 client_id_issued_at_unix = 2;
   string nyxid_authority = 3;
+  // Optional diagnostic scope for manually provisioned clients. Bootstrap
+  // never uses this command path; an empty value means unknown.
+  string oauth_scope = 4;
 }
 
 // Issued by ops to force a fresh HMAC key rotation. Old tokens signed with
@@ -112,6 +119,10 @@ message AevatarOAuthClientProvisionedEvent {
   // treats empty stored redirect_uri as legacy/unknown and re-DCRs once on
   // the next EnsureProvisioned command.
   string redirect_uri = 5;
+  // Scopes requested at DCR/authorize time for this OAuth client. Empty when
+  // an older event predates scope tracking; the actor treats empty as
+  // legacy/unknown and re-DCRs once so proxy-capable bindings can be minted.
+  string oauth_scope = 6;
 }
 
 // Persisted when the actor seeds or rotates its HMAC key. On rotation, the
@@ -173,4 +184,7 @@ message AevatarOAuthClientDocument {
   // so an operator can confirm DCR registered the right callback target
   // without inspecting actor state directly.
   string redirect_uri = 16;
+  // Mirror of AevatarOAuthClientState.oauth_scope for diagnostics and
+  // bootstrap drift detection.
+  string oauth_scope = 17;
 }

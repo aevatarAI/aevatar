@@ -98,10 +98,15 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
             ExternalSubject = subject,
             BindingId = "bnd_first",
         });
+        var afterFirstVersion = _agent.EventSourcing!.CurrentVersion;
 
         // Second concurrent /init wins the race after the first one already
         // committed. The actor MUST keep the existing binding_id and discard
-        // the second one (ADR-0018 §Implementation Notes #2).
+        // the second one (ADR-0018 §Implementation Notes #2). It also emits
+        // a no-op rebuild event so the projector materializes the existing
+        // binding into the readmodel — necessary on legacy clusters whose
+        // binding projection scope was activated for the first time after
+        // the bind already happened (issue #549 follow-up 2026-05-01).
         await _agent.HandleCommitBinding(new CommitBindingCommand
         {
             ExternalSubject = subject,
@@ -109,6 +114,9 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
         });
 
         _agent.State.BindingId.Should().Be("bnd_first");
+        _agent.EventSourcing!.CurrentVersion.Should().Be(
+            afterFirstVersion + 1,
+            "the discard branch must emit a rebuild event so the projector re-publishes the existing binding's state root");
     }
 
     [Fact]

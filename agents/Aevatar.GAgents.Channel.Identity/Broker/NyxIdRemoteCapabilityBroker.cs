@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -81,13 +82,16 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         ExternalSubjectRefExtensions.EnsureValid(externalSubject);
 
         var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
+        var redirectUri = ResolveRedirectUri();
+        EnsureClientCurrent(snapshot, redirectUri);
+
         var pkce = PkceHelper.GeneratePair();
         var correlationId = Guid.NewGuid().ToString("N");
         var stateToken = await _stateTokenCodec
             .EncodeAsync(correlationId, externalSubject, pkce.CodeVerifier, ct)
             .ConfigureAwait(false);
 
-        var url = BuildAuthorizeUrl(snapshot, stateToken, pkce.CodeChallenge);
+        var url = BuildAuthorizeUrl(snapshot, redirectUri, stateToken, pkce.CodeChallenge);
         var expiresAt = _timeProvider.GetUtcNow().Add(_options.StateTokenLifetime).ToUnixTimeSeconds();
         return new BindingChallenge
         {
@@ -198,6 +202,8 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             if ((int)response.StatusCode == 400 && IsInvalidGrant(body))
                 throw new BindingRevokedException(externalSubject, "NyxID returned invalid_grant on token-exchange.");
+            if ((int)response.StatusCode == 400 && IsInvalidScope(body))
+                throw new BindingScopeMismatchException(externalSubject, "NyxID returned invalid_scope on token-exchange.");
             _logger.LogError(
                 "NyxID token-exchange failed: status={StatusCode}, body={Body}",
                 (int)response.StatusCode,
@@ -243,6 +249,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
 
         var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
         var redirectUri = ResolveRedirectUri();
+        EnsureClientCurrent(snapshot, redirectUri);
 
         var form = new List<KeyValuePair<string, string>>
         {
@@ -284,20 +291,36 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         return new BrokerAuthorizationCodeResult(payload.BindingId, payload.IdToken, payload.AccessToken);
     }
 
-    private string BuildAuthorizeUrl(AevatarOAuthClientSnapshot snapshot, string stateToken, string codeChallenge)
+    private string BuildAuthorizeUrl(
+        AevatarOAuthClientSnapshot snapshot,
+        string redirectUri,
+        string stateToken,
+        string codeChallenge)
     {
-        var redirectUri = ResolveRedirectUri();
         var queryParts = new List<string>
         {
             "response_type=code",
             $"client_id={Uri.EscapeDataString(snapshot.ClientId)}",
             $"redirect_uri={Uri.EscapeDataString(redirectUri)}",
-            $"scope={Uri.EscapeDataString(_options.Scope)}",
+            $"scope={Uri.EscapeDataString(AevatarOAuthClientScopes.AuthorizationScope)}",
             $"state={Uri.EscapeDataString(stateToken)}",
             $"code_challenge={Uri.EscapeDataString(codeChallenge)}",
             "code_challenge_method=S256",
         };
         return $"{snapshot.NyxIdAuthority.TrimEnd('/')}{AuthorizeEndpoint}?{string.Join("&", queryParts)}";
+    }
+
+    private static void EnsureClientCurrent(AevatarOAuthClientSnapshot snapshot, string resolvedRedirectUri)
+    {
+        if (!string.IsNullOrEmpty(snapshot.RedirectUri)
+            && string.Equals(snapshot.RedirectUri, resolvedRedirectUri, StringComparison.Ordinal)
+            && AevatarOAuthClientScopes.ContainsRequiredScopes(snapshot.OauthScope))
+        {
+            return;
+        }
+
+        throw new AevatarOAuthClientNotProvisionedException(
+            "Aevatar OAuth client redirect_uri or oauth_scope is not current. Bootstrap must re-run DCR before issuing NyxID authorize URLs.");
     }
 
     private static bool IsInvalidGrant(string body)
@@ -309,6 +332,22 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             return document.RootElement.TryGetProperty("error", out var element)
                 && element.ValueKind == JsonValueKind.String
                 && string.Equals(element.GetString(), "invalid_grant", StringComparison.Ordinal);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsInvalidScope(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return false;
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            return document.RootElement.TryGetProperty("error", out var element)
+                && element.ValueKind == JsonValueKind.String
+                && string.Equals(element.GetString(), "invalid_scope", StringComparison.Ordinal);
         }
         catch (JsonException)
         {

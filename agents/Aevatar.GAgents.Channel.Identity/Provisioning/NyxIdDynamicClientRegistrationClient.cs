@@ -56,7 +56,7 @@ public class NyxIdDynamicClientRegistrationClient
             GrantTypes = ["authorization_code"],
             ResponseTypes = ["code"],
             TokenEndpointAuthMethod = "none",
-            Scope = "openid urn:nyxid:scope:broker_binding",
+            Scope = AevatarOAuthClientScopes.AuthorizationScope,
         };
 
         using var response = await _http.PostAsJsonAsync(url, request, JsonOptions, ct).ConfigureAwait(false);

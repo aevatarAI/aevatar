@@ -1,5 +1,3 @@
-using System.Net.Http.Headers;
-using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.AspNetCore.Authorization;
@@ -14,28 +12,22 @@ namespace Aevatar.Studio.Hosting.Controllers;
 [Route("api/user-config")]
 public sealed class UserConfigController : ControllerBase
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        PropertyNameCaseInsensitive = true,
-    };
-
     private readonly IUserConfigQueryPort _queryPort;
     private readonly IUserConfigCommandService _commandService;
-    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IUserLlmPreferenceService _llmPreferenceService;
     private readonly IConfiguration _configuration;
     private readonly ILogger<UserConfigController> _logger;
 
     public UserConfigController(
         IUserConfigQueryPort queryPort,
         IUserConfigCommandService commandService,
-        IHttpClientFactory httpClientFactory,
+        IUserLlmPreferenceService llmPreferenceService,
         IConfiguration configuration,
         ILogger<UserConfigController> logger)
     {
         _queryPort = queryPort;
         _commandService = commandService;
-        _httpClientFactory = httpClientFactory;
+        _llmPreferenceService = llmPreferenceService;
         _configuration = configuration;
         _logger = logger;
     }
@@ -106,238 +98,120 @@ public sealed class UserConfigController : ControllerBase
     [HttpGet("models")]
     public async Task<ActionResult<NyxIdLlmStatusResponse>> GetModels(CancellationToken cancellationToken)
     {
-        var authorityBase = ResolveNyxIdAuthorityBase();
-        if (string.IsNullOrWhiteSpace(authorityBase))
-        {
-            _logger.LogWarning("NyxID authority not configured; checked keys: Cli:App:NyxId:Authority, Aevatar:NyxId:Authority, Aevatar:Authentication:Authority");
-            return Ok(NyxIdLlmStatusResponse.Empty);
-        }
-
-        var bearerToken = ExtractBearerToken();
-        if (string.IsNullOrWhiteSpace(bearerToken))
-        {
-            _logger.LogWarning("No Bearer token found in request for models endpoint");
-            return Ok(NyxIdLlmStatusResponse.Empty);
-        }
-
         try
         {
-            var statusUrl = $"{authorityBase}/api/v1/llm/status";
-            _logger.LogDebug("Fetching LLM status from NyxID: {Url}", statusUrl);
-
-            using var request = new HttpRequestMessage(HttpMethod.Get, statusUrl);
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
-
-            var client = _httpClientFactory.CreateClient();
-            using var response = await client.SendAsync(request, cancellationToken);
-            var body = await response.Content.ReadAsStringAsync(cancellationToken);
-
-            if (!response.IsSuccessStatusCode)
-            {
-                _logger.LogWarning(
-                    "NyxID LLM status endpoint returned {StatusCode}: {Body}",
-                    response.StatusCode,
-                    body.Length > 500 ? body[..500] : body);
-                return Ok(NyxIdLlmStatusResponse.Empty);
-            }
-
-            var status = JsonSerializer.Deserialize<NyxIdLlmStatusResponse>(body, JsonOptions);
-            if (status == null)
-                return Ok(NyxIdLlmStatusResponse.Empty);
-
-            foreach (var provider in status.Providers ?? [])
-                provider.Source ??= NyxIdLlmProviderSource.GatewayProvider;
-
-            // Fetch actual model names from each ready LLM provider via proxy
-            var readyProviders = (status.Providers ?? [])
-                .Where(p => string.Equals(p.Status, "ready", StringComparison.OrdinalIgnoreCase))
-                .ToList();
-
-            // Also fetch user's AI Services (custom endpoints), excluding known non-LLM services
-            var userServices = await FetchUserServicesAsync(authorityBase, bearerToken, cancellationToken);
-            userServices = userServices.Where(s => !IsNonLlmService(s.Slug)).ToList();
-            foreach (var svc in userServices)
-            {
-                // Add as provider for display
-                status.Providers ??= [];
-                status.Providers.Add(new NyxIdLlmProviderStatus
-                {
-                    ProviderSlug = svc.Slug,
-                    ProviderName = svc.Label,
-                    Status = "ready",
-                    ProxyUrl = $"{authorityBase}/api/v1/proxy/s/{Uri.EscapeDataString(svc.Slug)}",
-                    Source = NyxIdLlmProviderSource.UserService,
-                });
-                readyProviders.Add(new NyxIdLlmProviderStatus
-                {
-                    ProviderSlug = svc.Slug,
-                    ProviderName = svc.Label,
-                    Status = "ready",
-                    ProxyUrl = $"{authorityBase}/api/v1/proxy/s/{Uri.EscapeDataString(svc.Slug)}",
-                    Source = NyxIdLlmProviderSource.UserService,
-                });
-            }
-
-            status.ModelsByProvider = await FetchModelsFromProvidersAsync(
-                authorityBase, bearerToken, readyProviders, cancellationToken);
-            status.SupportedModels = status.ModelsByProvider
+            var options = await _llmPreferenceService
+                .GetOptionsAsync(ExtractBearerToken(), cancellationToken)
+                .ConfigureAwait(false);
+            var status = ToLegacyStatusResponse(options);
+            status.GatewayUrl = ResolveNyxIdAuthorityBase() is { } authorityBase
+                ? $"{authorityBase}/api/v1/llm/gateway/v1"
+                : null;
+            status.SupportedModels = (status.ModelsByProvider ?? [])
                 .Values
                 .SelectMany(models => models)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
-
-            _logger.LogInformation(
-                "Fetched LLM status: {ProviderCount} providers, {ModelCount} models from live providers",
-                status.Providers?.Count ?? 0,
-                status.SupportedModels?.Count ?? 0);
             return Ok(status);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogWarning(ex, "Failed to fetch LLM status from NyxID");
+            _logger.LogWarning(ex, "Failed to fetch LLM services from NyxID");
             return Ok(NyxIdLlmStatusResponse.Empty);
         }
     }
 
-    private async Task<List<NyxIdUserService>> FetchUserServicesAsync(
-        string authorityBase,
-        string bearerToken,
+    [HttpGet("llm/options")]
+    public async Task<ActionResult<UserLlmOptionsView>> GetLlmOptions(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return Ok(await _llmPreferenceService
+                .GetOptionsAsync(ExtractBearerToken(), cancellationToken)
+                .ConfigureAwait(false));
+        }
+        catch (InvalidOperationException exception)
+        {
+            return BadRequest(new { message = exception.Message });
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _logger.LogWarning(exception, "Failed to fetch user LLM options");
+            return StatusCode(502, new { message = "LLM options are temporarily unavailable." });
+        }
+    }
+
+    [HttpPut("llm/preference")]
+    public async Task<ActionResult<UserConfig>> SaveLlmPreference(
+        [FromBody] SaveUserLlmPreferenceRequest request,
         CancellationToken cancellationToken)
     {
         try
         {
-            var keysUrl = $"{authorityBase}/api/v1/keys";
-            using var request = new HttpRequestMessage(HttpMethod.Get, keysUrl);
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
-
-            var client = _httpClientFactory.CreateClient();
-            using var response = await client.SendAsync(request, cancellationToken);
-            if (!response.IsSuccessStatusCode)
-                return [];
-
-            var body = await response.Content.ReadAsStringAsync(cancellationToken);
-            var envelope = JsonSerializer.Deserialize<NyxIdKeysResponse>(body, JsonOptions);
-            return (envelope?.Keys ?? [])
-                .Where(k => string.Equals(k.Status, "active", StringComparison.OrdinalIgnoreCase)
-                    && !string.IsNullOrWhiteSpace(k.Slug)
-                    && !string.IsNullOrWhiteSpace(k.EndpointUrl))
-                .ToList();
+            var next = await _llmPreferenceService.SaveAsync(
+                ExtractBearerToken(),
+                new SaveUserLlmPreferenceCommand(
+                    request.ServiceId,
+                    request.RouteValue,
+                    request.Model,
+                    request.PresetId,
+                    request.Reset),
+                cancellationToken).ConfigureAwait(false);
+            return Ok(next);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return BadRequest(new { message = exception.Message });
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogDebug(ex, "Failed to fetch user AI services from NyxID");
-            return [];
+            _logger.LogWarning(ex, "Failed to save user LLM preference");
+            return StatusCode(502, new { message = "User LLM preference is temporarily unavailable." });
         }
     }
 
-    /// <summary>
-    /// Fallback model names for providers whose /models endpoint is non-standard.
-    /// </summary>
-    private static readonly IReadOnlyDictionary<string, string[]> FallbackModels =
-        new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["anthropic"] = [
-                "claude-sonnet-4-5-20250929",
-                "claude-opus-4-20250514",
-                "claude-sonnet-4-20250514",
-                "claude-haiku-4-5-20251001",
-            ],
-            ["google-ai"] = [
-                "gemini-2.5-pro-preview-06-05",
-                "gemini-2.5-flash-preview-05-20",
-                "gemini-2.0-flash",
-            ],
-            ["cohere"] = [
-                "command-r-plus", "command-r", "command-a-03-2025",
-            ],
-        };
+    public sealed record SaveUserLlmPreferenceRequest(
+        [property: JsonPropertyName("serviceId")] string? ServiceId = null,
+        [property: JsonPropertyName("routeValue")] string? RouteValue = null,
+        [property: JsonPropertyName("model")] string? Model = null,
+        [property: JsonPropertyName("presetId")] string? PresetId = null,
+        [property: JsonPropertyName("reset")] bool? Reset = null);
 
-    private async Task<Dictionary<string, List<string>>> FetchModelsFromProvidersAsync(
-        string authorityBase,
-        string bearerToken,
-        List<NyxIdLlmProviderStatus> readyProviders,
-        CancellationToken cancellationToken)
+    private static NyxIdLlmStatusResponse ToLegacyStatusResponse(UserLlmOptionsView options)
     {
-        var client = _httpClientFactory.CreateClient();
-        var tasks = readyProviders
-            .Where(p => !string.IsNullOrWhiteSpace(p.ProxyUrl))
-            .Select(async provider =>
+        var providers = options.Available
+            .GroupBy(option => option.ServiceSlug, StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
             {
-                var slug = provider.ProviderSlug ?? string.Empty;
-                try
+                var first = group.First();
+                return new NyxIdLlmProviderStatus
                 {
-                    var proxyUrl = provider.ProxyUrl!.Trim().TrimEnd('/');
-                    var baseUrl = proxyUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase)
-                        ? proxyUrl
-                        : $"{authorityBase}{proxyUrl}";
+                    ProviderSlug = first.ServiceSlug,
+                    ProviderName = first.DisplayName,
+                    Status = first.Status,
+                    ProxyUrl = first.RouteValue,
+                    Source = first.Source,
+                };
+            })
+            .ToList();
 
-                    var modelsUrl = $"{baseUrl}/models";
-                    using var request = new HttpRequestMessage(HttpMethod.Get, modelsUrl);
-                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+        var modelsByProvider = options.Available
+            .GroupBy(option => option.ServiceSlug, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group
+                    .SelectMany(option => option.AvailableModels)
+                    .Where(model => !string.IsNullOrWhiteSpace(model))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(model => model, StringComparer.OrdinalIgnoreCase)
+                    .ToList(),
+                StringComparer.OrdinalIgnoreCase);
 
-                    using var response = await client.SendAsync(request, cancellationToken);
-                    if (response.IsSuccessStatusCode)
-                    {
-                        var body = await response.Content.ReadAsStringAsync(cancellationToken);
-                        var envelope = JsonSerializer.Deserialize<OpenAIModelsResponse>(body, JsonOptions);
-                        var models = (envelope?.Data ?? [])
-                            .Where(m => !string.IsNullOrWhiteSpace(m.Id))
-                            .Select(m => m.Id!.Trim())
-                            .ToArray();
-
-                        if (models.Length > 0)
-                            return new KeyValuePair<string, List<string>>(slug, [.. models]);
-                    }
-
-                    _logger.LogDebug("Provider {Slug} /models returned {Status}, using fallback", slug, response.StatusCode);
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    _logger.LogDebug(ex, "Failed to fetch models for provider {Slug}, using fallback", slug);
-                }
-
-                // Fallback for providers with non-standard /models endpoint
-                var fallback = FallbackModels.TryGetValue(slug, out var fallbackModels)
-                    ? fallbackModels.ToList()
-                    : new List<string>();
-                return new KeyValuePair<string, List<string>>(slug, fallback);
-            });
-
-        var results = await Task.WhenAll(tasks);
-        var modelsByProvider = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var result in results)
+        return new NyxIdLlmStatusResponse
         {
-            var slug = result.Key;
-            var models = result.Value;
-            if (string.IsNullOrWhiteSpace(slug))
-                continue;
-
-            modelsByProvider[slug] = models
-                .Where(model => !string.IsNullOrWhiteSpace(model))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(model => model, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-        }
-
-        return modelsByProvider;
-    }
-
-    /// <summary>
-    /// Slug keywords that indicate a non-LLM infrastructure service.
-    /// </summary>
-    private static readonly string[] NonLlmServiceKeywords =
-    [
-        "sisyphus", "chrono-storage", "chrono-sandbox", "chrono-graph",
-        "ornn", "admin", "webhook", "n8n", "grafana", "prometheus",
-    ];
-
-    private static bool IsNonLlmService(string slug)
-    {
-        if (string.IsNullOrWhiteSpace(slug))
-            return true;
-
-        var lower = slug.ToLowerInvariant();
-        return NonLlmServiceKeywords.Any(kw => lower.Contains(kw, StringComparison.Ordinal));
+            Providers = providers,
+            ModelsByProvider = modelsByProvider,
+        };
     }
 
     private string? ResolveNyxIdAuthorityBase()
@@ -407,43 +281,4 @@ public sealed class NyxIdLlmProviderStatus
 
     [JsonPropertyName("source")]
     public string? Source { get; set; }
-}
-
-public static class NyxIdLlmProviderSource
-{
-    public const string GatewayProvider = "gateway_provider";
-    public const string UserService = "user_service";
-}
-
-internal sealed class NyxIdKeysResponse
-{
-    [JsonPropertyName("keys")]
-    public List<NyxIdUserService>? Keys { get; set; }
-}
-
-internal sealed class NyxIdUserService
-{
-    [JsonPropertyName("slug")]
-    public string Slug { get; set; } = string.Empty;
-
-    [JsonPropertyName("label")]
-    public string Label { get; set; } = string.Empty;
-
-    [JsonPropertyName("endpoint_url")]
-    public string? EndpointUrl { get; set; }
-
-    [JsonPropertyName("status")]
-    public string? Status { get; set; }
-}
-
-internal sealed class OpenAIModelsResponse
-{
-    [JsonPropertyName("data")]
-    public List<OpenAIModelEntry>? Data { get; set; }
-}
-
-internal sealed class OpenAIModelEntry
-{
-    [JsonPropertyName("id")]
-    public string? Id { get; set; }
 }

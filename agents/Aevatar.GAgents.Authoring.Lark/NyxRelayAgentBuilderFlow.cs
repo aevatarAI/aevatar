@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Scheduled;
 
@@ -22,7 +23,10 @@ public static class NyxRelayAgentBuilderFlow
     private const string DeleteAgentCommand = "/delete-agent";
     private const string DefaultScheduleTime = "09:00";
 
-    public static bool TryResolve(ChannelInboundEvent evt, out AgentBuilderFlowDecision? decision)
+    public static bool TryResolve(
+        ChannelInboundEvent evt,
+        out AgentBuilderFlowDecision? decision,
+        ChannelSlashCommandRegistry? slashCommandRegistry = null)
     {
         ArgumentNullException.ThrowIfNull(evt);
         decision = null;
@@ -41,7 +45,7 @@ public static class NyxRelayAgentBuilderFlow
         var command = tokens[0];
         if (!IsKnownCommand(command))
         {
-            decision = AgentBuilderFlowDecision.DirectReply(BuildUnknownCommandReply(command));
+            decision = AgentBuilderFlowDecision.DirectReply(BuildUnknownCommandReply(command, slashCommandRegistry));
             return true;
         }
 
@@ -540,19 +544,37 @@ public static class NyxRelayAgentBuilderFlow
     private static string BuildSocialMediaCommandExample() =>
         "/social-media topic=\"Launch update\" schedule_time=10:30 audience=\"Developers\" style=\"Confident and concise\"";
 
-    private static string BuildUnknownCommandReply(string command) =>
+    private static string BuildUnknownCommandReply(
+        string command,
+        ChannelSlashCommandRegistry? slashCommandRegistry) =>
         BuildTextBlock(
-            $"Unknown command: {command}",
-            "Supported commands:",
-            BuildDailyReportCommandExample(),
-            BuildSocialMediaCommandExample(),
-            "/templates",
-            "/agents",
-            "/agent-status <agent_id>",
-            "/run-agent <agent_id>",
-            "/disable-agent <agent_id>",
-            "/enable-agent <agent_id>",
-            "/delete-agent <agent_id> confirm");
+            new[]
+            {
+                $"Unknown command: {command}",
+                "Supported commands:",
+                BuildDailyReportCommandExample(),
+                BuildSocialMediaCommandExample(),
+                "/templates",
+                "/agents",
+                "/agent-status <agent_id>",
+                "/run-agent <agent_id>",
+                "/disable-agent <agent_id>",
+                "/enable-agent <agent_id>",
+                "/delete-agent <agent_id> confirm",
+            }.Concat(BuildSlashUsageLines(slashCommandRegistry)).ToArray());
+
+    private static IEnumerable<string> BuildSlashUsageLines(ChannelSlashCommandRegistry? slashCommandRegistry)
+    {
+        if (slashCommandRegistry is null)
+            yield break;
+
+        foreach (var descriptor in slashCommandRegistry.ListDescriptors())
+        {
+            var command = "/" + descriptor.Name;
+            var syntax = NormalizeOptional(descriptor.ArgumentSyntax);
+            yield return syntax is null ? command : $"{command} {syntax}";
+        }
+    }
 
     private static string BuildPrivateChatRestrictionReply(string command) =>
         $"`{command}` only works in a private chat with this bot. Please DM me and run `{command}` again.";

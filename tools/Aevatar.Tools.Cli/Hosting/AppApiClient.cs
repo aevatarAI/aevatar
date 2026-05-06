@@ -78,6 +78,15 @@ internal sealed class AppApiClient : IDisposable
         return await GetJsonAsync(path, ct);
     }
 
+    public Task<JsonElement> GetUserLlmOptionsAsync(string bearerToken, CancellationToken ct) =>
+        GetJsonAsync("api/user-config/llm/options", ct, bearerToken);
+
+    public Task<JsonElement> SaveUserLlmPreferenceAsync(
+        string bearerToken,
+        object body,
+        CancellationToken ct) =>
+        PutJsonAsync("api/user-config/llm/preference", body, ct, bearerToken);
+
     public async Task<bool> ProbeHealthAsync(CancellationToken ct)
     {
         try
@@ -120,14 +129,43 @@ internal sealed class AppApiClient : IDisposable
         return response;
     }
 
-    private async Task<JsonElement> GetJsonAsync(string path, CancellationToken ct)
+    private async Task<JsonElement> GetJsonAsync(string path, CancellationToken ct, string? bearerToken = null)
     {
-        using var response = await _http.GetAsync(path, ct);
+        using var request = new HttpRequestMessage(HttpMethod.Get, path);
+        AddBearerToken(request, bearerToken);
+        using var response = await _http.SendAsync(request, ct);
+        return await ReadJsonResponseAsync(response, ct);
+    }
+
+    private async Task<JsonElement> PutJsonAsync(
+        string path,
+        object body,
+        CancellationToken ct,
+        string? bearerToken = null)
+    {
+        var json = JsonSerializer.Serialize(body);
+        using var request = new HttpRequestMessage(HttpMethod.Put, path)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
+        };
+        AddBearerToken(request, bearerToken);
+        using var response = await _http.SendAsync(request, ct);
+        return await ReadJsonResponseAsync(response, ct);
+    }
+
+    private static async Task<JsonElement> ReadJsonResponseAsync(HttpResponseMessage response, CancellationToken ct)
+    {
         var body = await response.Content.ReadAsStringAsync(ct);
         if (!response.IsSuccessStatusCode)
             throw new HttpRequestException($"HTTP {(int)response.StatusCode}: {body}");
         using var doc = JsonDocument.Parse(body);
         return doc.RootElement.Clone();
+    }
+
+    private static void AddBearerToken(HttpRequestMessage request, string? bearerToken)
+    {
+        if (!string.IsNullOrWhiteSpace(bearerToken))
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken.Trim());
     }
 
     public void Dispose() => _http.Dispose();

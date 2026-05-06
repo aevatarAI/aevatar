@@ -4057,13 +4057,14 @@ const StudioPage: React.FC = () => {
     waitForMemberBindingRun,
   ]);
 
-  const openWorkspaceWorkflow = (workflowId: string) => {
+  const openWorkspaceWorkflow = useCallback((workflowId: string) => {
     const normalizedWorkflowId = trimOptional(workflowId);
     setSelectedWorkflowId(normalizedWorkflowId);
+    setSelectedScriptId('');
     setTemplateWorkflow('');
     setBuildSurface('editor');
     setStudioSurface('build');
-  };
+  }, []);
 
   const openExecution = (executionId: string) => {
     setSelectedExecutionId(executionId);
@@ -4072,7 +4073,9 @@ const StudioPage: React.FC = () => {
 
   const openScopeScript = useCallback((scriptId: string) => {
     const normalizedScriptId = trimOptional(scriptId);
+    setSelectedWorkflowId('');
     setSelectedScriptId(normalizedScriptId);
+    setTemplateWorkflow('');
     setBuildSurface('scripts');
     setStudioSurface('build');
   }, []);
@@ -4723,16 +4726,33 @@ const StudioPage: React.FC = () => {
           setInventoryBusyAction('delete');
 
           try {
-            await studioApi.deleteWorkflow(
-              workflowId,
-              resolvedStudioScopeId || undefined,
-            );
+            try {
+              await studioApi.deleteWorkflow(
+                workflowId,
+                resolvedStudioScopeId || undefined,
+              );
+            } catch (error) {
+              if (!isWorkflowNotFoundError(error)) {
+                void message.error(
+                  error instanceof Error
+                    ? error.message
+                    : 'Failed to delete workflow member.',
+                );
+                return;
+              }
+            }
+
             queryClient.removeQueries({
               queryKey: ['studio-workflow', workflowWorkspaceContextKey, workflowId],
             });
             await queryClient.invalidateQueries({
               queryKey: ['studio-workspace-workflows', workflowWorkspaceContextKey],
             });
+            if (resolvedStudioScopeId) {
+              await queryClient.invalidateQueries({
+                queryKey: ['studio-scope-members', resolvedStudioScopeId],
+              });
+            }
 
             if (selectedWorkflowId === workflowId) {
               const fallbackWorkflowId =
@@ -4741,8 +4761,23 @@ const StudioPage: React.FC = () => {
                 )?.workflowId || '';
               if (fallbackWorkflowId) {
                 openWorkspaceWorkflow(fallbackWorkflowId);
+                history.replace(
+                  buildStudioRoute({
+                    scopeId: resolvedStudioScopeId || undefined,
+                    focus: `workflow:${fallbackWorkflowId}`,
+                    step: 'build',
+                    tab: 'studio',
+                  }),
+                );
               } else {
                 clearWorkflowBuildFocus();
+                history.replace(
+                  buildStudioRoute({
+                    scopeId: resolvedStudioScopeId || undefined,
+                    step: 'build',
+                    tab: 'studio',
+                  }),
+                );
               }
             }
 
@@ -4753,7 +4788,6 @@ const StudioPage: React.FC = () => {
                 ? error.message
                 : 'Failed to delete workflow member.',
             );
-            throw error;
           } finally {
             setInventoryBusyKey('');
             setInventoryBusyAction('');
@@ -4765,6 +4799,7 @@ const StudioPage: React.FC = () => {
       activeWorkflowFile,
       openWorkspaceWorkflow,
       clearWorkflowBuildFocus,
+      history,
       queryClient,
       resolvedStudioScopeId,
       selectedWorkflowId,
@@ -5644,13 +5679,17 @@ const StudioPage: React.FC = () => {
     return trimOptional(matchedMember?.memberSummary?.memberId);
   }, [publishedScopeMembers, selectedGAgentTypeName]);
   const activeBuildPublishedServiceId =
-    activeWorkflowPublishedServiceId ||
-    activeScriptPublishedServiceId ||
-    activeGAgentPublishedServiceId;
+    activeBuildMode === 'workflow'
+      ? activeWorkflowPublishedServiceId
+      : activeBuildMode === 'script'
+        ? activeScriptPublishedServiceId
+        : activeGAgentPublishedServiceId;
   const activeBuildPublishedMemberId =
-    activeWorkflowPublishedMemberId ||
-    activeScriptPublishedMemberId ||
-    activeGAgentPublishedMemberId;
+    activeBuildMode === 'workflow'
+      ? activeWorkflowPublishedMemberId
+      : activeBuildMode === 'script'
+        ? activeScriptPublishedMemberId
+        : activeGAgentPublishedMemberId;
   const selectedWorkflowRepresentsPublishedMember =
     Boolean(activeWorkflowPublishedServiceId);
   const selectedScriptRepresentsPublishedMember = Boolean(
@@ -5659,16 +5698,50 @@ const StudioPage: React.FC = () => {
   const selectedGAgentRepresentsPublishedMember = Boolean(
     activeGAgentPublishedServiceId,
   );
-  const selectedBuildRepresentsPublishedMember =
-    selectedWorkflowRepresentsPublishedMember ||
-    selectedScriptRepresentsPublishedMember ||
-    selectedGAgentRepresentsPublishedMember;
+  const selectedBuildRepresentsPublishedMember = Boolean(
+    activeBuildPublishedServiceId,
+  );
+  const buildSurfaceMemberKeyUsesRouteServiceId = useMemo(() => {
+    if (!routeSelectedMemberKey.startsWith('member:') || !buildSurfaceMemberKey) {
+      return false;
+    }
+
+    const routeMember = resolveStudioMemberSummaryFromMemberKey(
+      routeSelectedMemberKey,
+      publishedScopeMembers,
+      studioScopeMembers,
+    );
+    const routePublishedServiceId = normalizeComparableText(
+      routeMember?.publishedServiceId,
+    );
+    if (!routePublishedServiceId) {
+      return false;
+    }
+
+    const buildRouteValue =
+      readScriptIdFromMemberKey(buildSurfaceMemberKey) ||
+      readWorkflowMemberRouteValueFromMemberKey(buildSurfaceMemberKey);
+    return normalizeComparableText(buildRouteValue) === routePublishedServiceId;
+  }, [
+    buildSurfaceMemberKey,
+    publishedScopeMembers,
+    routeSelectedMemberKey,
+    studioScopeMembers,
+  ]);
   const lifecycleSurfaceMemberKey =
-    routeSelectedMemberKey ||
-    buildSurfaceMemberKey ||
-    (activeBuildPublishedMemberId
-      ? `member:${activeBuildPublishedMemberId}`
-      : '');
+    studioSurface === 'build'
+      ? (buildSurfaceMemberKeyUsesRouteServiceId
+          ? routeSelectedMemberKey
+          : buildSurfaceMemberKey) ||
+        routeSelectedMemberKey ||
+        (activeBuildPublishedMemberId
+          ? `member:${activeBuildPublishedMemberId}`
+          : '')
+      : routeSelectedMemberKey ||
+        buildSurfaceMemberKey ||
+        (activeBuildPublishedMemberId
+          ? `member:${activeBuildPublishedMemberId}`
+          : '');
   const currentFocusMemberKey =
     studioSurface === 'build' ? buildSurfaceMemberKey : lifecycleSurfaceMemberKey;
   useEffect(() => {
@@ -6756,6 +6829,13 @@ const StudioPage: React.FC = () => {
           return;
         }
 
+        history.push(
+          buildStudioRoute({
+            scopeId: resolvedStudioScopeId || undefined,
+            memberKey: normalizedMemberKey,
+            tab: 'studio',
+          }),
+        );
         openWorkspaceWorkflow(workflowId);
         return;
       }
@@ -6788,6 +6868,13 @@ const StudioPage: React.FC = () => {
           return;
         }
 
+        history.push(
+          buildStudioRoute({
+            scopeId: resolvedStudioScopeId || undefined,
+            memberKey: normalizedMemberKey,
+            tab: 'scripts',
+          }),
+        );
         openScopeScript(scriptId);
         return;
       }
@@ -6815,6 +6902,81 @@ const StudioPage: React.FC = () => {
             trimOptional(service.serviceId) === selectedMemberServiceId,
         );
         if (!selectedMemberServiceId || !selectedService) {
+          const memberImplementationKind =
+            normalizeStudioMemberBindingImplementationKind(
+              selectedMemberSummary?.implementationKind,
+            );
+          const memberImplementationName =
+            trimOptional(selectedMemberSummary?.displayName) ||
+            trimOptional(selectedMemberSummary?.memberId);
+
+          if (memberImplementationKind === 'workflow') {
+            const workflowId = resolveWorkflowIdFromRouteValue(
+              memberImplementationName,
+              visibleWorkflowSummaries,
+              {
+                allowDirectIdFallback: true,
+                workflowFile: activeWorkflowFile,
+              },
+            );
+            if (workflowId) {
+              const workflowMemberKey =
+                buildWorkflowMemberKeyFromSummary(
+                  visibleWorkflowSummaries.find(
+                    (workflow) => trimOptional(workflow.workflowId) === workflowId,
+                  ),
+                ) || normalizedMemberKey;
+              history.push(
+                buildStudioRoute({
+                  scopeId: resolvedStudioScopeId || undefined,
+                  memberKey: workflowMemberKey,
+                  tab: 'studio',
+                }),
+              );
+              openWorkspaceWorkflow(workflowId);
+            } else {
+              void message.warning(
+                `Could not find a workflow draft for ${memberImplementationName || 'this member'}.`,
+              );
+            }
+            return;
+          }
+
+          if (memberImplementationKind === 'script') {
+            const scriptId = availableScopeScripts.find(
+              (detail) =>
+                normalizeComparableText(detail.script?.scriptId) ===
+                  normalizeComparableText(memberImplementationName) ||
+                normalizeComparableText(detail.script?.scriptId) ===
+                  normalizeComparableText(selectedMemberServiceId),
+            )?.script?.scriptId;
+            if (scriptId) {
+              history.push(
+                buildStudioRoute({
+                  scopeId: resolvedStudioScopeId || undefined,
+                  memberKey: `script:${scriptId}`,
+                  tab: 'scripts',
+                }),
+              );
+              openScopeScript(scriptId);
+            } else {
+              void message.warning(
+                `Could not find a scope script for ${memberImplementationName || 'this member'}.`,
+              );
+            }
+            return;
+          }
+
+          if (memberImplementationKind === 'gagent') {
+            void message.warning(
+              `Could not find a published GAgent service for ${memberImplementationName || 'this member'}.`,
+            );
+            return;
+          }
+
+          void message.warning(
+            `Could not find a published service for ${memberImplementationName || 'this member'}.`,
+          );
           return;
         }
 
@@ -6906,9 +7068,11 @@ const StudioPage: React.FC = () => {
     },
     [
       activeWorkflowFile,
+      availableScopeScripts,
       confirmScriptsStudioLeave,
       currentFocusMemberKey,
       currentLifecycleStep,
+      history,
       openScopeScript,
       openWorkspaceWorkflow,
       publishedScopeMembers,
@@ -6933,18 +7097,41 @@ const StudioPage: React.FC = () => {
       meta: currentMemberMeta,
       tone: currentMemberTone,
     };
+    const currentMemberDuplicateKeys = [
+      selectedRailMemberKey,
+      currentFocusMemberKey,
+      selectedWorkflowId ? selectedWorkflowMemberKey : '',
+      selectedScriptId ? `script:${selectedScriptId}` : '',
+      workbenchStudioMemberId ? `member:${workbenchStudioMemberId}` : '',
+      workbenchPublishedServiceId ? `member:${workbenchPublishedServiceId}` : '',
+    ];
 
-    const addItem = (item: StudioShellMemberItem | null) => {
+    const addItem = (
+      item: StudioShellMemberItem | null,
+      duplicateKeys: readonly string[] = [],
+    ) => {
       if (!item) {
         return;
       }
 
       const normalizedKey = trimOptional(item.key);
-      if (!normalizedKey || seen.has(normalizedKey)) {
+      const normalizedDuplicateKeys = Array.from(
+        new Set(
+          [normalizedKey, ...duplicateKeys]
+            .map((key) => trimOptional(key))
+            .filter(Boolean),
+        ),
+      );
+      if (
+        !normalizedKey ||
+        normalizedDuplicateKeys.some((duplicateKey) => seen.has(duplicateKey))
+      ) {
         return;
       }
 
-      seen.add(normalizedKey);
+      for (const duplicateKey of normalizedDuplicateKeys) {
+        seen.add(duplicateKey);
+      }
       items.push({
         ...item,
         insertionOrder: items.length,
@@ -6962,9 +7149,39 @@ const StudioPage: React.FC = () => {
       const memberLifecycleLabel = memberSummary
         ? formatStudioMemberLifecycleStage(memberSummary.lifecycleStage)
         : '';
+      const memberId = trimOptional(memberSummary?.memberId);
+      const memberPublishedServiceId = trimOptional(memberSummary?.publishedServiceId);
+      const serviceId = trimOptional(service.serviceId);
+      const matchedWorkflowKey = buildWorkflowMemberKeyFromSummary(matchedWorkflow);
+      const matchedScriptId = trimOptional(matchedScript?.script?.scriptId);
+      const memberImplementationKind =
+        normalizeStudioMemberBindingImplementationKind(
+          memberSummary?.implementationKind || serviceRevision?.implementationKind,
+        );
+      const memberImplementationName =
+        trimOptional(memberSummary?.displayName) ||
+        trimOptional(serviceRevision?.workflowName) ||
+        trimOptional(serviceRevision?.scriptId) ||
+        trimOptional(service.displayName);
+      const memberDuplicateKeys = [
+        memberId ? `member:${memberId}` : '',
+        memberPublishedServiceId ? `member:${memberPublishedServiceId}` : '',
+        serviceId ? `member:${serviceId}` : '',
+        matchedWorkflowKey,
+        matchedScriptId ? `script:${matchedScriptId}` : '',
+        memberImplementationKind === 'workflow' && memberImplementationName
+          ? `workflow:${memberImplementationName}`
+          : '',
+        memberImplementationKind === 'script' && memberImplementationName
+          ? `script:${memberImplementationName}`
+          : '',
+        memberImplementationKind === 'script' && memberPublishedServiceId
+          ? `script:${memberPublishedServiceId}`
+          : '',
+      ];
       addItem({
         key:
-          `member:${trimOptional(memberSummary?.memberId) || trimOptional(memberSummary?.publishedServiceId) || service.serviceId}`,
+          `member:${memberId || memberPublishedServiceId || serviceId}`,
         label:
           trimOptional(matchedWorkflow?.name) ||
           trimOptional(matchedScript?.script?.scriptId) ||
@@ -7006,7 +7223,7 @@ const StudioPage: React.FC = () => {
             trimOptional(service.deploymentStatus),
         }),
         tone: resolveServiceMemberTone(service.deploymentStatus),
-      });
+      }, memberDuplicateKeys);
     }
 
     for (const workflow of visibleWorkflowSummaries) {
@@ -7018,6 +7235,11 @@ const StudioPage: React.FC = () => {
       if (!workflowMemberKey) {
         continue;
       }
+      const workflowDuplicateKeys = [
+        workflowMemberKey,
+        `workflow:${trimOptional(workflow.name)}`,
+        `workflow:${trimOptional(workflow.fileName).replace(/\.(ya?ml)$/i, '')}`,
+      ];
 
       addItem({
         key: workflowMemberKey,
@@ -7040,7 +7262,7 @@ const StudioPage: React.FC = () => {
           currentFocusMemberKey === workflowMemberKey
             ? 'live'
             : 'idle',
-      });
+      }, workflowDuplicateKeys);
     }
 
     for (const scriptDetail of availableScopeScripts) {
@@ -7048,7 +7270,6 @@ const StudioPage: React.FC = () => {
       if (!scriptId || serviceBackedScriptIds.has(scriptId)) {
         continue;
       }
-
       addItem({
         key: `script:${scriptId}`,
         label: scriptId,
@@ -7068,9 +7289,7 @@ const StudioPage: React.FC = () => {
       });
     }
 
-    if (!seen.has(trimOptional(currentMemberItem.key))) {
-      addItem(currentMemberItem);
-    }
+    addItem(currentMemberItem, currentMemberDuplicateKeys);
 
     const recencyIndexByKey = new Map(
       memberRecencyOrder.map((memberKey, index) => [memberKey, index]),
@@ -7120,7 +7339,11 @@ const StudioPage: React.FC = () => {
     serviceBackedScriptIds,
     serviceBackedWorkflowIds,
     selectedWorkflowId,
+    selectedWorkflowMemberKey,
+    selectedScriptId,
     visibleWorkflowSummaries,
+    workbenchPublishedServiceId,
+    workbenchStudioMemberId,
   ]);
   const selectedMemberCanBind =
     Boolean(workbenchMemberKey) &&

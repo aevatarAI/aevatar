@@ -47,7 +47,8 @@ public sealed record AevatarOAuthClientSnapshot(
     string? PreviousHmacKid = null,
     byte[]? PreviousHmacKey = null,
     DateTimeOffset? PreviousHmacDemotedAt = null,
-    string? RedirectUri = null);
+    string? RedirectUri = null,
+    string? OauthScope = null);
 
 /// <summary>
 /// Thrown when an OAuth flow tries to use the cluster client before the

@@ -33,6 +33,11 @@ public sealed class UnbindChannelSlashCommandHandler : IChannelSlashCommandHandl
 
     public bool RequiresBinding => false;
 
+    public ChannelSlashCommandUsage Usage => new(
+        Name,
+        string.Empty,
+        "解绑当前聊天用户的 NyxID 账号");
+
     public async Task<MessageContent?> HandleAsync(ChannelSlashCommandContext context, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(context);

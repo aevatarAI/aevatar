@@ -267,6 +267,34 @@ public sealed class NyxIdRelayTransportTests
     }
 
     [Fact]
+    public void Parse_ShouldPopulateCardAction_FromCompactTelegramPayload()
+    {
+        var body = """
+            {
+              "message_id": "msg-card-compact",
+              "platform": "telegram",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "conv-1", "platform_id": "123", "type": "private" },
+              "sender": { "platform_id": "456", "display_name": "User One" },
+              "content": {
+                "content_type": "card_action",
+                "text": "{\"a\":\"llm_select_service\",\"s\":\"chrono-llm-shared\",\"v\":{\"service_id\":\"chrono-llm-shared\"}}"
+              }
+            }
+            """;
+
+        var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        parsed.Success.Should().BeTrue();
+        var cardAction = parsed.Activity!.Content.CardAction;
+        cardAction.Should().NotBeNull();
+        cardAction!.ActionId.Should().Be("llm_select_service");
+        cardAction.SubmittedValue.Should().Be("chrono-llm-shared");
+        cardAction.Arguments.Should().ContainKey("service_id")
+            .WhoseValue.Should().Be("chrono-llm-shared");
+    }
+
+    [Fact]
     public void Parse_ShouldAcceptEmptyCardActionText_AsEmptySubmission()
     {
         var body = """

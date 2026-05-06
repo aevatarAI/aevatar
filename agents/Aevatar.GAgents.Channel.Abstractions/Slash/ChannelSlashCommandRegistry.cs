@@ -66,6 +66,12 @@ public sealed class ChannelSlashCommandRegistry
     public IReadOnlyCollection<IChannelSlashCommandHandler> Handlers =>
         _byName.Values.Distinct().ToArray();
 
+    /// <summary>
+    /// Returns one user-facing usage descriptor per registered handler.
+    /// </summary>
+    public IReadOnlyList<ChannelSlashCommandUsage> ListDescriptors() =>
+        Handlers.Select(handler => handler.Usage).ToArray();
+
     private static IEnumerable<string> EnumerateTokens(IChannelSlashCommandHandler handler)
     {
         ArgumentNullException.ThrowIfNull(handler);

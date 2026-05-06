@@ -13,6 +13,9 @@ import {
 type JsonRecord = Record<string, unknown>;
 
 type CustomEventParser<T> = (value: unknown) => T | undefined;
+export type RuntimeRunContextData = RunContextData & {
+  readonly correlationId?: string;
+};
 
 function asRecord(value: unknown): JsonRecord | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -58,16 +61,19 @@ function hasDefinedValues(values: unknown[]): boolean {
   return values.some((value) => value !== undefined);
 }
 
-export function parseRunContextData(value: unknown): RunContextData | undefined {
+export function parseRunContextData(
+  value: unknown,
+): RuntimeRunContextData | undefined {
   const record = asRecord(value);
   if (!record) {
     return undefined;
   }
 
-  const data: RunContextData = {
+  const data: RuntimeRunContextData = {
     actorId: readOptionalString(record, 'actorId'),
     workflowName: readOptionalString(record, 'workflowName'),
     commandId: readOptionalString(record, 'commandId'),
+    correlationId: readOptionalString(record, 'correlationId'),
   };
 
   return hasDefinedValues(Object.values(data)) ? data : undefined;

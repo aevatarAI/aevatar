@@ -34,6 +34,11 @@ public sealed class InitChannelSlashCommandHandler : IChannelSlashCommandHandler
 
     public bool RequiresBinding => false;
 
+    public ChannelSlashCommandUsage Usage => new(
+        Name,
+        string.Empty,
+        "发起 NyxID 账号绑定");
+
     public async Task<MessageContent?> HandleAsync(ChannelSlashCommandContext context, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(context);

@@ -70,8 +70,10 @@ internal static class IdentityGAgentTestHarness
 
             var currentVersion = stream.Count == 0 ? 0 : stream[^1].Version;
             if (currentVersion != expectedVersion)
-                throw new InvalidOperationException(
-                    $"Optimistic concurrency conflict: expected {expectedVersion}, actual {currentVersion}");
+                throw new EventStoreOptimisticConcurrencyException(
+                    agentId,
+                    expectedVersion,
+                    currentVersion);
 
             var appended = events.Select(x => x.Clone()).ToList();
             stream.AddRange(appended);

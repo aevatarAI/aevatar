@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -95,6 +96,62 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
     {
         ArgumentNullException.ThrowIfNull(evt);
         return PersistDomainEventsAsync([evt], ct);
+    }
+
+    /// <summary>
+    /// Persist one domain event with framework-mediated OCC absorption. On
+    /// <see cref="EventStoreOptimisticConcurrencyException"/>, the framework
+    /// drains pending events, replays from the store to refresh
+    /// <see cref="State"/>, and then invokes
+    /// <paramref name="onOptimisticConcurrencyConflict"/> to let the caller
+    /// decide whether the peer's commit already satisfies the intent of
+    /// this command. Returning <c>true</c> swallows the conflict as a
+    /// successful no-op (see <see cref="State"/> for the post-replay
+    /// shape); returning <c>false</c> rethrows so the runtime envelope
+    /// retry path re-evaluates against fresh state.
+    /// </summary>
+    /// <remarks>
+    /// This overload exists so OCC absorption is a *commit-bound*
+    /// capability — actors cannot replay state outside an active commit
+    /// path (CLAUDE.md "抽象一旦能被滥用就等于设计未完成"). The callback
+    /// must be a pure decision function over the refreshed
+    /// <see cref="State"/>; it must not raise new events, persist
+    /// snapshots, or perform external side effects (NyxID DCR / HTTP),
+    /// because the framework has already drained pending events for
+    /// recovery and any callback-raised events would be committed on the
+    /// next handler turn.
+    /// </remarks>
+    protected async Task PersistDomainEventAsync<TEvent>(
+        TEvent evt,
+        Func<EventStoreOptimisticConcurrencyException, Task<bool>> onOptimisticConcurrencyConflict,
+        CancellationToken ct = default)
+        where TEvent : IMessage
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        ArgumentNullException.ThrowIfNull(onOptimisticConcurrencyConflict);
+
+        try
+        {
+            await PersistDomainEventsAsync([evt], ct).ConfigureAwait(false);
+        }
+        catch (EventStoreOptimisticConcurrencyException conflict)
+        {
+            // ConfirmEventsAsync only removes the committed prefix on OCC;
+            // any events raised mid-flight survive as a pending suffix.
+            // Drain them before replay so they cannot be silently committed
+            // on the next ConfirmEventsAsync (PR #552 review kimi).
+            var eventSourcing = EnsureEventSourcingConfigured();
+            eventSourcing.DiscardPendingEvents();
+            var replayed = await eventSourcing.ReplayAsync(Id, ct).ConfigureAwait(false);
+            using (var guard = StateGuard.BeginWriteScope())
+            {
+                _state = replayed ?? new TState();
+            }
+
+            var absorbed = await onOptimisticConcurrencyConflict(conflict).ConfigureAwait(false);
+            if (!absorbed)
+                throw;
+        }
     }
 
     /// <summary>

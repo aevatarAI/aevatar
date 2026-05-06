@@ -77,4 +77,73 @@ describe("sseFrameNormalizer", () => {
       type: AGUIEventType.TEXT_MESSAGE_END,
     });
   });
+
+  it("extracts run identifiers from nested backend frames", () => {
+    expect(
+      normalizeBackendSseFrame({
+        runStarted: {
+          actorId: "actor-1",
+          commandId: "cmd-1",
+          correlationId: "corr-1",
+          runId: "run-1",
+        },
+        timestamp: 5,
+      })
+    ).toEqual({
+      actorId: "actor-1",
+      commandId: "cmd-1",
+      correlationId: "corr-1",
+      runId: "run-1",
+      threadId: "actor-1",
+      timestamp: 5,
+      type: AGUIEventType.RUN_STARTED,
+    });
+
+    expect(
+      normalizeBackendSseFrame({
+        runFinished: {
+          command_id: "cmd-2",
+          correlation_id: "corr-2",
+          result: {
+            output: "complete",
+          },
+          runId: "run-2",
+          threadId: "actor-2",
+        },
+        timestamp: 6,
+      })
+    ).toEqual({
+      commandId: "cmd-2",
+      correlationId: "corr-2",
+      result: {
+        output: "complete",
+      },
+      runId: "run-2",
+      threadId: "actor-2",
+      timestamp: 6,
+      type: AGUIEventType.RUN_FINISHED,
+    });
+  });
+
+  it("extracts run identifiers and error code from flat typed backend frames", () => {
+    expect(
+      normalizeBackendSseFrame({
+        code: "ERR_RUNTIME",
+        commandId: "cmd-1",
+        correlationId: "corr-1",
+        message: "failed",
+        runId: "run-1",
+        timestamp: 7,
+        type: AGUIEventType.RUN_ERROR,
+      })
+    ).toEqual({
+      code: "ERR_RUNTIME",
+      commandId: "cmd-1",
+      correlationId: "corr-1",
+      message: "failed",
+      runId: "run-1",
+      timestamp: 7,
+      type: AGUIEventType.RUN_ERROR,
+    });
+  });
 });
