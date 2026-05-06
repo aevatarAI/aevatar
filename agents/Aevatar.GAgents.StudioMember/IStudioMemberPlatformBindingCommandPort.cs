@@ -2,9 +2,10 @@ namespace Aevatar.GAgents.StudioMember;
 
 /// <summary>
 /// Admits and executes platform-side binding work for an admitted StudioMember binding run.
-/// <see cref="StartAsync"/> returns an accepted receipt only; execution is driven
-/// by the run actor through <see cref="ExecuteAsync"/> so restart recovery can
-/// be derived from persisted run state.
+/// <see cref="StartAsync"/> returns an accepted receipt only; <see cref="ExecuteAsync"/>
+/// schedules execution and returns after dispatch acceptance. Completion or failure
+/// is reported to the run actor as a later event so the actor turn is not held by
+/// platform-side work.
 /// </summary>
 public interface IStudioMemberPlatformBindingCommandPort
 {

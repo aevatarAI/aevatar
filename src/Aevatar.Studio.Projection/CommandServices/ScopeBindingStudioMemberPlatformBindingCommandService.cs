@@ -56,7 +56,30 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         ArgumentException.ThrowIfNullOrWhiteSpace(platformBindingCommandId);
         ArgumentNullException.ThrowIfNull(request);
 
-        return RunBindingAsync(replyActorId, platformBindingCommandId, request, ct);
+        var executionRequest = request.Clone();
+        executionRequest.PlatformBindingCommandId = platformBindingCommandId;
+        _ = Task.Run(
+            async () =>
+            {
+                try
+                {
+                    await RunBindingAsync(
+                        replyActorId,
+                        platformBindingCommandId,
+                        executionRequest,
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        ex,
+                        "StudioMember platform binding background execution crashed. bindingRunId={BindingRunId} platformBindingCommandId={CommandId}",
+                        executionRequest.BindingRunId,
+                        platformBindingCommandId);
+                }
+            },
+            CancellationToken.None);
+        return Task.CompletedTask;
     }
 
     private async Task RunBindingAsync(
@@ -138,8 +161,9 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                 ImplementationKind: ScopeBindingImplementationKind.Workflow,
                 Workflow: new ScopeBindingWorkflowSpec(bindingRequest.Workflow.WorkflowYamls.ToArray()),
                 DisplayName: request.Admitted.DisplayName,
-                RevisionId: bindingRequest.HasRevisionId ? bindingRequest.RevisionId : null,
-                ServiceId: request.Admitted.PublishedServiceId),
+                RevisionId: ResolveRevisionId(request),
+                ServiceId: request.Admitted.PublishedServiceId,
+                AllowExistingRevisionReplay: true),
             StudioMemberBindingRequest.ImplementationOneofCase.Script => new ScopeBindingUpsertRequest(
                 ScopeId: bindingRequest.ScopeId,
                 ImplementationKind: ScopeBindingImplementationKind.Scripting,
@@ -147,8 +171,9 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                     bindingRequest.Script.ScriptId,
                     bindingRequest.Script.HasScriptRevision ? bindingRequest.Script.ScriptRevision : null),
                 DisplayName: request.Admitted.DisplayName,
-                RevisionId: bindingRequest.HasRevisionId ? bindingRequest.RevisionId : null,
-                ServiceId: request.Admitted.PublishedServiceId),
+                RevisionId: ResolveRevisionId(request),
+                ServiceId: request.Admitted.PublishedServiceId,
+                AllowExistingRevisionReplay: true),
             StudioMemberBindingRequest.ImplementationOneofCase.Gagent => new ScopeBindingUpsertRequest(
                 ScopeId: bindingRequest.ScopeId,
                 ImplementationKind: ScopeBindingImplementationKind.GAgent,
@@ -156,10 +181,46 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                     bindingRequest.Gagent.ActorTypeName,
                     bindingRequest.Gagent.Endpoints.Select(ToScopeBindingEndpoint).ToArray()),
                 DisplayName: request.Admitted.DisplayName,
-                RevisionId: bindingRequest.HasRevisionId ? bindingRequest.RevisionId : null,
-                ServiceId: request.Admitted.PublishedServiceId),
+                RevisionId: ResolveRevisionId(request),
+                ServiceId: request.Admitted.PublishedServiceId,
+                AllowExistingRevisionReplay: true),
             _ => throw new InvalidOperationException("binding request must carry exactly one implementation payload."),
         };
+    }
+
+    private static string ResolveRevisionId(StudioMemberPlatformBindingStartRequested request)
+    {
+        var explicitRevisionId = request.Request.HasRevisionId
+            ? request.Request.RevisionId?.Trim()
+            : null;
+        if (!string.IsNullOrWhiteSpace(explicitRevisionId))
+            return explicitRevisionId;
+
+        var source = !string.IsNullOrWhiteSpace(request.PlatformBindingCommandId)
+            ? request.PlatformBindingCommandId
+            : request.BindingRunId;
+        return $"rev-{BuildStableRevisionComponent(source)}";
+    }
+
+    private static string BuildStableRevisionComponent(string value)
+    {
+        var component = new System.Text.StringBuilder(value.Length);
+        foreach (var ch in value)
+        {
+            if (char.IsLetterOrDigit(ch))
+            {
+                component.Append(char.ToLowerInvariant(ch));
+                continue;
+            }
+
+            if (component.Length > 0 && component[^1] != '-')
+                component.Append('-');
+        }
+
+        while (component.Length > 0 && component[^1] == '-')
+            component.Length--;
+
+        return component.Length == 0 ? "binding" : component.ToString();
     }
 
     private static ScopeBindingGAgentEndpoint ToScopeBindingEndpoint(

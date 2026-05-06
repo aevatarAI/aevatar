@@ -129,6 +129,14 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
 
         await PersistDomainEventAsync(evt);
         await SendToAsync(
+            StudioMemberConventions.BuildActorId(State.ScopeId, State.MemberId),
+            new StudioMemberBindingPlatformPendingEvent
+            {
+                BindingRunId = evt.BindingRunId,
+                PlatformBindingCommandId = evt.PlatformBindingCommandId,
+                PendingAtUtc = evt.AcceptedAtUtc,
+            });
+        await SendToAsync(
             Id,
             new StudioMemberPlatformBindingExecuteRequested
             {

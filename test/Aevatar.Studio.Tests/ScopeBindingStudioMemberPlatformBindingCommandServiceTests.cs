@@ -49,13 +49,13 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             NewScriptStartRequest(),
             CancellationToken.None);
 
-        var dispatch = dispatchPort.Dispatches.Should().ContainSingle().Which;
+        var dispatch = await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
         dispatch.ActorId.Should().Be("studio-member-binding-run:bind-1");
         var succeeded = dispatch.Envelope.Payload.Unpack<StudioMemberPlatformBindingSucceeded>();
         succeeded.BindingRunId.Should().Be("bind-1");
         succeeded.PlatformBindingCommandId.Should().Be("platform-bind-1");
         succeeded.Result.PublishedServiceId.Should().Be("member-m-1");
-        succeeded.Result.RevisionId.Should().Be("rev-1");
+        succeeded.Result.RevisionId.Should().Be("rev-platform-bind-1");
         succeeded.Result.ImplementationKind.Should().Be(StudioMemberImplementationKind.Script);
         succeeded.Result.ImplementationRef.Script.ScriptId.Should().Be("script-1");
 
@@ -66,6 +66,60 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         scopeBindingPort.Requests[0].ImplementationKind.Should().Be(ScopeBindingImplementationKind.Scripting);
         scopeBindingPort.Requests[0].Script!.ScriptId.Should().Be("script-1");
         scopeBindingPort.Requests[0].Script!.ScriptRevision.Should().Be("draft-1");
+        scopeBindingPort.Requests[0].RevisionId.Should().Be("rev-platform-bind-1");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldReturnBeforePlatformBindingCompletes()
+    {
+        var releaseUpsert = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var scopeBindingPort = new RecordingScopeBindingCommandPort
+        {
+            ReleaseUpsert = releaseUpsert,
+        };
+        var dispatchPort = new RecordingDispatchPort();
+        var service = new ScopeBindingStudioMemberPlatformBindingCommandService(
+            scopeBindingPort,
+            dispatchPort,
+            NullLogger<ScopeBindingStudioMemberPlatformBindingCommandService>.Instance);
+
+        var executeTask = service.ExecuteAsync(
+            "studio-member-binding-run:bind-1",
+            "platform-bind-1",
+            NewScriptStartRequest(),
+            CancellationToken.None);
+
+        executeTask.IsCompletedSuccessfully.Should().BeTrue();
+        await executeTask;
+        var request = await scopeBindingPort.UpsertStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        request.RevisionId.Should().Be("rev-platform-bind-1");
+        dispatchPort.Dispatches.Should().BeEmpty();
+
+        releaseUpsert.SetResult(null);
+        var dispatch = await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        dispatch.Envelope.Payload.Unpack<StudioMemberPlatformBindingSucceeded>()
+            .Result.RevisionId.Should().Be("rev-platform-bind-1");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldHonorExplicitRevisionId()
+    {
+        var scopeBindingPort = new RecordingScopeBindingCommandPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var service = new ScopeBindingStudioMemberPlatformBindingCommandService(
+            scopeBindingPort,
+            dispatchPort,
+            NullLogger<ScopeBindingStudioMemberPlatformBindingCommandService>.Instance);
+
+        await service.ExecuteAsync(
+            "studio-member-binding-run:bind-1",
+            "platform-bind-1",
+            NewScriptStartRequest("rev-explicit"),
+            CancellationToken.None);
+
+        await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        scopeBindingPort.Requests.Should().ContainSingle()
+            .Which.RevisionId.Should().Be("rev-explicit");
     }
 
     [Fact]
@@ -87,7 +141,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             NewScriptStartRequest(),
             CancellationToken.None);
 
-        var dispatch = dispatchPort.Dispatches.Should().ContainSingle().Which;
+        var dispatch = await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var failed = dispatch.Envelope.Payload.Unpack<StudioMemberPlatformBindingFailed>();
         failed.BindingRunId.Should().Be("bind-1");
         failed.PlatformBindingCommandId.Should().Be("platform-bind-1");
@@ -95,8 +149,24 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         failed.Failure.Message.Should().Be("platform rejected");
     }
 
-    private static StudioMemberPlatformBindingStartRequested NewScriptStartRequest() =>
-        new()
+    private static StudioMemberPlatformBindingStartRequested NewScriptStartRequest(string? revisionId = null)
+    {
+        var bindingRequest = new StudioMemberBindingRequest
+        {
+            BindingRunId = "bind-1",
+            ScopeId = "scope-1",
+            MemberId = "m-1",
+            RequestHash = "hash-1",
+            Script = new StudioMemberScriptBindingRequest
+            {
+                ScriptId = "script-1",
+                ScriptRevision = "draft-1",
+            },
+        };
+        if (revisionId != null)
+            bindingRequest.RevisionId = revisionId;
+
+        return new StudioMemberPlatformBindingStartRequested
         {
             BindingRunId = "bind-1",
             PlatformBindingCommandId = "platform-bind-1",
@@ -109,51 +179,52 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
                 ImplementationKind = StudioMemberImplementationKind.Script,
                 DisplayName = "Script member",
             },
-            Request = new StudioMemberBindingRequest
-            {
-                BindingRunId = "bind-1",
-                ScopeId = "scope-1",
-                MemberId = "m-1",
-                RequestHash = "hash-1",
-                Script = new StudioMemberScriptBindingRequest
-                {
-                    ScriptId = "script-1",
-                    ScriptRevision = "draft-1",
-                },
-            },
+            Request = bindingRequest,
         };
+    }
 
     private sealed class RecordingScopeBindingCommandPort : IScopeBindingCommandPort
     {
         public List<ScopeBindingUpsertRequest> Requests { get; } = [];
         public Exception? Failure { get; init; }
+        public TaskCompletionSource<ScopeBindingUpsertRequest> UpsertStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<object?>? ReleaseUpsert { get; init; }
 
-        public Task<ScopeBindingUpsertResult> UpsertAsync(
+        public async Task<ScopeBindingUpsertResult> UpsertAsync(
             ScopeBindingUpsertRequest request,
             CancellationToken ct = default)
         {
             Requests.Add(request);
+            UpsertStarted.TrySetResult(request);
+            if (ReleaseUpsert != null)
+                await ReleaseUpsert.Task.ConfigureAwait(false);
             if (Failure != null)
                 throw Failure;
 
-            return Task.FromResult(new ScopeBindingUpsertResult(
+            var revisionId = request.RevisionId ?? "rev-1";
+            return new ScopeBindingUpsertResult(
                 ScopeId: request.ScopeId,
                 ServiceId: request.ServiceId ?? string.Empty,
                 DisplayName: request.DisplayName ?? string.Empty,
-                RevisionId: "rev-1",
+                RevisionId: revisionId,
                 ImplementationKind: request.ImplementationKind,
                 ExpectedActorId: "scope-script:scope-1:script-1",
-                Script: new ScopeBindingScriptResult("script-1", "rev-1", "scope-script:scope-1:script-1")));
+                Script: new ScopeBindingScriptResult("script-1", revisionId, "scope-script:scope-1:script-1"));
         }
     }
 
     private sealed class RecordingDispatchPort : IActorDispatchPort
     {
         public List<DispatchedCommand> Dispatches { get; } = [];
+        public TaskCompletionSource<DispatchedCommand> NextDispatch { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
-            Dispatches.Add(new DispatchedCommand(actorId, envelope));
+            var dispatch = new DispatchedCommand(actorId, envelope);
+            Dispatches.Add(dispatch);
+            NextDispatch.TrySetResult(dispatch);
             return Task.CompletedTask;
         }
 
