@@ -68,6 +68,58 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
     }
 
     [Fact]
+    public void Compose_WhenPlainTextExceedsLegacyTwoThousandChars_DoesNotSilentlyTruncate()
+    {
+        var text = new string('a', 2_500);
+
+        var payload = CreateComposer().Compose(
+            new MessageContent
+            {
+                Text = text,
+            },
+            new ComposeContext
+            {
+                Conversation = ConversationReference.Create(
+                    ChannelId.From("lark"),
+                    BotInstanceId.From("bot-1"),
+                    ConversationScope.DirectMessage,
+                    partition: null,
+                    "user-1"),
+                Capabilities = LarkMessageComposer.DefaultCapabilities.Clone(),
+            });
+
+        payload.PlainText.ShouldBe(text);
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        document.RootElement.GetProperty("text").GetString().ShouldBe(text);
+    }
+
+    [Fact]
+    public void Compose_WhenTextExceedsConfiguredLimit_AppendsTruncationMarker()
+    {
+        var payload = CreateComposer().Compose(
+            new MessageContent
+            {
+                Text = "0123456789ABCDEFGHIJ",
+            },
+            new ComposeContext
+            {
+                Conversation = ConversationReference.Create(
+                    ChannelId.From("lark"),
+                    BotInstanceId.From("bot-1"),
+                    ConversationScope.DirectMessage,
+                    partition: null,
+                    "user-1"),
+                Capabilities = new ChannelCapabilities
+                {
+                    MaxMessageLength = 18,
+                },
+            });
+
+        payload.PlainText.Length.ShouldBeLessThanOrEqualTo(18);
+        payload.PlainText.ShouldEndWith("...[truncated]");
+    }
+
+    [Fact]
     public void Compose_WhenRenderingInteractiveCard_UsesLarkV2BodyElements()
     {
         var intent = new MessageContent
