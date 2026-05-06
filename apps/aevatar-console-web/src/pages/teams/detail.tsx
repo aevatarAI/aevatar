@@ -49,6 +49,7 @@ import {
 } from "@/shared/studio/navigation";
 import {
   formatStudioMemberLifecycleStage,
+  formatStudioTeamLifecycleStage,
   type StudioWorkflowDocument,
 } from "@/shared/studio/models";
 import {
@@ -1167,6 +1168,12 @@ const TeamDetailPage: React.FC = () => {
     queryKey: ["teams", "team-members", scopeId, selectedTeamId],
     retry: false,
   });
+  const teamSummaryQuery = useQuery({
+    enabled: scopeId.length > 0 && selectedTeamId.length > 0,
+    queryFn: () => studioApi.getTeam(scopeId, selectedTeamId),
+    queryKey: ["teams", "team-summary", scopeId, selectedTeamId],
+    retry: false,
+  });
 
   const fallbackWorkflowSummary = React.useMemo(() => {
     if (lens.activeRevision?.implementationKind !== "workflow") {
@@ -1610,24 +1617,53 @@ const TeamDetailPage: React.FC = () => {
     workflowId: activeWorkflowSummary?.workflowId,
     workflowName: activeWorkflowSummary?.workflowName,
     displayName:
+      trimText(teamSummaryQuery.data?.displayName) ||
       trimText(preferredMemberSummary?.displayName) ||
       activeWorkflowSummary?.displayName,
     lensTitle: lens.title,
   });
   const teamTitle = teamHeading.title;
-  const teamTitleMeta = teamHeading.metaScopeId ? (
-    <Space size={6} wrap>
-      <span style={{ textTransform: "none" }}>scopeId</span>
-      <AevatarCompactText
-        color="inherit"
-        head={8}
-        maxWidth={320}
-        monospace
-        tail={6}
-        value={teamHeading.metaScopeId}
-      />
-    </Space>
-  ) : null;
+  const teamLifecycleStatus = trimText(teamSummaryQuery.data?.lifecycleStage);
+  const teamLifecycleLabel = teamSummaryQuery.data
+    ? formatStudioTeamLifecycleStage(teamSummaryQuery.data.lifecycleStage)
+    : "";
+  const teamSummaryDescription = trimText(teamSummaryQuery.data?.description);
+  const teamMetaScopeId = teamHeading.metaScopeId || (selectedTeamId ? scopeId : "");
+  const teamTitleMeta =
+    selectedTeamId || teamMetaScopeId || teamSummaryQuery.data ? (
+      <Space size={[10, 6]} wrap>
+        {selectedTeamId ? (
+          <Space size={6} wrap>
+            <span style={{ textTransform: "none" }}>teamId</span>
+            <AevatarCompactText
+              color="inherit"
+              head={8}
+              maxWidth={320}
+              monospace
+              tail={6}
+              value={selectedTeamId}
+            />
+          </Space>
+        ) : null}
+        {teamMetaScopeId ? (
+          <Space size={6} wrap>
+            <span style={{ textTransform: "none" }}>scopeId</span>
+            <AevatarCompactText
+              color="inherit"
+              head={8}
+              maxWidth={320}
+              monospace
+              tail={6}
+              value={teamMetaScopeId}
+            />
+          </Space>
+        ) : null}
+        {teamSummaryQuery.data ? (
+          <span>{teamSummaryQuery.data.memberCount} 个成员</span>
+        ) : null}
+        {teamSummaryDescription ? <span>{teamSummaryDescription}</span> : null}
+      </Space>
+    ) : null;
   const activeWorkflowId =
     trimText(activeWorkflowSummary?.workflowId) || trimText(routeState.workflowId);
   const teamCompositionRows = React.useMemo(
@@ -1654,19 +1690,22 @@ const TeamDetailPage: React.FC = () => {
     [teamMembersQuery.data?.members, token],
   );
   const latestVisibleUpdate =
+    teamSummaryQuery.data?.updatedAt ||
     lens.currentRun?.lastUpdatedAt ||
     lens.currentRunAudit?.summary.lastUpdatedAt ||
     activeWorkflowSummary?.updatedAt ||
     "";
-  const latestVisibleUpdateNote = lens.currentRun?.lastUpdatedAt
-    ? trimText(lens.currentRun?.runId)
+  const latestVisibleUpdateNote = teamSummaryQuery.data?.updatedAt
+    ? "来自 Team authority 更新时间"
+    : lens.currentRun?.lastUpdatedAt
+      ? trimText(lens.currentRun?.runId)
       ? `来自 run ${compactId(lens.currentRun?.runId)}`
       : "来自最近可见运行"
-    : lens.currentRunAudit?.summary.lastUpdatedAt
-      ? "来自最近审计摘要"
-      : activeWorkflowSummary?.updatedAt
-        ? "来自 workflow 更新时间"
-        : "当前还没有可见更新时间";
+      : lens.currentRunAudit?.summary.lastUpdatedAt
+        ? "来自最近审计摘要"
+        : activeWorkflowSummary?.updatedAt
+          ? "来自 workflow 更新时间"
+          : "当前还没有可见更新时间";
   const activeRunId =
     lens.currentRun?.runId ||
     lens.playback.currentRunId ||
@@ -2906,6 +2945,76 @@ const TeamDetailPage: React.FC = () => {
         ? resolveTonePillStyle(token, "success")
         : resolveStatusPillStyle(token, row.badge),
   }));
+  const teamAuthorityStatusLabel = teamSummaryQuery.data
+    ? teamLifecycleLabel
+    : teamSummaryQuery.isError
+      ? "Team summary 不可用"
+      : selectedTeamId
+        ? "加载中"
+        : "未绑定 Team";
+  const teamAuthorityStatusStyle = teamSummaryQuery.data
+    ? resolveStatusPillStyle(token, teamLifecycleStatus)
+    : teamSummaryQuery.isError
+      ? resolveTonePillStyle(token, "warning")
+      : resolveTonePillStyle(token, "neutral");
+  const teamAuthorityTitle = teamSummaryQuery.data
+    ? teamTitle
+    : selectedTeamId
+      ? "Team summary 暂不可用"
+      : teamTitle;
+  const teamAuthorityDescription = teamSummaryQuery.data
+    ? teamSummaryDescription || "Team authority 当前没有描述。"
+    : selectedTeamId
+      ? "当前仍会显示运行时视图；Team authority summary 暂时无法读取。"
+      : "当前详情来自运行时上下文，还没有明确的 Team authority 绑定。";
+  const teamAuthorityRows = [
+    {
+      badge: teamLifecycleLabel || teamAuthorityStatusLabel,
+      badgeStyle: teamAuthorityStatusStyle,
+      key: "teamLifecycle",
+      label: "生命周期",
+      note: teamSummaryQuery.data
+        ? `teamId · ${compactId(teamSummaryQuery.data.teamId)}`
+        : selectedTeamId
+          ? `teamId · ${compactId(selectedTeamId)}`
+          : "当前路由没有 Team ID",
+      noteMonospace: false,
+      noteTooltip: teamSummaryQuery.data
+        ? `teamId · ${teamSummaryQuery.data.teamId}`
+        : selectedTeamId
+          ? `teamId · ${selectedTeamId}`
+          : "当前路由没有 Team ID",
+      value: teamAuthorityStatusLabel,
+    },
+    {
+      badge: teamSummaryQuery.data ? `${teamSummaryQuery.data.memberCount}` : "--",
+      badgeStyle: teamSummaryQuery.data
+        ? resolveTonePillStyle(token, "info")
+        : resolveTonePillStyle(token, "neutral"),
+      key: "teamMembers",
+      label: "成员规模",
+      note: teamSummaryQuery.data
+        ? "来自 Team authority memberCount"
+        : "成员数会在 Team summary 可用后显示",
+      noteMonospace: false,
+      value: teamSummaryQuery.data ? `${teamSummaryQuery.data.memberCount} 个成员` : "--",
+    },
+    {
+      badge: teamSummaryQuery.data?.updatedAt ? "已同步" : "--",
+      badgeStyle: teamSummaryQuery.data?.updatedAt
+        ? resolveTonePillStyle(token, "success")
+        : resolveTonePillStyle(token, "neutral"),
+      key: "teamUpdatedAt",
+      label: "Team 更新时间",
+      note: teamSummaryQuery.data?.updatedAt
+        ? "来自 Team authority updatedAt"
+        : "当前使用运行时更新时间作为降级参考",
+      noteMonospace: false,
+      value: teamSummaryQuery.data?.updatedAt
+        ? formatCompactTimestamp(teamSummaryQuery.data.updatedAt)
+        : "--",
+    },
+  ];
   const overviewGovernanceRows = [
     {
       badge: currentRevisionId !== "--" ? "serving" : "unknown",
@@ -3434,6 +3543,11 @@ const TeamDetailPage: React.FC = () => {
         latestVisibleUpdateNote={latestVisibleUpdateNote}
         partialSignals={overviewPartialSignals}
         runtimeSummaryRows={overviewRuntimeSummaryRows}
+        teamAuthorityDescription={teamAuthorityDescription}
+        teamAuthorityRows={teamAuthorityRows}
+        teamAuthorityStatusLabel={teamAuthorityStatusLabel}
+        teamAuthorityStatusStyle={teamAuthorityStatusStyle}
+        teamAuthorityTitle={teamAuthorityTitle}
       />
     );
   };
@@ -3691,7 +3805,12 @@ const TeamDetailPage: React.FC = () => {
       onOpenTeamsList={handleOpenTeamsList}
       onSelectTab={pushTeamTab}
       statusBadge={
-        currentHeaderStatusFriendly !== "--" ? (
+        teamSummaryQuery.data ? (
+          <DetailPill
+            style={resolveStatusPillStyle(token, teamLifecycleStatus)}
+            text={teamLifecycleLabel}
+          />
+        ) : currentHeaderStatusFriendly !== "--" ? (
           <DetailPill
             style={resolveStatusPillStyle(token, currentHeaderStatus)}
             text={currentHeaderStatusFriendly}

@@ -1151,6 +1151,54 @@ describe('studioApi host-session requests', () => {
     );
   });
 
+  it('gets a studio team summary from the team authority endpoint', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        teamId: 't-alpha',
+        scopeId: 'scope-1',
+        displayName: 'Alpha Team',
+        description: 'Owns support workflows',
+        lifecycleStage: 'active',
+        memberCount: 2,
+        createdAt: '2026-05-01T08:00:00Z',
+        updatedAt: '2026-05-01T08:05:00Z',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(studioApi.getTeam('scope-1', 't-alpha')).resolves.toEqual({
+      teamId: 't-alpha',
+      scopeId: 'scope-1',
+      displayName: 'Alpha Team',
+      description: 'Owns support workflows',
+      lifecycleStage: 'active',
+      memberCount: 2,
+      createdAt: '2026-05-01T08:00:00Z',
+      updatedAt: '2026-05-01T08:05:00Z',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scopes/scope-1/teams/t-alpha',
+      expect.objectContaining({
+        credentials: 'same-origin',
+      }),
+    );
+  });
+
   it('creates, updates, archives, and lists members for studio teams', async () => {
     persistAuthSession({
       tokens: {

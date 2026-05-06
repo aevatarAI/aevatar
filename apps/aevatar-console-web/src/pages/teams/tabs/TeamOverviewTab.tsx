@@ -73,6 +73,11 @@ type TeamOverviewTabProps = {
   readonly latestVisibleUpdateNote: string;
   readonly partialSignals: readonly string[];
   readonly runtimeSummaryRows: readonly OverviewRuntimeSummaryRow[];
+  readonly teamAuthorityDescription: string;
+  readonly teamAuthorityRows: readonly OverviewRuntimeSummaryRow[];
+  readonly teamAuthorityStatusLabel: string;
+  readonly teamAuthorityStatusStyle: React.CSSProperties;
+  readonly teamAuthorityTitle: string;
 };
 
 const surfaceStyle = (
@@ -128,11 +133,80 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
   latestVisibleUpdateNote,
   partialSignals,
   runtimeSummaryRows,
+  teamAuthorityDescription,
+  teamAuthorityRows,
+  teamAuthorityStatusLabel,
+  teamAuthorityStatusStyle,
+  teamAuthorityTitle,
 }) => {
   const { token } = theme.useToken();
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <section style={surfaceStyle(token)}>
+        <div
+          style={{
+            alignItems: "flex-start",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 12,
+            justifyContent: "space-between",
+          }}
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <Space wrap size={8}>
+              <Typography.Text strong style={{ fontSize: 16 }}>
+                Team authority
+              </Typography.Text>
+              <DetailPill
+                style={teamAuthorityStatusStyle}
+                text={teamAuthorityStatusLabel}
+              />
+            </Space>
+            <Typography.Title level={3} style={{ margin: 0 }}>
+              {teamAuthorityTitle}
+            </Typography.Title>
+            <FactLine
+              monospace={false}
+              rows={2}
+              secondary
+              text={teamAuthorityDescription}
+            />
+          </div>
+        </div>
+        <div style={{ display: "grid", gap: 12 }}>
+          {teamAuthorityRows.map((row, index) => (
+            <div
+              key={row.key}
+              style={{
+                alignItems: "start",
+                borderTop:
+                  index === 0 ? "none" : `1px solid ${token.colorBorderSecondary}`,
+                display: "grid",
+                gap: 12,
+                gridTemplateColumns: "minmax(96px, 128px) minmax(0, 1fr) max-content",
+                paddingTop: index === 0 ? 0 : 12,
+              }}
+            >
+              <Typography.Text style={{ paddingTop: 2 }} type="secondary">
+                {row.label}
+              </Typography.Text>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
+                <FactLine rows={2} text={String(row.value)} />
+                <FactLine
+                  monospace={row.noteMonospace ?? false}
+                  rows={3}
+                  secondary
+                  text={String(row.note)}
+                  tooltipText={row.noteTooltip}
+                />
+              </div>
+              <DetailPill compact style={row.badgeStyle} text={row.badge} />
+            </div>
+          ))}
+        </div>
+      </section>
+
       <section style={surfaceStyle(token)}>
         <div
           style={{
