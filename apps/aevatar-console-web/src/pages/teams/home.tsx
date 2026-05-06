@@ -20,9 +20,7 @@ import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { loadRestorableAuthSession } from "@/shared/auth/session";
 import { formatCompactDateTime } from "@/shared/datetime/dateTime";
 import { history } from "@/shared/navigation/history";
-import {
-  buildTeamDetailHref,
-} from "@/shared/navigation/teamRoutes";
+import { buildTeamDetailHref } from "@/shared/navigation/teamRoutes";
 import { buildRuntimeRunsHref } from "@/shared/navigation/runtimeRoutes";
 import { studioApi } from "@/shared/studio/api";
 import type { ScopeServiceRunSummary } from "@/shared/models/runtime/scopeServices";
@@ -30,11 +28,9 @@ import type { ServiceCatalogSnapshot } from "@/shared/models/services";
 import {
   formatStudioMemberLifecycleStage,
   type StudioMemberSummary,
+  type StudioTeamSummary,
 } from "@/shared/studio/models";
-import {
-  buildStudioRoute,
-  buildStudioWorkflowWorkspaceRoute,
-} from "@/shared/studio/navigation";
+import { buildStudioWorkflowWorkspaceRoute } from "@/shared/studio/navigation";
 import {
   AevatarInspectorEmpty,
   AevatarPageShell,
@@ -68,6 +64,21 @@ type MemberRosterPreview = {
   readonly primaryActionLabel: string;
   readonly serviceId: string;
   readonly serviceLabel: string;
+  readonly title: string;
+  readonly updatedAt: string | null;
+};
+
+type TeamRosterPreview = {
+  readonly attention: WorkflowOperationalAttention;
+  readonly attentionDetail: string;
+  readonly detailHref: string;
+  readonly latestRun: ScopeServiceRunSummary | null;
+  readonly memberPreviewLabel: string;
+  readonly moreActions: Array<{ key: string; label: string; onClick: () => void }>;
+  readonly primaryActionLabel: string;
+  readonly serviceLabel: string;
+  readonly team: StudioTeamSummary;
+  readonly teamId: string;
   readonly title: string;
   readonly updatedAt: string | null;
 };
@@ -366,6 +377,41 @@ function compareMembers(
   return right.memberId.localeCompare(left.memberId);
 }
 
+function compareTeams(
+  left: StudioTeamSummary,
+  right: StudioTeamSummary,
+): number {
+  const rightTime = parseTimestamp(right.updatedAt);
+  const leftTime = parseTimestamp(left.updatedAt);
+  if (rightTime !== leftTime) {
+    return rightTime - leftTime;
+  }
+
+  return right.teamId.localeCompare(left.teamId);
+}
+
+function groupMembersByTeamId(
+  members: readonly StudioMemberSummary[],
+): Map<string, StudioMemberSummary[]> {
+  const result = new Map<string, StudioMemberSummary[]>();
+  members.forEach((member) => {
+    const teamId = trimOptional(member.teamId);
+    if (!teamId) {
+      return;
+    }
+
+    const existing = result.get(teamId);
+    if (existing) {
+      existing.push(member);
+    } else {
+      result.set(teamId, [member]);
+    }
+  });
+
+  result.forEach((teamMembers) => teamMembers.sort(compareMembers));
+  return result;
+}
+
 function resolveMemberPreviewService(input: {
   readonly member: StudioMemberSummary;
   readonly services: readonly ServiceCatalogSnapshot[];
@@ -523,6 +569,143 @@ function buildMemberRosterPreview(input: {
   };
 }
 
+function buildTeamRosterPreview(input: {
+  readonly guardrailedMemberIds?: ReadonlySet<string>;
+  readonly members: readonly StudioMemberSummary[];
+  readonly runsByMemberId: Readonly<Record<string, readonly ScopeServiceRunSummary[]>>;
+  readonly runtimeAvailableByMemberId?: ReadonlySet<string>;
+  readonly scopeId: string;
+  readonly services: readonly ServiceCatalogSnapshot[];
+  readonly team: StudioTeamSummary;
+}): TeamRosterPreview {
+  const memberPreviews = input.members.map((member) =>
+    buildMemberRosterPreview({
+      guardrailedMemberIds: input.guardrailedMemberIds,
+      member,
+      runsByMemberId: input.runsByMemberId,
+      runtimeAvailableByMemberId: input.runtimeAvailableByMemberId,
+      scopeId: input.scopeId,
+      services: input.services,
+    }),
+  );
+  const sortedMembers = [...input.members].sort(compareMembers);
+  const latestRun =
+    memberPreviews
+      .map((preview) => preview.latestRun)
+      .filter((run): run is ScopeServiceRunSummary => Boolean(run))
+      .sort(compareRuns)[0] ?? null;
+  const statusRank: Record<WorkflowOperationalAttention, number> = {
+    failed: 0,
+    waiting: 1,
+    "runtime-unresolved": 2,
+    "no-bound-service": 3,
+    "no-recent-runs": 4,
+    draft: 5,
+    healthy: 6,
+  };
+  const mostImportantMemberPreview = memberPreviews
+    .slice()
+    .sort(
+      (left, right) =>
+        statusRank[left.attention] - statusRank[right.attention] ||
+        parseTimestamp(right.updatedAt) - parseTimestamp(left.updatedAt) ||
+        right.memberId.localeCompare(left.memberId),
+    )[0];
+  const memberCount =
+    input.team.memberCount > 0 ? input.team.memberCount : input.members.length;
+  const firstMemberLabel = pickMeaningfulLabel(
+    sortedMembers[0]?.displayName,
+    sortedMembers[0]?.memberId,
+  );
+  const memberPreviewLabel =
+    memberCount > 0
+      ? firstMemberLabel
+        ? memberCount > 1
+          ? `${firstMemberLabel} 等 ${memberCount} 个成员`
+          : firstMemberLabel
+        : `${memberCount} 个成员`
+      : "暂无成员";
+  const serviceLabels = memberPreviews
+    .map((preview) => preview.serviceLabel)
+    .filter((label) => label && label !== "未绑定");
+  const uniqueServiceLabels = Array.from(new Set(serviceLabels));
+  const primaryMemberPreview =
+    memberPreviews.find((preview) => preview.serviceId) ?? memberPreviews[0] ?? null;
+  const detailHref = buildTeamDetailHref({
+    memberId: primaryMemberPreview?.memberId || undefined,
+    runId: latestRun?.runId || undefined,
+    scopeId: input.scopeId,
+    serviceId: primaryMemberPreview?.serviceId || undefined,
+    teamId: input.team.teamId,
+  });
+  const studioHref = buildStudioWorkflowWorkspaceRoute({
+    scopeId: input.scopeId,
+  });
+  const runtimeHref =
+    primaryMemberPreview?.serviceId && primaryMemberPreview.serviceId.length > 0
+      ? buildRuntimeRunsHref({
+          actorId: latestRun?.actorId || undefined,
+          scopeId: input.scopeId,
+          serviceId: primaryMemberPreview.serviceId,
+        })
+      : "";
+  const moreActions: Array<{ key: string; label: string; onClick: () => void }> = [];
+  const createMemberHref = buildStudioWorkflowWorkspaceRoute({
+    scopeId: input.scopeId,
+    teamId: input.team.teamId,
+    intent: "create-member",
+  });
+  if (runtimeHref) {
+    moreActions.push({
+      key: "runtime",
+      label: "查看运行",
+      onClick: () => history.push(runtimeHref),
+    });
+  }
+  moreActions.push({
+    key: "add-member",
+    label: "新增成员",
+    onClick: () => history.push(createMemberHref),
+  });
+  moreActions.push({
+    key: "builder",
+    label: "进入 Studio",
+    onClick: () => history.push(studioHref),
+  });
+
+  let attention: WorkflowOperationalAttention =
+    mostImportantMemberPreview?.attention ?? "draft";
+  let attentionDetail = "这个 Team 已经存在后端事实，但还没有分配成员。";
+  if (input.team.lifecycleStage === "archived") {
+    attention = "draft";
+    attentionDetail = "这个 Team 已归档，列表中仅保留它的后端 roster 事实。";
+  } else if (mostImportantMemberPreview) {
+    attentionDetail = mostImportantMemberPreview.attentionDetail;
+  }
+
+  return {
+    attention,
+    attentionDetail,
+    detailHref,
+    latestRun,
+    memberPreviewLabel,
+    moreActions,
+    primaryActionLabel: "查看团队",
+    serviceLabel:
+      uniqueServiceLabels.length > 0
+        ? uniqueServiceLabels.slice(0, 2).join(" / ")
+        : "暂无绑定服务",
+    team: input.team,
+    teamId: input.team.teamId,
+    title: pickMeaningfulLabel(input.team.displayName, input.team.teamId) || "未命名 Team",
+    updatedAt:
+      latestRun?.lastUpdatedAt ||
+      mostImportantMemberPreview?.updatedAt ||
+      input.team.updatedAt ||
+      null,
+  };
+}
+
 const MoreActionsButton: React.FC<{
   readonly actions: Array<{ key: string; label: string; onClick: () => void }>;
 }> = ({ actions }) => (
@@ -554,8 +737,8 @@ const MoreActionsButton: React.FC<{
   </Dropdown>
 );
 
-const MemberRosterCard: React.FC<{
-  readonly preview: MemberRosterPreview;
+const TeamRosterCard: React.FC<{
+  readonly preview: TeamRosterPreview;
 }> = ({ preview }) => {
   const { token } = theme.useToken();
 
@@ -636,7 +819,7 @@ const MemberRosterCard: React.FC<{
           fontSize: 13,
         }}
       >
-        成员标识：{preview.entryLabel}
+        Team 标识：{preview.teamId}
       </Typography.Text>
 
       <div
@@ -659,6 +842,18 @@ const MemberRosterCard: React.FC<{
           label="最近更新"
           value={formatShortTime(preview.updatedAt)}
         />
+      </div>
+
+      <div
+        style={{
+          borderTop: `1px solid ${token.colorBorderSecondary}`,
+          display: "grid",
+          gap: 14,
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+          paddingTop: 14,
+        }}
+      >
+        <TeamFact label="Team 成员" value={preview.memberPreviewLabel} />
         <TeamFact label="关联服务" value={preview.serviceLabel} />
       </div>
 
@@ -676,8 +871,8 @@ const MemberRosterCard: React.FC<{
   );
 };
 
-const MemberRosterRow: React.FC<{
-  readonly preview: MemberRosterPreview;
+const TeamRosterRow: React.FC<{
+  readonly preview: TeamRosterPreview;
 }> = ({ preview }) => {
   const { token } = theme.useToken();
 
@@ -698,9 +893,9 @@ const MemberRosterRow: React.FC<{
         borderRadius: 20,
         boxShadow: token.boxShadowTertiary,
         cursor: "pointer",
-        display: "grid",
-        gap: 16,
-        gridTemplateColumns: "minmax(0, 1.8fr) repeat(3, minmax(88px, 120px)) auto",
+    display: "grid",
+    gap: 16,
+    gridTemplateColumns: "minmax(0, 1.8fr) repeat(4, minmax(88px, 120px)) auto",
         minWidth: 0,
         padding: 16,
       }}
@@ -749,7 +944,7 @@ const MemberRosterRow: React.FC<{
             fontSize: 13,
           }}
         >
-          成员标识：{preview.entryLabel}
+          Team 标识：{preview.teamId}
         </Typography.Text>
       </div>
 
@@ -761,6 +956,7 @@ const MemberRosterRow: React.FC<{
         )}
       />
       <TeamFact label="更新" value={formatShortTime(preview.updatedAt)} />
+      <TeamFact label="成员" value={preview.memberPreviewLabel} />
       <TeamFact label="服务" value={preview.serviceLabel} />
 
       <Space wrap>
@@ -849,6 +1045,12 @@ const TeamsHomePage: React.FC = () => {
     queryFn: () => studioApi.listMembers(scopeId),
     retry: false,
   });
+  const teamsQuery = useQuery({
+    enabled: scopeId.length > 0,
+    queryKey: ["teams", "roster", scopeId],
+    queryFn: () => studioApi.listTeams(scopeId),
+    retry: false,
+  });
   const servicesQuery = useQuery({
     enabled: scopeId.length > 0,
     queryKey: ["teams", "services", scopeId],
@@ -862,6 +1064,18 @@ const TeamsHomePage: React.FC = () => {
   const studioMembers = React.useMemo(
     () => [...(membersQuery.data?.members ?? [])].sort(compareMembers),
     [membersQuery.data?.members],
+  );
+  const studioTeams = React.useMemo(
+    () => [...(teamsQuery.data?.teams ?? [])].sort(compareTeams),
+    [teamsQuery.data?.teams],
+  );
+  const membersByTeamId = React.useMemo(
+    () => groupMembersByTeamId(studioMembers),
+    [studioMembers],
+  );
+  const unassignedMembers = React.useMemo(
+    () => studioMembers.filter((member) => !trimOptional(member.teamId)),
+    [studioMembers],
   );
   const runtimeTrackableMembers = React.useMemo(
     () =>
@@ -916,25 +1130,27 @@ const TeamsHomePage: React.FC = () => {
       ) as Record<string, readonly any[]>,
     [memberRunQueries, runtimeSampleMembers],
   );
-  const memberPreviews = React.useMemo(
+  const teamPreviews = React.useMemo(
     () =>
-      studioMembers.map((member) =>
-        buildMemberRosterPreview({
+      studioTeams.map((team) =>
+        buildTeamRosterPreview({
           guardrailedMemberIds,
-          member,
+          members: membersByTeamId.get(team.teamId) ?? [],
           runsByMemberId,
           runtimeAvailableByMemberId,
           scopeId,
           services: servicesQuery.data ?? [],
+          team,
         }),
       ),
     [
       guardrailedMemberIds,
+      membersByTeamId,
       runsByMemberId,
       runtimeAvailableByMemberId,
       scopeId,
       servicesQuery.data,
-      studioMembers,
+      studioTeams,
     ],
   );
   const membersPendingBindingCount = React.useMemo(
@@ -946,24 +1162,25 @@ const TeamsHomePage: React.FC = () => {
       ).length,
     [studioMembers],
   );
-  const visibleTeamCount = memberPreviews.length;
+  const visibleTeamCount = teamPreviews.length;
   const resolvedRosterView =
     manualRosterView ??
     (visibleTeamCount >= compactTeamRosterThreshold ? "list" : "cards");
   const useCompactRoster = resolvedRosterView === "list";
-  const healthyTeamCount = memberPreviews.filter(
+  const healthyTeamCount = teamPreviews.filter(
     (preview) => preview.attention === "healthy",
   ).length;
-  const attentionTeamCount = memberPreviews.filter(
+  const attentionTeamCount = teamPreviews.filter(
     (preview) => preview.attention !== "healthy",
   ).length;
   const emptyRosterHint =
     scopeId.length > 0
-      ? "当前 Scope 下还没有创建任何 member。进入 Studio 创建成员后，这里会按成员逐个展示。"
-      : "先导入一个 Scope，首页才能渲染出这组成员卡片。";
+      ? "当前 Scope 下还没有创建任何 Team。创建 Team 后，这里会按后端 roster 展示真实团队。"
+      : "先导入一个 Scope，首页才能渲染出这组 Team roster。";
   const partialIssues = [
     servicesQuery.isError ? "服务目录暂时不可见。" : null,
     membersQuery.isError ? "当前 Scope 的成员清单暂时不可见。" : null,
+    teamsQuery.isError ? "当前 Scope 的 Team roster 暂时不可见。" : null,
     ...memberRunQueries.map((query) =>
       query.isError ? "部分成员运行信号暂时不可见。" : null,
     ),
@@ -1000,19 +1217,7 @@ const TeamsHomePage: React.FC = () => {
         <Space wrap>
           <Button
             icon={<PlusOutlined />}
-            onClick={() =>
-              history.push(
-                buildStudioRoute({
-                  scopeId:
-                    scopeId ||
-                    readScopeQueryDraft().scopeId ||
-                    resolvedScope?.scopeId ||
-                    localScopeId,
-                  tab: "studio",
-                  intent: "create-member",
-                }),
-              )
-            }
+            onClick={() => history.push("/teams/new")}
             style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
             type="primary"
           >
@@ -1122,19 +1327,19 @@ const TeamsHomePage: React.FC = () => {
                 {scopeId}
               </Typography.Text>
               <Typography.Text type="secondary">
-                首页按这个 Scope 汇总成员本身的绑定与运行状态，Scope 只做上下文，不再直接当团队名展示。
+                首页按这个 Scope 读取后端 Team roster；成员绑定与运行状态只作为 Team 卡片的辅助信号。
               </Typography.Text>
             </div>
           </div>
         ) : null}
 
-        {!scopeId ? (
-          <Alert
-            showIcon
-            title="先导入一个 Scope，首页才能渲染出这组成员卡片。"
-            type="info"
-          />
-        ) : null}
+	{!scopeId ? (
+	  <Alert
+	    showIcon
+	    title="先导入一个 Scope，首页才能渲染出这组 Team roster。"
+	    type="info"
+	  />
+	) : null}
 
         {partialIssues.length > 0 ? (
           <Alert
@@ -1171,10 +1376,34 @@ const TeamsHomePage: React.FC = () => {
                 gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
               }}
             >
-              <SummaryStatCard accent label="团队成员" value={visibleTeamCount} />
+              <SummaryStatCard accent label="真实 Team" value={visibleTeamCount} />
               <SummaryStatCard label="运行正常" value={healthyTeamCount} />
               <SummaryStatCard label="需要处理" value={attentionTeamCount} />
             </div>
+
+            {unassignedMembers.length > 0 ? (
+              <Alert
+                action={
+                  <Button
+                    onClick={() =>
+                      history.push(
+                        buildStudioWorkflowWorkspaceRoute({
+                          scopeId,
+                        }),
+                      )
+                    }
+                    size="small"
+                    type="primary"
+                  >
+                    打开 Studio
+                  </Button>
+                }
+                description={`还有 ${unassignedMembers.length} 个成员没有归属 Team。它们不会被当成 Team 展示，只作为待整理成员保留。`}
+                showIcon
+                title="存在未归队成员"
+                type="info"
+              />
+            ) : null}
 
             {membersPendingBindingCount > 0 ? (
               <Alert
@@ -1200,15 +1429,15 @@ const TeamsHomePage: React.FC = () => {
               />
             ) : null}
 
-            {membersQuery.isLoading ? (
-              <AevatarInspectorEmpty description="正在整理当前 Scope 的成员清单。" />
-            ) : membersQuery.isError ? (
+            {teamsQuery.isLoading ? (
+              <AevatarInspectorEmpty description="正在读取当前 Scope 的 Team roster。" />
+            ) : teamsQuery.isError ? (
               <Alert
                 showIcon
-                title="当前 Scope 的成员清单暂时无法加载。"
+                title="当前 Scope 的 Team roster 暂时无法加载。"
                 type="error"
               />
-            ) : memberPreviews.length > 0 ? (
+            ) : teamPreviews.length > 0 ? (
               <>
                 <div
                   style={{
@@ -1232,10 +1461,10 @@ const TeamsHomePage: React.FC = () => {
                         margin: 0,
                       }}
                     >
-                      团队成员
+                      Team roster
                     </Typography.Title>
                     <Typography.Text type="secondary">
-                      当前 Scope 下已经登记的成员，以及它们各自的绑定和运行状态。
+                      当前 Scope 下已经登记的真实 Team；成员绑定和运行状态只作为辅助信号。
                     </Typography.Text>
                   </div>
                   {visibleTeamCount > 1 ? (
@@ -1268,8 +1497,8 @@ const TeamsHomePage: React.FC = () => {
                       gap: 14,
                     }}
                   >
-                    {memberPreviews.map((preview) => (
-                      <MemberRosterRow key={preview.memberId} preview={preview} />
+                    {teamPreviews.map((preview) => (
+                      <TeamRosterRow key={preview.teamId} preview={preview} />
                     ))}
                   </div>
                 ) : (
@@ -1281,8 +1510,8 @@ const TeamsHomePage: React.FC = () => {
                       gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))",
                     }}
                   >
-                    {memberPreviews.map((preview) => (
-                      <MemberRosterCard key={preview.memberId} preview={preview} />
+                    {teamPreviews.map((preview) => (
+                      <TeamRosterCard key={preview.teamId} preview={preview} />
                     ))}
                   </div>
                 )}
@@ -1294,15 +1523,11 @@ const TeamsHomePage: React.FC = () => {
               >
                 <Button
                   onClick={() =>
-                    history.push(
-                      buildStudioWorkflowWorkspaceRoute({
-                        scopeId,
-                      }),
-                    )
+                    history.push("/teams/new")
                   }
                   type="primary"
                 >
-                  打开 Studio
+                  组建新团队
                 </Button>
               </Empty>
             )}

@@ -47,7 +47,10 @@ import {
   buildStudioWorkflowEditorRoute,
   buildStudioWorkflowWorkspaceRoute,
 } from "@/shared/studio/navigation";
-import type { StudioWorkflowDocument } from "@/shared/studio/models";
+import {
+  formatStudioMemberLifecycleStage,
+  type StudioWorkflowDocument,
+} from "@/shared/studio/models";
 import {
   AevatarInspectorEmpty,
   AevatarPanel,
@@ -1088,6 +1091,7 @@ const TeamDetailPage: React.FC = () => {
     return readTeamDetailRouteState(window.location.search, window.location.pathname);
   }, [locationSnapshot]);
   const scopeId = routeState.scopeId.trim();
+  const selectedTeamId = trimText(routeState.teamId);
   const teamsListHref = React.useMemo(
     () => buildScopeHref("/teams", { scopeId }),
     [scopeId],
@@ -1154,6 +1158,13 @@ const TeamDetailPage: React.FC = () => {
     enabled: scopeId.length > 0,
     queryFn: () => studioApi.getConnectorCatalog(),
     queryKey: ["teams", "connector-catalog"],
+    retry: false,
+  });
+
+  const teamMembersQuery = useQuery({
+    enabled: scopeId.length > 0 && selectedTeamId.length > 0,
+    queryFn: () => studioApi.listTeamMembers(scopeId, selectedTeamId),
+    queryKey: ["teams", "team-members", scopeId, selectedTeamId],
     retry: false,
   });
 
@@ -1380,6 +1391,7 @@ const TeamDetailPage: React.FC = () => {
       buildTeamDetailHref({
         memberId: canonicalMemberId,
         scopeId,
+        teamId: selectedTeamId || undefined,
         workflowId: trimText(routeState.workflowId) || undefined,
         serviceId: trimText(routeState.serviceId) || undefined,
         runId: trimText(routeState.runId) || undefined,
@@ -1393,6 +1405,7 @@ const TeamDetailPage: React.FC = () => {
     routeState.serviceId,
     routeState.tab,
     routeState.workflowId,
+    selectedTeamId,
     scopeId,
   ]);
   const currentPlatformService =
@@ -1430,11 +1443,13 @@ const TeamDetailPage: React.FC = () => {
     trimText(activeWorkflowSummary?.workflowId).length > 0
       ? buildStudioWorkflowEditorRoute({
           scopeId,
+          teamId: selectedTeamId || undefined,
           memberKey: selectedStudioMemberKey,
           workflowId: activeWorkflowSummary?.workflowId,
         })
       : buildStudioWorkflowWorkspaceRoute({
           scopeId,
+          teamId: selectedTeamId || undefined,
           memberKey: selectedStudioMemberKey,
         });
 
@@ -1623,6 +1638,20 @@ const TeamDetailPage: React.FC = () => {
         implementationKind: lens.activeRevision?.implementationKind,
       }),
     [lens.activeRevision?.implementationKind, lens.members, teamWorkflowDocumentsQuery.data],
+  );
+  const teamRosterRows = React.useMemo(
+    () =>
+      (teamMembersQuery.data?.members ?? []).map((member) => ({
+        description: trimText(member.description),
+        implementationKind: formatCompositionKind(member.implementationKind),
+        key: member.memberId,
+        lifecycleLabel: formatStudioMemberLifecycleStage(member.lifecycleStage),
+        lifecycleStyle: resolveStatusPillStyle(token, member.lifecycleStage),
+        memberId: member.memberId,
+        name: trimText(member.displayName) || member.memberId,
+        serviceId: trimText(member.publishedServiceId) || "--",
+      })),
+    [teamMembersQuery.data?.members, token],
   );
   const latestVisibleUpdate =
     lens.currentRun?.lastUpdatedAt ||
@@ -3212,6 +3241,7 @@ const TeamDetailPage: React.FC = () => {
         buildTeamDetailHref({
           memberId: currentMemberId || undefined,
           scopeId,
+          teamId: selectedTeamId || undefined,
           workflowId: activeWorkflowId || undefined,
           serviceId: runtimeServiceId,
           runId:
@@ -3230,6 +3260,7 @@ const TeamDetailPage: React.FC = () => {
       lens.playback.currentRunId,
       preferredRunId,
       runtimeServiceId,
+      selectedTeamId,
       scopeId,
     ],
   );
@@ -3244,6 +3275,7 @@ const TeamDetailPage: React.FC = () => {
         buildTeamDetailHref({
           memberId: currentMemberId || undefined,
           scopeId,
+          teamId: selectedTeamId || undefined,
           workflowId: activeWorkflowId || undefined,
           serviceId: runtimeServiceId,
           runId: normalizedRunId || undefined,
@@ -3251,7 +3283,14 @@ const TeamDetailPage: React.FC = () => {
         }),
       );
     },
-    [activeTab, activeWorkflowId, currentMemberId, runtimeServiceId, scopeId],
+    [
+      activeTab,
+      activeWorkflowId,
+      currentMemberId,
+      runtimeServiceId,
+      selectedTeamId,
+      scopeId,
+    ],
   );
 
   const handleOpenConversation = React.useCallback(() => {
@@ -3510,6 +3549,10 @@ const TeamDetailPage: React.FC = () => {
         onOpenRuntimeExplorer={handleOpenServiceMapping}
         onOpenServices={handleOpenServices}
         onSelectActor={setSelectedActorId}
+        rosterError={teamMembersQuery.isError}
+        rosterLoading={teamMembersQuery.isLoading}
+        rosterRows={teamRosterRows}
+        rosterTeamId={selectedTeamId}
       />
     );
   };
@@ -3551,6 +3594,7 @@ const TeamDetailPage: React.FC = () => {
           history.push(
             buildStudioScriptsWorkspaceRoute({
               scopeId,
+              teamId: selectedTeamId || undefined,
               memberKey: selectedStudioMemberKey,
             }),
           )
@@ -3560,6 +3604,7 @@ const TeamDetailPage: React.FC = () => {
           history.push(
             buildStudioWorkflowWorkspaceRoute({
               scopeId,
+              teamId: selectedTeamId || undefined,
               memberKey: selectedStudioMemberKey,
             }),
           )

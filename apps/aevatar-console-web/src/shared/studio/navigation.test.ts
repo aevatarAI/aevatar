@@ -69,10 +69,12 @@ describe('buildStudioRoute', () => {
   it('supports the typed create-member Studio intent', () => {
     expect(
       buildStudioRoute({
+        scopeId: 'scope-1',
+        teamId: 't-alpha',
         tab: 'studio',
         intent: 'create-member',
       }),
-    ).toBe('/studio?tab=studio&intent=create-member');
+    ).toBe('/studio?scopeId=scope-1&teamId=t-alpha&tab=studio&intent=create-member');
   });
 
   it('drops invalid Studio intent values', () => {
