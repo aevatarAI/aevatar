@@ -58,8 +58,9 @@ public sealed class IdentityOAuthCallbackEndpointTests
         var (result, _) = await InvokeCallbackAsync(broker, queryPort, readiness);
 
         await broker.Received(1).RevokeBindingByIdAsync(incoming, Arg.Any<CancellationToken>());
-        await ReadJsonAsync(result).ContinueWith(t =>
-            t.Result.RootElement.GetProperty("status").GetString().Should().Be("already_bound"));
+        var html = await ReadTextAsync(result);
+        html.Should().Contain("已绑定");
+        html.Should().Contain("/whoami");
     }
 
     [Fact]
@@ -108,8 +109,37 @@ public sealed class IdentityOAuthCallbackEndpointTests
 
         await broker.DidNotReceive().RevokeBindingByIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
         await queryPort.Received(1).ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>());
-        var doc = await ReadJsonAsync(result);
-        doc.RootElement.GetProperty("status").GetString().Should().Be("bound");
+        var html = await ReadTextAsync(result);
+        // Issue #513 phase 1 substitute: the success page must name the
+        // next-step slash commands so the user knows what to type back in
+        // Lark after the OAuth round-trip.
+        html.Should().Contain("绑定成功");
+        html.Should().Contain("/model");
+        html.Should().Contain("/whoami");
+    }
+
+    [Fact]
+    public async Task HappyPath_RendersHtml_ContentTypeIsTextHtml()
+    {
+        const string incoming = "bnd_incoming";
+        var subject = SampleSubject();
+        var broker = NewBroker(subject, incoming);
+        var queryPort = Substitute.For<IExternalIdentityBindingQueryPort>();
+        queryPort.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<BindingId?>(null));
+        var readiness = Substitute.For<IProjectionReadinessPort>();
+        readiness.WaitForBindingStateAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                incoming,
+                Arg.Any<TimeSpan>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var (result, _) = await InvokeCallbackAsync(broker, queryPort, readiness);
+        var (text, contentType) = await ReadTextWithContentTypeAsync(result);
+
+        contentType.Should().StartWith("text/html");
+        text.Should().Contain("<!DOCTYPE html>");
     }
 
     // ─── Test plumbing ───
@@ -190,11 +220,23 @@ public sealed class IdentityOAuthCallbackEndpointTests
 
     private static async Task<JsonDocument> ReadJsonAsync(IResult result)
     {
+        var (text, _) = await ReadTextWithContentTypeAsync(result);
+        return JsonDocument.Parse(text);
+    }
+
+    private static async Task<string> ReadTextAsync(IResult result)
+    {
+        var (text, _) = await ReadTextWithContentTypeAsync(result);
+        return text;
+    }
+
+    private static async Task<(string Text, string? ContentType)> ReadTextWithContentTypeAsync(IResult result)
+    {
         var context = NewHttpContext();
         await result.ExecuteAsync(context);
         context.Response.Body.Position = 0;
         var text = await new StreamReader(context.Response.Body, Encoding.UTF8).ReadToEndAsync();
-        return JsonDocument.Parse(text);
+        return (text, context.Response.ContentType);
     }
 
     private static HttpContext NewHttpContext()
