@@ -626,8 +626,17 @@ public class ToolCallLoopTests
         var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 3, CancellationToken.None);
 
         result.Should().Be("final-after-dsml");
-        var dsmlAssistant = messages.First(m => m.Role == "assistant" && m.ReasoningContent == "dsml-thinking");
-        dsmlAssistant.Should().NotBeNull();
+        var dsmlAssistant = messages.Single(m =>
+            m.Role == "assistant" &&
+            m.ToolCalls is { Count: 1 } &&
+            m.ToolCalls[0].Name == "echo");
+        dsmlAssistant.Content.Should().Be("I will search now.");
+        dsmlAssistant.ReasoningContent.Should().Be("dsml-thinking");
+        var forwardedDsmlAssistant = provider.Requests[1].Messages.Single(m =>
+            m.Role == "assistant" &&
+            m.ToolCalls is { Count: 1 } &&
+            m.ToolCalls[0].Name == "echo");
+        forwardedDsmlAssistant.ReasoningContent.Should().Be("dsml-thinking");
         var finalAssistant = messages.Last(m => m.Role == "assistant");
         finalAssistant.ReasoningContent.Should().Be("final-thinking");
     }
@@ -671,6 +680,12 @@ public class ToolCallLoopTests
         var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 1, CancellationToken.None);
 
         result.Should().Be("summary");
+        var forwardedFinalDsmlAssistant = provider.Requests[2].Messages.Single(m =>
+            m.Role == "assistant" &&
+            m.ToolCalls is { Count: 1 } &&
+            m.ToolCalls[0].Name == "echo" &&
+            m.ReasoningContent == "final-dsml-thinking");
+        forwardedFinalDsmlAssistant.ReasoningContent.Should().Be("final-dsml-thinking");
         var lastAssistant = messages.Last(m => m.Role == "assistant");
         lastAssistant.ReasoningContent.Should().Be("summary-thinking");
     }

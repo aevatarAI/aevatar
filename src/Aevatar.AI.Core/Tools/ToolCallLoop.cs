@@ -150,9 +150,10 @@ public sealed class ToolCallLoop
                             }
                         }
 
-                        if (!string.IsNullOrWhiteSpace(parsed.CleanedContent))
-                            messages.Add(ChatMessage.Assistant(parsed.CleanedContent, response.ReasoningContent));
-                        messages.Add(new ChatMessage { Role = "assistant", ToolCalls = parsed.ToolCalls });
+                        messages.Add(BuildAssistantToolCallMessage(
+                            parsed.CleanedContent,
+                            response.ReasoningContent,
+                            parsed.ToolCalls));
                         await ExecuteToolCallsCoreAsync(parsed.ToolCalls, messages, ct);
                         accumulatedContent = null;
                         continue;
@@ -228,9 +229,10 @@ public sealed class ToolCallLoop
             var finalParsed = TextToolCallParser.Parse(finalContent);
             if (finalParsed.ToolCalls.Count > 0)
             {
-                if (!string.IsNullOrWhiteSpace(finalParsed.CleanedContent))
-                    messages.Add(ChatMessage.Assistant(finalParsed.CleanedContent, finalResponse?.ReasoningContent));
-                messages.Add(new ChatMessage { Role = "assistant", ToolCalls = finalParsed.ToolCalls });
+                messages.Add(BuildAssistantToolCallMessage(
+                    finalParsed.CleanedContent,
+                    finalResponse?.ReasoningContent,
+                    finalParsed.ToolCalls));
                 await ExecuteToolCallsCoreAsync(finalParsed.ToolCalls, messages, ct);
 
                 // One more LLM call to summarize
@@ -574,6 +576,18 @@ public sealed class ToolCallLoop
         await foreach (var result in executor.GetRemainingResultsAsync(ct))
             messages.Add(BuildToolResultMessage(result.CallId, result.Result));
     }
+
+    private static ChatMessage BuildAssistantToolCallMessage(
+        string? content,
+        string? reasoningContent,
+        IReadOnlyList<ToolCall> toolCalls) =>
+        new()
+        {
+            Role = "assistant",
+            Content = string.IsNullOrWhiteSpace(content) ? null : content,
+            ReasoningContent = reasoningContent,
+            ToolCalls = toolCalls,
+        };
 
     /// <summary>
     /// Detects whether the LLM response was truncated by the output token limit.

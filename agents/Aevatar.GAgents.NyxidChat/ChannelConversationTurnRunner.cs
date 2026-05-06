@@ -595,8 +595,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 await selectionService.SetByServiceAsync(selectionContext, value.Trim(), modelOverride: null, ct)
                     .ConfigureAwait(false);
                 var updated = await optionsService.GetOptionsAsync(query, ct).ConfigureAwait(false);
-                var picked = updated.Available.FirstOrDefault(option =>
-                    string.Equals(option.ServiceId, value.Trim(), StringComparison.OrdinalIgnoreCase)) ?? updated.Current;
+                var picked = updated.Current ?? updated.Available.FirstOrDefault(option =>
+                    string.Equals(option.ServiceId, value.Trim(), StringComparison.OrdinalIgnoreCase));
                 return picked is null
                     ? new MessageContent { Text = "已切换 LLM service。下一条消息会用新的设置回复。" }
                     : renderer.RenderSelectionConfirm(picked, picked.DefaultModel);

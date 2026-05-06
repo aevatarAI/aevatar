@@ -409,16 +409,32 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
             .Where(option =>
                 option.ServiceSlug.Contains(requested, StringComparison.OrdinalIgnoreCase) ||
                 option.DisplayName.Contains(requested, StringComparison.OrdinalIgnoreCase))
-            .Take(2)
             .ToArray();
+        var selectable = fuzzy.Where(IsSelectable).Take(2).ToArray();
+        if (selectable.Length == 1)
+            return selectable[0];
+
         return fuzzy.Length == 1 ? fuzzy[0] : null;
     }
 
-    private static UserLlmOption? FindExactOption(string requested, IReadOnlyList<UserLlmOption> available) =>
-        available.FirstOrDefault(option =>
-            string.Equals(option.ServiceId, requested, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(option.ServiceSlug, requested, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(option.DisplayName, requested, StringComparison.OrdinalIgnoreCase));
+    private static UserLlmOption? FindExactOption(string requested, IReadOnlyList<UserLlmOption> available)
+    {
+        var matches = available
+            .Where(option =>
+                string.Equals(option.ServiceId, requested, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(option.ServiceSlug, requested, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(option.DisplayName, requested, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        var selectable = matches.Where(IsSelectable).Take(2).ToArray();
+        if (selectable.Length == 1)
+            return selectable[0];
+
+        return matches.FirstOrDefault();
+    }
+
+    private static bool IsSelectable(UserLlmOption option) =>
+        option.Allowed && string.Equals(option.Status, "ready", StringComparison.OrdinalIgnoreCase);
 
     private static bool TryResolveExactOptionPrefix(
         string requested,

@@ -695,6 +695,68 @@ public sealed class UserConfigProjectionAndControllerTests
     }
 
     [Fact]
+    public async Task UserConfigController_GetLlmOptions_PrefersReadyProxyRouteOverLegacyNotConnectedDuplicate()
+    {
+        var httpHandler = new RecordingHttpHandler(
+            (HttpStatusCode.NotFound, """{"error":"not_found"}"""),
+            (HttpStatusCode.OK, """
+            {
+              "providers": [
+                {
+                  "provider_slug": "chrono-llm",
+                  "provider_name": "Chrono LLM",
+                  "status": "not_connected",
+                  "proxy_url": "https://nyxid.example/api/v1/llm/chrono-llm/v1"
+                }
+              ],
+              "gateway_url": "https://nyxid.example/api/v1/llm/gateway/v1",
+              "supported_models": ["chrono-default"]
+            }
+            """),
+            (HttpStatusCode.OK, """
+            {
+              "services": [
+                {
+                  "id": "svc-chrono",
+                  "name": "Chrono LLM",
+                  "slug": "chrono-llm",
+                  "description": "Shared OpenAI-compatible route",
+                  "connected": false,
+                  "requires_connection": false,
+                  "has_node_binding": true,
+                  "proxy_url_slug": "https://nyxid.example/api/v1/proxy/s/chrono-llm/{path}"
+                }
+              ]
+            }
+            """));
+        var controller = CreateController(
+            new StubUserConfigQueryPort(),
+            new RecordingUserConfigCommandService(),
+            new StubHttpClientFactory(httpHandler),
+            BuildNyxIdConfiguration(),
+            bearerToken: "user-token-1");
+
+        var response = await controller.GetLlmOptions(CancellationToken.None);
+
+        var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var payload = ok.Value.Should().BeOfType<UserLlmOptionsView>().Subject;
+        var chrono = payload.Available.Should().ContainSingle().Subject;
+        chrono.ServiceId.Should().Be("svc-chrono");
+        chrono.ServiceSlug.Should().Be("chrono-llm");
+        chrono.DisplayName.Should().Be("Chrono LLM");
+        chrono.RouteValue.Should().Be("/api/v1/proxy/s/chrono-llm");
+        chrono.Source.Should().Be(NyxIdLlmProviderSource.ProxyService);
+        chrono.Status.Should().Be("ready");
+        chrono.Allowed.Should().BeTrue();
+        httpHandler.Requests.Select(request => request.Path)
+            .Should()
+            .Equal(
+                "/api/v1/llm/services",
+                "/api/v1/llm/status",
+                "/api/v1/proxy/services?per_page=100");
+    }
+
+    [Fact]
     public async Task UserConfigController_SaveLlmPreference_WithServiceId_WritesConfirmedRoute()
     {
         var httpHandler = new RecordingHttpHandler("""

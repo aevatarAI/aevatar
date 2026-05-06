@@ -254,6 +254,62 @@ public sealed class ModelSlashCommandHandlerTests
     }
 
     [Fact]
+    public async Task Use_ServiceName_PrefersSelectableDuplicate()
+    {
+        var disabledGateway = ChronoLlm with
+        {
+            UserServiceId = "chrono-llm",
+            DisplayName = "Chrono LLM",
+            RouteValue = "/api/v1/llm/chrono-llm/v1",
+            Status = "not_connected",
+            Source = NyxIdLlmProviderSource.GatewayProvider,
+            Allowed = false,
+        };
+        var selectableProxy = ChronoLlm with { DisplayName = "Chrono LLM" };
+        var catalog = new StubCatalogClient { Services = [disabledGateway, selectableProxy] };
+        var commandService = new StubUserConfigCommandService();
+        var handler = CreateHandler(catalog, commandService: commandService);
+
+        var reply = await handler.HandleAsync(Context(subAndArgs: "use Chrono LLM"), default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("Chrono LLM");
+        var saved = commandService.SavedConfigs.Should().ContainSingle().Subject;
+        saved.Config.PreferredLlmRoute.Should().Be(selectableProxy.RouteValue);
+        saved.Config.DefaultModel.Should().Be(selectableProxy.DefaultModel);
+    }
+
+    [Fact]
+    public async Task Selection_SetByService_PrefersSelectableDuplicateForSubmittedServiceId()
+    {
+        var disabledGateway = ChronoLlm with
+        {
+            UserServiceId = "chrono-llm",
+            DisplayName = "Chrono LLM",
+            RouteValue = "/api/v1/llm/chrono-llm/v1",
+            Status = "not_connected",
+            Source = NyxIdLlmProviderSource.GatewayProvider,
+            Allowed = false,
+        };
+        var selectableProxy = ChronoLlm with { DisplayName = "Chrono LLM" };
+        var catalog = new StubCatalogClient { Services = [disabledGateway, selectableProxy] };
+        var commandService = new StubUserConfigCommandService();
+        var provider = new ServiceCollection()
+            .AddSingleton<IUserConfigQueryPort>(new StubUserConfigQueryPort())
+            .AddSingleton<IUserConfigCommandService>(commandService)
+            .BuildServiceProvider();
+        var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
+        var options = new DefaultUserLlmOptionsService(catalog, scopeFactory);
+        var selection = new DefaultUserLlmSelectionService(options, catalog, scopeFactory);
+
+        await selection.SetByServiceAsync(BuildSelectionContext(), "chrono-llm", null, default);
+
+        var saved = commandService.SavedConfigs.Should().ContainSingle().Subject;
+        saved.Config.PreferredLlmRoute.Should().Be(selectableProxy.RouteValue);
+        saved.Config.DefaultModel.Should().Be(selectableProxy.DefaultModel);
+    }
+
+    [Fact]
     public async Task Use_ServiceNameAndModel_WritesRouteAndModelOverride()
     {
         var commandService = new StubUserConfigCommandService();
@@ -425,6 +481,11 @@ public sealed class ModelSlashCommandHandlerTests
             selection,
             new TextUserLlmOptionsRenderer());
     }
+
+    private static UserLlmSelectionContext BuildSelectionContext() => new(
+        new BindingId { Value = "bnd_sender" },
+        Context().Subject,
+        "owner-scope");
 
     private sealed class RecordingActorDispatchPort : IActorDispatchPort
     {

@@ -42,17 +42,18 @@ public static class NyxIdLlmServiceCatalogParser
             return result;
 
         var merged = result.Services.ToList();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var service in merged)
-            AddServiceKeys(seen, service);
-
         foreach (var candidate in proxyCandidates)
         {
-            if (HasAnyServiceKey(seen, candidate))
+            var duplicateIndex = FindMatchingServiceIndex(merged, candidate);
+            if (duplicateIndex >= 0)
+            {
+                if (ShouldPreferService(candidate, merged[duplicateIndex]))
+                    merged[duplicateIndex] = candidate;
+
                 continue;
+            }
 
             merged.Add(candidate);
-            AddServiceKeys(seen, candidate);
         }
 
         return result with { Services = merged };
@@ -150,6 +151,7 @@ public static class NyxIdLlmServiceCatalogParser
             return null;
 
         var status = ResolveProxyStatus(element);
+        var explicitAllowed = ReadAllowedOverride(element);
         var models = ReadStringArray(element, "models", "available_models", "availableModels");
         return new NyxIdLlmService(
             UserServiceId: ReadOptionalString(
@@ -167,7 +169,7 @@ public static class NyxIdLlmServiceCatalogParser
             Models: models,
             Status: status,
             Source: NyxIdLlmProviderSource.ProxyService,
-            Allowed: string.Equals(status, ReadyStatus, StringComparison.OrdinalIgnoreCase),
+            Allowed: explicitAllowed ?? string.Equals(status, ReadyStatus, StringComparison.OrdinalIgnoreCase),
             Description: ReadOptionalString(element, "description"));
     }
 
@@ -475,26 +477,41 @@ public static class NyxIdLlmServiceCatalogParser
             : "not_connected";
     }
 
-    private static void AddServiceKeys(ISet<string> seen, NyxIdLlmService service)
+    private static int FindMatchingServiceIndex(IReadOnlyList<NyxIdLlmService> services, NyxIdLlmService candidate)
     {
-        AddIfPresent(seen, service.RouteValue);
-        AddIfPresent(seen, service.UserServiceId);
-        AddIfPresent(seen, service.ServiceSlug);
+        for (var index = 0; index < services.Count; index++)
+        {
+            if (ShareServiceKey(services[index], candidate))
+                return index;
+        }
+
+        return -1;
     }
 
-    private static bool HasAnyServiceKey(ISet<string> seen, NyxIdLlmService service) =>
-        ContainsIfPresent(seen, service.RouteValue) ||
-        ContainsIfPresent(seen, service.UserServiceId) ||
-        ContainsIfPresent(seen, service.ServiceSlug);
+    private static bool ShareServiceKey(NyxIdLlmService left, NyxIdLlmService right) =>
+        EqualIfPresent(left.RouteValue, right.RouteValue) ||
+        EqualIfPresent(left.UserServiceId, right.UserServiceId) ||
+        EqualIfPresent(left.ServiceSlug, right.ServiceSlug);
 
-    private static void AddIfPresent(ISet<string> seen, string? value)
+    private static bool EqualIfPresent(string? left, string? right) =>
+        !string.IsNullOrWhiteSpace(left) &&
+        !string.IsNullOrWhiteSpace(right) &&
+        string.Equals(left.Trim(), right.Trim(), StringComparison.OrdinalIgnoreCase);
+
+    private static bool ShouldPreferService(NyxIdLlmService candidate, NyxIdLlmService existing) =>
+        ServiceSelectabilityRank(candidate) > ServiceSelectabilityRank(existing);
+
+    private static int ServiceSelectabilityRank(NyxIdLlmService service)
     {
-        if (!string.IsNullOrWhiteSpace(value))
-            seen.Add(value.Trim());
+        var ready = string.Equals(service.Status, ReadyStatus, StringComparison.OrdinalIgnoreCase);
+        return (service.Allowed, ready) switch
+        {
+            (true, true) => 3,
+            (true, false) => 2,
+            (false, true) => 1,
+            _ => 0,
+        };
     }
-
-    private static bool ContainsIfPresent(ISet<string> seen, string? value) =>
-        !string.IsNullOrWhiteSpace(value) && seen.Contains(value.Trim());
 
     private static JsonElement? TryGetProperty(JsonElement element, params string[] names)
     {
@@ -543,6 +560,18 @@ public static class NyxIdLlmServiceCatalogParser
                 _ => null,
             };
         }
+
+        return null;
+    }
+
+    private static bool? ReadAllowedOverride(JsonElement element)
+    {
+        var allowed = ReadOptionalBool(element, "allowed");
+        if (allowed is not null)
+            return allowed;
+
+        if (TryGetProperty(element, "credential_source", "credentialSource") is { ValueKind: JsonValueKind.Object } source)
+            return ReadOptionalBool(source, "allowed");
 
         return null;
     }

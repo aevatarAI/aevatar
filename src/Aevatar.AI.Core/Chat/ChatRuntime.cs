@@ -337,6 +337,7 @@ public sealed class ChatRuntime
                                             LLMResponse = new LLMResponse
                                             {
                                                 Content = parsed.CleanedContent,
+                                                ReasoningContent = roundResult.ReasoningContent,
                                                 ToolCalls = parsed.ToolCalls,
                                             },
                                         };
@@ -357,15 +358,12 @@ public sealed class ChatRuntime
                                         break;
                                     }
 
-                                    AppendAssistantMessage(messages, pendingHistoryMessages, parsed.CleanedContent, roundResult.ReasoningContent, toolCalls: null);
-
-                                    var textToolCallMsg = new ChatMessage
-                                    {
-                                        Role = "assistant",
-                                        ToolCalls = parsed.ToolCalls,
-                                    };
-                                    messages.Add(textToolCallMsg);
-                                    pendingHistoryMessages.Add(textToolCallMsg);
+                                    AppendAssistantMessage(
+                                        messages,
+                                        pendingHistoryMessages,
+                                        parsed.CleanedContent,
+                                        roundResult.ReasoningContent,
+                                        parsed.ToolCalls);
 
                                     // Execute parsed tool calls via a fresh executor
                                     using var textToolExecutor = new StreamingToolExecutor(
@@ -491,15 +489,12 @@ public sealed class ChatRuntime
                             : null;
                         if (finalParsed?.ToolCalls.Count > 0)
                         {
-                            AppendAssistantMessage(messages, pendingHistoryMessages, finalParsed.CleanedContent, finalRound.ReasoningContent, toolCalls: null);
-
-                            var finalToolCallMsg = new ChatMessage
-                            {
-                                Role = "assistant",
-                                ToolCalls = finalParsed.ToolCalls,
-                            };
-                            messages.Add(finalToolCallMsg);
-                            pendingHistoryMessages.Add(finalToolCallMsg);
+                            AppendAssistantMessage(
+                                messages,
+                                pendingHistoryMessages,
+                                finalParsed.CleanedContent,
+                                finalRound.ReasoningContent,
+                                finalParsed.ToolCalls);
 
                             using var finalToolExecutor = new StreamingToolExecutor(
                                 _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,

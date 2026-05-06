@@ -685,6 +685,40 @@ public class AIComponentCoverageTests
     }
 
     [Fact]
+    public void TornadoProvider_StripNonTextContentParts_ShouldPreserveReasoningAndToolCalls()
+    {
+        var stripped = InvokePrivateStatic<AevatarChatMessage>(
+            typeof(TornadoLLMProvider),
+            "StripNonTextContentParts",
+            new AevatarChatMessage
+            {
+                Role = "assistant",
+                Content = "fallback",
+                ReasoningContent = "thinking",
+                ContentParts =
+                [
+                    ContentPart.TextPart("visible"),
+                    ContentPart.ImagePart("aW1n", "image/png"),
+                ],
+                ToolCalls =
+                [
+                    new Aevatar.AI.Abstractions.LLMProviders.ToolCall
+                    {
+                        Id = "tc-1",
+                        Name = "lookup",
+                        ArgumentsJson = "{}",
+                    },
+                ],
+            });
+
+        stripped.Content.Should().Contain("visible");
+        stripped.Content.Should().Contain("image content was attached");
+        stripped.ReasoningContent.Should().Be("thinking");
+        stripped.ToolCalls.Should().ContainSingle()
+            .Which.Id.Should().Be("tc-1");
+    }
+
+    [Fact]
     public void TornadoProvider_MapResponseAndToolCallConverters_ShouldHandleSparsePayloads()
     {
         var sparseResult = new ChatResult
