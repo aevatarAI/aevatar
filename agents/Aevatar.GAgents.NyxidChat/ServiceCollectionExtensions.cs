@@ -22,6 +22,7 @@ public static class ServiceCollectionExtensions
 
         services.AddHttpClient();
         services.TryAddSingleton(provider => BindRelayOptions(configuration));
+        services.TryAddSingleton(provider => BindChatOptions(configuration));
         services.TryAddSingleton<Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions>(
             provider => provider.GetRequiredService<NyxIdRelayOptions>());
         services.TryAddSingleton<INyxIdRelayReplayGuard>(provider =>
@@ -70,6 +71,13 @@ public static class ServiceCollectionExtensions
     {
         var options = new NyxIdRelayOptions();
         configuration?.GetSection("Aevatar:NyxId:Relay").Bind(options);
+        return options;
+    }
+
+    private static NyxIdChatOptions BindChatOptions(IConfiguration? configuration)
+    {
+        var options = new NyxIdChatOptions();
+        configuration?.GetSection("Aevatar:NyxId:Chat").Bind(options);
         return options;
     }
 }

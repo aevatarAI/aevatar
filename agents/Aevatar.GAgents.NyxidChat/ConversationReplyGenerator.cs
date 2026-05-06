@@ -18,6 +18,11 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
     private const int MaxToolRounds = 40;
     private const int MaxHistoryMessages = 100;
     private const int StreamBufferCapacity = 256;
+    private const int DefaultRemoteSkillAutoLoadMaxSkills = 2;
+    private const int MaxRemoteSkillAutoLoadMaxSkills = 5;
+    private const int MaxRemoteSkillSearchQueryChars = 500;
+    private const int DefaultRemoteSkillAutoLoadTimeoutSeconds = 3;
+    private const int MaxRemoteSkillAutoLoadTimeoutSeconds = 30;
 
     private readonly ILLMProviderFactory _llmProviderFactory;
     private readonly IReadOnlyList<IAgentToolSource> _toolSources;
@@ -25,6 +30,9 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
     private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares;
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
     private readonly SkillRegistry? _skillRegistry;
+    private readonly IReadOnlyList<IRemoteSkillDiscovery> _remoteSkillDiscoveries;
+    private readonly IRemoteSkillFetcher? _remoteSkillFetcher;
+    private readonly NyxIdChatOptions? _chatOptions;
     private readonly global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? _relayOptions;
     private readonly INyxIdUserLlmPreferencesStore? _preferencesStore;
     private readonly IUserMemoryStore? _userMemoryStore;
@@ -43,6 +51,9 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         SkillRegistry? skillRegistry = null,
+        IEnumerable<IRemoteSkillDiscovery>? remoteSkillDiscoveries = null,
+        IRemoteSkillFetcher? remoteSkillFetcher = null,
+        NyxIdChatOptions? chatOptions = null,
         global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions = null,
         INyxIdUserLlmPreferencesStore? preferencesStore = null,
         IUserMemoryStore? userMemoryStore = null,
@@ -54,6 +65,9 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         _toolMiddlewares = (toolMiddlewares ?? []).ToArray();
         _llmMiddlewares = (llmMiddlewares ?? []).ToArray();
         _skillRegistry = skillRegistry;
+        _remoteSkillDiscoveries = (remoteSkillDiscoveries ?? []).ToArray();
+        _remoteSkillFetcher = remoteSkillFetcher;
+        _chatOptions = chatOptions;
         _relayOptions = relayOptions;
         _preferencesStore = preferencesStore;
         _userMemoryStore = userMemoryStore;
@@ -69,11 +83,6 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         ArgumentNullException.ThrowIfNull(activity);
         ArgumentNullException.ThrowIfNull(metadata);
 
-        var metadataPlan = await BuildEffectiveMetadataPlanAsync(metadata, ct);
-        var tools = new ToolManager();
-        foreach (var tool in await DiscoverToolsAsync(ct))
-            tools.Register(tool);
-
         // Emit a placeholder immediately so the user sees a message within the outbound RTT,
         // regardless of LLM cold-start, router selection, or tool-call latency before the
         // first real delta. The first real delta overwrites this placeholder via edit-in-place;
@@ -86,13 +95,17 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
                 await streamingSink.OnDeltaAsync(placeholder, ct);
         }
 
+        var metadataPlan = await BuildEffectiveMetadataPlanAsync(metadata, ct);
+        var primaryTurn = await BuildTurnToolContextAsync(activity, metadataPlan.Primary, ct);
+
         try
         {
             return await GenerateWithMetadataAsync(
                     activity,
                     metadataPlan.Primary,
-                    tools,
+                    primaryTurn.Tools,
                     streamingSink,
+                    primaryTurn.SkillRegistry,
                     ct)
                 .ConfigureAwait(false);
         }
@@ -107,14 +120,199 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
                 "Sender LLM route failed; retrying with bot owner LLM config. activity={ActivityId}",
                 activity.Id);
 
+            var fallbackTurn = await BuildTurnToolContextAsync(activity, metadataPlan.OwnerFallback, ct);
             return await GenerateWithMetadataAsync(
                     activity,
                     metadataPlan.OwnerFallback,
-                    tools,
+                    fallbackTurn.Tools,
                     streamingSink,
+                    fallbackTurn.SkillRegistry,
                     ct)
                 .ConfigureAwait(false);
         }
+    }
+
+    private sealed record TurnToolContext(ToolManager Tools, SkillRegistry? SkillRegistry);
+
+    private async Task<TurnToolContext> BuildTurnToolContextAsync(
+        ChatActivity activity,
+        IReadOnlyDictionary<string, string> effectiveMetadata,
+        CancellationToken ct)
+    {
+        var tools = new ToolManager();
+        foreach (var tool in await DiscoverToolsAsync(ct))
+            tools.Register(tool);
+
+        var remoteSkills = await AutoLoadRemoteSkillsAsync(activity, effectiveMetadata, ct);
+        var turnSkillRegistry = BuildTurnSkillRegistry(remoteSkills);
+        if (turnSkillRegistry is not null || _remoteSkillFetcher is not null)
+            tools.Register(new UseSkillTool(turnSkillRegistry ?? new SkillRegistry(), _remoteSkillFetcher));
+
+        return new TurnToolContext(tools, turnSkillRegistry);
+    }
+
+    private SkillRegistry? BuildTurnSkillRegistry(IReadOnlyList<SkillDefinition> remoteSkills)
+    {
+        if (_skillRegistry is null && remoteSkills.Count == 0)
+            return null;
+
+        var registry = new SkillRegistry();
+        if (_skillRegistry is not null)
+        {
+            var localSkills = _skillRegistry.GetAll()
+                .Where(skill => skill.Source == SkillSource.Local);
+            registry.RegisterRange(localSkills);
+        }
+
+        if (remoteSkills.Count > 0)
+            registry.RegisterRange(remoteSkills);
+
+        return registry;
+    }
+
+    private async Task<IReadOnlyList<SkillDefinition>> AutoLoadRemoteSkillsAsync(
+        ChatActivity activity,
+        IReadOnlyDictionary<string, string> effectiveMetadata,
+        CancellationToken ct)
+    {
+        if (!ShouldAutoLoadRemoteSkills(activity, effectiveMetadata))
+            return [];
+
+        if (_remoteSkillFetcher is null || _remoteSkillDiscoveries.Count == 0)
+            return [];
+
+        if (!effectiveMetadata.TryGetValue(LLMRequestMetadataKeys.NyxIdAccessToken, out var token) ||
+            string.IsNullOrWhiteSpace(token))
+        {
+            return [];
+        }
+
+        var query = BuildRemoteSkillSearchQuery(activity);
+        if (string.IsNullOrWhiteSpace(query))
+            return [];
+
+        var maxSkills = ResolveRemoteSkillAutoLoadMaxSkills();
+        if (maxSkills == 0)
+            return [];
+
+        using var timeoutCts = CreateRemoteSkillAutoLoadCancellation(ct);
+        var loadCt = timeoutCts.Token;
+
+        var request = new RemoteSkillSearchRequest(
+            AccessToken: token.Trim(),
+            Query: query,
+            Scope: "mixed",
+            Mode: ResolveRemoteSkillSearchMode(),
+            PageSize: maxSkills);
+
+        var loaded = new List<SkillDefinition>(maxSkills);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        try
+        {
+            foreach (var discovery in _remoteSkillDiscoveries)
+            {
+                IReadOnlyList<RemoteSkillSummary> candidates;
+                try
+                {
+                    candidates = await discovery.SearchSkillsAsync(request, loadCt).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Remote skill discovery failed for Lark turn. activity={ActivityId}", activity.Id);
+                    continue;
+                }
+
+                foreach (var candidate in candidates)
+                {
+                    if (loaded.Count >= maxSkills)
+                        return loaded;
+
+                    var key = string.IsNullOrWhiteSpace(candidate.RemoteId) ? candidate.Name : candidate.RemoteId;
+                    if (string.IsNullOrWhiteSpace(key) || !seen.Add(key))
+                        continue;
+
+                    try
+                    {
+                        var skill = await _remoteSkillFetcher.FetchSkillAsync(token.Trim(), key.Trim(), loadCt)
+                            .ConfigureAwait(false);
+                        if (skill is not null)
+                            loaded.Add(skill);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(
+                            ex,
+                            "Remote skill fetch failed for Lark turn. activity={ActivityId} skill={Skill}",
+                            activity.Id,
+                            candidate.Name);
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            _logger.LogWarning("Remote skill auto-load timed out for Lark turn. activity={ActivityId}", activity.Id);
+        }
+
+        return loaded;
+    }
+
+    private bool ShouldAutoLoadRemoteSkills(
+        ChatActivity activity,
+        IReadOnlyDictionary<string, string> effectiveMetadata)
+    {
+        if (_chatOptions?.LarkRemoteSkillAutoLoadEnabled == false)
+            return false;
+
+        if (!effectiveMetadata.TryGetValue(ChannelMetadataKeys.Platform, out var platform) ||
+            string.IsNullOrWhiteSpace(platform))
+        {
+            platform = activity.Conversation?.CanonicalKey ?? activity.ChannelId?.Value ?? string.Empty;
+        }
+
+        return platform.Contains("lark", StringComparison.OrdinalIgnoreCase) ||
+               platform.Contains("feishu", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private int ResolveRemoteSkillAutoLoadMaxSkills()
+    {
+        var configured = _chatOptions?.LarkRemoteSkillAutoLoadMaxSkills ?? DefaultRemoteSkillAutoLoadMaxSkills;
+        return Math.Clamp(configured, 0, MaxRemoteSkillAutoLoadMaxSkills);
+    }
+
+    private string ResolveRemoteSkillSearchMode()
+    {
+        var configured = _chatOptions?.LarkRemoteSkillAutoLoadSearchMode;
+        return string.Equals(configured, "keyword", StringComparison.OrdinalIgnoreCase)
+            ? "keyword"
+            : "semantic";
+    }
+
+    private CancellationTokenSource CreateRemoteSkillAutoLoadCancellation(CancellationToken ct)
+    {
+        var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var configured = _chatOptions?.LarkRemoteSkillAutoLoadTimeoutSeconds ??
+                         DefaultRemoteSkillAutoLoadTimeoutSeconds;
+        var seconds = Math.Clamp(configured, 1, MaxRemoteSkillAutoLoadTimeoutSeconds);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(seconds));
+        return timeoutCts;
+    }
+
+    private static string BuildRemoteSkillSearchQuery(ChatActivity activity)
+    {
+        var query = activity.Content?.Text?.Trim() ?? string.Empty;
+        return query.Length <= MaxRemoteSkillSearchQueryChars
+            ? query
+            : query[..MaxRemoteSkillSearchQueryChars];
     }
 
     private async Task<string?> GenerateWithMetadataAsync(
@@ -122,6 +320,7 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         IReadOnlyDictionary<string, string> effectiveMetadata,
         ToolManager tools,
         IStreamingReplySink? streamingSink,
+        SkillRegistry? turnSkillRegistry,
         CancellationToken ct)
     {
         var history = new global::Aevatar.AI.Core.Chat.ChatHistory
@@ -141,7 +340,7 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
             {
                 Messages =
                 [
-                    ChatMessage.System(BuildSystemPrompt()),
+                    ChatMessage.System(BuildSystemPrompt(turnSkillRegistry)),
                 ],
                 Metadata = new Dictionary<string, string>(effectiveMetadata, StringComparer.Ordinal),
                 Tools = FilterValidTools(tools),
@@ -329,14 +528,15 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         return valid.Length == 0 ? null : valid;
     }
 
-    private string BuildSystemPrompt()
+    private string BuildSystemPrompt(SkillRegistry? turnSkillRegistry = null)
     {
         var prompt = LoadBaseSystemPrompt();
         prompt += NyxIdRelayPromptConfiguration.BuildChannelRuntimeConfigurationSection(_relayOptions);
 
-        if (_skillRegistry != null && _skillRegistry.Count > 0)
+        var registry = turnSkillRegistry ?? _skillRegistry;
+        if (registry != null && registry.Count > 0)
         {
-            var skillSection = _skillRegistry.BuildSystemPromptSection();
+            var skillSection = registry.BuildSystemPromptSection();
             if (!string.IsNullOrEmpty(skillSection))
                 prompt += "\n" + skillSection;
         }

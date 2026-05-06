@@ -64,7 +64,8 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
 
         foreach (var skill in result.Items)
         {
-            var tags = skill.Metadata?.Tags != null ? string.Join(", ", skill.Metadata.Tags) : "";
+            var rawTags = skill.Tags ?? skill.Metadata?.Tags;
+            var tags = rawTags != null ? string.Join(", ", rawTags) : "";
             var visibility = skill.IsPrivate ? "private" : "public";
             lines.Add($"- **{skill.Name}** ({visibility}, {skill.Metadata?.Category ?? "unknown"})");
             lines.Add($"  {skill.Description}");

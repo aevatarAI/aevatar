@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.GAgents.Channel.Abstractions;
 using FluentAssertions;
 using Xunit;
@@ -128,6 +129,111 @@ public sealed class ConversationReplyGeneratorTests
             CancellationToken.None);
 
         reply.Should().Be("ok");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_ForLarkTurn_AutoLoadsRemoteSkillsIntoTurnPrompt()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var discovery = new StubRemoteSkillDiscovery
+        {
+            Results =
+            {
+                new RemoteSkillSummary(
+                    Name: "translate-pro",
+                    Description: "Translate with glossary awareness",
+                    RemoteId: "skill-1"),
+            },
+        };
+        var fetcher = new StubRemoteSkillFetcher
+        {
+            ById =
+            {
+                ["skill-1"] = new SkillDefinition
+                {
+                    Name = "translate-pro",
+                    Description = "Translate with glossary awareness",
+                    Instructions = "Use glossary first.",
+                    Source = SkillSource.Remote,
+                    RemoteId = "skill-1",
+                },
+            },
+        };
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            remoteSkillDiscoveries: [discovery],
+            remoteSkillFetcher: fetcher,
+            chatOptions: new NyxIdChatOptions
+            {
+                LarkRemoteSkillAutoLoadMaxSkills = 1,
+            });
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-auto-skill",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "Translate this launch note into Chinese" },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "nyx-token",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        discovery.Requests.Should().ContainSingle();
+        discovery.Requests[0].AccessToken.Should().Be("nyx-token");
+        discovery.Requests[0].Query.Should().Be("Translate this launch note into Chinese");
+        discovery.Requests[0].Mode.Should().Be("semantic");
+        fetcher.Requests.Should().ContainSingle().Which.Should().Be(("nyx-token", "skill-1"));
+
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        request.Tools.Should().NotBeNull();
+        request.Tools!.Should().Contain(tool => tool.Name == "use_skill");
+        var systemPrompt = request.Messages.First(message => message.Role == "system").Content;
+        systemPrompt.Should().Contain("translate-pro");
+        systemPrompt.Should().Contain("Translate with glossary awareness");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_ForNonLarkTurn_DoesNotAutoLoadRemoteSkills()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var discovery = new StubRemoteSkillDiscovery
+        {
+            Results =
+            {
+                new RemoteSkillSummary("translate-pro", "Translate with glossary awareness", "skill-1"),
+            },
+        };
+        var fetcher = new StubRemoteSkillFetcher();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            remoteSkillDiscoveries: [discovery],
+            remoteSkillFetcher: fetcher);
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-non-lark-auto-skill",
+                Conversation = new ConversationReference { CanonicalKey = "telegram:dm:user-1" },
+                Content = new MessageContent { Text = "Translate this launch note into Chinese" },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "telegram",
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "nyx-token",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        discovery.Requests.Should().BeEmpty();
+        fetcher.Requests.Should().BeEmpty();
+        var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject.Messages
+            .First(message => message.Role == "system").Content;
+        systemPrompt.Should().NotContain("translate-pro");
     }
 
     [Fact]
@@ -491,6 +597,35 @@ public sealed class ConversationReplyGeneratorTests
         {
             Emissions.Add(accumulatedText);
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class StubRemoteSkillDiscovery : IRemoteSkillDiscovery
+    {
+        public List<RemoteSkillSearchRequest> Requests { get; } = [];
+        public List<RemoteSkillSummary> Results { get; } = [];
+
+        public Task<IReadOnlyList<RemoteSkillSummary>> SearchSkillsAsync(
+            RemoteSkillSearchRequest request,
+            CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            return Task.FromResult<IReadOnlyList<RemoteSkillSummary>>(Results.ToArray());
+        }
+    }
+
+    private sealed class StubRemoteSkillFetcher : IRemoteSkillFetcher
+    {
+        public Dictionary<string, SkillDefinition> ById { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public List<(string Token, string NameOrId)> Requests { get; } = [];
+
+        public Task<SkillDefinition?> FetchSkillAsync(
+            string accessToken,
+            string nameOrId,
+            CancellationToken ct = default)
+        {
+            Requests.Add((accessToken, nameOrId));
+            return Task.FromResult(ById.GetValueOrDefault(nameOrId));
         }
     }
 

@@ -22,6 +22,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<OrnnSkillClient>();
         services.TryAddSingleton<IRemoteSkillFetcher, OrnnRemoteSkillFetcher>();
         services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IRemoteSkillDiscovery, OrnnRemoteSkillDiscovery>());
+        services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IAgentToolSource, OrnnAgentToolSource>());
         return services;
     }

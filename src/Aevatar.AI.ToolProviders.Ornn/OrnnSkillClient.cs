@@ -34,13 +34,23 @@ public sealed class OrnnSkillClient
         string scope = "mixed",
         int page = 1,
         int pageSize = 20,
+        string mode = "keyword",
         CancellationToken ct = default)
     {
         var baseUrl = _options.BaseUrl?.TrimEnd('/');
         if (string.IsNullOrWhiteSpace(baseUrl))
             return new OrnnSearchResult { Items = [] };
 
-        var url = $"{baseUrl}/api/web/skill-search?query={Uri.EscapeDataString(query)}&mode=keyword&scope={Uri.EscapeDataString(scope)}&page={page}&pageSize={pageSize}";
+        var normalizedMode = string.Equals(mode, "semantic", StringComparison.OrdinalIgnoreCase)
+            ? "semantic"
+            : "keyword";
+        var normalizedScope = scope.ToLowerInvariant() is "public" or "private" or "mixed"
+            ? scope.ToLowerInvariant()
+            : "mixed";
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, 100);
+
+        var url = $"{baseUrl}/api/web/skill-search?query={Uri.EscapeDataString(query)}&mode={normalizedMode}&scope={Uri.EscapeDataString(normalizedScope)}&page={page}&pageSize={pageSize}";
 
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
@@ -115,6 +125,7 @@ public sealed class OrnnSkillSummary
     public string? Name { get; set; }
     public string? Description { get; set; }
     public bool IsPrivate { get; set; }
+    public List<string>? Tags { get; set; }
     public OrnnSkillMetadata? Metadata { get; set; }
 }
 
