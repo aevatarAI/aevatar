@@ -19,9 +19,23 @@ jest.mock("@/shared/api/scopeRuntimeApi", () => ({
 jest.mock("@/shared/studio/api", () => ({
   studioApi: {
     getAuthSession: jest.fn(),
+    listTeams: jest.fn(),
     listMembers: jest.fn(),
   },
 }));
+
+const defaultTeams = [
+  {
+    teamId: "t-support",
+    scopeId: "scope-a",
+    displayName: "客服团队",
+    description: "负责处理用户问题",
+    lifecycleStage: "active",
+    memberCount: 1,
+    createdAt: "2026-05-01T09:00:00Z",
+    updatedAt: "2026-05-01T10:02:00Z",
+  },
+];
 
 const defaultMembers = [
   {
@@ -33,6 +47,7 @@ const defaultMembers = [
     lifecycleStage: "bind_ready",
     publishedServiceId: "service-alpha",
     lastBoundRevisionId: "rev-2",
+    teamId: "t-support",
     createdAt: "2026-04-13T09:00:00Z",
     updatedAt: "2026-04-13T10:02:00Z",
   },
@@ -126,30 +141,36 @@ describe("TeamsHomePage", () => {
       members: defaultMembers,
       nextPageToken: null,
     });
+    (studioApi.listTeams as jest.Mock).mockResolvedValue({
+      scopeId: "scope-a",
+      teams: defaultTeams,
+      nextPageToken: null,
+    });
     (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValue(defaultServices);
     (scopeRuntimeApi.listMemberRuns as jest.Mock).mockImplementation(
       async (_scopeId: string, memberId: string) => buildMemberRunCatalog(memberId),
     );
   });
 
-  it("renders the team homepage around member-specific runtime facts", async () => {
+  it("renders the team homepage around real Team roster with member runtime hints", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
     expect(await screen.findByRole("button", { name: "查看团队" })).toBeTruthy();
     expect(screen.getByText("Aevatar / Teams")).toBeTruthy();
     expect(screen.getByText("我的 AI 团队")).toBeTruthy();
     expect(screen.getByText("当前 Scope")).toBeTruthy();
-    expect(screen.getAllByText("团队成员").length).toBeGreaterThan(0);
+    expect(screen.getByText("真实 Team")).toBeTruthy();
+    expect(screen.getByText("Team roster")).toBeTruthy();
     expect(screen.getByText("运行正常")).toBeTruthy();
     expect(screen.getByText("需要处理")).toBeTruthy();
     expect(screen.getByRole("button", { name: "组建新团队" })).toBeTruthy();
-    expect(screen.getByText("客服团队")).toBeTruthy();
-    expect(screen.getByText("成员标识：member-alpha")).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 3, name: "客服团队" })).toBeTruthy();
+    expect(screen.getByText("Team 标识：t-support")).toBeTruthy();
     expect(screen.getByText("客服运行时")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "切换到列表视图" })).toBeNull();
   });
 
-  it("opens Studio from the member card without falling back to service-shaped member routes", async () => {
+  it("opens Studio from the team card actions", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
     fireEvent.click(await screen.findByRole("button", { name: "更多" }));
@@ -161,26 +182,39 @@ describe("TeamsHomePage", () => {
 
     const params = new URLSearchParams(window.location.search);
     expect(params.get("scopeId")).toBe("scope-a");
-    expect(params.get("member")).toBe("member:member-alpha");
+    expect(params.get("teamId")).toBeNull();
     expect(params.get("tab")).toBe("studio");
   });
 
-  it("routes Create Team directly into Studio member creation", async () => {
+  it("opens Studio member creation with Team context from the team card actions", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    fireEvent.click(await screen.findByRole("button", { name: "组建新团队" }));
+    fireEvent.click(await screen.findByRole("button", { name: "更多" }));
+    fireEvent.click(await screen.findByText("新增成员"));
 
-    expect(window.location.pathname).toBe("/studio");
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/studio");
+    });
+
     const params = new URLSearchParams(window.location.search);
     expect(params.get("scopeId")).toBe("scope-a");
+    expect(params.get("teamId")).toBe("t-support");
     expect(params.get("tab")).toBe("studio");
     expect(params.get("intent")).toBe("create-member");
   });
 
-  it("does not show the roster view toggle when only one member is visible", async () => {
+  it("routes Create Team to the real create-team page", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    await screen.findByText("客服团队");
+    fireEvent.click(await screen.findByRole("button", { name: "组建新团队" }));
+
+    expect(window.location.pathname).toBe("/teams/new");
+  });
+
+  it("does not show the roster view toggle when only one Team is visible", async () => {
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    await screen.findByRole("heading", { level: 3, name: "客服团队" });
     expect(screen.queryByRole("button", { name: "切换到列表视图" })).toBeNull();
     expect(screen.queryByRole("button", { name: "切换到卡片视图" })).toBeNull();
   });
@@ -192,7 +226,7 @@ describe("TeamsHomePage", () => {
 
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    expect(await screen.findByText("客服团队")).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 3, name: "客服团队" })).toBeTruthy();
     expect(screen.getByText("部分团队信号暂时不可见")).toBeTruthy();
     expect(
       screen.queryByText("No stub for /api/scopes/scope-a/members/member-alpha/runs"),
@@ -209,6 +243,7 @@ describe("TeamsHomePage", () => {
     });
 
     const params = new URLSearchParams(window.location.search);
+    expect(params.get("teamId")).toBe("t-support");
     expect(params.get("memberId")).toBe("member-alpha");
     expect(params.get("serviceId")).toBe("service-alpha");
     expect(params.get("runId")).toBe("run-latest");
@@ -247,7 +282,24 @@ describe("TeamsHomePage", () => {
     });
   });
 
-  it("renders one card per member instead of collapsing the homepage into a scope singleton", async () => {
+  it("renders one card per Team instead of using member cards as teams", async () => {
+    (studioApi.listTeams as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      teams: [
+        ...defaultTeams,
+        {
+          teamId: "t-joker",
+          scopeId: "scope-a",
+          displayName: "joker",
+          description: "讽刺评论 Team",
+          lifecycleStage: "active",
+          memberCount: 1,
+          createdAt: "2026-05-01T09:10:00Z",
+          updatedAt: "2026-05-01T10:10:00Z",
+        },
+      ],
+      nextPageToken: null,
+    });
     (studioApi.listMembers as jest.Mock).mockResolvedValueOnce({
       scopeId: "scope-a",
       members: [
@@ -261,6 +313,7 @@ describe("TeamsHomePage", () => {
           lifecycleStage: "bind_ready",
           publishedServiceId: "service-joker",
           lastBoundRevisionId: "rev-joker",
+          teamId: "t-joker",
           createdAt: "2026-04-13T09:10:00Z",
           updatedAt: "2026-04-13T10:10:00Z",
         },
@@ -291,11 +344,44 @@ describe("TeamsHomePage", () => {
 
     expect(await screen.findByRole("heading", { level: 3, name: "客服团队" })).toBeTruthy();
     expect(screen.getByRole("heading", { level: 3, name: "joker" })).toBeTruthy();
-    expect(screen.getByText("成员标识：member-joker")).toBeTruthy();
+    expect(screen.getByText("Team 标识：t-joker")).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "查看团队" })).toHaveLength(2);
   });
 
-  it("shows an empty member roster state without querying member runs", async () => {
+  it("shows unassigned members without promoting them into team cards", async () => {
+    (studioApi.listMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      members: [
+        {
+          memberId: "member-loose",
+          scopeId: "scope-a",
+          displayName: "未归队成员",
+          description: "还没有 Team",
+          implementationKind: "workflow",
+          lifecycleStage: "created",
+          publishedServiceId: "",
+          lastBoundRevisionId: null,
+          teamId: null,
+          createdAt: "2026-04-13T09:10:00Z",
+          updatedAt: "2026-04-13T10:10:00Z",
+        },
+      ],
+      nextPageToken: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    expect(await screen.findByText("存在未归队成员")).toBeTruthy();
+    expect(screen.getByText("Team 标识：t-support")).toBeTruthy();
+    expect(screen.queryByRole("heading", { level: 3, name: "未归队成员" })).toBeNull();
+  });
+
+  it("shows an empty Team roster state without querying member runs", async () => {
+    (studioApi.listTeams as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      teams: [],
+      nextPageToken: null,
+    });
     (studioApi.listMembers as jest.Mock).mockResolvedValueOnce({
       scopeId: "scope-a",
       members: [],
@@ -306,13 +392,18 @@ describe("TeamsHomePage", () => {
 
     expect(
       await screen.findByText(
-        "当前 Scope 下还没有创建任何 member。进入 Studio 创建成员后，这里会按成员逐个展示。",
+        "当前 Scope 下还没有创建任何 Team。创建 Team 后，这里会按后端 roster 展示真实团队。",
       ),
     ).toBeTruthy();
     expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
   });
 
-  it("opens Studio from the empty member roster state", async () => {
+  it("opens the real create-team page from the empty Team roster state", async () => {
+    (studioApi.listTeams as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-a",
+      teams: [],
+      nextPageToken: null,
+    });
     (studioApi.listMembers as jest.Mock).mockResolvedValueOnce({
       scopeId: "scope-a",
       members: [],
@@ -321,14 +412,8 @@ describe("TeamsHomePage", () => {
 
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    fireEvent.click(await screen.findByRole("button", { name: "打开 Studio" }));
+    fireEvent.click(await screen.findByRole("button", { name: "组建新团队" }));
 
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/studio");
-    });
-
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("scopeId")).toBe("scope-a");
-    expect(params.get("tab")).toBe("studio");
+    expect(window.location.pathname).toBe("/teams/new");
   });
 });

@@ -19,6 +19,7 @@ type StudioRouteOptions = {
   scopeId?: string;
   memberId?: string;
   memberKey?: StudioMemberKey | string;
+  teamId?: string;
   step?: StudioStep;
   focus?: StudioBuildFocus;
   tab?: StudioTab;
@@ -133,6 +134,9 @@ export function buildStudioRoute(options?: StudioRouteOptions): string {
   const params = new URLSearchParams();
   if (options?.scopeId?.trim()) {
     params.set('scopeId', options.scopeId.trim());
+  }
+  if (options?.teamId?.trim()) {
+    params.set('teamId', options.teamId.trim());
   }
   const memberKey = normalizeStudioMemberKey(
     options?.memberKey,

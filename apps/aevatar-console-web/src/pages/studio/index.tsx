@@ -155,6 +155,7 @@ import {
 
 type StudioRouteState = {
   scopeId: string;
+  teamId: string;
   memberKey: string;
   memberId: string;
   step: StudioStep;
@@ -1084,6 +1085,7 @@ function readStudioRouteState(search?: string): StudioRouteState {
   if (typeof window === 'undefined' && typeof search !== 'string') {
     return {
       scopeId: '',
+      teamId: '',
       memberKey: '',
       memberId: '',
       step: 'build',
@@ -1107,6 +1109,7 @@ function readStudioRouteState(search?: string): StudioRouteState {
   const routeMember = readStudioRouteMemberFromParams(params);
   return {
     scopeId: trimOptional(params.get('scopeId')),
+    teamId: trimOptional(params.get('teamId')),
     memberKey: routeMember.key,
     memberId: routeMember.memberId,
     step: parseStudioStep(params.get('step')),
@@ -2300,6 +2303,7 @@ const StudioPage: React.FC = () => {
   const [createMemberKind, setCreateMemberKind] = useState<BuildMode>('workflow');
   const [createMemberName, setCreateMemberName] = useState('');
   const [createMemberDirectoryId, setCreateMemberDirectoryId] = useState('');
+  const [createMemberTeamId, setCreateMemberTeamId] = useState('');
   const [runPrompt, setRunPrompt] = useState(() => readStudioRouteState().prompt);
   const [runPending, setRunPending] = useState(false);
   const [runNotice, setRunNotice] = useState<DraftRunNotice | null>(null);
@@ -4187,6 +4191,7 @@ const StudioPage: React.FC = () => {
       return;
     }
 
+    setCreateMemberTeamId(trimOptional(routeState.teamId));
     setCreateMemberName(suggestedCreateWorkflowName);
     setCreateMemberKind('workflow');
     setCreateMemberDirectoryId(
@@ -4197,6 +4202,7 @@ const StudioPage: React.FC = () => {
     confirmScriptsStudioLeave,
     inventoryDirectoryId,
     inventoryDirectoryOptions,
+    routeState.teamId,
     suggestedCreateWorkflowName,
   ]);
 
@@ -4205,6 +4211,7 @@ const StudioPage: React.FC = () => {
       return;
     }
 
+    setCreateMemberTeamId(trimOptional(routeState.teamId));
     setCreateMemberName(suggestedCreateScriptName);
     setCreateMemberKind('script');
     setCreateMemberDirectoryId(
@@ -4215,6 +4222,7 @@ const StudioPage: React.FC = () => {
     confirmScriptsStudioLeave,
     inventoryDirectoryId,
     inventoryDirectoryOptions,
+    routeState.teamId,
     suggestedCreateScriptName,
   ]);
 
@@ -4251,6 +4259,7 @@ const StudioPage: React.FC = () => {
     }
 
     setCreateMemberModalOpen(false);
+    setCreateMemberTeamId('');
   }, [inventoryBusyKey]);
 
   const handleCreateMember = useCallback(async (selectedCreateMemberKind: BuildMode) => {
@@ -4286,9 +4295,11 @@ const StudioPage: React.FC = () => {
         setSelectedScriptId(scriptId);
         setScriptBuildState(null);
         setCreateMemberModalOpen(false);
+        setCreateMemberTeamId('');
         history.push(
           buildStudioRoute({
             scopeId: resolvedStudioScopeId || undefined,
+            teamId: createMemberTeamId || undefined,
             focus: `script:${scriptId}`,
             step: 'build',
             tab: 'scripts',
@@ -4301,9 +4312,11 @@ const StudioPage: React.FC = () => {
       }
 
       setCreateMemberModalOpen(false);
+      setCreateMemberTeamId('');
       history.push(
         buildStudioRoute({
           scopeId: resolvedStudioScopeId || undefined,
+          teamId: createMemberTeamId || undefined,
           step: 'build',
           tab: 'gagents',
         }),
@@ -4364,6 +4377,7 @@ const StudioPage: React.FC = () => {
       setCreateMemberModalOpen(false);
 
       if (!resolvedStudioScopeId) {
+        setCreateMemberTeamId('');
         void message.success(
           `Created workflow draft for member ${workflowName}. Connect a scope to register the backend member authority.`,
         );
@@ -4375,6 +4389,7 @@ const StudioPage: React.FC = () => {
           scopeId: resolvedStudioScopeId,
           displayName: workflowName,
           implementationKind: 'workflow',
+          ...(createMemberTeamId ? { teamId: createMemberTeamId } : {}),
         });
         await queryClient.invalidateQueries({
           queryKey: ['studio-scope-members', resolvedStudioScopeId],
@@ -4389,6 +4404,7 @@ const StudioPage: React.FC = () => {
             : 'Workflow draft created, but Studio could not register the member authority.',
         );
       }
+      setCreateMemberTeamId('');
     } catch (error) {
       void message.error(
         error instanceof Error
@@ -4406,6 +4422,7 @@ const StudioPage: React.FC = () => {
     confirmScriptsStudioLeave,
     createMemberDirectoryId,
     createMemberName,
+    createMemberTeamId,
     history,
     inventoryDirectoryId,
     queryClient,
@@ -5767,6 +5784,7 @@ const StudioPage: React.FC = () => {
 
     history.replace(buildStudioRoute({
       scopeId: resolvedStudioScopeId || undefined,
+      teamId: routeState.teamId || undefined,
       memberKey: persistedMemberKey,
       step,
       focus: persistedFocus,
@@ -5791,6 +5809,7 @@ const StudioPage: React.FC = () => {
     routeBuildFocus.kind,
     routeBuildFocus.value,
     routeSelectedMemberKey,
+    routeState.teamId,
     runPrompt,
     selectedWorkflowId,
     selectedExecutionId,

@@ -165,6 +165,28 @@ function mockCreateMembersCatalog() {
   };
 }
 
+function mockCreateTeamMembersCatalog() {
+  return {
+    scopeId: "scope-1",
+    members: [
+      {
+        memberId: "member-team-alpha",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        displayName: "Team Alpha Operator",
+        description: "真实 Team roster 成员",
+        implementationKind: "workflow",
+        lifecycleStage: "bind_ready",
+        publishedServiceId: "alpha-service",
+        lastBoundRevisionId: "rev-alpha",
+        createdAt: "2026-04-09T08:00:00Z",
+        updatedAt: "2026-04-09T09:00:00Z",
+      },
+    ],
+    nextPageToken: null,
+  };
+}
+
 function mockCreateRunAudit(scopeId: string, runId: string) {
   return {
     summary: {
@@ -604,6 +626,7 @@ jest.mock("@/shared/studio/api", () => ({
       ],
     })),
     listMembers: jest.fn(async () => mockCreateMembersCatalog()),
+    listTeamMembers: jest.fn(async () => mockCreateTeamMembersCatalog()),
     parseYaml: jest.fn(async () => ({
       document: {
         name: "support-triage",
@@ -649,6 +672,10 @@ describe("TeamDetailPage", () => {
     (studioApi.listMembers as jest.Mock).mockReset();
     (studioApi.listMembers as jest.Mock).mockImplementation(
       async () => mockCreateMembersCatalog(),
+    );
+    (studioApi.listTeamMembers as jest.Mock).mockReset();
+    (studioApi.listTeamMembers as jest.Mock).mockImplementation(
+      async () => mockCreateTeamMembersCatalog(),
     );
   });
 
@@ -957,6 +984,26 @@ describe("TeamDetailPage", () => {
     expect(screen.getAllByText("serviceId").length).toBeGreaterThan(0);
     expect(screen.getAllByText("default").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "打开 Services" })).toBeTruthy();
+  });
+
+  it("uses the real Team roster when teamId is selected", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1?scopeId=scope-1&teamId=t-alpha&tab=members",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("真实 Team roster")).toBeTruthy();
+    expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
+    expect(screen.getByText("真实 Team roster 成员")).toBeTruthy();
+    expect(screen.getByText("member-team-alpha")).toBeTruthy();
+    expect(screen.getByText("alph...vice")).toBeTruthy();
+
+    await waitFor(() => {
+      expect(studioApi.listTeamMembers).toHaveBeenCalledWith("scope-1", "t-alpha");
+    });
   });
 
   it("shows a team-first event stream with member mapping", async () => {

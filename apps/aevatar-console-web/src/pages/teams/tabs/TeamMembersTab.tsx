@@ -21,6 +21,17 @@ type MemberCompositionRow = {
   readonly summary: string;
 };
 
+type TeamRosterMemberRow = {
+  readonly description: string;
+  readonly implementationKind: string;
+  readonly key: string;
+  readonly lifecycleLabel: string;
+  readonly lifecycleStyle: React.CSSProperties;
+  readonly memberId: string;
+  readonly name: string;
+  readonly serviceId: string;
+};
+
 type MemberIdentityRow = {
   readonly actorId: string;
   readonly cardStyle: React.CSSProperties;
@@ -42,6 +53,10 @@ type TeamMembersTabProps = {
   readonly onOpenRuntimeExplorer: () => void;
   readonly onOpenServices: () => void;
   readonly onSelectActor: (actorId: string) => void;
+  readonly rosterError?: boolean;
+  readonly rosterLoading?: boolean;
+  readonly rosterRows?: readonly TeamRosterMemberRow[];
+  readonly rosterTeamId?: string;
 };
 
 const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
@@ -52,10 +67,14 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
   onOpenRuntimeExplorer,
   onOpenServices,
   onSelectActor,
+  rosterError = false,
+  rosterLoading = false,
+  rosterRows = [],
+  rosterTeamId = "",
 }) => {
   const { token } = theme.useToken();
   const showMembersOverviewEmpty =
-    compositionRows.length === 0 && identityRows.length === 0;
+    compositionRows.length === 0 && identityRows.length === 0 && rosterRows.length === 0;
   const actionButtonStyle: React.CSSProperties = {
     borderRadius: 14,
     height: 36,
@@ -103,6 +122,109 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <AevatarPanel
+        title="真实 Team roster"
+        extra={
+          <Typography.Text style={{ fontSize: 12 }} type="secondary">
+            teamId · memberId · implementation
+          </Typography.Text>
+        }
+      >
+        {rosterLoading ? (
+          <AevatarInspectorEmpty
+            compact
+            title="正在读取 Team roster"
+            description="正在从后端 Team API 读取这支团队的成员清单。"
+          />
+        ) : rosterError ? (
+          <AevatarInspectorEmpty
+            compact
+            title="Team roster 暂不可见"
+            description="当前无法读取后端 Team roster，下面只保留运行时观察到的身份信号。"
+          />
+        ) : rosterRows.length > 0 ? (
+          <div
+            style={{
+              border: "1px solid var(--ant-colorBorderSecondary)",
+              borderRadius: 18,
+              overflow: "hidden",
+            }}
+          >
+            <div style={{ overflowX: "auto" }}>
+              <div style={{ minWidth: 820 }}>
+                <div
+                  style={{
+                    background: "var(--ant-colorBgContainerDisabled)",
+                    borderBottom: "1px solid var(--ant-colorBorderSecondary)",
+                    color: "var(--ant-colorTextSecondary)",
+                    display: "grid",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    gap: 16,
+                    gridTemplateColumns:
+                      "minmax(160px, 1.2fr) minmax(220px, 1.4fr) minmax(120px, 0.8fr) minmax(120px, 0.8fr)",
+                    padding: "12px 16px",
+                  }}
+                >
+                  <span>成员</span>
+                  <span>职责</span>
+                  <span>实现</span>
+                  <span>服务</span>
+                </div>
+                {rosterRows.map((row, index) => (
+                  <div
+                    key={row.key}
+                    style={{
+                      alignItems: "center",
+                      borderTop:
+                        index === 0 ? "none" : "1px solid var(--ant-colorBorderSecondary)",
+                      display: "grid",
+                      gap: 16,
+                      gridTemplateColumns:
+                        "minmax(160px, 1.2fr) minmax(220px, 1.4fr) minmax(120px, 0.8fr) minmax(120px, 0.8fr)",
+                      padding: "14px 16px",
+                    }}
+                  >
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+                      <Typography.Text strong>{row.name}</Typography.Text>
+                      <Typography.Text
+                        style={{ fontFamily: factValueFontFamily, fontSize: 12 }}
+                        type="secondary"
+                      >
+                        {row.memberId}
+                      </Typography.Text>
+                    </div>
+                    <FactLine rows={2} text={row.description || `归属 Team ${rosterTeamId || "--"}`} />
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
+                      <DetailPill compact style={row.lifecycleStyle} text={row.lifecycleLabel} />
+                      <Typography.Text style={{ fontFamily: factValueFontFamily, fontSize: 12 }}>
+                        {row.implementationKind}
+                      </Typography.Text>
+                    </div>
+                    <CompactFactValue
+                      color="var(--ant-color-text-secondary)"
+                      strong={false}
+                      value={row.serviceId}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : rosterTeamId ? (
+          <AevatarInspectorEmpty
+            compact
+            title="这支 Team 还没有成员"
+            description="Team 已经是后端事实，但当前 roster 为空。新增 member 后会出现在这里。"
+          />
+        ) : (
+          <AevatarInspectorEmpty
+            compact
+            title="尚未选中真实 Team"
+            description="当前路由还没有 teamId，所以只能展示运行时观察到的成员身份。"
+          />
+        )}
+      </AevatarPanel>
       <AevatarPanel
         title="参与者结构"
         extra={
