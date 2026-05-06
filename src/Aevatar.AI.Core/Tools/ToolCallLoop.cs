@@ -134,6 +134,7 @@ public sealed class ToolCallLoop
                                 LLMResponse = new LLMResponse
                                 {
                                     Content = parsed.CleanedContent,
+                                    ReasoningContent = response.ReasoningContent,
                                     ToolCalls = parsed.ToolCalls,
                                 },
                             };
@@ -194,7 +195,13 @@ public sealed class ToolCallLoop
             accumulatedContent = null;
 
             // 记录 assistant tool_call 消息
-            messages.Add(new ChatMessage { Role = "assistant", ToolCalls = response.ToolCalls });
+            messages.Add(new ChatMessage
+            {
+                Role = "assistant",
+                Content = response.Content,
+                ReasoningContent = response.ReasoningContent,
+                ToolCalls = response.ToolCalls,
+            });
             await ExecuteToolCallsCoreAsync(response.ToolCalls!, messages, ct);
         }
 

@@ -515,6 +515,16 @@ public class ToolCallLoopTests
         var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 3, CancellationToken.None);
 
         result.Should().Be("final");
+        var toolCallAssistant = messages.Single(m => m.Role == "assistant" && m.ToolCalls is { Count: 1 });
+        toolCallAssistant.Content.Should().Be("will use tool");
+        toolCallAssistant.ReasoningContent.Should().Be("first-thought");
+        provider.Requests.Should().HaveCount(2);
+        provider.Requests[1].Messages.Should().Contain(m =>
+            m.Role == "assistant" &&
+            m.ToolCalls != null &&
+            m.ToolCalls.Count == 1 &&
+            m.Content == "will use tool" &&
+            m.ReasoningContent == "first-thought");
         var finalAssistant = messages.Last(m => m.Role == "assistant");
         finalAssistant.ReasoningContent.Should().Be("second-thought");
     }

@@ -412,6 +412,7 @@ public sealed class ChatRuntime
                                 LLMResponse = new LLMResponse
                                 {
                                     Content = roundResult.Content,
+                                    ReasoningContent = roundResult.ReasoningContent,
                                     ToolCalls = roundResult.ToolCalls,
                                 },
                             };
@@ -437,6 +438,8 @@ public sealed class ChatRuntime
                         var assistantToolCallMessage = new ChatMessage
                         {
                             Role = "assistant",
+                            Content = roundResult.Content,
+                            ReasoningContent = roundResult.ReasoningContent,
                             ToolCalls = roundResult.ToolCalls,
                         };
                         messages.Add(assistantToolCallMessage);
