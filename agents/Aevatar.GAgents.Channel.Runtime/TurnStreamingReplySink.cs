@@ -52,6 +52,7 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
     private readonly string _registrationId;
     private readonly ChatActivity _activityTemplate;
     private readonly TimeSpan _throttle;
+    private readonly int _maxInterimChunks;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger? _logger;
 
@@ -78,7 +79,8 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
         ChatActivity activityTemplate,
         TimeSpan throttle,
         TimeProvider timeProvider,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        int maxInterimChunks = int.MaxValue)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         if (string.IsNullOrWhiteSpace(targetActorId))
@@ -90,6 +92,7 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
         _registrationId = registrationId ?? string.Empty;
         _activityTemplate = activityTemplate ?? throw new ArgumentNullException(nameof(activityTemplate));
         _throttle = throttle < TimeSpan.Zero ? TimeSpan.Zero : throttle;
+        _maxInterimChunks = maxInterimChunks < 0 ? 0 : maxInterimChunks;
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _logger = logger;
     }
@@ -155,6 +158,19 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
                 // any subsequent ready event.
                 _pendingText = string.Empty;
                 _hasPending = false;
+                return;
+            }
+
+            // Lark/Feishu refuses message edits past a per-message cap (~20 in mainnet, code
+            // 230072). Once that cap is reached the platform rejects every subsequent edit
+            // including the final flush, leaving the user with a truncated reply. Cap interim
+            // dispatches here so the final always has headroom; we still stash the latest text
+            // so FinalizeAsync can dispatch the complete content when the stream ends.
+            if (!isFinal && _chunksEmitted >= _maxInterimChunks)
+            {
+                _pendingText = text;
+                _hasPending = true;
+                CancelTimerLocked();
                 return;
             }
 
@@ -259,13 +275,14 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
     {
         var current = firstText;
         TaskCompletionSource<bool>? drainSignal = null;
+        TimeSpan? armTimerDelay = null;
         try
         {
             while (true)
             {
                 await DispatchOneAsync(current, ct).ConfigureAwait(false);
 
-                string? next;
+                string? next = null;
                 lock (_lock)
                 {
                     if (_disposed || !_hasPending)
@@ -284,6 +301,37 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
                         drainSignal = _drainTcs;
                         _drainTcs = null;
                         break;
+                    }
+
+                    var nextIsFinal = _drainTcs is not null;
+
+                    // Stop dispatching interim chunks once the cap is reached. The pending
+                    // stash remains so FinalizeAsync (which bypasses the cap) still has the
+                    // freshest text to dispatch when the stream ends.
+                    if (!nextIsFinal && _chunksEmitted >= _maxInterimChunks)
+                    {
+                        _dispatchInProgress = false;
+                        drainSignal = _drainTcs;
+                        _drainTcs = null;
+                        break;
+                    }
+
+                    // Throttle gate between dispatches. Without this, the loop drains stashed
+                    // text at network round-trip pace (~50ms) and exhausts the platform-side
+                    // per-message edit cap (Lark code 230072). When the throttle window has
+                    // not elapsed since the last emit, hand off to the deferred flush timer
+                    // and let DispatchLoopAsync return so callers (OnDeltaAsync) are not
+                    // blocked on the throttle. Final dispatches bypass the throttle so the
+                    // user sees the complete text immediately when the stream ends.
+                    if (!nextIsFinal && _throttle > TimeSpan.Zero)
+                    {
+                        var elapsed = _timeProvider.GetUtcNow() - _lastEmitAt;
+                        if (elapsed < _throttle)
+                        {
+                            _dispatchInProgress = false;
+                            armTimerDelay = _throttle - elapsed;
+                            break;
+                        }
                     }
 
                     next = _pendingText;
@@ -305,6 +353,25 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
             }
             errSignal?.TrySetException(ex);
             throw;
+        }
+
+        // Arm the deferred-flush timer if the loop exited mid-throttle. The timer fires
+        // OnFlushTimerFired which will start a fresh DispatchLoopAsync with the latest
+        // _pendingText. Done outside the lock so the timer callback registration is not
+        // held under our critical section.
+        if (armTimerDelay is { } delay)
+        {
+            lock (_lock)
+            {
+                if (!_disposed && _hasPending && _flushTimer is null)
+                {
+                    _flushTimer = _timeProvider.CreateTimer(
+                        OnFlushTimerFired,
+                        state: null,
+                        dueTime: delay,
+                        period: Timeout.InfiniteTimeSpan);
+                }
+            }
         }
 
         drainSignal?.TrySetResult(true);

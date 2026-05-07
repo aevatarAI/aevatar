@@ -241,6 +241,7 @@ public sealed class ChannelLlmReplyInboxRuntime :
             return null;
 
         var throttle = TimeSpan.FromMilliseconds(Math.Max(0, _relayOptions.StreamingFlushIntervalMs));
+        var maxInterimChunks = Math.Max(0, _relayOptions.StreamingMaxInterimChunks);
         return new TurnStreamingReplySink(
             _actorDispatchPort,
             targetActorId,
@@ -249,7 +250,8 @@ public sealed class ChannelLlmReplyInboxRuntime :
             request.Activity.Clone(),
             throttle,
             _timeProvider,
-            _logger);
+            _logger,
+            maxInterimChunks);
     }
 
     private async Task<IReadOnlyDictionary<string, string>> BuildEffectiveMetadataAsync(

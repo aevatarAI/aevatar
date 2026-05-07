@@ -45,6 +45,16 @@ public class NyxIdRelayOptions
     public int StreamingFlushIntervalMs { get; set; } = 750;
 
     /// <summary>
+    /// Maximum number of interim (non-final) edit dispatches per turn. Lark refuses message
+    /// edits beyond a per-message cap (observed ~20 in mainnet, code 230072
+    /// "The message has reached the number of times it can be edited"); once that cap is
+    /// reached, even the final edit is rejected and the user sees a truncated reply. Capping
+    /// interim chunks here leaves headroom so the final flush always lands. Long replies
+    /// freeze on the last interim until the final fires — that is preferable to truncation.
+    /// </summary>
+    public int StreamingMaxInterimChunks { get; set; } = 15;
+
+    /// <summary>
     /// Placeholder text emitted as the first streaming chunk before the LLM produces any delta.
     /// Guarantees a visible "working" state within the outbound RTT even when the LLM suffers
     /// cold-start, router handoff, or tool-call latency before the first token. Set to empty
