@@ -15,8 +15,12 @@ export type TeamTabOption = {
 
 type TeamActionRailProps = {
   readonly conversationActionLabel: string;
+  readonly editTeamDisabled?: boolean;
+  readonly editTeamLabel: string;
+  readonly editTeamHint?: string;
   readonly onOpenConversation: () => void;
   readonly onOpenServiceMapping: () => void;
+  readonly onOpenTeamEditor: () => void;
   readonly onOpenTeamBuilder: () => void;
   readonly serviceMappingDisabled?: boolean;
   readonly serviceMappingHint?: string;
@@ -61,8 +65,12 @@ export const TeamDetailEmptyState: React.FC = () => (
 
 export const TeamActionRail: React.FC<TeamActionRailProps> = ({
   conversationActionLabel,
+  editTeamDisabled = false,
+  editTeamLabel,
+  editTeamHint,
   onOpenConversation,
   onOpenServiceMapping,
+  onOpenTeamEditor,
   onOpenTeamBuilder,
   serviceMappingDisabled = false,
   serviceMappingHint,
@@ -78,6 +86,14 @@ export const TeamActionRail: React.FC<TeamActionRailProps> = ({
       type="primary"
     >
       {serviceMappingActionLabel}
+    </Button>
+    <Button
+      disabled={editTeamDisabled}
+      onClick={onOpenTeamEditor}
+      style={topActionButtonStyle}
+      title={editTeamDisabled ? editTeamHint : undefined}
+    >
+      {editTeamLabel}
     </Button>
     <Button onClick={onOpenConversation} style={topActionButtonStyle}>
       {conversationActionLabel}
