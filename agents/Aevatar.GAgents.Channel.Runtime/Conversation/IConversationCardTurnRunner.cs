@@ -46,7 +46,14 @@ public interface IConversationCardTurnRunner
     /// from the last interim flush, writes one more element-content update so the persisted
     /// card matches the LLM's final output.
     /// </summary>
+    /// <param name="referenceActivity">
+    /// Carries <c>TransportExtras.NyxUserAccessToken</c> for the proxy call. Stream chunk
+    /// methods read it from the chunk's own activity; finalize is invoked from the
+    /// <c>LlmReplyReadyEvent</c> path so the actor passes the event's reference activity
+    /// here instead of a chunk.
+    /// </param>
     Task<ConversationCardFinalizeResult> RunCardFinalizeAsync(
+        ChatActivity referenceActivity,
         string cardId,
         string elementId,
         string finalText,
@@ -149,6 +156,7 @@ public sealed class NullConversationCardTurnRunner : IConversationCardTurnRunner
             "no IConversationCardTurnRunner registered"));
 
     public Task<ConversationCardFinalizeResult> RunCardFinalizeAsync(
+        ChatActivity referenceActivity,
         string cardId,
         string elementId,
         string finalText,

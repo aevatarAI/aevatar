@@ -41,6 +41,7 @@ public static class ServiceCollectionExtensions
 
         // ─── Conversation turn-runner override + reply generator ───
         services.Replace(ServiceDescriptor.Singleton<IConversationTurnRunner, ChannelConversationTurnRunner>());
+        services.Replace(ServiceDescriptor.Singleton<IConversationCardTurnRunner, ChannelCardConversationTurnRunner>());
         services.TryAddSingleton<IConversationReplyGenerator, NyxIdConversationReplyGenerator>();
 
         // ─── LLM-call middleware that injects channel context into LLM requests ───
