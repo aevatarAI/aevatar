@@ -1,4 +1,5 @@
 using System.CommandLine;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn;
 using Aevatar.Tools.Cli.Hosting;
 
@@ -6,20 +7,23 @@ namespace Aevatar.Tools.Cli.Commands;
 
 internal static class OrnnSkillsCommand
 {
+    private const string DefaultNyxIdBaseUrl = "https://nyx-api.chrono-ai.fun";
+
     public static Command Create()
     {
         var command = new Command("skills", "Browse and inspect Ornn skills.");
 
         var tokenOption = new Option<string>("--token", "NyxID bearer token.") { IsRequired = true };
-        var ornnUrlOption = new Option<string?>("--ornn-url", "Ornn base URL override (reads Ornn:BaseUrl from config if not set).");
+        var nyxIdUrlOption = new Option<string?>("--nyxid-url", "NyxID base URL override (reads Cli:App:NyxId:Authority from config if not set).");
+        var slugOption = new Option<string>("--slug", () => "ornn-api", "NyxID-bound Ornn service slug.");
 
-        command.AddCommand(CreateListCommand(tokenOption, ornnUrlOption));
-        command.AddCommand(CreateShowCommand(tokenOption, ornnUrlOption));
+        command.AddCommand(CreateListCommand(tokenOption, nyxIdUrlOption, slugOption));
+        command.AddCommand(CreateShowCommand(tokenOption, nyxIdUrlOption, slugOption));
 
         return command;
     }
 
-    private static Command CreateListCommand(Option<string> tokenOption, Option<string?> ornnUrlOption)
+    private static Command CreateListCommand(Option<string> tokenOption, Option<string?> nyxIdUrlOption, Option<string> slugOption)
     {
         var command = new Command("list", "Search/list Ornn skills.");
 
@@ -29,23 +33,18 @@ internal static class OrnnSkillsCommand
         var pageSizeOption = new Option<int>("--page-size", () => 20, "Results per page.");
 
         command.AddOption(tokenOption);
-        command.AddOption(ornnUrlOption);
+        command.AddOption(nyxIdUrlOption);
+        command.AddOption(slugOption);
         command.AddOption(queryOption);
         command.AddOption(scopeOption);
         command.AddOption(pageOption);
         command.AddOption(pageSizeOption);
 
-        command.SetHandler(async (string token, string? ornnUrl, string query, string scope, int page, int pageSize) =>
+        command.SetHandler(async (string token, string? nyxIdUrl, string slug, string query, string scope, int page, int pageSize) =>
         {
-            var baseUrl = ResolveOrnnUrl(ornnUrl);
-            if (string.IsNullOrWhiteSpace(baseUrl))
-            {
-                Console.Error.WriteLine("Ornn base URL not configured. Use --ornn-url or run: aevatar config ornn set-url <url>");
+            var client = TryCreateClient(nyxIdUrl, slug);
+            if (client is null)
                 return;
-            }
-
-            var options = new OrnnOptions { BaseUrl = baseUrl };
-            var client = new OrnnSkillClient(options);
 
             try
             {
@@ -56,12 +55,12 @@ internal static class OrnnSkillsCommand
             {
                 Console.Error.WriteLine($"Request failed: {ex.Message}");
             }
-        }, tokenOption, ornnUrlOption, queryOption, scopeOption, pageOption, pageSizeOption);
+        }, tokenOption, nyxIdUrlOption, slugOption, queryOption, scopeOption, pageOption, pageSizeOption);
 
         return command;
     }
 
-    private static Command CreateShowCommand(Option<string> tokenOption, Option<string?> ornnUrlOption)
+    private static Command CreateShowCommand(Option<string> tokenOption, Option<string?> nyxIdUrlOption, Option<string> slugOption)
     {
         var command = new Command("show", "Show details of a specific Ornn skill.");
 
@@ -69,19 +68,14 @@ internal static class OrnnSkillsCommand
 
         command.AddArgument(nameArg);
         command.AddOption(tokenOption);
-        command.AddOption(ornnUrlOption);
+        command.AddOption(nyxIdUrlOption);
+        command.AddOption(slugOption);
 
-        command.SetHandler(async (string nameOrId, string token, string? ornnUrl) =>
+        command.SetHandler(async (string nameOrId, string token, string? nyxIdUrl, string slug) =>
         {
-            var baseUrl = ResolveOrnnUrl(ornnUrl);
-            if (string.IsNullOrWhiteSpace(baseUrl))
-            {
-                Console.Error.WriteLine("Ornn base URL not configured. Use --ornn-url or run: aevatar config ornn set-url <url>");
+            var client = TryCreateClient(nyxIdUrl, slug);
+            if (client is null)
                 return;
-            }
-
-            var options = new OrnnOptions { BaseUrl = baseUrl };
-            var client = new OrnnSkillClient(options);
 
             try
             {
@@ -98,22 +92,49 @@ internal static class OrnnSkillsCommand
             {
                 Console.Error.WriteLine($"Request failed: {ex.Message}");
             }
-        }, nameArg, tokenOption, ornnUrlOption);
+        }, nameArg, tokenOption, nyxIdUrlOption, slugOption);
 
         return command;
     }
 
-    private static string? ResolveOrnnUrl(string? ornnUrlOverride)
+    private static OrnnSkillClient? TryCreateClient(string? nyxIdUrlOverride, string slug)
     {
-        if (!string.IsNullOrWhiteSpace(ornnUrlOverride))
-            return ornnUrlOverride.TrimEnd('/');
+        var nyxIdUrl = ResolveNyxIdUrl(nyxIdUrlOverride);
+        if (string.IsNullOrWhiteSpace(nyxIdUrl))
+        {
+            Console.Error.WriteLine(
+                "NyxID base URL not configured. Use --nyxid-url or run: " +
+                "aevatar config config-json set Cli:App:NyxId:Authority <url> --json");
+            return null;
+        }
 
-        // Read from ~/.aevatar/config.json at Ornn:BaseUrl
-        return CliAppConfigStore.TryGetConfigValue("Ornn:BaseUrl");
+        var nyxClient = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = nyxIdUrl }, new HttpClient());
+        return new OrnnSkillClient(new OrnnOptions { NyxIdSlug = slug }, nyxClient);
+    }
+
+    private static string? ResolveNyxIdUrl(string? nyxIdUrlOverride)
+    {
+        if (!string.IsNullOrWhiteSpace(nyxIdUrlOverride))
+            return nyxIdUrlOverride.TrimEnd('/');
+
+        // CLI's NyxID authority follows the same key the frontend / config UI uses.
+        var configured = CliAppConfigStore.TryGetConfigValue("Cli:App:NyxId:Authority");
+        if (!string.IsNullOrWhiteSpace(configured))
+            return configured.TrimEnd('/');
+
+        // Fall back to the production NyxID host so dev workstations work without explicit
+        // config — matches the default in tools/Aevatar.Tools.Cli/Frontend/src/auth/nyxid.ts.
+        return DefaultNyxIdBaseUrl;
     }
 
     private static void PrintSearchResults(OrnnSearchResult result)
     {
+        if (!string.IsNullOrEmpty(result.Error))
+        {
+            Console.Error.WriteLine($"Search failed: {result.Error}");
+            return;
+        }
+
         Console.WriteLine($"Skills found: {result.Total} (page {result.Page}/{result.TotalPages})");
         Console.WriteLine();
 

@@ -119,9 +119,12 @@ public sealed class OrnnSearchSkillsToolTests
 
     private static OrnnSearchSkillsTool CreateTool(OrnnTestHttpMessageHandler handler)
     {
-        var client = new OrnnSkillClient(
-            new OrnnOptions { BaseUrl = "https://ornn.example" },
+        var nyxClient = new Aevatar.AI.ToolProviders.NyxId.NyxIdApiClient(
+            new Aevatar.AI.ToolProviders.NyxId.NyxIdToolOptions { BaseUrl = "https://nyx.example" },
             new HttpClient(handler));
+        var client = new OrnnSkillClient(
+            new OrnnOptions { NyxIdSlug = "ornn-api" },
+            nyxClient);
 
         return new OrnnSearchSkillsTool(client);
     }

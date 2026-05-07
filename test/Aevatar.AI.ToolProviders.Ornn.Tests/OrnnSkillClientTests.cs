@@ -1,4 +1,5 @@
 using System.Net;
+using Aevatar.AI.ToolProviders.NyxId;
 using FluentAssertions;
 
 namespace Aevatar.AI.ToolProviders.Ornn.Tests;
@@ -6,7 +7,7 @@ namespace Aevatar.AI.ToolProviders.Ornn.Tests;
 public sealed class OrnnSkillClientTests
 {
     [Fact]
-    public async Task SearchSkillsAsync_SendsNormalizedSearchRequest()
+    public async Task SearchSkillsAsync_RoutesThroughNyxIdProxyWithNormalizedQuery()
     {
         var handler = OrnnTestHttpMessageHandler.ReturningJson("""
             {
@@ -28,7 +29,7 @@ public sealed class OrnnSkillClientTests
               }
             }
             """);
-        var client = CreateClient(handler, "https://ornn.example/");
+        var client = CreateClient(handler);
 
         var result = await client.SearchSkillsAsync(
             "access-token",
@@ -49,35 +50,42 @@ public sealed class OrnnSkillClientTests
         request.Authorization!.Scheme.Should().Be("Bearer");
         request.Authorization.Parameter.Should().Be("access-token");
         request.RequestUri!.AbsoluteUri.Should().Be(
-            "https://ornn.example/api/web/skill-search?query=hello%20world&mode=semantic&scope=mixed&page=1&pageSize=100");
+            "https://nyx.example/api/v1/proxy/s/ornn-api/api/web/skill-search?query=hello%20world&mode=semantic&scope=mixed&page=1&pageSize=100");
     }
 
     [Fact]
-    public async Task SearchSkillsAsync_ReturnsEmptyResultWhenBaseUrlMissing()
+    public async Task SearchSkillsAsync_HonorsCustomNyxIdSlug()
     {
-        var handler = OrnnTestHttpMessageHandler.ReturningJson("""{ "data": null }""");
-        var client = CreateClient(handler, "");
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""{ "data": { "items": [] } }""");
+        var client = CreateClient(handler, slug: "ornn-tenant-a");
 
-        var result = await client.SearchSkillsAsync("access-token", "query");
+        await client.SearchSkillsAsync("token", "anything");
 
-        result.Items.Should().BeEmpty();
-        handler.Requests.Should().BeEmpty();
+        handler.Requests.Should().ContainSingle()
+            .Which.RequestUri!.AbsoluteUri.Should().StartWith("https://nyx.example/api/v1/proxy/s/ornn-tenant-a/api/web/skill-search");
     }
 
     [Fact]
-    public async Task SearchSkillsAsync_ReturnsErrorWhenRequestFails()
+    public async Task SearchSkillsAsync_TreatsNyxIdProxyErrorEnvelopeAsSearchFailure()
     {
-        var handler = OrnnTestHttpMessageHandler.ReturningJson("""{ "error": "nope" }""", HttpStatusCode.InternalServerError);
+        // NyxIdApiClient wraps non-2xx responses as {"error":true,"status":N,"body":"..."}.
+        // Issue #530 follow-up: the upstream Ornn deployment returned HTTP 200 with HTML
+        // (SPA shell) for direct calls; via NyxID proxy, malformed upstream surfaces as a
+        // proxy error envelope. The client must surface a concise error rather than a
+        // confusing JsonException about the wrapper.
+        var handler = OrnnTestHttpMessageHandler.ReturningJson(
+            """{ "error": "nope" }""",
+            HttpStatusCode.InternalServerError);
         var client = CreateClient(handler);
 
-        var result = await client.SearchSkillsAsync("access-token", "query");
+        var result = await client.SearchSkillsAsync("token", "query");
 
         result.Items.Should().BeEmpty();
-        result.Error.Should().NotBeNullOrWhiteSpace();
+        result.Error.Should().Contain("NyxID proxy error");
     }
 
     [Fact]
-    public async Task GetSkillJsonAsync_ReturnsSkillFiles()
+    public async Task GetSkillJsonAsync_RoutesThroughNyxIdProxyAndReturnsSkillFiles()
     {
         var handler = OrnnTestHttpMessageHandler.ReturningJson("""
             {
@@ -89,7 +97,7 @@ public sealed class OrnnSkillClientTests
               }
             }
             """);
-        var client = CreateClient(handler, "https://ornn.example/");
+        var client = CreateClient(handler);
 
         var skill = await client.GetSkillJsonAsync("access-token", "Translate Skill");
 
@@ -100,24 +108,28 @@ public sealed class OrnnSkillClientTests
 
         var request = handler.Requests.Should().ContainSingle().Subject;
         request.Authorization!.Parameter.Should().Be("access-token");
-        request.RequestUri!.AbsoluteUri.Should().Be("https://ornn.example/api/web/skills/Translate%20Skill/json");
+        request.RequestUri!.AbsoluteUri.Should().Be(
+            "https://nyx.example/api/v1/proxy/s/ornn-api/api/web/skills/Translate%20Skill/json");
     }
 
     [Fact]
-    public async Task GetSkillJsonAsync_ReturnsNullWhenRequestFails()
+    public async Task GetSkillJsonAsync_ReturnsNullWhenNyxIdProxyReportsError()
     {
-        var handler = OrnnTestHttpMessageHandler.ReturningJson("""{ "error": "missing" }""", HttpStatusCode.NotFound);
+        var handler = OrnnTestHttpMessageHandler.ReturningJson(
+            """{ "error": "missing" }""",
+            HttpStatusCode.NotFound);
         var client = CreateClient(handler);
 
-        var skill = await client.GetSkillJsonAsync("access-token", "missing");
+        var skill = await client.GetSkillJsonAsync("token", "missing");
 
         skill.Should().BeNull();
     }
 
-    private static OrnnSkillClient CreateClient(OrnnTestHttpMessageHandler handler, string baseUrl = "https://ornn.example")
+    private static OrnnSkillClient CreateClient(OrnnTestHttpMessageHandler handler, string slug = "ornn-api")
     {
-        return new OrnnSkillClient(
-            new OrnnOptions { BaseUrl = baseUrl },
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
             new HttpClient(handler));
+        return new OrnnSkillClient(new OrnnOptions { NyxIdSlug = slug }, nyxClient);
     }
 }

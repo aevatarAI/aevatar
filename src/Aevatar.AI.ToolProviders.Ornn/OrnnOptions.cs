@@ -4,8 +4,10 @@ namespace Aevatar.AI.ToolProviders.Ornn;
 public sealed class OrnnOptions
 {
     /// <summary>
-    /// Ornn API 基础地址。默认指向生产平台，部署可通过 `Ornn:BaseUrl` 配置覆盖。
-    /// 不再依赖 helm 显式注入，避免 issue #530 中 `ornn_search_skills` 因配置缺失静默缺席。
+    /// NyxID-bound service slug used to reach the Ornn skill API. The Ornn skill backend is
+    /// not directly reachable at the public frontend URL (which serves the SPA shell), so all
+    /// requests go through NyxID's proxy: <c>{NyxID}/api/v1/proxy/s/{slug}/api/web/...</c>
+    /// NyxID resolves the upstream backend address from the user's bound service.
     /// </summary>
-    public string BaseUrl { get; set; } = "https://ornn.chrono-ai.fun";
+    public string NyxIdSlug { get; set; } = "ornn-api";
 }

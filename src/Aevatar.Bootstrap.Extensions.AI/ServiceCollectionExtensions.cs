@@ -47,7 +47,6 @@ public sealed class AevatarAIFeatureOptions
     public bool EnableMCPTools { get; set; }
     public bool EnableSkills { get; set; }
     public bool EnableOrnnSkills { get; set; }
-    public string? OrnnBaseUrl { get; set; }
     public IAevatarSecretsStore? SecretsStore { get; set; }
     public string? ApiKey { get; set; }
     public NyxIdLlmEndpointSpec? NyxIdLlmEndpoint { get; set; }
@@ -888,15 +887,11 @@ public static class ServiceCollectionExtensions
 
     private static void RegisterOrnnSkills(IServiceCollection services, AevatarAIFeatureOptions options)
     {
-        // EnableOrnnSkills is the only gate; BaseUrl falls back to the OrnnOptions
-        // default (production Ornn URL) when configuration leaves Ornn:BaseUrl
-        // unset. This keeps ornn_search_skills always visible to the LLM and
-        // closes the silent-fallback path called out in issue #530.
-        services.AddOrnnSkills(o =>
-        {
-            if (!string.IsNullOrWhiteSpace(options.OrnnBaseUrl))
-                o.BaseUrl = options.OrnnBaseUrl;
-        });
+        // EnableOrnnSkills is the only gate. OrnnSkillClient now routes through NyxID's
+        // proxy (slug = ornn-api by default) so the upstream Ornn URL is no longer a
+        // configuration concern at this layer — NyxIdToolOptions.BaseUrl already supplies
+        // the NyxID host, and NyxID resolves the Ornn backend from the user's bound service.
+        services.AddOrnnSkills();
     }
 
     private static void RegisterWebTools(IServiceCollection services, AevatarAIFeatureOptions options)
