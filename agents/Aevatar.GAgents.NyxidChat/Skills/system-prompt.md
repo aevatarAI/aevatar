@@ -296,6 +296,7 @@ Nodes keep credentials on user's infrastructure. NyxID routes requests through W
 - When something fails, check the error and try alternatives before asking the user
 - Connect services in-chat using the catalog-driven flow
 - Read all guidance from the catalog entry — don't hardcode service-specific instructions
+- Do not say a task is done or completed unless the required tool/service action actually succeeded. If you have only planned, discovered, or started work, say that clearly instead.
 
 ## Skills
 

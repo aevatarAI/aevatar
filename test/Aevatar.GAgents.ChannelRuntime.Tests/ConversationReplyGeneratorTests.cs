@@ -195,6 +195,69 @@ public sealed class ConversationReplyGeneratorTests
         var systemPrompt = request.Messages.First(message => message.Role == "system").Content;
         systemPrompt.Should().Contain("translate-pro");
         systemPrompt.Should().Contain("Translate with glossary awareness");
+        systemPrompt.Should().Contain("Use glossary first.");
+        systemPrompt.Should().Contain("do not claim success until the required tool or service action has actually completed");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_ForNetworkInventoryLarkTurn_UsesExpandedRemoteSkillSearch()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var discovery = new StubRemoteSkillDiscovery
+        {
+            OnSearch = request => request.Query.Contains("network device ip address", StringComparison.OrdinalIgnoreCase)
+                ? [new RemoteSkillSummary("network-inventory", "Collect network device IP addresses", "skill-network")]
+                : [],
+        };
+        var fetcher = new StubRemoteSkillFetcher
+        {
+            ById =
+            {
+                ["skill-network"] = new SkillDefinition
+                {
+                    Name = "network-inventory",
+                    Description = "Collect network device IP addresses",
+                    Instructions = "Use the NyxID SSH-capable node to scan the office network before reporting device IPs.",
+                    Source = SkillSource.Remote,
+                    RemoteId = "skill-network",
+                },
+            },
+        };
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            remoteSkillDiscoveries: [discovery],
+            remoteSkillFetcher: fetcher,
+            chatOptions: new NyxIdChatOptions
+            {
+                LarkRemoteSkillAutoLoadMaxSkills = 1,
+            });
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-network-auto-skill",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "从SG Office Network拉一下所有设备的IP" },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "nyx-token",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        discovery.Requests.Should().Contain(request =>
+            request.Query == "从SG Office Network拉一下所有设备的IP" &&
+            request.Mode == "semantic");
+        discovery.Requests.Should().Contain(request =>
+            request.Query.Contains("network device ip address", StringComparison.OrdinalIgnoreCase));
+        fetcher.Requests.Should().ContainSingle().Which.Should().Be(("nyx-token", "skill-network"));
+
+        var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject.Messages
+            .First(message => message.Role == "system").Content;
+        systemPrompt.Should().Contain("network-inventory");
+        systemPrompt.Should().Contain("Use the NyxID SSH-capable node to scan the office network before reporting device IPs.");
     }
 
     [Fact]
@@ -604,13 +667,14 @@ public sealed class ConversationReplyGeneratorTests
     {
         public List<RemoteSkillSearchRequest> Requests { get; } = [];
         public List<RemoteSkillSummary> Results { get; } = [];
+        public Func<RemoteSkillSearchRequest, IReadOnlyList<RemoteSkillSummary>>? OnSearch { get; init; }
 
         public Task<IReadOnlyList<RemoteSkillSummary>> SearchSkillsAsync(
             RemoteSkillSearchRequest request,
             CancellationToken ct = default)
         {
             Requests.Add(request);
-            return Task.FromResult<IReadOnlyList<RemoteSkillSummary>>(Results.ToArray());
+            return Task.FromResult(OnSearch?.Invoke(request) ?? Results.ToArray());
         }
     }
 

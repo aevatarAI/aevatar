@@ -98,10 +98,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return ConversationTurnResult.PermanentFailure("registration_not_found", "Channel registration not found.");
 
         // Capture the typing-reaction Task instead of `_ =`-discarding it. The direct-reply
-        // AgentBuilder path can complete fast enough that the swap fires before Lark has
-        // persisted the typing reaction; the swap GET would then find nothing to delete and
-        // leave both Typing + DONE on the message. Threading the task to the swap site lets
-        // the swap await-with-timeout the typing POST first. The deferred-LLM and streaming
+        // AgentBuilder path can complete fast enough that the clear fires before Lark has
+        // persisted the typing reaction; the clear GET would then find nothing to delete and
+        // leave Typing on the message. Threading the task to the clear site lets the clear
+        // await-with-timeout the typing POST first. The deferred-LLM and streaming
         // paths don't get this task (different invocation), but their natural latency is
         // orders of magnitude greater than the typing POST so the race cannot fire.
         var typingReactionTask = TrySendImmediateLarkReactionAsync(activity, registration, ct);
@@ -715,10 +715,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         var inbound = ToInboundMessage(reply.Activity);
         // Direct path requires registration to actually send the reply; relay path only wants it
-        // for the post-reply reaction swap (relay sends use the reply token, not registration).
+        // for the post-reply reaction clear (relay sends use the reply token, not registration).
         // So lookup is mandatory on the direct path and best-effort on the relay path — a
         // transient registration-store error on the relay path must not drop an otherwise valid
-        // reply, only degrade the swap to a no-op for that turn.
+        // reply, only degrade the clear to a no-op for that turn.
         ChannelBotRegistrationEntry? registration;
         if (HasRelayDelivery(inbound))
         {
@@ -734,7 +734,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             {
                 _logger.LogWarning(
                     ex,
-                    "Registration lookup failed on relay reply path; reply will proceed but post-reply reaction swap will be skipped. correlation={CorrelationId}",
+                    "Registration lookup failed on relay reply path; reply will proceed but post-reply reaction clear will be skipped. correlation={CorrelationId}",
                     reply.CorrelationId);
                 registration = null;
             }
@@ -762,7 +762,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             runtimeContext,
             ct);
         if (result.Success)
-            _ = TrySwapTypingReactionToDoneAsync(inbound, registration, ct);
+            _ = TryClearTypingReactionAsync(inbound, registration, ct);
         return result;
     }
 
@@ -814,9 +814,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     public async Task OnReplyDeliveredAsync(ChatActivity activity, CancellationToken ct)
     {
         // Streaming-completion path in ConversationGAgent calls this hook because it finalizes
-        // the reply without going through RunLlmReplyAsync (which is where the non-streaming swap
-        // lives). For non-Lark platforms or activities missing the platform message id, the swap
-        // helper short-circuits in ShouldSwapTypingReaction.
+        // the reply without going through RunLlmReplyAsync (which is where the non-streaming clear
+        // lives). For non-Lark platforms or activities missing the platform message id, the clear
+        // helper short-circuits in ShouldClearTypingReaction.
         if (activity is null)
             return;
 
@@ -825,7 +825,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return;
 
         var inbound = ToInboundMessage(activity);
-        await TrySwapTypingReactionToDoneAsync(inbound, registration, ct);
+        await TryClearTypingReactionAsync(inbound, registration, ct);
     }
 
     public async Task<ConversationStreamChunkResult> RunStreamChunkAsync(
@@ -963,7 +963,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             runtimeContext,
             ct);
         if (result.Success)
-            _ = AwaitTypingReactionThenSwapAsync(typingReactionTask, inbound, registration, ct);
+            _ = AwaitTypingReactionThenClearAsync(typingReactionTask, inbound, registration, ct);
         return result.Success
             ? ConversationTurnResult.Sent(
                 sentActivityId: $"direct-reply:{activity.Id}",
@@ -1656,10 +1656,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         string.Equals(NormalizeOptional(activity.Bot?.Value), nyxAgentApiKeyId, StringComparison.Ordinal);
 
     // Lark reaction emoji_type for "hands typing on keyboard" — added immediately on inbound
-    // so the user sees the bot is working before the LLM reply lands. Swapped to DoneReactionEmojiType
-    // after the reply succeeds so the same message ends up with a single completion reaction.
+    // so the user sees the bot is working before the LLM reply lands. After a reply succeeds,
+    // the reaction is cleared instead of replaced with DONE because DONE reads as task completion,
+    // while a chat reply can be an intermediate progress update.
     private const string TypingReactionEmojiType = "Typing";
-    private const string DoneReactionEmojiType = "DONE";
 
     private async Task TrySendImmediateLarkReactionAsync(
         ChatActivity activity,
@@ -1725,14 +1725,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     }
 
     // Direct-reply paths (TryHandleAgentBuilderAsync) can complete a slash-command reply faster
-    // than the typing POST takes to land in Lark, leaving the swap GET to find no Typing reaction
-    // to delete and the orphaned typing reaction to materialize after DONE was already added —
-    // both reactions on the same message. Awaiting (with a short cap) the typing task before the
-    // GET closes that race. The cap protects against a hung POST stalling the swap forever; if it
-    // expires the swap still proceeds — Lark will at worst end up with both reactions, same as
-    // before this guard. The deferred-LLM and streaming paths skip this guard because their reply
-    // latency dwarfs the typing POST and so cannot race.
-    private async Task AwaitTypingReactionThenSwapAsync(
+    // than the typing POST takes to land in Lark, leaving the clear GET to find no Typing reaction
+    // to delete and the orphaned typing reaction to materialize after the clear already ran.
+    // Awaiting (with a short cap) the typing task before the GET closes that race. The cap protects
+    // against a hung POST stalling the clear forever. The deferred-LLM and streaming paths skip this
+    // guard because their reply latency dwarfs the typing POST and so cannot race.
+    private async Task AwaitTypingReactionThenClearAsync(
         Task typingReactionTask,
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
@@ -1749,24 +1747,23 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         catch (TimeoutException)
         {
             _logger.LogDebug(
-                "Lark typing reaction task did not complete within timeout before swap; proceeding anyway");
+                "Lark typing reaction task did not complete within timeout before clear; proceeding anyway");
         }
         catch (Exception)
         {
-            // The typing task already logged its own exception — proceed with the swap so the
-            // user-visible message still ends up with a DONE reaction whenever possible.
+            // The typing task already logged its own exception — proceed with the clear so any
+            // already-visible Typing reaction is still removed whenever possible.
         }
 
-        await TrySwapTypingReactionToDoneAsync(inbound, registration, ct);
+        await TryClearTypingReactionAsync(inbound, registration, ct);
     }
 
-    // After a successful reply, replace the bot's "Typing" reaction with a "DONE" reaction so the
-    // same message ends with a single completion marker. Uses list-based discovery (filter by
+    // After a successful reply, remove the bot's "Typing" reaction. Uses list-based discovery (filter by
     // emoji_type=Typing AND operator_type=app) instead of caching the immediate reaction's
     // reaction_id locally — the runner is a singleton and cross-turn state on it would violate the
     // "中间层进程内缓存作为事实源" rule. Filtering on operator_type=app avoids deleting any user
     // who happened to add the same Typing reaction.
-    private async Task TrySwapTypingReactionToDoneAsync(
+    private async Task TryClearTypingReactionAsync(
         InboundMessage inbound,
         ChannelBotRegistrationEntry? registration,
         CancellationToken ct)
@@ -1774,7 +1771,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (registration is null)
             return;
 
-        if (!ShouldSwapTypingReaction(inbound, registration, out var accessToken, out var providerSlug, out var platformMessageId))
+        if (!ShouldClearTypingReaction(inbound, registration, out var accessToken, out var providerSlug, out var platformMessageId))
             return;
 
         try
@@ -1782,7 +1779,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             var reactionIds = new List<string>();
             string? pageToken = null;
             // Bound the iteration so a misbehaving Lark response (e.g. always-true `has_more`)
-            // can't loop the swap forever. 10 pages × 50 per page = 500 Typing reactions on a
+            // can't loop the clear forever. 10 pages × 50 per page = 500 Typing reactions on a
             // single message — orders of magnitude more than realistic, since this list is
             // already scoped to one emoji_type and the bot only adds Typing once per inbound.
             const int MaxListPages = 10;
@@ -1804,7 +1801,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 if (LarkProxyResponse.TryGetError(listResponse, out var listCode, out var listDetail))
                 {
                     _logger.LogDebug(
-                        "Lark typing reaction list failed; skipping swap: provider={ProviderSlug}, message={MessageId}, page={Page}, larkCode={LarkCode}, detail={Detail}",
+                        "Lark typing reaction list failed; skipping clear: provider={ProviderSlug}, message={MessageId}, page={Page}, larkCode={LarkCode}, detail={Detail}",
                         providerSlug,
                         platformMessageId,
                         page,
@@ -1862,35 +1859,6 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 }
             }
 
-            var addResponse = await _nyxClient.ProxyRequestAsync(
-                accessToken!,
-                providerSlug!,
-                $"/open-apis/im/v1/messages/{Uri.EscapeDataString(platformMessageId!)}/reactions",
-                "POST",
-                $$$"""{"reaction_type":{"emoji_type":"{{{DoneReactionEmojiType}}}"}}""",
-                null,
-                ct);
-
-            if (LarkProxyResponse.TryGetError(addResponse, out var addCode, out var addDetail))
-            {
-                if (addCode == LarkBotErrorCodes.NoPermissionToReact)
-                {
-                    _logger.LogDebug(
-                        "Lark done reaction skipped (missing reaction scope): provider={ProviderSlug}, message={MessageId}, detail={Detail}",
-                        providerSlug,
-                        platformMessageId,
-                        addDetail);
-                }
-                else
-                {
-                    _logger.LogWarning(
-                        "Lark done reaction failed: provider={ProviderSlug}, message={MessageId}, larkCode={LarkCode}, detail={Detail}",
-                        providerSlug,
-                        platformMessageId,
-                        addCode,
-                        addDetail);
-                }
-            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -1900,7 +1868,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             _logger.LogWarning(
                 ex,
-                "Lark typing→done reaction swap threw: provider={ProviderSlug}, message={MessageId}",
+                "Lark typing reaction clear threw: provider={ProviderSlug}, message={MessageId}",
                 providerSlug,
                 platformMessageId);
         }
@@ -1957,7 +1925,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 continue;
 
             // Only delete reactions added by the bot itself (operator_type=app); leave any
-            // user-added Typing reactions alone so the swap doesn't accidentally erase them.
+            // user-added Typing reactions alone so the clear doesn't accidentally erase them.
             if (!item.TryGetProperty("operator", out var operatorProp) ||
                 operatorProp.ValueKind != JsonValueKind.Object)
             {
@@ -1985,7 +1953,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         return (ids, nextPageToken);
     }
 
-    private static bool ShouldSwapTypingReaction(
+    private static bool ShouldClearTypingReaction(
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
         out string? accessToken,

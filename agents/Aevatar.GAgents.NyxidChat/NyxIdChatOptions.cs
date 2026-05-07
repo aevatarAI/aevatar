@@ -11,7 +11,7 @@ public sealed class NyxIdChatOptions
     /// <summary>
     /// Maximum number of remote skills to pull into a single Lark/Feishu LLM turn.
     /// </summary>
-    public int LarkRemoteSkillAutoLoadMaxSkills { get; set; } = 2;
+    public int LarkRemoteSkillAutoLoadMaxSkills { get; set; } = 3;
 
     /// <summary>
     /// Remote skill search mode used by Lark/Feishu auto-loading.
@@ -22,5 +22,5 @@ public sealed class NyxIdChatOptions
     /// <summary>
     /// Timeout for the best-effort remote skill auto-load phase before the LLM call.
     /// </summary>
-    public int LarkRemoteSkillAutoLoadTimeoutSeconds { get; set; } = 3;
+    public int LarkRemoteSkillAutoLoadTimeoutSeconds { get; set; } = 8;
 }

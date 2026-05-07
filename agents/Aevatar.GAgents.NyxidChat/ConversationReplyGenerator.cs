@@ -18,11 +18,12 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
     private const int MaxToolRounds = 40;
     private const int MaxHistoryMessages = 100;
     private const int StreamBufferCapacity = 256;
-    private const int DefaultRemoteSkillAutoLoadMaxSkills = 2;
+    private const int DefaultRemoteSkillAutoLoadMaxSkills = 3;
     private const int MaxRemoteSkillAutoLoadMaxSkills = 5;
     private const int MaxRemoteSkillSearchQueryChars = 500;
-    private const int DefaultRemoteSkillAutoLoadTimeoutSeconds = 3;
+    private const int DefaultRemoteSkillAutoLoadTimeoutSeconds = 8;
     private const int MaxRemoteSkillAutoLoadTimeoutSeconds = 30;
+    private const int MaxAutoLoadedSkillInstructionChars = 12000;
 
     private readonly ILLMProviderFactory _llmProviderFactory;
     private readonly IReadOnlyList<IAgentToolSource> _toolSources;
@@ -187,8 +188,8 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
             return [];
         }
 
-        var query = BuildRemoteSkillSearchQuery(activity);
-        if (string.IsNullOrWhiteSpace(query))
+        var queries = BuildRemoteSkillSearchQueries(activity);
+        if (queries.Count == 0)
             return [];
 
         var maxSkills = ResolveRemoteSkillAutoLoadMaxSkills();
@@ -198,62 +199,74 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         using var timeoutCts = CreateRemoteSkillAutoLoadCancellation(ct);
         var loadCt = timeoutCts.Token;
 
-        var request = new RemoteSkillSearchRequest(
-            AccessToken: token.Trim(),
-            Query: query,
-            Scope: "mixed",
-            Mode: ResolveRemoteSkillSearchMode(),
-            PageSize: maxSkills);
+        var modes = ResolveRemoteSkillSearchModes();
 
         var loaded = new List<SkillDefinition>(maxSkills);
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         try
         {
-            foreach (var discovery in _remoteSkillDiscoveries)
+            foreach (var query in queries)
             {
-                IReadOnlyList<RemoteSkillSummary> candidates;
-                try
+                foreach (var mode in modes)
                 {
-                    candidates = await discovery.SearchSkillsAsync(request, loadCt).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Remote skill discovery failed for Lark turn. activity={ActivityId}", activity.Id);
-                    continue;
-                }
+                    var request = new RemoteSkillSearchRequest(
+                        AccessToken: token.Trim(),
+                        Query: query,
+                        Scope: "mixed",
+                        Mode: mode,
+                        PageSize: maxSkills);
 
-                foreach (var candidate in candidates)
-                {
-                    if (loaded.Count >= maxSkills)
-                        return loaded;
+                    foreach (var discovery in _remoteSkillDiscoveries)
+                    {
+                        IReadOnlyList<RemoteSkillSummary> candidates;
+                        try
+                        {
+                            candidates = await discovery.SearchSkillsAsync(request, loadCt).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Remote skill discovery failed for Lark turn. activity={ActivityId}", activity.Id);
+                            continue;
+                        }
 
-                    var key = string.IsNullOrWhiteSpace(candidate.RemoteId) ? candidate.Name : candidate.RemoteId;
-                    if (string.IsNullOrWhiteSpace(key) || !seen.Add(key))
-                        continue;
+                        foreach (var candidate in candidates)
+                        {
+                            if (loaded.Count >= maxSkills)
+                                return loaded;
 
-                    try
-                    {
-                        var skill = await _remoteSkillFetcher.FetchSkillAsync(token.Trim(), key.Trim(), loadCt)
-                            .ConfigureAwait(false);
-                        if (skill is not null)
-                            loaded.Add(skill);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        throw;
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(
-                            ex,
-                            "Remote skill fetch failed for Lark turn. activity={ActivityId} skill={Skill}",
-                            activity.Id,
-                            candidate.Name);
+                            var key = string.IsNullOrWhiteSpace(candidate.RemoteId) ? candidate.Name : candidate.RemoteId;
+                            if (string.IsNullOrWhiteSpace(key) || !seen.Add(key))
+                                continue;
+
+                            try
+                            {
+                                var skill = await _remoteSkillFetcher.FetchSkillAsync(token.Trim(), key.Trim(), loadCt)
+                                    .ConfigureAwait(false);
+                                if (skill is not null)
+                                {
+                                    loaded.Add(skill);
+                                    if (loaded.Count >= maxSkills)
+                                        return loaded;
+                                }
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                throw;
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(
+                                    ex,
+                                    "Remote skill fetch failed for Lark turn. activity={ActivityId} skill={Skill}",
+                                    activity.Id,
+                                    candidate.Name);
+                            }
+                        }
                     }
                 }
             }
@@ -289,12 +302,13 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         return Math.Clamp(configured, 0, MaxRemoteSkillAutoLoadMaxSkills);
     }
 
-    private string ResolveRemoteSkillSearchMode()
+    private IReadOnlyList<string> ResolveRemoteSkillSearchModes()
     {
         var configured = _chatOptions?.LarkRemoteSkillAutoLoadSearchMode;
-        return string.Equals(configured, "keyword", StringComparison.OrdinalIgnoreCase)
-            ? "keyword"
-            : "semantic";
+        if (string.Equals(configured, "keyword", StringComparison.OrdinalIgnoreCase))
+            return ["keyword"];
+
+        return ["semantic", "keyword"];
     }
 
     private CancellationTokenSource CreateRemoteSkillAutoLoadCancellation(CancellationToken ct)
@@ -307,12 +321,58 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         return timeoutCts;
     }
 
-    private static string BuildRemoteSkillSearchQuery(ChatActivity activity)
+    private static IReadOnlyList<string> BuildRemoteSkillSearchQueries(ChatActivity activity)
     {
         var query = activity.Content?.Text?.Trim() ?? string.Empty;
-        return query.Length <= MaxRemoteSkillSearchQueryChars
-            ? query
-            : query[..MaxRemoteSkillSearchQueryChars];
+        var queries = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        AddQuery(query);
+
+        if (LooksLikeNetworkInventoryRequest(query))
+            AddQuery("network device ip address inventory discovery scan ssh nyxid node gateway");
+
+        return queries;
+
+        void AddQuery(string value)
+        {
+            value = value.Trim();
+            if (string.IsNullOrWhiteSpace(value))
+                return;
+            if (value.Length > MaxRemoteSkillSearchQueryChars)
+                value = value[..MaxRemoteSkillSearchQueryChars];
+            if (seen.Add(value))
+                queries.Add(value);
+        }
+    }
+
+    private static bool LooksLikeNetworkInventoryRequest(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return false;
+
+        return ContainsAny(query,
+            "ip",
+            "network",
+            "ssh",
+            "device",
+            "devices",
+            "网络",
+            "设备",
+            "节点",
+            "扫描",
+            "局域网");
+    }
+
+    private static bool ContainsAny(string value, params string[] needles)
+    {
+        foreach (var needle in needles)
+        {
+            if (value.Contains(needle, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 
     private async Task<string?> GenerateWithMetadataAsync(
@@ -541,7 +601,65 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
                 prompt += "\n" + skillSection;
         }
 
+        if (turnSkillRegistry is not null)
+        {
+            var autoLoadedSection = BuildAutoLoadedRemoteSkillInstructionsSection(turnSkillRegistry);
+            if (!string.IsNullOrEmpty(autoLoadedSection))
+                prompt += "\n" + autoLoadedSection;
+        }
+
         return prompt;
+    }
+
+    private static string BuildAutoLoadedRemoteSkillInstructionsSection(SkillRegistry turnSkillRegistry)
+    {
+        var remoteSkills = turnSkillRegistry.GetAll()
+            .Where(skill => skill.Source == SkillSource.Remote &&
+                            skill.IsModelInvocable &&
+                            !string.IsNullOrWhiteSpace(skill.Instructions))
+            .ToArray();
+        if (remoteSkills.Length == 0)
+            return string.Empty;
+
+        var sb = new StringBuilder();
+        sb.AppendLine();
+        sb.AppendLine("## Auto-Loaded Ornn Skill Instructions");
+        sb.AppendLine();
+        sb.AppendLine("The following Ornn skills were already discovered and pulled for this Lark turn. Treat these instructions as active for the current user request; do not claim success until the required tool or service action has actually completed.");
+        sb.AppendLine();
+
+        foreach (var skill in remoteSkills)
+        {
+            sb.Append("### ");
+            sb.AppendLine(skill.Name);
+            if (!string.IsNullOrWhiteSpace(skill.Description))
+            {
+                sb.AppendLine();
+                sb.AppendLine(skill.Description);
+            }
+
+            if (!string.IsNullOrWhiteSpace(skill.WhenToUse))
+            {
+                sb.AppendLine();
+                sb.Append("When to use: ");
+                sb.AppendLine(skill.WhenToUse);
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("Instructions:");
+            sb.AppendLine(TrimForPrompt(skill.Instructions, MaxAutoLoadedSkillInstructionChars));
+            sb.AppendLine();
+        }
+
+        return sb.ToString();
+    }
+
+    private static string TrimForPrompt(string value, int maxChars)
+    {
+        if (value.Length <= maxChars)
+            return value;
+
+        return value[..maxChars] + "\n\n[Instruction content truncated. Call `use_skill` with this skill name if more detail is needed.]";
     }
 
     private static string LoadBaseSystemPrompt()
