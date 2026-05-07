@@ -755,6 +755,7 @@ jest.mock("@/shared/studio/api", () => ({
         implementationKind: "workflow" | "script" | "gagent";
         description?: string | null;
         memberId?: string | null;
+        teamId?: string | null;
       }) => {
         const nextMemberId =
           input.memberId?.trim() ||
@@ -768,6 +769,7 @@ jest.mock("@/shared/studio/api", () => ({
           lifecycleStage: "created",
           publishedServiceId: `member-${nextMemberId}`,
           lastBoundRevisionId: null,
+          teamId: input.teamId ?? null,
           createdAt: "2026-04-27T08:10:00Z",
           updatedAt: "2026-04-27T08:10:00Z",
         };
@@ -3465,6 +3467,28 @@ describe("StudioPage", () => {
       expect(message.success).toHaveBeenCalledWith(
         "Created member orders-draft and opened its workflow draft.",
       );
+    });
+  });
+
+  it("passes route Team context when creating a backend member", async () => {
+    renderStudioPage("/studio?scopeId=scope-1&teamId=t-alpha&tab=studio&intent=create-member");
+
+    const createDialog = await screen.findByRole("dialog", { name: "Create member" });
+    const nameInput = within(createDialog).getByLabelText("Member name");
+    fireEvent.change(nameInput, {
+      target: {
+        value: "team-worker",
+      },
+    });
+    fireEvent.click(within(createDialog).getByRole("button", { name: "Create member" }));
+
+    await waitFor(() => {
+      expect(studioApi.createMember).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        displayName: "team-worker",
+        implementationKind: "workflow",
+        teamId: "t-alpha",
+      });
     });
   });
 

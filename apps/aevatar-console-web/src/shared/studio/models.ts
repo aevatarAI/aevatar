@@ -440,6 +440,7 @@ export interface StudioMemberSummary {
   readonly lifecycleStage: StudioMemberLifecycleStage;
   readonly publishedServiceId: string;
   readonly lastBoundRevisionId: string | null;
+  readonly teamId?: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -510,6 +511,65 @@ export interface StudioMemberRoster {
   readonly scopeId: string;
   readonly members: readonly StudioMemberSummary[];
   readonly nextPageToken?: string | null;
+}
+
+export type StudioTeamLifecycleStage = 'active' | 'archived' | 'unknown';
+
+export function normalizeStudioTeamLifecycleStage(
+  value: string | null | undefined,
+): StudioTeamLifecycleStage {
+  switch (String(value || '').trim().toLowerCase()) {
+    case 'active':
+      return 'active';
+    case 'archived':
+      return 'archived';
+    default:
+      return 'unknown';
+  }
+}
+
+export function formatStudioTeamLifecycleStage(
+  value: StudioTeamLifecycleStage | string | null | undefined,
+): string {
+  switch (normalizeStudioTeamLifecycleStage(value)) {
+    case 'active':
+      return 'Active';
+    case 'archived':
+      return 'Archived';
+    default:
+      return 'Unknown';
+  }
+}
+
+export interface StudioTeamSummary {
+  readonly teamId: string;
+  readonly scopeId: string;
+  readonly displayName: string;
+  readonly description: string;
+  readonly lifecycleStage: StudioTeamLifecycleStage;
+  readonly memberCount: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface StudioTeamRoster {
+  readonly scopeId: string;
+  readonly teams: readonly StudioTeamSummary[];
+  readonly nextPageToken?: string | null;
+}
+
+export interface StudioTeamCreateInput {
+  readonly scopeId: string;
+  readonly displayName: string;
+  readonly description?: string | null;
+  readonly teamId?: string | null;
+}
+
+export interface StudioTeamUpdateInput {
+  readonly scopeId: string;
+  readonly teamId: string;
+  readonly displayName?: string | null;
+  readonly description?: string | null;
 }
 
 export type StudioMemberBindingTargetKind = StudioScopeBindingTargetKind;

@@ -43,6 +43,11 @@ import type {
   StudioSerializeYamlResult,
   StudioSettings,
   StudioStartExecutionInput,
+  StudioTeamCreateInput,
+  StudioTeamLifecycleStage,
+  StudioTeamRoster,
+  StudioTeamSummary,
+  StudioTeamUpdateInput,
   StudioUserConfig,
   StudioUserConfigModelsResponse,
   StudioWorkflowDraft,
@@ -55,6 +60,7 @@ import type {
 import {
   normalizeStudioMemberLifecycleStage,
   normalizeStudioScopeBindingImplementationKind,
+  normalizeStudioTeamLifecycleStage,
 } from "./models";
 import type { WorkflowCatalogItemDetail } from "@/shared/api/models";
 import { scopesApi } from "@/shared/api/scopesApi";
@@ -956,6 +962,15 @@ function readStudioMemberLifecycle(
   );
 }
 
+function readStudioTeamLifecycle(
+  record: Record<string, unknown>,
+  keys: string | string[]
+): StudioTeamLifecycleStage {
+  return normalizeStudioTeamLifecycleStage(
+    readNullableString(record, keys, "StudioTeamSummary.lifecycleStage")
+  );
+}
+
 function decodeStudioMemberSummary(value: unknown): StudioMemberSummary {
   const record = expectRecord(value, "StudioMemberSummary");
   return {
@@ -999,6 +1014,12 @@ function decodeStudioMemberSummary(value: unknown): StudioMemberSummary {
         ["lastBoundRevisionId", "LastBoundRevisionId"],
         "StudioMemberSummary.lastBoundRevisionId"
       ) ?? null,
+    teamId:
+      readNullableString(
+        record,
+        ["teamId", "TeamId"],
+        "StudioMemberSummary.teamId"
+      ) ?? null,
     createdAt: readString(
       record,
       ["createdAt", "CreatedAt"],
@@ -1009,6 +1030,74 @@ function decodeStudioMemberSummary(value: unknown): StudioMemberSummary {
       ["updatedAt", "UpdatedAt"],
       "StudioMemberSummary.updatedAt"
     ),
+  };
+}
+
+function decodeStudioTeamSummary(value: unknown): StudioTeamSummary {
+  const record = expectRecord(value, "StudioTeamSummary");
+  return {
+    teamId: readString(
+      record,
+      ["teamId", "TeamId"],
+      "StudioTeamSummary.teamId"
+    ),
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioTeamSummary.scopeId"
+    ),
+    displayName: readString(
+      record,
+      ["displayName", "DisplayName"],
+      "StudioTeamSummary.displayName"
+    ),
+    description:
+      readNullableString(
+        record,
+        ["description", "Description"],
+        "StudioTeamSummary.description"
+      ) ?? "",
+    lifecycleStage: readStudioTeamLifecycle(record, [
+      "lifecycleStage",
+      "LifecycleStage",
+    ]),
+    memberCount: readNumber(
+      record,
+      ["memberCount", "MemberCount"],
+      "StudioTeamSummary.memberCount"
+    ),
+    createdAt: readString(
+      record,
+      ["createdAt", "CreatedAt"],
+      "StudioTeamSummary.createdAt"
+    ),
+    updatedAt: readString(
+      record,
+      ["updatedAt", "UpdatedAt"],
+      "StudioTeamSummary.updatedAt"
+    ),
+  };
+}
+
+function decodeStudioTeamRoster(value: unknown): StudioTeamRoster {
+  const record = expectRecord(value, "StudioTeamRoster");
+  return {
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioTeamRoster.scopeId"
+    ),
+    teams: expectArray(
+      record.teams ?? record.Teams,
+      "StudioTeamRoster.teams",
+      decodeStudioTeamSummary
+    ),
+    nextPageToken:
+      readNullableString(
+        record,
+        ["nextPageToken", "NextPageToken"],
+        "StudioTeamRoster.nextPageToken"
+      ) ?? null,
   };
 }
 
@@ -1294,6 +1383,75 @@ export const studioApi = {
     return requestJson(withOptionalScopeId("/api/workspace/", scopeId));
   },
 
+  listTeams(scopeId: string): Promise<StudioTeamRoster> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams`,
+      decodeStudioTeamRoster
+    );
+  },
+
+  getTeam(scopeId: string, teamId: string): Promise<StudioTeamSummary> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams/${encodeURIComponent(teamId.trim())}`,
+      decodeStudioTeamSummary
+    );
+  },
+
+  createTeam(input: StudioTeamCreateInput): Promise<StudioTeamSummary> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/teams`,
+      decodeStudioTeamSummary,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            displayName: input.displayName.trim(),
+            description: trimOptional(input.description),
+            teamId: trimOptional(input.teamId),
+          })
+        ),
+      }
+    );
+  },
+
+  updateTeam(input: StudioTeamUpdateInput): Promise<StudioTeamSummary> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/teams/${encodeURIComponent(input.teamId.trim())}`,
+      decodeStudioTeamSummary,
+      {
+        method: "PATCH",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            displayName:
+              input.displayName === null ? null : trimOptional(input.displayName),
+            description:
+              input.description === null ? null : trimOptional(input.description),
+          })
+        ),
+      }
+    );
+  },
+
+  archiveTeam(scopeId: string, teamId: string): Promise<StudioTeamSummary> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams/${encodeURIComponent(teamId.trim())}/archive`,
+      decodeStudioTeamSummary,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+      }
+    );
+  },
+
+  listTeamMembers(scopeId: string, teamId: string): Promise<StudioMemberRoster> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams/${encodeURIComponent(teamId.trim())}/members`,
+      decodeStudioMemberRoster
+    );
+  },
+
   listMembers(scopeId: string): Promise<StudioMemberRoster> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/members`,
@@ -1314,6 +1472,7 @@ export const studioApi = {
     implementationKind: StudioMemberImplementationKind;
     description?: string | null;
     memberId?: string | null;
+    teamId?: string | null;
   }): Promise<StudioMemberSummary> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members`,
@@ -1327,6 +1486,7 @@ export const studioApi = {
             implementationKind: input.implementationKind,
             description: trimOptional(input.description),
             memberId: trimOptional(input.memberId),
+            teamId: trimOptional(input.teamId),
           })
         ),
       }

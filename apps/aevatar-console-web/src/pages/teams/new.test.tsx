@@ -21,70 +21,124 @@ jest.mock('antd', () => {
 });
 
 describe('TeamCreatePage', () => {
+  const teamResponse = {
+    teamId: 't-alpha',
+    scopeId: 'scope-a',
+    displayName: '订单助手团队',
+    description: '处理订单异常',
+    lifecycleStage: 'active',
+    memberCount: 0,
+    createdAt: '2026-05-06T08:00:00Z',
+    updatedAt: '2026-05-06T08:00:00Z',
+  };
+  let fetchMock: jest.Mock;
+
   beforeEach(() => {
-    window.history.replaceState({}, '', '/teams/new');
+    window.history.replaceState({}, '', '/teams/new?scopeId=scope-a');
     jest.clearAllMocks();
+    fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({
+        enabled: false,
+        scopeId: 'scope-a',
+        scopeSource: 'nyxid',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
   });
 
-  it('renders the hidden compatibility page for saved draft recovery', async () => {
+  it('renders the real Team API create page with saved draft recovery kept secondary', async () => {
     renderWithQueryClient(React.createElement(TeamCreatePage));
 
     expect(await screen.findByText('Aevatar / Teams')).toBeTruthy();
-    expect(screen.getByText('Saved Draft Recovery')).toBeTruthy();
-    expect(screen.getByText('用途')).toBeTruthy();
-    expect(screen.getByText('恢复对象')).toBeTruthy();
-    expect(screen.getByText('继续位置')).toBeTruthy();
-    expect(screen.getByText('新增后端事实')).toBeTruthy();
-    expect(screen.getByText('Continue initial member draft')).toBeTruthy();
-    expect(screen.getByRole('heading', { level: 3, name: 'Saved draft recovery' })).toBeTruthy();
-    expect(screen.getByLabelText('Legacy team label')).toBeTruthy();
-    expect(screen.getByLabelText('Initial member label')).toBeTruthy();
-    expect(
-      screen.getAllByRole('button', { name: 'Continue in Studio' }).length,
-    ).toBeGreaterThan(0);
+    expect(screen.getByRole('heading', { level: 2, name: 'Create Team' })).toBeTruthy();
+    expect(screen.getByText('数据源')).toBeTruthy();
+    expect(screen.getByText('StudioTeam')).toBeTruthy();
+    expect(screen.getByText('Scope context')).toBeTruthy();
+    expect(screen.getByText('Team authority')).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 3, name: 'Create real Team roster entry' })).toBeTruthy();
+    expect(screen.getByLabelText('Team name')).toBeTruthy();
+    expect(screen.getByLabelText('Team description')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Create Team' }).length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'View Behaviors' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Back to My Teams' })).toBeTruthy();
     expect(
       screen.getByText(
-        'This compatibility page preserves old Create Team links and saved draft recovery. New team creation now starts in Studio by creating the first member.',
+        'This page now creates a backend StudioTeam record. Members can be assigned later; the Teams homepage will use this roster entry as the primary team truth.',
       ),
     ).toBeTruthy();
-    expect(screen.queryByText('Team Builder Entry')).toBeNull();
-    expect(screen.queryByText('Start Building')).toBeNull();
-    expect(screen.queryByText('Open Studio')).toBeNull();
-    expect(
-      screen.queryByText(
-        '当前实现不会新增一套独立后端流程，而是复用现有 Studio 工作区先组建团队，再进入 Team Details 查看拓扑和事件流。',
-      ),
-    ).toBeNull();
-    expect(screen.queryByText('Next Steps')).toBeNull();
-    expect(screen.queryByText('Builder 模式')).toBeNull();
-    expect(screen.queryByText('默认入口')).toBeNull();
-    expect(screen.queryByText('后续页')).toBeNull();
-    expect(screen.queryByText('数据源')).toBeNull();
   });
 
-  it('opens Studio in member-first build mode without persisting create-team draft params', async () => {
+  it('creates a backend StudioTeam and routes to team focus', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({
+        enabled: false,
+        scopeId: 'scope-a',
+        scopeSource: 'nyxid',
+      }),
+    } as Response);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 201,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => teamResponse,
+    } as Response);
+
+    renderWithQueryClient(React.createElement(TeamCreatePage));
+
+    fireEvent.change(await screen.findByLabelText('Team name'), {
+      target: { value: '订单助手团队' },
+    });
+    fireEvent.change(screen.getByLabelText('Team description'), {
+      target: { value: '处理订单异常' },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Create Team' })[0]);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/scopes/scope-a/teams',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            displayName: '订单助手团队',
+            description: '处理订单异常',
+          }),
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/teams/scope-a');
+    });
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get('scopeId')).toBe('scope-a');
+    expect(params.get('teamId')).toBe('t-alpha');
+    expect(message.success).toHaveBeenCalledWith('已创建 Team。');
+  });
+
+  it('opens Studio with only scope context from the secondary action', async () => {
     renderWithQueryClient(React.createElement(TeamCreatePage));
 
     const openStudioButtons = await screen.findAllByRole('button', {
       name: 'Continue in Studio',
     });
 
-    expect(openStudioButtons[0]).toBeDisabled();
+    expect(openStudioButtons[0]).toBeEnabled();
 
-    fireEvent.change(screen.getByLabelText('Legacy team label'), {
+    fireEvent.change(screen.getByLabelText('Team name'), {
       target: { value: '订单助手团队' },
     });
-    fireEvent.change(screen.getByLabelText('Initial member label'), {
-      target: { value: '订单入口' },
-    });
 
-    expect(openStudioButtons[0]).toBeEnabled();
     fireEvent.click(openStudioButtons[0]);
 
     expect(window.location.pathname).toBe('/studio');
     const params = new URLSearchParams(window.location.search);
+    expect(params.get('scopeId')).toBe('scope-a');
     expect(params.get('tab')).toBe('studio');
     expect(params.get('focus')).toBeNull();
     expect(params.get('teamMode')).toBeNull();
