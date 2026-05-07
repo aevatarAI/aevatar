@@ -51,7 +51,7 @@ public sealed class OrnnSkillClient
         page = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize, 1, 100);
 
-        var path = $"/api/web/skill-search?query={Uri.EscapeDataString(query)}&mode={normalizedMode}&scope={Uri.EscapeDataString(normalizedScope)}&page={page}&pageSize={pageSize}";
+        var path = $"/api/v1/skill-search?query={Uri.EscapeDataString(query)}&mode={normalizedMode}&scope={Uri.EscapeDataString(normalizedScope)}&page={page}&pageSize={pageSize}";
 
         try
         {
@@ -83,7 +83,7 @@ public sealed class OrnnSkillClient
         string idOrName,
         CancellationToken ct = default)
     {
-        var path = $"/api/web/skills/{Uri.EscapeDataString(idOrName)}/json";
+        var path = $"/api/v1/skills/{Uri.EscapeDataString(idOrName)}/json";
 
         try
         {

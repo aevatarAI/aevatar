@@ -80,8 +80,8 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
 
         _logger.LogInformation("[code_execute] {Language} via slug={Slug}", language, slug);
 
-        var body = JsonSerializer.Serialize(new { language, code });
-        var result = await _client.ProxyRequestAsync(token, slug, "/run", "POST", body, null, ct);
+        var body = JsonSerializer.Serialize(new { language = language, script = code });
+        var result = await _client.ProxyRequestAsync(token, slug, "/execute", "POST", body, null, ct);
         return result;
     }
 
