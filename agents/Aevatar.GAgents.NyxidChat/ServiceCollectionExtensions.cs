@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.NyxIdRelay;
@@ -10,6 +11,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -41,7 +43,22 @@ public static class ServiceCollectionExtensions
 
         // ─── Conversation turn-runner override + reply generator ───
         services.Replace(ServiceDescriptor.Singleton<IConversationTurnRunner, ChannelConversationTurnRunner>());
-        services.Replace(ServiceDescriptor.Singleton<IConversationCardTurnRunner, ChannelCardConversationTurnRunner>());
+        // The CardKit runner depends on Aevatar.AI.ToolProviders.Lark services. AddNyxIdChat()
+        // does not transitively register them — production hosts also call AddLarkTools() —
+        // so resolve via factory and gracefully fall back to the no-op runner when Lark
+        // tooling is absent. This keeps CardKit dormant for hosts that opt out of Lark
+        // instead of failing DI validation at startup.
+        services.Replace(ServiceDescriptor.Singleton<IConversationCardTurnRunner>(sp =>
+        {
+            var cardKit = sp.GetService<ILarkCardKitClient>();
+            var lark = sp.GetService<ILarkNyxClient>();
+            if (cardKit is null || lark is null)
+                return new NullConversationCardTurnRunner();
+            return new ChannelCardConversationTurnRunner(
+                cardKit,
+                lark,
+                sp.GetRequiredService<ILogger<ChannelCardConversationTurnRunner>>());
+        }));
         services.TryAddSingleton<IConversationReplyGenerator, NyxIdConversationReplyGenerator>();
 
         // ─── LLM-call middleware that injects channel context into LLM requests ───

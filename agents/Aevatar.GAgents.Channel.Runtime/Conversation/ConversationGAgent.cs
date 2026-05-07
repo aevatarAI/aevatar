@@ -553,7 +553,10 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         // end-to-end by the card handler.
         if (evt.CardMode)
         {
-            if (await HandleLarkCardStreamingChunkCoreAsync(evt, correlationId).ConfigureAwait(false))
+            // Plain `await`: actor turns run on a single-threaded scheduler and the
+            // continuation must observe that context for subsequent state mutations
+            // on `_larkCardStreamingStates` / `_nyxRelayStreamingStates`.
+            if (await HandleLarkCardStreamingChunkCoreAsync(evt, correlationId))
                 return;
         }
 
@@ -646,8 +649,10 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
 
         // Card path takes precedence when active; falls through to text-edit when card never
         // started (Idle), card creation failed (CreationFailed → text-edit fallback), or card
-        // finished as a terminal phase.
-        if (await TryCompleteCardStreamedReplyAsync(evt, correlationId, commandId, referenceActivity).ConfigureAwait(false))
+        // finished as a terminal phase. Plain `await` so the continuation stays on the
+        // actor's single-threaded scheduler (no ConfigureAwait(false) — it would let the
+        // post-await `_nyxRelayStreamingStates` reads run off the actor turn).
+        if (await TryCompleteCardStreamedReplyAsync(evt, correlationId, commandId, referenceActivity))
             return true;
 
         var state = GetOrInitNyxRelayStreamingState(correlationId);

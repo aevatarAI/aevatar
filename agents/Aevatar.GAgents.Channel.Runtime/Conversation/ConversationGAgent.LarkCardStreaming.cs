@@ -226,6 +226,39 @@ public sealed partial class ConversationGAgent
 
             if (!createResult.Success)
             {
+                if (createResult.IsPostSendFailure)
+                {
+                    // Card was already sent to the chat — falling back to text-edit would
+                    // produce a duplicate visible reply. Terminate the turn at Terminated and
+                    // persist a partial-card record using the orphan card_message_id so the
+                    // event store has a terminal entry. The runner has already attempted a
+                    // best-effort streaming-mode close on the orphan card.
+                    Logger.LogWarning(
+                        "Card post-send failure (create+send succeeded, first stream failed); terminating turn without text-edit fallback. correlation={CorrelationId}, code={ErrorCode}, cardId={CardId}",
+                        evt.CorrelationId,
+                        createResult.ErrorCode,
+                        createResult.CardId);
+                    var terminated = TransitionLarkCardStreamingPhase(
+                        correlationId,
+                        creating,
+                        LarkCardStreamingPhase.Terminated,
+                        terminalReason: $"create_post_send_failed:{createResult.ErrorCode}",
+                        fieldUpdate: s => s with
+                        {
+                            CardId = createResult.CardId,
+                            CardMessageId = createResult.CardMessageId,
+                            OriginalCardId = createResult.CardId,
+                        });
+                    await PersistCardStreamedCompletionAsync(
+                        correlationId,
+                        BuildLlmReplyCommandId(evt.CorrelationId),
+                        evt.Activity,
+                        evt.Activity,
+                        terminated.CardMessageId ?? string.Empty,
+                        terminated.LastFlushedText);
+                    return true;
+                }
+
                 Logger.LogInformation(
                     "Card create failed; falling back to text-edit for the rest of this turn. correlation={CorrelationId}, code={ErrorCode}, rateLimited={RateLimited}, tableLimit={TableLimit}, cardUnavailable={CardUnavailable}",
                     evt.CorrelationId,
@@ -292,11 +325,23 @@ public sealed partial class ConversationGAgent
                 Logger.LogWarning(
                     "Card stream terminal failure; ending turn. correlation={CorrelationId}, code={ErrorCode}",
                     evt.CorrelationId, streamResult.ErrorCode);
-                TransitionLarkCardStreamingPhase(
+                var terminated = TransitionLarkCardStreamingPhase(
                     correlationId,
                     state,
                     LarkCardStreamingPhase.Terminated,
                     terminalReason: $"stream_failed:{streamResult.ErrorCode}");
+                // Persist the partial-card terminal record so the event store records the
+                // turn even though LlmReplyReady has not arrived yet. Without this the
+                // ProcessedCommandIds guard in HandleLlmReplyReadyAsync would still see no
+                // matching entry, fall through to the legacy reply path, and post a
+                // duplicate text reply on top of the visible card.
+                await PersistCardStreamedCompletionAsync(
+                    correlationId,
+                    BuildLlmReplyCommandId(evt.CorrelationId),
+                    evt.Activity,
+                    evt.Activity,
+                    terminated.CardMessageId ?? string.Empty,
+                    terminated.LastFlushedText);
                 return true;
             }
             Logger.LogInformation(
@@ -330,9 +375,28 @@ public sealed partial class ConversationGAgent
         ChatActivity? referenceActivity)
     {
         var state = GetOrInitLarkCardStreamingState(correlationId);
-        if (state.Phase is not LarkCardStreamingPhase.Streaming)
+        // Idle: card path was never started for this turn (or already cleaned up); let the
+        // legacy edit-message finalize path handle it. CreationFailed: card create rejected
+        // pre-send, which already routed the chunks to the text-edit sink, so the text-edit
+        // finalize must run too. Both → return false to fall through.
+        if (state.Phase is LarkCardStreamingPhase.Idle
+                       or LarkCardStreamingPhase.CreationFailed)
             return false;
 
+        // Already-terminal card phase (post-send-failure, mid-stream rate/unavailable, or
+        // a previous finalize): persistence already happened at the transition site, so
+        // simply consume the ready event without running text-edit finalize. The
+        // ProcessedCommandIds guard in HandleLlmReplyReadyAsync also short-circuits late
+        // ready events, but returning true here keeps the contract explicit.
+        if (state.Phase is LarkCardStreamingPhase.Completed
+                       or LarkCardStreamingPhase.Aborted
+                       or LarkCardStreamingPhase.Terminated)
+            return true;
+
+        // Phase is Streaming or Creating. Creating during finalize is unexpected (card.create
+        // is synchronous within a single chunk's handler); treat it as Streaming with no
+        // prior interim text. Anything else falls through to text-edit, but the explicit
+        // guards above mean we only reach this point with phase=Streaming/Creating.
         var finalText = evt.Outbound?.Text ?? string.Empty;
         var finalDiffers = !string.IsNullOrWhiteSpace(finalText)
             && !string.Equals(finalText, state.LastFlushedText, StringComparison.Ordinal);
@@ -363,11 +427,22 @@ public sealed partial class ConversationGAgent
                 state,
                 LarkCardStreamingPhase.Terminated,
                 terminalReason: $"finalize_threw:{ex.GetType().Name}");
-            await PersistCardStreamedCompletionAsync(evt, commandId, referenceActivity, state.CardMessageId ?? string.Empty, state.LastFlushedText);
+            await PersistCardStreamedCompletionAsync(
+                correlationId,
+                commandId,
+                evt.Activity,
+                referenceActivity,
+                state.CardMessageId ?? string.Empty,
+                state.LastFlushedText);
             return true;
         }
 
-        var visibleText = finalDiffers && finalizeResult.Success ? finalText : state.LastFlushedText;
+        // visibleText must match what the user actually sees on the card. Two failure modes:
+        //   * Final stream write failed                  → card shows LastFlushedText
+        //   * Final stream succeeded but close-streaming failed → card shows finalText, just
+        //     with a still-blinking cursor. Persist finalText so the durable record agrees
+        //     with the visible state.
+        var visibleText = finalizeResult.FinalTextWritten ? finalText : state.LastFlushedText;
         if (finalizeResult.Success)
         {
             TransitionLarkCardStreamingPhase(
@@ -389,17 +464,25 @@ public sealed partial class ConversationGAgent
         }
 
         await PersistCardStreamedCompletionAsync(
-            evt,
+            correlationId,
             commandId,
+            evt.Activity,
             referenceActivity,
             state.CardMessageId ?? string.Empty,
             visibleText);
         return true;
     }
 
+    /// <summary>
+    /// Persists the terminal <c>ConversationTurnCompletedEvent</c> for a card-streamed turn.
+    /// Decoupled from the inbound event type so both the LlmReplyReady finalize path and the
+    /// mid-stream Terminated path (post-send-failure / table-limit / unavailable, observed
+    /// while still processing chunks) can share one writer.
+    /// </summary>
     private async Task PersistCardStreamedCompletionAsync(
-        LlmReplyReadyEvent evt,
+        string correlationId,
         string commandId,
+        ChatActivity? eventActivity,
         ChatActivity? referenceActivity,
         string cardMessageId,
         string outboundText)
@@ -411,18 +494,18 @@ public sealed partial class ConversationGAgent
             CausationCommandId = commandId,
             SentActivityId = $"lark-card-stream:{cardMessageId}",
             AuthPrincipal = "bot",
-            Conversation = evt.Activity?.Conversation?.Clone()
+            Conversation = eventActivity?.Conversation?.Clone()
                            ?? State.Conversation?.Clone()
                            ?? new ConversationReference(),
             Outbound = new MessageContent { Text = outboundText },
             CompletedAtUnixMs = nowMs,
-            OutboundDelivery = ToOutboundDeliveryReceipt(evt.Activity?.OutboundDelivery),
+            OutboundDelivery = ToOutboundDeliveryReceipt(eventActivity?.OutboundDelivery),
         };
         await PersistDomainEventAsync(completed);
-        RemoveNyxRelayReplyToken(evt.CorrelationId, referenceActivity);
+        RemoveNyxRelayReplyToken(correlationId, referenceActivity);
         Logger.LogInformation(
             "Completed card-streamed LLM reply: correlation={CorrelationId} cardMessageId={CardMessageId} conversation={Key}",
-            evt.CorrelationId,
+            correlationId,
             cardMessageId,
             completed.Conversation?.CanonicalKey);
     }

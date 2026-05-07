@@ -1656,7 +1656,7 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
-    public async Task HandleLlmReplyStreamChunkAsync_CardMode_TableLimit_TerminatesAndDropsSubsequentChunks()
+    public async Task HandleLlmReplyStreamChunkAsync_CardMode_TableLimit_TerminatesPersistsAndDropsLaterChunks()
     {
         var card = new RecordingCardTurnRunner
         {
@@ -1664,7 +1664,7 @@ public sealed class ConversationGAgentDedupTests
             CardStreamResultFactory = (_, _, _, _) =>
                 ConversationCardStreamResult.Failed("card_table_limit", "too big", isTableLimitExceeded: true),
         };
-        var (agent, _) = CreateAgent(new RecordingTurnRunner(), "conv-card-tl", cardRunner: card);
+        var (agent, store) = CreateAgent(new RecordingTurnRunner(), "conv-card-tl", cardRunner: card);
         SeedReplyToken(agent, "act-card-tl", "token-1", "relay-msg-1");
 
         await agent.HandleLlmReplyStreamChunkAsync(
@@ -1674,7 +1674,55 @@ public sealed class ConversationGAgentDedupTests
         await agent.HandleLlmReplyStreamChunkAsync(
             CreateCardStreamChunk("act-card-tl", "relay-msg-1", "first plus second plus third"));
 
+        // Only one CardStream call before termination; chunk 3 is dropped by the
+        // ProcessedCommandIds guard once mid-stream persistence ran.
         card.CardStreamCount.ShouldBe(1);
+
+        // Mid-stream Terminated must persist a partial-card terminal record so the event
+        // store has a terminal entry before LlmReplyReady arrives — otherwise the ready
+        // event would fall through to RunLlmReplyAsync and post a duplicate text reply.
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Last().EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
+        var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(events.Last().EventData.Value);
+        completed.SentActivityId.ShouldStartWith("lark-card-stream:");
+        completed.Outbound.Text.ShouldBe("first");
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyStreamChunkAsync_CardMode_PostSendFirstStreamFailure_TerminatesWithoutTextEditFallback()
+    {
+        // Regression for codex P2: when card.create + im.messages.send succeed but the
+        // first cardElement.content write fails, the card is already visible in the chat.
+        // The actor must NOT fall back to the legacy text-edit sink (that would post a
+        // duplicate reply on top of the empty card). It transitions to Terminated, persists
+        // a partial-card terminal record, and the text-edit runner is never invoked.
+        var card = new RecordingCardTurnRunner
+        {
+            CardCreateResultFactory = _ => ConversationCardCreateResult.PostSendFailed(
+                cardId: "card_orphan",
+                cardMessageId: "om_orphan",
+                errorCode: "card_first_stream_failed",
+                errorSummary: "stream rejected"),
+        };
+        var text = new RecordingTurnRunner();
+        var (agent, store) = CreateAgent(text, "conv-card-postsend", cardRunner: card);
+        SeedReplyToken(agent, "act-card-postsend", "token-1", "relay-msg-1");
+
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateCardStreamChunk("act-card-postsend", "relay-msg-1", "hello"));
+        await agent.HandleLlmReplyStreamChunkAsync(
+            CreateCardStreamChunk("act-card-postsend", "relay-msg-1", "hello world"));
+
+        // Card runner saw create exactly once; text-edit runner never saw a chunk because
+        // the post-send-failure path terminates instead of falling back.
+        card.CardCreateCount.ShouldBe(1);
+        text.StreamChunkCount.ShouldBe(0);
+
+        // Partial-card terminal record persisted with the orphan card_message_id.
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Last().EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
+        var completed = ConversationTurnCompletedEvent.Parser.ParseFrom(events.Last().EventData.Value);
+        completed.SentActivityId.ShouldBe("lark-card-stream:om_orphan");
     }
 
     [Fact]

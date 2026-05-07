@@ -100,13 +100,22 @@ public sealed partial class ConversationGAgent
     /// Every public handler that touches the streaming path defers to this helper at the
     /// top instead of repeating ad-hoc checks. Returns true when the caller should bail.
     /// </summary>
+    /// <remarks>
+    /// The Finalize branch also short-circuits when <see cref="NyxRelayStreamingState.PlatformMessageId"/>
+    /// is empty: a turn whose first send did not surface a platform message id (Nyx returned
+    /// an empty <c>PlatformMessageId</c> on initial <c>/reply</c>) cannot be finalized via
+    /// <c>/reply/update</c> — we have no upstream message to address — so the legacy
+    /// <c>RunLlmReplyAsync</c> fallback owns the terminal user-visible state. This preserves
+    /// the explicit empty-PlatformMessageId check that lived in the pre-refactor path.
+    /// </remarks>
     private static bool ShouldSkipNyxRelayStreamingForUnavailable(
         NyxRelayStreamingState state,
         NyxRelayStreamingGuardSource source) =>
         source switch
         {
             NyxRelayStreamingGuardSource.AcceptInterimChunk => !state.AllowsInterimEdit,
-            NyxRelayStreamingGuardSource.Finalize => state.AllowsReplyFallback,
+            NyxRelayStreamingGuardSource.Finalize =>
+                state.AllowsReplyFallback || string.IsNullOrEmpty(state.PlatformMessageId),
             _ => false,
         };
 

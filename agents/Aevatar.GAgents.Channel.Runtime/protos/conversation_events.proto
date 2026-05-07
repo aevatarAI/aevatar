@@ -95,10 +95,13 @@ message LlmReplyStreamChunkEvent {
   // Current accumulated reply text (not a delta slice). Each chunk supersedes the previous one.
   string accumulated_text = 4;
   int64 chunk_at_unix_ms = 5;
-  // True when dispatched by TurnStreamingCardSink (CardKit path) instead of TurnStreamingReplySink.
-  // The actor branches into HandleLlmReplyCardStreamChunk semantics — drives LarkCardStreamingState,
-  // calls IConversationCardTurnRunner — instead of the legacy edit-message path. Default false
-  // (text-edit) for backward compatibility with existing event-store payloads.
+  // True when dispatched by the card sink (CardKit path) instead of the legacy edit-message
+  // sink. The actor reads this to drive LarkCardStreamingState + IConversationCardTurnRunner
+  // instead of the edit-message path. Like the rest of this message, it is a runtime-only
+  // signal (see the message-level "must never be persisted" note above): persisting and
+  // replaying it would re-trigger card routing on a turn whose card lifecycle has long since
+  // ended, posting a duplicate card. Default false preserves the legacy path on any caller
+  // that has not opted in.
   bool card_mode = 6;
 }
 

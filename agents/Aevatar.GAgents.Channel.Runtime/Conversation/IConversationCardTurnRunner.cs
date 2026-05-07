@@ -64,10 +64,22 @@ public interface IConversationCardTurnRunner
 }
 
 /// <summary>
-/// Outcome of <see cref="IConversationCardTurnRunner.RunCardCreateAsync"/>. The error
-/// classification flags drive the grain's fallback decision: <see cref="IsRateLimited"/>
-/// and <see cref="IsTableLimitExceeded"/> route the turn to the legacy text-edit sink;
-/// <see cref="IsCardUnavailable"/> terminates the turn at <c>Terminated</c>.
+/// Outcome of <see cref="IConversationCardTurnRunner.RunCardCreateAsync"/>. The classification
+/// flags drive the grain's fallback decision:
+/// <list type="bullet">
+/// <item>Pre-send failures (create call rejected before any chat-visible side effect): the
+///   actor transitions to <c>CreationFailed</c> and falls back to the legacy text-edit sink
+///   so the user still sees a reply. <see cref="IsRateLimited"/> /
+///   <see cref="IsTableLimitExceeded"/> imply this path.</item>
+/// <item>Post-send failures (create + send succeeded but the first stream-content write
+///   failed — see <see cref="IsPostSendFailure"/>): an empty card is already visible in the
+///   chat. Falling back to text-edit would produce a duplicate reply. The actor terminates
+///   the turn at <c>Terminated</c> using the surfaced <see cref="CardId"/> /
+///   <see cref="CardMessageId"/> and persists the partial-card terminal record. The runner
+///   makes a best-effort settings patch to close streaming mode on the orphan card before
+///   returning so the cursor does not blink forever.</item>
+/// <item><see cref="IsCardUnavailable"/> on its own terminates the turn (no fallback).</item>
+/// </list>
 /// </summary>
 public sealed record ConversationCardCreateResult(
     bool Success,
@@ -76,11 +88,12 @@ public sealed record ConversationCardCreateResult(
     bool IsRateLimited,
     bool IsTableLimitExceeded,
     bool IsCardUnavailable,
+    bool IsPostSendFailure,
     string ErrorCode,
     string ErrorSummary)
 {
     public static ConversationCardCreateResult Succeeded(string cardId, string cardMessageId) =>
-        new(true, cardId, cardMessageId, false, false, false, string.Empty, string.Empty);
+        new(true, cardId, cardMessageId, false, false, false, false, string.Empty, string.Empty);
 
     public static ConversationCardCreateResult Failed(
         string errorCode,
@@ -88,7 +101,24 @@ public sealed record ConversationCardCreateResult(
         bool isRateLimited = false,
         bool isTableLimitExceeded = false,
         bool isCardUnavailable = false) =>
-        new(false, null, null, isRateLimited, isTableLimitExceeded, isCardUnavailable, errorCode, errorSummary);
+        new(false, null, null, isRateLimited, isTableLimitExceeded, isCardUnavailable, false, errorCode, errorSummary);
+
+    /// <summary>
+    /// Failure factory for the "card was already sent to the chat but the first
+    /// element-content write failed" case. The actor must NOT fall back to text-edit
+    /// (the orphan card is already visible) — it transitions the turn to <c>Terminated</c>
+    /// and uses <paramref name="cardId"/> / <paramref name="cardMessageId"/> for the
+    /// persisted partial-card record.
+    /// </summary>
+    public static ConversationCardCreateResult PostSendFailed(
+        string cardId,
+        string cardMessageId,
+        string errorCode,
+        string errorSummary,
+        bool isRateLimited = false,
+        bool isTableLimitExceeded = false,
+        bool isCardUnavailable = false) =>
+        new(false, cardId, cardMessageId, isRateLimited, isTableLimitExceeded, isCardUnavailable, true, errorCode, errorSummary);
 }
 
 /// <summary>
@@ -116,16 +146,32 @@ public sealed record ConversationCardStreamResult(
         new(false, isRateLimited, isTableLimitExceeded, isCardUnavailable, errorCode, errorSummary);
 }
 
+/// <param name="Success">True only when both the optional final stream write AND the
+/// streaming-mode close succeeded.</param>
+/// <param name="FinalTextWritten">
+/// True when the trailing element-content write either succeeded OR was skipped
+/// (final text equals last flushed). False only when the runner attempted the trailing
+/// write and it failed; lets the actor persist the visible-state text correctly when
+/// success is false but the final text actually did land before the close-streaming-mode
+/// failure.
+/// </param>
 public sealed record ConversationCardFinalizeResult(
     bool Success,
+    bool FinalTextWritten,
     string ErrorCode,
     string ErrorSummary)
 {
     public static ConversationCardFinalizeResult Succeeded() =>
-        new(true, string.Empty, string.Empty);
+        new(true, true, string.Empty, string.Empty);
 
-    public static ConversationCardFinalizeResult Failed(string errorCode, string errorSummary) =>
-        new(false, errorCode, errorSummary);
+    /// <summary>
+    /// Failure factory. <paramref name="finalTextWritten"/> distinguishes between "trailing
+    /// write failed; user sees stale interim" (false) and "trailing write succeeded but
+    /// streaming-mode close failed; user sees the final text with a still-blinking cursor"
+    /// (true).
+    /// </summary>
+    public static ConversationCardFinalizeResult Failed(string errorCode, string errorSummary, bool finalTextWritten = false) =>
+        new(false, finalTextWritten, errorCode, errorSummary);
 }
 
 /// <summary>

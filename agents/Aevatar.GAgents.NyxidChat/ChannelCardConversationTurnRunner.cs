@@ -108,6 +108,10 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
 
         // 3. Write the first chunk's text into the streaming element. Sequence = 1 (the
         //    grain pre-allocates this value; subsequent chunks pass sequence+1 each call).
+        //    The card has already been bound to the chat (step 2), so any failure from here
+        //    on is a *post-send* failure: an empty card is visible in the chat. We must
+        //    return PostSendFailed (not Failed) so the actor terminates the turn instead
+        //    of falling back to text-edit and producing a duplicate reply.
         string firstStreamResponse;
         try
         {
@@ -124,13 +128,46 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "CardKit first stream threw for correlation={CorrelationId}, card_id={CardId}", chunk.CorrelationId, cardId);
-            return ConversationCardCreateResult.Failed("card_first_stream_threw", ex.Message);
+            await TryBestEffortCloseStreamingAsync(token, cardId, sequence: 2, ct).ConfigureAwait(false);
+            return ConversationCardCreateResult.PostSendFailed(
+                cardId,
+                cardMessageId,
+                "card_first_stream_threw",
+                ex.Message);
         }
 
         if (LarkProxyResponseParser.TryParseError(firstStreamResponse, out var firstStreamError))
-            return ClassifyCreateFailure("card_first_stream_failed", firstStreamError);
+        {
+            await TryBestEffortCloseStreamingAsync(token, cardId, sequence: 2, ct).ConfigureAwait(false);
+            return ClassifyPostSendFailure(cardId, cardMessageId, "card_first_stream_failed", firstStreamError);
+        }
 
         return ConversationCardCreateResult.Succeeded(cardId, cardMessageId);
+    }
+
+    /// <summary>
+    /// Best-effort settings patch to close <c>streaming_mode</c> on a card whose first
+    /// content write failed. Stops the typewriter cursor on the orphan empty card so the
+    /// chat does not show a perpetually-loading bubble. Failures are logged and swallowed —
+    /// the parent operation has already failed; this is a UX cleanup, not a correctness gate.
+    /// </summary>
+    private async Task TryBestEffortCloseStreamingAsync(string token, string cardId, long sequence, CancellationToken ct)
+    {
+        try
+        {
+            await _cardKit.SetCardSettingsAsync(
+                token,
+                new LarkCardKitSettingsRequest(
+                    CardId: cardId,
+                    SettingsJson: """{"streaming_mode": false}""",
+                    Sequence: sequence,
+                    IdempotencyKey: $"orphan-close-{cardId}"),
+                ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Best-effort close of orphan streaming card failed; cursor may remain visible. card_id={CardId}", cardId);
+        }
     }
 
     public async Task<ConversationCardStreamResult> RunCardStreamAsync(
@@ -192,8 +229,10 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
 
         // 1. If final text drifted from the last flushed interim, write it before closing
         //    streaming mode. Order matters: closing streaming first would freeze the cursor
-        //    on the stale text.
+        //    on the stale text. Track whether the trailing write actually landed so the
+        //    actor can pick the right user-visible text on a partial-failure terminal.
         long workingSequence = sequence;
+        var finalTextWritten = !finalTextDiffersFromLastFlushed || string.IsNullOrWhiteSpace(finalText);
         if (finalTextDiffersFromLastFlushed && !string.IsNullOrWhiteSpace(finalText))
         {
             try
@@ -208,13 +247,14 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
                         IdempotencyKey: $"final-{cardId}-{workingSequence}"),
                     ct);
                 if (LarkProxyResponseParser.TryParseError(streamFinalResponse, out var streamFinalError))
-                    return ConversationCardFinalizeResult.Failed("card_final_stream_failed", streamFinalError);
+                    return ConversationCardFinalizeResult.Failed("card_final_stream_failed", streamFinalError, finalTextWritten: false);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "CardKit final stream threw for card_id={CardId}, seq={Sequence}", cardId, workingSequence);
-                return ConversationCardFinalizeResult.Failed("card_final_stream_threw", ex.Message);
+                return ConversationCardFinalizeResult.Failed("card_final_stream_threw", ex.Message, finalTextWritten: false);
             }
+            finalTextWritten = true;
             workingSequence++;
         }
 
@@ -230,12 +270,12 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
                     IdempotencyKey: $"close-{cardId}-{workingSequence}"),
                 ct);
             if (LarkProxyResponseParser.TryParseError(settingsResponse, out var settingsError))
-                return ConversationCardFinalizeResult.Failed("card_close_streaming_failed", settingsError);
+                return ConversationCardFinalizeResult.Failed("card_close_streaming_failed", settingsError, finalTextWritten: finalTextWritten);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "CardKit close-streaming threw for card_id={CardId}, seq={Sequence}", cardId, workingSequence);
-            return ConversationCardFinalizeResult.Failed("card_close_streaming_threw", ex.Message);
+            return ConversationCardFinalizeResult.Failed("card_close_streaming_threw", ex.Message, finalTextWritten: finalTextWritten);
         }
 
         return ConversationCardFinalizeResult.Succeeded();
@@ -300,7 +340,27 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
             errorCode: contextErrorCode,
             errorSummary: larkError,
             isRateLimited: ContainsLarkCode(larkError, 230020),
-            isTableLimitExceeded: ContainsLarkCode(larkError, 230099) || ContainsLarkCode(larkError, 11310),
+            isTableLimitExceeded: ContainsLarkCode(larkError, 11310),
+            isCardUnavailable: ContainsLarkCode(larkError, 230099) || ContainsLarkCode(larkError, 230100));
+
+    /// <summary>
+    /// Same classification as <see cref="ClassifyCreateFailure"/> but threads the
+    /// already-allocated <paramref name="cardId"/> / <paramref name="cardMessageId"/> through
+    /// the result so the actor can persist the partial-card terminal record. Used for any
+    /// failure that occurs after <c>im/v1/messages</c> has bound the card to the chat.
+    /// </summary>
+    private static ConversationCardCreateResult ClassifyPostSendFailure(
+        string cardId,
+        string cardMessageId,
+        string contextErrorCode,
+        string larkError) =>
+        ConversationCardCreateResult.PostSendFailed(
+            cardId: cardId,
+            cardMessageId: cardMessageId,
+            errorCode: contextErrorCode,
+            errorSummary: larkError,
+            isRateLimited: ContainsLarkCode(larkError, 230020),
+            isTableLimitExceeded: ContainsLarkCode(larkError, 11310),
             isCardUnavailable: ContainsLarkCode(larkError, 230099) || ContainsLarkCode(larkError, 230100));
 
     private static ConversationCardStreamResult ClassifyStreamFailure(string larkError) =>
@@ -308,14 +368,31 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
             errorCode: "card_stream_failed",
             errorSummary: larkError,
             isRateLimited: ContainsLarkCode(larkError, 230020),
-            isTableLimitExceeded: ContainsLarkCode(larkError, 230099) || ContainsLarkCode(larkError, 11310),
-            isCardUnavailable: ContainsLarkCode(larkError, 230100));
+            isTableLimitExceeded: ContainsLarkCode(larkError, 11310),
+            isCardUnavailable: ContainsLarkCode(larkError, 230099) || ContainsLarkCode(larkError, 230100));
 
     /// <summary>
-    /// Substring match against <see cref="LarkProxyResponseParser.TryParseError"/>'s output
-    /// shape (<c>"lark_code={n} ..."</c>). Cheap, allocation-free; the parser owns the
-    /// canonical error string format so this stays stable.
+    /// Boundary-aware match against <see cref="LarkProxyResponseParser.TryParseError"/>'s
+    /// output shape (<c>"lark_code={n} ..."</c>). The needle's trailing position must be
+    /// the end of the string OR a non-digit; without the boundary check, looking for
+    /// <c>lark_code=23002</c> would falsely match a string containing <c>lark_code=230020</c>.
     /// </summary>
-    private static bool ContainsLarkCode(string error, int code) =>
-        !string.IsNullOrEmpty(error) && error.Contains($"lark_code={code}", StringComparison.Ordinal);
+    private static bool ContainsLarkCode(string error, int code)
+    {
+        if (string.IsNullOrEmpty(error))
+            return false;
+        var needle = $"lark_code={code}";
+        var index = 0;
+        while (index <= error.Length - needle.Length)
+        {
+            var found = error.IndexOf(needle, index, StringComparison.Ordinal);
+            if (found < 0)
+                return false;
+            var endIndex = found + needle.Length;
+            if (endIndex == error.Length || !char.IsDigit(error[endIndex]))
+                return true;
+            index = endIndex;
+        }
+        return false;
+    }
 }
