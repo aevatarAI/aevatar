@@ -62,6 +62,92 @@ public sealed class StudioMemberBindingRunQueryPortTests
         run.Should().BeNull();
     }
 
+    [Fact]
+    public async Task GetAsync_ShouldReturnNull_WhenRunDocumentIsMissing()
+    {
+        var port = new ProjectionStudioMemberBindingRunQueryPort(new StubDocumentReader([]));
+
+        var run = await port.GetAsync("scope-1", "m-1", "bind-missing");
+
+        run.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetAsync_ShouldReturnNull_WhenRunBelongsToDifferentScope()
+    {
+        var actorId = StudioMemberConventions.BuildBindingRunActorId("bind-1");
+        var reader = new StubDocumentReader([
+            new StudioMemberBindingRunCurrentStateDocument
+            {
+                Id = actorId,
+                ActorId = actorId,
+                BindingRunId = "bind-1",
+                ScopeId = "other-scope",
+                MemberId = "m-1",
+                Status = StudioMemberBindingRunStatusNames.Succeeded,
+            },
+        ]);
+        var port = new ProjectionStudioMemberBindingRunQueryPort(reader);
+
+        var run = await port.GetAsync("scope-1", "m-1", "bind-1");
+
+        run.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetAsync_ShouldReturnNull_WhenDocumentBindingRunIdDoesNotMatch()
+    {
+        var actorId = StudioMemberConventions.BuildBindingRunActorId("bind-1");
+        var reader = new StubDocumentReader([
+            new StudioMemberBindingRunCurrentStateDocument
+            {
+                Id = actorId,
+                ActorId = actorId,
+                BindingRunId = "other-bind",
+                ScopeId = "scope-1",
+                MemberId = "m-1",
+                Status = StudioMemberBindingRunStatusNames.Succeeded,
+            },
+        ]);
+        var port = new ProjectionStudioMemberBindingRunQueryPort(reader);
+
+        var run = await port.GetAsync("scope-1", "m-1", "bind-1");
+
+        run.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetAsync_ShouldMapFailureAndUnknownStatusFromDocument()
+    {
+        var failedAt = DateTimeOffset.Parse("2026-04-30T09:30:00Z");
+        var actorId = StudioMemberConventions.BuildBindingRunActorId("bind-1");
+        var reader = new StubDocumentReader([
+            new StudioMemberBindingRunCurrentStateDocument
+            {
+                Id = actorId,
+                ActorId = actorId,
+                BindingRunId = "bind-1",
+                ScopeId = "scope-1",
+                MemberId = "m-1",
+                Status = "new-status-from-future",
+                FailureCode = "BIND_FAILED",
+                FailureMessage = "platform refused the revision",
+                FailureAt = Timestamp.FromDateTimeOffset(failedAt),
+            },
+        ]);
+        var port = new ProjectionStudioMemberBindingRunQueryPort(reader);
+
+        var run = await port.GetAsync("scope-1", "m-1", "bind-1");
+
+        run.Should().NotBeNull();
+        run!.Status.Should().BeEmpty();
+        run.Failure.Should().NotBeNull();
+        run.Failure!.Code.Should().Be("BIND_FAILED");
+        run.Failure.Message.Should().Be("platform refused the revision");
+        run.Failure.FailedAt.Should().Be(failedAt);
+        run.PlatformBindingCommandId.Should().BeNull();
+    }
+
     private sealed class StubDocumentReader
         : IProjectionDocumentReader<StudioMemberBindingRunCurrentStateDocument, string>
     {

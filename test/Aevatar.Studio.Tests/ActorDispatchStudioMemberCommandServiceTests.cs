@@ -240,6 +240,77 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
     }
 
     [Fact]
+    public async Task StartBindingRunAsync_ShouldDispatchWorkflowBindingPayload()
+    {
+        var bootstrap = new RecordingBootstrap();
+        var dispatch = new RecordingDispatchPort();
+        var service = new ActorDispatchStudioMemberCommandService(bootstrap, dispatch);
+
+        await service.StartBindingRunAsync(
+            new StudioMemberBindingRunStartRequest(
+                BindingRunId: "bind-workflow",
+                ScopeId: ScopeId,
+                MemberId: "m-1",
+                ImplementationKind: MemberImplementationKindNames.Workflow,
+                Binding: new UpdateStudioMemberBindingRequest(
+                    RevisionId: "rev-explicit",
+                    Workflow: new StudioMemberWorkflowBindingSpec([
+                        "workflow:\n  name: alpha",
+                        "workflow:\n  name: beta",
+                    ]))),
+            CancellationToken.None);
+
+        var evt = dispatch.Dispatches.Should().ContainSingle().Which
+            .Envelope.Payload.Unpack<StudioMemberBindingRunRequested>();
+        evt.Request.RevisionId.Should().Be("rev-explicit");
+        evt.Request.Workflow.WorkflowYamls.Should().Equal(
+            "workflow:\n  name: alpha",
+            "workflow:\n  name: beta");
+    }
+
+    [Fact]
+    public async Task StartBindingRunAsync_ShouldDispatchGAgentBindingPayload()
+    {
+        var bootstrap = new RecordingBootstrap();
+        var dispatch = new RecordingDispatchPort();
+        var service = new ActorDispatchStudioMemberCommandService(bootstrap, dispatch);
+
+        await service.StartBindingRunAsync(
+            new StudioMemberBindingRunStartRequest(
+                BindingRunId: "bind-gagent",
+                ScopeId: ScopeId,
+                MemberId: "m-1",
+                ImplementationKind: MemberImplementationKindNames.GAgent,
+                Binding: new UpdateStudioMemberBindingRequest(
+                    GAgent: new StudioMemberGAgentBindingSpec(
+                        ActorTypeName: "MyCompany.MyGAgent",
+                        Endpoints: [
+                            new StudioMemberGAgentEndpointSpec(
+                                EndpointId: "chat",
+                                DisplayName: "Chat",
+                                Kind: "chat",
+                                RequestTypeUrl: "type.googleapis.com/a.Request",
+                                ResponseTypeUrl: "type.googleapis.com/a.Response",
+                                Description: "chat endpoint")
+                        ]))),
+            CancellationToken.None);
+
+        var evt = dispatch.Dispatches.Should().ContainSingle().Which
+            .Envelope.Payload.Unpack<StudioMemberBindingRunRequested>();
+        evt.Request.Gagent.ActorTypeName.Should().Be("MyCompany.MyGAgent");
+        evt.Request.Gagent.Endpoints.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(new StudioMemberGAgentEndpointBindingRequest
+            {
+                EndpointId = "chat",
+                DisplayName = "Chat",
+                Kind = "chat",
+                RequestTypeUrl = "type.googleapis.com/a.Request",
+                ResponseTypeUrl = "type.googleapis.com/a.Response",
+                Description = "chat endpoint",
+            });
+    }
+
+    [Fact]
     public void Constructor_ShouldRejectNullDependencies()
     {
         FluentActions.Invoking(() =>
