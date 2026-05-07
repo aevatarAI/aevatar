@@ -49,7 +49,7 @@ internal static class OrnnSkillsCommand
 
             try
             {
-                var result = await client.SearchSkillsAsync(token, query, scope, page, pageSize, CancellationToken.None);
+                var result = await client.SearchSkillsAsync(token, query, scope, page, pageSize, ct: CancellationToken.None);
                 PrintSearchResults(result);
             }
             catch (HttpRequestException ex)
