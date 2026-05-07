@@ -278,11 +278,6 @@ public sealed class StudioMemberServiceTeamTests
             CancellationToken ct = default) =>
             Task.CompletedTask;
 
-        public Task RecordBindingAsync(
-            string scopeId, string memberId, string publishedServiceId,
-            string revisionId, string implementationKindName, CancellationToken ct = default) =>
-            Task.CompletedTask;
-
         public Task ReassignTeamAsync(
             string scopeId, string memberId, string? fromTeamId, string? toTeamId,
             CancellationToken ct = default)

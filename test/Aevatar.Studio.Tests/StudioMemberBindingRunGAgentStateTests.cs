@@ -27,6 +27,27 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     }
 
     [Fact]
+    public void DuplicateRequested_WithDifferentPayload_ShouldBeDetectedAsConflict()
+    {
+        var requested = NewRequested();
+        var state = _agent.Apply(new StudioMemberBindingRunState(), requested);
+        var duplicate = NewRequested();
+        duplicate.Request.Script.ScriptRevision = "rev-b";
+
+        _agent.IsSameRequest(state.Request, duplicate.Request, state.RequestHash).Should().BeFalse();
+    }
+
+    [Fact]
+    public void DuplicateRequested_WithSamePayloadAndHash_ShouldBeAcceptedAsIdempotent()
+    {
+        var requested = NewRequested();
+        var state = _agent.Apply(new StudioMemberBindingRunState(), requested);
+        var duplicate = NewRequested();
+
+        _agent.IsSameRequest(state.Request, duplicate.Request, state.RequestHash).Should().BeTrue();
+    }
+
+    [Fact]
     public void Admitted_ShouldCaptureMemberSnapshot()
     {
         var accepted = _agent.Apply(new StudioMemberBindingRunState(), NewRequested());
@@ -188,6 +209,12 @@ public sealed class StudioMemberBindingRunGAgentStateTests
                 BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new InvalidOperationException("TransitionState method not found.");
 
+        private static readonly MethodInfo IsSameRequestMethod =
+            typeof(StudioMemberBindingRunGAgent).GetMethod(
+                "IsSameRequest",
+                BindingFlags.Static | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("IsSameRequest method not found.");
+
         private readonly StudioMemberBindingRunGAgent _agent = new();
 
         public StudioMemberBindingRunState Apply(StudioMemberBindingRunState current, IMessage evt)
@@ -195,6 +222,16 @@ public sealed class StudioMemberBindingRunGAgentStateTests
             var result = TransitionStateMethod.Invoke(_agent, [current, evt])
                 ?? throw new InvalidOperationException("TransitionState returned null.");
             return (StudioMemberBindingRunState)result;
+        }
+
+        public bool IsSameRequest(
+            StudioMemberBindingRequest current,
+            StudioMemberBindingRequest incoming,
+            string currentHash)
+        {
+            var result = IsSameRequestMethod.Invoke(null, [current, incoming, currentHash])
+                ?? throw new InvalidOperationException("IsSameRequest returned null.");
+            return (bool)result;
         }
     }
 }

@@ -43,19 +43,6 @@ public interface IStudioMemberCommandPort
         CancellationToken ct = default);
 
     /// <summary>
-    /// Records that the member has been bound to its published service at the
-    /// given revision. Called by the member binding orchestrator after the
-    /// underlying scope binding upsert succeeds.
-    /// </summary>
-    Task RecordBindingAsync(
-        string scopeId,
-        string memberId,
-        string publishedServiceId,
-        string revisionId,
-        string implementationKindName,
-        CancellationToken ct = default);
-
-    /// <summary>
     /// Reassigns a member from one team to another (ADR-0017 §Q3). At least
     /// one of <paramref name="fromTeamId"/> / <paramref name="toTeamId"/> must
     /// be non-null; passing both null, or both equal, is rejected. Pure

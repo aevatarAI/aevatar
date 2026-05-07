@@ -58,28 +58,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
 
         var executionRequest = request.Clone();
         executionRequest.PlatformBindingCommandId = platformBindingCommandId;
-        _ = Task.Run(
-            async () =>
-            {
-                try
-                {
-                    await RunBindingAsync(
-                        replyActorId,
-                        platformBindingCommandId,
-                        executionRequest,
-                        CancellationToken.None).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(
-                        ex,
-                        "StudioMember platform binding background execution crashed. bindingRunId={BindingRunId} platformBindingCommandId={CommandId}",
-                        executionRequest.BindingRunId,
-                        platformBindingCommandId);
-                }
-            },
-            CancellationToken.None);
-        return Task.CompletedTask;
+        return RunBindingAsync(replyActorId, platformBindingCommandId, executionRequest, ct);
     }
 
     private async Task RunBindingAsync(

@@ -19,20 +19,22 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
     {
         await base.OnActivateAsync(ct);
 
-        if (State.Status == StudioMemberBindingRunStatus.PlatformBindingPending
-            && !string.IsNullOrEmpty(State.BindingRunId)
-            && !string.IsNullOrEmpty(State.PlatformBindingCommandId)
-            && State.Request != null
-            && State.Admitted != null)
+        if (!CanRecoverRun())
+            return;
+
+        switch (State.Status)
         {
-            await SendToAsync(
-                Id,
-                new StudioMemberPlatformBindingExecuteRequested
-                {
-                    BindingRunId = State.BindingRunId,
-                    PlatformBindingCommandId = State.PlatformBindingCommandId,
-                },
-                ct);
+            case StudioMemberBindingRunStatus.AdmissionPending:
+                await SendAdmissionRequestAsync(ct);
+                break;
+            case StudioMemberBindingRunStatus.Admitted:
+                await SendPlatformBindingStartRequestedAsync(State.UpdatedAtUtc, ct);
+                break;
+            case StudioMemberBindingRunStatus.PlatformBindingPending:
+                await SendPlatformBindingPendingAndExecuteAsync(
+                    State.UpdatedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    ct);
+                break;
         }
     }
 
@@ -47,21 +49,17 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
                     $"binding run already initialized with id '{State.BindingRunId}'.");
             }
 
+            if (!IsSameRequest(State.Request, evt.Request, State.RequestHash))
+            {
+                throw new InvalidOperationException(
+                    $"binding run '{State.BindingRunId}' already exists with a different request payload.");
+            }
+
             return;
         }
 
         await PersistDomainEventAsync(evt);
-        await SendToAsync(
-            StudioMemberConventions.BuildActorId(evt.Request.ScopeId, evt.Request.MemberId),
-            new StudioMemberBindAdmissionRequested
-            {
-                BindingRunId = evt.Request.BindingRunId,
-                ScopeId = evt.Request.ScopeId,
-                MemberId = evt.Request.MemberId,
-                RequestHash = evt.Request.RequestHash,
-                Request = evt.Request.Clone(),
-                RequestedAtUtc = evt.RequestedAtUtc,
-            });
+        await SendAdmissionRequestAsync();
     }
 
     [EventHandler(EndpointName = "admitBindingRun")]
@@ -71,16 +69,7 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
             return;
 
         await PersistDomainEventAsync(evt);
-        await SendToAsync(
-            Id,
-            new StudioMemberPlatformBindingStartRequested
-            {
-                BindingRunId = evt.BindingRunId,
-                PlatformBindingCommandId = BuildPlatformBindingCommandId(evt.BindingRunId, State.AttemptCount + 1),
-                Request = State.Request.Clone(),
-                Admitted = State.Admitted.Clone(),
-                RequestedAtUtc = evt.AdmittedAtUtc,
-            });
+        await SendPlatformBindingStartRequestedAsync(evt.AdmittedAtUtc);
     }
 
     [EventHandler(EndpointName = "rejectBindingRun")]
@@ -128,21 +117,7 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
             return;
 
         await PersistDomainEventAsync(evt);
-        await SendToAsync(
-            StudioMemberConventions.BuildActorId(State.ScopeId, State.MemberId),
-            new StudioMemberBindingPlatformPendingEvent
-            {
-                BindingRunId = evt.BindingRunId,
-                PlatformBindingCommandId = evt.PlatformBindingCommandId,
-                PendingAtUtc = evt.AcceptedAtUtc,
-            });
-        await SendToAsync(
-            Id,
-            new StudioMemberPlatformBindingExecuteRequested
-            {
-                BindingRunId = evt.BindingRunId,
-                PlatformBindingCommandId = evt.PlatformBindingCommandId,
-            });
+        await SendPlatformBindingPendingAndExecuteAsync(evt.AcceptedAtUtc);
     }
 
     [EventHandler(EndpointName = "executePlatformBinding", AllowSelfHandling = true)]
@@ -364,6 +339,104 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         !string.IsNullOrEmpty(State.BindingRunId)
         && string.Equals(State.BindingRunId, bindingRunId, StringComparison.Ordinal)
         && !IsTerminal(State.Status);
+
+    private bool CanRecoverRun() =>
+        !string.IsNullOrEmpty(State.BindingRunId)
+        && State.Request != null
+        && State.Status switch
+        {
+            StudioMemberBindingRunStatus.AdmissionPending => true,
+            StudioMemberBindingRunStatus.Admitted => State.Admitted != null,
+            StudioMemberBindingRunStatus.PlatformBindingPending =>
+                State.Admitted != null && !string.IsNullOrEmpty(State.PlatformBindingCommandId),
+            _ => false,
+        };
+
+    private Task SendAdmissionRequestAsync(CancellationToken ct = default) =>
+        SendToAsync(
+            StudioMemberConventions.BuildActorId(State.ScopeId, State.MemberId),
+            new StudioMemberBindAdmissionRequested
+            {
+                BindingRunId = State.BindingRunId,
+                ScopeId = State.ScopeId,
+                MemberId = State.MemberId,
+                RequestHash = State.RequestHash,
+                Request = State.Request.Clone(),
+                RequestedAtUtc = State.UpdatedAtUtc ?? State.AcceptedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+            ct);
+
+    private Task SendPlatformBindingStartRequestedAsync(Timestamp? requestedAtUtc = null, CancellationToken ct = default)
+    {
+        if (State.Admitted == null)
+            return Task.CompletedTask;
+
+        return SendToAsync(
+            Id,
+            new StudioMemberPlatformBindingStartRequested
+            {
+                BindingRunId = State.BindingRunId,
+                PlatformBindingCommandId = BuildPlatformBindingCommandId(State.BindingRunId, State.AttemptCount + 1),
+                Request = State.Request.Clone(),
+                Admitted = State.Admitted.Clone(),
+                RequestedAtUtc = requestedAtUtc ?? State.UpdatedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+            ct);
+    }
+
+    private async Task SendPlatformBindingPendingAndExecuteAsync(Timestamp pendingAtUtc, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(State.PlatformBindingCommandId) || State.Admitted == null)
+            return;
+
+        await SendToAsync(
+            StudioMemberConventions.BuildActorId(State.ScopeId, State.MemberId),
+            new StudioMemberBindingPlatformPendingEvent
+            {
+                BindingRunId = State.BindingRunId,
+                PlatformBindingCommandId = State.PlatformBindingCommandId,
+                PendingAtUtc = pendingAtUtc,
+            },
+            ct);
+        await SendPlatformBindingExecuteRequestedAsync(ct);
+    }
+
+    private Task SendPlatformBindingExecuteRequestedAsync(CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(State.PlatformBindingCommandId) || State.Admitted == null)
+            return Task.CompletedTask;
+
+        return SendToAsync(
+            Id,
+            new StudioMemberPlatformBindingExecuteRequested
+            {
+                BindingRunId = State.BindingRunId,
+                PlatformBindingCommandId = State.PlatformBindingCommandId,
+            },
+            ct);
+    }
+
+    private static bool IsSameRequest(
+        StudioMemberBindingRequest? current,
+        StudioMemberBindingRequest incoming,
+        string currentHash)
+    {
+        if (current == null)
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(currentHash)
+            && !string.IsNullOrWhiteSpace(incoming.RequestHash)
+            && !string.Equals(currentHash, incoming.RequestHash, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var normalizedCurrent = current.Clone();
+        normalizedCurrent.RequestHash = string.Empty;
+        var normalizedIncoming = incoming.Clone();
+        normalizedIncoming.RequestHash = string.Empty;
+        return normalizedCurrent.Equals(normalizedIncoming);
+    }
 
     private static string BuildPlatformBindingCommandId(string bindingRunId, int attempt) =>
         $"platform-{bindingRunId}-{attempt}";

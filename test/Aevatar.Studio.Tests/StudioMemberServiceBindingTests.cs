@@ -299,8 +299,6 @@ public sealed class StudioMemberServiceBindingTests
 
     private sealed class RecordingCommandPort : IStudioMemberCommandPort
     {
-        public List<RecordedBinding> RecordedBindings { get; } = [];
-
         public List<StudioMemberImplementationRefResponse> RecordedImplementationUpdates { get; } = [];
 
         public List<StudioMemberBindingRunStartRequest> StartedRuns { get; } = [];
@@ -333,20 +331,6 @@ public sealed class StudioMemberServiceBindingTests
             return Task.CompletedTask;
         }
 
-        public Task RecordBindingAsync(
-            string scopeId,
-            string memberId,
-            string publishedServiceId,
-            string revisionId,
-            string implementationKindName,
-            CancellationToken ct = default)
-        {
-            RecordedBindings.Add(new RecordedBinding(
-                scopeId, memberId, publishedServiceId, revisionId, implementationKindName));
-            OperationsInOrder.Add("RecordBinding");
-            return Task.CompletedTask;
-        }
-
         public Task ReassignTeamAsync(
             string scopeId, string memberId, string? fromTeamId, string? toTeamId,
             CancellationToken ct = default)
@@ -354,13 +338,6 @@ public sealed class StudioMemberServiceBindingTests
             OperationsInOrder.Add("ReassignTeam");
             return Task.CompletedTask;
         }
-
-        public sealed record RecordedBinding(
-            string ScopeId,
-            string MemberId,
-            string PublishedServiceId,
-            string RevisionId,
-            string ImplementationKindName);
     }
 
     private sealed class ThrowingServiceLifecycleQueryPort : IServiceLifecycleQueryPort

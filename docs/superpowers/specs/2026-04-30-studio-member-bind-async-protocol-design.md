@@ -377,7 +377,9 @@ V1 does not accept a client-provided idempotency key. Each `PUT /binding` create
 
 V1 duplicate handling is actor-protocol idempotency:
 
+- `request_hash` is computed by the Studio command adapter from the canonical protobuf bytes of `StudioMemberBindingRequest` with `request_hash` cleared;
 - repeated `StudioMemberBindingRunRequested` messages for the same `binding_run_id` and same `request_hash` are no-ops;
+- repeated `StudioMemberBindingRunRequested` messages for the same `binding_run_id` with a different `request_hash` or payload are rejected as conflicts;
 - repeated admission messages for the same `binding_run_id` and same admitted snapshot are no-ops;
 - repeated terminal completion events are idempotent if `binding_run_id` and result match;
 - stale completion/failure events for a superseded active run are ignored or recorded as stale, but must not overwrite a newer successful binding.
@@ -433,6 +435,7 @@ Focused tests should cover:
 - missing member: run reaches rejected/failed status with `STUDIO_MEMBER_NOT_FOUND`;
 - successful workflow/script/gagent bind: run records success and member read model exposes last binding;
 - duplicate run messages with the same `binding_run_id` and same `request_hash` are idempotent;
+- duplicate run messages with the same `binding_run_id` and different `request_hash` or payload are rejected;
 - duplicate terminal events with the same result are idempotent;
 - platform binding failure records durable failed status;
 - stale terminal event cannot overwrite a newer successful binding;

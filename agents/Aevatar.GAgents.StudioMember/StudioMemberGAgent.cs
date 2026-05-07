@@ -145,6 +145,12 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             throw new InvalidOperationException("member not yet created.");
         }
 
+        if (State.Binding?.CurrentStatus == StudioMemberBindingRunStatus.PlatformBindingPending
+            && string.Equals(State.Binding.CurrentBindingRunId, evt.BindingRunId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
         await PersistDomainEventAsync(evt);
     }
 

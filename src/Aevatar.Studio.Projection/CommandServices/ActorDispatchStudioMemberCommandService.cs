@@ -6,6 +6,7 @@ using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Projection.Mapping;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using System.Security.Cryptography;
 
 namespace Aevatar.Studio.Projection.CommandServices;
 
@@ -262,41 +263,6 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
     }
 
-    public async Task RecordBindingAsync(
-        string scopeId,
-        string memberId,
-        string publishedServiceId,
-        string revisionId,
-        string implementationKindName,
-        CancellationToken ct = default)
-    {
-        var normalizedScopeId = StudioMemberConventions.NormalizeScopeId(scopeId);
-        var normalizedMemberId = StudioMemberConventions.NormalizeMemberId(memberId);
-
-        if (string.IsNullOrWhiteSpace(publishedServiceId))
-        {
-            throw new InvalidOperationException(
-                $"member '{normalizedMemberId}' bind: publishedServiceId is required to record binding.");
-        }
-
-        if (string.IsNullOrWhiteSpace(revisionId))
-        {
-            throw new InvalidOperationException(
-                $"member '{normalizedMemberId}' bind: revisionId is required to record binding.");
-        }
-
-        var evt = new StudioMemberBindingCompletedEvent
-        {
-            BindingRunId = Guid.NewGuid().ToString("N"),
-            PublishedServiceId = publishedServiceId,
-            RevisionId = revisionId,
-            ImplementationKind = MemberImplementationKindMapper.Parse(implementationKindName),
-            CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-        };
-
-        await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
-    }
-
     private static StudioMemberImplementationRef BuildImplementationRefMessage(
         StudioMemberImplementationRefResponse implementation)
     {
@@ -343,7 +309,6 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
             BindingRunId = bindingRunId,
             ScopeId = scopeId,
             MemberId = memberId,
-            RequestHash = string.Empty,
         };
         if (!string.IsNullOrWhiteSpace(binding.RevisionId))
             request.RevisionId = binding.RevisionId;
@@ -385,7 +350,15 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
                     $"Unknown implementationKind '{implementationKindName}'.");
         }
 
+        request.RequestHash = ComputeRequestHash(request);
         return request;
+    }
+
+    private static string ComputeRequestHash(StudioMemberBindingRequest request)
+    {
+        var normalized = request.Clone();
+        normalized.RequestHash = string.Empty;
+        return Convert.ToHexString(SHA256.HashData(normalized.ToByteArray())).ToLowerInvariant();
     }
 
     private async Task DispatchAsync(string scopeId, string memberId, IMessage payload, CancellationToken ct)
