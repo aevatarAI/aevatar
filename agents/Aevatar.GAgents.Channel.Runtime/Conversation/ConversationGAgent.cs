@@ -540,15 +540,26 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             return;
         }
 
-        var state = GetOrInitNyxRelayStreamingState(correlationId);
-        if (ShouldSkipNyxRelayStreamingForUnavailable(state, NyxRelayStreamingGuardSource.AcceptInterimChunk))
-            return;
-
         if (State.ProcessedCommandIds.Contains(BuildLlmReplyCommandId(evt.CorrelationId)))
         {
             // Turn already finalized; drop any late chunk that sneaks in via the actor inbox.
             return;
         }
+
+        // CardKit-mode chunks go through the card path. The card handler returns false ONLY
+        // when phase is CreationFailed (card create already failed pre-flight or on first
+        // chunk) — in that case the chunk falls through to the legacy text-edit path so the
+        // user still sees a reply. All other phases (Idle/Streaming/terminal) are handled
+        // end-to-end by the card handler.
+        if (evt.CardMode)
+        {
+            if (await HandleLarkCardStreamingChunkCoreAsync(evt, correlationId).ConfigureAwait(false))
+                return;
+        }
+
+        var state = GetOrInitNyxRelayStreamingState(correlationId);
+        if (ShouldSkipNyxRelayStreamingForUnavailable(state, NyxRelayStreamingGuardSource.AcceptInterimChunk))
+            return;
 
         var runtimeContext = BuildNyxRelayRuntimeContext(evt.CorrelationId, evt.Activity);
         if (runtimeContext.NyxRelayReplyToken is null)
@@ -632,6 +643,12 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         var correlationId = NormalizeOptional(evt.CorrelationId);
         if (correlationId is null)
             return false;
+
+        // Card path takes precedence when active; falls through to text-edit when card never
+        // started (Idle), card creation failed (CreationFailed → text-edit fallback), or card
+        // finished as a terminal phase.
+        if (await TryCompleteCardStreamedReplyAsync(evt, correlationId, commandId, referenceActivity).ConfigureAwait(false))
+            return true;
 
         var state = GetOrInitNyxRelayStreamingState(correlationId);
         if (ShouldSkipNyxRelayStreamingForUnavailable(state, NyxRelayStreamingGuardSource.Finalize))

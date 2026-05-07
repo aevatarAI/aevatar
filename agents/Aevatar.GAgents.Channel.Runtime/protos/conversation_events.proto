@@ -95,6 +95,11 @@ message LlmReplyStreamChunkEvent {
   // Current accumulated reply text (not a delta slice). Each chunk supersedes the previous one.
   string accumulated_text = 4;
   int64 chunk_at_unix_ms = 5;
+  // True when dispatched by TurnStreamingCardSink (CardKit path) instead of TurnStreamingReplySink.
+  // The actor branches into HandleLlmReplyCardStreamChunk semantics — drives LarkCardStreamingState,
+  // calls IConversationCardTurnRunner — instead of the legacy edit-message path. Default false
+  // (text-edit) for backward compatibility with existing event-store payloads.
+  bool card_mode = 6;
 }
 
 message DeferredLlmReplyDispatchRequestedEvent {

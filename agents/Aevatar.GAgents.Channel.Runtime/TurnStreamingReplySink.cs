@@ -53,6 +53,7 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
     private readonly ChatActivity _activityTemplate;
     private readonly TimeSpan _throttle;
     private readonly int _maxInterimChunks;
+    private readonly bool _cardMode;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger? _logger;
 
@@ -80,7 +81,8 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
         TimeSpan throttle,
         TimeProvider timeProvider,
         ILogger? logger = null,
-        int maxInterimChunks = int.MaxValue)
+        int maxInterimChunks = int.MaxValue,
+        bool cardMode = false)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         if (string.IsNullOrWhiteSpace(targetActorId))
@@ -93,6 +95,7 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
         _activityTemplate = activityTemplate ?? throw new ArgumentNullException(nameof(activityTemplate));
         _throttle = throttle < TimeSpan.Zero ? TimeSpan.Zero : throttle;
         _maxInterimChunks = maxInterimChunks < 0 ? 0 : maxInterimChunks;
+        _cardMode = cardMode;
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _logger = logger;
     }
@@ -386,6 +389,7 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
             Activity = _activityTemplate.Clone(),
             AccumulatedText = text,
             ChunkAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            CardMode = _cardMode,
         };
         var envelope = new EventEnvelope
         {

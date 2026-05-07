@@ -61,4 +61,24 @@ public class NyxIdRelayOptions
     /// to disable and instead wait for the first real delta (slower time-to-first-visible).
     /// </summary>
     public string StreamingPlaceholderText { get; set; } = "…";
+
+    /// <summary>
+    /// Routes streaming replies through Lark CardKit 2.0 streaming cards instead of editing a
+    /// regular message in place. CardKit element-content updates are not subject to the per-
+    /// message edit cap (Lark code 230072) so long replies never need to freeze on the last
+    /// interim chunk. Default false; the legacy edit-message path remains the only behaviour
+    /// until the bot's CardKit scopes (<c>cardkit:card:read</c> + <c>cardkit:card:write</c>)
+    /// are granted in the Feishu developer console. When enabled, the card sink dispatches
+    /// chunks with <c>card_mode=true</c> and <see cref="ConversationGAgent"/> drives the
+    /// CardKit lifecycle; if card creation fails (rate-limit / table-limit / scope), the
+    /// turn falls back to the legacy edit-message sink for the rest of the chunks.
+    /// </summary>
+    public bool StreamingCardKitEnabled { get; set; }
+
+    /// <summary>
+    /// Minimum interval between CardKit element-content dispatches, in milliseconds. Defaults
+    /// to 200ms — well below the 750ms used by the edit-message path because CardKit accepts
+    /// far more updates per card than Lark's edit-message cap allows.
+    /// </summary>
+    public int StreamingCardKitFlushIntervalMs { get; set; } = 200;
 }

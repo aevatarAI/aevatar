@@ -240,8 +240,16 @@ public sealed class ChannelLlmReplyInboxRuntime :
         if (string.IsNullOrWhiteSpace(request.CorrelationId))
             return null;
 
-        var throttle = TimeSpan.FromMilliseconds(Math.Max(0, _relayOptions.StreamingFlushIntervalMs));
-        var maxInterimChunks = Math.Max(0, _relayOptions.StreamingMaxInterimChunks);
+        var cardMode = _relayOptions.StreamingCardKitEnabled;
+        var throttle = TimeSpan.FromMilliseconds(Math.Max(0, cardMode
+            ? _relayOptions.StreamingCardKitFlushIntervalMs
+            : _relayOptions.StreamingFlushIntervalMs));
+        // CardKit element-content updates have no per-card edit cap, so the interim cap that
+        // protects the legacy edit-message path is irrelevant. Pass int.MaxValue so the sink's
+        // throttle is the only frame-rate gate.
+        var maxInterimChunks = cardMode
+            ? int.MaxValue
+            : Math.Max(0, _relayOptions.StreamingMaxInterimChunks);
         return new TurnStreamingReplySink(
             _actorDispatchPort,
             targetActorId,
@@ -251,7 +259,8 @@ public sealed class ChannelLlmReplyInboxRuntime :
             throttle,
             _timeProvider,
             _logger,
-            maxInterimChunks);
+            maxInterimChunks,
+            cardMode);
     }
 
     private async Task<IReadOnlyDictionary<string, string>> BuildEffectiveMetadataAsync(
