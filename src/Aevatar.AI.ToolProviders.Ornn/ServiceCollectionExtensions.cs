@@ -9,8 +9,8 @@ namespace Aevatar.AI.ToolProviders.Ornn;
 public static class ServiceCollectionExtensions
 {
     /// <summary>
-    /// 注册 Ornn 技能工具系统。配置 BaseUrl 后，ornn_search_skills 自动注册，
-    /// 远程技能获取通过 IRemoteSkillFetcher 集成到统一的 use_skill 工具。
+    /// 注册 Ornn 技能工具系统。ornn_search_skills 工具始终注册到 LLM；远程技能按需获取
+    /// 通过 IRemoteSkillFetcher 集成到统一的 use_skill 工具。
     /// </summary>
     public static IServiceCollection AddOrnnSkills(
         this IServiceCollection services,
@@ -21,8 +21,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(options);
         services.TryAddSingleton<OrnnSkillClient>();
         services.TryAddSingleton<IRemoteSkillFetcher, OrnnRemoteSkillFetcher>();
-        services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IRemoteSkillDiscovery, OrnnRemoteSkillDiscovery>());
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IAgentToolSource, OrnnAgentToolSource>());
         return services;
