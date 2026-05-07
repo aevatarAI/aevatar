@@ -888,10 +888,15 @@ public static class ServiceCollectionExtensions
 
     private static void RegisterOrnnSkills(IServiceCollection services, AevatarAIFeatureOptions options)
     {
-        if (string.IsNullOrWhiteSpace(options.OrnnBaseUrl))
-            return;
-
-        services.AddOrnnSkills(o => o.BaseUrl = options.OrnnBaseUrl);
+        // EnableOrnnSkills is the only gate; BaseUrl falls back to the OrnnOptions
+        // default (production Ornn URL) when configuration leaves Ornn:BaseUrl
+        // unset. This keeps ornn_search_skills always visible to the LLM and
+        // closes the silent-fallback path called out in issue #530.
+        services.AddOrnnSkills(o =>
+        {
+            if (!string.IsNullOrWhiteSpace(options.OrnnBaseUrl))
+                o.BaseUrl = options.OrnnBaseUrl;
+        });
     }
 
     private static void RegisterWebTools(IServiceCollection services, AevatarAIFeatureOptions options)
