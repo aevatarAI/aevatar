@@ -2,6 +2,7 @@ using System.Text.Json;
 using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Platform.Lark;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -54,7 +55,7 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
         // 1. Allocate a CardKit entity holding an empty streaming element. The first chunk's
         //    text lands via StreamElementContentAsync (step 3) so the card_json schema and
         //    the streaming wire format stay decoupled.
-        var initialCardJson = BuildInitialCardJson(streamingElementId);
+        var initialCardJson = LarkStreamingCardShell.BuildInitialCardJson(streamingElementId);
         string createResponse;
         try
         {
@@ -268,33 +269,6 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
             return ("chat_id", chatId);
 
         return null;
-    }
-
-    /// <summary>
-    /// Minimal Lark CardKit 2.0 card with a single markdown element identified by
-    /// <paramref name="streamingElementId"/>. Streaming text is written via
-    /// <c>cardElement.content</c> updates; this initial JSON only declares the shell.
-    /// </summary>
-    private static string BuildInitialCardJson(string streamingElementId)
-    {
-        var card = new
-        {
-            schema = "2.0",
-            config = new { streaming_mode = true },
-            body = new
-            {
-                elements = new object[]
-                {
-                    new
-                    {
-                        tag = "markdown",
-                        element_id = streamingElementId,
-                        content = string.Empty,
-                    },
-                },
-            },
-        };
-        return JsonSerializer.Serialize(card, JsonOptions);
     }
 
     /// <summary>
