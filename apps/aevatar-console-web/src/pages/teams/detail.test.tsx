@@ -1,4 +1,5 @@
-import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { message } from "antd";
 import React from "react";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
@@ -16,6 +17,21 @@ jest.mock("@/shared/graphs/GraphCanvas", () => ({
     return React.createElement("div", null, "Graph canvas");
   },
 }));
+
+jest.mock("antd", () => {
+  const actual = jest.requireActual("antd");
+  return {
+    ...actual,
+    message: {
+      ...actual.message,
+      success: jest.fn(),
+      info: jest.fn(),
+      warning: jest.fn(),
+      error: jest.fn(),
+      destroy: jest.fn(),
+    },
+  };
+});
 
 function mockCreateRunsCatalog() {
   return {
@@ -640,6 +656,15 @@ jest.mock("@/shared/studio/api", () => ({
     })),
     listMembers: jest.fn(async () => mockCreateMembersCatalog()),
     getTeam: jest.fn(async () => mockCreateTeamSummary()),
+    updateTeam: jest.fn(async () => ({
+      ...mockCreateTeamSummary(),
+      displayName: "Alpha Ops Team",
+      description: "",
+    })),
+    archiveTeam: jest.fn(async () => ({
+      ...mockCreateTeamSummary(),
+      lifecycleStage: "archived",
+    })),
     listTeamMembers: jest.fn(async () => mockCreateTeamMembersCatalog()),
     parseYaml: jest.fn(async () => ({
       document: {
@@ -691,6 +716,17 @@ describe("TeamDetailPage", () => {
     (studioApi.getTeam as jest.Mock).mockImplementation(
       async () => mockCreateTeamSummary(),
     );
+    (studioApi.updateTeam as jest.Mock).mockReset();
+    (studioApi.updateTeam as jest.Mock).mockImplementation(async () => ({
+      ...mockCreateTeamSummary(),
+      displayName: "Alpha Ops Team",
+      description: "",
+    }));
+    (studioApi.archiveTeam as jest.Mock).mockReset();
+    (studioApi.archiveTeam as jest.Mock).mockImplementation(async () => ({
+      ...mockCreateTeamSummary(),
+      lifecycleStage: "archived",
+    }));
     (studioApi.listTeamMembers as jest.Mock).mockReset();
     (studioApi.listTeamMembers as jest.Mock).mockImplementation(
       async () => mockCreateTeamMembersCatalog(),
@@ -1051,6 +1087,126 @@ describe("TeamDetailPage", () => {
     await waitFor(() => {
       expect(studioApi.getTeam).toHaveBeenCalledWith("scope-1", "t-alpha");
     });
+  });
+
+  it("updates the real Team summary from the detail header", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1?scopeId=scope-1&teamId=t-alpha",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("heading", {
+      level: 1,
+      name: "Alpha Support Team",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Edit Team" }));
+
+    const nameInput = await screen.findByLabelText("Edit team name");
+    expect(nameInput).toHaveValue("Alpha Support Team");
+    fireEvent.change(nameInput, {
+      target: { value: " Alpha Ops Team " },
+    });
+    fireEvent.change(screen.getByLabelText("Edit team description"), {
+      target: { value: "   " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Team" }));
+
+    await waitFor(() => {
+      expect(studioApi.updateTeam).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        displayName: "Alpha Ops Team",
+        description: null,
+      });
+    });
+    expect(message.success).toHaveBeenCalledWith("Team updated.");
+    await waitFor(() => {
+      expect(studioApi.getTeam).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("does not submit an empty Team name", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1?scopeId=scope-1&teamId=t-alpha",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("heading", {
+      level: 1,
+      name: "Alpha Support Team",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Edit Team" }));
+    fireEvent.change(await screen.findByLabelText("Edit team name"), {
+      target: { value: "   " },
+    });
+
+    expect(screen.getByRole("button", { name: "Save Team" })).toBeDisabled();
+    expect(studioApi.updateTeam).not.toHaveBeenCalled();
+  });
+
+  it("archives the Team without making archived Teams read-only", async () => {
+    (studioApi.getTeam as jest.Mock)
+      .mockResolvedValueOnce(mockCreateTeamSummary())
+      .mockResolvedValue({
+        ...mockCreateTeamSummary(),
+        lifecycleStage: "archived",
+      });
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1?scopeId=scope-1&teamId=t-alpha&tab=advanced",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Active roster entry")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Archive Team" }));
+    expect(await screen.findByText("Archive this Team?")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This marks the Team as archived and de-emphasizes it in the active roster. You can still edit its configuration and view its history.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(
+      within(screen.getByRole("dialog", { name: "Archive this Team?" })).getByRole(
+        "button",
+        { name: "Archive Team" },
+      ),
+    );
+
+    await waitFor(() => {
+      expect(studioApi.archiveTeam).toHaveBeenCalledWith("scope-1", "t-alpha");
+    });
+    expect(message.success).toHaveBeenCalledWith("Team archived.");
+    expect(await screen.findByText("Archived but still maintainable")).toBeTruthy();
+    expect(screen.getByText("维护这支团队配置")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Edit Team" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Archive Team" })).toBeNull();
+  });
+
+  it("keeps archived Teams maintainable on first load", async () => {
+    (studioApi.getTeam as jest.Mock).mockResolvedValueOnce({
+      ...mockCreateTeamSummary(),
+      lifecycleStage: "archived",
+    });
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1?scopeId=scope-1&teamId=t-alpha&tab=advanced",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Archived but still maintainable")).toBeTruthy();
+    expect(screen.getByText("维护这支团队配置")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Edit Team" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Archive Team" })).toBeNull();
   });
 
   it("keeps the runtime overview when Team summary fails", async () => {
