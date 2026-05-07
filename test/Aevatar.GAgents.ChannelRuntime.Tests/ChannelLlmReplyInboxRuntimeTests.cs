@@ -144,6 +144,52 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
     }
 
     [Fact]
+    public async Task ProcessAsync_ShouldEmitTimeoutFallbackReply_WhenGeneratorHangsPastBudget()
+    {
+        // Without a cancellation budget on the LLM run, a tool that hangs (broken sandbox,
+        // unreachable proxy upstream, slow remote SSH) would pin the inbox task indefinitely
+        // and Lark would stay on the loading reaction forever. The runtime caps each turn at
+        // the relay ResponseTimeoutSeconds and folds the cancellation into a user-visible
+        // fallback reply with errorCode=llm_reply_timeout.
+        var collector = new AsyncLocalInteractiveReplyCollector();
+        var replyGenerator = new HangingReplyGenerator();
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("channel-conversation:lark:group:oc_group_chat_1");
+        EventEnvelope? handled = null;
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled = call.Arg<EventEnvelope>());
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var runtime = new ChannelLlmReplyInboxRuntime(
+            Substitute.For<IStreamProvider>(),
+            actorRuntime,
+            replyGenerator,
+            collector,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                ResponseTimeoutSeconds = 1,
+            },
+            NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
+
+        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-timeout",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-timeout",
+        });
+
+        replyGenerator.WasCancelled.Should().BeTrue();
+        handled.Should().NotBeNull();
+        var ready = handled!.Payload.Unpack<LlmReplyReadyEvent>();
+        ready.TerminalState.Should().Be(LlmReplyTerminalState.Failed);
+        ready.ErrorCode.Should().Be("llm_reply_timeout");
+        ready.ErrorSummary.Should().Contain("1s budget");
+        ready.Outbound.Text.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
     public async Task ProcessAsync_ShouldEmitFailedReply_WhenGeneratorReturnsEmpty()
     {
         var collector = new AsyncLocalInteractiveReplyCollector();
@@ -679,5 +725,29 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             IReadOnlyDictionary<string, string> metadata,
             IStreamingReplySink? streamingSink,
             CancellationToken ct) => Task.FromException<string?>(exception);
+    }
+
+    /// <summary>Generator that never completes on its own — only ends when the runtime cancels it.</summary>
+    private sealed class HangingReplyGenerator : IConversationReplyGenerator
+    {
+        public bool WasCancelled { get; private set; }
+
+        public async Task<string?> GenerateReplyAsync(
+            ChatActivity activity,
+            IReadOnlyDictionary<string, string> metadata,
+            IStreamingReplySink? streamingSink,
+            CancellationToken ct)
+        {
+            try
+            {
+                await Task.Delay(Timeout.Infinite, ct);
+                return string.Empty;
+            }
+            catch (OperationCanceledException)
+            {
+                WasCancelled = true;
+                throw;
+            }
+        }
     }
 }

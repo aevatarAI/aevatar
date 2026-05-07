@@ -173,6 +173,22 @@ public sealed class NyxIdApiClient
         return await SendAsync(request, ct);
     }
 
+    // ─── SSH ───
+
+    /// <summary>
+    /// Executes a shell command on a remote SSH host through NyxID's SSH gateway.
+    /// </summary>
+    /// <param name="serviceIdOrSlug">NyxID service identifier or slug for an SSH-typed service (endpoint registered as <c>ssh://host:port</c>).</param>
+    /// <param name="body">JSON body matching NyxID's <c>SshExecRequest</c>: <c>{ command, principal, timeout_secs }</c>.</param>
+    /// <remarks>
+    /// Mirrors <c>POST /api/v1/ssh/{service_id}/exec</c>. NyxID enforces a 1 MB output cap, a max 300s
+    /// timeout, an 8192-char command length, and a built-in dangerous-command filter. Non-SSH services
+    /// reject this route, so callers must filter to SSH-typed slugs before invoking (the agent tool
+    /// surfaces this in its description so the LLM does not call HTTP-typed services here).
+    /// </remarks>
+    public Task<string> SshExecAsync(string token, string serviceIdOrSlug, string body, CancellationToken ct) =>
+        PostAsync(token, $"/api/v1/ssh/{Uri.EscapeDataString(serviceIdOrSlug)}/exec", body, ct);
+
     // ─── API Keys ───
 
     public Task<string> ListApiKeysAsync(string token, CancellationToken ct) =>

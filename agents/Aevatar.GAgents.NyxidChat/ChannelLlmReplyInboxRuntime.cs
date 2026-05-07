@@ -92,6 +92,16 @@ public sealed class ChannelLlmReplyInboxRuntime :
 
     internal const long MaxInboxRequestAgeMs = 5 * 60 * 1000;
 
+    /// <summary>
+    /// Hard upper bound on a single LLM reply turn. The relay's
+    /// <c>ResponseTimeoutSeconds</c> (default 120s) is the contract with the upstream
+    /// platform, so we cap the LLM run at the same budget — anything longer would be
+    /// a reply the user has already given up on. Without this cap, a tool that hangs
+    /// (e.g. a misbehaving sandbox or unreachable proxy upstream) would pin the inbox
+    /// task indefinitely and the user's "loading" reaction would never resolve.
+    /// </summary>
+    internal const int FallbackTimeoutSecondsDefault = 120;
+
     internal async Task ProcessAsync(NeedsLlmReplyEvent request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -149,9 +159,12 @@ public sealed class ChannelLlmReplyInboxRuntime :
         var errorSummary = string.Empty;
         using TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, request.TargetActorId);
 
+        var fallbackTimeout = ResolveFallbackTimeout();
+        using var timeoutCts = new CancellationTokenSource(fallbackTimeout);
+
         try
         {
-            var effectiveMetadata = await BuildEffectiveMetadataAsync(request, CancellationToken.None);
+            var effectiveMetadata = await BuildEffectiveMetadataAsync(request, timeoutCts.Token);
             IDisposable? interactiveReplyScope = null;
             try
             {
@@ -162,7 +175,7 @@ public sealed class ChannelLlmReplyInboxRuntime :
                     request.Activity,
                     effectiveMetadata,
                     streamingSink,
-                    CancellationToken.None) ?? string.Empty;
+                    timeoutCts.Token) ?? string.Empty;
                 outboundIntent = _interactiveReplyCollector?.TryTake();
             }
             finally
@@ -184,6 +197,19 @@ public sealed class ChannelLlmReplyInboxRuntime :
                 errorSummary = "Reply generator returned an empty response.";
                 replyText = "Sorry, I wasn't able to generate a response. Please try again.";
             }
+        }
+        catch (OperationCanceledException ex) when (timeoutCts.IsCancellationRequested)
+        {
+            terminalState = LlmReplyTerminalState.Failed;
+            errorCode = "llm_reply_timeout";
+            errorSummary = $"LLM reply generation exceeded {(int)fallbackTimeout.TotalSeconds}s budget.";
+            replyText = "Sorry, this took too long to process — the model or one of its tools didn't " +
+                        "respond in time. Please try again, or rephrase the request.";
+            _logger.LogWarning(
+                ex,
+                "Deferred LLM reply timed out after {TimeoutSeconds}s: correlation={CorrelationId}",
+                (int)fallbackTimeout.TotalSeconds,
+                request.CorrelationId);
         }
         catch (Exception ex)
         {
@@ -347,6 +373,13 @@ public sealed class ChannelLlmReplyInboxRuntime :
                 request.CorrelationId,
                 scopeId);
         }
+    }
+
+    private TimeSpan ResolveFallbackTimeout()
+    {
+        var configured = _relayOptions?.ResponseTimeoutSeconds ?? 0;
+        var seconds = configured > 0 ? configured : FallbackTimeoutSecondsDefault;
+        return TimeSpan.FromSeconds(seconds);
     }
 
     private static bool IsRelayRequest(NeedsLlmReplyEvent request) =>
