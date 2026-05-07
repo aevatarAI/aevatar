@@ -123,7 +123,7 @@ public sealed class OrnnSearchSkillsToolTests
             new Aevatar.AI.ToolProviders.NyxId.NyxIdToolOptions { BaseUrl = "https://nyx.example" },
             new HttpClient(handler));
         var client = new OrnnSkillClient(
-            new OrnnOptions { NyxIdSlug = "ornn-api" },
+            new OrnnOptions { NyxIdSlug = "ornn" },
             nyxClient);
 
         return new OrnnSearchSkillsTool(client);

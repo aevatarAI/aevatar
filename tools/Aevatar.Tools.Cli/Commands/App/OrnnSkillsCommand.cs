@@ -15,7 +15,7 @@ internal static class OrnnSkillsCommand
 
         var tokenOption = new Option<string>("--token", "NyxID bearer token.") { IsRequired = true };
         var nyxIdUrlOption = new Option<string?>("--nyxid-url", "NyxID base URL override (reads Cli:App:NyxId:Authority from config if not set).");
-        var slugOption = new Option<string>("--slug", () => "ornn-api", "NyxID-bound Ornn service slug.");
+        var slugOption = new Option<string>("--slug", () => "ornn", "NyxID-bound Ornn service slug.");
 
         command.AddCommand(CreateListCommand(tokenOption, nyxIdUrlOption, slugOption));
         command.AddCommand(CreateShowCommand(tokenOption, nyxIdUrlOption, slugOption));

@@ -112,9 +112,9 @@ public sealed class OrnnSkillClient
     /// <summary>
     /// Detect the wrapped error envelope NyxIdApiClient.SendAsync emits when the upstream
     /// returns non-2xx (<c>{"error": true, "status": N, "body": "..."}</c>) so callers see a
-    /// concise message instead of a JsonException about the wrapper shape.
+    /// concise actionable message instead of a JsonException about the wrapper shape.
     /// </summary>
-    private static bool TryUnwrapNyxIdProxyError(string response, out string detail)
+    private bool TryUnwrapNyxIdProxyError(string response, out string detail)
     {
         detail = string.Empty;
         if (string.IsNullOrWhiteSpace(response))
@@ -133,9 +133,19 @@ public sealed class OrnnSkillClient
 
             var status = root.TryGetProperty("status", out var statusProp) &&
                          statusProp.ValueKind == JsonValueKind.Number
-                ? statusProp.GetInt32().ToString()
-                : "unknown";
-            detail = $"NyxID proxy error (status={status})";
+                ? statusProp.GetInt32()
+                : 0;
+
+            // 404 here means NyxID could not resolve `_options.NyxIdSlug` to an upstream — either
+            // the user has not bound an Ornn service to this slug, or the deployment's NyxID
+            // catalog uses a different slug name. The LLM can recover by guiding the user to
+            // bind the service or by retrying with a different slug; surface that hint instead
+            // of a bare "status=404".
+            detail = status == 404
+                ? $"Ornn skill API not reachable: NyxID has no service bound to slug '{_options.NyxIdSlug}'. " +
+                  "The user may need to connect their Ornn account via NyxID (nyxid_services action=create), " +
+                  "or the deployment may need to override Aevatar:Ornn:NyxIdSlug."
+                : $"NyxID proxy returned status={status}.";
             return true;
         }
         catch (JsonException)

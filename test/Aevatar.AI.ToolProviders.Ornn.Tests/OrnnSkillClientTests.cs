@@ -50,7 +50,7 @@ public sealed class OrnnSkillClientTests
         request.Authorization!.Scheme.Should().Be("Bearer");
         request.Authorization.Parameter.Should().Be("access-token");
         request.RequestUri!.AbsoluteUri.Should().Be(
-            "https://nyx.example/api/v1/proxy/s/ornn-api/api/web/skill-search?query=hello%20world&mode=semantic&scope=mixed&page=1&pageSize=100");
+            "https://nyx.example/api/v1/proxy/s/ornn/api/web/skill-search?query=hello%20world&mode=semantic&scope=mixed&page=1&pageSize=100");
     }
 
     [Fact]
@@ -66,13 +66,11 @@ public sealed class OrnnSkillClientTests
     }
 
     [Fact]
-    public async Task SearchSkillsAsync_TreatsNyxIdProxyErrorEnvelopeAsSearchFailure()
+    public async Task SearchSkillsAsync_SurfacesGenericNyxIdProxyErrorWithStatus()
     {
         // NyxIdApiClient wraps non-2xx responses as {"error":true,"status":N,"body":"..."}.
-        // Issue #530 follow-up: the upstream Ornn deployment returned HTTP 200 with HTML
-        // (SPA shell) for direct calls; via NyxID proxy, malformed upstream surfaces as a
-        // proxy error envelope. The client must surface a concise error rather than a
-        // confusing JsonException about the wrapper.
+        // The client must surface a concise error rather than a confusing JsonException
+        // about the wrapper shape.
         var handler = OrnnTestHttpMessageHandler.ReturningJson(
             """{ "error": "nope" }""",
             HttpStatusCode.InternalServerError);
@@ -81,7 +79,26 @@ public sealed class OrnnSkillClientTests
         var result = await client.SearchSkillsAsync("token", "query");
 
         result.Items.Should().BeEmpty();
-        result.Error.Should().Contain("NyxID proxy error");
+        result.Error.Should().Contain("status=500");
+    }
+
+    [Fact]
+    public async Task SearchSkillsAsync_OnNyxIdProxy404_SurfacesSlugBindingHint()
+    {
+        // 404 from NyxID proxy means the slug isn't resolvable — the user hasn't bound an
+        // Ornn service or the deployment's slug differs. The LLM-facing error must tell the
+        // model exactly that so it can guide the user rather than retry mechanically (which
+        // is what we observed in mainnet after the first NyxID-proxy refactor).
+        var handler = OrnnTestHttpMessageHandler.ReturningJson(
+            """{ "error": "missing" }""",
+            HttpStatusCode.NotFound);
+        var client = CreateClient(handler, slug: "ornn");
+
+        var result = await client.SearchSkillsAsync("token", "query");
+
+        result.Items.Should().BeEmpty();
+        result.Error.Should().Contain("slug 'ornn'");
+        result.Error.Should().Contain("nyxid_services action=create");
     }
 
     [Fact]
@@ -109,7 +126,7 @@ public sealed class OrnnSkillClientTests
         var request = handler.Requests.Should().ContainSingle().Subject;
         request.Authorization!.Parameter.Should().Be("access-token");
         request.RequestUri!.AbsoluteUri.Should().Be(
-            "https://nyx.example/api/v1/proxy/s/ornn-api/api/web/skills/Translate%20Skill/json");
+            "https://nyx.example/api/v1/proxy/s/ornn/api/web/skills/Translate%20Skill/json");
     }
 
     [Fact]
@@ -125,7 +142,7 @@ public sealed class OrnnSkillClientTests
         skill.Should().BeNull();
     }
 
-    private static OrnnSkillClient CreateClient(OrnnTestHttpMessageHandler handler, string slug = "ornn-api")
+    private static OrnnSkillClient CreateClient(OrnnTestHttpMessageHandler handler, string slug = "ornn")
     {
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
