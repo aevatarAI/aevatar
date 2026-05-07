@@ -195,14 +195,6 @@ public sealed record StudioMemberGAgentBindingSpec(
     string ActorTypeName,
     IReadOnlyList<StudioMemberGAgentEndpointSpec>? Endpoints = null);
 
-public sealed record StudioMemberBindingResponse(
-    string MemberId,
-    string PublishedServiceId,
-    string RevisionId,
-    string ImplementationKind,
-    string ScopeId,
-    string ExpectedActorId);
-
 public sealed record StudioMemberBindingAcceptedResponse(
     string Status,
     string BindingRunId,

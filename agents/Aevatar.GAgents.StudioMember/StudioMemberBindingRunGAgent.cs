@@ -13,6 +13,9 @@ namespace Aevatar.GAgents.StudioMember;
 /// </summary>
 public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindingRunState>, IProjectedActor
 {
+    private static readonly TimeSpan PlatformBindingExecuteInitialDelay = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan PlatformBindingExecuteRetryDelay = TimeSpan.FromSeconds(30);
+
     public static string ProjectionKind => "studio-member-binding-run";
 
     protected override async Task OnActivateAsync(CancellationToken ct)
@@ -123,10 +126,7 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
     [EventHandler(EndpointName = "executePlatformBinding", AllowSelfHandling = true)]
     public async Task HandlePlatformBindingExecuteRequested(StudioMemberPlatformBindingExecuteRequested evt)
     {
-        if (!CanAcceptRunEvent(evt.BindingRunId))
-            return;
-
-        if (!string.Equals(State.PlatformBindingCommandId, evt.PlatformBindingCommandId, StringComparison.Ordinal))
+        if (!CanAcceptPlatformBindingCommand(evt.BindingRunId, evt.PlatformBindingCommandId))
             return;
 
         var platformBindingPort = Services.GetService<IStudioMemberPlatformBindingCommandPort>();
@@ -146,6 +146,10 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
             return;
         }
 
+        await SchedulePlatformBindingExecuteRequestedAsync(
+            PlatformBindingExecuteRetryDelay,
+            CancellationToken.None);
+
         await platformBindingPort.ExecuteAsync(
             Id,
             evt.PlatformBindingCommandId,
@@ -162,7 +166,7 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
     [EventHandler(EndpointName = "completePlatformBinding")]
     public async Task HandlePlatformBindingSucceeded(StudioMemberPlatformBindingSucceeded evt)
     {
-        if (!CanAcceptRunEvent(evt.BindingRunId))
+        if (!CanAcceptPlatformBindingResult(evt.BindingRunId, evt.PlatformBindingCommandId))
             return;
 
         await PersistDomainEventAsync(evt);
@@ -182,7 +186,7 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
     [EventHandler(EndpointName = "failPlatformBinding", AllowSelfHandling = true)]
     public async Task HandlePlatformBindingFailed(StudioMemberPlatformBindingFailed evt)
     {
-        if (!CanAcceptRunEvent(evt.BindingRunId))
+        if (!CanAcceptPlatformBindingResult(evt.BindingRunId, evt.PlatformBindingCommandId))
             return;
 
         await PersistDomainEventAsync(evt);
@@ -301,7 +305,7 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         StudioMemberBindingRunState state,
         StudioMemberPlatformBindingSucceeded evt)
     {
-        if (IsStale(state, evt.BindingRunId) || IsTerminal(state.Status))
+        if (!CanApplyPlatformBindingResult(state, evt.BindingRunId, evt.PlatformBindingCommandId))
             return state;
 
         var next = state.Clone();
@@ -315,7 +319,7 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         StudioMemberBindingRunState state,
         StudioMemberPlatformBindingFailed evt)
     {
-        if (IsStale(state, evt.BindingRunId) || IsTerminal(state.Status))
+        if (!CanApplyPlatformBindingResult(state, evt.BindingRunId, evt.PlatformBindingCommandId))
             return state;
 
         var next = state.Clone();
@@ -339,6 +343,24 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         !string.IsNullOrEmpty(State.BindingRunId)
         && string.Equals(State.BindingRunId, bindingRunId, StringComparison.Ordinal)
         && !IsTerminal(State.Status);
+
+    private bool CanAcceptPlatformBindingResult(string bindingRunId, string platformBindingCommandId) =>
+        CanAcceptPlatformBindingCommand(bindingRunId, platformBindingCommandId);
+
+    private bool CanAcceptPlatformBindingCommand(string bindingRunId, string platformBindingCommandId) =>
+        !string.IsNullOrEmpty(State.BindingRunId)
+        && string.Equals(State.BindingRunId, bindingRunId, StringComparison.Ordinal)
+        && State.Status == StudioMemberBindingRunStatus.PlatformBindingPending
+        && string.Equals(State.PlatformBindingCommandId, platformBindingCommandId, StringComparison.Ordinal);
+
+    private static bool CanApplyPlatformBindingResult(
+        StudioMemberBindingRunState state,
+        string bindingRunId,
+        string platformBindingCommandId) =>
+        !string.IsNullOrEmpty(state.BindingRunId)
+        && string.Equals(state.BindingRunId, bindingRunId, StringComparison.Ordinal)
+        && state.Status == StudioMemberBindingRunStatus.PlatformBindingPending
+        && string.Equals(state.PlatformBindingCommandId, platformBindingCommandId, StringComparison.Ordinal);
 
     private bool CanRecoverRun() =>
         !string.IsNullOrEmpty(State.BindingRunId)
@@ -389,6 +411,10 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         if (string.IsNullOrEmpty(State.PlatformBindingCommandId) || State.Admitted == null)
             return;
 
+        await SchedulePlatformBindingExecuteRequestedAsync(
+            PlatformBindingExecuteInitialDelay,
+            ct);
+
         await SendToAsync(
             StudioMemberConventions.BuildActorId(State.ScopeId, State.MemberId),
             new StudioMemberBindingPlatformPendingEvent
@@ -398,22 +424,24 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
                 PendingAtUtc = pendingAtUtc,
             },
             ct);
-        await SendPlatformBindingExecuteRequestedAsync(ct);
     }
 
-    private Task SendPlatformBindingExecuteRequestedAsync(CancellationToken ct = default)
+    private Task SchedulePlatformBindingExecuteRequestedAsync(
+        TimeSpan dueTime,
+        CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(State.PlatformBindingCommandId) || State.Admitted == null)
             return Task.CompletedTask;
 
-        return SendToAsync(
-            Id,
+        return ScheduleSelfDurableTimeoutAsync(
+            BuildPlatformBindingExecuteCallbackId(State.BindingRunId, State.PlatformBindingCommandId),
+            dueTime,
             new StudioMemberPlatformBindingExecuteRequested
             {
                 BindingRunId = State.BindingRunId,
                 PlatformBindingCommandId = State.PlatformBindingCommandId,
             },
-            ct);
+            ct: ct);
     }
 
     private static bool IsSameRequest(
@@ -440,4 +468,9 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
 
     private static string BuildPlatformBindingCommandId(string bindingRunId, int attempt) =>
         $"platform-{bindingRunId}-{attempt}";
+
+    private static string BuildPlatformBindingExecuteCallbackId(
+        string bindingRunId,
+        string platformBindingCommandId) =>
+        $"studio-member-binding-execute:{bindingRunId}:{platformBindingCommandId}";
 }

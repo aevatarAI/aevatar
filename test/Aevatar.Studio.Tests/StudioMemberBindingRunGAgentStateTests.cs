@@ -100,7 +100,7 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     [Fact]
     public void PlatformSucceeded_ShouldRecordTerminalResult()
     {
-        var accepted = _agent.Apply(new StudioMemberBindingRunState(), NewRequested());
+        var accepted = NewPlatformPendingState();
         var completedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(2));
 
         var succeeded = _agent.Apply(accepted, new StudioMemberPlatformBindingSucceeded
@@ -120,6 +120,51 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         succeeded.Status.Should().Be(StudioMemberBindingRunStatus.Succeeded);
         succeeded.PlatformResult.RevisionId.Should().Be("rev-1");
         succeeded.UpdatedAtUtc.Should().Be(completedAt);
+    }
+
+    [Fact]
+    public void PlatformSucceeded_WithDifferentCommandId_ShouldBeIgnored()
+    {
+        var accepted = NewPlatformPendingState();
+
+        var stale = _agent.Apply(accepted, new StudioMemberPlatformBindingSucceeded
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-stale",
+            CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(2)),
+            Result = new StudioMemberPlatformBindingResult
+            {
+                PublishedServiceId = "member-m-1",
+                RevisionId = "rev-stale",
+                ImplementationKind = StudioMemberImplementationKind.Script,
+            },
+        });
+
+        stale.Status.Should().Be(StudioMemberBindingRunStatus.PlatformBindingPending);
+        stale.PlatformResult.Should().BeNull();
+    }
+
+    [Fact]
+    public void PlatformFailed_ShouldRecordTerminalFailure()
+    {
+        var accepted = NewPlatformPendingState();
+        var failedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(2));
+
+        var failed = _agent.Apply(accepted, new StudioMemberPlatformBindingFailed
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            Failure = new StudioMemberBindingFailure
+            {
+                Code = "SCOPE_BINDING_FAILED",
+                Message = "platform failed",
+                FailedAtUtc = failedAt,
+            },
+        });
+
+        failed.Status.Should().Be(StudioMemberBindingRunStatus.Failed);
+        failed.Failure.Code.Should().Be("SCOPE_BINDING_FAILED");
+        failed.UpdatedAtUtc.Should().Be(failedAt);
     }
 
     [Fact]
@@ -149,7 +194,7 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     [Fact]
     public void TerminalState_ShouldIgnoreLaterPlatformFailure()
     {
-        var accepted = _agent.Apply(new StudioMemberBindingRunState(), NewRequested());
+        var accepted = NewPlatformPendingState();
         var succeeded = _agent.Apply(accepted, new StudioMemberPlatformBindingSucceeded
         {
             BindingRunId = "bind-1",
@@ -199,6 +244,17 @@ public sealed class StudioMemberBindingRunGAgentStateTests
                 },
             },
         };
+    }
+
+    private StudioMemberBindingRunState NewPlatformPendingState()
+    {
+        var requested = _agent.Apply(new StudioMemberBindingRunState(), NewRequested());
+        return _agent.Apply(requested, new StudioMemberPlatformBindingStartRequested
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+        });
     }
 
     private sealed class StudioMemberBindingRunStateApplier
