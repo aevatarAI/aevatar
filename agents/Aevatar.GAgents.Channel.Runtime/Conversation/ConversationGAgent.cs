@@ -52,41 +52,6 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     private readonly Dictionary<string, NyxRelayStreamingState> _nyxRelayStreamingStates = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Actor-scoped, in-memory streaming state for one conversation turn. Never persisted: tracks
-    /// the upstream platform message id of the placeholder send and the two distinct failure
-    /// modes that can disable parts of the streaming path. Keyed by <c>correlation_id</c>, same
-    /// lifecycle as <see cref="NyxRelayReplyTokenContext"/>.
-    /// </summary>
-    /// <remarks>
-    /// The two failure flags carry different semantics with respect to the NyxID reply token:
-    /// <list type="bullet">
-    /// <item><c>Disabled</c> means streaming was aborted <em>before</em> any successful send, so
-    /// the reply token is still available and the actor may safely fall back to a single-shot
-    /// <c>/reply</c> via <see cref="IConversationTurnRunner.RunLlmReplyAsync"/>.</item>
-    /// <item><c>SuppressInterim</c> means the first chunk already consumed the reply token (the
-    /// placeholder or first delta landed) but a later interim edit failed. The final edit must
-    /// still be attempted via <c>/reply/update</c>; falling back to <c>/reply</c> would reuse a
-    /// dead token and turn the partial into the user-visible terminal state.</item>
-    /// </list>
-    /// </remarks>
-    private sealed record NyxRelayStreamingState(
-        string? PlatformMessageId,
-        string LastFlushedText,
-        int EditCount,
-        bool Disabled,
-        bool SuppressInterim)
-    {
-        public static NyxRelayStreamingState Initial { get; } = new(null, string.Empty, 0, false, false);
-
-        /// <summary>
-        /// True once the first successful send has landed: the NyxID reply token has been
-        /// consumed and any further outbound must go through <c>/reply/update</c>. Used as the
-        /// "token is dead, don't fall back to <c>/reply</c>" guard.
-        /// </summary>
-        public bool ReplyTokenConsumed => !string.IsNullOrEmpty(PlatformMessageId);
-    }
-
-    /// <summary>
     /// Sliding window cap on retained processed ids. Keeps state size bounded while still
     /// catching typical redelivery windows (seconds to minutes).
     /// </summary>
@@ -575,8 +540,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             return;
         }
 
-        var state = _nyxRelayStreamingStates.GetValueOrDefault(correlationId) ?? NyxRelayStreamingState.Initial;
-        if (state.Disabled || state.SuppressInterim)
+        var state = GetOrInitNyxRelayStreamingState(correlationId);
+        if (ShouldSkipNyxRelayStreamingForUnavailable(state, NyxRelayStreamingGuardSource.AcceptInterimChunk))
             return;
 
         if (State.ProcessedCommandIds.Contains(BuildLlmReplyCommandId(evt.CorrelationId)))
@@ -591,7 +556,11 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             Logger.LogInformation(
                 "Streaming chunk received but relay reply token is unavailable; disabling streaming for turn. correlation={CorrelationId}",
                 evt.CorrelationId);
-            _nyxRelayStreamingStates[correlationId] = state with { Disabled = true };
+            TransitionNyxRelayStreamingPhase(
+                correlationId,
+                state,
+                NyxRelayStreamingPhase.DisabledPreSend,
+                terminalReason: "no_reply_token");
             return;
         }
 
@@ -603,7 +572,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             CancellationToken.None);
         if (!result.Success)
         {
-            if (state.ReplyTokenConsumed)
+            if (state.AllowsFinalEdit)
             {
                 // First chunk already consumed the reply token. Skip further interim edits but
                 // preserve PlatformMessageId so the final edit on LlmReplyReady can still try
@@ -614,7 +583,11 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                     evt.CorrelationId,
                     result.ErrorCode,
                     result.EditUnsupported);
-                _nyxRelayStreamingStates[correlationId] = state with { SuppressInterim = true };
+                TransitionNyxRelayStreamingPhase(
+                    correlationId,
+                    state,
+                    NyxRelayStreamingPhase.SuppressingInterim,
+                    terminalReason: $"interim_edit_failed:{result.ErrorCode}");
             }
             else
             {
@@ -625,21 +598,29 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                     evt.CorrelationId,
                     result.ErrorCode,
                     result.EditUnsupported);
-                _nyxRelayStreamingStates[correlationId] = state with { Disabled = true };
+                TransitionNyxRelayStreamingPhase(
+                    correlationId,
+                    state,
+                    NyxRelayStreamingPhase.DisabledPreSend,
+                    terminalReason: $"first_send_failed:{result.ErrorCode}");
             }
             return;
         }
 
-        var isFirstChunk = string.IsNullOrEmpty(state.PlatformMessageId);
+        var isFirstChunk = state.Phase == NyxRelayStreamingPhase.Idle;
         var newPlatformMessageId = string.IsNullOrWhiteSpace(result.PlatformMessageId)
             ? state.PlatformMessageId
             : result.PlatformMessageId;
-        _nyxRelayStreamingStates[correlationId] = state with
-        {
-            PlatformMessageId = newPlatformMessageId,
-            LastFlushedText = evt.AccumulatedText,
-            EditCount = isFirstChunk ? 0 : state.EditCount + 1,
-        };
+        TransitionNyxRelayStreamingPhase(
+            correlationId,
+            state,
+            isFirstChunk ? NyxRelayStreamingPhase.PlaceholderSent : NyxRelayStreamingPhase.Streaming,
+            fieldUpdate: s => s with
+            {
+                PlatformMessageId = newPlatformMessageId,
+                LastFlushedText = evt.AccumulatedText,
+                EditCount = isFirstChunk ? 0 : s.EditCount + 1,
+            });
     }
 
     private async Task<bool> TryCompleteStreamedReplyAsync(
@@ -652,12 +633,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         if (correlationId is null)
             return false;
 
-        if (!_nyxRelayStreamingStates.TryGetValue(correlationId, out var state))
-            return false;
-        // Disabled means the initial send never landed, so the reply token is still usable
-        // and the caller may fall back to a single-shot /reply. A missing PlatformMessageId
-        // with SuppressInterim would be inconsistent, but treat it the same for safety.
-        if (state.Disabled || string.IsNullOrEmpty(state.PlatformMessageId))
+        var state = GetOrInitNyxRelayStreamingState(correlationId);
+        if (ShouldSkipNyxRelayStreamingForUnavailable(state, NyxRelayStreamingGuardSource.Finalize))
             return false;
 
         var platformMessageId = state.PlatformMessageId!;
@@ -695,6 +672,11 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                     evt.CorrelationId,
                     evt.ErrorCode,
                     platformMessageId);
+                TransitionNyxRelayStreamingPhase(
+                    correlationId,
+                    state,
+                    NyxRelayStreamingPhase.TerminalSucceeded,
+                    terminalReason: $"failed_self_heal:{evt.ErrorCode}");
                 await PersistStreamedCompletionAsync(evt, commandId, referenceActivity, platformMessageId, failureText, state.EditCount + 1);
                 return true;
             }
@@ -708,6 +690,11 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 evt.CorrelationId,
                 failureResult.ErrorCode,
                 platformMessageId);
+            TransitionNyxRelayStreamingPhase(
+                correlationId,
+                state,
+                NyxRelayStreamingPhase.TerminalPartial,
+                terminalReason: $"failed_self_heal_edit_failed:{failureResult.ErrorCode}");
             await PersistStreamedCompletionAsync(evt, commandId, referenceActivity, platformMessageId, state.LastFlushedText, state.EditCount);
             return true;
         }
@@ -725,6 +712,11 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 "Streaming LLM reply final text was empty; persisting last flushed partial as terminal. correlation={CorrelationId} platformMessageId={PlatformMessageId}",
                 evt.CorrelationId,
                 platformMessageId);
+            TransitionNyxRelayStreamingPhase(
+                correlationId,
+                state,
+                NyxRelayStreamingPhase.TerminalPartial,
+                terminalReason: "empty_final_text");
             await PersistStreamedCompletionAsync(evt, commandId, referenceActivity, platformMessageId, state.LastFlushedText, state.EditCount);
             return true;
         }
@@ -758,12 +750,22 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                     evt.CorrelationId,
                     finalResult.ErrorCode,
                     platformMessageId);
+                TransitionNyxRelayStreamingPhase(
+                    correlationId,
+                    state,
+                    NyxRelayStreamingPhase.TerminalPartial,
+                    terminalReason: $"final_edit_failed:{finalResult.ErrorCode}");
                 await PersistStreamedCompletionAsync(evt, commandId, referenceActivity, platformMessageId, state.LastFlushedText, state.EditCount);
                 return true;
             }
             edits += 1;
         }
 
+        TransitionNyxRelayStreamingPhase(
+            correlationId,
+            state,
+            NyxRelayStreamingPhase.TerminalSucceeded,
+            terminalReason: "completed");
         await PersistStreamedCompletionAsync(evt, commandId, referenceActivity, platformMessageId, finalText, edits);
         return true;
     }
