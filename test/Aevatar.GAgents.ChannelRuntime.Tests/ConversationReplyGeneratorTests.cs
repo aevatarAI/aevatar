@@ -200,6 +200,63 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateReplyAsync_ForNamedNetworkSkillLarkTurn_SearchesAndPullsExactSlugBeforeGeneralDiscovery()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var discovery = new StubRemoteSkillDiscovery();
+        var fetcher = new StubRemoteSkillFetcher
+        {
+            ById =
+            {
+                ["sg-office-network"] = new SkillDefinition
+                {
+                    Name = "sg-office-network",
+                    Description = "Shared office network inventory skill",
+                    Instructions = "Use the SG Office Network skill to get every device IP before reporting results.",
+                    Source = SkillSource.Remote,
+                    RemoteId = "skill-sg-office-network",
+                },
+            },
+        };
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            remoteSkillDiscoveries: [discovery],
+            remoteSkillFetcher: fetcher,
+            chatOptions: new NyxIdChatOptions
+            {
+                LarkRemoteSkillAutoLoadMaxSkills = 1,
+            });
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-sg-office-network",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "从SG Office Network拉一下所有设备的IP" },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "nyx-token",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        discovery.Requests.Should().NotBeEmpty();
+        discovery.Requests[0].Query.Should().Be("sg-office-network");
+        discovery.Requests[0].Mode.Should().Be("keyword");
+        discovery.Requests.Should().NotContain(request =>
+            request.Query.Contains("network device ip address", StringComparison.OrdinalIgnoreCase));
+        fetcher.Requests.Should().ContainSingle().Which.Should().Be(("nyx-token", "sg-office-network"));
+
+        var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject.Messages
+            .First(message => message.Role == "system").Content;
+        systemPrompt.Should().Contain("sg-office-network");
+        systemPrompt.Should().Contain("Use the SG Office Network skill to get every device IP before reporting results.");
+        systemPrompt.Should().Contain("follow them before starting generic service, catalog, storage, or network discovery");
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_ForNetworkInventoryLarkTurn_UsesExpandedRemoteSkillSearch()
     {
         var providerFactory = new RecordingProviderFactory();
@@ -252,7 +309,7 @@ public sealed class ConversationReplyGeneratorTests
             request.Mode == "semantic");
         discovery.Requests.Should().Contain(request =>
             request.Query.Contains("network device ip address", StringComparison.OrdinalIgnoreCase));
-        fetcher.Requests.Should().ContainSingle().Which.Should().Be(("nyx-token", "skill-network"));
+        fetcher.Requests.Should().Contain(("nyx-token", "skill-network"));
 
         var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject.Messages
             .First(message => message.Role == "system").Content;
