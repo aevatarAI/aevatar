@@ -12,6 +12,9 @@ namespace Aevatar.AI.Tests;
 
 public class NyxIdSshExecToolTests
 {
+    private const string CatalogId = "69b3fbd6-bb62-40ec-9b42-88457a9c75d0";
+    private const string SshOk = """{"exit_code":0,"stdout":"ok","stderr":"","duration_ms":42,"timed_out":false}""";
+
     [Fact]
     public void Name_IsSshExec()
     {
@@ -60,14 +63,15 @@ public class NyxIdSshExecToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_RoutesToCorrectSshEndpoint_AndForwardsBody()
+    public async Task ExecuteAsync_ResolvesSlugToCatalogServiceId_AndPostsToCorrectSshPath()
     {
-        var handler = new RecordingHandler(new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(
-                """{"exit_code":0,"stdout":"ok","stderr":"","duration_ms":42,"timed_out":false}""",
-                Encoding.UTF8, "application/json"),
-        });
+        // The /api/v1/ssh/{id}/exec route keys on catalog_service_id, NOT on the user-service
+        // slug or its uuid. Tool must hop GET /keys/{slug} → take catalog_service_id → POST.
+        var handler = new PathHandler();
+        handler.Map(HttpMethod.Get, "/api/v1/keys/sg-office-network",
+            $$"""{"id":"70f053b1-9185-4794-a135-5536c7608c19","slug":"sg-office-network","catalog_service_id":"{{CatalogId}}"}""");
+        handler.Map(HttpMethod.Post, $"/api/v1/ssh/{CatalogId}/exec", SshOk);
+
         var tool = new NyxIdSshExecTool(new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
             new HttpClient(handler)));
@@ -78,14 +82,15 @@ public class NyxIdSshExecToolTests
                 """{"service":"sg-office-network","command":"uname -a","principal":"ubuntu","timeout_secs":15}""");
 
             result.Should().Contain("\"exit_code\":0");
-            handler.LastRequest.Should().NotBeNull();
-            handler.LastRequest!.Method.Should().Be(HttpMethod.Post);
-            handler.LastRequest.RequestUri!.AbsoluteUri.Should()
-                .Be("https://nyx.example/api/v1/ssh/sg-office-network/exec");
-            handler.LastRequest.Headers.Authorization
-                .Should().BeEquivalentTo(new AuthenticationHeaderValue("Bearer", "test-token"));
 
-            using var doc = JsonDocument.Parse(handler.LastBody!);
+            handler.Recorded.Should().Contain(r =>
+                r.Method == HttpMethod.Post &&
+                r.Path == $"/api/v1/ssh/{CatalogId}/exec");
+
+            var execRequest = handler.Recorded.Last(r => r.Method == HttpMethod.Post);
+            execRequest.Authorization.Should().Be("Bearer test-token");
+
+            using var doc = JsonDocument.Parse(execRequest.Body!);
             doc.RootElement.GetProperty("command").GetString().Should().Be("uname -a");
             doc.RootElement.GetProperty("principal").GetString().Should().Be("ubuntu");
             doc.RootElement.GetProperty("timeout_secs").GetInt32().Should().Be(15);
@@ -97,21 +102,54 @@ public class NyxIdSshExecToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_DefaultsTimeoutTo30_WhenOmitted()
+    public async Task ExecuteAsync_FallsBackToListServices_WhenDirectKeyLookupMissesCatalogId()
     {
-        var handler = new RecordingHandler(new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent("""{"exit_code":0,"stdout":"","stderr":"","duration_ms":1,"timed_out":false}""",
-                Encoding.UTF8, "application/json"),
-        });
+        // /keys/{slug} can return a wrapper without `catalog_service_id` surfaced (e.g. some
+        // builds nest it). The list endpoint always carries it, so the resolver falls back.
+        var handler = new PathHandler();
+        handler.Map(HttpMethod.Get, "/api/v1/keys/sg-office-network",
+            """{"id":"70f053b1-9185-4794-a135-5536c7608c19","slug":"sg-office-network"}""");
+        handler.Map(HttpMethod.Get, "/api/v1/keys",
+            $$"""{"keys":[{"id":"70f053b1-9185-4794-a135-5536c7608c19","slug":"sg-office-network","catalog_service_id":"{{CatalogId}}"}]}""");
+        handler.Map(HttpMethod.Post, $"/api/v1/ssh/{CatalogId}/exec", SshOk);
+
         var tool = new NyxIdSshExecTool(new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
             new HttpClient(handler)));
         SetMetadata("test-token");
         try
         {
-            await tool.ExecuteAsync("""{"service":"sg-office","command":"echo hi","principal":"ubuntu"}""");
-            using var doc = JsonDocument.Parse(handler.LastBody!);
+            var result = await tool.ExecuteAsync(
+                """{"service":"sg-office-network","command":"uname -a","principal":"ubuntu"}""");
+
+            result.Should().Contain("\"exit_code\":0");
+            handler.Recorded.Should().Contain(r =>
+                r.Method == HttpMethod.Post && r.Path == $"/api/v1/ssh/{CatalogId}/exec");
+        }
+        finally
+        {
+            ClearMetadata();
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_DefaultsTimeoutTo30_WhenOmitted()
+    {
+        var handler = new PathHandler();
+        handler.Map(HttpMethod.Get, "/api/v1/keys/sg-office",
+            $$"""{"id":"u","slug":"sg-office","catalog_service_id":"{{CatalogId}}"}""");
+        handler.Map(HttpMethod.Post, $"/api/v1/ssh/{CatalogId}/exec", SshOk);
+
+        var tool = new NyxIdSshExecTool(new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(handler)));
+        SetMetadata("test-token");
+        try
+        {
+            await tool.ExecuteAsync(
+                """{"service":"sg-office","command":"echo hi","principal":"ubuntu"}""");
+            var exec = handler.Recorded.Last(r => r.Method == HttpMethod.Post);
+            using var doc = JsonDocument.Parse(exec.Body!);
             doc.RootElement.GetProperty("timeout_secs").GetInt32().Should().Be(30);
         }
         finally
@@ -123,11 +161,11 @@ public class NyxIdSshExecToolTests
     [Fact]
     public async Task ExecuteAsync_ClampsTimeoutToServerMax()
     {
-        var handler = new RecordingHandler(new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent("""{"exit_code":0,"stdout":"","stderr":"","duration_ms":1,"timed_out":false}""",
-                Encoding.UTF8, "application/json"),
-        });
+        var handler = new PathHandler();
+        handler.Map(HttpMethod.Get, "/api/v1/keys/sg",
+            $$"""{"id":"u","slug":"sg","catalog_service_id":"{{CatalogId}}"}""");
+        handler.Map(HttpMethod.Post, $"/api/v1/ssh/{CatalogId}/exec", SshOk);
+
         var tool = new NyxIdSshExecTool(new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
             new HttpClient(handler)));
@@ -136,7 +174,8 @@ public class NyxIdSshExecToolTests
         {
             await tool.ExecuteAsync(
                 """{"service":"sg","command":"sleep 1","principal":"ubuntu","timeout_secs":9999}""");
-            using var doc = JsonDocument.Parse(handler.LastBody!);
+            var exec = handler.Recorded.Last(r => r.Method == HttpMethod.Post);
+            using var doc = JsonDocument.Parse(exec.Body!);
             doc.RootElement.GetProperty("timeout_secs").GetInt32().Should().Be(300);
         }
         finally
@@ -158,19 +197,44 @@ public class NyxIdSshExecToolTests
 
     private static void ClearMetadata() => AgentToolRequestContext.CurrentMetadata = null;
 
-    private sealed class RecordingHandler(HttpResponseMessage response) : HttpMessageHandler
+    private sealed record RecordedRequest(HttpMethod Method, string Path, string? Body, string? Authorization);
+
+    private sealed class PathHandler : HttpMessageHandler
     {
-        public HttpRequestMessage? LastRequest { get; private set; }
-        public string? LastBody { get; private set; }
+        private readonly Dictionary<(HttpMethod Method, string Path), string> _routes = new();
+        public List<RecordedRequest> Recorded { get; } = new();
+
+        public void Map(HttpMethod method, string path, string responseBody)
+        {
+            _routes[(method, path)] = responseBody;
+        }
 
         protected override async Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken)
+            HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            LastRequest = request;
+            string? body = null;
             if (request.Content is not null)
-                LastBody = await request.Content.ReadAsStringAsync(cancellationToken);
-            return response;
+                body = await request.Content.ReadAsStringAsync(cancellationToken);
+            var path = request.RequestUri!.AbsolutePath;
+            Recorded.Add(new RecordedRequest(
+                request.Method,
+                path,
+                body,
+                request.Headers.Authorization?.ToString()));
+
+            if (_routes.TryGetValue((request.Method, path), out var responseBodyText))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(responseBodyText, Encoding.UTF8, "application/json"),
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound)
+            {
+                Content = new StringContent("""{"error":"not_found"}""",
+                    Encoding.UTF8, "application/json"),
+            };
         }
     }
 }

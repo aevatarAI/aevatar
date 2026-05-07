@@ -89,9 +89,25 @@ public sealed class NyxIdSshExecTool : IAgentTool
             return """{"error":"'service', 'command', and 'principal' are required."}""";
         }
 
+        // NyxID's /api/v1/ssh/{id}/exec route keys on `catalog_service_id`, NOT on the user
+        // service slug or user-service id. The CLI's `nyxid ssh exec` does the same hop
+        // internally (cli/src/commands/ssh.rs:resolve_ssh_service_id). Without this resolve,
+        // a slug like 'sg-office-network' or its user-service uuid both 404 with NyxID's
+        // generic "Service not found" envelope, and the LLM gets stuck retrying the same
+        // wrong path.
+        var catalogServiceId = await ResolveCatalogServiceIdAsync(token, service, ct);
+        if (string.IsNullOrWhiteSpace(catalogServiceId))
+        {
+            _logger.LogWarning(
+                "[ssh_exec] could not resolve catalog_service_id for service={Service}", service);
+            return $$"""
+                {"error":"Service not found in user-services. Pass a slug or id from `nyxid_proxy` discovery (with no slug) — only SSH-typed user services have a catalog_service_id usable here.","received":{{JsonSerializer.Serialize(service)}}}
+                """;
+        }
+
         _logger.LogInformation(
-            "[ssh_exec] service={Service} principal={Principal} timeoutSecs={Timeout}",
-            service, principal, timeoutSecs);
+            "[ssh_exec] service={Service} catalogId={CatalogId} principal={Principal} timeoutSecs={Timeout}",
+            service, catalogServiceId, principal, timeoutSecs);
 
         var body = JsonSerializer.Serialize(new
         {
@@ -100,7 +116,120 @@ public sealed class NyxIdSshExecTool : IAgentTool
             timeout_secs = timeoutSecs,
         });
 
-        return await _client.SshExecAsync(token, service, body, ct);
+        return await _client.SshExecAsync(token, catalogServiceId, body, ct);
+    }
+
+    /// <summary>
+    /// Resolve a slug or user-service id into the catalog_service_id required by NyxID's SSH
+    /// route. Mirrors the CLI's <c>resolve_ssh_service_id</c>: prefer the user-service entry's
+    /// <c>catalog_service_id</c>, otherwise fall back to the input (so a raw catalog id passed
+    /// directly still works).
+    /// </summary>
+    private async Task<string?> ResolveCatalogServiceIdAsync(
+        string token, string serviceIdOrSlug, CancellationToken ct)
+    {
+        try
+        {
+            // Direct lookup by user-service id or slug — NyxID's /keys/{x} accepts either.
+            var direct = await _client.GetServiceAsync(token, serviceIdOrSlug, ct);
+            var catalog = TryReadCatalogServiceId(direct);
+            if (!string.IsNullOrWhiteSpace(catalog))
+                return catalog;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(
+                ex, "[ssh_exec] direct /keys/{Service} lookup failed; falling back to list", serviceIdOrSlug);
+        }
+
+        try
+        {
+            // List + match by slug — covers cases where direct lookup returns a wrapper without
+            // the field surfaced at the top level.
+            var listJson = await _client.ListServicesAsync(token, ct);
+            using var doc = JsonDocument.Parse(listJson);
+            var root = doc.RootElement;
+
+            JsonElement entries = default;
+            var hasEntries = false;
+            if (root.ValueKind == JsonValueKind.Array)
+            {
+                entries = root;
+                hasEntries = true;
+            }
+            else if (root.ValueKind == JsonValueKind.Object &&
+                     root.TryGetProperty("keys", out var keysProp) &&
+                     keysProp.ValueKind == JsonValueKind.Array)
+            {
+                entries = keysProp;
+                hasEntries = true;
+            }
+
+            if (hasEntries)
+            {
+                foreach (var entry in entries.EnumerateArray())
+                {
+                    if (!MatchesService(entry, serviceIdOrSlug))
+                        continue;
+                    if (entry.TryGetProperty("catalog_service_id", out var catalogProp) &&
+                        catalogProp.ValueKind == JsonValueKind.String)
+                    {
+                        var candidate = catalogProp.GetString();
+                        if (!string.IsNullOrWhiteSpace(candidate))
+                            return candidate;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[ssh_exec] /keys list lookup failed for {Service}", serviceIdOrSlug);
+        }
+
+        // Caller passed a raw catalog id directly (the CLI also falls through this way).
+        return serviceIdOrSlug;
+    }
+
+    private static string? TryReadCatalogServiceId(string keyResponse)
+    {
+        if (string.IsNullOrWhiteSpace(keyResponse))
+            return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(keyResponse);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return null;
+            // NyxID's /keys/{x} returns either the entry directly or wrapped in { error: ... }.
+            if (root.TryGetProperty("error", out _))
+                return null;
+            if (root.TryGetProperty("catalog_service_id", out var prop) &&
+                prop.ValueKind == JsonValueKind.String)
+            {
+                return prop.GetString();
+            }
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+        return null;
+    }
+
+    private static bool MatchesService(JsonElement entry, string idOrSlug)
+    {
+        if (entry.ValueKind != JsonValueKind.Object)
+            return false;
+        foreach (var key in new[] { "id", "_id", "slug", "service_slug" })
+        {
+            if (entry.TryGetProperty(key, out var prop) &&
+                prop.ValueKind == JsonValueKind.String &&
+                string.Equals(prop.GetString(), idOrSlug, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static int ParseTimeoutSecs(string? raw)

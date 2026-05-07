@@ -727,7 +727,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             CancellationToken ct) => Task.FromException<string?>(exception);
     }
 
-    /// <summary>Generator that never completes on its own — only ends when the runtime cancels it.</summary>
+    /// <summary>Generator that never completes on its own; only ends when the runtime cancels it.</summary>
     private sealed class HangingReplyGenerator : IConversationReplyGenerator
     {
         public bool WasCancelled { get; private set; }
@@ -738,16 +738,15 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             IStreamingReplySink? streamingSink,
             CancellationToken ct)
         {
-            try
-            {
-                await Task.Delay(Timeout.Infinite, ct);
-                return string.Empty;
-            }
-            catch (OperationCanceledException)
+            var pendingReply = new TaskCompletionSource<string?>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            using var cancellationRegistration = ct.Register(() =>
             {
                 WasCancelled = true;
-                throw;
-            }
+                pendingReply.TrySetCanceled(ct);
+            });
+
+            return await pendingReply.Task;
         }
     }
 }
