@@ -1160,6 +1160,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         {
             _nyxRelayReplyTokens.Remove(normalizedCorrelationId);
             _nyxRelayStreamingStates.Remove(normalizedCorrelationId);
+            _larkCardStreamingStates.Remove(normalizedCorrelationId);
         }
     }
 
