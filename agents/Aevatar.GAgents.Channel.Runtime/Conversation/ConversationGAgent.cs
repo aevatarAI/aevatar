@@ -596,11 +596,15 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         }
 
         var runner = ResolveRunner();
+        // Bound the upstream edit so a stuck relay/network can't pin the actor turn forever
+        // (PR #562 review). 10s matches the failure-path timeout below; the edit is best-effort,
+        // so timing out cleanly into the !result.Success branch preserves correctness.
+        using var streamChunkCts = new CancellationTokenSource(StreamingFailureUpdateTimeout);
         var result = await runner.RunStreamChunkAsync(
             evt,
             state.PlatformMessageId,
             runtimeContext,
-            CancellationToken.None);
+            streamChunkCts.Token);
         if (!result.Success)
         {
             if (state.ReplyTokenConsumed)
@@ -741,11 +745,12 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 AccumulatedText = finalText,
                 ChunkAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             };
+            using var finalChunkCts = new CancellationTokenSource(StreamingFailureUpdateTimeout);
             var finalResult = await runner.RunStreamChunkAsync(
                 finalChunk,
                 platformMessageId,
                 runtimeContext,
-                CancellationToken.None);
+                finalChunkCts.Token);
             if (!finalResult.Success)
             {
                 // The reply token was already consumed by the first chunk, so falling back to

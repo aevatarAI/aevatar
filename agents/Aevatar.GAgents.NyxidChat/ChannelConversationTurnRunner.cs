@@ -1,3 +1,4 @@
+using System.Net.Http;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -456,11 +457,26 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             throw;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (IsTransientBindingLookupFailure(ex))
         {
+            // Transient infra failures (DB blip, transient HTTP, JSON shape mismatch from
+            // upstream): degrade to owner credentials and keep the conversation alive.
             _logger.LogWarning(
                 ex,
-                "Failed to resolve sender NyxID binding; falling back to bot owner LLM config. subject={Platform}:{Tenant}:{User}",
+                "Transient sender NyxID binding lookup failure; falling back to bot owner LLM config. subject={Platform}:{Tenant}:{User}",
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            // Non-transient (programmer error, unexpected NRE, serialization break): surface
+            // at Error level so ops can distinguish from "sender just isn't bound" — but still
+            // fall through to owner credentials so the user gets a reply rather than nothing.
+            _logger.LogError(
+                ex,
+                "Sender NyxID binding lookup raised non-transient exception; falling back to bot owner LLM config. subject={Platform}:{Tenant}:{User}",
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);
@@ -472,6 +488,17 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         return null;
     }
+
+    /// <summary>
+    /// Distinguish infra-shaped binding lookup failures (worth a Warning + owner fallback)
+    /// from logic/programmer errors (worth an Error log so ops sees them).
+    /// </summary>
+    private static bool IsTransientBindingLookupFailure(Exception ex) =>
+        ex is HttpRequestException
+            or TimeoutException
+            or TaskCanceledException
+            or System.Text.Json.JsonException
+            or System.IO.IOException;
 
     // Lark-aware private-chat detection. Other platforms map their direct-
     // message chat-type strings here as the runner gains support for them.

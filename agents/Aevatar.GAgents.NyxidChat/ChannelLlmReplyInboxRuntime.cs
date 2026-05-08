@@ -99,8 +99,19 @@ public sealed class ChannelLlmReplyInboxRuntime :
     /// a reply the user has already given up on. Without this cap, a tool that hangs
     /// (e.g. a misbehaving sandbox or unreachable proxy upstream) would pin the inbox
     /// task indefinitely and the user's "loading" reaction would never resolve.
+    /// A configured value of <c>0</c> or negative is treated as "disable the cap" — pass
+    /// through with no timeout, mirroring HttpClient/Polly conventions where 0 means
+    /// "no limit". The default of 120s applies when the option is unset.
     /// </summary>
     internal const int FallbackTimeoutSecondsDefault = 120;
+
+    /// <summary>
+    /// Standalone budget for metadata enrichment (scope resolve + UserConfig lookup).
+    /// We split this out from the LLM run budget so that slow infra around metadata
+    /// can't silently steal the LLM's response window — and so a metadata timeout
+    /// surfaces as a distinct error code rather than a misleading "llm_reply_timeout".
+    /// </summary>
+    internal static readonly TimeSpan MetadataBuildBudget = TimeSpan.FromSeconds(15);
 
     internal async Task ProcessAsync(NeedsLlmReplyEvent request)
     {
@@ -159,12 +170,39 @@ public sealed class ChannelLlmReplyInboxRuntime :
         var errorSummary = string.Empty;
         using TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, request.TargetActorId);
 
+        // Metadata enrichment runs on its own short budget so a slow scope/UserConfig lookup
+        // can't silently shrink the LLM run's window. The LLM CTS only starts ticking after
+        // metadata is in hand, and a metadata timeout surfaces as a distinct error code.
+        IReadOnlyDictionary<string, string> effectiveMetadata;
+        using (var metadataCts = new CancellationTokenSource(MetadataBuildBudget))
+        {
+            try
+            {
+                effectiveMetadata = await BuildEffectiveMetadataAsync(request, metadataCts.Token);
+            }
+            catch (OperationCanceledException ex) when (metadataCts.IsCancellationRequested)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Deferred LLM reply metadata build timed out after {TimeoutSeconds}s: correlation={CorrelationId}",
+                    (int)MetadataBuildBudget.TotalSeconds,
+                    request.CorrelationId);
+                replyText = "Sorry, I couldn't load your model preferences in time. Please try again.";
+                terminalState = LlmReplyTerminalState.Failed;
+                errorCode = "llm_reply_metadata_timeout";
+                errorSummary = $"Metadata enrichment exceeded {(int)MetadataBuildBudget.TotalSeconds}s budget.";
+                await DispatchReadyEventAsync(request, replyText, outboundIntent, terminalState, errorCode, errorSummary);
+                return;
+            }
+        }
+
         var fallbackTimeout = ResolveFallbackTimeout();
-        using var timeoutCts = new CancellationTokenSource(fallbackTimeout);
+        using var timeoutCts = fallbackTimeout > TimeSpan.Zero
+            ? new CancellationTokenSource(fallbackTimeout)
+            : new CancellationTokenSource();
 
         try
         {
-            var effectiveMetadata = await BuildEffectiveMetadataAsync(request, timeoutCts.Token);
             IDisposable? interactiveReplyScope = null;
             try
             {
@@ -223,12 +261,23 @@ public sealed class ChannelLlmReplyInboxRuntime :
                 request.CorrelationId);
         }
 
+        await DispatchReadyEventAsync(request, replyText, outboundIntent, terminalState, errorCode, errorSummary);
+    }
+
+    private async Task DispatchReadyEventAsync(
+        NeedsLlmReplyEvent request,
+        string replyText,
+        MessageContent? outboundIntent,
+        LlmReplyTerminalState terminalState,
+        string errorCode,
+        string errorSummary)
+    {
         var ready = new LlmReplyReadyEvent
         {
             CorrelationId = request.CorrelationId,
             RegistrationId = request.RegistrationId,
             SourceActorId = InboxStreamId,
-            Activity = request.Activity.Clone(),
+            Activity = request.Activity!.Clone(),
             Outbound = outboundIntent?.Clone() ?? new MessageContent { Text = replyText },
             TerminalState = terminalState,
             ErrorCode = errorCode,
@@ -375,11 +424,24 @@ public sealed class ChannelLlmReplyInboxRuntime :
         }
     }
 
+    /// <summary>
+    /// Resolve the LLM-run cap from <c>NyxIdRelayOptions.ResponseTimeoutSeconds</c>.
+    /// Conventions:
+    ///   * unset / null  → <see cref="FallbackTimeoutSecondsDefault"/> (120s)
+    ///   * &gt; 0        → use that exact value
+    ///   * 0 or negative → <see cref="TimeSpan.Zero"/> meaning "no timeout"; the caller
+    ///     constructs an unbounded <see cref="CancellationTokenSource"/>. Use this only
+    ///     in environments that have an external watchdog — without it, a hung tool
+    ///     keeps the inbox task alive indefinitely.
+    /// </summary>
     private TimeSpan ResolveFallbackTimeout()
     {
-        var configured = _relayOptions?.ResponseTimeoutSeconds ?? 0;
-        var seconds = configured > 0 ? configured : FallbackTimeoutSecondsDefault;
-        return TimeSpan.FromSeconds(seconds);
+        if (_relayOptions is null)
+            return TimeSpan.FromSeconds(FallbackTimeoutSecondsDefault);
+        var configured = _relayOptions.ResponseTimeoutSeconds;
+        if (configured <= 0)
+            return TimeSpan.Zero;
+        return TimeSpan.FromSeconds(configured);
     }
 
     private static bool IsRelayRequest(NeedsLlmReplyEvent request) =>

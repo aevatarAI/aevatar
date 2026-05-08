@@ -1,3 +1,4 @@
+using System.Net.Http;
 using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -101,7 +102,7 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         {
             throw;
         }
-        catch (Exception ex) when (metadataPlan.OwnerFallback is not null)
+        catch (Exception ex) when (metadataPlan.OwnerFallback is not null && IsRetryableSenderRouteFailure(ex))
         {
             _logger.LogWarning(
                 ex,
@@ -118,6 +119,22 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
                 .ConfigureAwait(false);
         }
     }
+
+    /// <summary>
+    /// Decide whether falling back from sender credentials to owner credentials is worth
+    /// the retry. Programmer errors (Argument*, NullReference, InvalidCast) are not transient
+    /// and would only fail the same way with the owner token while burying the original cause
+    /// behind a second failure. We retry only on infra-shaped failures: network, timeout, JSON
+    /// parsing of upstream errors, and the InvalidOperationException NyxID emits when an
+    /// access token is rejected.
+    /// </summary>
+    private static bool IsRetryableSenderRouteFailure(Exception ex) =>
+        ex is HttpRequestException
+            or TimeoutException
+            or System.Text.Json.JsonException
+            or InvalidOperationException
+            or TaskCanceledException
+            or System.IO.IOException;
 
     private async Task<ToolManager> BuildTurnToolsAsync(CancellationToken ct)
     {

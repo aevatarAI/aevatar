@@ -39,8 +39,8 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             return Task.FromResult<IReadOnlyList<IAgentTool>>([]);
         }
 
-        IReadOnlyList<IAgentTool> tools =
-        [
+        var tools = new List<IAgentTool>
+        {
             new NyxIdAccountTool(_client),
             new NyxIdStatusTool(_client),
             new NyxIdProfileTool(_client),
@@ -50,7 +50,6 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdServicesTool(_client),
             new NyxIdProxyTool(_client, _cache, _logger),
             new NyxIdCodeExecuteTool(_client, _logger),
-            new NyxIdSshExecTool(_client, _logger),
             new NyxIdApiKeysTool(_client),
             new NyxIdNodesTool(_client),
             new NyxIdApprovalsTool(_client),
@@ -65,12 +64,21 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdAdminTool(_client),
             new NyxIdSearchCapabilitiesTool(_specCatalog),
             new NyxIdProxyExecuteTool(_specCatalog, _client, _logger as ILogger<NyxIdProxyExecuteTool>),
-        ];
+        };
+
+        // ssh_exec is opt-in. The tool's Auto/RequiresApproval=true contract relies on the
+        // host wiring an approval middleware around tool execution; without that middleware,
+        // a host would let the LLM run remote shell commands directly. Make hosts opt in
+        // explicitly so that exposure is a deliberate decision.
+        if (_options.EnableSshExecTool)
+        {
+            tools.Add(new NyxIdSshExecTool(_client, _logger));
+        }
 
         _logger.LogInformation(
-            "NyxID tools registered ({Count} tools, base URL: {BaseUrl})",
-            tools.Count, _options.BaseUrl);
+            "NyxID tools registered ({Count} tools, base URL: {BaseUrl}, ssh_exec={SshEnabled})",
+            tools.Count, _options.BaseUrl, _options.EnableSshExecTool);
 
-        return Task.FromResult(tools);
+        return Task.FromResult<IReadOnlyList<IAgentTool>>(tools);
     }
 }

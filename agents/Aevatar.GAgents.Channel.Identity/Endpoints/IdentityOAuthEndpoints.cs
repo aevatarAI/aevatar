@@ -600,9 +600,15 @@ public static class IdentityOAuthEndpoints
     /// The earlier shape returned early on <c>right is null</c>; the call
     /// site short-circuits via <c>TryGetValue</c> so right is never null in
     /// practice, but we still treat null as empty to keep the helper's
-    /// signature constant-time-uniform for future callers (PR #570 review,
-    /// 4-model consensus).
+    /// signature constant-time-uniform (PR #570 review, 4-model consensus).
     /// </summary>
+    /// <remarks>
+    /// SCOPE: this helper is intentionally <c>private static</c> and tied to
+    /// the rebuild admin-token check. It is NOT for general callers — if a new
+    /// caller needs constant-time string compare for a lower-entropy secret,
+    /// the length leak above becomes material; do not promote this to
+    /// internal/public without first replacing it with a length-padding scheme.
+    /// </remarks>
     private static bool ConstantTimeEquals(string left, string? right)
     {
         var leftBytes = Encoding.UTF8.GetBytes(left);

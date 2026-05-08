@@ -84,6 +84,10 @@ public sealed class SkillRegistry
     private bool IsFresh(CachedSkill cached, TimeSpan? maxAge)
     {
         if (maxAge is null) return true;
+        // TTL only applies to remote skills — local skills are baked in at registration
+        // and don't go stale. Without this carve-out, a 5-minute TTL would expire local
+        // entries too and `use_skill` would silently lose them after the first cache window.
+        if (cached.Definition.Source != SkillSource.Remote) return true;
         return _timeProvider.GetUtcNow() - cached.FetchedAt < maxAge.Value;
     }
 

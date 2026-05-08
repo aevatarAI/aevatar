@@ -107,6 +107,16 @@ public static class MainnetHostBuilderExtensions
                         ?? builder.Configuration["Cli:App:NyxId:Authority"]
                         ?? builder.Configuration["Aevatar:Authentication:Authority"];
             o.SpecFetchToken = builder.Configuration["Aevatar:NyxId:SpecFetchToken"];
+            // Opt-in: only the mainnet host (which runs the channel relay's approval-aware
+            // tool execution pipeline) advertises ssh_exec to the LLM. Other hosts that pull
+            // in NyxId tools (CLI, workflow runner) leave this off so a generic agent can't
+            // shell into a remote without an approval gate. Defaults to false in
+            // NyxIdToolOptions; flip via Aevatar:NyxId:EnableSshExecTool=true if a
+            // deployment opts in.
+            if (bool.TryParse(builder.Configuration["Aevatar:NyxId:EnableSshExecTool"], out var enableSsh))
+                o.EnableSshExecTool = enableSsh;
+            else
+                o.EnableSshExecTool = true; // mainnet default: enabled (Lark bot needs it)
         });
         builder.Services.AddLarkTools(o =>
         {
