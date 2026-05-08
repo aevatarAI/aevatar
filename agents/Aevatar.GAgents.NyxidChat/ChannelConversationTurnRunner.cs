@@ -119,7 +119,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         // Normal LLM messages do not force /init. If the sender is bound we
         // carry that binding forward so the reply generator can try the
-        // sender's own NyxID LLM prefs first; otherwise the inbox/generator
+        // sender's own NyxID LLM prefs first; otherwise the run actor/generator
         // will use the bot owner's ambient LLM config.
         var senderBinding = await TryResolveSenderBindingAsync(inbound, registration, ct).ConfigureAwait(false);
 
@@ -1509,9 +1509,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
 
-        // Carry the relay reply credential through the inbox as transient inbox-only
+        // Carry the relay reply credential through the run command as transient command-only
         // fields. ConversationGAgent strips these before persisting NeedsLlmReplyEvent;
-        // ChannelLlmReplyInboxRuntime echoes them into the LlmReplyReadyEvent so the
+        // AgentRunGAgent echoes them into the LlmReplyReadyEvent so the
         // outbound reply does not depend on the actor's in-memory token dict surviving
         // deactivation.
         if (runtimeContext.NyxRelayReplyToken is { } token &&

@@ -30,8 +30,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
 {
     // Orleans Reminders (the durable scheduler backing ScheduleSelfDurableTimeoutAsync)
     // round dueTime up to the local reminder service tick (typically ~1 minute), so
-    // sub-minute schedules are unreliable. The inbox dispatch happens inline via
-    // IChannelLlmReplyInbox; the durable timer is reserved for retry/rehydration.
+    // sub-minute schedules are unreliable. The run dispatch happens inline via
+    // IChannelLlmReplyRunDispatcher; the durable timer is reserved for retry/rehydration.
     private static readonly TimeSpan DeferredLlmDispatchRetryDelay = TimeSpan.FromSeconds(60);
     // Pending LLM reply requests older than this are considered stale on rehydration:
     // the user gave up, the relay reply_token (~30 min TTL) is likely already expired,
@@ -122,16 +122,16 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         if (result.LlmReplyRequest is not null)
         {
-            // The transient inbox copy keeps reply_token + expiry so the LLM worker can
+            // The transient run command copy keeps reply_token + expiry so the run actor can
             // echo them back inside LlmReplyReadyEvent; the persisted state copy must
             // not carry the credential into the event store / projection / read model.
-            var inboxCopy = result.LlmReplyRequest.Clone();
-            inboxCopy.TargetActorId = Id;
-            var persistedCopy = inboxCopy.Clone();
+            var runCopy = result.LlmReplyRequest.Clone();
+            runCopy.TargetActorId = Id;
+            var persistedCopy = runCopy.Clone();
             persistedCopy.ReplyToken = string.Empty;
             persistedCopy.ReplyTokenExpiresAtUnixMs = 0;
             await PersistDomainEventAsync(persistedCopy);
-            await DispatchPendingLlmReplyAsync(inboxCopy, CancellationToken.None);
+            await DispatchPendingLlmReplyAsync(runCopy, CancellationToken.None);
             Logger.LogInformation(
                 "Accepted inbound activity for deferred LLM reply: activity={ActivityId} conversation={Key}",
                 activity.Id,
@@ -298,7 +298,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             CausationId = string.Empty,
             Kind = FailureKind.PermanentAdapterError,
             ErrorCode = reason,
-            ErrorSummary = "Deferred LLM reply request was dropped by the inbox pre-LLM gate.",
+            ErrorSummary = "Deferred LLM reply request was dropped by the run actor pre-LLM gate.",
             NotRetryable = new Google.Protobuf.WellKnownTypes.Empty(),
             FailedAtUnixMs = evt.DroppedAtUnixMs > 0
                 ? evt.DroppedAtUnixMs
@@ -308,7 +308,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         RemoveNyxRelayReplyToken(evt.CorrelationId, pending.Activity);
 
         Logger.LogInformation(
-            "Retired pending LLM reply after inbox drop: correlation={CorrelationId} reason={Reason}",
+            "Retired pending LLM reply after run drop: correlation={CorrelationId} reason={Reason}",
             evt.CorrelationId,
             reason);
     }
@@ -344,11 +344,11 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
 
     private async Task DispatchPendingLlmReplyAsync(NeedsLlmReplyEvent request, CancellationToken ct)
     {
-        var inbox = Services.GetService<IChannelLlmReplyInbox>();
-        if (inbox is null)
+        var dispatcher = Services.GetService<IChannelLlmReplyRunDispatcher>();
+        if (dispatcher is null)
         {
             Logger.LogWarning(
-                "Channel LLM reply inbox not registered; scheduling durable retry: correlation={CorrelationId}",
+                "Channel LLM reply run dispatcher not registered; scheduling durable retry: correlation={CorrelationId}",
                 request.CorrelationId);
             await ScheduleDeferredLlmReplyDispatchAsync(request, DeferredLlmDispatchRetryDelay, ct);
             return;
@@ -357,24 +357,24 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         // Retry and rehydration paths read `request` from State.PendingLlmReplyRequests,
         // which always carries an empty ReplyToken (the inbound handler strips it before
         // persist). If the actor is still alive and the in-memory dict still has the
-        // token for this correlation, re-enrich the inbox copy so the subscriber's relay
-        // credential gate does not mistake a legitimate retry for a dead request.
+        // token for this correlation, re-enrich the run command copy so AgentRunGAgent's
+        // relay credential gate does not mistake a legitimate retry for a dead request.
         var enriched = EnrichWithRuntimeReplyTokenIfNeeded(request);
 
         try
         {
-            await inbox.EnqueueAsync(enriched.Clone(), ct);
+            await dispatcher.DispatchAsync(enriched.Clone(), ct);
             Logger.LogInformation(
-                "Enqueued LLM reply request to inbox: correlation={CorrelationId} conversation={Key} replyTokenSource={Source}",
+                "Dispatched LLM reply run request: correlation={CorrelationId} conversation={Key} replyTokenSource={Source}",
                 enriched.CorrelationId,
                 enriched.Activity?.Conversation?.CanonicalKey,
-                DescribeEnqueuedReplyTokenSource(request, enriched));
+                DescribeDispatchedReplyTokenSource(request, enriched));
         }
         catch (Exception ex)
         {
             Logger.LogError(
                 ex,
-                "Failed to enqueue LLM reply request; scheduling durable retry: correlation={CorrelationId}",
+                "Failed to dispatch LLM reply run request; scheduling durable retry: correlation={CorrelationId}",
                 request.CorrelationId);
             await ScheduleDeferredLlmReplyDispatchAsync(request, DeferredLlmDispatchRetryDelay, ct);
         }
@@ -405,7 +405,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         return enriched;
     }
 
-    private static string DescribeEnqueuedReplyTokenSource(
+    private static string DescribeDispatchedReplyTokenSource(
         NeedsLlmReplyEvent original,
         NeedsLlmReplyEvent enriched)
     {
@@ -1170,9 +1170,9 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     {
         var activity = pendingActivity ?? evt.Activity;
 
-        // Inbox-echoed credential is the authoritative source — it survives actor
+        // Run-echoed credential is the authoritative source: it survives actor
         // deactivation between inbound capture and LLM reply ready, which the in-memory
-        // dict cannot. Fall back to the dict only when the inbox didn't carry a token
+        // dict cannot. Fall back to the dict only when the run event didn't carry a token
         // (legacy in-flight messages from before this change deployed).
         var inlineToken = NormalizeOptional(evt.ReplyToken);
         if (inlineToken is not null)
@@ -1199,7 +1199,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         if (runtimeContext.NyxRelayReplyToken is null)
             return "none";
         if (!string.IsNullOrWhiteSpace(evt.ReplyToken))
-            return "inbox-echo";
+            return "run-echo";
         return "actor-runtime-dict";
     }
 
