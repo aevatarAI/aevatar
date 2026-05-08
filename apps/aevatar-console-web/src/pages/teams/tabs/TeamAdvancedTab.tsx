@@ -30,6 +30,9 @@ type AdvancedAdjustmentRow = {
 
 type TeamAdvancedTabProps = {
   readonly adjustmentBadgeStyle: React.CSSProperties;
+  readonly archiveTeamActionLabel: string;
+  readonly archiveTeamDisabled?: boolean;
+  readonly archiveTeamHint?: string;
   readonly configurationAdjustmentRows: readonly AdvancedAdjustmentRow[];
   readonly configurationDetailRows: readonly AdvancedDetailRow[];
   readonly conversationActionLabel: string;
@@ -37,6 +40,7 @@ type TeamAdvancedTabProps = {
   readonly currentDeploymentFriendly: string;
   readonly currentServiceFriendly: string;
   readonly currentVersionFriendly: string;
+  readonly onArchiveTeam: () => void;
   readonly onOpenConversation: () => void;
   readonly onOpenServiceMapping: () => void;
   readonly onOpenTeamBuilder: () => void;
@@ -46,12 +50,21 @@ type TeamAdvancedTabProps = {
   readonly secondaryActionButtonStyle: React.CSSProperties;
   readonly serviceMappingActionLabel: string;
   readonly summaryCards: readonly AdvancedSummaryCard[];
+  readonly teamAdjustmentLead: string;
+  readonly teamAdjustmentTitle: string;
   readonly teamBuilderActionLabel: string;
+  readonly teamLifecycleBadgeStyle: React.CSSProperties;
+  readonly teamLifecycleDescription: string;
+  readonly teamLifecycleLabel: string;
+  readonly teamLifecycleTitle: string;
   readonly teamImpactSummary: string;
 };
 
 const TeamAdvancedTab: React.FC<TeamAdvancedTabProps> = ({
   adjustmentBadgeStyle,
+  archiveTeamActionLabel,
+  archiveTeamDisabled = false,
+  archiveTeamHint,
   configurationAdjustmentRows,
   configurationDetailRows,
   conversationActionLabel,
@@ -59,6 +72,7 @@ const TeamAdvancedTab: React.FC<TeamAdvancedTabProps> = ({
   currentDeploymentFriendly,
   currentServiceFriendly,
   currentVersionFriendly,
+  onArchiveTeam,
   onOpenConversation,
   onOpenServiceMapping,
   onOpenTeamBuilder,
@@ -68,7 +82,13 @@ const TeamAdvancedTab: React.FC<TeamAdvancedTabProps> = ({
   secondaryActionButtonStyle,
   serviceMappingActionLabel,
   summaryCards,
+  teamAdjustmentLead,
+  teamAdjustmentTitle,
   teamBuilderActionLabel,
+  teamLifecycleBadgeStyle,
+  teamLifecycleDescription,
+  teamLifecycleLabel,
+  teamLifecycleTitle,
   teamImpactSummary,
 }) => {
   const { token } = theme.useToken();
@@ -94,6 +114,36 @@ const TeamAdvancedTab: React.FC<TeamAdvancedTabProps> = ({
               value={card.value}
             />
           ))}
+        </div>
+      </AevatarPanel>
+      <AevatarPanel
+        title="Team lifecycle"
+        extra={
+          <DetailPill
+            compact
+            style={teamLifecycleBadgeStyle}
+            text={teamLifecycleLabel}
+          />
+        }
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <Typography.Text strong>{teamLifecycleTitle}</Typography.Text>
+            <FactLine rows={3} secondary text={teamLifecycleDescription} />
+          </div>
+          {archiveTeamActionLabel ? (
+            <Space wrap>
+              <Button
+                danger
+                disabled={archiveTeamDisabled}
+                onClick={onArchiveTeam}
+                style={secondaryActionButtonStyle}
+                title={archiveTeamDisabled ? archiveTeamHint : undefined}
+              >
+                {archiveTeamActionLabel}
+              </Button>
+            </Space>
+          ) : null}
         </div>
       </AevatarPanel>
       <div
@@ -138,12 +188,10 @@ const TeamAdvancedTab: React.FC<TeamAdvancedTabProps> = ({
             ))}
           </div>
         </AevatarPanel>
-        <AevatarPanel title="继续调整这支团队">
+        <AevatarPanel title={teamAdjustmentTitle}>
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <Typography.Text strong>
-                先确认这次要调整的是流程、服务映射，还是连接器引用。
-              </Typography.Text>
+              <Typography.Text strong>{teamAdjustmentLead}</Typography.Text>
               <Typography.Text type="secondary">
                 当前会影响 {currentServiceFriendly}、{currentVersionFriendly}，以及
                 {teamImpactSummary}。

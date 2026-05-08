@@ -1,13 +1,23 @@
-import { BuildOutlined, RocketOutlined } from '@ant-design/icons';
+import { BuildOutlined, RocketOutlined, TeamOutlined } from '@ant-design/icons';
 import { Button, Input, Space, Typography, message } from 'antd';
+import { useQuery } from '@tanstack/react-query';
 import React from 'react';
+import { loadRestorableAuthSession } from '@/shared/auth/session';
 import { history } from '@/shared/navigation/history';
-import { buildTeamCreateHref, buildTeamsHref } from '@/shared/navigation/teamRoutes';
+import { buildTeamsHref } from '@/shared/navigation/teamRoutes';
 import { studioApi } from '@/shared/studio/api';
 import { buildStudioRoute } from '@/shared/studio/navigation';
 import { AevatarPanel } from '@/shared/ui/aevatarPageShells';
 import ConsoleMetricCard from '@/shared/ui/ConsoleMetricCard';
 import ConsoleMenuPageShell from '@/shared/ui/ConsoleMenuPageShell';
+import ScopeQueryCard from '../scopes/components/ScopeQueryCard';
+import { resolveStudioScopeContext } from '../scopes/components/resolvedScope';
+import {
+  buildScopeHref,
+  normalizeScopeDraft,
+  readScopeQueryDraft,
+  type ScopeQueryDraft,
+} from '../scopes/components/scopeQuery';
 
 const primaryActionButtonStyle: React.CSSProperties = {
   background: '#6c5ce7',
@@ -39,6 +49,10 @@ const stageChipStyle: React.CSSProperties = {
   padding: '6px 12px',
 };
 
+function trimOptional(value: string | null | undefined): string {
+  return value?.trim() ?? '';
+}
+
 function readCreateTeamDraftFromLocation(): {
   readonly teamName: string;
   readonly entryName: string;
@@ -65,29 +79,103 @@ function readCreateTeamDraftFromLocation(): {
 
 const TeamCreatePage: React.FC = () => {
   const initialDraft = React.useMemo(readCreateTeamDraftFromLocation, []);
+  const [draft, setDraft] = React.useState<ScopeQueryDraft>(() =>
+    readScopeQueryDraft(),
+  );
+  const [activeDraft, setActiveDraft] = React.useState<ScopeQueryDraft>(() =>
+    readScopeQueryDraft(),
+  );
   const [teamName, setTeamName] = React.useState(initialDraft.teamName);
-  const [entryName, setEntryName] = React.useState(initialDraft.entryName);
+  const [teamDescription, setTeamDescription] = React.useState('');
+  const [entryName] = React.useState(initialDraft.entryName);
   const [teamDraftWorkflowId, setTeamDraftWorkflowId] = React.useState(
     initialDraft.teamDraftWorkflowId,
   );
   const [teamDraftWorkflowName, setTeamDraftWorkflowName] = React.useState(
     initialDraft.teamDraftWorkflowName,
   );
+  const [isCreatingTeam, setIsCreatingTeam] = React.useState(false);
   const [isDeletingDraft, setIsDeletingDraft] = React.useState(false);
-  const resolvedEntryName = entryName.trim() || teamName.trim();
+  const hasInitializedScopeFromResolvedSession = React.useRef(false);
+  const authSessionQuery = useQuery({
+    queryKey: ['scopes', 'auth-session'],
+    queryFn: () => studioApi.getAuthSession(),
+    retry: false,
+  });
+  const localScopeId = trimOptional(loadRestorableAuthSession()?.user.sub);
+  const locallyResolvedScope = React.useMemo(() => {
+    if (!localScopeId) {
+      return null;
+    }
+
+    return {
+      scopeId: localScopeId,
+      scopeSource: 'local-session',
+    };
+  }, [localScopeId]);
+  const resolvedScope = React.useMemo(
+    () => resolveStudioScopeContext(authSessionQuery.data) ?? locallyResolvedScope,
+    [authSessionQuery.data, locallyResolvedScope],
+  );
+  React.useEffect(() => {
+    if (!resolvedScope?.scopeId) {
+      return;
+    }
+    if (hasInitializedScopeFromResolvedSession.current) {
+      return;
+    }
+
+    hasInitializedScopeFromResolvedSession.current = true;
+    setDraft((currentDraft) =>
+      currentDraft.scopeId.trim()
+        ? currentDraft
+        : { scopeId: resolvedScope.scopeId },
+    );
+    setActiveDraft((currentDraft) =>
+      currentDraft.scopeId.trim()
+        ? currentDraft
+        : { scopeId: resolvedScope.scopeId },
+    );
+  }, [resolvedScope?.scopeId]);
+  const scopeId = activeDraft.scopeId.trim();
+  const legacyCreateParams = React.useMemo(
+    () => ({
+      entryName: initialDraft.entryName || undefined,
+      teamDraftWorkflowId: teamDraftWorkflowId.trim() || undefined,
+      teamDraftWorkflowName: teamDraftWorkflowName.trim() || undefined,
+      teamName: teamName.trim() || undefined,
+    }),
+    [
+      initialDraft.entryName,
+      teamDraftWorkflowId,
+      teamDraftWorkflowName,
+      teamName,
+    ],
+  );
+  React.useEffect(() => {
+    const nextPath = buildScopeHref(
+      '/teams/new',
+      activeDraft,
+      legacyCreateParams,
+    );
+    const currentPath =
+      typeof window === 'undefined'
+        ? ''
+        : `${window.location.pathname}${window.location.search}`;
+    if (nextPath !== currentPath) {
+      history.replace(nextPath);
+    }
+  }, [activeDraft, legacyCreateParams]);
   const resolvedDraftWorkflowId = teamDraftWorkflowId.trim();
   const resolvedDraftWorkflowName =
     teamDraftWorkflowName.trim() || resolvedDraftWorkflowId;
   const hasSavedDraft = Boolean(resolvedDraftWorkflowId);
-  const canOpenBuilder = Boolean(teamName.trim());
+  const canCreateTeam = Boolean(scopeId && teamName.trim());
+  const canOpenBuilder = Boolean(scopeId);
   const openBuilder = () =>
     history.push(
       buildStudioRoute({
-        teamMode: 'create',
-        teamName: teamName.trim() || undefined,
-        entryName: resolvedEntryName || undefined,
-        teamDraftWorkflowId: resolvedDraftWorkflowId || undefined,
-        teamDraftWorkflowName: resolvedDraftWorkflowName || undefined,
+        scopeId,
         focus: resolvedDraftWorkflowId
           ? `workflow:${resolvedDraftWorkflowId}`
           : undefined,
@@ -97,9 +185,44 @@ const TeamCreatePage: React.FC = () => {
   const openBehaviors = () =>
     history.push(
       buildStudioRoute({
+        scopeId,
         tab: 'workflows',
       }),
     );
+  const handleCreateTeam = async () => {
+    if (!canCreateTeam || isCreatingTeam) {
+      return;
+    }
+
+    setIsCreatingTeam(true);
+    try {
+      const team = await studioApi.createTeam({
+        scopeId,
+        displayName: teamName.trim(),
+        description: teamDescription.trim() || undefined,
+      });
+      void message.success('已创建 Team。');
+      history.push(
+        buildScopeHref(
+          `/teams/${encodeURIComponent(team.scopeId)}`,
+          {
+            scopeId: team.scopeId,
+          },
+          {
+            teamId: team.teamId,
+          },
+        ),
+      );
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error && error.message.trim()
+          ? error.message
+          : '创建 Team 失败。';
+      void message.error(errorMessage);
+    } finally {
+      setIsCreatingTeam(false);
+    }
+  };
   const handleDeleteDraft = async () => {
     if (!resolvedDraftWorkflowId || isDeletingDraft) {
       return;
@@ -111,10 +234,14 @@ const TeamCreatePage: React.FC = () => {
       setTeamDraftWorkflowId('');
       setTeamDraftWorkflowName('');
       history.replace(
-        buildTeamCreateHref({
-          teamName: teamName.trim() || undefined,
-          entryName: entryName.trim() || undefined,
-        }),
+        buildScopeHref(
+          '/teams/new',
+          { scopeId },
+          {
+            teamName: teamName.trim() || undefined,
+            entryName: entryName.trim() || undefined,
+          },
+        ),
       );
       void message.success('已删除当前团队草稿。');
     } catch (error) {
@@ -132,15 +259,25 @@ const TeamCreatePage: React.FC = () => {
     <ConsoleMenuPageShell
       breadcrumb="Aevatar / Teams"
       extra={
-        <Button
-          disabled={!canOpenBuilder}
-          onClick={openBuilder}
-          style={primaryActionButtonStyle}
-        >
-          Continue in Studio
-        </Button>
+        <Space wrap>
+          <Button
+            disabled={!canCreateTeam}
+            loading={isCreatingTeam}
+            onClick={() => void handleCreateTeam()}
+            style={primaryActionButtonStyle}
+          >
+            Create Team
+          </Button>
+          <Button
+            disabled={!canOpenBuilder}
+            onClick={openBuilder}
+            style={secondaryActionButtonStyle}
+          >
+            Continue in Studio
+          </Button>
+        </Space>
       }
-      title="Saved Draft Recovery"
+      title="Create Team"
     >
       <div
         style={{
@@ -150,16 +287,55 @@ const TeamCreatePage: React.FC = () => {
           marginBottom: 20,
         }}
       >
-        <ConsoleMetricCard label="用途" tone="purple" value="旧链接恢复" />
-        <ConsoleMetricCard label="恢复对象" value="初始 member 草稿" />
-        <ConsoleMetricCard label="继续位置" value="Studio" />
-        <ConsoleMetricCard label="新增后端事实" tone="green" value="0" />
+        <ConsoleMetricCard label="数据源" tone="green" value="StudioTeam" />
+        <ConsoleMetricCard label="Scope" value={scopeId || '待选择'} />
+        <ConsoleMetricCard label="创建后" value="Team detail" />
+        <ConsoleMetricCard label="成员归属" value="后续分配" />
       </div>
+
+      <AevatarPanel layoutMode="document" padding={20} title="Scope context">
+        <ScopeQueryCard
+          activeScopeId={scopeId}
+          draft={draft}
+          loadLabel="使用这个 Scope"
+          onChange={setDraft}
+          onLoad={() => {
+            const nextDraft = normalizeScopeDraft(draft);
+            setDraft(nextDraft);
+            setActiveDraft(nextDraft);
+          }}
+          onReset={() => {
+            const nextDraft = normalizeScopeDraft({
+              scopeId: resolvedScope?.scopeId ?? '',
+            });
+            setDraft(nextDraft);
+            setActiveDraft(nextDraft);
+          }}
+          onUseResolvedScope={() => {
+            if (!resolvedScope?.scopeId) {
+              return;
+            }
+
+            const nextDraft = normalizeScopeDraft({
+              scopeId: resolvedScope.scopeId,
+            });
+            setDraft(nextDraft);
+            setActiveDraft(nextDraft);
+          }}
+          resetDisabled={
+            normalizeScopeDraft(draft).scopeId ===
+              (resolvedScope?.scopeId?.trim() ?? '') &&
+            scopeId === (resolvedScope?.scopeId?.trim() ?? '')
+          }
+          resolvedScopeId={resolvedScope?.scopeId}
+          resolvedScopeSource={resolvedScope?.scopeSource}
+        />
+      </AevatarPanel>
 
       <AevatarPanel
         layoutMode="document"
         padding={20}
-        title="Continue initial member draft"
+        title="Team authority"
       >
         <div
           style={{
@@ -180,7 +356,7 @@ const TeamCreatePage: React.FC = () => {
                 margin: 0,
               }}
             >
-              Saved draft recovery
+              Create real Team roster entry
             </Typography.Title>
             <div
               style={{
@@ -189,7 +365,7 @@ const TeamCreatePage: React.FC = () => {
                 gap: 8,
               }}
             >
-              {['旧链接兼容', '草稿恢复', '显式进入 Studio', '不创建团队事实'].map((item) => (
+              {['真实 Team API', 'Scope 内归属', '成员后续分配', '运行态只作辅助'].map((item) => (
                 <span key={item} style={stageChipStyle}>
                   {item}
                 </span>
@@ -204,41 +380,50 @@ const TeamCreatePage: React.FC = () => {
               }}
             >
               <div style={{ display: 'grid', gap: 8 }}>
-                <Typography.Text strong>Legacy team label</Typography.Text>
+                <Typography.Text strong>Team name</Typography.Text>
                 <Input
-                  aria-label="Legacy team label"
+                  aria-label="Team name"
                   placeholder="例如：订单助手团队"
                   value={teamName}
                   onChange={(event) => setTeamName(event.target.value)}
                 />
               </div>
               <div style={{ display: 'grid', gap: 8 }}>
-                <Typography.Text strong>Initial member label</Typography.Text>
+                <Typography.Text strong>Description</Typography.Text>
                 <Input
-                  aria-label="Initial member label"
-                  placeholder="默认复用团队名称"
-                  value={entryName}
-                  onChange={(event) => setEntryName(event.target.value)}
+                  aria-label="Team description"
+                  placeholder="这个 Team 负责什么"
+                  value={teamDescription}
+                  onChange={(event) => setTeamDescription(event.target.value)}
                 />
               </div>
               <Typography.Text
                 type="secondary"
                 style={{ gridColumn: '1 / -1', lineHeight: 1.6 }}
               >
-                This compatibility page preserves old Create Team links and saved
-                draft recovery. New team creation now starts in Studio by creating
-                the first member.
+                This page now creates a backend StudioTeam record. Members can be
+                assigned later; the Teams homepage will use this roster entry as
+                the primary team truth.
                 {hasSavedDraft
-                  ? ' Continue in Studio to edit the linked initial member draft.'
+                  ? ' The old saved draft below remains available for Studio recovery.'
                   : ''}
               </Typography.Text>
             </div>
             <Space wrap size={[8, 8]}>
               <Button
+                icon={<TeamOutlined />}
+                disabled={!canCreateTeam}
+                loading={isCreatingTeam}
+                onClick={() => void handleCreateTeam()}
+                style={primaryActionButtonStyle}
+              >
+                Create Team
+              </Button>
+              <Button
                 icon={<BuildOutlined />}
                 disabled={!canOpenBuilder}
                 onClick={openBuilder}
-                style={primaryActionButtonStyle}
+                style={secondaryActionButtonStyle}
               >
                 Continue in Studio
               </Button>
@@ -272,8 +457,8 @@ const TeamCreatePage: React.FC = () => {
               }}
             >
               {teamName.trim()
-                ? `Legacy label: ${teamName.trim()}`
-                : 'Use this page only for old links or saved drafts'}
+                ? `Team label: ${teamName.trim()}`
+                : 'Create a Team before assigning members'}
             </Typography.Text>
           </div>
         </div>
@@ -318,6 +503,11 @@ const TeamCreatePage: React.FC = () => {
               Delete Draft removes the linked workflow draft. Legacy labels stay
               in the URL so old links remain understandable.
             </Typography.Text>
+            {entryName.trim() ? (
+              <Typography.Text type="secondary">
+                Legacy initial member label: {entryName.trim()}
+              </Typography.Text>
+            ) : null}
           </div>
         </AevatarPanel>
       ) : null}

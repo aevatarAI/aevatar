@@ -1,4 +1,5 @@
-import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { message } from "antd";
 import React from "react";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
@@ -16,6 +17,21 @@ jest.mock("@/shared/graphs/GraphCanvas", () => ({
     return React.createElement("div", null, "Graph canvas");
   },
 }));
+
+jest.mock("antd", () => {
+  const actual = jest.requireActual("antd");
+  return {
+    ...actual,
+    message: {
+      ...actual.message,
+      success: jest.fn(),
+      info: jest.fn(),
+      warning: jest.fn(),
+      error: jest.fn(),
+      destroy: jest.fn(),
+    },
+  };
+});
 
 function mockCreateRunsCatalog() {
   return {
@@ -162,6 +178,41 @@ function mockCreateMembersCatalog() {
       },
     ],
     nextPageToken: null,
+  };
+}
+
+function mockCreateTeamMembersCatalog() {
+  return {
+    scopeId: "scope-1",
+    members: [
+      {
+        memberId: "member-team-alpha",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        displayName: "Team Alpha Operator",
+        description: "真实 Team roster 成员",
+        implementationKind: "workflow",
+        lifecycleStage: "bind_ready",
+        publishedServiceId: "alpha-service",
+        lastBoundRevisionId: "rev-alpha",
+        createdAt: "2026-04-09T08:00:00Z",
+        updatedAt: "2026-04-09T09:00:00Z",
+      },
+    ],
+    nextPageToken: null,
+  };
+}
+
+function mockCreateTeamSummary() {
+  return {
+    teamId: "t-alpha",
+    scopeId: "scope-1",
+    displayName: "Alpha Support Team",
+    description: "Team authority summary",
+    lifecycleStage: "active",
+    memberCount: 3,
+    createdAt: "2026-05-01T08:00:00Z",
+    updatedAt: "2026-05-01T08:05:00Z",
   };
 }
 
@@ -604,6 +655,17 @@ jest.mock("@/shared/studio/api", () => ({
       ],
     })),
     listMembers: jest.fn(async () => mockCreateMembersCatalog()),
+    getTeam: jest.fn(async () => mockCreateTeamSummary()),
+    updateTeam: jest.fn(async () => ({
+      ...mockCreateTeamSummary(),
+      displayName: "Alpha Ops Team",
+      description: "",
+    })),
+    archiveTeam: jest.fn(async () => ({
+      ...mockCreateTeamSummary(),
+      lifecycleStage: "archived",
+    })),
+    listTeamMembers: jest.fn(async () => mockCreateTeamMembersCatalog()),
     parseYaml: jest.fn(async () => ({
       document: {
         name: "support-triage",
@@ -650,6 +712,25 @@ describe("TeamDetailPage", () => {
     (studioApi.listMembers as jest.Mock).mockImplementation(
       async () => mockCreateMembersCatalog(),
     );
+    (studioApi.getTeam as jest.Mock).mockReset();
+    (studioApi.getTeam as jest.Mock).mockImplementation(
+      async () => mockCreateTeamSummary(),
+    );
+    (studioApi.updateTeam as jest.Mock).mockReset();
+    (studioApi.updateTeam as jest.Mock).mockImplementation(async () => ({
+      ...mockCreateTeamSummary(),
+      displayName: "Alpha Ops Team",
+      description: "",
+    }));
+    (studioApi.archiveTeam as jest.Mock).mockReset();
+    (studioApi.archiveTeam as jest.Mock).mockImplementation(async () => ({
+      ...mockCreateTeamSummary(),
+      lifecycleStage: "archived",
+    }));
+    (studioApi.listTeamMembers as jest.Mock).mockReset();
+    (studioApi.listTeamMembers as jest.Mock).mockImplementation(
+      async () => mockCreateTeamMembersCatalog(),
+    );
   });
 
   it("renders the chinese team-first overview shell", async () => {
@@ -665,11 +746,13 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("scopeId")).toBeTruthy();
     expect(screen.getByText("scope-1")).toBeTruthy();
     const currentPostureHeading = screen.getByText("当前态势");
+    const teamAuthorityHeading = screen.getByText("Team authority");
     const trustHeading = screen.getByText("信任态势");
     const governanceHeading = screen.getByText("治理快照");
     const compareHeading = screen.getByText("Run Compare / Change Diff");
     expect(screen.getByText("团队构成")).toBeTruthy();
     expect(screen.getByText("运行摘要")).toBeTruthy();
+    expect(teamAuthorityHeading).toBeTruthy();
     expect(currentPostureHeading).toBeTruthy();
     expect(trustHeading).toBeTruthy();
     expect(
@@ -693,6 +776,7 @@ describe("TeamDetailPage", () => {
     expect(screen.getByRole("button", { name: "本次对话" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "服务映射" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "高级编辑" })).toBeTruthy();
+    expect(studioApi.getTeam).not.toHaveBeenCalled();
   });
 
   it("keeps compare honest when no successful baseline exists", async () => {
@@ -959,6 +1043,198 @@ describe("TeamDetailPage", () => {
     expect(screen.getByRole("button", { name: "打开 Services" })).toBeTruthy();
   });
 
+  it("uses the real Team roster when teamId is selected", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1?scopeId=scope-1&teamId=t-alpha&tab=members",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("真实 Team roster")).toBeTruthy();
+    expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
+    expect(screen.getByText("真实 Team roster 成员")).toBeTruthy();
+    expect(screen.getByText("member-team-alpha")).toBeTruthy();
+    expect(screen.getByText("alph...vice")).toBeTruthy();
+
+    await waitFor(() => {
+      expect(studioApi.listTeamMembers).toHaveBeenCalledWith("scope-1", "t-alpha");
+    });
+  });
+
+  it("uses the real Team summary when teamId is selected", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1?scopeId=scope-1&teamId=t-alpha",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "Alpha Support Team",
+      }),
+    ).toBeTruthy();
+    expect((await screen.findAllByText("Team authority summary")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("3 个成员").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("来自 Team authority 更新时间").length).toBeGreaterThan(0);
+    expect(screen.getByText("Team 更新时间")).toBeTruthy();
+    expect(screen.getByText("生命周期")).toBeTruthy();
+
+    await waitFor(() => {
+      expect(studioApi.getTeam).toHaveBeenCalledWith("scope-1", "t-alpha");
+    });
+  });
+
+  it("updates the real Team summary from the detail header", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1?scopeId=scope-1&teamId=t-alpha",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("heading", {
+      level: 1,
+      name: "Alpha Support Team",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Edit Team" }));
+
+    const nameInput = await screen.findByLabelText("Edit team name");
+    expect(nameInput).toHaveValue("Alpha Support Team");
+    fireEvent.change(nameInput, {
+      target: { value: " Alpha Ops Team " },
+    });
+    fireEvent.change(screen.getByLabelText("Edit team description"), {
+      target: { value: "   " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Team" }));
+
+    await waitFor(() => {
+      expect(studioApi.updateTeam).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        displayName: "Alpha Ops Team",
+        description: null,
+      });
+    });
+    expect(message.success).toHaveBeenCalledWith("Team updated.");
+    await waitFor(() => {
+      expect(studioApi.getTeam).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("does not submit an empty Team name", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1?scopeId=scope-1&teamId=t-alpha",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("heading", {
+      level: 1,
+      name: "Alpha Support Team",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Edit Team" }));
+    fireEvent.change(await screen.findByLabelText("Edit team name"), {
+      target: { value: "   " },
+    });
+
+    expect(screen.getByRole("button", { name: "Save Team" })).toBeDisabled();
+    expect(studioApi.updateTeam).not.toHaveBeenCalled();
+  });
+
+  it("archives the Team without making archived Teams read-only", async () => {
+    (studioApi.getTeam as jest.Mock)
+      .mockResolvedValueOnce(mockCreateTeamSummary())
+      .mockResolvedValue({
+        ...mockCreateTeamSummary(),
+        lifecycleStage: "archived",
+      });
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1?scopeId=scope-1&teamId=t-alpha&tab=advanced",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Active roster entry")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Archive Team" }));
+    expect(await screen.findByText("Archive this Team?")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This marks the Team as archived and de-emphasizes it in the active roster. You can still edit its configuration and view its history.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(
+      within(screen.getByRole("dialog", { name: "Archive this Team?" })).getByRole(
+        "button",
+        { name: "Archive Team" },
+      ),
+    );
+
+    await waitFor(() => {
+      expect(studioApi.archiveTeam).toHaveBeenCalledWith("scope-1", "t-alpha");
+    });
+    expect(message.success).toHaveBeenCalledWith("Team archived.");
+    expect(await screen.findByText("Archived but still maintainable")).toBeTruthy();
+    expect(screen.getByText("维护这支团队配置")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Edit Team" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Archive Team" })).toBeNull();
+  });
+
+  it("keeps archived Teams maintainable on first load", async () => {
+    (studioApi.getTeam as jest.Mock).mockResolvedValueOnce({
+      ...mockCreateTeamSummary(),
+      lifecycleStage: "archived",
+    });
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1?scopeId=scope-1&teamId=t-alpha&tab=advanced",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Archived but still maintainable")).toBeTruthy();
+    expect(screen.getByText("维护这支团队配置")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Edit Team" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Archive Team" })).toBeNull();
+  });
+
+  it("keeps the runtime overview when Team summary fails", async () => {
+    (studioApi.getTeam as jest.Mock).mockRejectedValueOnce(
+      new Error("Team summary failed"),
+    );
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1?scopeId=scope-1&teamId=t-alpha",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect((await screen.findAllByText("Team summary 不可用")).length).toBeGreaterThan(0);
+    expect(screen.getByText("Team summary 暂不可用")).toBeTruthy();
+    expect(
+      screen.getByText("当前仍会显示运行时视图；Team authority summary 暂时无法读取。"),
+    ).toBeTruthy();
+    expect(await screen.findByText("当前态势")).toBeTruthy();
+    expect(await screen.findByText("信任态势")).toBeTruthy();
+    expect(screen.getByText("Support Escalation Triage")).toBeTruthy();
+
+    await waitFor(() => {
+      expect(studioApi.getTeam).toHaveBeenCalledWith("scope-1", "t-alpha");
+    });
+  });
+
   it("shows a team-first event stream with member mapping", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
@@ -1174,7 +1450,10 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "服务映射" });
-    await screen.findByText("Support Escalation Triage");
+    await screen.findByRole("heading", {
+      level: 1,
+      name: "Support Escalation Triage",
+    });
     fireEvent.click(screen.getByRole("button", { name: "高级编辑" }));
 
     await waitFor(() => {
@@ -1231,7 +1510,12 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("Support Escalation Triage")).toBeTruthy();
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "Support Escalation Triage",
+      }),
+    ).toBeTruthy();
     expect(screen.queryByText("路由上下文已自动校正")).toBeNull();
   });
 

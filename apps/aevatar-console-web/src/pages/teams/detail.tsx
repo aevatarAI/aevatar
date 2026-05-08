@@ -8,15 +8,14 @@ import {
   DeploymentUnitOutlined,
 } from "@ant-design/icons";
 import type { Edge, Node } from "@xyflow/react";
-import { Button, Space, Tooltip, Typography, theme } from "antd";
-import { useQuery } from "@tanstack/react-query";
+import { Input, Modal, Space, Typography, message, theme } from "antd";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import React from "react";
 import { scopesApi } from "@/shared/api/scopesApi";
 import {
   formatCompactDateTime,
   formatTimeOnly,
 } from "@/shared/datetime/dateTime";
-import GraphCanvas from "@/shared/graphs/GraphCanvas";
 import { buildActorGraphElements } from "@/shared/graphs/buildGraphElements";
 import {
   getLocationSnapshot,
@@ -47,12 +46,13 @@ import {
   buildStudioWorkflowEditorRoute,
   buildStudioWorkflowWorkspaceRoute,
 } from "@/shared/studio/navigation";
-import type { StudioWorkflowDocument } from "@/shared/studio/models";
 import {
-  AevatarInspectorEmpty,
-  AevatarPanel,
-} from "@/shared/ui/aevatarPageShells";
+  formatStudioMemberLifecycleStage,
+  formatStudioTeamLifecycleStage,
+  type StudioWorkflowDocument,
+} from "@/shared/studio/models";
 import { AevatarCompactText } from "@/shared/ui/compactText";
+import { describeError } from "@/shared/ui/errorText";
 import {
   TeamActionRail,
   TeamDetailEmptyState,
@@ -61,9 +61,7 @@ import {
 } from "./components/TeamDetailChrome";
 import {
   DetailPill,
-  FactLine,
   factValueFontFamily,
-  SignalCard,
 } from "./components/TeamDetailPrimitives";
 import TeamAdvancedTab from "./tabs/TeamAdvancedTab";
 import TeamAssetsTab, { teamAssetIcons } from "./tabs/TeamAssetsTab";
@@ -440,7 +438,10 @@ function buildDepthMap(
   const queue = [normalizedRootId];
 
   while (queue.length > 0) {
-    const current = queue.shift()!;
+    const current = queue.shift();
+    if (!current) {
+      continue;
+    }
     const nextDepth = (depths.get(current) ?? 0) + 1;
     for (const next of adjacency.get(current) ?? []) {
       if (depths.has(next)) {
@@ -647,6 +648,13 @@ function resolveStatusPillStyle(
   value: string | null | undefined,
 ): React.CSSProperties {
   const normalized = normalizeStatus(value);
+
+  if (normalized === "archived") {
+    return {
+      background: token.colorFillQuaternary,
+      color: token.colorTextSecondary,
+    };
+  }
 
   if (
     [
@@ -1075,6 +1083,7 @@ const TopologyNodeCard: React.FC<{
 };
 
 const TeamDetailPage: React.FC = () => {
+  const queryClient = useQueryClient();
   const locationSnapshot = React.useSyncExternalStore(
     subscribeToLocationChanges,
     getLocationSnapshot,
@@ -1088,6 +1097,7 @@ const TeamDetailPage: React.FC = () => {
     return readTeamDetailRouteState(window.location.search, window.location.pathname);
   }, [locationSnapshot]);
   const scopeId = routeState.scopeId.trim();
+  const selectedTeamId = trimText(routeState.teamId);
   const teamsListHref = React.useMemo(
     () => buildScopeHref("/teams", { scopeId }),
     [scopeId],
@@ -1102,6 +1112,12 @@ const TeamDetailPage: React.FC = () => {
   const [selectedActorId, setSelectedActorId] = React.useState("");
   const [selectedConnectorKey, setSelectedConnectorKey] = React.useState("");
   const [selectedTopologyNodeId, setSelectedTopologyNodeId] = React.useState("");
+  const [teamEditorOpen, setTeamEditorOpen] = React.useState(false);
+  const [teamArchiveOpen, setTeamArchiveOpen] = React.useState(false);
+  const [teamEditorName, setTeamEditorName] = React.useState("");
+  const [teamEditorDescription, setTeamEditorDescription] = React.useState("");
+  const [teamEditorSaving, setTeamEditorSaving] = React.useState(false);
+  const [teamArchiving, setTeamArchiving] = React.useState(false);
   const { token } = theme.useToken();
 
   React.useEffect(() => {
@@ -1126,7 +1142,6 @@ const TeamDetailPage: React.FC = () => {
   const {
     actorGraphQuery,
     actorsQuery,
-    baselineRunAuditQuery,
     currentRunAuditQuery,
     lens,
     runsQuery,
@@ -1156,6 +1171,37 @@ const TeamDetailPage: React.FC = () => {
     queryKey: ["teams", "connector-catalog"],
     retry: false,
   });
+
+  const teamMembersQuery = useQuery({
+    enabled: scopeId.length > 0 && selectedTeamId.length > 0,
+    queryFn: () => studioApi.listTeamMembers(scopeId, selectedTeamId),
+    queryKey: ["teams", "team-members", scopeId, selectedTeamId],
+    retry: false,
+  });
+  const teamSummaryQuery = useQuery({
+    enabled: scopeId.length > 0 && selectedTeamId.length > 0,
+    queryFn: () => studioApi.getTeam(scopeId, selectedTeamId),
+    queryKey: ["teams", "team-summary", scopeId, selectedTeamId],
+    retry: false,
+  });
+
+  React.useEffect(() => {
+    if (!teamEditorOpen || !teamSummaryQuery.data) {
+      return;
+    }
+
+    setTeamEditorName(teamSummaryQuery.data.displayName);
+    setTeamEditorDescription(teamSummaryQuery.data.description);
+  }, [teamEditorOpen, teamSummaryQuery.data]);
+
+  const refreshTeamAuthority = React.useCallback(async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: ["teams", "team-summary", scopeId, selectedTeamId],
+      }),
+      queryClient.invalidateQueries({ queryKey: ["teams", "roster", scopeId] }),
+    ]);
+  }, [queryClient, scopeId, selectedTeamId]);
 
   const fallbackWorkflowSummary = React.useMemo(() => {
     if (lens.activeRevision?.implementationKind !== "workflow") {
@@ -1380,6 +1426,7 @@ const TeamDetailPage: React.FC = () => {
       buildTeamDetailHref({
         memberId: canonicalMemberId,
         scopeId,
+        teamId: selectedTeamId || undefined,
         workflowId: trimText(routeState.workflowId) || undefined,
         serviceId: trimText(routeState.serviceId) || undefined,
         runId: trimText(routeState.runId) || undefined,
@@ -1393,6 +1440,7 @@ const TeamDetailPage: React.FC = () => {
     routeState.serviceId,
     routeState.tab,
     routeState.workflowId,
+    selectedTeamId,
     scopeId,
   ]);
   const currentPlatformService =
@@ -1430,11 +1478,13 @@ const TeamDetailPage: React.FC = () => {
     trimText(activeWorkflowSummary?.workflowId).length > 0
       ? buildStudioWorkflowEditorRoute({
           scopeId,
+          teamId: selectedTeamId || undefined,
           memberKey: selectedStudioMemberKey,
           workflowId: activeWorkflowSummary?.workflowId,
         })
       : buildStudioWorkflowWorkspaceRoute({
           scopeId,
+          teamId: selectedTeamId || undefined,
           memberKey: selectedStudioMemberKey,
         });
 
@@ -1595,24 +1645,53 @@ const TeamDetailPage: React.FC = () => {
     workflowId: activeWorkflowSummary?.workflowId,
     workflowName: activeWorkflowSummary?.workflowName,
     displayName:
+      trimText(teamSummaryQuery.data?.displayName) ||
       trimText(preferredMemberSummary?.displayName) ||
       activeWorkflowSummary?.displayName,
     lensTitle: lens.title,
   });
   const teamTitle = teamHeading.title;
-  const teamTitleMeta = teamHeading.metaScopeId ? (
-    <Space size={6} wrap>
-      <span style={{ textTransform: "none" }}>scopeId</span>
-      <AevatarCompactText
-        color="inherit"
-        head={8}
-        maxWidth={320}
-        monospace
-        tail={6}
-        value={teamHeading.metaScopeId}
-      />
-    </Space>
-  ) : null;
+  const teamLifecycleStatus = trimText(teamSummaryQuery.data?.lifecycleStage);
+  const teamLifecycleLabel = teamSummaryQuery.data
+    ? formatStudioTeamLifecycleStage(teamSummaryQuery.data.lifecycleStage)
+    : "";
+  const teamSummaryDescription = trimText(teamSummaryQuery.data?.description);
+  const teamMetaScopeId = teamHeading.metaScopeId || (selectedTeamId ? scopeId : "");
+  const teamTitleMeta =
+    selectedTeamId || teamMetaScopeId || teamSummaryQuery.data ? (
+      <Space size={[10, 6]} wrap>
+        {selectedTeamId ? (
+          <Space size={6} wrap>
+            <span style={{ textTransform: "none" }}>teamId</span>
+            <AevatarCompactText
+              color="inherit"
+              head={8}
+              maxWidth={320}
+              monospace
+              tail={6}
+              value={selectedTeamId}
+            />
+          </Space>
+        ) : null}
+        {teamMetaScopeId ? (
+          <Space size={6} wrap>
+            <span style={{ textTransform: "none" }}>scopeId</span>
+            <AevatarCompactText
+              color="inherit"
+              head={8}
+              maxWidth={320}
+              monospace
+              tail={6}
+              value={teamMetaScopeId}
+            />
+          </Space>
+        ) : null}
+        {teamSummaryQuery.data ? (
+          <span>{teamSummaryQuery.data.memberCount} 个成员</span>
+        ) : null}
+        {teamSummaryDescription ? <span>{teamSummaryDescription}</span> : null}
+      </Space>
+    ) : null;
   const activeWorkflowId =
     trimText(activeWorkflowSummary?.workflowId) || trimText(routeState.workflowId);
   const teamCompositionRows = React.useMemo(
@@ -1624,20 +1703,37 @@ const TeamDetailPage: React.FC = () => {
       }),
     [lens.activeRevision?.implementationKind, lens.members, teamWorkflowDocumentsQuery.data],
   );
+  const teamRosterRows = React.useMemo(
+    () =>
+      (teamMembersQuery.data?.members ?? []).map((member) => ({
+        description: trimText(member.description),
+        implementationKind: formatCompositionKind(member.implementationKind),
+        key: member.memberId,
+        lifecycleLabel: formatStudioMemberLifecycleStage(member.lifecycleStage),
+        lifecycleStyle: resolveStatusPillStyle(token, member.lifecycleStage),
+        memberId: member.memberId,
+        name: trimText(member.displayName) || member.memberId,
+        serviceId: trimText(member.publishedServiceId) || "--",
+      })),
+    [teamMembersQuery.data?.members, token],
+  );
   const latestVisibleUpdate =
+    teamSummaryQuery.data?.updatedAt ||
     lens.currentRun?.lastUpdatedAt ||
     lens.currentRunAudit?.summary.lastUpdatedAt ||
     activeWorkflowSummary?.updatedAt ||
     "";
-  const latestVisibleUpdateNote = lens.currentRun?.lastUpdatedAt
-    ? trimText(lens.currentRun?.runId)
+  const latestVisibleUpdateNote = teamSummaryQuery.data?.updatedAt
+    ? "来自 Team authority 更新时间"
+    : lens.currentRun?.lastUpdatedAt
+      ? trimText(lens.currentRun?.runId)
       ? `来自 run ${compactId(lens.currentRun?.runId)}`
       : "来自最近可见运行"
-    : lens.currentRunAudit?.summary.lastUpdatedAt
-      ? "来自最近审计摘要"
-      : activeWorkflowSummary?.updatedAt
-        ? "来自 workflow 更新时间"
-        : "当前还没有可见更新时间";
+      : lens.currentRunAudit?.summary.lastUpdatedAt
+        ? "来自最近审计摘要"
+        : activeWorkflowSummary?.updatedAt
+          ? "来自 workflow 更新时间"
+          : "当前还没有可见更新时间";
   const activeRunId =
     lens.currentRun?.runId ||
     lens.playback.currentRunId ||
@@ -1719,7 +1815,6 @@ const TeamDetailPage: React.FC = () => {
     "--";
   const currentStateVersion =
     lens.currentRun?.stateVersion != null ? String(lens.currentRun.stateVersion) : "--";
-  const currentLastEventId = trimText(lens.currentRun?.lastEventId) || "--";
   const currentEndpointCount = lens.currentService?.endpoints.length ?? 0;
   const currentPolicyCount = lens.currentService?.policyIds.length ?? 0;
   const enabledConnectorCount = integrations.items.filter((item) => item.enabled).length;
@@ -2877,6 +2972,76 @@ const TeamDetailPage: React.FC = () => {
         ? resolveTonePillStyle(token, "success")
         : resolveStatusPillStyle(token, row.badge),
   }));
+  const teamAuthorityStatusLabel = teamSummaryQuery.data
+    ? teamLifecycleLabel
+    : teamSummaryQuery.isError
+      ? "Team summary 不可用"
+      : selectedTeamId
+        ? "加载中"
+        : "未绑定 Team";
+  const teamAuthorityStatusStyle = teamSummaryQuery.data
+    ? resolveStatusPillStyle(token, teamLifecycleStatus)
+    : teamSummaryQuery.isError
+      ? resolveTonePillStyle(token, "warning")
+      : resolveTonePillStyle(token, "neutral");
+  const teamAuthorityTitle = teamSummaryQuery.data
+    ? teamTitle
+    : selectedTeamId
+      ? "Team summary 暂不可用"
+      : teamTitle;
+  const teamAuthorityDescription = teamSummaryQuery.data
+    ? teamSummaryDescription || "Team authority 当前没有描述。"
+    : selectedTeamId
+      ? "当前仍会显示运行时视图；Team authority summary 暂时无法读取。"
+      : "当前详情来自运行时上下文，还没有明确的 Team authority 绑定。";
+  const teamAuthorityRows = [
+    {
+      badge: teamLifecycleLabel || teamAuthorityStatusLabel,
+      badgeStyle: teamAuthorityStatusStyle,
+      key: "teamLifecycle",
+      label: "生命周期",
+      note: teamSummaryQuery.data
+        ? `teamId · ${compactId(teamSummaryQuery.data.teamId)}`
+        : selectedTeamId
+          ? `teamId · ${compactId(selectedTeamId)}`
+          : "当前路由没有 Team ID",
+      noteMonospace: false,
+      noteTooltip: teamSummaryQuery.data
+        ? `teamId · ${teamSummaryQuery.data.teamId}`
+        : selectedTeamId
+          ? `teamId · ${selectedTeamId}`
+          : "当前路由没有 Team ID",
+      value: teamAuthorityStatusLabel,
+    },
+    {
+      badge: teamSummaryQuery.data ? `${teamSummaryQuery.data.memberCount}` : "--",
+      badgeStyle: teamSummaryQuery.data
+        ? resolveTonePillStyle(token, "info")
+        : resolveTonePillStyle(token, "neutral"),
+      key: "teamMembers",
+      label: "成员规模",
+      note: teamSummaryQuery.data
+        ? "来自 Team authority memberCount"
+        : "成员数会在 Team summary 可用后显示",
+      noteMonospace: false,
+      value: teamSummaryQuery.data ? `${teamSummaryQuery.data.memberCount} 个成员` : "--",
+    },
+    {
+      badge: teamSummaryQuery.data?.updatedAt ? "已同步" : "--",
+      badgeStyle: teamSummaryQuery.data?.updatedAt
+        ? resolveTonePillStyle(token, "success")
+        : resolveTonePillStyle(token, "neutral"),
+      key: "teamUpdatedAt",
+      label: "Team 更新时间",
+      note: teamSummaryQuery.data?.updatedAt
+        ? "来自 Team authority updatedAt"
+        : "当前使用运行时更新时间作为降级参考",
+      noteMonospace: false,
+      value: teamSummaryQuery.data?.updatedAt
+        ? formatCompactTimestamp(teamSummaryQuery.data.updatedAt)
+        : "--",
+    },
+  ];
   const overviewGovernanceRows = [
     {
       badge: currentRevisionId !== "--" ? "serving" : "unknown",
@@ -3212,6 +3377,7 @@ const TeamDetailPage: React.FC = () => {
         buildTeamDetailHref({
           memberId: currentMemberId || undefined,
           scopeId,
+          teamId: selectedTeamId || undefined,
           workflowId: activeWorkflowId || undefined,
           serviceId: runtimeServiceId,
           runId:
@@ -3230,6 +3396,7 @@ const TeamDetailPage: React.FC = () => {
       lens.playback.currentRunId,
       preferredRunId,
       runtimeServiceId,
+      selectedTeamId,
       scopeId,
     ],
   );
@@ -3244,6 +3411,7 @@ const TeamDetailPage: React.FC = () => {
         buildTeamDetailHref({
           memberId: currentMemberId || undefined,
           scopeId,
+          teamId: selectedTeamId || undefined,
           workflowId: activeWorkflowId || undefined,
           serviceId: runtimeServiceId,
           runId: normalizedRunId || undefined,
@@ -3251,7 +3419,14 @@ const TeamDetailPage: React.FC = () => {
         }),
       );
     },
-    [activeTab, activeWorkflowId, currentMemberId, runtimeServiceId, scopeId],
+    [
+      activeTab,
+      activeWorkflowId,
+      currentMemberId,
+      runtimeServiceId,
+      selectedTeamId,
+      scopeId,
+    ],
   );
 
   const handleOpenConversation = React.useCallback(() => {
@@ -3276,6 +3451,106 @@ const TeamDetailPage: React.FC = () => {
   const conversationActionLabel = lens.playback.currentRunId ? "本次对话" : "运行记录";
   const serviceMappingActionLabel = "服务映射";
   const teamBuilderActionLabel = "高级编辑";
+  const editTeamActionLabel = "Edit Team";
+  const canEditSelectedTeam = Boolean(teamSummaryQuery.data && selectedTeamId);
+  const editTeamHint = selectedTeamId
+    ? "Team summary 读取完成后才能编辑。"
+    : "当前路由还没有选中真实 Team。";
+  const openTeamEditor = React.useCallback(() => {
+    if (!teamSummaryQuery.data) {
+      return;
+    }
+
+    setTeamEditorName(teamSummaryQuery.data.displayName);
+    setTeamEditorDescription(teamSummaryQuery.data.description);
+    setTeamEditorOpen(true);
+  }, [teamSummaryQuery.data]);
+  const closeTeamEditor = React.useCallback(() => {
+    if (teamEditorSaving) {
+      return;
+    }
+
+    setTeamEditorOpen(false);
+  }, [teamEditorSaving]);
+  const saveTeamEditor = React.useCallback(async () => {
+    if (!teamSummaryQuery.data || teamEditorSaving) {
+      return;
+    }
+
+    const displayName = teamEditorName.trim();
+    if (!displayName) {
+      void message.error("Team name is required.");
+      return;
+    }
+
+    setTeamEditorSaving(true);
+    try {
+      await studioApi.updateTeam({
+        scopeId,
+        teamId: selectedTeamId,
+        displayName,
+        description: teamEditorDescription.trim() || null,
+      });
+      void message.success("Team updated.");
+      setTeamEditorOpen(false);
+      await refreshTeamAuthority();
+    } catch (error) {
+      void message.error(describeError(error, "Team update failed."));
+    } finally {
+      setTeamEditorSaving(false);
+    }
+  }, [
+    refreshTeamAuthority,
+    scopeId,
+    selectedTeamId,
+    teamEditorDescription,
+    teamEditorName,
+    teamEditorSaving,
+    teamSummaryQuery.data,
+  ]);
+  const isTeamArchived = normalizeStatus(teamSummaryQuery.data?.lifecycleStage) === "archived";
+  const archiveTeamActionLabel = teamSummaryQuery.data && !isTeamArchived ? "Archive Team" : "";
+  const archiveTeamHint = selectedTeamId
+    ? "Team summary 读取完成后才能归档。"
+    : "当前路由还没有选中真实 Team。";
+  const openTeamArchive = React.useCallback(() => {
+    if (!teamSummaryQuery.data || isTeamArchived) {
+      return;
+    }
+
+    setTeamArchiveOpen(true);
+  }, [isTeamArchived, teamSummaryQuery.data]);
+  const closeTeamArchive = React.useCallback(() => {
+    if (teamArchiving) {
+      return;
+    }
+
+    setTeamArchiveOpen(false);
+  }, [teamArchiving]);
+  const confirmTeamArchive = React.useCallback(async () => {
+    if (!teamSummaryQuery.data || isTeamArchived || teamArchiving) {
+      return;
+    }
+
+    setTeamArchiving(true);
+    try {
+      await studioApi.archiveTeam(scopeId, selectedTeamId);
+      void message.success("Team archived.");
+      setTeamArchiveOpen(false);
+      await refreshTeamAuthority();
+    } catch (error) {
+      void message.error(describeError(error, "Team archive failed."));
+    } finally {
+      setTeamArchiving(false);
+    }
+  }, [
+    isTeamArchived,
+    refreshTeamAuthority,
+    scopeId,
+    selectedTeamId,
+    teamArchiving,
+    teamSummaryQuery.data,
+  ]);
   const topologyFocusActorId =
     trimText(effectiveActorId) ||
     trimText(lens.graph.focusActorId) ||
@@ -3395,6 +3670,11 @@ const TeamDetailPage: React.FC = () => {
         latestVisibleUpdateNote={latestVisibleUpdateNote}
         partialSignals={overviewPartialSignals}
         runtimeSummaryRows={overviewRuntimeSummaryRows}
+        teamAuthorityDescription={teamAuthorityDescription}
+        teamAuthorityRows={teamAuthorityRows}
+        teamAuthorityStatusLabel={teamAuthorityStatusLabel}
+        teamAuthorityStatusStyle={teamAuthorityStatusStyle}
+        teamAuthorityTitle={teamAuthorityTitle}
       />
     );
   };
@@ -3510,6 +3790,10 @@ const TeamDetailPage: React.FC = () => {
         onOpenRuntimeExplorer={handleOpenServiceMapping}
         onOpenServices={handleOpenServices}
         onSelectActor={setSelectedActorId}
+        rosterError={teamMembersQuery.isError}
+        rosterLoading={teamMembersQuery.isLoading}
+        rosterRows={teamRosterRows}
+        rosterTeamId={selectedTeamId}
       />
     );
   };
@@ -3551,6 +3835,7 @@ const TeamDetailPage: React.FC = () => {
           history.push(
             buildStudioScriptsWorkspaceRoute({
               scopeId,
+              teamId: selectedTeamId || undefined,
               memberKey: selectedStudioMemberKey,
             }),
           )
@@ -3560,6 +3845,7 @@ const TeamDetailPage: React.FC = () => {
           history.push(
             buildStudioWorkflowWorkspaceRoute({
               scopeId,
+              teamId: selectedTeamId || undefined,
               memberKey: selectedStudioMemberKey,
             }),
           )
@@ -3572,9 +3858,29 @@ const TeamDetailPage: React.FC = () => {
   };
 
   const renderAdvancedTab = () => {
+    const lifecycleLabel = teamSummaryQuery.data
+      ? teamLifecycleLabel
+      : selectedTeamId
+        ? "加载中"
+        : "未绑定 Team";
+    const lifecycleDescription = teamSummaryQuery.data
+      ? isTeamArchived
+        ? "This Team is archived and de-emphasized in the active roster. You can still edit its identity, configuration, members, and history."
+        : "This Team is active in the roster. Archive only de-emphasizes it; it does not lock future maintenance."
+      : selectedTeamId
+        ? "Team summary 读取完成后才能修改 lifecycle。"
+        : "当前路由还没有选中真实 Team。";
+    const adjustmentTitle = isTeamArchived ? "维护这支团队配置" : "继续调整这支团队";
+    const adjustmentLead = isTeamArchived
+      ? "这支 Team 已归档，但配置仍可维护；先确认这次要调整的是流程、服务映射，还是连接器引用。"
+      : "先确认这次要调整的是流程、服务映射，还是连接器引用。";
+
     return (
       <TeamAdvancedTab
         adjustmentBadgeStyle={resolveTonePillStyle(token, "neutral")}
+        archiveTeamActionLabel={archiveTeamActionLabel}
+        archiveTeamDisabled={!teamSummaryQuery.data || teamArchiving}
+        archiveTeamHint={archiveTeamHint}
         configurationAdjustmentRows={configurationAdjustmentRows}
         configurationDetailRows={configurationDetailRows}
         conversationActionLabel={conversationActionLabel}
@@ -3582,6 +3888,7 @@ const TeamDetailPage: React.FC = () => {
         currentDeploymentFriendly={currentDeploymentFriendly}
         currentServiceFriendly={currentServiceFriendly}
         currentVersionFriendly={currentVersionFriendly}
+        onArchiveTeam={openTeamArchive}
         onOpenConversation={handleOpenConversation}
         onOpenServiceMapping={handleOpenServiceMapping}
         onOpenTeamBuilder={() => history.push(teamBuilderRoute)}
@@ -3591,7 +3898,23 @@ const TeamDetailPage: React.FC = () => {
         secondaryActionButtonStyle={resolveActionButtonStyle(token)}
         serviceMappingActionLabel={serviceMappingActionLabel}
         summaryCards={advancedSummaryCards}
+        teamAdjustmentLead={adjustmentLead}
+        teamAdjustmentTitle={adjustmentTitle}
         teamBuilderActionLabel={teamBuilderActionLabel}
+        teamLifecycleBadgeStyle={
+          teamSummaryQuery.data
+            ? resolveStatusPillStyle(token, teamLifecycleStatus)
+            : resolveTonePillStyle(token, "neutral")
+        }
+        teamLifecycleDescription={lifecycleDescription}
+        teamLifecycleLabel={lifecycleLabel}
+        teamLifecycleTitle={
+          teamSummaryQuery.data
+            ? isTeamArchived
+              ? "Archived but still maintainable"
+              : "Active roster entry"
+            : "Team authority lifecycle"
+        }
         teamImpactSummary={advancedTeamImpactSummary}
       />
     );
@@ -3631,8 +3954,12 @@ const TeamDetailPage: React.FC = () => {
       actionRail={
         <TeamActionRail
           conversationActionLabel={conversationActionLabel}
+          editTeamDisabled={!canEditSelectedTeam}
+          editTeamHint={editTeamHint}
+          editTeamLabel={editTeamActionLabel}
           onOpenConversation={handleOpenConversation}
           onOpenServiceMapping={handleOpenServiceMapping}
+          onOpenTeamEditor={openTeamEditor}
           onOpenTeamBuilder={() => history.push(teamBuilderRoute)}
           serviceMappingDisabled={!canOpenPlatformTopology}
           serviceMappingHint={platformTopologyHint || undefined}
@@ -3646,7 +3973,12 @@ const TeamDetailPage: React.FC = () => {
       onOpenTeamsList={handleOpenTeamsList}
       onSelectTab={pushTeamTab}
       statusBadge={
-        currentHeaderStatusFriendly !== "--" ? (
+        teamSummaryQuery.data ? (
+          <DetailPill
+            style={resolveStatusPillStyle(token, teamLifecycleStatus)}
+            text={teamLifecycleLabel}
+          />
+        ) : currentHeaderStatusFriendly !== "--" ? (
           <DetailPill
             style={resolveStatusPillStyle(token, currentHeaderStatus)}
             text={currentHeaderStatusFriendly}
@@ -3659,6 +3991,55 @@ const TeamDetailPage: React.FC = () => {
       teamsListHref={teamsListHref}
     >
       {tabContent}
+      <Modal
+        confirmLoading={teamEditorSaving}
+        okButtonProps={{ disabled: !teamEditorName.trim() }}
+        okText="Save Team"
+        onCancel={closeTeamEditor}
+        onOk={() => void saveTeamEditor()}
+        open={teamEditorOpen}
+        title="Edit Team"
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <Typography.Text strong>Team name</Typography.Text>
+            <Input
+              aria-label="Edit team name"
+              disabled={teamEditorSaving}
+              onChange={(event) => setTeamEditorName(event.target.value)}
+              value={teamEditorName}
+            />
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <Typography.Text strong>Description</Typography.Text>
+            <Input.TextArea
+              aria-label="Edit team description"
+              autoSize={{ minRows: 3, maxRows: 5 }}
+              disabled={teamEditorSaving}
+              onChange={(event) => setTeamEditorDescription(event.target.value)}
+              value={teamEditorDescription}
+            />
+          </div>
+          <Typography.Text type="secondary">
+            This updates the Team authority summary. Archived Teams can still be
+            edited and maintained.
+          </Typography.Text>
+        </div>
+      </Modal>
+      <Modal
+        confirmLoading={teamArchiving}
+        okText="Archive Team"
+        okButtonProps={{ danger: true }}
+        onCancel={closeTeamArchive}
+        onOk={() => void confirmTeamArchive()}
+        open={teamArchiveOpen}
+        title="Archive this Team?"
+      >
+        <Typography.Text>
+          This marks the Team as archived and de-emphasizes it in the active
+          roster. You can still edit its configuration and view its history.
+        </Typography.Text>
+      </Modal>
     </TeamDetailShell>
   );
 };
