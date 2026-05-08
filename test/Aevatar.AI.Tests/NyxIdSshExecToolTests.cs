@@ -578,8 +578,12 @@ public class NyxIdSshExecToolTests
             {
                 // Block until the caller's wall-clock cap fires — exactly what the production
                 // incident looked like (NyxID accepted the POST but never responded).
-                await Task.Delay(Timeout.Infinite, cancellationToken);
-                throw new InvalidOperationException("unreachable: cancellation should have fired");
+                var pendingResponse = new TaskCompletionSource<HttpResponseMessage>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                using var cancellationRegistration = cancellationToken.Register(() =>
+                    pendingResponse.TrySetCanceled(cancellationToken));
+
+                return await pendingResponse.Task;
             }
 
             if (_routes.TryGetValue((request.Method, path), out var responseBodyText))
