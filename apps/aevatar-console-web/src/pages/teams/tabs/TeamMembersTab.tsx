@@ -56,6 +56,7 @@ type TeamMembersTabProps = {
   readonly rosterError?: boolean;
   readonly rosterLoading?: boolean;
   readonly rosterRows?: readonly TeamRosterMemberRow[];
+  readonly rosterSyncing?: boolean;
   readonly rosterTeamId?: string;
 };
 
@@ -70,6 +71,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
   rosterError = false,
   rosterLoading = false,
   rosterRows = [],
+  rosterSyncing = false,
   rosterTeamId = "",
 }) => {
   const { token } = theme.useToken();
@@ -130,7 +132,13 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
           </Typography.Text>
         }
       >
-        {rosterLoading ? (
+        {rosterSyncing ? (
+          <AevatarInspectorEmpty
+            compact
+            title="Team roster 正在同步"
+            description="Team 已创建，成员 read model 正在由 Projection 写入。这里会自动刷新。"
+          />
+        ) : rosterLoading ? (
           <AevatarInspectorEmpty
             compact
             title="正在读取 Team roster"

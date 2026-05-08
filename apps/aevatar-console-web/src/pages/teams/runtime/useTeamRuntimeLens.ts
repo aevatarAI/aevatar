@@ -10,6 +10,7 @@ import { deriveTeamRuntimeLens, selectTeamCompareRuns } from "./teamRuntimeLens"
 
 const scopeServiceAppId = "default";
 type UseTeamRuntimeLensOptions = {
+  enabled?: boolean;
   graphDepth?: number;
   includeCatalogSignals?: boolean;
   preferredActorId?: string;
@@ -48,6 +49,7 @@ export function useTeamRuntimeLens(
   options?: UseTeamRuntimeLensOptions,
 ) {
   const normalizedScopeId = scopeId.trim();
+  const enabled = options?.enabled ?? true;
   const graphDepth = Math.max(1, Math.min(options?.graphDepth ?? 2, 4));
   const includeCatalogSignals = options?.includeCatalogSignals ?? true;
   const preferredActorId = options?.preferredActorId?.trim() ?? "";
@@ -56,19 +58,19 @@ export function useTeamRuntimeLens(
   const preferredRunId = options?.preferredRunId?.trim() ?? "";
 
   const workflowsQuery = useQuery({
-    enabled: normalizedScopeId.length > 0 && includeCatalogSignals,
+    enabled: enabled && normalizedScopeId.length > 0 && includeCatalogSignals,
     queryKey: ["teams", "workflows", normalizedScopeId],
     queryFn: () => scopesApi.listWorkflows(normalizedScopeId),
     retry: false,
   });
   const scriptsQuery = useQuery({
-    enabled: normalizedScopeId.length > 0 && includeCatalogSignals,
+    enabled: enabled && normalizedScopeId.length > 0 && includeCatalogSignals,
     queryKey: ["teams", "scripts", normalizedScopeId],
     queryFn: () => scopesApi.listScripts(normalizedScopeId),
     retry: false,
   });
   const servicesQuery = useQuery({
-    enabled: normalizedScopeId.length > 0,
+    enabled: enabled && normalizedScopeId.length > 0,
     queryKey: ["teams", "services", normalizedScopeId],
     queryFn: () =>
       scopeRuntimeApi.listServices(normalizedScopeId, {
@@ -77,13 +79,14 @@ export function useTeamRuntimeLens(
     retry: false,
   });
   const actorsQuery = useQuery({
-    enabled: normalizedScopeId.length > 0,
+    enabled: enabled && normalizedScopeId.length > 0,
     queryKey: ["teams", "actors", normalizedScopeId],
     queryFn: () => runtimeGAgentApi.listActors(normalizedScopeId),
     retry: false,
   });
   const membersQuery = useQuery({
     enabled:
+      enabled &&
       normalizedScopeId.length > 0 &&
       (preferredMemberId.length > 0 || preferredServiceId.length > 0),
     queryKey: ["teams", "members", normalizedScopeId],
@@ -130,13 +133,14 @@ export function useTeamRuntimeLens(
       ? ""
       : services[0]?.serviceId || "";
   const serviceRevisionsQuery = useQuery({
-    enabled: normalizedScopeId.length > 0 && serviceId.length > 0,
+    enabled: enabled && normalizedScopeId.length > 0 && serviceId.length > 0,
     queryKey: ["teams", "service-revisions", normalizedScopeId, serviceId],
     queryFn: () => scopeRuntimeApi.getServiceRevisions(normalizedScopeId, serviceId),
     retry: false,
   });
   const runsQuery = useQuery({
     enabled:
+      enabled &&
       normalizedScopeId.length > 0 &&
       (serviceId.length > 0 || preferredMemberId.length > 0),
     queryKey: [
@@ -184,6 +188,7 @@ export function useTeamRuntimeLens(
 
   const currentRunAuditQuery = useQuery({
     enabled:
+      enabled &&
       normalizedScopeId.length > 0 &&
       (serviceId.length > 0 || preferredMemberId.length > 0) &&
       currentRunId.length > 0,
@@ -218,6 +223,7 @@ export function useTeamRuntimeLens(
   });
   const baselineRunAuditQuery = useQuery({
     enabled:
+      enabled &&
       normalizedScopeId.length > 0 &&
       (serviceId.length > 0 || preferredMemberId.length > 0) &&
       baselineRunId.length > 0,
@@ -251,7 +257,7 @@ export function useTeamRuntimeLens(
     retry: false,
   });
   const actorGraphQuery = useQuery({
-    enabled: focusActorId.length > 0,
+    enabled: enabled && focusActorId.length > 0,
     queryKey: ["teams", "actor-graph", focusActorId, graphDepth],
     queryFn: () =>
       runtimeActorsApi.getActorGraphEnriched(focusActorId, {

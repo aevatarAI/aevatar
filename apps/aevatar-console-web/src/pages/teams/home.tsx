@@ -1217,7 +1217,9 @@ const TeamsHomePage: React.FC = () => {
         <Space wrap>
           <Button
             icon={<PlusOutlined />}
-            onClick={() => history.push("/teams/new")}
+            onClick={() =>
+              history.push(buildScopeHref("/teams/new", { scopeId }))
+            }
             style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
             type="primary"
           >
@@ -1523,7 +1525,7 @@ const TeamsHomePage: React.FC = () => {
               >
                 <Button
                   onClick={() =>
-                    history.push("/teams/new")
+                    history.push(buildScopeHref("/teams/new", { scopeId }))
                   }
                   type="primary"
                 >

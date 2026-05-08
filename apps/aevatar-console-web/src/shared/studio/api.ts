@@ -109,6 +109,24 @@ async function externalFetch(
   });
 }
 
+export class StudioApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "StudioApiError";
+    this.status = status;
+  }
+}
+
+export function isStudioApiStatus(error: unknown, status: number): boolean {
+  return error instanceof StudioApiError && error.status === status;
+}
+
+async function createStudioApiError(response: Response): Promise<StudioApiError> {
+  return new StudioApiError(await readResponseError(response), response.status);
+}
+
 function isJsonContentType(contentType: string | null): boolean {
   const value = String(contentType || "").toLowerCase();
   return value.includes("application/json") || value.includes("+json");
@@ -359,7 +377,7 @@ function decodeStudioUserConfigModelsResponse(
 async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
   const response = await studioHostFetch(input, init);
   if (!response.ok) {
-    throw new Error(await readResponseError(response));
+    throw await createStudioApiError(response);
   }
 
   if (response.status === 204) {
@@ -379,7 +397,7 @@ async function requestJsonOrNull<T>(
   }
 
   if (!response.ok) {
-    throw new Error(await readResponseError(response));
+    throw await createStudioApiError(response);
   }
 
   if (response.status === 204) {
@@ -396,7 +414,7 @@ async function requestDecodedJson<T>(
 ): Promise<T> {
   const response = await studioHostFetch(input, init);
   if (!response.ok) {
-    throw new Error(await readResponseError(response));
+    throw await createStudioApiError(response);
   }
 
   if (response.status === 204) {
@@ -422,7 +440,7 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
     headers,
   });
   if (!response.ok) {
-    throw new Error(await readResponseError(response));
+    throw await createStudioApiError(response);
   }
 
   if (response.status === 204) {
@@ -452,7 +470,7 @@ async function streamSse(
     signal,
   });
   if (!response.ok) {
-    throw new Error(await readResponseError(response));
+    throw await createStudioApiError(response);
   }
 
   if (!response.body) {
@@ -2115,7 +2133,7 @@ export const studioApi = {
       `${baseUrl}/api/web/skill-search?${params.toString()}`
     );
     if (!response.ok) {
-      throw new Error(await readResponseError(response));
+      throw await createStudioApiError(response);
     }
 
     const contentType = response.headers?.get?.("content-type") ?? null;

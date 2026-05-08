@@ -89,7 +89,7 @@ describe('TeamCreatePage', () => {
       json: async () => teamResponse,
     } as Response);
 
-    renderWithQueryClient(React.createElement(TeamCreatePage));
+    const { queryClient } = renderWithQueryClient(React.createElement(TeamCreatePage));
 
     fireEvent.change(await screen.findByLabelText('Team name'), {
       target: { value: '订单助手团队' },
@@ -113,11 +113,14 @@ describe('TeamCreatePage', () => {
     });
 
     await waitFor(() => {
-      expect(window.location.pathname).toBe('/teams/scope-a');
+      expect(window.location.pathname).toBe('/teams/scope-a/t-alpha');
     });
+    expect(
+      queryClient.getQueryData(['teams', 'team-summary', 'scope-a', 't-alpha']),
+    ).toEqual(teamResponse);
     const params = new URLSearchParams(window.location.search);
-    expect(params.get('scopeId')).toBe('scope-a');
-    expect(params.get('teamId')).toBe('t-alpha');
+    expect(params.get('scopeId')).toBeNull();
+    expect(params.get('teamId')).toBeNull();
     expect(message.success).toHaveBeenCalledWith('已创建 Team。');
   });
 

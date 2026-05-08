@@ -6,7 +6,7 @@ import {
 } from "./teamRoutes";
 
 describe("teamRoutes", () => {
-  it("builds a workflow-aware team detail href and trims empty values", () => {
+  it("builds a canonical team detail href and trims empty values", () => {
     expect(
       buildTeamDetailHref({
         memberId: " member-alpha ",
@@ -18,7 +18,7 @@ describe("teamRoutes", () => {
         tab: "events",
       }),
     ).toBe(
-      "/teams/scope-alpha?memberId=member-alpha&teamId=t-alpha&workflowId=workflow-1&tab=events&serviceId=service-1&runId=run-1",
+      "/teams/scope-alpha/t-alpha?memberId=member-alpha&workflowId=workflow-1&tab=events&serviceId=service-1&runId=run-1",
     );
   });
 
@@ -29,6 +29,16 @@ describe("teamRoutes", () => {
         workflowId: "workflow-1",
       }),
     ).toBe(buildTeamsHref());
+  });
+
+  it("returns to the teams list with scope context when teamId is missing", () => {
+    expect(
+      buildTeamDetailHref({
+        memberId: "member-alpha",
+        scopeId: " scope-alpha ",
+        serviceId: "service-1",
+      }),
+    ).toBe("/teams?scopeId=scope-alpha");
   });
 
   it("preserves draft team names when returning to the create page", () => {
@@ -44,11 +54,11 @@ describe("teamRoutes", () => {
     );
   });
 
-  it("reads the team detail route state from path and query", () => {
+  it("reads the canonical team detail route state from path and query", () => {
     expect(
       readTeamDetailRouteState(
-        "?memberId=member-alpha&teamId=t-alpha&workflowId=wf-1&serviceId=service-1&runId=run-1&tab=members",
-        "/teams/scope-alpha",
+        "?memberId=member-alpha&teamId=stale-team&workflowId=wf-1&serviceId=service-1&runId=run-1&tab=members",
+        "/teams/scope-alpha/t-alpha",
       ),
     ).toEqual({
       memberId: "member-alpha",
@@ -58,6 +68,19 @@ describe("teamRoutes", () => {
       tab: "members",
       teamId: "t-alpha",
       workflowId: "wf-1",
+    });
+  });
+
+  it("reads legacy query team links", () => {
+    expect(
+      readTeamDetailRouteState(
+        "?teamId=t-alpha&tab=members",
+        "/teams/scope-alpha",
+      ),
+    ).toMatchObject({
+      scopeId: "scope-alpha",
+      tab: "members",
+      teamId: "t-alpha",
     });
   });
 

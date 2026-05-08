@@ -1,11 +1,12 @@
 import { BuildOutlined, RocketOutlined, TeamOutlined } from '@ant-design/icons';
 import { Button, Input, Space, Typography, message } from 'antd';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import React from 'react';
 import { loadRestorableAuthSession } from '@/shared/auth/session';
 import { history } from '@/shared/navigation/history';
-import { buildTeamsHref } from '@/shared/navigation/teamRoutes';
+import { buildTeamDetailHref, buildTeamsHref } from '@/shared/navigation/teamRoutes';
 import { studioApi } from '@/shared/studio/api';
+import type { StudioTeamRoster } from '@/shared/studio/models';
 import { buildStudioRoute } from '@/shared/studio/navigation';
 import { AevatarPanel } from '@/shared/ui/aevatarPageShells';
 import ConsoleMetricCard from '@/shared/ui/ConsoleMetricCard';
@@ -78,6 +79,7 @@ function readCreateTeamDraftFromLocation(): {
 }
 
 const TeamCreatePage: React.FC = () => {
+  const queryClient = useQueryClient();
   const initialDraft = React.useMemo(readCreateTeamDraftFromLocation, []);
   const [draft, setDraft] = React.useState<ScopeQueryDraft>(() =>
     readScopeQueryDraft(),
@@ -201,17 +203,41 @@ const TeamCreatePage: React.FC = () => {
         displayName: teamName.trim(),
         description: teamDescription.trim() || undefined,
       });
+      queryClient.setQueryData(
+        ['teams', 'roster', team.scopeId],
+        (current: StudioTeamRoster | undefined) => {
+          if (!current) {
+            return current;
+          }
+
+          const teams = current.teams.some(
+            (candidate) => candidate.teamId === team.teamId,
+          )
+            ? current.teams.map((candidate) =>
+                candidate.teamId === team.teamId ? team : candidate,
+              )
+            : [team, ...current.teams];
+
+          return {
+            ...current,
+            scopeId: team.scopeId,
+            teams,
+          };
+        },
+      );
+      queryClient.setQueryData(
+        ['teams', 'team-summary', team.scopeId, team.teamId],
+        team,
+      );
+      await queryClient.invalidateQueries({
+        queryKey: ['teams', 'roster', team.scopeId],
+      });
       void message.success('已创建 Team。');
       history.push(
-        buildScopeHref(
-          `/teams/${encodeURIComponent(team.scopeId)}`,
-          {
-            scopeId: team.scopeId,
-          },
-          {
-            teamId: team.teamId,
-          },
-        ),
+        buildTeamDetailHref({
+          scopeId: team.scopeId,
+          teamId: team.teamId,
+        }),
       );
     } catch (error) {
       const errorMessage =

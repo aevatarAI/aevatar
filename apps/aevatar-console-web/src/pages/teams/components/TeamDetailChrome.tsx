@@ -56,9 +56,9 @@ const topActionButtonStyle: React.CSSProperties = {
 };
 
 export const TeamDetailEmptyState: React.FC = () => (
-  <AevatarPageShell title="团队详情" content="请先进入一个具体团队，再查看详情。">
+  <AevatarPageShell title="团队详情" content="请先从团队列表选择一个具体团队，再查看详情。">
     <AevatarPanel title="未选择团队">
-      <AevatarInspectorEmpty description="当前需要一个明确的 scope 才能渲染团队详情。" />
+      <AevatarInspectorEmpty description="当前链接只有工作区上下文，没有具体 Team 标识。返回团队列表后选择一个团队。" />
     </AevatarPanel>
   </AevatarPageShell>
 );
