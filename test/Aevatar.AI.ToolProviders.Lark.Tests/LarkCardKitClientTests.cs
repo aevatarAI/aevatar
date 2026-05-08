@@ -184,6 +184,62 @@ public sealed class LarkCardKitClientTests
     }
 
     [Fact]
+    public async Task CreateCardAsync_RejectsLiteralNullJson()
+    {
+        // JsonNode.Parse("null") returns null without throwing — the literal `null` JSON
+        // would otherwise serialize as `"data": null` and Lark rejects it as a missing
+        // field. ParseJsonObject's `?? throw` branch must surface ArgumentException so the
+        // bug is caught at the boundary instead of in production logs.
+        var (client, _) = BuildClient("");
+
+        var act = async () => await client.CreateCardAsync(
+            "tok-1",
+            new LarkCardKitCreateRequest("card_json", "null"),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .Where(ex => ex.ParamName == "DataJson" && ex.Message.Contains("parsed to null"));
+    }
+
+    [Fact]
+    public async Task SetCardSettingsAsync_OmitsUuid_WhenIdempotencyKeyIsBlank()
+    {
+        var (client, handler) = BuildClient("""{"code":0,"data":{}}""");
+
+        await client.SetCardSettingsAsync(
+            "tok-1",
+            new LarkCardKitSettingsRequest(
+                CardId: "card_x",
+                SettingsJson: """{"streaming_mode":false}""",
+                Sequence: 1,
+                IdempotencyKey: null),
+            CancellationToken.None);
+
+        using var body = JsonDocument.Parse(handler.LastBody!);
+        body.RootElement.TryGetProperty("uuid", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task UpdateCardAsync_PassesIdempotencyKey_WhenProvided()
+    {
+        var (client, handler) = BuildClient("""{"code":0,"data":{}}""");
+
+        await client.UpdateCardAsync(
+            "tok-1",
+            new LarkCardKitUpdateRequest(
+                CardId: "card_x",
+                CardJson: """{"schema":"2.0"}""",
+                Sequence: 1,
+                IdempotencyKey: "  uuid-update  "),
+            CancellationToken.None);
+
+        // Idempotency key is trimmed before emission so callers do not have to worry about
+        // accidental whitespace defeating Lark's dedup.
+        using var body = JsonDocument.Parse(handler.LastBody!);
+        body.RootElement.GetProperty("uuid").GetString().Should().Be("uuid-update");
+    }
+
+    [Fact]
     public async Task LarkCardKitClient_IsRegisteredAsSingleton_AfterAddLarkTools()
     {
         var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
