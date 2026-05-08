@@ -84,6 +84,8 @@ public static class IdentityServiceCollectionExtensions
         // inbound message's gate keeps re-sending the binding card. See
         // issue #549 follow-up observed 2026-05-01.
         services.TryAddSingleton<ExternalIdentityBindingProjectionPort>();
+        services.TryAddSingleton<IExternalIdentityBindingProjectionPort>(
+            sp => sp.GetRequiredService<ExternalIdentityBindingProjectionPort>());
 
         // ─── Cluster-singleton OAuth client projection ───
         services.AddProjectionMaterializationRuntimeCore<

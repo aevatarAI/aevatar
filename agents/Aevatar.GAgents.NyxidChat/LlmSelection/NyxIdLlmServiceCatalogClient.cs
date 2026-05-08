@@ -3,6 +3,7 @@ using System.Text;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Services;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -11,20 +12,19 @@ namespace Aevatar.GAgents.NyxidChat.LlmSelection;
 public sealed class NyxIdLlmServiceCatalogClient : INyxIdLlmServiceCatalogClient
 {
     private static readonly TimeSpan ProxyServicesCacheTtl = TimeSpan.FromSeconds(30);
-    private const int MaxProxyServicesCacheEntries = 128;
+    private const string ProxyServicesCacheKeyPrefix = "nyxid-llm-svc:proxy-services:";
 
     private readonly NyxIdApiClient _nyxClient;
+    private readonly IMemoryCache _proxyServicesCache;
     private readonly ILogger<NyxIdLlmServiceCatalogClient> _logger;
-    private readonly object _proxyServicesCacheLock = new();
-    private readonly Dictionary<string, ProxyServicesCacheEntry> _proxyServicesCache = new(StringComparer.Ordinal);
-
-    private sealed record ProxyServicesCacheEntry(string Response, DateTimeOffset ExpiresAtUtc);
 
     public NyxIdLlmServiceCatalogClient(
         NyxIdApiClient nyxClient,
+        IMemoryCache proxyServicesCache,
         ILogger<NyxIdLlmServiceCatalogClient>? logger = null)
     {
         _nyxClient = nyxClient ?? throw new ArgumentNullException(nameof(nyxClient));
+        _proxyServicesCache = proxyServicesCache ?? throw new ArgumentNullException(nameof(proxyServicesCache));
         _logger = logger ?? NullLogger<NyxIdLlmServiceCatalogClient>.Instance;
     }
 
@@ -87,56 +87,37 @@ public sealed class NyxIdLlmServiceCatalogClient : INyxIdLlmServiceCatalogClient
         }
     }
 
+    /// <summary>
+    /// Cache the per-user <c>/api/v1/proxy/services</c> response for a short TTL so a flurry
+    /// of /model invocations from the same user collapses onto one upstream call. We use
+    /// <see cref="IMemoryCache"/> rather than a singleton dictionary so the cache backing
+    /// store is shared, sized, and evicted per the host's standard memory-cache policy
+    /// (CLAUDE.md §"中间层状态约束" — services don't own per-caller state directly).
+    /// </summary>
     private async Task<string> DiscoverProxyServicesCachedAsync(
         string accessToken,
         CancellationToken ct)
     {
-        var cacheKey = ComputeTokenFingerprint(accessToken);
-        var now = DateTimeOffset.UtcNow;
-        lock (_proxyServicesCacheLock)
+        var cacheKey = ProxyServicesCacheKeyPrefix + ComputeTokenFingerprint(accessToken);
+        if (_proxyServicesCache.TryGetValue(cacheKey, out string? cached) &&
+            !string.IsNullOrEmpty(cached))
         {
-            if (_proxyServicesCache.TryGetValue(cacheKey, out var cached) &&
-                cached.ExpiresAtUtc > now)
-            {
-                return cached.Response;
-            }
+            return cached;
         }
 
         var response = await _nyxClient.DiscoverProxyServicesAsync(accessToken, ct).ConfigureAwait(false);
-        var expiresAt = DateTimeOffset.UtcNow.Add(ProxyServicesCacheTtl);
-        lock (_proxyServicesCacheLock)
-        {
-            PruneProxyServicesCache(DateTimeOffset.UtcNow);
-            _proxyServicesCache[cacheKey] = new ProxyServicesCacheEntry(response, expiresAt);
-        }
-
+        // Size is not set on the entry — IMemoryCache only enforces Size when the host
+        // configured a SizeLimit on MemoryCacheOptions. The cache backing store is owned
+        // by the host (we register IMemoryCache via AddMemoryCache, no per-entry size
+        // policy from us), so leave eviction to the host's TimeBasedExpiration default.
+        _proxyServicesCache.Set(
+            cacheKey,
+            response,
+            new MemoryCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = ProxyServicesCacheTtl,
+            });
         return response;
-    }
-
-    private void PruneProxyServicesCache(DateTimeOffset now)
-    {
-        if (_proxyServicesCache.Count == 0)
-            return;
-
-        foreach (var key in _proxyServicesCache
-                     .Where(pair => pair.Value.ExpiresAtUtc <= now)
-                     .Select(pair => pair.Key)
-                     .ToArray())
-        {
-            _proxyServicesCache.Remove(key);
-        }
-
-        if (_proxyServicesCache.Count <= MaxProxyServicesCacheEntries)
-            return;
-
-        foreach (var key in _proxyServicesCache
-                     .OrderBy(pair => pair.Value.ExpiresAtUtc)
-                     .Take(_proxyServicesCache.Count - MaxProxyServicesCacheEntries)
-                     .Select(pair => pair.Key)
-                     .ToArray())
-        {
-            _proxyServicesCache.Remove(key);
-        }
     }
 
     private static string ComputeTokenFingerprint(string accessToken) =>

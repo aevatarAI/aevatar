@@ -54,6 +54,10 @@ public static class ServiceCollectionExtensions
         // Registered here (not in Channel.Identity) because the handler depends
         // on Studio.Application UserConfig ports; Channel.Identity intentionally
         // does not pull Studio dependencies.
+        // Catalog client uses IMemoryCache for the proxy-services TTL cache. AddMemoryCache
+        // is idempotent (no-op when already registered) so hosts that already wire it keep
+        // their configured eviction policy; hosts that didn't register one get the default.
+        services.AddMemoryCache();
         services.TryAddSingleton<INyxIdLlmServiceCatalogClient, NyxIdLlmServiceCatalogClient>();
         // These are consumed by singleton turn-runner/slash handlers. They create
         // short scopes internally for UserConfig ports instead of capturing

@@ -23,7 +23,8 @@ namespace Aevatar.GAgents.Channel.Identity;
 /// without a corresponding readmodel materialization).
 /// </remarks>
 public sealed class ExternalIdentityBindingProjectionPort
-    : MaterializationProjectionPortBase<ExternalIdentityBindingMaterializationRuntimeLease>
+    : MaterializationProjectionPortBase<ExternalIdentityBindingMaterializationRuntimeLease>,
+      IExternalIdentityBindingProjectionPort
 {
     public const string ProjectionKind = "external-identity-binding";
 

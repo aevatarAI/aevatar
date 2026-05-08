@@ -67,7 +67,7 @@ public static class IdentityOAuthEndpoints
         [FromServices] IExternalIdentityBindingQueryPort queryPort,
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] IProjectionReadinessPort projectionReadiness,
-        [FromServices] ExternalIdentityBindingProjectionPort bindingProjectionPort,
+        [FromServices] IExternalIdentityBindingProjectionPort bindingProjectionPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {

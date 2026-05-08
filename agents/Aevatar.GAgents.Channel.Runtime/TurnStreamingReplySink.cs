@@ -307,7 +307,13 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
 
                     // Stop dispatching interim chunks once the cap is reached. The pending
                     // stash remains so FinalizeAsync (which bypasses the cap) still has the
-                    // freshest text to dispatch when the stream ends.
+                    // freshest text to dispatch when the stream ends. The drainSignal capture
+                    // here is a defensive cleanup: when nextIsFinal is false there is by
+                    // construction no _drainTcs (FinalizeAsync would have set it BEFORE this
+                    // re-entry into the lock, flipping nextIsFinal to true and routing past
+                    // the cap), but capturing+clearing keeps the invariant local rather than
+                    // relying on that proof and makes the !_dispatchInProgress hand-off the
+                    // sole owner of any future _drainTcs.
                     if (!nextIsFinal && _chunksEmitted >= _maxInterimChunks)
                     {
                         _dispatchInProgress = false;
@@ -323,6 +329,14 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
                     // and let DispatchLoopAsync return so callers (OnDeltaAsync) are not
                     // blocked on the throttle. Final dispatches bypass the throttle so the
                     // user sees the complete text immediately when the stream ends.
+                    //
+                    // Invariant: if we reach this branch, nextIsFinal == false, so _drainTcs
+                    // must be null — FinalizeAsync sets _drainTcs only when it arrives during
+                    // an in-flight dispatch, and that path always re-evaluates nextIsFinal
+                    // inside this same lock acquisition. We do NOT signal drainSignal here:
+                    // a future timer-driven loop (or a fresh FinalizeAsync that races in
+                    // through the !_dispatchInProgress path) is the one that will eventually
+                    // drain _pendingText and signal whatever _drainTcs gets attached.
                     if (!nextIsFinal && _throttle > TimeSpan.Zero)
                     {
                         var elapsed = _timeProvider.GetUtcNow() - _lastEmitAt;

@@ -7,7 +7,9 @@ using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
@@ -22,8 +24,10 @@ public sealed class NyxIdLlmServiceCatalogClientTests
             new NyxIdToolOptions { BaseUrl = "https://nyx.test" },
             new HttpClient(handler),
             NullLogger<NyxIdApiClient>.Instance);
+        var memoryCache = new MemoryCache(Options.Create(new MemoryCacheOptions()));
         var client = new NyxIdLlmServiceCatalogClient(
             nyxClient,
+            memoryCache,
             NullLogger<NyxIdLlmServiceCatalogClient>.Instance);
         var query = new UserLlmOptionsQuery(
             new BindingId { Value = "bnd-1" },
