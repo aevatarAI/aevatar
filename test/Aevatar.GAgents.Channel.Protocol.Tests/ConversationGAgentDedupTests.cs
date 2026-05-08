@@ -1561,7 +1561,7 @@ public sealed class ConversationGAgentDedupTests
         var (agent, _) = CreateAgent(new RecordingTurnRunner(), "conv-card-first", cardRunner: card);
         SeedReplyToken(agent, "act-card-first", "token-1", "relay-msg-1");
 
-        await agent.HandleLlmReplyStreamChunkAsync(
+        await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-first", "relay-msg-1", "hello"));
 
         card.CardCreateCount.ShouldBe(1);
@@ -1579,11 +1579,11 @@ public sealed class ConversationGAgentDedupTests
         var (agent, _) = CreateAgent(new RecordingTurnRunner(), "conv-card-seq", cardRunner: card);
         SeedReplyToken(agent, "act-card-seq", "token-1", "relay-msg-1");
 
-        await agent.HandleLlmReplyStreamChunkAsync(
+        await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-seq", "relay-msg-1", "first"));
-        await agent.HandleLlmReplyStreamChunkAsync(
+        await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-seq", "relay-msg-1", "first plus second"));
-        await agent.HandleLlmReplyStreamChunkAsync(
+        await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-seq", "relay-msg-1", "first plus second plus third"));
 
         card.CardCreateCount.ShouldBe(1);
@@ -1613,9 +1613,9 @@ public sealed class ConversationGAgentDedupTests
         var (agent, _) = CreateAgent(text, "conv-card-fallback", cardRunner: card);
         SeedReplyToken(agent, "act-card-fallback", "token-1", "relay-msg-1");
 
-        await agent.HandleLlmReplyStreamChunkAsync(
+        await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-fallback", "relay-msg-1", "hello"));
-        await agent.HandleLlmReplyStreamChunkAsync(
+        await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-fallback", "relay-msg-1", "hello world"));
 
         card.CardCreateCount.ShouldBe(1);
@@ -1644,11 +1644,11 @@ public sealed class ConversationGAgentDedupTests
         var (agent, _) = CreateAgent(new RecordingTurnRunner(), "conv-card-rate", cardRunner: card);
         SeedReplyToken(agent, "act-card-rate", "token-1", "relay-msg-1");
 
-        await agent.HandleLlmReplyStreamChunkAsync(
+        await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-rate", "relay-msg-1", "first"));
-        await agent.HandleLlmReplyStreamChunkAsync(
+        await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-rate", "relay-msg-1", "first plus second"));
-        await agent.HandleLlmReplyStreamChunkAsync(
+        await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-rate", "relay-msg-1", "first plus second plus third"));
 
         seenSequences.ShouldBe(new[] { 2L, 2L });
@@ -1667,11 +1667,11 @@ public sealed class ConversationGAgentDedupTests
         var (agent, store) = CreateAgent(new RecordingTurnRunner(), "conv-card-tl", cardRunner: card);
         SeedReplyToken(agent, "act-card-tl", "token-1", "relay-msg-1");
 
-        await agent.HandleLlmReplyStreamChunkAsync(
+        await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-tl", "relay-msg-1", "first"));
-        await agent.HandleLlmReplyStreamChunkAsync(
+        await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-tl", "relay-msg-1", "first plus second"));
-        await agent.HandleLlmReplyStreamChunkAsync(
+        await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-tl", "relay-msg-1", "first plus second plus third"));
 
         // Only one CardStream call before termination; chunk 3 is dropped by the
@@ -1708,9 +1708,9 @@ public sealed class ConversationGAgentDedupTests
         var (agent, store) = CreateAgent(text, "conv-card-postsend", cardRunner: card);
         SeedReplyToken(agent, "act-card-postsend", "token-1", "relay-msg-1");
 
-        await agent.HandleLlmReplyStreamChunkAsync(
+        await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-postsend", "relay-msg-1", "hello"));
-        await agent.HandleLlmReplyStreamChunkAsync(
+        await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-postsend", "relay-msg-1", "hello world"));
 
         // Card runner saw create exactly once; text-edit runner never saw a chunk because
@@ -1736,7 +1736,7 @@ public sealed class ConversationGAgentDedupTests
         var (agent, store) = CreateAgent(new RecordingTurnRunner(), "conv-card-finalize", cardRunner: card);
         SeedReplyToken(agent, "act-card-finalize", "token-1", "relay-msg-1");
 
-        await agent.HandleLlmReplyStreamChunkAsync(
+        await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-finalize", "relay-msg-1", "complete answer"));
 
         var ready = new LlmReplyReadyEvent
@@ -1781,7 +1781,7 @@ public sealed class ConversationGAgentDedupTests
         var (agent, store) = CreateAgent(text, "conv-card-fb-final", cardRunner: card);
         SeedReplyToken(agent, "act-card-fb-final", "token-1", "relay-msg-1");
 
-        await agent.HandleLlmReplyStreamChunkAsync(
+        await agent.HandleLlmReplyCardStreamChunkAsync(
             CreateCardStreamChunk("act-card-fb-final", "relay-msg-1", "complete answer"));
 
         var ready = new LlmReplyReadyEvent
@@ -1804,7 +1804,7 @@ public sealed class ConversationGAgentDedupTests
         completed.SentActivityId.ShouldStartWith("nyx-relay-stream:");
     }
 
-    private static LlmReplyStreamChunkEvent CreateCardStreamChunk(string correlationId, string replyMessageId, string accumulatedText) =>
+    private static LlmReplyCardStreamChunkEvent CreateCardStreamChunk(string correlationId, string replyMessageId, string accumulatedText) =>
         new()
         {
             CorrelationId = correlationId,
@@ -1812,7 +1812,6 @@ public sealed class ConversationGAgentDedupTests
             Activity = CreateRelayActivity(correlationId, replyMessageId),
             AccumulatedText = accumulatedText,
             ChunkAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            CardMode = true,
         };
 
     private sealed class RecordingCardTurnRunner : IConversationCardTurnRunner
@@ -1822,12 +1821,12 @@ public sealed class ConversationGAgentDedupTests
         public int CardFinalizeCount;
         public long LastCardStreamSequence;
 
-        public Func<LlmReplyStreamChunkEvent, ConversationCardCreateResult>? CardCreateResultFactory { get; set; }
-        public Func<LlmReplyStreamChunkEvent, string, string, long, ConversationCardStreamResult>? CardStreamResultFactory { get; set; }
+        public Func<LlmReplyCardStreamChunkEvent, ConversationCardCreateResult>? CardCreateResultFactory { get; set; }
+        public Func<LlmReplyCardStreamChunkEvent, string, string, long, ConversationCardStreamResult>? CardStreamResultFactory { get; set; }
         public Func<ChatActivity, string, string, long, ConversationCardFinalizeResult>? CardFinalizeResultFactory { get; set; }
 
         public Task<ConversationCardCreateResult> RunCardCreateAsync(
-            LlmReplyStreamChunkEvent chunk,
+            LlmReplyCardStreamChunkEvent chunk,
             string streamingElementId,
             ConversationTurnRuntimeContext runtimeContext,
             CancellationToken ct)
@@ -1839,7 +1838,7 @@ public sealed class ConversationGAgentDedupTests
         }
 
         public Task<ConversationCardStreamResult> RunCardStreamAsync(
-            LlmReplyStreamChunkEvent chunk,
+            LlmReplyCardStreamChunkEvent chunk,
             string cardId,
             string elementId,
             long sequence,

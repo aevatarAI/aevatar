@@ -185,7 +185,7 @@ public sealed partial class ConversationGAgent
     /// chunks through edit-message streaming."
     /// </summary>
     private async Task<bool> HandleLarkCardStreamingChunkCoreAsync(
-        LlmReplyStreamChunkEvent evt,
+        LlmReplyCardStreamChunkEvent evt,
         string correlationId)
     {
         var state = GetOrInitLarkCardStreamingState(correlationId);

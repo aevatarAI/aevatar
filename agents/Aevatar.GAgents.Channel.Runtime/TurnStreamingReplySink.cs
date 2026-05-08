@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
@@ -382,15 +383,26 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
 
     private async Task DispatchOneAsync(string text, CancellationToken ct)
     {
-        var chunk = new LlmReplyStreamChunkEvent
-        {
-            CorrelationId = _correlationId,
-            RegistrationId = _registrationId,
-            Activity = _activityTemplate.Clone(),
-            AccumulatedText = text,
-            ChunkAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-            CardMode = _cardMode,
-        };
+        // Card mode dispatches a structurally distinct message type so persistence layers
+        // cannot silently re-route a replayed event back to the card sink. The two proto
+        // types carry identical payloads; the type identity itself signals routing.
+        IMessage chunk = _cardMode
+            ? new LlmReplyCardStreamChunkEvent
+            {
+                CorrelationId = _correlationId,
+                RegistrationId = _registrationId,
+                Activity = _activityTemplate.Clone(),
+                AccumulatedText = text,
+                ChunkAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            }
+            : new LlmReplyStreamChunkEvent
+            {
+                CorrelationId = _correlationId,
+                RegistrationId = _registrationId,
+                Activity = _activityTemplate.Clone(),
+                AccumulatedText = text,
+                ChunkAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            };
         var envelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),

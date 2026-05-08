@@ -35,7 +35,7 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
     }
 
     public async Task<ConversationCardCreateResult> RunCardCreateAsync(
-        LlmReplyStreamChunkEvent chunk,
+        LlmReplyCardStreamChunkEvent chunk,
         string streamingElementId,
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
@@ -171,7 +171,7 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
     }
 
     public async Task<ConversationCardStreamResult> RunCardStreamAsync(
-        LlmReplyStreamChunkEvent chunk,
+        LlmReplyCardStreamChunkEvent chunk,
         string cardId,
         string elementId,
         long sequence,

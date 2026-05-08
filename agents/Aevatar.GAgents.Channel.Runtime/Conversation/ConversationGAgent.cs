@@ -527,10 +527,61 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     /// boundary and the edit ordering is enforced by actor serialization.
     /// </summary>
     [EventHandler]
-    public async Task HandleLlmReplyStreamChunkAsync(LlmReplyStreamChunkEvent evt)
+    public Task HandleLlmReplyStreamChunkAsync(LlmReplyStreamChunkEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        return HandleNyxRelayStreamingChunkCoreAsync(evt);
+    }
+
+    /// <summary>
+    /// CardKit-streaming chunks travel on a structurally distinct proto type so a misbehaving
+    /// persistence layer cannot silently re-route a replayed event back to the card sink. The
+    /// card handler owns Idle / Creating / Streaming / terminal transitions; on
+    /// <c>CreationFailed</c> it returns false and we drop into the legacy text-edit core
+    /// helper so the user still sees a reply for the rest of the turn.
+    /// </summary>
+    [EventHandler]
+    public async Task HandleLlmReplyCardStreamChunkAsync(LlmReplyCardStreamChunkEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
 
+        var correlationId = NormalizeOptional(evt.CorrelationId);
+        if (correlationId is null || evt.Activity is null || string.IsNullOrWhiteSpace(evt.AccumulatedText))
+        {
+            Logger.LogDebug(
+                "Dropping malformed card streaming chunk: correlation={CorrelationId}",
+                evt.CorrelationId);
+            return;
+        }
+
+        if (State.ProcessedCommandIds.Contains(BuildLlmReplyCommandId(evt.CorrelationId)))
+        {
+            // Turn already finalized; drop any late chunk that sneaks in via the actor inbox.
+            return;
+        }
+
+        // Plain `await`: actor turns run on a single-threaded scheduler and the continuation
+        // must observe that context for subsequent state mutations on
+        // `_larkCardStreamingStates` / `_nyxRelayStreamingStates`.
+        if (await HandleLarkCardStreamingChunkCoreAsync(evt, correlationId))
+            return;
+
+        // CardCreation failed (pre-flight or first chunk). Route the rest of the turn through
+        // the legacy text-edit core so the user still gets a reply. Synthesize the equivalent
+        // edit-message chunk from the card-event payload — both proto types carry the same
+        // fields so the projection is loss-less.
+        await HandleNyxRelayStreamingChunkCoreAsync(new LlmReplyStreamChunkEvent
+        {
+            CorrelationId = evt.CorrelationId,
+            RegistrationId = evt.RegistrationId,
+            Activity = evt.Activity?.Clone() ?? new ChatActivity(),
+            AccumulatedText = evt.AccumulatedText,
+            ChunkAtUnixMs = evt.ChunkAtUnixMs,
+        });
+    }
+
+    private async Task HandleNyxRelayStreamingChunkCoreAsync(LlmReplyStreamChunkEvent evt)
+    {
         var correlationId = NormalizeOptional(evt.CorrelationId);
         if (correlationId is null || evt.Activity is null || string.IsNullOrWhiteSpace(evt.AccumulatedText))
         {
@@ -544,20 +595,6 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         {
             // Turn already finalized; drop any late chunk that sneaks in via the actor inbox.
             return;
-        }
-
-        // CardKit-mode chunks go through the card path. The card handler returns false ONLY
-        // when phase is CreationFailed (card create already failed pre-flight or on first
-        // chunk) — in that case the chunk falls through to the legacy text-edit path so the
-        // user still sees a reply. All other phases (Idle/Streaming/terminal) are handled
-        // end-to-end by the card handler.
-        if (evt.CardMode)
-        {
-            // Plain `await`: actor turns run on a single-threaded scheduler and the
-            // continuation must observe that context for subsequent state mutations
-            // on `_larkCardStreamingStates` / `_nyxRelayStreamingStates`.
-            if (await HandleLarkCardStreamingChunkCoreAsync(evt, correlationId))
-                return;
         }
 
         var state = GetOrInitNyxRelayStreamingState(correlationId);

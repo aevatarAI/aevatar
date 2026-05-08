@@ -87,6 +87,14 @@ message LlmReplyReadyEvent {
 // in-memory keyed by `correlation_id`. This event must never be persisted — it is a runtime-only
 // signal.
 message LlmReplyStreamChunkEvent {
+  // Field 6 (`card_mode`) was a runtime-only routing flag that has been promoted to its own
+  // message type (`LlmReplyCardStreamChunkEvent`) so the structural contract of this domain-
+  // event-shaped envelope no longer carries any "should I re-route to a different sink?"
+  // signal. Reserved here so accidental reuse of the field number, or a stale serializer
+  // built before the split, fails loudly instead of silently flipping back to card mode.
+  reserved 6;
+  reserved "card_mode";
+
   string correlation_id = 1;
   string registration_id = 2;
   // Clone of the inbound activity so the actor/turn runner can resolve the platform, conversation,
@@ -95,14 +103,24 @@ message LlmReplyStreamChunkEvent {
   // Current accumulated reply text (not a delta slice). Each chunk supersedes the previous one.
   string accumulated_text = 4;
   int64 chunk_at_unix_ms = 5;
-  // True when dispatched by the card sink (CardKit path) instead of the legacy edit-message
-  // sink. The actor reads this to drive LarkCardStreamingState + IConversationCardTurnRunner
-  // instead of the edit-message path. Like the rest of this message, it is a runtime-only
-  // signal (see the message-level "must never be persisted" note above): persisting and
-  // replaying it would re-trigger card routing on a turn whose card lifecycle has long since
-  // ended, posting a duplicate card. Default false preserves the legacy path on any caller
-  // that has not opted in.
-  bool card_mode = 6;
+}
+
+// Per-delta streaming signal for the Lark CardKit (card-mode) outbound path. Identical
+// payload to LlmReplyStreamChunkEvent, but a separate proto type so the routing decision is
+// structural: there is no boolean a misbehaving persistence layer can flip — the actor's
+// HandleLlmReplyCardStreamChunkAsync handler is reachable only via this type. Like its
+// edit-message sibling, this event is a runtime-only signal and must never be persisted to
+// the event store, projection, or any durable state.
+message LlmReplyCardStreamChunkEvent {
+  string correlation_id = 1;
+  string registration_id = 2;
+  // Clone of the inbound activity so the actor/runner can resolve the platform, conversation,
+  // delivery context, and TransportExtras (NyxUserAccessToken, NyxLarkChatId, NyxLarkUnionId)
+  // without re-reading from durable state.
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 3;
+  // Current accumulated reply text (not a delta slice). Each chunk supersedes the previous one.
+  string accumulated_text = 4;
+  int64 chunk_at_unix_ms = 5;
 }
 
 message DeferredLlmReplyDispatchRequestedEvent {

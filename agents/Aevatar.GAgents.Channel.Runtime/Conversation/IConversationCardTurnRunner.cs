@@ -24,7 +24,7 @@ public interface IConversationCardTurnRunner
     /// <paramref name="streamingElementId"/>. Implicit sequence = 1.
     /// </summary>
     Task<ConversationCardCreateResult> RunCardCreateAsync(
-        LlmReplyStreamChunkEvent chunk,
+        LlmReplyCardStreamChunkEvent chunk,
         string streamingElementId,
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct);
@@ -34,7 +34,7 @@ public interface IConversationCardTurnRunner
     /// pre-incremented by the grain. Lark rejects stale sequences deterministically.
     /// </summary>
     Task<ConversationCardStreamResult> RunCardStreamAsync(
-        LlmReplyStreamChunkEvent chunk,
+        LlmReplyCardStreamChunkEvent chunk,
         string cardId,
         string elementId,
         long sequence,
@@ -182,7 +182,7 @@ public sealed record ConversationCardFinalizeResult(
 public sealed class NullConversationCardTurnRunner : IConversationCardTurnRunner
 {
     public Task<ConversationCardCreateResult> RunCardCreateAsync(
-        LlmReplyStreamChunkEvent chunk,
+        LlmReplyCardStreamChunkEvent chunk,
         string streamingElementId,
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct) =>
@@ -191,7 +191,7 @@ public sealed class NullConversationCardTurnRunner : IConversationCardTurnRunner
             "no IConversationCardTurnRunner registered"));
 
     public Task<ConversationCardStreamResult> RunCardStreamAsync(
-        LlmReplyStreamChunkEvent chunk,
+        LlmReplyCardStreamChunkEvent chunk,
         string cardId,
         string elementId,
         long sequence,
