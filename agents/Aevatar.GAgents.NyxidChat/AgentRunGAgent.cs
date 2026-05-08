@@ -37,6 +37,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
     internal static readonly TimeSpan TerminalCleanupDelay = TimeSpan.FromMinutes(5);
     private const string TerminalCleanupCallbackPrefix = "agent-run-terminal-cleanup";
+    internal static readonly TimeSpan OutputDispatchRetryDelay = TimeSpan.FromSeconds(5);
+    private const string OutputDispatchRetryCallbackPrefix = "agent-run-output-dispatch-retry";
 
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _actorDispatchPort;
@@ -126,13 +128,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         }
         catch (AgentRunOutputDispatchException ex)
         {
-            // The run has not entered a terminal state yet. Leaving it Started lets the
-            // durable dispatcher retry the start command and re-emit the ready/drop signal.
-            _logger.LogWarning(
-                ex,
-                "Agent run output notification was not accepted; run remains retryable: runId={RunId} correlation={CorrelationId}",
-                runId,
-                request.CorrelationId);
+            if (!await TryHandleOutputDispatchFailureAsync(request, runId, ex))
+                throw;
         }
         catch (Exception ex)
         {
@@ -414,11 +411,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             }
             catch (AgentRunOutputDispatchException dispatchEx)
             {
-                _logger.LogWarning(
-                    dispatchEx,
-                    "Unhandled run failure notification was not accepted; run remains retryable: runId={RunId} correlation={CorrelationId}",
-                    runId,
-                    request.CorrelationId);
+                if (!await TryHandleOutputDispatchFailureAsync(request, runId, dispatchEx))
+                    throw;
                 return;
             }
         }
@@ -629,6 +623,56 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         }
     }
 
+    private async Task<bool> TryHandleOutputDispatchFailureAsync(
+        NeedsLlmReplyEvent request,
+        string runId,
+        AgentRunOutputDispatchException ex)
+    {
+        _logger.LogWarning(
+            ex,
+            "Agent run output notification was not accepted; run remains retryable: runId={RunId} correlation={CorrelationId}",
+            runId,
+            request.CorrelationId);
+
+        if (await TryScheduleStartRetryAsync(request, runId))
+            return true;
+
+        _logger.LogWarning(
+            ex,
+            "Agent run output retry could not be scheduled; propagating to runtime retry: runId={RunId} correlation={CorrelationId}",
+            runId,
+            request.CorrelationId);
+        return false;
+    }
+
+    private async Task<bool> TryScheduleStartRetryAsync(NeedsLlmReplyEvent request, string runId)
+    {
+        if (Services.GetService<IActorRuntimeCallbackScheduler>() is null)
+            return false;
+
+        try
+        {
+            await ScheduleSelfDurableTimeoutAsync(
+                BuildOutputDispatchRetryCallbackId(runId),
+                OutputDispatchRetryDelay,
+                new AgentRunStartRequested
+                {
+                    Request = request.Clone(),
+                },
+                ct: CancellationToken.None);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to schedule agent run output retry: runId={RunId} actorId={ActorId}",
+                runId,
+                Id);
+            return false;
+        }
+    }
+
     private async Task ScheduleTerminalCleanupAsync(string runId)
     {
         if (Services.GetService<IActorRuntimeCallbackScheduler>() is null)
@@ -664,6 +708,16 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             .Take(96)
             .ToArray();
         return $"{TerminalCleanupCallbackPrefix}:{new string(chars)}";
+    }
+
+    private static string BuildOutputDispatchRetryCallbackId(string runId)
+    {
+        var normalized = NormalizeOptional(runId) ?? "unknown";
+        var chars = normalized
+            .Select(static ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '_')
+            .Take(96)
+            .ToArray();
+        return $"{OutputDispatchRetryCallbackPrefix}:{new string(chars)}";
     }
 
     private async Task EnsureTargetActorAsync(string targetActorId)

@@ -5,12 +5,14 @@ using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Xunit;
@@ -81,6 +83,41 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleStartAsync_ShouldScheduleTerminalCleanupAfterReplyProduced()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var scheduler = new RecordingCallbackScheduler();
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            new RecordingReplyGenerator(() => false) { ReplyText = "ok" },
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            });
+        AttachScheduler(runtime, scheduler);
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-cleanup-schedule",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-cleanup-schedule",
+        });
+
+        var cleanup = scheduler.Timeouts.Should().ContainSingle(
+            timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunCleanupRequested.Descriptor)).Subject;
+        cleanup.ActorId.Should().Be(runtime.Id);
+        cleanup.DueTime.Should().Be(AgentRunGAgent.TerminalCleanupDelay);
+        var cleanupCommand = cleanup.TriggerEnvelope.Payload.Unpack<AgentRunCleanupRequested>();
+        cleanupCommand.RunId.Should().Be("corr-cleanup-schedule");
+    }
+
+    [Fact]
     public async Task HandleCleanupAsync_ShouldDestroyTerminalRunActor()
     {
         var actor = Substitute.For<IActor>();
@@ -104,7 +141,6 @@ public sealed class AgentRunGAgentTests
             Activity = BuildRelayActivity(),
             ReplyToken = "relay-token-cleanup",
         });
-
         await runtime.HandleCleanupAsync(new AgentRunCleanupRequested
         {
             RunId = "corr-cleanup",
@@ -114,7 +150,7 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
-    public async Task HandleStartAsync_ShouldRetryReadySignal_WhenFirstOutputDispatchIsNotAccepted()
+    public async Task HandleStartAsync_ShouldScheduleRetry_WhenReadySignalIsNotAccepted()
     {
         var actor = Substitute.For<IActor>();
         actor.Id.Returns("actor-1");
@@ -122,6 +158,7 @@ public sealed class AgentRunGAgentTests
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled.Add(call.Arg<EventEnvelope>()));
         var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var scheduler = new RecordingCallbackScheduler();
         var publisher = new DispatchingEventPublisher(actorRuntime)
         {
             FailNextSend = true,
@@ -137,6 +174,7 @@ public sealed class AgentRunGAgentTests
                 StreamingRepliesEnabled = false,
             },
             eventPublisher: publisher);
+        AttachScheduler(runtime, scheduler);
         var request = new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-retry-ready",
@@ -151,11 +189,106 @@ public sealed class AgentRunGAgentTests
         runtime.State.Status.Should().Be(AgentRunStatus.Started);
         handled.Should().BeEmpty();
 
-        await runtime.HandleStartAsync(request.Clone());
+        var retry = scheduler.Timeouts.Should().ContainSingle(
+            timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunStartRequested.Descriptor)).Subject;
+        retry.ActorId.Should().Be(runtime.Id);
+        retry.DueTime.Should().Be(AgentRunGAgent.OutputDispatchRetryDelay);
+        var retryCommand = retry.TriggerEnvelope.Payload.Unpack<AgentRunStartRequested>();
+
+        await runtime.HandleStartAsync(retryCommand);
 
         runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
         replyGenerator.CallCount.Should().Be(2);
         handled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor));
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_ShouldScheduleRetry_WhenDropSignalIsNotAccepted()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var scheduler = new RecordingCallbackScheduler();
+        var publisher = new DispatchingEventPublisher(actorRuntime)
+        {
+            FailNextSend = true,
+        };
+        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "should not run" };
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            },
+            eventPublisher: publisher);
+        AttachScheduler(runtime, scheduler);
+        var request = new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-retry-drop",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+        };
+
+        await runtime.HandleStartAsync(request);
+
+        runtime.State.Status.Should().Be(AgentRunStatus.Started);
+        handled.Should().BeEmpty();
+        replyGenerator.CallCount.Should().Be(0);
+
+        var retryCommand = scheduler.Timeouts.Should().ContainSingle(
+                timeout => timeout.TriggerEnvelope.Payload.Is(AgentRunStartRequested.Descriptor))
+            .Subject.TriggerEnvelope.Payload.Unpack<AgentRunStartRequested>();
+
+        await runtime.HandleStartAsync(retryCommand);
+
+        runtime.State.Status.Should().Be(AgentRunStatus.Dropped);
+        replyGenerator.CallCount.Should().Be(0);
+        handled.Should().ContainSingle(e => e.Payload.Is(DeferredLlmReplyDroppedEvent.Descriptor));
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_ShouldPersistFailed_WhenUnexpectedExceptionFollowsStartedEvent()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        EventEnvelope? handled = null;
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled = call.Arg<EventEnvelope>());
+        var actorRuntime = new FailingOnceGetActorRuntime(("actor-1", actor));
+        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "should not run" };
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            });
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-unexpected",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-unexpected",
+        });
+
+        runtime.State.Status.Should().Be(AgentRunStatus.Failed);
+        runtime.State.ErrorCode.Should().Be("agent_run_unhandled_exception");
+        replyGenerator.CallCount.Should().Be(0);
+        handled.Should().NotBeNull();
+        var ready = handled!.Payload.Unpack<LlmReplyReadyEvent>();
+        ready.TerminalState.Should().Be(LlmReplyTerminalState.Failed);
+        ready.ErrorCode.Should().Be("agent_run_unhandled_exception");
     }
 
     [Fact]
@@ -819,6 +952,13 @@ public sealed class AgentRunGAgentTests
         return agent;
     }
 
+    private static void AttachScheduler(AgentRunGAgent agent, RecordingCallbackScheduler scheduler)
+    {
+        agent.Services = new ServiceCollection()
+            .AddSingleton<IActorRuntimeCallbackScheduler>(scheduler)
+            .BuildServiceProvider();
+    }
+
     private static AgentRunGAgentState InvokeAgentTransition(
         AgentRunGAgent agent,
         AgentRunGAgentState current,
@@ -935,6 +1075,41 @@ public sealed class AgentRunGAgentTests
         }
     }
 
+    private sealed class FailingOnceGetActorRuntime(params (string Id, IActor Actor)[] actors) : IActorRuntime
+    {
+        private readonly DispatchingActorRuntime _inner = new(actors);
+        private bool _failNextGet = true;
+
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+            where TAgent : IAgent =>
+            _inner.CreateAsync<TAgent>(id, ct);
+
+        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default) =>
+            _inner.CreateAsync(agentType, id, ct);
+
+        public Task DestroyAsync(string id, CancellationToken ct = default) =>
+            _inner.DestroyAsync(id, ct);
+
+        public Task<IActor?> GetAsync(string id)
+        {
+            if (_failNextGet)
+            {
+                _failNextGet = false;
+                throw new InvalidOperationException("actor runtime lookup failed");
+            }
+
+            return _inner.GetAsync(id);
+        }
+
+        public Task<bool> ExistsAsync(string id) => _inner.ExistsAsync(id);
+
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) =>
+            _inner.LinkAsync(parentId, childId, ct);
+
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
+            _inner.UnlinkAsync(childId, ct);
+    }
+
     private sealed class StateTransitionEventSourcing<TState>(Func<TState, IMessage, TState> transition)
         : IEventSourcingBehavior<TState>
         where TState : class, IMessage<TState>, new()
@@ -970,6 +1145,53 @@ public sealed class AgentRunGAgentTests
         }
 
         public TState TransitionState(TState current, IMessage evt) => transition(current, evt);
+    }
+
+    private sealed class RecordingCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        public List<RuntimeCallbackTimeoutRequest> Timeouts { get; } = [];
+
+        public List<RuntimeCallbackTimerRequest> Timers { get; } = [];
+
+        public List<RuntimeCallbackLease> Cancelled { get; } = [];
+
+        public List<string> PurgedActorIds { get; } = [];
+
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default)
+        {
+            Timeouts.Add(request);
+            return Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                Timeouts.Count,
+                RuntimeCallbackBackend.InMemory));
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default)
+        {
+            Timers.Add(request);
+            return Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                Timers.Count,
+                RuntimeCallbackBackend.InMemory));
+        }
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default)
+        {
+            Cancelled.Add(lease);
+            return Task.CompletedTask;
+        }
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default)
+        {
+            PurgedActorIds.Add(actorId);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class DispatchingEventPublisher(IActorRuntime actorRuntime) : IEventPublisher
