@@ -293,13 +293,32 @@ public sealed class MEAILLMProvider : ILLMProvider
         var rawMessage = BuildOpenAIAssistantMessage(sourceMessage);
 
         // OpenAI SDK currently exposes no typed reasoning_content property for
-        // assistant history messages. Keep the raw patch isolated here and
-        // pinned by AIComponentCoverageTests before touching SDK versions.
+        // assistant history messages, so we fall back to its experimental Patch
+        // API to inject the field into the serialized payload. The Patch surface
+        // is marked SCME0001 (model serialization may evolve), and the
+        // reasoning_content field name is also undocumented — any future SDK
+        // bump that renames the field, drops Patch, or changes its serializer
+        // shape would silently strip reasoning context from request history.
+        // Wrap the call in try/catch so a wire-format break degrades to "no
+        // reasoning replay" instead of crashing the entire chat call. The
+        // happy-path is covered by an integration assertion in
+        // MEAILLMProviderTests, which fails the build the moment the patch
+        // stops landing in the serialized JSON (the only thing that can
+        // actually verify this round-trip survives an SDK bump).
+        try
+        {
 #pragma warning disable SCME0001
-        rawMessage.Patch.Set("$.reasoning_content"u8, sourceMessage.ReasoningContent);
+            rawMessage.Patch.Set("$.reasoning_content"u8, sourceMessage.ReasoningContent);
 #pragma warning restore SCME0001
-
-        meaiMessage.RawRepresentation = rawMessage;
+            meaiMessage.RawRepresentation = rawMessage;
+        }
+        catch (Exception)
+        {
+            // Reasoning continuity is best-effort; on a SDK contract break we
+            // proceed without it rather than throwing. The source message's
+            // ReasoningContent stays in our own state and can be re-rendered
+            // through other paths if needed.
+        }
     }
 
     private static OpenAIAssistantChatMessage BuildOpenAIAssistantMessage(

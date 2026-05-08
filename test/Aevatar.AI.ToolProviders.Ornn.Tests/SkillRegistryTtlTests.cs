@@ -29,15 +29,35 @@ public sealed class SkillRegistryTtlTests
     [Fact]
     public void TryGet_BeyondTtl_ReturnsFalseSoCallerCanRefetch()
     {
+        // TTL only applies to remote skills (PR #562 review #22) — local skills are
+        // baked in at registration. Use a remoteId here so the entry is SkillSource.Remote,
+        // which is the realistic stale-entry scenario the TTL is designed to catch.
         var time = new FakeTimeProvider(new DateTimeOffset(2026, 5, 7, 12, 0, 0, TimeSpan.Zero));
         var registry = new SkillRegistry(time);
-        registry.Register(MakeSkill("nyxid", instructions: "v1"));
+        registry.Register(MakeSkill("nyxid", instructions: "v1", remoteId: "skill-nyxid"));
 
         time.Advance(TimeSpan.FromMinutes(6));
 
         registry.TryGet("nyxid", out var skill, maxAge: TimeSpan.FromMinutes(5))
-            .Should().BeFalse("stale entries must miss so use_skill drops to the remote fetcher");
+            .Should().BeFalse("stale remote entries must miss so use_skill drops to the remote fetcher");
         skill.Should().BeNull();
+    }
+
+    [Fact]
+    public void TryGet_LocalSkillBeyondTtl_StillFresh()
+    {
+        // PR #562 review #22: local skills are scanned per-process and have no remote
+        // refresh story. They must NOT expire even past a TTL window — otherwise the
+        // first 5-minute window would silently lose them from use_skill.
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 5, 7, 12, 0, 0, TimeSpan.Zero));
+        var registry = new SkillRegistry(time);
+        registry.Register(MakeSkill("translate-local", instructions: "v1"));
+
+        time.Advance(TimeSpan.FromHours(24));
+
+        registry.TryGet("translate-local", out var skill, maxAge: TimeSpan.FromMinutes(5))
+            .Should().BeTrue("local skills are not subject to TTL");
+        skill!.Instructions.Should().Be("v1");
     }
 
     [Fact]
@@ -45,12 +65,12 @@ public sealed class SkillRegistryTtlTests
     {
         var time = new FakeTimeProvider(new DateTimeOffset(2026, 5, 7, 12, 0, 0, TimeSpan.Zero));
         var registry = new SkillRegistry(time);
-        registry.Register(MakeSkill("nyxid", instructions: "v1"));
+        registry.Register(MakeSkill("nyxid", instructions: "v1", remoteId: "skill-nyxid"));
 
         time.Advance(TimeSpan.FromMinutes(6));
         // Simulate UseSkillTool's refetch-on-stale path: fetcher returns a fresher skill,
         // registry replaces the entry with a new FetchedAt at "now".
-        registry.Register(MakeSkill("nyxid", instructions: "v2"));
+        registry.Register(MakeSkill("nyxid", instructions: "v2", remoteId: "skill-nyxid"));
 
         // Within 5 min of the re-register, lookup must hit the new entry.
         time.Advance(TimeSpan.FromMinutes(4));
