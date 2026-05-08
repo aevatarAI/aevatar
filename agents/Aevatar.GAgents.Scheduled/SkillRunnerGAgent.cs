@@ -664,7 +664,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             return
                 $"Lark message delivery rejected (code={larkCode}): {detail}. " +
                 "This agent was created before cross-app union_id ingress existed; " +
-                "delete and recreate it (`/agents` → Delete → `/daily`) to pick up the cross-app safe target.";
+                "delete and recreate it (`/agents` → Delete → recreate) to pick up the cross-app safe target.";
         }
 
         if (larkCode == LarkBotErrorCodes.UserIdCrossTenant)
@@ -677,7 +677,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 $"Lark message delivery rejected (code={larkCode}): {detail}. " +
                 "The outbound Lark app is in a different tenant than the inbound app, so " +
                 "user-id translation is impossible. Delete and recreate the agent " +
-                "(`/agents` → Delete → `/daily`) so the new chat_id-preferred outbound path " +
+                "(`/agents` → Delete → recreate) so the new chat_id-preferred outbound path " +
                 "takes effect, or align the NyxID `s/api-lark-bot` proxy with the channel-bot that " +
                 "received the inbound event.";
         }
@@ -918,7 +918,12 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     /// text from prior context is a fake-success failure mode for them).
     /// </summary>
     internal static bool RequiresProxySuccessByTemplate(string? templateName) =>
-        string.Equals(templateName, "daily", StringComparison.Ordinal);
+        // Reserved for future fetch-and-summarize templates that need the runner-layer
+        // safety net (issue #439). Currently empty: the in-tree daily template was
+        // removed in favor of the Ornn-hosted skill, and no other template needs the
+        // legacy proto-field-16-default backfill. Keep the method so tests + the apply
+        // path don't need to special-case "no templates" — just add new entries here.
+        templateName is not null && false;
 
     private static string NormalizeProviderName(string? providerName) =>
         string.IsNullOrWhiteSpace(providerName) ? SkillRunnerDefaults.DefaultProviderName : providerName.Trim();

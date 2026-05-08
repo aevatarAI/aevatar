@@ -71,8 +71,8 @@ public sealed class UserAgentCatalogCompatibilityTests
                 Entry = new UserAgentCatalogEntry
                 {
                     AgentId = "agent-compat-2",
-                    AgentType = WorkflowAgentDefaults.AgentType,
-                    TemplateName = WorkflowAgentDefaults.TemplateName,
+                    AgentType = SkillRunnerDefaults.AgentType,
+                    TemplateName = "legacy-template",
                 },
             });
 
@@ -89,7 +89,7 @@ public sealed class UserAgentCatalogCompatibilityTests
 
         next.Entries.Should().ContainSingle(x =>
             x.AgentId == "agent-compat-2" &&
-            x.TemplateName == WorkflowAgentDefaults.TemplateName);
+            x.TemplateName == "legacy-template");
     }
 
     [Fact]

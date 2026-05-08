@@ -332,26 +332,20 @@ public class SkillRunnerToolFailureSafetyNetTests
         act.Should().NotThrow();
     }
 
-    // ─── Legacy actor default (PR #569 review) ───
+    // ─── Legacy actor default ───
 
     [Theory]
-    [InlineData("daily", true)]
-    [InlineData("DAILY_REPORT", false)]   // case-sensitive: only the canonical name opts in
-    [InlineData("social_media", false)]   // workflow template — no nyxid_proxy fanout
-    [InlineData("future_pure_llm", false)]
-    [InlineData("", false)]
-    [InlineData(null, false)]
-    public void RequiresProxySuccessByTemplate_DerivesDefaultFromTemplateName(
-        string? templateName, bool expected)
+    [InlineData("daily")]
+    [InlineData("future_pure_llm")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void RequiresProxySuccessByTemplate_AlwaysReturnsFalse(string? templateName)
     {
-        // Closes the gap flagged on PR #569 (codex P1 + eanzhao on SkillRunnerGAgent.cs:834):
-        // actors created before proto field 16 existed replay an init event whose
-        // RequiresNyxidProxySuccess deserializes as false. Without a template-derived default,
-        // those actors keep the pre-#439 zero-tool-call fake-success behavior even after this
-        // fix ships, so production behavior would depend on creation time rather than
-        // template semantics. ApplyInitialized ORs the explicit flag with this helper, so a
-        // legacy daily actor that replays today is gated by the safety net on activation.
-        SkillRunnerGAgent.RequiresProxySuccessByTemplate(templateName).Should().Be(expected);
+        // Issue #598: with /daily migrated to Ornn, no template name carries an auto-opt-in
+        // semantic anymore. Skills now own their own success criteria; the legacy
+        // template-name-derived default is reserved for future templates and currently
+        // returns false for every input.
+        SkillRunnerGAgent.RequiresProxySuccessByTemplate(templateName).Should().BeFalse();
     }
 
     [Fact]

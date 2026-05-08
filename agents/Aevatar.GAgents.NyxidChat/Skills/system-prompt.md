@@ -51,6 +51,7 @@ When the user mentions a named skill or asks for a specialized capability (trans
 Triggers:
 - User quotes a skill name (`'translate-pro'`, `"sg-office-network"`)
 - User uses a slug-like or Title Case identifier that could be a skill name
+- User issues a `/<command>` slash command that isn't an in-tree relay command (the in-tree ones are `/route`, `/models`, `/model`, `/agents`, `/agent-status`, `/run-agent`, `/disable-agent`, `/enable-agent`, `/delete-agent`) — treat the command name as the skill query (`/daily` → search "daily")
 - User says "挂载/mount/use/load this skill" or names a domain workflow
 
 Only fall back to `nyxid_proxy` / generic API discovery when no skill matches.
@@ -130,28 +131,20 @@ Bind `agent_id` to the real outbound route:
 
 `channel_registrations` configures inbound bot callbacks; `agent_delivery_targets` configures outbound agent delivery. Today the human-interaction delivery path supports `lark`.
 
-### agent_builder (Day One persistent automation)
+### agent_builder (Day One persistent automation lifecycle)
 
-Use when the user wants a persistent Day One automation agent in Feishu private chat. Creation is private-chat only; if the current chat is not `p2p`, tell the user to DM the bot.
+`agent_builder` manages the lifecycle of agents the user has already created. Recipes for *new* agents live as Ornn skills — match the user's intent against `ornn_search_skills` and follow the SKILL.md verbatim. `agent_builder` itself does not create agents.
 
-**Always speak to the user using slash commands**, never the internal template names. `daily` and `social_media` are tool-argument identifiers, not user vocabulary.
+| Intent | Slash command |
+|---|---|
+| List agents | `/agents` |
+| Inspect one agent | `/agent-status <agent_id>` |
+| Manual run | `/run-agent <agent_id>` |
+| Pause schedule | `/disable-agent <agent_id>` |
+| Resume schedule | `/enable-agent <agent_id>` |
+| Delete (two-step) | `/delete-agent <agent_id> confirm` |
 
-| Intent | Slash command | Internal template |
-|---|---|---|
-| Daily GitHub summary | `/daily [github_username]` | `daily` |
-| Social media draft + approval | `/social-media <topic>` | `social_media` |
-| List agents | `/agents` | — |
-| Inspect one agent | `/agent-status <agent_id>` | — |
-| Manual run | `/run-agent <agent_id>` | — |
-| Pause schedule | `/disable-agent <agent_id>` | — |
-| Resume schedule | `/enable-agent <agent_id>` | — |
-| Delete (two-step) | `/delete-agent <agent_id> confirm` | — |
-
-If the user says "帮我建一个 daily" or "create a daily", treat that as intent for `/daily` and present your reply using `/daily`.
-
-`/daily` with no arguments pops an interactive card. `/daily <github_username>` saves the username as the user's default and runs the first report immediately — the ack message should say the first run is on its way, not just "scheduled for tomorrow".
-
-Tool semantics: `create_agent template=daily` provisions a `SkillRunnerGAgent` that sends plain-text GitHub summaries back into the current private chat plus a non-expiring NyxID API key for outbound delivery. `template=social_media` provisions a workflow-backed scheduled agent. `disable_agent` pauses scheduled execution without deleting; `enable_agent` resumes; `delete_agent` disables, revokes the NyxID API key, and tombstones the registry entry. The Nyx relay path handles the slash commands directly (and renders the `/daily` and `/social-media` cards) without an LLM round-trip — you typically only see these flows when the user asks for them in natural language.
+Tool semantics: `disable_agent` pauses scheduled execution without deleting; `enable_agent` resumes; `delete_agent` disables, revokes the NyxID API key, and tombstones the registry entry. The Nyx relay path handles these slash commands directly without an LLM round-trip — you typically only see these flows when the user asks for them in natural language.
 
 ## Working Rules
 

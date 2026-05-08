@@ -1,4 +1,3 @@
-using System.Net;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -7,12 +6,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
-using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Scheduled;
-using Aevatar.Studio.Application.Studio.Abstractions;
-using Aevatar.Workflow.Application.Abstractions.Runs;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -22,10 +16,6 @@ public sealed class AgentBuilderTool : IAgentTool
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<AgentBuilderTool>? _logger;
-    // Per-instance polling budget for actor -> projector -> document store
-    // propagation. Defaults to ProjectionWaitDefaults (15 s); tests inject
-    // shrunk values via the constructor instead of mutating a process-global,
-    // which would race other tests if the test surface ever parallelizes.
     private readonly int _projectionWaitAttempts;
     private readonly int _projectionWaitDelayMilliseconds;
 
@@ -44,8 +34,9 @@ public sealed class AgentBuilderTool : IAgentTool
     public string Name => "agent_builder";
 
     public string Description =>
-        "Create and manage persistent user-facing automation agents for the current channel context. " +
-        "Actions: list_templates, create_agent, list_agents, agent_status, run_agent, disable_agent, enable_agent, delete_agent.";
+        "List and manage the caller's persistent automation agents. " +
+        "Actions: list_agents, agent_status, run_agent, disable_agent, enable_agent, delete_agent. " +
+        "Agent creation is not handled here — recipes for new agents live as Ornn skills.";
 
     // Note (issue #466): no `owner_nyx_user_id` parameter is exposed. The tool always
     // operates on the caller's own agents; the resolver derives ownership from the
@@ -58,73 +49,22 @@ public sealed class AgentBuilderTool : IAgentTool
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list_templates", "create_agent", "list_agents", "agent_status", "run_agent", "disable_agent", "enable_agent", "delete_agent"]
-            },
-            "template": {
-              "type": "string",
-              "description": "Template name, currently supports daily and social_media"
+              "enum": ["list_agents", "agent_status", "run_agent", "disable_agent", "enable_agent", "delete_agent"]
             },
             "agent_id": {
               "type": "string",
-              "description": "Optional stable actor ID. Auto-generated when omitted."
-            },
-            "github_username": {
-              "type": "string",
-              "description": "GitHub username for the daily template"
-            },
-            "save_github_username_preference": {
-              "type": "boolean",
-              "description": "When true, save github_username as the owner-scoped default preference after a successful daily creation"
-            },
-            "topic": {
-              "type": "string",
-              "description": "Primary topic or campaign focus for the social_media template"
-            },
-            "audience": {
-              "type": "string",
-              "description": "Optional audience descriptor for the social_media template"
-            },
-            "style": {
-              "type": "string",
-              "description": "Optional tone/style instruction for the social_media template"
-            },
-            "repositories": {
-              "type": "string",
-              "description": "Optional comma-separated repositories to prioritize"
-            },
-            "schedule_cron": {
-              "type": "string",
-              "description": "Cron expression for future executions"
-            },
-            "schedule_timezone": {
-              "type": "string",
-              "description": "IANA or system timezone ID (default: UTC)"
-            },
-            "conversation_id": {
-              "type": "string",
-              "description": "Override outbound conversation/chat ID. Defaults to current channel context."
-            },
-            "nyx_provider_slug": {
-              "type": "string",
-              "description": "Outbound Nyx proxy slug (default: api-lark-bot)"
-            },
-            "publish_provider_slug": {
-              "type": "string",
-              "description": "Optional Nyx proxy slug used to publish approved content (default: api-twitter for the social_media template)"
-            },
-            "run_immediately": {
-              "type": "boolean",
-              "description": "When true, trigger one execution right after creation"
+              "description": "Stable actor ID. Required for every action except list_agents."
             },
             "confirm": {
               "type": "boolean",
-              "description": "Must be true to execute delete_agent"
+              "description": "Must be true to execute delete_agent."
             },
             "revision_feedback": {
               "type": "string",
-              "description": "Optional revision guidance to include in the next workflow-backed run"
+              "description": "Optional revision guidance to include in the next run."
             }
-          }
+          },
+          "required": ["action"]
         }
         """;
 
@@ -138,18 +78,13 @@ public sealed class AgentBuilderTool : IAgentTool
         if (args.HasParseError)
             return JsonSerializer.Serialize(new { error = args.ParseError });
 
-        var action = args.Str("action", "list_templates");
-        if (string.Equals(action, "list_templates", StringComparison.Ordinal))
-            return JsonSerializer.Serialize(new { templates = AgentBuilderTemplates.ListTemplates() });
-
         var queryPort = _serviceProvider.GetService<IUserAgentCatalogQueryPort>();
         var nyxClient = _serviceProvider.GetService<NyxIdApiClient>();
         var skillRunnerPort = _serviceProvider.GetService<ISkillRunnerCommandPort>();
-        var workflowAgentPort = _serviceProvider.GetService<IWorkflowAgentCommandPort>();
         var catalogCommandPort = _serviceProvider.GetService<IUserAgentCatalogCommandPort>();
         var callerScopeResolver = _serviceProvider.GetService<ICallerScopeResolver>();
         if (queryPort is null || nyxClient is null ||
-            skillRunnerPort is null || workflowAgentPort is null || catalogCommandPort is null ||
+            skillRunnerPort is null || catalogCommandPort is null ||
             callerScopeResolver is null)
         {
             return """{"error":"Agent builder runtime not available. Required services are not registered in DI."}""";
@@ -172,404 +107,17 @@ public sealed class AgentBuilderTool : IAgentTool
             });
         }
 
+        var action = args.Str("action", "list_agents");
         return action switch
         {
-            "create_agent" => await CreateAgentAsync(args, queryPort, skillRunnerPort, workflowAgentPort, nyxClient, token, caller, ct),
             "list_agents" => await ListAgentsAsync(queryPort, caller, ct),
             "agent_status" => await GetAgentStatusAsync(args, queryPort, caller, ct),
-            "run_agent" => await RunAgentAsync(args, queryPort, skillRunnerPort, workflowAgentPort, caller, ct),
-            "disable_agent" => await DisableAgentAsync(args, queryPort, skillRunnerPort, workflowAgentPort, caller, ct),
-            "enable_agent" => await EnableAgentAsync(args, queryPort, skillRunnerPort, workflowAgentPort, caller, ct),
-            "delete_agent" => await DeleteAgentAsync(args, queryPort, catalogCommandPort, skillRunnerPort, workflowAgentPort, nyxClient, token, caller, ct),
+            "run_agent" => await RunAgentAsync(args, queryPort, skillRunnerPort, caller, ct),
+            "disable_agent" => await DisableAgentAsync(args, queryPort, skillRunnerPort, caller, ct),
+            "enable_agent" => await EnableAgentAsync(args, queryPort, skillRunnerPort, caller, ct),
+            "delete_agent" => await DeleteAgentAsync(args, queryPort, catalogCommandPort, skillRunnerPort, nyxClient, token, caller, ct),
             _ => JsonSerializer.Serialize(new { error = $"Unsupported action '{action}'" }),
         };
-    }
-
-    private async Task<string> CreateAgentAsync(
-        BuilderArgs args,
-        IUserAgentCatalogQueryPort queryPort,
-        ISkillRunnerCommandPort skillRunnerPort,
-        IWorkflowAgentCommandPort workflowAgentPort,
-        NyxIdApiClient nyxClient,
-        string token,
-        OwnerScope caller,
-        CancellationToken ct)
-    {
-        var chatType = AgentToolRequestContext.TryGet(ChannelMetadataKeys.ChatType);
-        if (!string.IsNullOrWhiteSpace(chatType) &&
-            !string.Equals(chatType, "p2p", StringComparison.OrdinalIgnoreCase))
-        {
-            return """{"error":"Day One agent creation only supports private chat (chat_type=p2p)."}""";
-        }
-
-        var template = (args.Str("template") ?? string.Empty).Trim();
-        return template.ToLowerInvariant() switch
-        {
-            "daily" => await CreateDailyAgentAsync(args, queryPort, skillRunnerPort, nyxClient, token, caller, ct),
-            "social_media" => await CreateSocialMediaAgentAsync(args, queryPort, workflowAgentPort, nyxClient, token, caller, ct),
-            _ => JsonSerializer.Serialize(new { error = $"Unsupported template '{template}'. Supported templates: daily, social_media." }),
-        };
-    }
-
-    private async Task<string> CreateDailyAgentAsync(
-        BuilderArgs args,
-        IUserAgentCatalogQueryPort queryPort,
-        ISkillRunnerCommandPort skillRunnerPort,
-        NyxIdApiClient nyxClient,
-        string token,
-        OwnerScope caller,
-        CancellationToken ct)
-    {
-        var rawScopeId = NormalizeOptional(AgentToolRequestContext.TryGet(ChannelMetadataKeys.RegistrationScopeId));
-        var configScopeId = NormalizeScopeId(rawScopeId);
-        // Bot's RegistrationScopeId is per-NyxID-account (one bot = one scope), so multiple
-        // Lark users sharing one bot would otherwise share a single UserConfigGAgent and
-        // overwrite each other's saved github_username (issue #436). Compose a per-end-user
-        // scope from the channel sender for personal-preference reads/writes only;
-        // SkillRunner.ScopeId stays bot-scoped for downstream NyxID-tenant tools.
-        var userConfigScopeId = ChannelUserConfigScope.FromMetadata(AgentToolRequestContext.CurrentMetadata);
-        var githubUsernameResolution = await ResolveDailyGithubUsernameAsync(
-            args,
-            nyxClient,
-            token,
-            userConfigScopeId,
-            ct);
-        if (githubUsernameResolution.ErrorResponse is not null)
-            return githubUsernameResolution.ErrorResponse;
-
-        if (!AgentBuilderTemplates.TryBuildDailySpec(
-                githubUsernameResolution.GithubUsername ?? string.Empty,
-                args.Str("repositories"),
-                out var templateSpec,
-                out var templateError))
-        {
-            return JsonSerializer.Serialize(new { error = templateError });
-        }
-
-        var scheduleCron = args.Str("schedule_cron");
-        if (string.IsNullOrWhiteSpace(scheduleCron))
-            return """{"error":"schedule_cron is required for create_agent"}""";
-
-        var scheduleTimezone = args.Str("schedule_timezone") ?? SkillRunnerDefaults.DefaultTimezone;
-        if (!ChannelScheduleCalculator.TryGetNextOccurrence(scheduleCron, scheduleTimezone, DateTimeOffset.UtcNow, out var nextRunAtUtc, out var cronError))
-            return JsonSerializer.Serialize(new { error = $"Invalid schedule: {cronError}" });
-
-        var conversationId = args.Str("conversation_id")
-            ?? AgentToolRequestContext.TryGet(ChannelMetadataKeys.ConversationId);
-        if (string.IsNullOrWhiteSpace(conversationId))
-            return """{"error":"conversation_id is required when no current channel conversation is available"}""";
-
-        var ownerNyxUserId = caller.NyxUserId;
-
-        var gitHubAuthorizationResponse = await BuildGitHubAuthorizationResponseAsync(
-            nyxClient,
-            token,
-            ct,
-            submittedGithubUsername: githubUsernameResolution.GithubUsername);
-        if (!string.IsNullOrWhiteSpace(gitHubAuthorizationResponse))
-            return gitHubAuthorizationResponse;
-
-        var providerSlug = (args.Str("nyx_provider_slug") ?? "api-lark-bot").Trim();
-        var serviceResolution = await ResolveProxyServiceIdsAsync(nyxClient, token, templateSpec!.RequiredServiceSlugs, ct);
-        if (serviceResolution.ErrorJson != null)
-            return serviceResolution.ErrorJson;
-
-        // Issue #423 §C — capture the inbound channel-bot slug as a failure-notification
-        // fallback. By definition the user can be reached through the bot they just
-        // messaged, so when a primary outbound delivery is rejected (e.g. cross-tenant
-        // Lark `99992364`) the failure-notification message can still land if the agent's
-        // API key is allowed to route through the inbound bot. Optional: if the inbound
-        // slug is not registered as a per-user UserService row (or equals the primary,
-        // in which case the fallback would just hit the same proxy), we leave the field
-        // empty and TrySendFailureAsync degrades to the current single-attempt behavior.
-        var failureNotificationContext = ResolveFailureNotificationContext(
-            providerSlug,
-            serviceResolution.RequiredIds!,
-            serviceResolution.EligibleIdBySlug);
-
-        var agentId = string.IsNullOrWhiteSpace(args.Str("agent_id"))
-            ? SkillRunnerDefaults.GenerateActorId()
-            : args.Str("agent_id")!.Trim();
-
-        var createKeyResponse = await nyxClient.CreateApiKeyAsync(
-            token,
-            BuildCreateApiKeyPayload(agentId, failureNotificationContext.AllowedServiceIds),
-            ct);
-
-        if (IsErrorPayload(createKeyResponse))
-            return createKeyResponse;
-
-        if (!TryParseApiKeyCreateResponse(createKeyResponse, out var apiKeyId, out var apiKeyValue, out var apiKeyError))
-            return JsonSerializer.Serialize(new { error = apiKeyError });
-
-        // Issue aevatarAI/aevatar#411 / #417 follow-up: catch in-flight GitHub-side issues.
-        // The earlier `BuildGitHubAuthorizationResponseAsync` check covers the "no provider
-        // token at all" case; this preflight catches misconfigurations that only surface at
-        // request time (the original case under #421 was a missing `User-Agent` header that
-        // GitHub rejects with 403; OAuth grant revocation is the other one).
-        //
-        // PR #418 review r3141846175: revoke the freshly-minted key on preflight failure so
-        // each `/daily` retry doesn't leave another orphan proxy-scoped key behind in the
-        // user's NyxID account. The revoke is best-effort cleanup, not a safety claim about
-        // the key's correctness.
-        var preflight = await PreflightGitHubProxyAsync(
-            nyxClient,
-            apiKeyValue!,
-            githubUsernameResolution.GithubUsername ?? string.Empty,
-            templateSpec!.Repositories,
-            providerSlug,
-            ct);
-        if (preflight is not null)
-        {
-            await BestEffortRevokeApiKeyAsync(nyxClient, token, apiKeyId!, "github_preflight_failed", ct);
-            return preflight;
-        }
-
-        // Pre-create version baseline. Use the caller-scoped version probe — for an agent
-        // the caller is about to own (not yet existing), the probe returns null so
-        // versionBefore stays at -1, which is what the create-confirmation wait expects.
-        var versionBefore = await queryPort.GetStateVersionForCallerAsync(agentId, caller, ct) ?? -1;
-
-        var deliveryTarget = ResolveDeliveryTarget(conversationId, agentId);
-#pragma warning disable CS0612 // legacy fields written for rollback safety during owner_scope migration
-        var outboundConfig = new SkillRunnerOutboundConfig
-        {
-            ConversationId = conversationId.Trim(),
-            NyxProviderSlug = providerSlug,
-            NyxApiKey = apiKeyValue!,
-            OwnerNyxUserId = ownerNyxUserId!,
-            Platform = caller.Platform,
-            ApiKeyId = apiKeyId!,
-            LarkReceiveId = deliveryTarget.Primary.ReceiveId,
-            LarkReceiveIdType = deliveryTarget.Primary.ReceiveIdType,
-            LarkReceiveIdFallback = deliveryTarget.Fallback?.ReceiveId ?? string.Empty,
-            LarkReceiveIdTypeFallback = deliveryTarget.Fallback?.ReceiveIdType ?? string.Empty,
-            OwnerScope = caller.Clone(),
-            FailureNotificationProviderSlug = failureNotificationContext.FailureSlug ?? string.Empty,
-        };
-#pragma warning restore CS0612
-
-        var initialize = new InitializeSkillRunnerCommand
-        {
-            SkillName = templateSpec.SkillName,
-            TemplateName = templateSpec.TemplateName,
-            SkillContent = templateSpec.SkillContent,
-            ExecutionPrompt = templateSpec.ExecutionPrompt,
-            ScheduleCron = scheduleCron.Trim(),
-            ScheduleTimezone = scheduleTimezone.Trim(),
-            Enabled = true,
-            ScopeId = configScopeId,
-            ProviderName = SkillRunnerDefaults.DefaultProviderName,
-            MaxToolRounds = SkillRunnerDefaults.DefaultMaxToolRounds,
-            MaxHistoryMessages = SkillRunnerDefaults.DefaultMaxHistoryMessages,
-            OutboundConfig = outboundConfig,
-            RequiresNyxidProxySuccess = templateSpec.RequiresNyxidProxySuccess,
-        };
-
-        var runImmediatelyRequested = args.Bool("run_immediately") == true;
-        await skillRunnerPort.InitializeAsync(agentId, initialize, runImmediatelyRequested, ct);
-
-        var confirmed = await WaitForCreatedAgentAsync(
-            queryPort,
-            agentId,
-            caller,
-            versionBefore,
-            entry => string.Equals(entry.AgentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal) &&
-                     string.Equals(entry.TemplateName, templateSpec.TemplateName, StringComparison.Ordinal),
-            ct,
-            maxAttempts: runImmediatelyRequested ? 20 : 10);
-
-        var savePreferenceRequested = args.Bool("save_github_username_preference") == true;
-        var preferenceSaved = await SaveGithubUsernamePreferenceIfRequestedAsync(
-            userConfigScopeId,
-            githubUsernameResolution.GithubUsername ?? string.Empty,
-            savePreferenceRequested,
-            ct);
-
-        return JsonSerializer.Serialize(new
-        {
-            status = confirmed ? "created" : "accepted",
-            agent_id = agentId,
-            agent_type = SkillRunnerDefaults.AgentType,
-            template = templateSpec.TemplateName,
-            github_username = githubUsernameResolution.GithubUsername,
-            github_username_preference_saved = preferenceSaved,
-            run_immediately_requested = runImmediatelyRequested,
-            next_scheduled_run = nextRunAtUtc,
-            conversation_id = conversationId,
-            api_key_id = apiKeyId,
-            note = confirmed ? "" : "Agent initialization accepted but registry projection is not yet confirmed.",
-        });
-    }
-
-    private async Task<string> CreateSocialMediaAgentAsync(
-        BuilderArgs args,
-        IUserAgentCatalogQueryPort queryPort,
-        IWorkflowAgentCommandPort workflowAgentPort,
-        NyxIdApiClient nyxClient,
-        string token,
-        OwnerScope caller,
-        CancellationToken ct)
-    {
-        var scopeId = AgentToolRequestContext.TryGet(ChannelMetadataKeys.RegistrationScopeId);
-        if (string.IsNullOrWhiteSpace(scopeId))
-            return """{"error":"scope_id is required for the social_media template"}""";
-
-        var workflowCommandPort = _serviceProvider.GetService<IScopeWorkflowCommandPort>();
-        if (workflowCommandPort is null)
-            return """{"error":"Scope workflow command port is not registered."}""";
-
-        var scheduleCron = args.Str("schedule_cron");
-        if (string.IsNullOrWhiteSpace(scheduleCron))
-            return """{"error":"schedule_cron is required for create_agent"}""";
-
-        var scheduleTimezone = args.Str("schedule_timezone") ?? WorkflowAgentDefaults.DefaultTimezone;
-        if (!ChannelScheduleCalculator.TryGetNextOccurrence(scheduleCron, scheduleTimezone, DateTimeOffset.UtcNow, out var nextRunAtUtc, out var cronError))
-            return JsonSerializer.Serialize(new { error = $"Invalid schedule: {cronError}" });
-
-        var conversationId = args.Str("conversation_id")
-            ?? AgentToolRequestContext.TryGet(ChannelMetadataKeys.ConversationId);
-        if (string.IsNullOrWhiteSpace(conversationId))
-            return """{"error":"conversation_id is required when no current channel conversation is available"}""";
-
-        var ownerNyxUserId = caller.NyxUserId;
-
-        var providerSlug = (args.Str("nyx_provider_slug") ?? "api-lark-bot").Trim();
-        // The social_media template now publishes the approved post to Twitter (X) via the
-        // api-twitter NyxID proxy in addition to delivering the approval card via api-lark-bot
-        // (issue #216). Mint the agent api-key with both slugs so a single key carries both
-        // entitlements; without api-twitter here, NyxID's `allowed_service_ids` enforcement
-        // (api_keys.rs / proxy.rs) would 403 every publish call regardless of OAuth scope.
-        var publishProviderSlug = (args.Str("publish_provider_slug") ?? "api-twitter").Trim();
-
-        var agentId = string.IsNullOrWhiteSpace(args.Str("agent_id"))
-            ? WorkflowAgentDefaults.GenerateActorId()
-            : args.Str("agent_id")!.Trim();
-
-        if (!AgentBuilderTemplates.TryBuildSocialMediaSpec(
-                agentId,
-                args.Str("topic") ?? string.Empty,
-                args.Str("audience"),
-                args.Str("style"),
-                providerSlug,
-                publishProviderSlug,
-                out var templateSpec,
-                out var templateError))
-        {
-            return JsonSerializer.Serialize(new { error = templateError });
-        }
-
-        // Resolve service IDs from the spec's authoritative slug list (parity with
-        // daily's TemplateSpec.RequiredServiceSlugs — PR #461 review item #6). Inlined
-        // hardcoded `[providerSlug, publishProviderSlug]` was fine for two slugs but would
-        // drift if a third slug were ever added; route through the spec so the source of
-        // truth lives next to the workflow YAML.
-        var serviceResolution = await ResolveProxyServiceIdsAsync(
-            nyxClient,
-            token,
-            templateSpec!.RequiredServiceSlugs,
-            ct);
-        if (serviceResolution.ErrorJson != null)
-            return serviceResolution.ErrorJson;
-
-        var createKeyResponse = await nyxClient.CreateApiKeyAsync(
-            token,
-            BuildCreateApiKeyPayload(agentId, serviceResolution.RequiredIds!),
-            ct);
-
-        if (IsErrorPayload(createKeyResponse))
-            return createKeyResponse;
-
-        if (!TryParseApiKeyCreateResponse(createKeyResponse, out var apiKeyId, out var apiKeyValue, out var apiKeyError))
-            return JsonSerializer.Serialize(new { error = apiKeyError });
-
-        // Mirror the daily preflight (#411 / #418) for Twitter: the user may not have
-        // connected Twitter at NyxID yet, or may have revoked the OAuth grant at x.com between
-        // connect-time and create-time. Surfacing 401/403 here keeps us from persisting a
-        // social_media agent whose every approved post would fail at publish time. Best-effort
-        // revoke the freshly minted key on failure so retries don't accumulate orphan keys.
-        var preflight = await PreflightTwitterProxyAsync(nyxClient, apiKeyValue!, publishProviderSlug, ct);
-        if (preflight is not null)
-        {
-            await BestEffortRevokeApiKeyAsync(nyxClient, token, apiKeyId!, "twitter_preflight_failed", ct);
-            return preflight;
-        }
-
-        var workflowUpsert = await workflowCommandPort.UpsertAsync(
-            new ScopeWorkflowUpsertRequest(
-                scopeId.Trim(),
-                templateSpec!.WorkflowId,
-                templateSpec.WorkflowYaml,
-                templateSpec.WorkflowName,
-                templateSpec.DisplayName),
-            ct);
-
-        var versionBefore = await queryPort.GetStateVersionForCallerAsync(agentId, caller, ct) ?? -1;
-
-        var deliveryTarget = ResolveDeliveryTarget(conversationId, agentId);
-#pragma warning disable CS0612 // legacy fields written for rollback safety during owner_scope migration
-        var initialize = new InitializeWorkflowAgentCommand
-        {
-            WorkflowId = workflowUpsert.Workflow.WorkflowId,
-            WorkflowName = templateSpec.WorkflowName,
-            WorkflowActorId = workflowUpsert.Workflow.ActorId,
-            ExecutionPrompt = templateSpec.ExecutionPrompt,
-            ScheduleCron = scheduleCron.Trim(),
-            ScheduleTimezone = scheduleTimezone.Trim(),
-            ConversationId = conversationId.Trim(),
-            NyxProviderSlug = providerSlug,
-            NyxApiKey = apiKeyValue!,
-            OwnerNyxUserId = ownerNyxUserId!,
-            Platform = caller.Platform,
-            ApiKeyId = apiKeyId!,
-            Enabled = true,
-            ScopeId = scopeId.Trim(),
-            LarkReceiveId = deliveryTarget.Primary.ReceiveId,
-            LarkReceiveIdType = deliveryTarget.Primary.ReceiveIdType,
-            LarkReceiveIdFallback = deliveryTarget.Fallback?.ReceiveId ?? string.Empty,
-            LarkReceiveIdTypeFallback = deliveryTarget.Fallback?.ReceiveIdType ?? string.Empty,
-            OwnerScope = caller.Clone(),
-        };
-#pragma warning restore CS0612
-
-        // Initialize via the workflow-agent command port; observation lives in
-        // the polling loop below since it crosses actors (Workflow → catalog).
-        // We split run-immediately into a follow-up TriggerAsync so the trigger
-        // fires only after the catalog projection confirms creation.
-        await workflowAgentPort.InitializeAsync(agentId, initialize, runImmediately: false, ct);
-
-        var confirmed = await WaitForCreatedAgentAsync(
-            queryPort,
-            agentId,
-            caller,
-            versionBefore,
-            entry => string.Equals(entry.AgentType, WorkflowAgentDefaults.AgentType, StringComparison.Ordinal) &&
-                     string.Equals(entry.TemplateName, WorkflowAgentDefaults.TemplateName, StringComparison.Ordinal),
-            ct,
-            maxAttempts: args.Bool("run_immediately") == true ? 20 : 10);
-
-        if (args.Bool("run_immediately") == true && confirmed)
-        {
-            await workflowAgentPort.TriggerAsync(agentId, "create_agent", revisionFeedback: null, ct);
-        }
-
-        return JsonSerializer.Serialize(new
-        {
-            status = confirmed ? "created" : "accepted",
-            agent_id = agentId,
-            agent_type = WorkflowAgentDefaults.AgentType,
-            template = WorkflowAgentDefaults.TemplateName,
-            next_scheduled_run = nextRunAtUtc,
-            conversation_id = conversationId,
-            workflow_id = workflowUpsert.Workflow.WorkflowId,
-            workflow_actor_id = workflowUpsert.Workflow.ActorId,
-            api_key_id = apiKeyId,
-            note = confirmed
-                ? string.Empty
-                : args.Bool("run_immediately") == true
-                    ? "Agent initialization accepted but registry projection is not yet confirmed, so the immediate run was not triggered. Use Run Now after the agent appears."
-                    : "Agent initialization accepted but registry projection is not yet confirmed.",
-        });
     }
 
     private async Task<string> ListAgentsAsync(
@@ -578,7 +126,6 @@ public sealed class AgentBuilderTool : IAgentTool
         CancellationToken ct)
     {
         var agents = await QueryAgentsForCallerAsync(queryPort, caller, ct);
-
         return JsonSerializer.Serialize(new { agents, total = agents.Length });
     }
 
@@ -604,7 +151,6 @@ public sealed class AgentBuilderTool : IAgentTool
         IUserAgentCatalogQueryPort queryPort,
         IUserAgentCatalogCommandPort catalogCommandPort,
         ISkillRunnerCommandPort skillRunnerPort,
-        IWorkflowAgentCommandPort workflowAgentPort,
         NyxIdApiClient nyxClient,
         string token,
         OwnerScope caller,
@@ -629,19 +175,15 @@ public sealed class AgentBuilderTool : IAgentTool
             });
         }
 
-        // Disable via the typed lifecycle port (dispatch + projection priming happen there);
-        // skip if the agent type isn't managed.
         var disableResult = await TryDispatchLifecycleAsync(
             entry, "delete_agent", LifecycleAction.Disable, revisionFeedback: null,
-            skillRunnerPort, workflowAgentPort, ct);
+            skillRunnerPort, ct);
         if (disableResult.error != null)
             return disableResult.error;
 
         if (!string.IsNullOrWhiteSpace(entry.ApiKeyId))
             await nyxClient.DeleteApiKeyAsync(token, entry.ApiKeyId, ct);
 
-        // Tombstone via UserAgentCatalogCommandPort; port owns priming +
-        // version observation and returns an honest accepted/observed status.
         var tombstoneResult = await catalogCommandPort.TombstoneAsync(entry.AgentId, ct);
         var deleted = tombstoneResult.Outcome == CatalogCommandOutcome.Observed;
 
@@ -676,7 +218,6 @@ public sealed class AgentBuilderTool : IAgentTool
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
         ISkillRunnerCommandPort skillRunnerPort,
-        IWorkflowAgentCommandPort workflowAgentPort,
         OwnerScope caller,
         CancellationToken ct)
     {
@@ -691,12 +232,11 @@ public sealed class AgentBuilderTool : IAgentTool
         if (!SupportsManagedLifecycle(entry.AgentType))
             return JsonSerializer.Serialize(new { error = $"Agent '{entry.AgentId}' does not support run_agent" });
 
-        if (string.Equals(entry.Status, SkillRunnerDefaults.StatusDisabled, StringComparison.Ordinal) ||
-            string.Equals(entry.Status, WorkflowAgentDefaults.StatusDisabled, StringComparison.Ordinal))
+        if (string.Equals(entry.Status, SkillRunnerDefaults.StatusDisabled, StringComparison.Ordinal))
             return JsonSerializer.Serialize(new { error = $"Agent '{entry.AgentId}' is disabled. Enable it before running." });
 
         var revisionFeedback = NormalizeOptional(args.Str("revision_feedback"));
-        var dispatch = await TryDispatchLifecycleAsync(entry, "run_agent", LifecycleAction.Run, revisionFeedback, skillRunnerPort, workflowAgentPort, ct);
+        var dispatch = await TryDispatchLifecycleAsync(entry, "run_agent", LifecycleAction.Run, revisionFeedback, skillRunnerPort, ct);
         if (dispatch.error != null)
             return dispatch.error;
 
@@ -715,7 +255,6 @@ public sealed class AgentBuilderTool : IAgentTool
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
         ISkillRunnerCommandPort skillRunnerPort,
-        IWorkflowAgentCommandPort workflowAgentPort,
         OwnerScope caller,
         CancellationToken ct)
     {
@@ -723,8 +262,7 @@ public sealed class AgentBuilderTool : IAgentTool
         if (entry.error != null)
             return entry.error;
 
-        if (string.Equals(entry.value!.Status, SkillRunnerDefaults.StatusDisabled, StringComparison.Ordinal) ||
-            string.Equals(entry.value.Status, WorkflowAgentDefaults.StatusDisabled, StringComparison.Ordinal))
+        if (string.Equals(entry.value!.Status, SkillRunnerDefaults.StatusDisabled, StringComparison.Ordinal))
             return SerializeAgentStatus(entry.value, "Agent is already disabled.");
 
         // Capture baseline version BEFORE dispatch so the wait can distinguish
@@ -734,7 +272,7 @@ public sealed class AgentBuilderTool : IAgentTool
         // against a fast projection that already advanced the version.
         var versionBefore = await queryPort.GetStateVersionForCallerAsync(entry.value.AgentId, caller, ct) ?? -1;
 
-        var dispatch = await TryDispatchLifecycleAsync(entry.value, "disable_agent", LifecycleAction.Disable, null, skillRunnerPort, workflowAgentPort, ct);
+        var dispatch = await TryDispatchLifecycleAsync(entry.value, "disable_agent", LifecycleAction.Disable, null, skillRunnerPort, ct);
         if (dispatch.error != null)
             return dispatch.error;
 
@@ -742,10 +280,6 @@ public sealed class AgentBuilderTool : IAgentTool
         if (observation.Confirmed)
             return SerializeAgentStatus(observation.Entry!, "Agent disabled. Scheduling paused.");
 
-        // Dual gate never passed — the disable was dispatched but the read
-        // model has not confirmed the lifecycle change within the wait
-        // budget. Surface the pre-dispatch entry with an honest propagating
-        // note so the caller (LLM/user) does not assume the agent is paused.
         return SerializeAgentStatus(entry.value, "Disable submitted. Run /agent-status in a few seconds to confirm the agent is paused.");
     }
 
@@ -753,7 +287,6 @@ public sealed class AgentBuilderTool : IAgentTool
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
         ISkillRunnerCommandPort skillRunnerPort,
-        IWorkflowAgentCommandPort workflowAgentPort,
         OwnerScope caller,
         CancellationToken ct)
     {
@@ -761,15 +294,12 @@ public sealed class AgentBuilderTool : IAgentTool
         if (entry.error != null)
             return entry.error;
 
-        if (string.Equals(entry.value!.Status, SkillRunnerDefaults.StatusRunning, StringComparison.Ordinal) ||
-            string.Equals(entry.value.Status, WorkflowAgentDefaults.StatusRunning, StringComparison.Ordinal))
+        if (string.Equals(entry.value!.Status, SkillRunnerDefaults.StatusRunning, StringComparison.Ordinal))
             return SerializeAgentStatus(entry.value, "Agent is already enabled.");
 
-        // See DisableAgentAsync for why versionBefore is captured here (before
-        // any dispatch) and not inside WaitForAgentStatusAsync.
         var versionBefore = await queryPort.GetStateVersionForCallerAsync(entry.value.AgentId, caller, ct) ?? -1;
 
-        var dispatch = await TryDispatchLifecycleAsync(entry.value, "enable_agent", LifecycleAction.Enable, null, skillRunnerPort, workflowAgentPort, ct);
+        var dispatch = await TryDispatchLifecycleAsync(entry.value, "enable_agent", LifecycleAction.Enable, null, skillRunnerPort, ct);
         if (dispatch.error != null)
             return dispatch.error;
 
@@ -777,52 +307,7 @@ public sealed class AgentBuilderTool : IAgentTool
         if (observation.Confirmed)
             return SerializeAgentStatus(observation.Entry!, "Agent enabled. Scheduling resumed.");
 
-        // See DisableAgentAsync for the rationale on the un-confirmed branch.
         return SerializeAgentStatus(entry.value, "Enable submitted. Run /agent-status in a few seconds to confirm the agent is running.");
-    }
-
-    /// <summary>
-    /// Builds the JSON body for <c>POST /api/v1/api-keys</c> when the agent-builder mints a
-    /// scoped child key for a new agent. Pins <c>allow_all_services = false</c> alongside the
-    /// resolved <c>allowed_service_ids</c> so the agent's proxy reach is bounded to exactly the
-    /// catalog slugs the template requires.
-    /// </summary>
-    /// <remarks>
-    /// PR #418 review (4175529548): NyxID's <c>CreateApiKeyRequest.allow_all_services</c>
-    /// (<c>backend/src/handlers/api_keys.rs:105</c>) is <c>#[serde(default = "default_true")]</c>,
-    /// and proxy enforcement (<c>backend/src/handlers/proxy.rs:1030</c>) only checks
-    /// <c>allowed_service_ids</c> when <c>!auth_user.allow_all_services</c>. Omitting the field
-    /// means NyxID stores <c>true</c>, the resolved <c>UserService.id</c> list is persisted but
-    /// never consulted, and the key has broad proxy reach across every service the parent token
-    /// can see. Setting <c>false</c> explicitly:
-    /// <list type="bullet">
-    ///   <item>activates the enforcement path #417 was written to satisfy,</item>
-    ///   <item>makes the narrow-scope intent first-class instead of relying on the parent
-    ///   delegation token's setting (which is what surfaced the bug in production), and</item>
-    ///   <item>triggers <c>validate_service_ids</c> at create-time
-    ///   (<c>backend/src/services/key_service.rs:183</c>), so a malformed
-    ///   <c>UserService.id</c> fails fast at <c>POST /api-keys</c> instead of silently passing
-    ///   through and 403'ing on every later proxy call.</item>
-    /// </list>
-    /// <c>allow_all_nodes</c> stays at the NyxID default — this flow does not restrict node
-    /// routing, and pinning it would surface a separate boundary that has nothing to do with
-    /// the agent's service reach.
-    /// </remarks>
-    private static string BuildCreateApiKeyPayload(string agentId, IReadOnlyList<string> requiredServiceIds)
-    {
-        if (requiredServiceIds.Count == 0)
-            throw new InvalidOperationException("requiredServiceIds must not be empty.");
-
-        var payload = new Dictionary<string, object?>
-        {
-            ["name"] = $"aevatar-agent-{agentId}",
-            ["scopes"] = "proxy",
-            ["platform"] = "generic",
-            ["allowed_service_ids"] = requiredServiceIds,
-            ["allow_all_services"] = false,
-        };
-
-        return JsonSerializer.Serialize(payload);
     }
 
     private static string SerializeAgentStatus(UserAgentCatalogEntry entry, string? note = null)
@@ -889,34 +374,6 @@ public sealed class AgentBuilderTool : IAgentTool
         return (entry, null);
     }
 
-    private async Task<bool> WaitForCreatedAgentAsync(
-        IUserAgentCatalogQueryPort queryPort,
-        string agentId,
-        OwnerScope caller,
-        long versionBefore,
-        Func<UserAgentCatalogEntry, bool> predicate,
-        CancellationToken ct,
-        int maxAttempts = 10,
-        int delayMilliseconds = 500)
-    {
-        for (var attempt = 0; attempt < maxAttempts; attempt++)
-        {
-            if (attempt > 0)
-                await Task.Delay(delayMilliseconds, ct);
-
-            var versionAfter = await queryPort.GetStateVersionForCallerAsync(agentId, caller, ct) ?? -1;
-            if (versionAfter <= versionBefore)
-                continue;
-
-            var entry = await queryPort.GetForCallerAsync(agentId, caller, ct);
-            if (entry != null && predicate(entry))
-                return true;
-        }
-
-        return false;
-    }
-
-
     private async Task<(bool Confirmed, UserAgentCatalogEntry? Entry)> WaitForAgentStatusAsync(
         IUserAgentCatalogQueryPort queryPort,
         string agentId,
@@ -925,22 +382,14 @@ public sealed class AgentBuilderTool : IAgentTool
         string expectedStatus,
         CancellationToken ct)
     {
-        // Status + version dual-condition (mirrors WaitForCreatedAgentAsync):
-        // wait until the read model both advances past the caller-captured
-        // baseline AND surfaces the expected status. Status alone is not
-        // enough — a stale replica can hold an expected-looking historical
-        // status (e.g., a previous disable→enable→disable cycle) and pass a
-        // status-only check while the actor has not yet processed *this*
-        // dispatch. Conversely, version alone is not enough either — an
-        // unrelated state event could advance the version without changing
-        // status. Both conditions together pin "this specific lifecycle
-        // event has materialized in the read model". Caller must capture
-        // versionBefore *before* dispatch, otherwise a fast projection that
-        // already advanced the version would make versionAfter == versionBefore
-        // and burn the entire budget. Projection scope priming also happens
-        // in the caller before dispatch (see DisableAgentAsync /
-        // EnableAgentAsync) — a late prime here cannot recover an event the
-        // projector already missed.
+        // Status + version dual-condition: wait until the read model both advances past the
+        // caller-captured baseline AND surfaces the expected status. Status alone is not
+        // enough — a stale replica can hold an expected-looking historical status (e.g., a
+        // previous disable→enable→disable cycle) and pass a status-only check while the
+        // actor has not yet processed *this* dispatch. Conversely, version alone is not
+        // enough either — an unrelated state event could advance the version without
+        // changing status. Both conditions together pin "this specific lifecycle event has
+        // materialized in the read model".
         for (var attempt = 0; attempt < _projectionWaitAttempts; attempt++)
         {
             if (attempt > 0)
@@ -955,11 +404,6 @@ public sealed class AgentBuilderTool : IAgentTool
                 return (Confirmed: true, Entry: entry);
         }
 
-        // Budget exhausted: the dual gate never passed. Do NOT fall back to an
-        // un-gated GetAsync read — that would surface a stale-but-expected-
-        // looking entry and let callers report success despite the contract
-        // not being satisfied. Callers must surface honest "submitted /
-        // propagating" copy when Confirmed is false.
         return (Confirmed: false, Entry: null);
     }
 
@@ -969,1347 +413,38 @@ public sealed class AgentBuilderTool : IAgentTool
         LifecycleAction action,
         string? revisionFeedback,
         ISkillRunnerCommandPort skillRunnerPort,
-        IWorkflowAgentCommandPort workflowAgentPort,
         CancellationToken ct)
     {
-        if (string.Equals(entry.AgentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal))
+        if (!string.Equals(entry.AgentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal))
         {
-            switch (action)
-            {
-                case LifecycleAction.Run:
-                    await skillRunnerPort.TriggerAsync(entry.AgentId, reason, ct);
-                    break;
-                case LifecycleAction.Disable:
-                    await skillRunnerPort.DisableAsync(entry.AgentId, reason, ct);
-                    break;
-                case LifecycleAction.Enable:
-                    await skillRunnerPort.EnableAsync(entry.AgentId, reason, ct);
-                    break;
-                default:
-                    throw new ArgumentOutOfRangeException(nameof(action), action, null);
-            }
-            return (true, null);
+            return (false, JsonSerializer.Serialize(new { error = $"Agent '{entry.AgentId}' does not support {action.ToString().ToLowerInvariant()}." }));
         }
 
-        if (string.Equals(entry.AgentType, WorkflowAgentDefaults.AgentType, StringComparison.Ordinal))
+        switch (action)
         {
-            switch (action)
-            {
-                case LifecycleAction.Run:
-                    await workflowAgentPort.TriggerAsync(entry.AgentId, reason, revisionFeedback?.Trim(), ct);
-                    break;
-                case LifecycleAction.Disable:
-                    await workflowAgentPort.DisableAsync(entry.AgentId, reason, ct);
-                    break;
-                case LifecycleAction.Enable:
-                    await workflowAgentPort.EnableAsync(entry.AgentId, reason, ct);
-                    break;
-                default:
-                    throw new ArgumentOutOfRangeException(nameof(action), action, null);
-            }
-            return (true, null);
+            case LifecycleAction.Run:
+                await skillRunnerPort.TriggerAsync(entry.AgentId, reason, ct);
+                break;
+            case LifecycleAction.Disable:
+                await skillRunnerPort.DisableAsync(entry.AgentId, reason, ct);
+                break;
+            case LifecycleAction.Enable:
+                await skillRunnerPort.EnableAsync(entry.AgentId, reason, ct);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(action), action, null);
         }
-
-        return (false, JsonSerializer.Serialize(new { error = $"Agent '{entry.AgentId}' does not support {action.ToString().ToLowerInvariant()}." }));
+        _ = revisionFeedback; // SkillRunner doesn't accept revision feedback today; reserved for future surfaces.
+        return (true, null);
     }
 
     private static bool SupportsManagedLifecycle(string? agentType) =>
-        string.Equals(agentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal) ||
-        string.Equals(agentType, WorkflowAgentDefaults.AgentType, StringComparison.Ordinal);
-
-    private async Task<string?> ResolveCurrentUserIdAsync(NyxIdApiClient client, string token, CancellationToken ct)
-    {
-        var response = await client.GetCurrentUserAsync(token, ct);
-        if (IsErrorPayload(response))
-            return null;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(response);
-            if (doc.RootElement.TryGetProperty("user", out var user))
-                return ReadString(user, "id", "user_id", "sub");
-
-            return ReadString(doc.RootElement, "id", "user_id", "sub");
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Resolves the per-user <c>UserService.id</c> values that the new agent's API key needs in
-    /// <c>allowed_service_ids</c> to reach each required catalog slug through the NyxID proxy.
-    /// </summary>
-    /// <remarks>
-    /// <para>Issue aevatarAI/aevatar#417. The previous implementation called
-    /// <c>GET /api/v1/proxy/services</c> (the <em>catalog</em> list) and pulled out each row's
-    /// <c>id</c>, which is a <c>DownstreamService.id</c> — a global catalog UUID shared across
-    /// all users. NyxID's proxy enforcement (<c>backend/src/handlers/proxy.rs:1030</c>) checks the
-    /// API key's <c>allowed_service_ids</c> against the per-user <c>UserService.id</c>, not the
-    /// catalog id. The mismatch silently passed at <c>POST /api-keys</c> creation time, then
-    /// surfaced as <c>403 ApiKeyScopeForbidden</c> on every proxy call.</para>
-    /// <para>Why the old code looked correct in development: <c>allow_all_services=true</c>
-    /// short-circuits the enforcement check (NyxID <c>proxy.rs:1030</c>). Session-token-minted
-    /// API keys default to <c>true</c>, so a developer reproducing the create-key + proxy-call
-    /// dance from a CLI never tripped the bug. The agent path mints child keys via the
-    /// channel-relay delegation token; NyxID forces those children to inherit
-    /// <c>allow_all_services=false</c> from the parent, which is when enforcement kicks in.
-    /// The <c>BuildCreateApiKeyPayload</c> change in PR #418 (review 4175529548) makes the
-    /// narrow-scope intent first-class by setting <c>allow_all_services=false</c> explicitly,
-    /// so this resolver's output is consulted regardless of the parent's setting.</para>
-    /// <para>The fix: use <c>GET /api/v1/user-services</c>, which lists this user's
-    /// <c>UserService</c> instances. For each instance the response carries the per-user
-    /// <c>id</c> (what enforcement actually checks) plus <c>slug</c>, <c>is_active</c>, and a
-    /// <c>credential_source</c> envelope. We filter to active rows whose slug matches a required
-    /// slug, and skip org-shared rows the caller cannot use as a proxy target — those would later
-    /// surface as a less-actionable <c>org_role_insufficient</c> error.</para>
-    /// </remarks>
-    /// <summary>
-    /// Result of <see cref="ResolveProxyServiceIdsAsync"/>. <see cref="RequiredIds"/> /
-    /// <see cref="ErrorJson"/> are mutually exclusive (success vs. blocking error). Even on
-    /// success, callers can use <see cref="EligibleIdBySlug"/> to look up <em>optional</em>
-    /// slugs that were not in <c>requiredSlugs</c> — e.g. the inbound channel-bot slug for
-    /// SkillRunner's failure-notification fallback (issue #423 §C). Optional lookups must
-    /// not block agent creation, so they go through this map instead of being added to
-    /// <c>requiredSlugs</c> (which would cause <see cref="ResolveProxyServiceIdsAsync"/> to
-    /// return a <c>service_not_connected</c> error if the slug is missing).
-    /// </summary>
-    private readonly record struct ProxyServiceResolutionResult(
-        IReadOnlyList<string>? RequiredIds,
-        string? ErrorJson,
-        IReadOnlyDictionary<string, string> EligibleIdBySlug);
-
-    private async Task<ProxyServiceResolutionResult> ResolveProxyServiceIdsAsync(
-        NyxIdApiClient client,
-        string token,
-        IReadOnlyList<string> requiredSlugs,
-        CancellationToken ct)
-    {
-        var emptyEligible = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        if (requiredSlugs.Count == 0)
-        {
-            return new ProxyServiceResolutionResult(null, JsonSerializer.Serialize(new
-            {
-                error = "no_required_slugs",
-                hint = "At least one required Nyx proxy service slug must be provided.",
-            }), emptyEligible);
-        }
-
-        var response = await client.ListUserServicesAsync(token, ct);
-        if (IsErrorPayload(response))
-        {
-            return new ProxyServiceResolutionResult(null, JsonSerializer.Serialize(new
-            {
-                error = "user_services_unavailable",
-                hint = "Could not list connected Nyx user-services. Try again or check NyxID availability.",
-            }), emptyEligible);
-        }
-
-        try
-        {
-            using var doc = JsonDocument.Parse(response);
-            // List response shape: { "services": [ {id, slug, is_active, credential_source: {...}}, ... ] }
-            // The catalog response also nests under "services" (and additionally "custom_services"),
-            // so reusing EnumerateProxyServiceItems is safe — but we accept *only* rows that look
-            // like UserService instances by checking presence of `slug`.
-            //
-            // Codex review (PR #418 r3141846173): users with mixed bindings can have multiple
-            // rows for the same slug (e.g. an org-shared `allowed:false` row alongside a personal
-            // active row). NyxID does not guarantee any ordering, so the resolver must keep the
-            // *most eligible* row per slug rather than the first one seen. We track the first
-            // ineligible row anyway so that when no eligible row exists we can still emit a
-            // specific error (`service_inactive` / `service_org_viewer_only`) instead of a
-            // generic miss.
-            var bestBySlug = new Dictionary<string, ServiceResolution>(StringComparer.OrdinalIgnoreCase);
-            foreach (var svc in EnumerateProxyServiceItems(doc.RootElement))
-            {
-                var slug = ReadString(svc, "slug");
-                if (string.IsNullOrWhiteSpace(slug))
-                    continue;
-
-                var id = ReadString(svc, "id");
-                if (string.IsNullOrWhiteSpace(id))
-                    continue;
-
-                var isActive = TryReadBool(svc, "is_active") ?? true;
-                var credentialSource = svc.TryGetProperty("credential_source", out var cs) ? cs : default;
-                var sourceType = credentialSource.ValueKind == JsonValueKind.Object
-                    ? ReadString(credentialSource, "type")
-                    : null;
-                var orgAllowed = credentialSource.ValueKind == JsonValueKind.Object
-                    ? TryReadBool(credentialSource, "allowed")
-                    : null;
-
-                var candidate = new ServiceResolution(
-                    Id: id!,
-                    IsActive: isActive,
-                    CredentialSourceType: sourceType,
-                    OrgAllowed: orgAllowed);
-
-                if (bestBySlug.TryGetValue(slug, out var existing))
-                {
-                    // Already have an eligible row → never downgrade.
-                    if (existing.IsEligible)
-                        continue;
-                    // Existing is ineligible; only replace with another ineligible row if we
-                    // would otherwise lose information. Replace iff candidate is eligible.
-                    if (!candidate.IsEligible)
-                        continue;
-                }
-
-                bestBySlug[slug] = candidate;
-            }
-
-            // Snapshot the eligible (slug → id) map before the per-required-slug check so
-            // callers can look up optional slugs (e.g. inbound channel-bot for failure-
-            // notification fallback) without re-listing user-services. Ineligible rows are
-            // intentionally excluded — including them would let optional lookups silently
-            // pick up an inactive or org-viewer-only service the API key cannot route through.
-            var eligibleBySlug = bestBySlug
-                .Where(static pair => pair.Value.IsEligible)
-                .ToDictionary(
-                    pair => pair.Key,
-                    pair => pair.Value.Id,
-                    StringComparer.OrdinalIgnoreCase);
-
-            var ids = new List<string>(requiredSlugs.Count);
-            foreach (var slug in requiredSlugs.Distinct(StringComparer.OrdinalIgnoreCase))
-            {
-                if (!bestBySlug.TryGetValue(slug, out var resolution))
-                {
-                    return new ProxyServiceResolutionResult(null, JsonSerializer.Serialize(new
-                    {
-                        error = "service_not_connected",
-                        slug,
-                        hint = $"NyxID has no connected user-service for slug `{slug}`. Connect the provider at NyxID before creating this agent.",
-                    }), emptyEligible);
-                }
-
-                if (resolution.IsEligible)
-                {
-                    ids.Add(resolution.Id);
-                    continue;
-                }
-
-                if (string.Equals(resolution.CredentialSourceType, "org", StringComparison.OrdinalIgnoreCase) &&
-                    resolution.OrgAllowed != true)
-                {
-                    return new ProxyServiceResolutionResult(null, JsonSerializer.Serialize(new
-                    {
-                        error = "service_org_viewer_only",
-                        slug,
-                        hint = $"NyxID user-service for slug `{slug}` is shared by your org but your role does not permit using it as a proxy target. Ask an admin to widen the org role scope, or connect a personal credential.",
-                    }), emptyEligible);
-                }
-
-                // Remaining ineligible reason: !is_active.
-                return new ProxyServiceResolutionResult(null, JsonSerializer.Serialize(new
-                {
-                    error = "service_inactive",
-                    slug,
-                    hint = $"NyxID user-service for slug `{slug}` is inactive. Re-activate it at NyxID before creating this agent.",
-                }), emptyEligible);
-            }
-
-            return new ProxyServiceResolutionResult(
-                ids.Distinct(StringComparer.Ordinal).ToArray(),
-                null,
-                eligibleBySlug);
-        }
-        catch (JsonException)
-        {
-            return new ProxyServiceResolutionResult(null, JsonSerializer.Serialize(new
-            {
-                error = "user_services_parse_failed",
-                hint = "NyxID user-services response was not valid JSON.",
-            }), emptyEligible);
-        }
-    }
-
-    private readonly record struct ServiceResolution(
-        string Id,
-        bool IsActive,
-        string? CredentialSourceType,
-        bool? OrgAllowed)
-    {
-        public bool IsEligible =>
-            IsActive &&
-            !(string.Equals(CredentialSourceType, "org", StringComparison.OrdinalIgnoreCase) && OrgAllowed != true);
-    }
-
-    /// <summary>
-    /// Result of resolving the inbound channel-bot fallback used by SkillRunner's
-    /// failure-notification path (issue #423 §C). When the inbound slug is reachable
-    /// (registered + eligible + distinct from the primary), <see cref="FailureSlug"/>
-    /// is set and its corresponding <c>UserService.id</c> is appended to
-    /// <see cref="AllowedServiceIds"/> so the agent's API key can route through it
-    /// at runtime. Otherwise <see cref="FailureSlug"/> is null and the agent
-    /// degrades to the existing single-attempt failure notification.
-    /// </summary>
-    private readonly record struct FailureNotificationContext(
-        string? FailureSlug,
-        IReadOnlyList<string> AllowedServiceIds);
-
-    private FailureNotificationContext ResolveFailureNotificationContext(
-        string primarySlug,
-        IReadOnlyList<string> requiredIds,
-        IReadOnlyDictionary<string, string> eligibleIdBySlug)
-    {
-        var inboundSlug = AgentToolRequestContext.TryGet(ChannelMetadataKeys.InboundChannelBotProxySlug)?.Trim();
-        if (string.IsNullOrWhiteSpace(inboundSlug))
-            return new FailureNotificationContext(null, requiredIds);
-
-        // Same-proxy fallback gives no recovery benefit — a primary rejection at
-        // `slug=X` would also fail at `slug=X`. Skip the capture so TrySendFailureAsync
-        // doesn't pay the wasted POST and doesn't double-log the same rejection.
-        if (string.Equals(inboundSlug, primarySlug, StringComparison.Ordinal))
-            return new FailureNotificationContext(null, requiredIds);
-
-        // Optional slug must be a connected, eligible user-service for the API key to
-        // route through it. If it's not, leaving the failure-notification field empty
-        // keeps the runtime on the existing single-attempt path — better than persisting
-        // a slug whose every send would 403 at proxy enforcement time.
-        if (!eligibleIdBySlug.TryGetValue(inboundSlug, out var inboundId))
-            return new FailureNotificationContext(null, requiredIds);
-
-        // Dedupe — if the inbound slug's UserService.id is already in requiredIds the
-        // expanded list is identical, but we still surface the slug on OutboundConfig so
-        // the runtime knows to use it for failure notifications.
-        var allowed = requiredIds.Contains(inboundId, StringComparer.Ordinal)
-            ? requiredIds
-            : requiredIds.Append(inboundId).ToArray();
-
-        return new FailureNotificationContext(inboundSlug, allowed);
-    }
-
-    private async Task<string?> BuildGitHubAuthorizationResponseAsync(
-        NyxIdApiClient client,
-        string token,
-        CancellationToken ct,
-        bool preferCredentialsRequiredStatus = false,
-        string? submittedGithubUsername = null)
-    {
-        var providerTokensResponse = await client.ListProviderTokensAsync(token, ct);
-        if (IsErrorPayload(providerTokensResponse))
-        {
-            return JsonSerializer.Serialize(new
-            {
-                error = "Could not verify GitHub authorization status from NyxID providers.",
-            });
-        }
-
-        if (HasConnectedGitHubProvider(providerTokensResponse))
-            return null;
-
-        var catalogResponse = await client.GetCatalogEntryAsync(token, "api-github", ct);
-        if (IsErrorPayload(catalogResponse))
-        {
-            return JsonSerializer.Serialize(new
-            {
-                error = "GitHub provider configuration is not available in the NyxID catalog.",
-            });
-        }
-
-        if (!TryParseGitHubCatalogEntry(
-                catalogResponse,
-                out var providerId,
-                out var providerType,
-                out var credentialMode,
-                out var documentationUrl,
-                out var catalogError))
-            return JsonSerializer.Serialize(new { error = catalogError });
-
-        if (!string.Equals(providerType, "oauth2", StringComparison.OrdinalIgnoreCase))
-        {
-            return JsonSerializer.Serialize(new
-            {
-                error = $"GitHub provider requires unsupported connection mode '{providerType ?? "unknown"}'.",
-            });
-        }
-
-        if (string.Equals(credentialMode, "user", StringComparison.OrdinalIgnoreCase))
-        {
-            var credentialsResponse = await client.GetUserCredentialsAsync(token, providerId!, ct);
-            if (IsErrorPayload(credentialsResponse))
-                return credentialsResponse;
-
-            if (!TryParseUserCredentialsStatus(credentialsResponse, out var hasCredentials, out var credentialsError))
-                return JsonSerializer.Serialize(new { error = credentialsError });
-
-            if (!hasCredentials)
-            {
-                return JsonSerializer.Serialize(new
-                {
-                    status = "credentials_required",
-                    template = "daily",
-                    provider = "GitHub",
-                    provider_id = providerId,
-                    documentation_url = documentationUrl,
-                    github_username = submittedGithubUsername,
-                    note = "GitHub in NyxID uses user-managed OAuth app credentials. Set your GitHub OAuth app client_id/client_secret in NyxID first, then submit the daily report form again.",
-                });
-            }
-        }
-
-        var connectResponse = await client.InitiateOAuthConnectAsync(token, providerId!, ct);
-        if (IsErrorPayload(connectResponse))
-        {
-            return JsonSerializer.Serialize(new
-            {
-                error = "Could not initiate GitHub OAuth connect in NyxID.",
-            });
-        }
-
-        if (!TryParseAuthorizationUrl(connectResponse, out var authorizationUrl, out var authError))
-            return JsonSerializer.Serialize(new { error = authError });
-
-        return JsonSerializer.Serialize(new
-        {
-            status = preferCredentialsRequiredStatus ? "credentials_required" : "oauth_required",
-            template = "daily",
-            provider = "GitHub",
-            provider_id = providerId,
-            authorization_url = authorizationUrl,
-            documentation_url = documentationUrl,
-            github_username = submittedGithubUsername,
-            note = preferCredentialsRequiredStatus
-                ? "Connect GitHub in NyxID, then run /daily again."
-                : "Connect GitHub in NyxID, then return to Feishu and submit the daily report form again.",
-        });
-    }
-
-    private async Task<(string? GithubUsername, string? ErrorResponse)> ResolveDailyGithubUsernameAsync(
-        BuilderArgs args,
-        NyxIdApiClient nyxClient,
-        string token,
-        string scopeId,
-        CancellationToken ct)
-    {
-        var explicitGithubUsername = NormalizeOptional(args.Str("github_username"));
-        if (explicitGithubUsername is not null)
-            return (explicitGithubUsername, null);
-
-        var preferredGithubUsername = await TryResolvePreferredGithubUsernameAsync(scopeId, ct);
-        if (preferredGithubUsername is not null)
-            return (preferredGithubUsername, null);
-
-        var derivedGithubUsername = await TryResolveGitHubUsernameFromNyxAsync(nyxClient, token, ct);
-        if (derivedGithubUsername is not null)
-            return (derivedGithubUsername, null);
-
-        var authorizationResponse = await BuildGitHubAuthorizationResponseAsync(
-            nyxClient,
-            token,
-            ct,
-            preferCredentialsRequiredStatus: true);
-        if (authorizationResponse is not null)
-            return (null, authorizationResponse);
-
-        return (null, JsonSerializer.Serialize(new
-        {
-            status = "credentials_required",
-            template = "daily",
-            provider = "GitHub",
-            note = "Could not resolve github_username. Provide github_username explicitly, save a default preference, or reconnect GitHub in NyxID.",
-        }));
-    }
-
-    private static bool TryParseApiKeyCreateResponse(
-        string response,
-        out string? apiKeyId,
-        out string? apiKeyValue,
-        out string? error)
-    {
-        apiKeyId = null;
-        apiKeyValue = null;
-        error = null;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(response);
-            var root = doc.RootElement;
-            apiKeyId = ReadString(root, "id", "api_key_id");
-            apiKeyValue = ReadString(root, "full_key", "api_key", "token");
-
-            if ((string.IsNullOrWhiteSpace(apiKeyId) || string.IsNullOrWhiteSpace(apiKeyValue)) &&
-                root.TryGetProperty("api_key", out var nested))
-            {
-                apiKeyId ??= ReadString(nested, "id", "api_key_id");
-                apiKeyValue ??= ReadString(nested, "full_key", "token", "value");
-            }
-
-            if (string.IsNullOrWhiteSpace(apiKeyId) || string.IsNullOrWhiteSpace(apiKeyValue))
-            {
-                error = "NyxID API key response did not include both id and full_key.";
-                return false;
-            }
-
-            return true;
-        }
-        catch (JsonException ex)
-        {
-            error = ex.Message;
-            return false;
-        }
-    }
-
-    private static bool IsErrorPayload(string payload)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(payload);
-            if (doc.RootElement.ValueKind != JsonValueKind.Object)
-                return false;
-
-            return doc.RootElement.TryGetProperty("error", out var errorProp) &&
-                   errorProp.ValueKind == JsonValueKind.True;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
-
-    private static bool HasConnectedGitHubProvider(string response)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(response);
-            if (!doc.RootElement.TryGetProperty("tokens", out var tokens) || tokens.ValueKind != JsonValueKind.Array)
-                return false;
-
-            foreach (var element in tokens.EnumerateArray())
-            {
-                if (!LooksLikeGitHubProvider(element))
-                    continue;
-
-                return string.Equals(
-                    NormalizeOptional(ReadString(element, "status")),
-                    "active",
-                    StringComparison.OrdinalIgnoreCase);
-            }
-        }
-        catch (JsonException)
-        {
-        }
-
-        return false;
-    }
-
-    private static bool TryParseGitHubCatalogEntry(
-        string response,
-        out string? providerId,
-        out string? providerType,
-        out string? credentialMode,
-        out string? documentationUrl,
-        out string? error)
-    {
-        providerId = null;
-        providerType = null;
-        credentialMode = null;
-        documentationUrl = null;
-        error = null;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(response);
-            providerId = ReadStringDeep(doc.RootElement, 3, "provider_config_id", "provider_id");
-            providerType = ReadStringDeep(doc.RootElement, 3, "provider_type");
-            credentialMode = ReadStringDeep(doc.RootElement, 3, "credential_mode");
-            documentationUrl = ReadStringDeep(doc.RootElement, 3, "documentation_url");
-
-            if (string.IsNullOrWhiteSpace(providerId))
-            {
-                error = "GitHub catalog entry did not include provider_config_id.";
-                return false;
-            }
-
-            return true;
-        }
-        catch (JsonException ex)
-        {
-            error = ex.Message;
-            return false;
-        }
-    }
-
-    private static bool TryParseUserCredentialsStatus(
-        string response,
-        out bool hasCredentials,
-        out string? error)
-    {
-        hasCredentials = false;
-        error = null;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(response);
-            if (doc.RootElement.TryGetProperty("has_credentials", out var property))
-            {
-                if (property.ValueKind == JsonValueKind.True)
-                {
-                    hasCredentials = true;
-                    return true;
-                }
-
-                if (property.ValueKind == JsonValueKind.False)
-                {
-                    hasCredentials = false;
-                    return true;
-                }
-            }
-
-            error = "NyxID user credentials response did not include has_credentials.";
-            return false;
-        }
-        catch (JsonException ex)
-        {
-            error = ex.Message;
-            return false;
-        }
-    }
-
-    private static bool TryParseAuthorizationUrl(
-        string response,
-        out string? authorizationUrl,
-        out string? error)
-    {
-        authorizationUrl = null;
-        error = null;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(response);
-            authorizationUrl = ReadStringDeep(doc.RootElement, 3, "authorization_url", "auth_url", "url");
-            if (string.IsNullOrWhiteSpace(authorizationUrl))
-            {
-                error = "NyxID OAuth connect response did not include an authorization URL.";
-                return false;
-            }
-
-            return true;
-        }
-        catch (JsonException ex)
-        {
-            error = ex.Message;
-            return false;
-        }
-    }
-
-    private async Task<string?> TryResolvePreferredGithubUsernameAsync(string scopeId, CancellationToken ct)
-    {
-        var queryPort = _serviceProvider.GetService<IUserConfigQueryPort>();
-        if (queryPort is null)
-            return null;
-
-        try
-        {
-            var config = await queryPort.GetAsync(scopeId, ct);
-            return NormalizeOptional(config.GithubUsername);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private async Task<string?> TryResolveGitHubUsernameFromNyxAsync(
-        NyxIdApiClient client,
-        string token,
-        CancellationToken ct)
-    {
-        try
-        {
-            var response = await client.ProxyRequestAsync(
-                token,
-                "api-github",
-                "user",
-                "GET",
-                null,
-                null,
-                ct);
-            if (IsErrorPayload(response))
-                return null;
-
-            return TryParseGitHubUserLogin(response, out var login)
-                ? login
-                : null;
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private async Task<bool> SaveGithubUsernamePreferenceIfRequestedAsync(
-        string scopeId,
-        string githubUsername,
-        bool shouldSave,
-        CancellationToken ct)
-    {
-        if (!shouldSave || string.IsNullOrWhiteSpace(githubUsername))
-            return false;
-
-        var commandService = _serviceProvider.GetService<IUserConfigCommandService>();
-        if (commandService is null)
-            return false;
-
-        try
-        {
-            await commandService.SaveGithubUsernameAsync(scopeId, githubUsername, ct);
-            return true;
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static bool TryParseGitHubUserLogin(
-        string response,
-        out string? login)
-    {
-        login = null;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(response);
-            login = NormalizeOptional(ReadStringDeep(doc.RootElement, 2, "login", "username"));
-            return login is not null;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
-
-    private static string? ReadString(JsonElement element, params string[] names)
-    {
-        if (element.ValueKind != JsonValueKind.Object)
-            return null;
-
-        foreach (var name in names)
-        {
-            if (!element.TryGetProperty(name, out var property))
-                continue;
-
-            if (property.ValueKind == JsonValueKind.String)
-                return property.GetString();
-
-            if (property.ValueKind == JsonValueKind.Number)
-                return property.GetRawText();
-        }
-
-        return null;
-    }
-
-    private static string? ReadStringDeep(JsonElement element, int maxDepth, params string[] names)
-    {
-        var direct = ReadString(element, names);
-        if (!string.IsNullOrWhiteSpace(direct) || maxDepth <= 0)
-            return direct;
-
-        if (element.ValueKind == JsonValueKind.Object)
-        {
-            foreach (var property in element.EnumerateObject())
-            {
-                var nested = ReadStringDeep(property.Value, maxDepth - 1, names);
-                if (!string.IsNullOrWhiteSpace(nested))
-                    return nested;
-            }
-        }
-        else if (element.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in element.EnumerateArray())
-            {
-                var nested = ReadStringDeep(item, maxDepth - 1, names);
-                if (!string.IsNullOrWhiteSpace(nested))
-                    return nested;
-            }
-        }
-
-        return null;
-    }
-
-    private static bool LooksLikeGitHubProvider(JsonElement element)
-    {
-        foreach (var value in EnumerateStrings(
-                     ReadStringDeep(element, 2, "provider_name", "name", "display_name", "slug", "provider", "service_slug")))
-        {
-            if (value.Contains("github", StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
-
-        return false;
-    }
-
-    private static IEnumerable<string> EnumerateStrings(params string?[] values)
-    {
-        foreach (var value in values)
-        {
-            if (!string.IsNullOrWhiteSpace(value))
-                yield return value;
-        }
-    }
-
-    private static IEnumerable<JsonElement> EnumerateProxyServiceItems(JsonElement root)
-    {
-        if (root.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in root.EnumerateArray())
-                yield return item;
-            yield break;
-        }
-
-        if (root.ValueKind != JsonValueKind.Object)
-            yield break;
-
-        foreach (var propertyName in new[] { "services", "custom_services", "data" })
-        {
-            if (!root.TryGetProperty(propertyName, out var items) ||
-                items.ValueKind != JsonValueKind.Array)
-            {
-                continue;
-            }
-
-            foreach (var item in items.EnumerateArray())
-                yield return item;
-        }
-    }
-
-    private static string NormalizeScopeId(string? value) =>
-        NormalizeOptional(value) ?? "default";
+        string.Equals(agentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal);
 
     private static string? NormalizeOptional(string? value)
     {
         var normalized = (value ?? string.Empty).Trim();
         return normalized.Length == 0 ? null : normalized;
-    }
-
-    /// <summary>
-    /// Builds the typed Lark delivery target (primary + optional fallback) from the current
-    /// AgentToolRequestContext, and emits a LogDebug breadcrumb when the primary fell back from
-    /// the cross-app safe pair (chat_id / union_id) to the legacy open_id / conversation_id
-    /// path. The primary is what <see cref="LarkConversationTargets.BuildFromInbound"/>
-    /// returns; the fallback (when the primary is a DM chat_id and we also have a union_id at
-    /// ingress) is captured so the runtime can retry once on a Lark
-    /// <c>230002 bot not in chat</c> rejection — the failure mode for cross-app same-tenant
-    /// deployments where the outbound app is not in the inbound DM. Operators correlating Lark
-    /// <c>99992361 open_id cross app</c> rejections need the log line to confirm whether the
-    /// relay surfaced <c>union_id</c> at agent-create time.
-    /// </summary>
-    /// <summary>
-    /// Preflights GitHub proxy access using the newly created agent API key. Three-step probe:
-    /// first <c>/rate_limit</c> (catches token-level OAuth-grant revocation as 401/403), then
-    /// global <c>/search/issues</c> + <c>/search/commits</c> with the bound github_username
-    /// (catches scope insufficiency for global search), then per-repo
-    /// <c>/search/{issues,commits}?q=repo:{owner}/{repo}+author:{username}</c> for every
-    /// repository in the configured allowlist (catches the case where global public search
-    /// works but a specific repo in the allowlist is private and the token lacks <c>repo</c>
-    /// scope — codex review PR #479 r3152148327).
-    ///
-    /// Returns a structured error JSON suitable for returning verbatim from the tool on
-    /// hard-fail shapes; returns <c>null</c> on success or on probe shapes we don't classify
-    /// as "fundamentally broken" (rate limits, 5xx).
-    /// </summary>
-    /// <remarks>
-    /// Issue aevatarAI/aevatar#411 added the original <c>/rate_limit</c> step to fail fast on
-    /// a misdiagnosed root cause (we thought the api-key was missing a GitHub binding). Issue
-    /// #417 fixed that real cause — the api-key now carries the right per-user
-    /// <c>UserService.id</c>s. The probe was retained because the OAuth grant can still be
-    /// revoked outside our control. Issue #474 widens the probe surface to <c>/search/*</c>
-    /// because <c>/rate_limit</c> is scope-light (succeeds with any valid token) and never
-    /// caught the production failure mode where <c>/search/*</c> 422s every call — agents got
-    /// persisted but every scheduled run produced an empty report. The freshly minted api-key
-    /// is best-effort revoked at the call site on any preflight failure so retries don't
-    /// accumulate orphan proxy-scoped keys.
-    /// </remarks>
-    private async Task<string?> PreflightGitHubProxyAsync(
-        NyxIdApiClient nyxClient,
-        string apiKey,
-        string githubUsername,
-        IReadOnlyList<string> repositories,
-        string nyxProviderSlug,
-        CancellationToken ct)
-    {
-        // Step 1: cheap read-only endpoint; succeeds even with a rate-limited token, fails with
-        // 401/403 when the proxy can't resolve a bound GitHub credential.
-        var rateLimitProbe = await nyxClient.ProxyRequestAsync(
-            apiKey,
-            "api-github",
-            "/rate_limit",
-            "GET",
-            body: null,
-            extraHeaders: null,
-            ct);
-
-        var rateLimitFailure = ClassifyRateLimitProbeFailure(rateLimitProbe, nyxProviderSlug);
-        if (rateLimitFailure is not null)
-            return rateLimitFailure;
-
-        // Step 2: global search-API probes. /rate_limit is scope-light — it returns 200 even
-        // with a token that GitHub's search engine will reject. Issue #474: all of
-        // /search/issues and /search/commits return 422 "invalid user/permission" when the
-        // bound OAuth grant lacks public_repo/repo or the username is unreachable, and the
-        // daily report is useless if those endpoints don't work. Probe both with per_page=1 so
-        // we exercise the same auth surface the runtime will hit, without paying for full
-        // result pages. Skip when no username is bound — the rate_limit step is the only
-        // signal we have in that case (and CreateDailyAgentAsync rejects empty
-        // github_username earlier, so this guard is defensive only).
-        var normalizedUser = (githubUsername ?? string.Empty).Trim();
-        if (string.IsNullOrEmpty(normalizedUser))
-            return null;
-
-        var encodedUser = Uri.EscapeDataString(normalizedUser);
-        var globalSearchPaths = new (string Path, string Label)[]
-        {
-            ($"/search/issues?q=author:{encodedUser}&per_page=1", "/search/issues"),
-            ($"/search/commits?q=author:{encodedUser}&per_page=1", "/search/commits"),
-        };
-        foreach (var (path, label) in globalSearchPaths)
-        {
-            var searchProbe = await nyxClient.ProxyRequestAsync(
-                apiKey,
-                "api-github",
-                path,
-                "GET",
-                body: null,
-                extraHeaders: null,
-                ct);
-
-            var searchFailure = ClassifySearchProbeFailure(searchProbe, label, normalizedUser, nyxProviderSlug);
-            if (searchFailure is not null)
-                return searchFailure;
-        }
-
-        // Step 3: per-repo search-API probes when a repository allowlist is configured. The
-        // runtime daily report runs `repo:{owner}/{repo}+author:{username}` queries (see
-        // AgentBuilderTemplates.cs repo-mode URL list) — different auth surface from the
-        // global search above, because GitHub enforces per-repo visibility. A token with
-        // public_repo can pass global search yet 422 every repo-scoped call when one of the
-        // listed repos is private. Codex review PR #479 r3152148327: probing only global
-        // queries leaves that case persisting broken agents, so loop the repos here.
-        if (repositories is null || repositories.Count == 0)
-            return null;
-
-        foreach (var repoEntry in repositories)
-        {
-            var trimmedRepo = (repoEntry ?? string.Empty).Trim();
-            if (string.IsNullOrEmpty(trimmedRepo))
-                continue;
-
-            // GitHub usernames and repo names are restricted to [a-zA-Z0-9-._] per the
-            // github.com identifier rules — none of which need percent-encoding. The slash
-            // separator must be preserved literally (Uri.EscapeDataString would emit %2F,
-            // which GitHub's q= parser does not consistently accept). Pass repoEntry through
-            // unescaped; defense-in-depth escaping happens on the username segment.
-            var repoSearchPaths = new (string Path, string Label)[]
-            {
-                ($"/search/issues?q=repo:{trimmedRepo}+author:{encodedUser}&per_page=1", $"/search/issues (repo={trimmedRepo})"),
-                ($"/search/commits?q=repo:{trimmedRepo}+author:{encodedUser}&per_page=1", $"/search/commits (repo={trimmedRepo})"),
-            };
-            foreach (var (path, label) in repoSearchPaths)
-            {
-                var searchProbe = await nyxClient.ProxyRequestAsync(
-                    apiKey,
-                    "api-github",
-                    path,
-                    "GET",
-                    body: null,
-                    extraHeaders: null,
-                    ct);
-
-                var searchFailure = ClassifySearchProbeFailure(searchProbe, label, normalizedUser, nyxProviderSlug);
-                if (searchFailure is not null)
-                    return searchFailure;
-            }
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// Maps a <c>/rate_limit</c> probe response onto a fail-fast structured error or null.
-    /// Only 401/403 are fail-fast; all other shapes (200, 5xx, transient errors, malformed
-    /// JSON) flow through so creation can proceed and the operator can debug from logs.
-    /// </summary>
-    /// <remarks>
-    /// `NyxIdApiClient.SendAsync` (NyxIdApiClient.cs:710) wraps HTTP non-2xx as
-    /// <c>{"error": true, "status": &lt;http&gt;, "body": "&lt;raw downstream body&gt;"}</c> —
-    /// <c>status</c>, not <c>code</c>. Reviewer (PR #412 r3141699476): the previous parser only
-    /// read <c>code</c>, so for the actual #411 production failures (HTTP 403 from
-    /// <c>/api/v1/proxy/s/api-github/rate_limit</c>) it set status=0, returned null, and
-    /// persisted a daily agent that would fail at runtime. Read both <c>status</c> (the
-    /// SendAsync envelope) AND <c>code</c> (any future inverted-naming envelope or top-level
-    /// Lark code).
-    /// </remarks>
-    private static string? ClassifyRateLimitProbeFailure(string probe, string nyxProviderSlug)
-    {
-        if (string.IsNullOrWhiteSpace(probe))
-            return null;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(probe);
-            var root = doc.RootElement;
-            // `envelopeMessage` is the proxy envelope's `message` field; named to avoid
-            // shadowing the anonymous-type `detail` property below (codex review PR #479).
-            if (!IsErrorEnvelope(root, out var status, out var envelopeMessage, out var body))
-                return null;
-
-            if (status != (int)HttpStatusCode.Unauthorized && status != (int)HttpStatusCode.Forbidden)
-                return null;
-
-            return JsonSerializer.Serialize(new
-            {
-                error = "github_proxy_access_denied",
-                detail = string.IsNullOrWhiteSpace(envelopeMessage) ? "GitHub proxy returned 401/403 for the new agent API key." : envelopeMessage,
-                http_status = status,
-                proxy_body = string.IsNullOrWhiteSpace(body) ? null : body,
-                hint = "GitHub returned 401/403 through the NyxID proxy. Common causes: (a) the OAuth grant for GitHub was revoked at github.com/settings/applications or its scopes were downgraded — re-authorize the GitHub provider at NyxID; (b) the request reached GitHub without a User-Agent header (NyxIdApiClient now sends a default; if you see this, check that the deployed binary includes that fix). The agent will not produce a useful daily report until proxy access succeeds.",
-                nyx_provider_slug = nyxProviderSlug,
-            });
-        }
-        catch (JsonException)
-        {
-            // Non-JSON probe response: don't pretend we know what's going on; let creation
-            // proceed so the agent can at least be created (operator can debug from logs).
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Maps a <c>/search/{issues,commits}</c> probe response onto a fail-fast structured
-    /// error or null. Only 422 is fail-fast (the documented "invalid user/permission" /
-    /// "validation failed" surface); all other shapes (200 with empty results, 200 with
-    /// items, transient 5xx, secondary rate limits) flow through.
-    /// </summary>
-    /// <remarks>
-    /// Sub-reason classification reads the upstream GitHub error body, since GitHub does not
-    /// give different status codes for the four cases the user-facing report needs to
-    /// distinguish (issue #473's expected behavior): user-not-exist, scope-insufficient,
-    /// search rate-limited, query-invalid. The first two share a body
-    /// (<c>"...cannot be searched either because the resources do not exist or you do not
-    /// have permission to view them..."</c>), so we collapse them into one
-    /// <c>scope_insufficient_or_user_not_found</c> reason — they're both actionable in the
-    /// same way (re-authorize GitHub at NyxID with broader scope, then retry; if that still
-    /// fails, verify the username is reachable). Other 422 bodies fall through as
-    /// <c>validation_failed</c>.
-    /// </remarks>
-    private static string? ClassifySearchProbeFailure(
-        string probe,
-        string githubPath,
-        string githubUsername,
-        string nyxProviderSlug)
-    {
-        if (string.IsNullOrWhiteSpace(probe))
-            return null;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(probe);
-            var root = doc.RootElement;
-            // `envelopeMessage` is the proxy envelope's `message` field; named to avoid
-            // shadowing the anonymous-type `detail` property below (codex review PR #479).
-            if (!IsErrorEnvelope(root, out var status, out var envelopeMessage, out var body))
-                return null;
-
-            if (status != (int)HttpStatusCode.UnprocessableEntity)
-                return null;
-
-            var reason = ClassifyGitHubSearch422Body(body);
-            return JsonSerializer.Serialize(new
-            {
-                error = "github_search_unauthorized",
-                detail = string.IsNullOrWhiteSpace(envelopeMessage)
-                    ? $"GitHub {githubPath} returned 422 for github_username `{githubUsername}` with the new agent API key. The /rate_limit probe succeeded, so the api-key itself is valid; the failure is specific to GitHub's search API."
-                    : envelopeMessage,
-                http_status = status,
-                github_path = githubPath,
-                github_username = githubUsername,
-                reason_code = reason,
-                proxy_body = string.IsNullOrWhiteSpace(body) ? null : body,
-                // Hint references the `github_username` field above instead of inlining it
-                // a second time; codex review PR #479 caught a stray `{username}` literal in
-                // an earlier draft.
-                hint = "GitHub returned 422 from /search/* with the bound username. /search/commits and /search/issues enforce stricter scope than /rate_limit (which succeeded), so a token that passes /rate_limit can still fail every search call. Most common causes: (a) the OAuth grant for GitHub at NyxID is missing the scope GitHub's search engine requires (need `public_repo` to search public commits/issues, `repo` for private) — re-authorize the GitHub provider at NyxID with appropriate scopes; (b) the bound github_username (see field above) does not exist, was renamed, or has been restricted — verify it resolves at https://github.com/. The agent will not produce a useful daily report until /search/* succeeds.",
-                nyx_provider_slug = nyxProviderSlug,
-            });
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Preflights Twitter (X) proxy access using the newly created agent API key against
-    /// Twitter's <c>/users/me</c> — a cheap read-only endpoint that returns 401 when NyxID has
-    /// no OAuth grant for the user (or the grant was revoked) and 403 when the bound token
-    /// lacks <c>tweet.write</c> scope. Returns a structured error JSON suitable for returning
-    /// verbatim from the tool when access is denied; returns <c>null</c> on success or on
-    /// probe shapes we don't classify as "fundamentally broken" (rate limits, 5xx).
-    /// </summary>
-    /// <remarks>
-    /// Mirrors <see cref="PreflightGitHubProxyAsync"/> (issue aevatarAI/aevatar#216 / #418).
-    /// Two error codes instead of one because 401 and 403 lead to different user actions:
-    /// 401 means "go connect Twitter at NyxID" (or re-authorize a revoked grant); 403 means
-    /// "the bound token is missing <c>tweet.write</c> — operator/seed bug, not user fixable".
-    /// The freshly minted api-key is best-effort revoked at the call site so retries don't
-    /// accumulate orphan proxy-scoped keys.
-    /// </remarks>
-    private async Task<string?> PreflightTwitterProxyAsync(
-        NyxIdApiClient nyxClient,
-        string apiKey,
-        string nyxProviderSlug,
-        CancellationToken ct)
-    {
-        // Cheap read-only endpoint; succeeds with the default `users.read` scope, fails with
-        // 401 when no OAuth grant is bound to the user behind the api-key, and 403 when the
-        // bound token's scope set is too narrow.
-        //
-        // PR #461 review (commit d9f6df81 follow-up): probe the *configured* publish slug so
-        // a caller-overridden `publish_provider_slug` is the slug we actually validate. The
-        // earlier hardcoded `"api-twitter"` would silently green-light a custom slug at
-        // create-time only to surface a runtime 4xx on the first publish.
-        var probe = await nyxClient.ProxyRequestAsync(
-            apiKey,
-            nyxProviderSlug,
-            "/users/me",
-            "GET",
-            body: null,
-            extraHeaders: null,
-            ct);
-
-        if (string.IsNullOrWhiteSpace(probe))
-            return null;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(probe);
-            var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object)
-                return null;
-
-            if (!root.TryGetProperty("error", out var errorProp))
-                return null;
-            if (errorProp.ValueKind != JsonValueKind.True && errorProp.ValueKind != JsonValueKind.String)
-                return null;
-
-            var status = TryReadInt32Property(root, "status")
-                         ?? TryReadInt32Property(root, "code")
-                         ?? 0;
-            if (status != (int)HttpStatusCode.Unauthorized && status != (int)HttpStatusCode.Forbidden)
-                return null;
-
-            var detail = root.TryGetProperty("message", out var msgProp) && msgProp.ValueKind == JsonValueKind.String
-                ? msgProp.GetString()
-                : null;
-            var body = root.TryGetProperty("body", out var bodyProp) && bodyProp.ValueKind == JsonValueKind.String
-                ? bodyProp.GetString()
-                : null;
-
-            // 401 vs 403 distinction is the actionable difference for the user. NyxID seeds
-            // `tweet.write` into the default scope set (provider_service.rs:405-450), so the
-            // realistic 401 path is "user has not connected Twitter yet at NyxID" or "the
-            // user revoked the grant at x.com/settings". A 403 here would mean either the
-            // seed regressed (ops escalation) or x.com itself denied the request body — keep
-            // both paths separate so the hint copy steers the right person.
-            if (status == (int)HttpStatusCode.Unauthorized)
-            {
-                return JsonSerializer.Serialize(new
-                {
-                    error = "twitter_oauth_required",
-                    detail = string.IsNullOrWhiteSpace(detail) ? "Twitter proxy returned 401 for the new agent API key." : detail,
-                    http_status = status,
-                    proxy_body = string.IsNullOrWhiteSpace(body) ? null : body,
-                    hint = "Twitter (X) returned 401 through the NyxID proxy. The user has not connected Twitter at NyxID, or the OAuth grant was revoked at x.com/settings/connected_apps. Re-authorize the Twitter provider at NyxID before retrying agent creation.",
-                    nyx_provider_slug = nyxProviderSlug,
-                });
-            }
-
-            return JsonSerializer.Serialize(new
-            {
-                error = "twitter_proxy_access_denied",
-                detail = string.IsNullOrWhiteSpace(detail) ? "Twitter proxy returned 403 for the new agent API key." : detail,
-                http_status = status,
-                proxy_body = string.IsNullOrWhiteSpace(body) ? null : body,
-                hint = "Twitter (X) returned 403 through the NyxID proxy. Default provider scope includes `tweet.write`; a 403 here usually means the seeded provider scope was downgraded or the bound token was issued before the scope was widened. Re-authorize at NyxID; if it still fails, ask ops to verify the Twitter provider seed includes `tweet.write`.",
-                nyx_provider_slug = nyxProviderSlug,
-            });
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Reads the standard <c>NyxIdApiClient.SendAsync</c> error envelope shape. Returns
-    /// <c>true</c> when the response is an error envelope (with <c>error: true</c> or
-    /// <c>error: "..."</c>) and extracts <c>status</c> (or <c>code</c>), <c>message</c>, and
-    /// <c>body</c> for downstream classification. Used by both rate-limit and search probe
-    /// classifiers so they parse the envelope identically.
-    /// </summary>
-    private static bool IsErrorEnvelope(
-        JsonElement root,
-        out int status,
-        out string? detail,
-        out string? body)
-    {
-        status = 0;
-        detail = null;
-        body = null;
-
-        if (root.ValueKind != JsonValueKind.Object)
-            return false;
-
-        if (!root.TryGetProperty("error", out var errorProp))
-            return false;
-        if (errorProp.ValueKind != JsonValueKind.True && errorProp.ValueKind != JsonValueKind.String)
-            return false;
-
-        status = TryReadInt32Property(root, "status")
-                 ?? TryReadInt32Property(root, "code")
-                 ?? 0;
-        detail = root.TryGetProperty("message", out var msgProp) && msgProp.ValueKind == JsonValueKind.String
-            ? msgProp.GetString()
-            : null;
-        body = root.TryGetProperty("body", out var bodyProp) && bodyProp.ValueKind == JsonValueKind.String
-            ? bodyProp.GetString()
-            : null;
-        return true;
-    }
-
-    /// <summary>
-    /// Best-effort sub-reason classification for a GitHub 422 search response body. Returns a
-    /// short stable code so callers / operators can distinguish actionable cases without
-    /// regex'ing the body themselves. The detection is conservative — when the body doesn't
-    /// match a known pattern we fall through to <c>validation_failed</c> rather than guessing.
-    /// </summary>
-    private static string ClassifyGitHubSearch422Body(string? body)
-    {
-        if (string.IsNullOrWhiteSpace(body))
-            return "validation_failed";
-
-        // GitHub returns the same body for "user does not exist" and "scope insufficient":
-        // the search engine refuses to enumerate the user's items in either case. Operators
-        // distinguish them by checking https://github.com/{username} out of band.
-        if (body.Contains("cannot be searched", StringComparison.OrdinalIgnoreCase) ||
-            body.Contains("do not have permission to view", StringComparison.OrdinalIgnoreCase))
-        {
-            return "scope_insufficient_or_user_not_found";
-        }
-
-        return "validation_failed";
-    }
-
-    private static int? TryReadInt32Property(JsonElement element, string propertyName)
-    {
-        if (!element.TryGetProperty(propertyName, out var property) ||
-            property.ValueKind != JsonValueKind.Number ||
-            !property.TryGetInt32(out var value))
-        {
-            return null;
-        }
-        return value;
-    }
-
-    private static bool? TryReadBool(JsonElement element, string propertyName)
-    {
-        if (element.ValueKind != JsonValueKind.Object ||
-            !element.TryGetProperty(propertyName, out var property))
-        {
-            return null;
-        }
-
-        return property.ValueKind switch
-        {
-            JsonValueKind.True => true,
-            JsonValueKind.False => false,
-            _ => null,
-        };
-    }
-
-    /// <summary>
-    /// Best-effort revoke of an API key minted earlier in the create flow. Used when GitHub
-    /// preflight fails so retries of <c>/daily</c> don't accumulate orphan proxy-scoped keys
-    /// in the user's NyxID account (codex review #418 r3141846175). Failures here are logged
-    /// at Warning but do NOT propagate — the structured create-time error is the user-facing
-    /// signal; an orphan key is an ops cleanup concern, not a hard failure.
-    /// </summary>
-    private async Task BestEffortRevokeApiKeyAsync(
-        NyxIdApiClient nyxClient,
-        string sessionToken,
-        string apiKeyId,
-        string reason,
-        CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(apiKeyId))
-            return;
-
-        try
-        {
-            var response = await nyxClient.DeleteApiKeyAsync(sessionToken, apiKeyId, ct);
-            if (LarkProxyResponse.TryGetError(response, out _, out var detail))
-            {
-                _logger?.LogWarning(
-                    "Failed to revoke orphan agent API key {ApiKeyId} after {Reason}: {Detail}",
-                    apiKeyId,
-                    reason,
-                    detail);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogWarning(
-                ex,
-                "Exception revoking orphan agent API key {ApiKeyId} after {Reason}",
-                apiKeyId,
-                reason);
-        }
-    }
-
-    private LarkReceiveTargetWithFallback ResolveDeliveryTarget(string conversationId, string agentId)
-    {
-        var chatType = AgentToolRequestContext.TryGet(ChannelMetadataKeys.ChatType);
-        var senderId = AgentToolRequestContext.TryGet(ChannelMetadataKeys.SenderId);
-        var unionId = AgentToolRequestContext.TryGet(ChannelMetadataKeys.LarkUnionId);
-        var chatId = AgentToolRequestContext.TryGet(ChannelMetadataKeys.LarkChatId);
-
-        var target = LarkConversationTargets.BuildFromInboundWithFallback(
-            chatType,
-            conversationId,
-            senderId,
-            unionId,
-            chatId);
-
-        if (target.Primary.FellBackToPrefixInference)
-        {
-            _logger?.LogDebug(
-                "Agent builder fell back to legacy delivery target inference for {AgentId}: chatType={ChatType}, hasUnionId={HasUnionId}, hasLarkChatId={HasLarkChatId}, hasSenderId={HasSenderId}, resolvedReceiveIdType={ReceiveIdType}. Cross-app outbound (e.g. customer api-lark-bot) may surface Lark `99992361 open_id cross app` until the relay propagates union_id.",
-                agentId,
-                chatType ?? string.Empty,
-                !string.IsNullOrWhiteSpace(unionId),
-                !string.IsNullOrWhiteSpace(chatId),
-                !string.IsNullOrWhiteSpace(senderId),
-                target.Primary.ReceiveIdType);
-        }
-
-        return target;
     }
 
     private sealed class BuilderArgs

@@ -124,7 +124,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
             new UserAgentCatalogEntry
             {
                 AgentId = "workflow-agent-old",
-                AgentType = WorkflowAgentDefaults.AgentType,
+                AgentType = "workflow_agent",
             },
             new UserAgentCatalogEntry
             {
@@ -231,7 +231,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
             {
                 Id = "workflow-agent-snapshotted",
                 ActorId = "agent-registry-store",
-                AgentType = WorkflowAgentDefaults.AgentType,
+                AgentType = "workflow_agent",
             });
         var typeProbe = new StubActorTypeProbe(new Dictionary<string, string?>
         {

@@ -618,7 +618,7 @@ public sealed class ChannelConversationTurnRunnerTests
         var runner = CreateRunner(registrationQueryPort, adapter);
 
         var activity = BuildCardActionActivity("evt-card-builder-1");
-        activity.Content.CardAction.Arguments["agent_builder_action"] = "open_daily_form";
+        activity.Content.CardAction.Arguments["agent_builder_action"] = "list_agents";
 
         var result = await runner.RunInboundAsync(activity, CancellationToken.None);
 
@@ -627,7 +627,7 @@ public sealed class ChannelConversationTurnRunnerTests
         adapter.Replies.Should().ContainSingle();
         adapter.Replies[0].Inbound.ChatType.Should().Be("card_action");
         adapter.Replies[0].Inbound.Extra.Should().ContainKey("agent_builder_action")
-            .WhoseValue.Should().Be("open_daily_form");
+            .WhoseValue.Should().Be("list_agents");
     }
 
     [Fact]
@@ -638,7 +638,7 @@ public sealed class ChannelConversationTurnRunnerTests
         var runner = CreateRunner(registrationQueryPort, adapter);
 
         var activity = BuildCardActionActivity("evt-card-builder-action-id-1");
-        activity.Content.CardAction.ActionId = "open_daily_form";
+        activity.Content.CardAction.ActionId = "list_agents";
 
         var result = await runner.RunInboundAsync(activity, CancellationToken.None);
 
@@ -646,7 +646,7 @@ public sealed class ChannelConversationTurnRunnerTests
         result.SentActivityId.Should().Be("direct-reply:evt-card-builder-action-id-1");
         adapter.Replies.Should().ContainSingle();
         adapter.Replies[0].Inbound.Extra.Should().ContainKey("agent_builder_action")
-            .WhoseValue.Should().Be("open_daily_form");
+            .WhoseValue.Should().Be("list_agents");
     }
 
     [Fact]
@@ -815,115 +815,6 @@ public sealed class ChannelConversationTurnRunnerTests
         result.ErrorCode.Should().Be(expectedCode);
         result.FailureKind.Should().Be(expectedKind);
         adapter.Replies.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task RunInboundAsync_ShouldRouteSlashCommand_WhenRegistrationHasNoRelayApiKey()
-    {
-        var registrationQueryPort = BuildRegistrationQueryPort();
-        var adapter = new RecordingPlatformAdapter();
-        var runner = CreateRunner(registrationQueryPort, adapter);
-
-        var result = await runner.RunInboundAsync(
-            BuildInboundActivity(
-                "/daily alice",
-                "msg-slash-1",
-                ConversationScope.DirectMessage,
-                "oc_p2p_chat_1"),
-            CancellationToken.None);
-
-        result.Success.Should().BeTrue();
-        result.SentActivityId.Should().Be("direct-reply:msg-slash-1");
-        adapter.Replies.Should().ContainSingle();
-        adapter.Replies[0].ReplyText.Should().Contain("Create daily report agent failed");
-        adapter.Replies[0].ReplyText.Should().Contain("No NyxID access token available");
-    }
-
-    [Fact]
-    public async Task RunInboundAsync_ShouldSendRelayReply_ForDailySlashCommand_WhenRelayDeliveryIsPresent()
-    {
-        var registrationQueryPort = BuildRegistrationQueryPort();
-        var adapter = new RecordingPlatformAdapter();
-        var relayHandler = new RecordingJsonHandler("""{"message_id":"relay-reply-daily"}""");
-        var runner = CreateRunner(
-            registrationQueryPort,
-            adapter,
-            relayHandler: relayHandler);
-
-        var result = await runner.RunInboundAsync(
-            BuildInboundActivity(
-                "/daily alice",
-                "msg-daily-relay-1",
-                ConversationScope.DirectMessage,
-                "oc_p2p_chat_1",
-                new OutboundDeliveryContext
-                {
-                    ReplyMessageId = "relay-msg-daily-1",
-                    CorrelationId = "corr-daily-relay-1",
-                },
-                new TransportExtras
-                {
-                    NyxPlatform = "lark",
-                }),
-            RelayRuntimeContext(
-                "corr-daily-relay-1",
-                "relay-token-daily-1",
-                "relay-msg-daily-1"),
-            CancellationToken.None);
-
-        result.Success.Should().BeTrue();
-        result.SentActivityId.Should().Be("direct-reply:msg-daily-relay-1");
-        result.OutboundDelivery?.ReplyMessageId.Should().Be("relay-msg-daily-1");
-        result.OutboundDelivery?.CorrelationId.Should().Be("corr-daily-relay-1");
-        adapter.Replies.Should().BeEmpty();
-        relayHandler.Requests.Should().ContainSingle();
-        relayHandler.Requests[0].Path.Should().Be("/api/v1/channel-relay/reply");
-        relayHandler.Requests[0].Authorization.Should().Be("Bearer relay-token-daily-1");
-        relayHandler.Requests[0].Body.Should().Contain("\"message_id\":\"relay-msg-daily-1\"");
-        relayHandler.Requests[0].Body.Should().Contain("\"text\":\"Create daily report agent failed");
-        relayHandler.Requests[0].Body.Should().Contain("No NyxID access token available");
-    }
-
-    [Fact]
-    public async Task RunInboundAsync_ShouldSendRelayRestriction_ForDailySlashCommandInGroup()
-    {
-        var registrationQueryPort = BuildRegistrationQueryPort();
-        var adapter = new RecordingPlatformAdapter();
-        var relayHandler = new RecordingJsonHandler("""{"message_id":"relay-reply-group"}""");
-        var runner = CreateRunner(
-            registrationQueryPort,
-            adapter,
-            relayHandler: relayHandler);
-
-        var result = await runner.RunInboundAsync(
-            BuildInboundActivity(
-                "/daily alice",
-                "msg-daily-group-1",
-                ConversationScope.Group,
-                "oc_group_chat_1",
-                new OutboundDeliveryContext
-                {
-                    ReplyMessageId = "relay-msg-group-1",
-                    CorrelationId = "corr-daily-group-1",
-                },
-                new TransportExtras
-                {
-                    NyxPlatform = "lark",
-                }),
-            RelayRuntimeContext(
-                "corr-daily-group-1",
-                "relay-token-group-1",
-                "relay-msg-group-1"),
-            CancellationToken.None);
-
-        result.Success.Should().BeTrue();
-        adapter.Replies.Should().BeEmpty();
-        relayHandler.Requests.Should().ContainSingle();
-        relayHandler.Requests[0].Path.Should().Be("/api/v1/channel-relay/reply");
-        relayHandler.Requests[0].Authorization.Should().Be("Bearer relay-token-group-1");
-        relayHandler.Requests[0].Body.Should().Contain("\"message_id\":\"relay-msg-group-1\"");
-        relayHandler.Requests[0].Body.Should().Contain("private chat");
-        relayHandler.Requests[0].Body.Should().Contain("/daily");
     }
 
     [Theory]

@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -11,17 +10,12 @@ namespace Aevatar.GAgents.Authoring.Lark;
 public static class NyxRelayAgentBuilderFlow
 {
     private const string PrivateChatType = "p2p";
-    private const string DailyCommand = "/daily";
-    private const string SocialMediaCommand = "/social-media";
-    private const string SocialMediaAlias = "/create-social-media";
-    private const string ListTemplatesCommand = "/templates";
     private const string ListAgentsCommand = "/agents";
     private const string AgentStatusCommand = "/agent-status";
     private const string RunAgentCommand = "/run-agent";
     private const string DisableAgentCommand = "/disable-agent";
     private const string EnableAgentCommand = "/enable-agent";
     private const string DeleteAgentCommand = "/delete-agent";
-    private const string DefaultScheduleTime = "09:00";
 
     public static bool TryResolve(
         ChannelInboundEvent evt,
@@ -55,7 +49,7 @@ public static class NyxRelayAgentBuilderFlow
             return true;
         }
 
-        return TryResolveKnownCommand(command, tokens, evt.ConversationId, out decision);
+        return TryResolveKnownCommand(command, tokens, out decision);
     }
 
     public static MessageContent FormatToolResult(AgentBuilderFlowDecision decision, string toolResultJson)
@@ -67,9 +61,6 @@ public static class NyxRelayAgentBuilderFlow
             using var doc = JsonDocument.Parse(toolResultJson);
             return decision.ToolAction switch
             {
-                "create_daily" => FormatCreateDailyResult(doc.RootElement),
-                "create_social_media" => TextContent(FormatCreateSocialMediaResult(doc.RootElement)),
-                "list_templates" => TextContent(FormatListTemplatesResult(doc.RootElement)),
                 "list_agents" => AgentBuilderCardContent.FormatListAgentsResult(doc.RootElement),
                 "agent_status" => FormatAgentStatusCard(doc.RootElement),
                 "run_agent" => TextContent(FormatRunAgentResult(doc.RootElement)),
@@ -88,10 +79,7 @@ public static class NyxRelayAgentBuilderFlow
     private static MessageContent TextContent(string text) => AgentBuilderJson.TextContent(text);
 
     private static bool IsKnownCommand(string command) =>
-        command is DailyCommand
-            or SocialMediaCommand or SocialMediaAlias
-            or ListTemplatesCommand
-            or ListAgentsCommand
+        command is ListAgentsCommand
             or AgentStatusCommand
             or RunAgentCommand
             or DisableAgentCommand
@@ -104,22 +92,10 @@ public static class NyxRelayAgentBuilderFlow
     private static bool TryResolveKnownCommand(
         string command,
         IReadOnlyList<string> tokens,
-        string? conversationId,
         out AgentBuilderFlowDecision? decision)
     {
         switch (command)
         {
-            case DailyCommand:
-                return TryResolveDaily(tokens, conversationId, out decision);
-
-            case SocialMediaCommand:
-            case SocialMediaAlias:
-                return TryResolveSocialMedia(tokens, conversationId, out decision);
-
-            case ListTemplatesCommand:
-                decision = AgentBuilderFlowDecision.ToolCall("list_templates", """{"action":"list_templates"}""");
-                return true;
-
             case ListAgentsCommand:
                 decision = AgentBuilderFlowDecision.ToolCall("list_agents", """{"action":"list_agents"}""");
                 return true;
@@ -143,102 +119,6 @@ public static class NyxRelayAgentBuilderFlow
                 decision = null;
                 return false;
         }
-    }
-
-    private static bool TryResolveDaily(
-        IReadOnlyList<string> tokens,
-        string? conversationId,
-        out AgentBuilderFlowDecision? decision)
-    {
-        decision = null;
-        var args = ChannelTextCommandParser.ParseNamedArguments(tokens);
-        var githubUsername = NormalizeOptional(
-            GetOptional(args, "github_username") ?? FirstPositionalArgument(tokens));
-
-        if (!TryResolveSchedule(args, out var scheduleCron, out var scheduleTimezone, out var error))
-        {
-            decision = AgentBuilderFlowDecision.DirectReply(error! + "\n\n" + BuildDailyHelpText());
-            return true;
-        }
-
-        var repositories = GetOptional(args, "repositories");
-        var runImmediately = ResolveRunImmediately(args);
-        // When the user typed a positional username we persist it as their default so the next /daily
-        // call auto-resolves via the saved preference fallback inside AgentBuilderTool.
-        var savePreference = githubUsername is not null;
-        decision = AgentBuilderFlowDecision.ToolCall(
-            "create_daily",
-            JsonSerializer.Serialize(new
-            {
-                action = "create_agent",
-                template = "daily",
-                github_username = githubUsername,
-                save_github_username_preference = savePreference,
-                repositories,
-                schedule_cron = scheduleCron,
-                schedule_timezone = scheduleTimezone,
-                run_immediately = runImmediately,
-                conversation_id = NormalizeOptional(conversationId),
-            }));
-        return true;
-    }
-
-    private static bool TryResolveSocialMedia(
-        IReadOnlyList<string> tokens,
-        string? conversationId,
-        out AgentBuilderFlowDecision? decision)
-    {
-        decision = null;
-        if (tokens.Count == 1)
-        {
-            decision = AgentBuilderFlowDecision.DirectReply(BuildSocialMediaHelpText());
-            return true;
-        }
-
-        var args = ChannelTextCommandParser.ParseNamedArguments(tokens);
-        var topic = GetOptional(args, "topic") ?? FirstPositionalArgument(tokens);
-        if (string.IsNullOrWhiteSpace(topic))
-        {
-            decision = AgentBuilderFlowDecision.DirectReply(
-                "topic is required.\n\n" + BuildSocialMediaHelpText());
-            return true;
-        }
-
-        if (!TryResolveSchedule(args, out var scheduleCron, out var scheduleTimezone, out var error))
-        {
-            decision = AgentBuilderFlowDecision.DirectReply(error! + "\n\n" + BuildSocialMediaHelpText());
-            return true;
-        }
-
-        decision = AgentBuilderFlowDecision.ToolCall(
-            "create_social_media",
-            JsonSerializer.Serialize(new
-            {
-                action = "create_agent",
-                template = "social_media",
-                topic,
-                audience = GetOptional(args, "audience"),
-                style = GetOptional(args, "style"),
-                schedule_cron = scheduleCron,
-                schedule_timezone = scheduleTimezone,
-                run_immediately = ResolveRunImmediately(args),
-                conversation_id = NormalizeOptional(conversationId),
-            }));
-        return true;
-    }
-
-    private static string? FirstPositionalArgument(IReadOnlyList<string> tokens)
-    {
-        for (var i = 1; i < tokens.Count; i++)
-        {
-            var token = tokens[i];
-            if (string.IsNullOrWhiteSpace(token))
-                continue;
-            if (token.IndexOf('=', StringComparison.Ordinal) >= 0)
-                continue;
-            return token.Trim();
-        }
-        return null;
     }
 
     private static bool TryResolveSimpleAgentAction(
@@ -296,58 +176,12 @@ public static class NyxRelayAgentBuilderFlow
         return true;
     }
 
-    private static MessageContent FormatCreateDailyResult(JsonElement root) =>
-        AgentBuilderCardContent.FormatDailyToolReply(root);
-
-    private static string FormatCreateSocialMediaResult(JsonElement root)
-    {
-        if (TryReadError(root, out var error))
-            return $"Create social media agent failed: {error}";
-
-        return BuildTextBlock(
-            "Social media agent registered.",
-            $"Agent ID: {ReadString(root, "agent_id") ?? "unknown-agent"}",
-            $"Workflow ID: {ReadString(root, "workflow_id") ?? "pending"}",
-            $"Next scheduled run: {ReadString(root, "next_scheduled_run") ?? "pending"}",
-            NormalizeOptional(ReadString(root, "note")),
-            "Approvals will arrive as interactive cards in this chat. Text commands such as /approve and /reject still work as fallback.",
-            "Next commands: /agents, /agent-status <agent_id>, /run-agent <agent_id>");
-    }
-
-    private static string FormatListTemplatesResult(JsonElement root)
-    {
-        if (TryReadError(root, out var error))
-            return $"List templates failed: {error}";
-
-        if (!root.TryGetProperty("templates", out var templatesElement) ||
-            templatesElement.ValueKind != JsonValueKind.Array ||
-            templatesElement.GetArrayLength() == 0)
-        {
-            return "No templates available.";
-        }
-
-        var lines = new List<string> { "Available templates:" };
-        foreach (var item in templatesElement.EnumerateArray())
-        {
-            var name = ReadString(item, "name") ?? "unknown-template";
-            var description = ReadString(item, "description") ?? "No description.";
-            lines.Add($"- {name}: {description}");
-        }
-
-        lines.Add(string.Empty);
-        lines.Add("Examples:");
-        lines.Add(BuildDailyCommandExample());
-        lines.Add(BuildSocialMediaCommandExample());
-        return string.Join('\n', lines);
-    }
-
     /// <summary>
     /// Renders <c>/agent-status &lt;agent_id&gt;</c> as an interactive card with action buttons
     /// (Run, Disable, Enable, Delete). Each button submits the corresponding
     /// <c>agent_builder_action</c> with the agent_id as an argument so
     /// <see cref="AgentBuilderCardFlow"/> can route the click to the existing tool action without
-    /// the user having to retype the id. Mirrors the card produced by the card-flow path so the
-    /// text-command and card-flow surfaces stay visually consistent.
+    /// the user having to retype the id.
     /// </summary>
     private static MessageContent FormatAgentStatusCard(JsonElement root)
     {
@@ -386,10 +220,6 @@ public static class NyxRelayAgentBuilderFlow
             Text = string.Join("\n", bodyLines),
         });
 
-        // Lifecycle buttons mirror the legacy text "Next commands: ..." line. Disable and Enable
-        // are both shown so the user can flip status either direction without typing; the click
-        // handler enforces the invariants. Delete is marked danger so Lark renders it red and the
-        // user has a final visual confirm before submitting.
         var isRunning = string.Equals(status, SkillRunnerDefaults.StatusRunning, StringComparison.OrdinalIgnoreCase) ||
                         string.Equals(status, SkillRunnerDefaults.StatusError, StringComparison.OrdinalIgnoreCase);
         content.Actions.Add(BuildAgentScopedButton("Run Now", "run_agent", agentId, isPrimary: isRunning));
@@ -469,80 +299,11 @@ public static class NyxRelayAgentBuilderFlow
             "Run /agents to refresh the registry view.");
     }
 
-    private static bool TryResolveSchedule(
-        IReadOnlyDictionary<string, string> args,
-        out string? scheduleCron,
-        out string scheduleTimezone,
-        out string? error)
-    {
-        scheduleCron = null;
-        error = null;
-
-        scheduleTimezone = GetOptional(args, "schedule_timezone") ?? SkillRunnerDefaults.DefaultTimezone;
-        var rawCron = GetOptional(args, "schedule_cron");
-        if (!string.IsNullOrWhiteSpace(rawCron))
-        {
-            scheduleCron = rawCron;
-            return true;
-        }
-
-        var rawTime = GetOptional(args, "schedule_time");
-        var normalized = rawTime ?? DefaultScheduleTime;
-        if (!TimeOnly.TryParseExact(
-                normalized,
-                ["HH:mm", "H:mm"],
-                CultureInfo.InvariantCulture,
-                DateTimeStyles.None,
-                out var time))
-        {
-            error = "schedule_time must use HH:mm, for example 09:00.";
-            return false;
-        }
-
-        scheduleCron = $"{time.Minute} {time.Hour} * * *";
-        return true;
-    }
-
-    private static bool ResolveRunImmediately(IReadOnlyDictionary<string, string> args)
-    {
-        var raw = GetOptional(args, "run_immediately");
-        return !bool.TryParse(raw, out var parsed) || parsed;
-    }
-
-    private static string? GetOptional(IReadOnlyDictionary<string, string> args, string key)
-    {
-        if (!args.TryGetValue(key, out var raw))
-            return null;
-
-        return NormalizeOptional(raw);
-    }
-
     private static bool TryReadError(JsonElement root, out string error) =>
         AgentBuilderJson.TryReadError(root, out error);
 
     private static string? ReadString(JsonElement element, string propertyName) =>
         AgentBuilderJson.TryReadString(element, propertyName);
-
-    private static string BuildDailyHelpText() =>
-        BuildTextBlock(
-            "Daily report agent command",
-            "GitHub username can be passed explicitly, or omitted to reuse a saved preference when available.",
-            "Schedule defaults to 09:00 if schedule_time and schedule_cron are both omitted.",
-            $"Example: {BuildDailyCommandExample()}",
-            "Optional: github_username (otherwise uses your saved preference or connected GitHub login), repositories=owner/repo,owner/repo schedule_timezone=Asia/Singapore run_immediately=false");
-
-    private static string BuildSocialMediaHelpText() =>
-        BuildTextBlock(
-            "Social media agent command",
-            "Required: topic plus either schedule_time or schedule_cron.",
-            $"Example: {BuildSocialMediaCommandExample()}",
-            "Optional: audience=\"Developers\" style=\"Confident and concise\" schedule_timezone=Asia/Singapore run_immediately=false");
-
-    private static string BuildDailyCommandExample() =>
-        "/daily [github_username] schedule_time=09:00 repositories=owner/repo";
-
-    private static string BuildSocialMediaCommandExample() =>
-        "/social-media topic=\"Launch update\" schedule_time=10:30 audience=\"Developers\" style=\"Confident and concise\"";
 
     private static string BuildUnknownCommandReply(
         string command,
@@ -552,9 +313,6 @@ public static class NyxRelayAgentBuilderFlow
             {
                 $"Unknown command: {command}",
                 "Supported commands:",
-                BuildDailyCommandExample(),
-                BuildSocialMediaCommandExample(),
-                "/templates",
                 "/agents",
                 "/agent-status <agent_id>",
                 "/run-agent <agent_id>",
