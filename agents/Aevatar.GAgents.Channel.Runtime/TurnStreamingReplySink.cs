@@ -32,7 +32,7 @@ namespace Aevatar.GAgents.Channel.Runtime;
 /// <item><see cref="FinalizeAsync"/> bypasses the throttle so the actor sees the complete text
 /// once the stream ends; if a dispatch is in flight, the final text reflushes after it and
 /// <see cref="FinalizeAsync"/> awaits the dispatch loop's drain signal before returning so the
-/// caller (the inbox runtime) does not race the ready event past the final chunk.</item>
+/// caller (the run actor) does not race the ready event past the final chunk.</item>
 /// </list>
 /// </para>
 /// <para>
@@ -68,7 +68,7 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
     private bool _dispatchInProgress;
     private bool _disposed;
     // Signaled by the dispatch loop when it fully drains. FinalizeAsync awaits this when a
-    // dispatch is already in flight so the caller does not race the inbox runtime's
+    // dispatch is already in flight so the caller does not race AgentRunGAgent's
     // LlmReplyReadyEvent past the final chunk dispatch (the ConversationGAgent
     // processed-command guard would otherwise drop the late chunk).
     private TaskCompletionSource<bool>? _drainTcs;
@@ -116,7 +116,7 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
     /// Applies the final accumulated text, bypassing the throttle so the actor can drive the final
     /// edit once the stream ends. If a dispatch is already in flight, the final text is stashed and
     /// this call awaits the dispatch loop's drain signal so the final chunk is on the wire before
-    /// the caller proceeds (the inbox runtime sends LlmReplyReadyEvent immediately after).
+    /// the caller proceeds (AgentRunGAgent sends LlmReplyReadyEvent immediately after).
     /// </summary>
     public Task FinalizeAsync(string finalText, CancellationToken ct) =>
         FlushAsync(finalText, isFinal: true, ct);
@@ -188,7 +188,7 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
                 if (isFinal)
                 {
                     // Block FinalizeAsync until the dispatch loop drains the stashed final text.
-                    // Without this wait, ChannelLlmReplyInboxRuntime sends LlmReplyReadyEvent
+                    // Without this wait, AgentRunGAgent sends LlmReplyReadyEvent
                     // first and ConversationGAgent's processed-command guard drops the late
                     // final chunk.
                     _drainTcs ??= new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);

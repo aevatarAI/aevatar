@@ -9,9 +9,9 @@ public class NyxIdRelayOptions
     /// Hard upper bound on a single LLM reply turn (LLM thinking + tool rounds + final
     /// streaming dispatch). 300s gives margin for multi-step tool chains common in the
     /// aevatar Lark bot flow — search a skill, hit a remote endpoint, summarize the result —
-    /// without letting a genuine hang pin the inbox task forever. Set to <c>0</c> or
+    /// without letting a genuine hang pin the run actor turn forever. Set to <c>0</c> or
     /// negative on a deployment that has its own watchdog and prefers no in-process cap;
-    /// see <c>ChannelLlmReplyInboxRuntime.ResolveFallbackTimeout</c>.
+    /// see <c>AgentRunGAgent.ResolveFallbackTimeout</c>.
     /// </summary>
     public int ResponseTimeoutSeconds { get; set; } = 300;
 

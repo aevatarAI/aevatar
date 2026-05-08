@@ -751,7 +751,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             metadata["scope_id"] = State.ScopeId;
 
         // Pin the bot owner's pre-configured model + NyxID route + tool-round cap onto the
-        // outbound LLM metadata, the same pattern ChannelLlmReplyInboxRuntime applies for
+        // outbound LLM metadata, the same pattern AgentRunGAgent applies for
         // nyxid-chat. Without this, scheduled runs fall through to NyxIdLLMProvider's
         // compile-time defaults (`gpt-5.4` against `/api/v1/llm/gateway/v1/`), which the
         // gateway routes to the OpenAI provider — failing for bot owners who pre-configured

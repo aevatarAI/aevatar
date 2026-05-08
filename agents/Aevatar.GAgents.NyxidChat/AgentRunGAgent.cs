@@ -1,25 +1,39 @@
-using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Core;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
-using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Channel.NyxIdRelay;
-using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.NyxidChat;
 
-public sealed class ChannelLlmReplyInboxRuntime :
-    IHostedService,
-    IAsyncDisposable,
-    IChannelLlmReplyInbox
+/// <summary>
+/// Run-scoped continuation owner for one deferred channel LLM reply.
+/// </summary>
+public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 {
-    internal const string InboxStreamId = "channel-runtime:llm-reply:inbox";
+    public const string ActorIdPrefix = "channel-agent-run:";
 
-    private readonly IStreamProvider _streamProvider;
+    internal const long MaxRunRequestAgeMs = 5 * 60 * 1000;
+
+    /// <summary>
+    /// Hard upper bound on a single LLM reply turn. Mirrors
+    /// <c>NyxIdRelayOptions.ResponseTimeoutSeconds</c> (default 300s).
+    /// A configured value of <c>0</c> or negative is treated as "disable the cap".
+    /// </summary>
+    internal const int FallbackTimeoutSecondsDefault = 300;
+
+    /// <summary>
+    /// Standalone budget for metadata enrichment (scope resolve + UserConfig lookup).
+    /// </summary>
+    internal static readonly TimeSpan MetadataBuildBudget = TimeSpan.FromSeconds(15);
+
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _actorDispatchPort;
     private readonly IConversationReplyGenerator _replyGenerator;
@@ -28,26 +42,21 @@ public sealed class ChannelLlmReplyInboxRuntime :
     private readonly INyxIdRelayScopeResolver? _scopeResolver;
     private readonly IUserConfigQueryPort? _userConfigQueryPort;
     private readonly TimeProvider _timeProvider;
-    private readonly ILogger<ChannelLlmReplyInboxRuntime> _logger;
-    private IAsyncDisposable? _subscription;
+    private readonly ILogger<AgentRunGAgent> _logger;
 
-    public ChannelLlmReplyInboxRuntime(
-        IStreamProvider streamProvider,
+    public AgentRunGAgent(
         IActorRuntime actorRuntime,
+        IActorDispatchPort actorDispatchPort,
         IConversationReplyGenerator replyGenerator,
         IInteractiveReplyCollector? interactiveReplyCollector,
         Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions,
-        ILogger<ChannelLlmReplyInboxRuntime> logger,
+        ILogger<AgentRunGAgent> logger,
         INyxIdRelayScopeResolver? scopeResolver = null,
         IUserConfigQueryPort? userConfigQueryPort = null,
-        TimeProvider? timeProvider = null,
-        IActorDispatchPort? actorDispatchPort = null)
+        TimeProvider? timeProvider = null)
     {
-        _streamProvider = streamProvider ?? throw new ArgumentNullException(nameof(streamProvider));
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
-        _actorDispatchPort = actorDispatchPort
-            ?? actorRuntime as IActorDispatchPort
-            ?? throw new ArgumentNullException(nameof(actorDispatchPort));
+        _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _replyGenerator = replyGenerator ?? throw new ArgumentNullException(nameof(replyGenerator));
         _interactiveReplyCollector = interactiveReplyCollector;
         _relayOptions = relayOptions;
@@ -57,109 +66,106 @@ public sealed class ChannelLlmReplyInboxRuntime :
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public async Task StartAsync(CancellationToken ct)
+    public static string BuildActorId(string correlationId)
     {
-        if (_subscription is not null)
+        ArgumentException.ThrowIfNullOrWhiteSpace(correlationId);
+        return ActorIdPrefix + correlationId.Trim();
+    }
+
+    protected override AgentRunGAgentState TransitionState(AgentRunGAgentState current, IMessage evt) =>
+        StateTransitionMatcher
+            .Match(current, evt)
+            .On<AgentRunStartedEvent>(ApplyStarted)
+            .On<AgentRunReplyProducedEvent>(ApplyReplyProduced)
+            .On<AgentRunDroppedEvent>(ApplyDropped)
+            .On<AgentRunFailedEvent>(ApplyFailed)
+            .OrCurrent();
+
+    [EventHandler]
+    public async Task HandleStartAsync(AgentRunStartRequested command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (command.Request is null)
+        {
+            _logger.LogWarning("Dropping malformed agent run start command without request: runActor={RunActorId}", Id);
             return;
+        }
 
-        _subscription = await _streamProvider
-            .GetStream(InboxStreamId)
-            .SubscribeAsync<NeedsLlmReplyEvent>(ProcessAsync, ct);
+        var request = command.Request.Clone();
+        var runId = NormalizeOptional(request.CorrelationId) ?? Id;
+        var startedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
 
-        _logger.LogInformation("Started channel LLM reply inbox on {StreamId}", InboxStreamId);
-    }
-
-    public async Task StopAsync(CancellationToken ct)
-    {
-        if (_subscription is null)
+        if (State.Status is AgentRunStatus.ReplyProduced or AgentRunStatus.Dropped or AgentRunStatus.Failed)
+        {
+            _logger.LogInformation(
+                "Ignoring duplicate terminal agent run start: runId={RunId} status={Status}",
+                runId,
+                State.Status);
             return;
+        }
 
-        await _subscription.DisposeAsync();
-        _subscription = null;
-        _logger.LogInformation("Stopped channel LLM reply inbox on {StreamId}", InboxStreamId);
+        if (string.IsNullOrWhiteSpace(State.RunId))
+        {
+            await PersistDomainEventAsync(new AgentRunStartedEvent
+            {
+                RunId = runId,
+                CorrelationId = request.CorrelationId,
+                TargetActorId = request.TargetActorId,
+                StartedAtUnixMs = startedAtUnixMs,
+            });
+        }
+
+        await ProcessAsync(request, runId);
     }
 
-    public Task EnqueueAsync(NeedsLlmReplyEvent request, CancellationToken ct)
+    private async Task ProcessAsync(NeedsLlmReplyEvent request, string runId)
     {
-        ArgumentNullException.ThrowIfNull(request);
-        return _streamProvider.GetStream(InboxStreamId).ProduceAsync(request, ct);
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        await StopAsync(CancellationToken.None);
-    }
-
-    internal const long MaxInboxRequestAgeMs = 5 * 60 * 1000;
-
-    /// <summary>
-    /// Hard upper bound on a single LLM reply turn. Mirrors
-    /// <c>NyxIdRelayOptions.ResponseTimeoutSeconds</c> (default 300s) — long enough for the
-    /// aevatar Lark bot's multi-step flows (skill search + remote tool + summarize) to land
-    /// without truncation, short enough that a true hang does not pin the inbox task forever.
-    /// A configured value of <c>0</c> or negative is treated as "disable the cap" — pass
-    /// through with no timeout, mirroring HttpClient/Polly conventions where 0 means
-    /// "no limit". The default of 300s applies when the option is unset.
-    /// </summary>
-    internal const int FallbackTimeoutSecondsDefault = 300;
-
-    /// <summary>
-    /// Standalone budget for metadata enrichment (scope resolve + UserConfig lookup).
-    /// We split this out from the LLM run budget so that slow infra around metadata
-    /// can't silently steal the LLM's response window — and so a metadata timeout
-    /// surfaces as a distinct error code rather than a misleading "llm_reply_timeout".
-    /// </summary>
-    internal static readonly TimeSpan MetadataBuildBudget = TimeSpan.FromSeconds(15);
-
-    internal async Task ProcessAsync(NeedsLlmReplyEvent request)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-
         _logger.LogInformation(
-            "Processing LLM reply request: correlation={CorrelationId} target={TargetActorId}",
+            "Processing agent run LLM reply request: runId={RunId} correlation={CorrelationId} target={TargetActorId}",
+            runId,
             request.CorrelationId,
             request.TargetActorId);
 
         if (request.Activity is null || string.IsNullOrWhiteSpace(request.TargetActorId))
         {
             _logger.LogWarning(
-                "Dropping malformed deferred LLM reply request: correlation={CorrelationId}, target={TargetActorId}",
+                "Dropping malformed deferred LLM reply request: runId={RunId}, correlation={CorrelationId}, target={TargetActorId}",
+                runId,
                 request.CorrelationId,
                 request.TargetActorId);
-            await NotifyActorOfDropAsync(request, "malformed_deferred_llm_reply_request");
+            await DropAsync(request, runId, "malformed_deferred_llm_reply_request");
             return;
         }
 
         // Stale gate: NyxID relay reply tokens have a ~30 min TTL and the user access
         // token used for the LLM call expires inside ~15 min. A request that has been
-        // sitting in the stream for hours can't lead to a successful reply, so drop it
-        // here instead of spending an LLM round just to fail at the outbound stage.
-        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        if (request.RequestedAtUnixMs > 0 && nowMs - request.RequestedAtUnixMs > MaxInboxRequestAgeMs)
+        // delayed past the run window cannot lead to a successful reply.
+        var nowMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+        if (request.RequestedAtUnixMs > 0 && nowMs - request.RequestedAtUnixMs > MaxRunRequestAgeMs)
         {
             _logger.LogInformation(
-                "Dropping stale LLM reply request: correlation={CorrelationId} ageMs={AgeMs}",
+                "Dropping stale LLM reply request: runId={RunId} correlation={CorrelationId} ageMs={AgeMs}",
+                runId,
                 request.CorrelationId,
                 nowMs - request.RequestedAtUnixMs);
-            await NotifyActorOfDropAsync(request, "stale_inbox_request_dropped");
+            await DropAsync(request, runId, "stale_agent_run_request_dropped");
             return;
         }
 
         // Relay credential gate: relay turns require a fresh reply_token to send the
-        // outbound. A relay request with no inbox-carried token (e.g., rehydrated from
-        // persisted state after a pod restart that lost the original capture) cannot
-        // be delivered, so skip the LLM call entirely.
+        // outbound. A relay request with no command-carried token cannot be delivered,
+        // so skip the LLM call entirely.
         if (IsRelayRequest(request) && string.IsNullOrWhiteSpace(request.ReplyToken))
         {
             _logger.LogWarning(
-                "Dropping relay LLM reply request without inbox-carried reply_token: correlation={CorrelationId}",
+                "Dropping relay LLM reply request without command-carried reply_token: runId={RunId} correlation={CorrelationId}",
+                runId,
                 request.CorrelationId);
-            await NotifyActorOfDropAsync(request, "missing_relay_reply_token");
+            await DropAsync(request, runId, "missing_relay_reply_token");
             return;
         }
 
-        var actor = await _actorRuntime.GetAsync(request.TargetActorId)
-                    ?? await _actorRuntime.CreateAsync<ConversationGAgent>(request.TargetActorId, CancellationToken.None);
+        await EnsureTargetActorAsync(request.TargetActorId);
 
         string replyText;
         MessageContent? outboundIntent = null;
@@ -168,9 +174,6 @@ public sealed class ChannelLlmReplyInboxRuntime :
         var errorSummary = string.Empty;
         using TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, request.TargetActorId);
 
-        // Metadata enrichment runs on its own short budget so a slow scope/UserConfig lookup
-        // can't silently shrink the LLM run's window. The LLM CTS only starts ticking after
-        // metadata is in hand, and a metadata timeout surfaces as a distinct error code.
         IReadOnlyDictionary<string, string> effectiveMetadata;
         using (var metadataCts = new CancellationTokenSource(MetadataBuildBudget))
         {
@@ -182,14 +185,15 @@ public sealed class ChannelLlmReplyInboxRuntime :
             {
                 _logger.LogWarning(
                     ex,
-                    "Deferred LLM reply metadata build timed out after {TimeoutSeconds}s: correlation={CorrelationId}",
+                    "Deferred LLM reply metadata build timed out after {TimeoutSeconds}s: runId={RunId} correlation={CorrelationId}",
                     (int)MetadataBuildBudget.TotalSeconds,
+                    runId,
                     request.CorrelationId);
                 replyText = "Sorry, I couldn't load your model preferences in time. Please try again.";
                 terminalState = LlmReplyTerminalState.Failed;
                 errorCode = "llm_reply_metadata_timeout";
                 errorSummary = $"Metadata enrichment exceeded {(int)MetadataBuildBudget.TotalSeconds}s budget.";
-                await DispatchReadyEventAsync(request, replyText, outboundIntent, terminalState, errorCode, errorSummary);
+                await FailAndDispatchReadyAsync(request, runId, replyText, outboundIntent, terminalState, errorCode, errorSummary);
                 return;
             }
         }
@@ -239,12 +243,13 @@ public sealed class ChannelLlmReplyInboxRuntime :
             terminalState = LlmReplyTerminalState.Failed;
             errorCode = "llm_reply_timeout";
             errorSummary = $"LLM reply generation exceeded {(int)fallbackTimeout.TotalSeconds}s budget.";
-            replyText = "Sorry, this took too long to process — the model or one of its tools didn't " +
+            replyText = "Sorry, this took too long to process - the model or one of its tools didn't " +
                         "respond in time. Please try again, or rephrase the request.";
             _logger.LogWarning(
                 ex,
-                "Deferred LLM reply timed out after {TimeoutSeconds}s: correlation={CorrelationId}",
+                "Deferred LLM reply timed out after {TimeoutSeconds}s: runId={RunId} correlation={CorrelationId}",
                 (int)fallbackTimeout.TotalSeconds,
+                runId,
                 request.CorrelationId);
         }
         catch (Exception ex)
@@ -255,11 +260,69 @@ public sealed class ChannelLlmReplyInboxRuntime :
             replyText = NyxIdRelayErrorClassifier.Classify(ex.Message);
             _logger.LogWarning(
                 ex,
-                "Deferred LLM reply generation failed: correlation={CorrelationId}",
+                "Deferred LLM reply generation failed: runId={RunId} correlation={CorrelationId}",
+                runId,
                 request.CorrelationId);
         }
 
+        if (terminalState == LlmReplyTerminalState.Failed)
+        {
+            await FailAndDispatchReadyAsync(
+                request,
+                runId,
+                replyText,
+                outboundIntent,
+                terminalState,
+                errorCode,
+                errorSummary);
+            return;
+        }
+
+        await PersistDomainEventAsync(new AgentRunReplyProducedEvent
+        {
+            RunId = runId,
+            CorrelationId = request.CorrelationId,
+            TargetActorId = request.TargetActorId,
+            TerminalState = terminalState,
+            ProducedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+        });
         await DispatchReadyEventAsync(request, replyText, outboundIntent, terminalState, errorCode, errorSummary);
+    }
+
+    private async Task FailAndDispatchReadyAsync(
+        NeedsLlmReplyEvent request,
+        string runId,
+        string replyText,
+        MessageContent? outboundIntent,
+        LlmReplyTerminalState terminalState,
+        string errorCode,
+        string errorSummary)
+    {
+        await PersistDomainEventAsync(new AgentRunFailedEvent
+        {
+            RunId = runId,
+            CorrelationId = request.CorrelationId,
+            TargetActorId = request.TargetActorId,
+            ErrorCode = errorCode,
+            ErrorSummary = errorSummary,
+            FailedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+        });
+
+        await DispatchReadyEventAsync(request, replyText, outboundIntent, terminalState, errorCode, errorSummary);
+    }
+
+    private async Task DropAsync(NeedsLlmReplyEvent request, string runId, string reason)
+    {
+        await PersistDomainEventAsync(new AgentRunDroppedEvent
+        {
+            RunId = runId,
+            CorrelationId = request.CorrelationId,
+            TargetActorId = request.TargetActorId,
+            Reason = reason,
+            DroppedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+        });
+
+        await NotifyActorOfDropAsync(request, reason);
     }
 
     private async Task DispatchReadyEventAsync(
@@ -270,31 +333,27 @@ public sealed class ChannelLlmReplyInboxRuntime :
         string errorCode,
         string errorSummary)
     {
+        if (string.IsNullOrWhiteSpace(request.TargetActorId))
+            return;
+
         var ready = new LlmReplyReadyEvent
         {
             CorrelationId = request.CorrelationId,
             RegistrationId = request.RegistrationId,
-            SourceActorId = InboxStreamId,
+            SourceActorId = Id,
             Activity = request.Activity!.Clone(),
             Outbound = outboundIntent?.Clone() ?? new MessageContent { Text = replyText },
             TerminalState = terminalState,
             ErrorCode = errorCode,
             ErrorSummary = errorSummary,
             ReadyAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-            // Echo the inbox-only relay credential straight back so ConversationGAgent's
+            // Echo the command-only relay credential straight back so ConversationGAgent's
             // outbound reply does not depend on its in-memory token dict still having the
             // entry. The actor consumes these fields and never persists them.
             ReplyToken = request.ReplyToken ?? string.Empty,
             ReplyTokenExpiresAtUnixMs = request.ReplyTokenExpiresAtUnixMs,
         };
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
-            Payload = Any.Pack(ready),
-            Route = EnvelopeRouteSemantics.CreateDirect(InboxStreamId, request.TargetActorId),
-        };
-
+        var envelope = CreateEnvelope(request.TargetActorId, ready, request.CorrelationId);
         await _actorDispatchPort.DispatchAsync(request.TargetActorId, envelope, CancellationToken.None);
     }
 
@@ -317,9 +376,6 @@ public sealed class ChannelLlmReplyInboxRuntime :
         var throttle = TimeSpan.FromMilliseconds(Math.Max(0, cardMode
             ? _relayOptions.StreamingCardKitFlushIntervalMs
             : _relayOptions.StreamingFlushIntervalMs));
-        // CardKit element-content updates have no per-card edit cap, so the interim cap that
-        // protects the legacy edit-message path is irrelevant. Pass int.MaxValue so the sink's
-        // throttle is the only frame-rate gate.
         var maxInterimChunks = cardMode
             ? int.MaxValue
             : Math.Max(0, _relayOptions.StreamingMaxInterimChunks);
@@ -342,21 +398,8 @@ public sealed class ChannelLlmReplyInboxRuntime :
     {
         var metadata = new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal);
 
-        // Apply the bot owner's pre-configured LLM route + model. The relay callback
-        // identifies the bot by api_key_id (in activity.Bot.Value); we resolve that to
-        // the owner's Aevatar scope id and load the same UserConfig the owner uses
-        // when chatting through nyxid-chat themselves, then pin ModelOverride /
-        // NyxIdRoutePreference / MaxToolRoundsOverride from that configuration.
         await ApplyBotOwnerLlmConfigAsync(request, metadata, ct);
 
-        // The inbound callback's X-NyxID-User-Token is the bot owner's NyxID session
-        // JWT (freshly issued by NyxID for each callback). It is the bot owner's own
-        // credential for LLM calls — the same thing that would authorize them in
-        // nyxid-chat. The short TTL (~15 min) is mitigated by the direct-enqueue
-        // dispatch (#380), the inbox-echoed token flow (#383), and the stale pending
-        // request GC, so the token is still valid when the LLM call actually fires
-        // for any non-stale request. If the downstream provider rejects it, the
-        // classifier surfaces a real user-facing error via NyxIdRelayErrorClassifier.
         var userAccessToken = request.Activity?.TransportExtras?.NyxUserAccessToken?.Trim();
         if (!string.IsNullOrWhiteSpace(userAccessToken))
         {
@@ -388,7 +431,8 @@ public sealed class ChannelLlmReplyInboxRuntime :
         {
             _logger.LogWarning(
                 ex,
-                "Failed to resolve bot owner scope id for LLM config: correlation={CorrelationId} apiKeyId={ApiKeyId}",
+                "Failed to resolve bot owner scope id for LLM config: runId={RunId} correlation={CorrelationId} apiKeyId={ApiKeyId}",
+                Id,
                 request.CorrelationId,
                 apiKeyId);
             return;
@@ -397,7 +441,8 @@ public sealed class ChannelLlmReplyInboxRuntime :
         if (string.IsNullOrWhiteSpace(scopeId))
         {
             _logger.LogDebug(
-                "No bot owner scope id resolved for LLM config: correlation={CorrelationId} apiKeyId={ApiKeyId}",
+                "No bot owner scope id resolved for LLM config: runId={RunId} correlation={CorrelationId} apiKeyId={ApiKeyId}",
+                Id,
                 request.CorrelationId,
                 apiKeyId);
             return;
@@ -415,7 +460,8 @@ public sealed class ChannelLlmReplyInboxRuntime :
                     config.MaxToolRounds.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
             _logger.LogInformation(
-                "Applied bot owner LLM config: correlation={CorrelationId} scopeId={ScopeId} model={Model} route={Route}",
+                "Applied bot owner LLM config: runId={RunId} correlation={CorrelationId} scopeId={ScopeId} model={Model} route={Route}",
+                Id,
                 request.CorrelationId,
                 scopeId,
                 string.IsNullOrWhiteSpace(config.DefaultModel) ? "<server-default>" : config.DefaultModel,
@@ -425,22 +471,13 @@ public sealed class ChannelLlmReplyInboxRuntime :
         {
             _logger.LogWarning(
                 ex,
-                "Failed to load bot owner LLM config: correlation={CorrelationId} scopeId={ScopeId}",
+                "Failed to load bot owner LLM config: runId={RunId} correlation={CorrelationId} scopeId={ScopeId}",
+                Id,
                 request.CorrelationId,
                 scopeId);
         }
     }
 
-    /// <summary>
-    /// Resolve the LLM-run cap from <c>NyxIdRelayOptions.ResponseTimeoutSeconds</c>.
-    /// Conventions:
-    ///   * unset / null  → <see cref="FallbackTimeoutSecondsDefault"/> (300s)
-    ///   * &gt; 0        → use that exact value
-    ///   * 0 or negative → <see cref="TimeSpan.Zero"/> meaning "no timeout"; the caller
-    ///     constructs an unbounded <see cref="CancellationTokenSource"/>. Use this only
-    ///     in environments that have an external watchdog — without it, a hung tool
-    ///     keeps the inbox task alive indefinitely.
-    /// </summary>
     private TimeSpan ResolveFallbackTimeout()
     {
         if (_relayOptions is null)
@@ -475,32 +512,23 @@ public sealed class ChannelLlmReplyInboxRuntime :
         {
             _logger.LogWarning(
                 ex,
-                "Failed to resolve actor for inbox drop notification: correlation={CorrelationId} target={TargetActorId}",
+                "Failed to resolve actor for run drop notification: runId={RunId} correlation={CorrelationId} target={TargetActorId}",
+                Id,
                 request.CorrelationId,
                 request.TargetActorId);
             return;
         }
 
         if (actor is null)
-        {
-            // No active actor means there is nothing pending to clean up; the request
-            // either was never persisted or the actor's state was already retired.
             return;
-        }
 
         var dropped = new DeferredLlmReplyDroppedEvent
         {
             CorrelationId = request.CorrelationId,
             Reason = reason,
-            DroppedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            DroppedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
         };
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(dropped),
-            Route = EnvelopeRouteSemantics.CreateDirect(InboxStreamId, request.TargetActorId),
-        };
+        var envelope = CreateEnvelope(request.TargetActorId, dropped, request.CorrelationId);
 
         try
         {
@@ -510,10 +538,21 @@ public sealed class ChannelLlmReplyInboxRuntime :
         {
             _logger.LogWarning(
                 ex,
-                "Failed to deliver inbox drop notification: correlation={CorrelationId} reason={Reason}",
+                "Failed to deliver run drop notification: runId={RunId} correlation={CorrelationId} reason={Reason}",
+                Id,
                 request.CorrelationId,
                 reason);
         }
+    }
+
+    private async Task EnsureTargetActorAsync(string targetActorId)
+    {
+        if (string.IsNullOrWhiteSpace(targetActorId))
+            return;
+
+        var actor = await _actorRuntime.GetAsync(targetActorId);
+        if (actor is null)
+            await _actorRuntime.CreateAsync<ConversationGAgent>(targetActorId, CancellationToken.None);
     }
 
     private bool ShouldCaptureInteractiveReply(ChatActivity? activity)
@@ -530,18 +569,79 @@ public sealed class ChannelLlmReplyInboxRuntime :
             CorrelationId.Length: > 0,
         };
     }
-}
 
-public sealed class ChannelLlmReplyInboxHostedService : IHostedService
-{
-    private readonly ChannelLlmReplyInboxRuntime _runtime;
+    private EventEnvelope CreateEnvelope<TPayload>(
+        string targetActorId,
+        TPayload payload,
+        string correlationId)
+        where TPayload : IMessage =>
+        new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+            Payload = Any.Pack(payload),
+            Route = EnvelopeRouteSemantics.CreateDirect(Id, targetActorId),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = correlationId ?? string.Empty,
+            },
+        };
 
-    public ChannelLlmReplyInboxHostedService(ChannelLlmReplyInboxRuntime runtime)
+    private static AgentRunGAgentState ApplyStarted(AgentRunGAgentState current, AgentRunStartedEvent evt)
     {
-        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        var next = current.Clone();
+        next.RunId = evt.RunId;
+        next.CorrelationId = evt.CorrelationId;
+        next.TargetActorId = evt.TargetActorId;
+        next.Status = AgentRunStatus.Started;
+        next.StartedAtUnixMs = evt.StartedAtUnixMs;
+        return next;
     }
 
-    public Task StartAsync(CancellationToken ct) => _runtime.StartAsync(ct);
+    private static AgentRunGAgentState ApplyReplyProduced(
+        AgentRunGAgentState current,
+        AgentRunReplyProducedEvent evt)
+    {
+        var next = current.Clone();
+        next.RunId = string.IsNullOrWhiteSpace(next.RunId) ? evt.RunId : next.RunId;
+        next.CorrelationId = string.IsNullOrWhiteSpace(next.CorrelationId) ? evt.CorrelationId : next.CorrelationId;
+        next.TargetActorId = string.IsNullOrWhiteSpace(next.TargetActorId) ? evt.TargetActorId : next.TargetActorId;
+        next.Status = AgentRunStatus.ReplyProduced;
+        next.CompletedAtUnixMs = evt.ProducedAtUnixMs;
+        next.ErrorCode = evt.ErrorCode;
+        next.ErrorSummary = evt.ErrorSummary;
+        return next;
+    }
 
-    public Task StopAsync(CancellationToken ct) => _runtime.StopAsync(ct);
+    private static AgentRunGAgentState ApplyDropped(AgentRunGAgentState current, AgentRunDroppedEvent evt)
+    {
+        var next = current.Clone();
+        next.RunId = string.IsNullOrWhiteSpace(next.RunId) ? evt.RunId : next.RunId;
+        next.CorrelationId = string.IsNullOrWhiteSpace(next.CorrelationId) ? evt.CorrelationId : next.CorrelationId;
+        next.TargetActorId = string.IsNullOrWhiteSpace(next.TargetActorId) ? evt.TargetActorId : next.TargetActorId;
+        next.Status = AgentRunStatus.Dropped;
+        next.CompletedAtUnixMs = evt.DroppedAtUnixMs;
+        next.ErrorCode = evt.Reason;
+        next.ErrorSummary = string.Empty;
+        return next;
+    }
+
+    private static AgentRunGAgentState ApplyFailed(AgentRunGAgentState current, AgentRunFailedEvent evt)
+    {
+        var next = current.Clone();
+        next.RunId = string.IsNullOrWhiteSpace(next.RunId) ? evt.RunId : next.RunId;
+        next.CorrelationId = string.IsNullOrWhiteSpace(next.CorrelationId) ? evt.CorrelationId : next.CorrelationId;
+        next.TargetActorId = string.IsNullOrWhiteSpace(next.TargetActorId) ? evt.TargetActorId : next.TargetActorId;
+        next.Status = AgentRunStatus.Failed;
+        next.CompletedAtUnixMs = evt.FailedAtUnixMs;
+        next.ErrorCode = evt.ErrorCode;
+        next.ErrorSummary = evt.ErrorSummary;
+        return next;
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var trimmed = value?.Trim();
+        return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
+    }
 }

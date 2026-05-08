@@ -4,9 +4,11 @@ using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
@@ -14,10 +16,38 @@ using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
-public sealed class ChannelLlmReplyInboxRuntimeTests
+public sealed class AgentRunGAgentTests
 {
     [Fact]
-    public async Task ProcessAsync_RelayTurnCapturesInteractiveIntentIntoReadyEvent()
+    public async Task DispatchAsync_ShouldCreateRunActorAndDispatchStartCommand()
+    {
+        var actorRuntime = new DispatchingActorRuntime();
+        var dispatcher = new AgentRunDispatcher(
+            actorRuntime,
+            actorRuntime,
+            NullLogger<AgentRunDispatcher>.Instance);
+
+        await dispatcher.DispatchAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-dispatch",
+            TargetActorId = "conversation-actor",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-dispatch",
+        }, CancellationToken.None);
+
+        actorRuntime.Dispatches.Should().ContainSingle();
+        var (actorId, envelope) = actorRuntime.Dispatches.Single();
+        actorId.Should().Be(AgentRunGAgent.BuildActorId("corr-dispatch"));
+        envelope.Propagation.CorrelationId.Should().Be("corr-dispatch");
+        var command = envelope.Payload.Unpack<AgentRunStartRequested>();
+        command.Request.CorrelationId.Should().Be("corr-dispatch");
+        command.Request.TargetActorId.Should().Be("conversation-actor");
+        command.Request.ReplyToken.Should().Be("relay-token-dispatch");
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_RelayTurnCapturesInteractiveIntentIntoReadyEvent()
     {
         var collector = new AsyncLocalInteractiveReplyCollector();
         var replyGenerator = new RecordingReplyGenerator(() =>
@@ -41,15 +71,13 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled = call.Arg<EventEnvelope>());
         var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
-        var runtime = new ChannelLlmReplyInboxRuntime(
-            Substitute.For<IStreamProvider>(),
+        var runtime = CreateRunAgent(
             actorRuntime,
             replyGenerator,
             collector,
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
-            NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
 
-        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-1",
             TargetActorId = "actor-1",
@@ -67,7 +95,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
     }
 
     [Fact]
-    public async Task ProcessAsync_NonRelayTurnDoesNotEnableInteractiveScope()
+    public async Task HandleStartAsync_NonRelayTurnDoesNotEnableInteractiveScope()
     {
         var collector = new AsyncLocalInteractiveReplyCollector();
         var replyGenerator = new RecordingReplyGenerator(() => collector.Capture(new MessageContent { Text = "ignored" }))
@@ -80,15 +108,13 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled = call.Arg<EventEnvelope>());
         var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
-        var runtime = new ChannelLlmReplyInboxRuntime(
-            Substitute.For<IStreamProvider>(),
+        var runtime = CreateRunAgent(
             actorRuntime,
             replyGenerator,
             collector,
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
-            NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
 
-        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-2",
             TargetActorId = "actor-1",
@@ -108,7 +134,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
     }
 
     [Fact]
-    public async Task ProcessAsync_ShouldEmitFailedReply_WhenGeneratorThrows()
+    public async Task HandleStartAsync_ShouldEmitFailedReply_WhenGeneratorThrows()
     {
         var collector = new AsyncLocalInteractiveReplyCollector();
         var replyGenerator = new ThrowingReplyGenerator(new InvalidOperationException("boom"));
@@ -118,15 +144,13 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled = call.Arg<EventEnvelope>());
         var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
-        var runtime = new ChannelLlmReplyInboxRuntime(
-            Substitute.For<IStreamProvider>(),
+        var runtime = CreateRunAgent(
             actorRuntime,
             replyGenerator,
             collector,
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
-            NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
 
-        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-throw",
             TargetActorId = "actor-1",
@@ -144,10 +168,10 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
     }
 
     [Fact]
-    public async Task ProcessAsync_ShouldEmitTimeoutFallbackReply_WhenGeneratorHangsPastBudget()
+    public async Task HandleStartAsync_ShouldEmitTimeoutFallbackReply_WhenGeneratorHangsPastBudget()
     {
         // Without a cancellation budget on the LLM run, a tool that hangs (broken sandbox,
-        // unreachable proxy upstream, slow remote SSH) would pin the inbox task indefinitely
+        // unreachable proxy upstream, slow remote SSH) would pin the run actor turn indefinitely
         // and Lark would stay on the loading reaction forever. The runtime caps each turn at
         // the relay ResponseTimeoutSeconds and folds the cancellation into a user-visible
         // fallback reply with errorCode=llm_reply_timeout.
@@ -159,8 +183,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled = call.Arg<EventEnvelope>());
         var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
-        var runtime = new ChannelLlmReplyInboxRuntime(
-            Substitute.For<IStreamProvider>(),
+        var runtime = CreateRunAgent(
             actorRuntime,
             replyGenerator,
             collector,
@@ -168,10 +191,9 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             {
                 InteractiveRepliesEnabled = true,
                 ResponseTimeoutSeconds = 1,
-            },
-            NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
+            });
 
-        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-timeout",
             TargetActorId = "actor-1",
@@ -190,7 +212,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
     }
 
     [Fact]
-    public async Task ProcessAsync_ShouldEmitFailedReply_WhenGeneratorReturnsEmpty()
+    public async Task HandleStartAsync_ShouldEmitFailedReply_WhenGeneratorReturnsEmpty()
     {
         var collector = new AsyncLocalInteractiveReplyCollector();
         var replyGenerator = new RecordingReplyGenerator(() => false)
@@ -203,15 +225,13 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled = call.Arg<EventEnvelope>());
         var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
-        var runtime = new ChannelLlmReplyInboxRuntime(
-            Substitute.For<IStreamProvider>(),
+        var runtime = CreateRunAgent(
             actorRuntime,
             replyGenerator,
             collector,
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
-            NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
 
-        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-empty",
             TargetActorId = "actor-1",
@@ -228,7 +248,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
     }
 
     [Fact]
-    public async Task ProcessAsync_ShouldEchoReplyTokenIntoLlmReplyReadyEvent()
+    public async Task HandleStartAsync_ShouldEchoReplyTokenIntoLlmReplyReadyEvent()
     {
         var actor = Substitute.For<IActor>();
         actor.Id.Returns("channel-conversation:lark:group:oc_group_chat_1");
@@ -236,16 +256,14 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled = call.Arg<EventEnvelope>());
         var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
-        var runtime = new ChannelLlmReplyInboxRuntime(
-            Substitute.For<IStreamProvider>(),
+        var runtime = CreateRunAgent(
             actorRuntime,
             new RecordingReplyGenerator(() => false) { ReplyText = "ok" },
             new AsyncLocalInteractiveReplyCollector(),
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
-            NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
 
         var expiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(20).ToUnixTimeMilliseconds();
-        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-echo",
             TargetActorId = "actor-1",
@@ -262,7 +280,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
     }
 
     [Fact]
-    public async Task ProcessAsync_ShouldDropRelayRequest_WhenInboxCarriesNoReplyToken()
+    public async Task HandleStartAsync_ShouldDropRelayRequest_WhenRunCommandCarriesNoReplyToken()
     {
         var actor = Substitute.For<IActor>();
         actor.Id.Returns("actor-1");
@@ -271,17 +289,15 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             .Do(call => handled = call.Arg<EventEnvelope>());
         var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
         var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "should not run" };
-        var runtime = new ChannelLlmReplyInboxRuntime(
-            Substitute.For<IStreamProvider>(),
+        var runtime = CreateRunAgent(
             actorRuntime,
             replyGenerator,
             new AsyncLocalInteractiveReplyCollector(),
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
-            NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
 
-        // Relay activity but no inbox-carried ReplyToken — simulates a request rehydrated
+        // Relay activity but no command-carried ReplyToken — simulates a request rehydrated
         // from persisted state after a pod restart, where the original token capture is gone.
-        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-no-token",
             TargetActorId = "actor-1",
@@ -297,7 +313,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
     }
 
     [Fact]
-    public async Task ProcessAsync_ShouldDropRequest_WhenOlderThanMaxAge()
+    public async Task HandleStartAsync_ShouldDropRequest_WhenOlderThanMaxAge()
     {
         var actor = Substitute.For<IActor>();
         actor.Id.Returns("actor-1");
@@ -306,18 +322,16 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             .Do(call => handled = call.Arg<EventEnvelope>());
         var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
         var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "should not run" };
-        var runtime = new ChannelLlmReplyInboxRuntime(
-            Substitute.For<IStreamProvider>(),
+        var runtime = CreateRunAgent(
             actorRuntime,
             replyGenerator,
             new AsyncLocalInteractiveReplyCollector(),
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
-            NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
 
         var requestedAtUnixMs = DateTimeOffset.UtcNow
-            .AddMilliseconds(-(ChannelLlmReplyInboxRuntime.MaxInboxRequestAgeMs + 60_000))
+            .AddMilliseconds(-(AgentRunGAgent.MaxRunRequestAgeMs + 60_000))
             .ToUnixTimeMilliseconds();
-        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-stale",
             TargetActorId = "actor-1",
@@ -331,22 +345,20 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         handled.Should().NotBeNull();
         var dropped = handled!.Payload.Unpack<DeferredLlmReplyDroppedEvent>();
         dropped.CorrelationId.Should().Be("corr-stale");
-        dropped.Reason.Should().Be("stale_inbox_request_dropped");
+        dropped.Reason.Should().Be("stale_agent_run_request_dropped");
     }
 
     [Fact]
-    public async Task ProcessAsync_ShouldDropSilently_WhenTargetActorIdMissing()
+    public async Task HandleStartAsync_ShouldDropSilently_WhenTargetActorIdMissing()
     {
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
-        var runtime = new ChannelLlmReplyInboxRuntime(
-            Substitute.For<IStreamProvider>(),
+        var runtime = CreateRunAgent(
             actorRuntime,
             new RecordingReplyGenerator(() => false),
             new AsyncLocalInteractiveReplyCollector(),
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
-            NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
 
-        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-missing",
             TargetActorId = string.Empty,
@@ -358,7 +370,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
     }
 
     [Fact]
-    public async Task ProcessAsync_ShouldNotifyActor_WhenActivityMissing()
+    public async Task HandleStartAsync_ShouldNotifyActor_WhenActivityMissing()
     {
         // Malformed payload (no Activity) should still tell the actor to retire its
         // pending entry — the actor decides whether to clean up. Otherwise the entry
@@ -369,15 +381,13 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled = call.Arg<EventEnvelope>());
         var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
-        var runtime = new ChannelLlmReplyInboxRuntime(
-            Substitute.For<IStreamProvider>(),
+        var runtime = CreateRunAgent(
             actorRuntime,
             new RecordingReplyGenerator(() => false),
             new AsyncLocalInteractiveReplyCollector(),
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
-            NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
 
-        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-no-activity",
             TargetActorId = "actor-1",
@@ -391,7 +401,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
     }
 
     [Fact]
-    public async Task ProcessAsync_StreamingEnabled_DispatchesChunkEventAndReadyEvent()
+    public async Task HandleStartAsync_StreamingEnabled_DispatchesChunkEventAndReadyEvent()
     {
         // Pin the legacy edit-message path explicitly: card-mode is now the default
         // (StreamingCardKitEnabled=true) and emits a structurally distinct
@@ -405,8 +415,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled.Add(call.Arg<EventEnvelope>()));
         var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
-        var runtime = new ChannelLlmReplyInboxRuntime(
-            Substitute.For<IStreamProvider>(),
+        var runtime = CreateRunAgent(
             actorRuntime,
             replyGenerator,
             collector,
@@ -416,10 +425,9 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
                 StreamingRepliesEnabled = true,
                 StreamingFlushIntervalMs = 0,
                 StreamingCardKitEnabled = false,
-            },
-            NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
+            });
 
-        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-stream",
             TargetActorId = "actor-1",
@@ -438,12 +446,12 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
     }
 
     [Fact]
-    public async Task ProcessAsync_StreamingEnabledWithDefaultCardMode_DispatchesCardChunkEvent()
+    public async Task HandleStartAsync_StreamingEnabledWithDefaultCardMode_DispatchesCardChunkEvent()
     {
         // Pinning the new default: StreamingCardKitEnabled=true causes the sink to emit
         // the card-mode chunk type, exercising the CardKit lifecycle entrypoint without
         // needing a real ChannelCardConversationTurnRunner wired up (the actor is mocked,
-        // so we only verify the inbox dispatched the right proto type to the actor).
+        // so we only verify the run actor dispatched the right proto type to the actor).
         var collector = new AsyncLocalInteractiveReplyCollector();
         var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "card streamed reply" };
         var actor = Substitute.For<IActor>();
@@ -452,8 +460,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled.Add(call.Arg<EventEnvelope>()));
         var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
-        var runtime = new ChannelLlmReplyInboxRuntime(
-            Substitute.For<IStreamProvider>(),
+        var runtime = CreateRunAgent(
             actorRuntime,
             replyGenerator,
             collector,
@@ -463,10 +470,9 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
                 StreamingRepliesEnabled = true,
                 StreamingCardKitFlushIntervalMs = 0,
                 // StreamingCardKitEnabled defaults to true.
-            },
-            NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
+            });
 
-        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-card-stream",
             TargetActorId = "actor-1",
@@ -485,7 +491,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
     }
 
     [Fact]
-    public async Task ProcessAsync_StreamingDisabledFlag_DispatchesOnlyReadyEvent()
+    public async Task HandleStartAsync_StreamingDisabledFlag_DispatchesOnlyReadyEvent()
     {
         var collector = new AsyncLocalInteractiveReplyCollector();
         var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "plain reply" };
@@ -495,15 +501,13 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled.Add(call.Arg<EventEnvelope>()));
         var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
-        var runtime = new ChannelLlmReplyInboxRuntime(
-            Substitute.For<IStreamProvider>(),
+        var runtime = CreateRunAgent(
             actorRuntime,
             replyGenerator,
             collector,
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = false, StreamingRepliesEnabled = false },
-            NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = false, StreamingRepliesEnabled = false });
 
-        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-legacy",
             TargetActorId = "actor-1",
@@ -518,7 +522,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
     }
 
     [Fact]
-    public async Task ProcessAsync_StreamingEnabledButNonRelay_DispatchesOnlyReadyEvent()
+    public async Task HandleStartAsync_StreamingEnabledButNonRelay_DispatchesOnlyReadyEvent()
     {
         var collector = new AsyncLocalInteractiveReplyCollector();
         var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "plain reply" };
@@ -528,15 +532,13 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled.Add(call.Arg<EventEnvelope>()));
         var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
-        var runtime = new ChannelLlmReplyInboxRuntime(
-            Substitute.For<IStreamProvider>(),
+        var runtime = CreateRunAgent(
             actorRuntime,
             replyGenerator,
             collector,
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = false, StreamingRepliesEnabled = true },
-            NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = false, StreamingRepliesEnabled = true });
 
-        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-nonrelay",
             TargetActorId = "actor-1",
@@ -554,7 +556,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
     }
 
     [Fact]
-    public async Task ProcessAsync_ShouldApplyBotOwnerLlmConfig_FromUserConfigQueryPort()
+    public async Task HandleStartAsync_ShouldApplyBotOwnerLlmConfig_FromUserConfigQueryPort()
     {
         // Bot owner's LLM model + route comes from UserConfig (the same store that backs
         // their nyxid-chat preferences), looked up by the scope id resolved from the
@@ -592,13 +594,11 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
                 GithubUsername: null,
                 MaxToolRounds: 11)));
 
-        var runtime = new ChannelLlmReplyInboxRuntime(
-            Substitute.For<IStreamProvider>(),
+        var runtime = CreateRunAgent(
             actorRuntime,
             replyGenerator,
             new AsyncLocalInteractiveReplyCollector(),
             new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
-            NullLogger<ChannelLlmReplyInboxRuntime>.Instance,
             scopeResolver,
             userConfigQueryPort);
 
@@ -609,7 +609,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             NyxUserAccessToken = "bot-owner-session-jwt",
         };
 
-        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-bot-owner",
             TargetActorId = "actor-1",
@@ -631,12 +631,12 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
     }
 
     [Fact]
-    public async Task ProcessAsync_ShouldThreadBotOwnerSessionTokenAsLlmBearer()
+    public async Task HandleStartAsync_ShouldThreadBotOwnerSessionTokenAsLlmBearer()
     {
         // The inbound X-NyxID-User-Token is the bot owner's own NyxID session JWT.
         // It is the credential that would authorize the owner's LLM calls in
         // nyxid-chat, so it is also the correct credential for the bot's relay
-        // LLM call. The stale-pending GC plus the direct-enqueue + inbox-echoed
+        // LLM call. The stale-pending GC plus the direct-enqueue + run-echoed
         // token flow keeps it fresh through the window where the LLM call actually
         // fires.
         var capturedMetadata = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -654,13 +654,11 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
         actor.Id.Returns("actor-1");
         var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
 
-        var runtime = new ChannelLlmReplyInboxRuntime(
-            Substitute.For<IStreamProvider>(),
+        var runtime = CreateRunAgent(
             actorRuntime,
             replyGenerator,
             new AsyncLocalInteractiveReplyCollector(),
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
-            NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
 
         var activity = BuildRelayActivity();
         activity.TransportExtras = new TransportExtras
@@ -668,7 +666,7 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             NyxUserAccessToken = "bot-owner-session-jwt",
         };
 
-        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-bearer",
             TargetActorId = "actor-1",
@@ -681,6 +679,51 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             .WhoseValue.Should().Be("bot-owner-session-jwt");
         capturedMetadata.Should().ContainKey(LLMRequestMetadataKeys.NyxIdOrgToken)
             .WhoseValue.Should().Be("bot-owner-session-jwt");
+    }
+
+    private static AgentRunGAgent CreateRunAgent(
+        IActorRuntime actorRuntime,
+        IConversationReplyGenerator replyGenerator,
+        IInteractiveReplyCollector? collector,
+        Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions relayOptions,
+        INyxIdRelayScopeResolver? scopeResolver = null,
+        IUserConfigQueryPort? userConfigQueryPort = null)
+    {
+        var dispatchPort = actorRuntime as IActorDispatchPort ?? Substitute.For<IActorDispatchPort>();
+        var agent = new AgentRunGAgent(
+            actorRuntime,
+            dispatchPort,
+            replyGenerator,
+            collector,
+            relayOptions,
+            NullLogger<AgentRunGAgent>.Instance,
+            scopeResolver,
+            userConfigQueryPort)
+        {
+            EventSourcing = new NoOpEventSourcing<AgentRunGAgentState>(),
+        };
+        SetId(agent, AgentRunGAgent.BuildActorId(Guid.NewGuid().ToString("N")));
+        return agent;
+    }
+
+    private static void SetId(object agent, string id)
+    {
+        var current = agent.GetType();
+        while (current is not null)
+        {
+            var setIdMethod = current.GetMethod(
+                "SetId",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            if (setIdMethod is not null)
+            {
+                setIdMethod.Invoke(agent, [id]);
+                return;
+            }
+
+            current = current.BaseType;
+        }
+
+        throw new InvalidOperationException("Unable to set agent id via reflection.");
     }
 
     private static ChatActivity BuildRelayActivity() =>
@@ -711,6 +754,8 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             static pair => pair.Id,
             static pair => pair.Actor,
             StringComparer.Ordinal);
+
+        public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
             where TAgent : IAgent
@@ -747,10 +792,47 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
 
         public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
+            Dispatches.Add((actorId, envelope));
             if (!_actors.TryGetValue(actorId, out var actor))
                 throw new InvalidOperationException($"Actor {actorId} not found.");
             await actor.HandleEventAsync(envelope, ct);
         }
+    }
+
+    private sealed class NoOpEventSourcing<TState> : IEventSourcingBehavior<TState>
+        where TState : class, IMessage<TState>, new()
+    {
+        private readonly List<IMessage> _pending = [];
+
+        public long CurrentVersion { get; private set; }
+
+        public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage
+        {
+            _pending.Add(evt);
+        }
+
+        public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
+        {
+            CurrentVersion += _pending.Count;
+            _pending.Clear();
+            return Task.FromResult(new EventStoreCommitResult
+            {
+                LatestVersion = CurrentVersion,
+            });
+        }
+
+        public Task PersistSnapshotAsync(TState currentState, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task<TState?> ReplayAsync(string agentId, CancellationToken ct = default) =>
+            Task.FromResult<TState?>(null);
+
+        public void DiscardPendingEvents()
+        {
+            _pending.Clear();
+        }
+
+        public TState TransitionState(TState current, IMessage evt) => current;
     }
 
     private sealed class RecordingReplyGenerator(Func<bool> captureAction) : IConversationReplyGenerator
@@ -806,4 +888,13 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             return await pendingReply.Task;
         }
     }
+}
+
+internal static class AgentRunGAgentTestExtensions
+{
+    public static Task HandleStartAsync(this AgentRunGAgent agent, NeedsLlmReplyEvent request) =>
+        agent.HandleStartAsync(new AgentRunStartRequested
+        {
+            Request = request,
+        });
 }

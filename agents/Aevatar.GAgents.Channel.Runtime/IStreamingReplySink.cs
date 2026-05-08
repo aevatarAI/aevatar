@@ -2,13 +2,13 @@ namespace Aevatar.GAgents.Channel.Runtime;
 
 /// <summary>
 /// Receives per-delta streaming updates from <see cref="IConversationReplyGenerator"/> so the reply
-/// inbox can fan the accumulated text to the conversation actor as it is being generated. The
+/// run actor can fan the accumulated text to the conversation actor as it is being generated. The
 /// actor is the sole holder of the relay reply token, so only it is allowed to drive the relay
 /// placeholder send and subsequent edit calls; this sink therefore fans out signals (chunk events)
 /// and never touches the outbound port directly.
 /// </summary>
 /// <remarks>
-/// Implementations are per-turn and owned by the inbox runtime. A null sink signals that streaming
+/// Implementations are per-turn and owned by the run actor. A null sink signals that streaming
 /// is disabled for the turn (for example, the feature flag is off, the activity is not a relay
 /// turn, or an earlier failure invalidated the turn); generators must tolerate a null sink by
 /// simply accumulating the final text without calling any sink method.

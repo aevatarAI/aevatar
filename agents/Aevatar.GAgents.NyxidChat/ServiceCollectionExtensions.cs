@@ -10,7 +10,6 @@ using Aevatar.GAgents.NyxidChat.Slash;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -21,6 +20,7 @@ public static class ServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
         RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatGAgent).TypeHandle);
+        RuntimeHelpers.RunClassConstructor(typeof(AgentRunGAgent).TypeHandle);
 
         services.AddHttpClient();
         services.TryAddSingleton(provider => BindRelayOptions(configuration));
@@ -36,10 +36,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<NyxIdRelayTransport>();
         services.TryAddSingleton<NyxIdRelayAuthValidator>();
 
-        // ─── Channel LLM reply inbox runtime + hosted service ───
-        services.TryAddSingleton<ChannelLlmReplyInboxRuntime>();
-        services.TryAddSingleton<IChannelLlmReplyInbox>(sp => sp.GetRequiredService<ChannelLlmReplyInboxRuntime>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, ChannelLlmReplyInboxHostedService>());
+        // ─── Channel LLM reply run dispatch ───
+        services.TryAddSingleton<IChannelLlmReplyRunDispatcher, AgentRunDispatcher>();
 
         // ─── Conversation turn-runner override + reply generator ───
         services.Replace(ServiceDescriptor.Singleton<IConversationTurnRunner, ChannelConversationTurnRunner>());

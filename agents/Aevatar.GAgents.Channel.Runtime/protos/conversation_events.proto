@@ -30,10 +30,10 @@ message NeedsLlmReplyEvent {
   aevatar.gagents.channel.abstractions.ChatActivity activity = 4;
   map<string, string> metadata = 5;
   int64 requested_at_unix_ms = 6;
-  // Transient inbox-only credential. The actor MUST clear `reply_token` and
+  // Transient run-command-only credential. The actor MUST clear `reply_token` and
   // `reply_token_expires_at_unix_ms` (set them to the empty default) on the
-  // copy passed to PersistDomainEventAsync; only the inbox-bound copy may
-  // carry them so the LLM worker can echo the credential back without the
+  // copy passed to PersistDomainEventAsync; only the run-bound copy may
+  // carry them so AgentRunGAgent can echo the credential back without the
   // actor's in-memory dict surviving deactivation. Never persist to event
   // store, projection, or read model.
   string reply_token = 7;
@@ -70,16 +70,16 @@ message LlmReplyReadyEvent {
   string error_code = 7;
   string error_summary = 8;
   int64 ready_at_unix_ms = 9;
-  // Transient inbox-echoed credential carried back from the LLM worker so the
+  // Transient run-echoed credential carried back from AgentRunGAgent so the
   // actor's outbound relay reply does not depend on its in-memory token dict
   // surviving deactivation. The actor consumes these fields directly and never
-  // persists them. The inbox subscriber copies the values from the inbound
+  // persists them. AgentRunGAgent copies the values from the inbound
   // NeedsLlmReplyEvent verbatim.
   string reply_token = 10;
   int64 reply_token_expires_at_unix_ms = 11;
 }
 
-// Per-delta streaming signal dispatched from the LLM inbox runtime to the conversation actor while
+// Per-delta streaming signal dispatched from AgentRunGAgent to the conversation actor while
 // the reply is still being generated. The actor owns the outbound reply credential and the
 // placeholder message identifier for the turn, so it must be the one issuing the relay placeholder
 // send and subsequent edit calls. This message carries only the cumulative accumulated text for
@@ -154,7 +154,7 @@ message NyxRelayReplyTokenCleanupRequestedEvent {
   int64 requested_at_unix_ms = 2;
 }
 
-// Sent by ChannelLlmReplyInboxRuntime when its pre-LLM gates (stale age,
+// Sent by AgentRunGAgent when its pre-LLM gates (stale age,
 // missing relay credential, malformed payload) refuse to process a deferred
 // LLM reply. The actor consumes this to retire the matching pending entry
 // from State.PendingLlmReplyRequests via a NotRetryable

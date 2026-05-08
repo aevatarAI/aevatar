@@ -802,7 +802,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     {
         // Regression for the "/daily failed: Provider 'openai' not connected" report:
         // skill runners must honor the bot owner's pre-configured model + NyxID route + tool
-        // cap — same shape ChannelLlmReplyInboxRuntime applies for nyxid-chat. Without it,
+        // cap — same shape AgentRunGAgent applies for nyxid-chat. Without it,
         // every scheduled run falls through to NyxIdLLMProvider's compile-time `gpt-5.4` +
         // gateway default, which the gateway routes to OpenAI and 400s for bot owners who
         // wired a custom NyxID service like `chrono-llm` at `/api/v1/proxy/s/chrono-llm`.
