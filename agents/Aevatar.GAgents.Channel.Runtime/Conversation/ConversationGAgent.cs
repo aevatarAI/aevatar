@@ -344,6 +344,16 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
 
     private async Task DispatchPendingLlmReplyAsync(NeedsLlmReplyEvent request, CancellationToken ct)
     {
+        // Per-conversation parallelism is allowed: if the same conversation has multiple
+        // pending requests (e.g. the user sent two messages within the prior reply window),
+        // each calls executor.StartAsync independently and their LLM work runs concurrently.
+        // The previous host-level FIFO subscriber happened to serialize per-conversation as
+        // a side effect of the silo-wide bottleneck this PR removes — but per-user replies
+        // already require an explicit ack and Lark renders the typing indicator per-message,
+        // so out-of-order arrivals are uncommon and tolerable. If product feedback shows
+        // frequent reordering, the actor can grow an in-flight gate (block subsequent
+        // StartAsync until the current correlation's LlmReplyReadyEvent arrives) without
+        // breaking cross-conversation parallelism.
         var executor = Services.GetService<IConversationLlmReplyExecutor>();
         if (executor is null)
         {

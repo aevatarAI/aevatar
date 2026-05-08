@@ -93,6 +93,11 @@ public sealed class ConversationLlmReplyExecutor : IConversationLlmReplyExecutor
     public Task StartAsync(NeedsLlmReplyEvent request, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
+        // Honor the caller's token: a turn cancelled before scheduling shouldn't burn an
+        // LLM round. If the token is already signaled, throw before cloning so the actor
+        // sees the cancellation directly instead of via a swallowed background error.
+        ct.ThrowIfCancellationRequested();
+
         // Snapshot the request: the caller may mutate the original (e.g. the actor
         // re-enriches with a fresh reply token on retry) and we are about to hand off
         // ownership to a background task.
@@ -102,7 +107,10 @@ public sealed class ConversationLlmReplyExecutor : IConversationLlmReplyExecutor
         // synchronization context (which, for an actor turn, must not be blocked or the
         // very bottleneck this seam removes is reintroduced inside one actor). The
         // background task only does external I/O and finishes by dispatching back to
-        // the actor — it never reads or writes actor state.
+        // the actor — it never reads or writes actor state. Passing `ct` means a
+        // cancellation between StartAsync and the scheduler picking up the work skips
+        // the LLM round entirely; once the task is already running, internal cancellation
+        // tokens (metadata budget, fallback timeout) take over.
         _ = Task.Run(async () =>
         {
             try
@@ -113,15 +121,30 @@ public sealed class ConversationLlmReplyExecutor : IConversationLlmReplyExecutor
             {
                 // ProcessAsync handles its own errors and dispatches a terminal signal;
                 // an exception bubbling out here means dispatch itself or some outer
-                // step failed unexpectedly. Log and swallow so the unobserved exception
-                // does not crash the host.
+                // step failed unexpectedly. The IConversationLlmReplyExecutor contract
+                // requires a terminal signal so the actor can retire its pending entry —
+                // without it, State.PendingLlmReplyRequests leaks until the 5-minute
+                // stale-age gate kicks in on the next activation. Send the drop notice
+                // directly; the stale gate becomes a fallback if even the drop dispatch
+                // fails.
                 _logger.LogError(
                     ex,
                     "Conversation LLM reply executor crashed before dispatching terminal signal: correlation={CorrelationId} target={TargetActorId}",
                     snapshot.CorrelationId,
                     snapshot.TargetActorId);
+                try
+                {
+                    await NotifyActorOfDropAsync(snapshot, "executor_crash").ConfigureAwait(false);
+                }
+                catch (Exception notifyEx)
+                {
+                    _logger.LogError(
+                        notifyEx,
+                        "Failed to notify actor of executor crash; pending entry will retire via 5-min stale-age gate: correlation={CorrelationId}",
+                        snapshot.CorrelationId);
+                }
             }
-        }, CancellationToken.None);
+        }, ct);
 
         return Task.CompletedTask;
     }

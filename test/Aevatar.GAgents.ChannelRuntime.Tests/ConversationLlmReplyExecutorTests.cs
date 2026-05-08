@@ -607,6 +607,192 @@ public sealed class ConversationLlmReplyExecutorTests
             .WhoseValue.Should().Be("bot-owner-session-jwt");
     }
 
+    [Fact]
+    public async Task StartAsync_ReturnsImmediately_WhileLlmCallStillRunning()
+    {
+        // Non-blocking guarantee: the actor turn must not wait on the 60-300s LLM call.
+        // StartAsync schedules the work on the thread pool and returns; verify by gating
+        // the reply generator on a TCS that we never signal during the assertion.
+        var releaseGenerator = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var generatorEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var replyGenerator = new GatedReplyGenerator(generatorEntered, releaseGenerator);
+        var dispatchPort = new RecordingDispatchPort();
+        var executor = new ConversationLlmReplyExecutor(
+            dispatchPort,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
+            NullLogger<ConversationLlmReplyExecutor>.Instance);
+
+        var startTask = executor.StartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-nonblocking",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-1",
+        }, CancellationToken.None);
+
+        // StartAsync must complete without waiting for the generator to finish.
+        await startTask.WaitAsync(TimeSpan.FromSeconds(2));
+        startTask.IsCompletedSuccessfully.Should().BeTrue();
+
+        // Confirm the background task actually started the generator (so we know we're
+        // testing "non-blocking despite work in progress" rather than "no work happened").
+        await generatorEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        dispatchPort.Dispatched.Should().BeEmpty(
+            "the executor must not dispatch a terminal signal until the generator returns");
+
+        // Drain: release the generator and let the background task finalize.
+        releaseGenerator.SetResult();
+    }
+
+    [Fact]
+    public async Task StartAsync_ClonesRequest_SoCallerMutationsDoNotAffectInFlightWork()
+    {
+        // Snapshot guarantee: StartAsync must not pin the caller's NeedsLlmReplyEvent —
+        // the actor often clones+mutates pending requests on retry/rehydration. The
+        // background task should observe the values at the moment of StartAsync.
+        var observedActivities = new List<ChatActivity>();
+        var releaseGenerator = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var generatorEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var replyGenerator = new GatedReplyGenerator(generatorEntered, releaseGenerator)
+        {
+            ReplyText = "ok",
+            ActivityObserver = activity => observedActivities.Add(activity.Clone()),
+        };
+        var dispatchPort = new RecordingDispatchPort();
+        var executor = new ConversationLlmReplyExecutor(
+            dispatchPort,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
+            NullLogger<ConversationLlmReplyExecutor>.Instance);
+
+        var request = new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-snapshot",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-1",
+        };
+        await executor.StartAsync(request, CancellationToken.None);
+
+        await generatorEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Mutate the original AFTER StartAsync — the in-flight task must observe the
+        // pre-mutation activity.
+        request.Activity!.Content = new MessageContent { Text = "MUTATED-AFTER-START" };
+        request.ReplyToken = "MUTATED-TOKEN";
+
+        releaseGenerator.SetResult();
+
+        // Wait for terminal dispatch to confirm the work finished.
+        await WaitForDispatchAsync(dispatchPort, count: 1, TimeSpan.FromSeconds(5));
+
+        observedActivities.Should().ContainSingle();
+        observedActivities[0].Content.Text.Should().Be("hello",
+            "the generator must observe the cloned activity, not post-StartAsync mutations");
+    }
+
+    [Fact]
+    public async Task StartAsync_DispatchesExecutorCrashDrop_WhenBackgroundTaskThrowsAfterGates()
+    {
+        // Contract: the executor MUST eventually deliver a terminal signal so the actor
+        // can retire its pending entry. If something past the pre-LLM gates throws
+        // (here: the dispatch of the ready event itself fails), the outer catch must
+        // send DeferredLlmReplyDroppedEvent with reason executor_crash.
+        //
+        // Streaming is disabled here so the only dispatch is the ready event — that way
+        // the first ThrowOnceDispatchPort attempt is unambiguously the ready dispatch
+        // (with streaming on, the streaming sink dispatches first and the sink swallows
+        // its own dispatch errors, masking the failure path under test).
+        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "ok" };
+        var dispatchPort = new ThrowOnceDispatchPort();
+        var executor = new ConversationLlmReplyExecutor(
+            dispatchPort,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            },
+            NullLogger<ConversationLlmReplyExecutor>.Instance);
+
+        await executor.StartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-crash",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-crash",
+        }, CancellationToken.None);
+
+        // First dispatch (LlmReplyReadyEvent) throws; the outer catch sends a second
+        // dispatch (DeferredLlmReplyDroppedEvent) so the actor isn't left with a leaked
+        // pending entry.
+        await WaitForDispatchAsync(dispatchPort, count: 2, TimeSpan.FromSeconds(5));
+
+        dispatchPort.Attempts[0].Payload.Is(LlmReplyReadyEvent.Descriptor).Should().BeTrue();
+        var dropped = dispatchPort.Attempts[1].Payload.Unpack<DeferredLlmReplyDroppedEvent>();
+        dropped.CorrelationId.Should().Be("corr-crash");
+        dropped.Reason.Should().Be("executor_crash");
+    }
+
+    [Fact]
+    public async Task StartAsync_ThrowsImmediately_WhenCallerTokenAlreadyCancelled()
+    {
+        // A turn that's already cancelled before reaching the executor shouldn't burn
+        // an LLM round; throw directly so the actor sees the cancellation and skips
+        // dispatch instead of swallowing it inside a background task.
+        var dispatchPort = new RecordingDispatchPort();
+        var executor = new ConversationLlmReplyExecutor(
+            dispatchPort,
+            new RecordingReplyGenerator(() => false) { ReplyText = "should not run" },
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
+            NullLogger<ConversationLlmReplyExecutor>.Instance);
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var act = async () => await executor.StartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-cancelled",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-1",
+        }, cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        dispatchPort.Dispatched.Should().BeEmpty();
+    }
+
+    private static async Task WaitForDispatchAsync(
+        RecordingDispatchPort port,
+        int count,
+        TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        while (port.Dispatched.Count < count && DateTimeOffset.UtcNow < deadline)
+            await Task.Delay(20);
+        port.Dispatched.Count.Should().BeGreaterThanOrEqualTo(count);
+    }
+
+    private static async Task WaitForDispatchAsync(
+        ThrowOnceDispatchPort port,
+        int count,
+        TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        while (port.Attempts.Count < count && DateTimeOffset.UtcNow < deadline)
+            await Task.Delay(20);
+        port.Attempts.Count.Should().BeGreaterThanOrEqualTo(count);
+    }
+
     private static ChatActivity BuildRelayActivity() =>
         new()
         {
@@ -640,6 +826,24 @@ public sealed class ConversationLlmReplyExecutorTests
         }
     }
 
+    /// <summary>
+    /// Throws on the first dispatch and accepts the rest. Lets the executor-crash test
+    /// confirm that the outer catch sends a follow-up DeferredLlmReplyDroppedEvent after
+    /// the first envelope (the ready signal) fails to land.
+    /// </summary>
+    private sealed class ThrowOnceDispatchPort : IActorDispatchPort
+    {
+        public List<EventEnvelope> Attempts { get; } = [];
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            Attempts.Add(envelope);
+            if (Attempts.Count == 1)
+                throw new InvalidOperationException("dispatch failure simulation");
+            return Task.CompletedTask;
+        }
+    }
+
     private sealed class RecordingReplyGenerator(Func<bool> captureAction) : IConversationReplyGenerator
     {
         public string ReplyText { get; init; } = string.Empty;
@@ -669,6 +873,34 @@ public sealed class ConversationLlmReplyExecutorTests
             IReadOnlyDictionary<string, string> metadata,
             IStreamingReplySink? streamingSink,
             CancellationToken ct) => Task.FromException<string?>(exception);
+    }
+
+    /// <summary>
+    /// Generator that signals when invoked (<paramref name="entered"/>) and waits for an
+    /// external release (<paramref name="release"/>) before returning. Used to assert
+    /// non-blocking semantics (StartAsync returns while the generator is still running)
+    /// and snapshot semantics (the generator observes the cloned activity, not later
+    /// caller mutations).
+    /// </summary>
+    private sealed class GatedReplyGenerator(
+        TaskCompletionSource entered,
+        TaskCompletionSource release) : IConversationReplyGenerator
+    {
+        public string ReplyText { get; init; } = string.Empty;
+
+        public Action<ChatActivity>? ActivityObserver { get; init; }
+
+        public async Task<string?> GenerateReplyAsync(
+            ChatActivity activity,
+            IReadOnlyDictionary<string, string> metadata,
+            IStreamingReplySink? streamingSink,
+            CancellationToken ct)
+        {
+            ActivityObserver?.Invoke(activity);
+            entered.TrySetResult();
+            await release.Task.WaitAsync(ct);
+            return ReplyText;
+        }
     }
 
     /// <summary>Generator that never completes on its own; only ends when the executor cancels it.</summary>
