@@ -356,7 +356,7 @@ message StudioMemberBindingFailedEvent {
 }
 ```
 
-`StudioMemberBindingCompletedEvent` replaces `StudioMemberBoundEvent` as the authoritative bind terminal event. There is no public compatibility requirement for the current `StudioMemberBoundEvent` shape, so implementation should remove the old event path instead of keeping a parallel compatibility transition.
+`StudioMemberBindingCompletedEvent` is the authoritative successful bind terminal event. Binding completion must flow through the async binding run protocol and the member actor's current-run guard; no parallel compatibility transition is kept.
 
 ### Read Models
 
