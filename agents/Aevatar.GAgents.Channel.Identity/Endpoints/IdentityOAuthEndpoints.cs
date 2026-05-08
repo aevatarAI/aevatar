@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -49,9 +50,13 @@ public static class IdentityOAuthEndpoints
         // to point at an admin-supplied client_id (issue #549 production
         // unblock). Auth is by static admin token header — see
         // AevatarOAuthAdminOptions. AllowAnonymous because the auth check is
-        // done inline; no ASP.NET auth handler is wired for this module.
+        // done inline; no ASP.NET auth handler is wired for this module. The
+        // RebuildAuthEndpointFilter rejects unauthenticated callers BEFORE
+        // model binding / DI resolution so a flooded admin-token-less request
+        // does not run through deserialization and DI on every call.
         app.MapPost("/api/oauth/aevatar-client/rebuild", HandleAevatarOAuthClientRebuildAsync)
             .WithTags("ChannelIdentity")
+            .AddEndpointFilter<RebuildAuthEndpointFilter>()
             .AllowAnonymous();
 
         return app;
@@ -63,6 +68,7 @@ public static class IdentityOAuthEndpoints
         [FromQuery] string? code,
         [FromQuery] string? state,
         [FromQuery] string? error,
+        [FromQuery] string? format,
         [FromServices] INyxIdBrokerCallbackClient brokerCallback,
         [FromServices] IExternalIdentityBindingQueryPort queryPort,
         [FromServices] IActorRuntime actorRuntime,
@@ -178,7 +184,7 @@ public static class IdentityOAuthEndpoints
             // orphan. Best-effort revoke at NyxID before responding so the
             // orphan does not accumulate at NyxID with no local reference.
             await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
-            return RenderBoundSuccessHtml(displayName: null, alreadyBound: true);
+            return RenderBoundSuccess(displayName: null, alreadyBound: true, format: format);
         }
 
         var actor = await TryActivateActorAsync(actorRuntime, actorId, logger, ct).ConfigureAwait(false);
@@ -271,7 +277,7 @@ public static class IdentityOAuthEndpoints
                     resolvedAfterTimeout.Value,
                     exchange.BindingId);
                 await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
-                return RenderBoundSuccessHtml(displayName: null, alreadyBound: true);
+                return RenderBoundSuccess(displayName: null, alreadyBound: true, format: format);
             }
 
             logger.LogWarning(
@@ -290,7 +296,7 @@ public static class IdentityOAuthEndpoints
             "Bound external identity {Platform}:{Tenant}:{User} -> binding_id={BindingId}",
             subject.Platform, subject.Tenant, subject.ExternalUserId, exchange.BindingId);
 
-        return RenderBoundSuccessHtml(displayName, alreadyBound: false);
+        return RenderBoundSuccess(displayName, alreadyBound: false, format: format);
     }
 
     // ─── Status endpoint ───
@@ -366,6 +372,7 @@ public static class IdentityOAuthEndpoints
         [FromServices] IAevatarOAuthClientProvider provider,
         [FromServices] AevatarOAuthClientProjectionPort projectionPort,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IActorDispatchPort actorDispatchPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct) =>
         HandleAevatarOAuthClientRebuildCoreAsync(
@@ -375,6 +382,7 @@ public static class IdentityOAuthEndpoints
             provider,
             projectionPort,
             actorRuntime,
+            actorDispatchPort,
             loggerFactory,
             observationTimeout: RebuildObservationTimeout,
             observationPollDelay: RebuildObservationPollDelay,
@@ -393,6 +401,7 @@ public static class IdentityOAuthEndpoints
         IAevatarOAuthClientProvider provider,
         AevatarOAuthClientProjectionPort projectionPort,
         IActorRuntime actorRuntime,
+        IActorDispatchPort actorDispatchPort,
         ILoggerFactory loggerFactory,
         TimeSpan observationTimeout,
         TimeSpan observationPollDelay,
@@ -471,31 +480,13 @@ public static class IdentityOAuthEndpoints
             .EnsureProjectionForActorAsync(AevatarOAuthClientGAgent.WellKnownId, ct)
             .ConfigureAwait(false);
 
-        Aevatar.Foundation.Abstractions.IActor actor;
-        try
-        {
-            actor = await actorRuntime
-                .CreateAsync<AevatarOAuthClientGAgent>(AevatarOAuthClientGAgent.WellKnownId, ct)
-                .ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Rebuild endpoint failed to activate AevatarOAuthClientGAgent.");
-            return Results.Json(new
-            {
-                error = "actor_activation_failed",
-                detail = "Failed to activate the cluster-singleton OAuth client actor. Check silo logs.",
-            }, statusCode: StatusCodes.Status503ServiceUnavailable);
-        }
-
-        // The dispatch shape mirrors AevatarOAuthClientBootstrapService —
-        // direct envelope construction + actor.HandleEventAsync — and is a
-        // known CLAUDE.md edge: the rebuild path deliberately skips the
-        // EnsureProvisioned/DCR-mediation flow because the operator already
-        // holds the client_id (no DCR call needed). A future refactor that
-        // extracts both call sites behind an IAevatarOAuthClientAdminService
-        // is tracked as a follow-up to PR #570 — that change should move
-        // bootstrap and rebuild together so they keep sharing one code path.
+        // Dispatch through IActorDispatchPort to match /unbind and the rest of the
+        // codebase. CLAUDE.md "Runtime 与 Dispatch 分责" forbids inline
+        // actor.HandleEventAsync from app/host code — that bypasses the inbox
+        // serialization guarantees and any middleware/logging the dispatch port
+        // owns. The rebuild path deliberately skips DCR mediation (operator
+        // already holds the client_id), so we publish the provision command
+        // directly to the cluster-singleton actor and let the inbox process it.
         var provisionEnvelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
@@ -513,7 +504,21 @@ public static class IdentityOAuthEndpoints
                 Direct = new DirectRoute { TargetActorId = AevatarOAuthClientGAgent.WellKnownId },
             },
         };
-        await actor.HandleEventAsync(provisionEnvelope, ct).ConfigureAwait(false);
+        try
+        {
+            await actorDispatchPort
+                .DispatchAsync(AevatarOAuthClientGAgent.WellKnownId, provisionEnvelope, ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Rebuild endpoint failed to dispatch ProvisionAevatarOAuthClientCommand.");
+            return Results.Json(new
+            {
+                error = "actor_dispatch_failed",
+                detail = "Failed to dispatch the provision command to the OAuth client actor. Check silo logs.",
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
 
         logger.LogWarning(
             "Operator rebuild dispatched for AevatarOAuthClientGAgent: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}.",
@@ -614,6 +619,41 @@ public static class IdentityOAuthEndpoints
         var leftBytes = Encoding.UTF8.GetBytes(left);
         var rightBytes = Encoding.UTF8.GetBytes(right ?? string.Empty);
         return CryptographicOperations.FixedTimeEquals(leftBytes, rightBytes);
+    }
+
+    /// <summary>
+    /// Endpoint filter that performs the rebuild admin-token check before model binding
+    /// and per-request DI activation kick in. Without this filter the handler method
+    /// still rejects unauthenticated callers (it re-runs the same check inline), but
+    /// every unauthenticated POST would needlessly deserialize the body and resolve
+    /// IActorRuntime / IActorDispatchPort etc. — a small but real DoS amplifier on a
+    /// /rebuild that is supposed to be operator-only break-glass.
+    /// </summary>
+    internal sealed class RebuildAuthEndpointFilter : IEndpointFilter
+    {
+        public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+        {
+            var http = context.HttpContext;
+            var adminOptions = http.RequestServices
+                .GetRequiredService<IOptions<AevatarOAuthAdminOptions>>()
+                .Value;
+            var configuredToken = adminOptions.RebuildToken;
+            if (string.IsNullOrEmpty(configuredToken))
+            {
+                // Fall through to the handler so it can return the standard
+                // "rebuild_not_configured" 503; we don't want this filter to short-circuit
+                // and bypass that explicit operator-facing error.
+                return await next(context).ConfigureAwait(false);
+            }
+
+            if (!http.Request.Headers.TryGetValue(AevatarOAuthAdminOptions.RebuildTokenHeader, out var presented)
+                || !ConstantTimeEquals(configuredToken, presented.ToString()))
+            {
+                return Results.Unauthorized();
+            }
+
+            return await next(context).ConfigureAwait(false);
+        }
     }
 
     // ─── Broker revocation webhook ───
@@ -792,7 +832,32 @@ public static class IdentityOAuthEndpoints
     /// Other error paths in the callback intentionally keep returning JSON for
     /// ops/programmatic consumers.
     /// </remarks>
-    internal static IResult RenderBoundSuccessHtml(string? displayName, bool alreadyBound)
+    internal static IResult RenderBoundSuccessHtml(string? displayName, bool alreadyBound) =>
+        RenderBoundSuccess(displayName, alreadyBound, format: null);
+
+    /// <summary>
+    /// Render the post-binding success response. Default is the HTML browser page that
+    /// users land on after clicking the OAuth approve button. Programmatic consumers
+    /// (CLI, SDK, integration tests) opt into a JSON envelope by passing
+    /// <c>?format=json</c> on the callback URL — the same shape the endpoint returned
+    /// before the HTML render landed (PR #570 review #24).
+    /// </summary>
+    internal static IResult RenderBoundSuccess(string? displayName, bool alreadyBound, string? format)
+    {
+        if (string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.Json(new
+            {
+                status = "bound",
+                already_bound = alreadyBound,
+                display_name = string.IsNullOrWhiteSpace(displayName) ? null : displayName,
+            });
+        }
+
+        return RenderBoundSuccessHtmlInternal(displayName, alreadyBound);
+    }
+
+    internal static IResult RenderBoundSuccessHtmlInternal(string? displayName, bool alreadyBound)
     {
         var badge = alreadyBound ? "已绑定" : "绑定成功";
         var heading = alreadyBound ? "NyxID 账号已绑定" : "已绑定 NyxID 账号";

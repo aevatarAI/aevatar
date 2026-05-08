@@ -267,19 +267,28 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
     {
         public List<EventEnvelope> Captured { get; } = new();
         public IActorRuntime Runtime { get; }
+        public IActorDispatchPort DispatchPort { get; }
 
         public RecordingActorRuntime()
         {
             var actor = Substitute.For<IActor>();
             actor.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+                .Returns(Task.CompletedTask);
+            Runtime = Substitute.For<IActorRuntime>();
+            Runtime.CreateAsync<AevatarOAuthClientGAgent>(Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult<IActor>(actor));
+
+            // The rebuild endpoint dispatches the provision command via
+            // IActorDispatchPort (no longer inline actor.HandleEventAsync), so the
+            // recording happens on the dispatch port.
+            DispatchPort = Substitute.For<IActorDispatchPort>();
+            DispatchPort
+                .DispatchAsync(Arg.Any<string>(), Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
                 .Returns(callInfo =>
                 {
                     Captured.Add(callInfo.Arg<EventEnvelope>());
                     return Task.CompletedTask;
                 });
-            Runtime = Substitute.For<IActorRuntime>();
-            Runtime.CreateAsync<AevatarOAuthClientGAgent>(Arg.Any<string>(), Arg.Any<CancellationToken>())
-                .Returns(Task.FromResult<IActor>(actor));
         }
     }
 
@@ -326,6 +335,7 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
             provider: provider,
             projectionPort: projectionPort,
             actorRuntime: actorRuntime.Runtime,
+            actorDispatchPort: actorRuntime.DispatchPort,
             loggerFactory: NullLoggerFactory.Instance,
             observationTimeout: observationTimeout,
             observationPollDelay: observationPollDelay,

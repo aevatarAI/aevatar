@@ -114,6 +114,10 @@ public static class IdentityServiceCollectionExtensions
         // (production regression observed 2026-04-30 in aismart-app-mainnet).
         services.TryAddSingleton<AevatarOAuthClientProjectionPort>();
 
+        // Endpoint filter for the operator /rebuild path — rejects unauthenticated
+        // callers before model binding/DI resolution kicks in.
+        services.TryAddTransient<Endpoints.IdentityOAuthEndpoints.RebuildAuthEndpointFilter>();
+
         // ─── Operator admin surface (rebuild endpoint, issue #549) ───
         // Bound from configuration when present; absence keeps the rebuild
         // endpoint fail-secure (503 with "rebuild not configured"). Production

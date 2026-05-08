@@ -207,6 +207,7 @@ public sealed class IdentityOAuthCallbackEndpointTests
             code: "auth-code",
             state: "state-token",
             error: null,
+            format: null,
             brokerCallback: broker,
             queryPort: queryPort,
             actorRuntime: actorRuntime,

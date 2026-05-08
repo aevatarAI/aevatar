@@ -16,6 +16,16 @@ namespace Aevatar.GAgents.Channel.Identity;
 /// the write dispatcher. Read side (`IExternalIdentityBindingQueryPort`)
 /// reads the same documents — see ADR-0018 §Projection Readiness.
 /// </summary>
+/// <remarks>
+/// READMODEL CONTRACT: when <c>state.BindingId</c> is empty (revoked / never bound),
+/// the projector DELETES the document rather than upserting an inactive record. This
+/// is a deliberate semantic change from earlier builds that left an inactive document
+/// behind: <c>IExternalIdentityBindingQueryPort.ResolveAsync</c> returns <c>null</c>
+/// for revoked bindings now, which lets <c>ExternalIdentityBindingProjectionReadinessPort.Matches</c>
+/// match the <c>(null, null)</c> tuple cleanly. Downstream consumers that want the
+/// audit history (e.g. admin dashboards) must consume the committed-event log directly
+/// — they cannot rely on a tombstone in the readmodel.
+/// </remarks>
 public sealed class ExternalIdentityBindingProjector
     : ICurrentStateProjectionMaterializer<ExternalIdentityBindingMaterializationContext>
 {
