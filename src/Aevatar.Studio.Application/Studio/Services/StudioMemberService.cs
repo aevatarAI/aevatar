@@ -88,7 +88,7 @@ public sealed class StudioMemberService : IStudioMemberService
         // every member-centric endpoint.
         var detail = await _memberQueryPort.GetAsync(scopeId, memberId, ct)
             ?? throw new StudioMemberNotFoundException(scopeId, memberId);
-        return detail;
+        return await HydrateCurrentBindingRunAsync(detail, ct);
     }
 
     public async Task<StudioMemberBindingAcceptedResponse> BindAsync(
@@ -127,9 +127,11 @@ public sealed class StudioMemberService : IStudioMemberService
     {
         var detail = await _memberQueryPort.GetAsync(scopeId, memberId, ct)
             ?? throw new StudioMemberNotFoundException(scopeId, memberId);
+
+        var currentBindingRun = await ResolveCurrentBindingRunAsync(detail, ct);
         return new StudioMemberBindingViewResponse(detail.LastBinding)
         {
-            CurrentBindingRun = detail.CurrentBindingRun,
+            CurrentBindingRun = currentBindingRun,
         };
     }
 
@@ -145,6 +147,34 @@ public sealed class StudioMemberService : IStudioMemberService
             throw new StudioMemberBindingRunNotFoundException(scopeId, memberId, normalizedBindingRunId);
 
         return run;
+    }
+
+    private async Task<StudioMemberDetailResponse> HydrateCurrentBindingRunAsync(
+        StudioMemberDetailResponse detail,
+        CancellationToken ct)
+    {
+        var currentBindingRun = await ResolveCurrentBindingRunAsync(detail, ct);
+        return detail with
+        {
+            CurrentBindingRun = currentBindingRun,
+        };
+    }
+
+    private async Task<StudioMemberBindingRunStatusResponse?> ResolveCurrentBindingRunAsync(
+        StudioMemberDetailResponse detail,
+        CancellationToken ct)
+    {
+        var memberCurrentRun = detail.CurrentBindingRun;
+        if (memberCurrentRun == null || string.IsNullOrEmpty(memberCurrentRun.BindingRunId))
+            return null;
+
+        var run = await _bindingRunQueryPort.GetAsync(
+            memberCurrentRun.ScopeId,
+            memberCurrentRun.MemberId,
+            memberCurrentRun.BindingRunId,
+            ct);
+
+        return run ?? memberCurrentRun;
     }
 
     public async Task<StudioMemberEndpointContractResponse?> GetEndpointContractAsync(

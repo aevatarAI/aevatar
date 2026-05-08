@@ -161,6 +161,73 @@ public sealed class StudioMemberServiceBindingTests
     }
 
     [Fact]
+    public async Task GetBindingAsync_ShouldHydrateCurrentRunFromRunReadModel()
+    {
+        var detail = NewDetail(MemberImplementationKindNames.Script) with
+        {
+            CurrentBindingRun = new StudioMemberBindingRunStatusResponse(
+                BindingRunId: "bind-1",
+                ScopeId: ScopeId,
+                MemberId: MemberId,
+                Status: StudioMemberBindingRunStatusNames.PlatformBindingPending,
+                UpdatedAt: DateTimeOffset.UtcNow.AddMinutes(-1)),
+        };
+        var runQuery = new InMemoryBindingRunQueryPort(new StudioMemberBindingRunStatusResponse(
+            BindingRunId: "bind-1",
+            ScopeId: ScopeId,
+            MemberId: MemberId,
+            Status: StudioMemberBindingRunStatusNames.PlatformBindingPending,
+            UpdatedAt: DateTimeOffset.UtcNow)
+        {
+            PlatformBindingCommandId = "platform-bind-1",
+        });
+
+        var service = NewService(
+            new RecordingCommandPort(),
+            new InMemoryQueryPort(detail),
+            runQuery);
+
+        var binding = await service.GetBindingAsync(ScopeId, MemberId);
+
+        binding.CurrentBindingRun.Should().NotBeNull();
+        binding.CurrentBindingRun!.BindingRunId.Should().Be("bind-1");
+        binding.CurrentBindingRun.PlatformBindingCommandId.Should().Be("platform-bind-1");
+        runQuery.Requests.Should().ContainSingle().Which.Should().Be((ScopeId, MemberId, "bind-1"));
+    }
+
+    [Fact]
+    public async Task GetAsync_ShouldHydrateCurrentRunFromRunReadModel()
+    {
+        var detail = NewDetail(MemberImplementationKindNames.Script) with
+        {
+            CurrentBindingRun = new StudioMemberBindingRunStatusResponse(
+                BindingRunId: "bind-1",
+                ScopeId: ScopeId,
+                MemberId: MemberId,
+                Status: StudioMemberBindingRunStatusNames.PlatformBindingPending),
+        };
+        var runQuery = new InMemoryBindingRunQueryPort(new StudioMemberBindingRunStatusResponse(
+            BindingRunId: "bind-1",
+            ScopeId: ScopeId,
+            MemberId: MemberId,
+            Status: StudioMemberBindingRunStatusNames.PlatformBindingPending)
+        {
+            PlatformBindingCommandId = "platform-bind-1",
+        });
+
+        var service = NewService(
+            new RecordingCommandPort(),
+            new InMemoryQueryPort(detail),
+            runQuery);
+
+        var hydrated = await service.GetAsync(ScopeId, MemberId);
+
+        hydrated.CurrentBindingRun.Should().NotBeNull();
+        hydrated.CurrentBindingRun!.PlatformBindingCommandId.Should().Be("platform-bind-1");
+        runQuery.Requests.Should().ContainSingle().Which.Should().Be((ScopeId, MemberId, "bind-1"));
+    }
+
+    [Fact]
     public async Task GetBindingRunAsync_ShouldReadBindingRunQueryPort()
     {
         var runQuery = new InMemoryBindingRunQueryPort(new StudioMemberBindingRunStatusResponse(
