@@ -393,6 +393,10 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
     [Fact]
     public async Task ProcessAsync_StreamingEnabled_DispatchesChunkEventAndReadyEvent()
     {
+        // Pin the legacy edit-message path explicitly: card-mode is now the default
+        // (StreamingCardKitEnabled=true) and emits a structurally distinct
+        // LlmReplyCardStreamChunkEvent. This test specifically exercises the
+        // text-edit chunk shape, so opt out of card mode here.
         var collector = new AsyncLocalInteractiveReplyCollector();
         var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "streamed reply" };
         var actor = Substitute.For<IActor>();
@@ -406,7 +410,13 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             actorRuntime,
             replyGenerator,
             collector,
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = false, StreamingRepliesEnabled = true, StreamingFlushIntervalMs = 0 },
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = false,
+                StreamingRepliesEnabled = true,
+                StreamingFlushIntervalMs = 0,
+                StreamingCardKitEnabled = false,
+            },
             NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
 
         await runtime.ProcessAsync(new NeedsLlmReplyEvent
@@ -425,6 +435,53 @@ public sealed class ChannelLlmReplyInboxRuntimeTests
             .Payload.Unpack<LlmReplyStreamChunkEvent>();
         chunk.AccumulatedText.Should().Be("streamed reply");
         chunk.CorrelationId.Should().Be("corr-stream");
+    }
+
+    [Fact]
+    public async Task ProcessAsync_StreamingEnabledWithDefaultCardMode_DispatchesCardChunkEvent()
+    {
+        // Pinning the new default: StreamingCardKitEnabled=true causes the sink to emit
+        // the card-mode chunk type, exercising the CardKit lifecycle entrypoint without
+        // needing a real ChannelCardConversationTurnRunner wired up (the actor is mocked,
+        // so we only verify the inbox dispatched the right proto type to the actor).
+        var collector = new AsyncLocalInteractiveReplyCollector();
+        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "card streamed reply" };
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("channel-conversation:lark:group:oc_group_chat_2");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var runtime = new ChannelLlmReplyInboxRuntime(
+            Substitute.For<IStreamProvider>(),
+            actorRuntime,
+            replyGenerator,
+            collector,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = false,
+                StreamingRepliesEnabled = true,
+                StreamingCardKitFlushIntervalMs = 0,
+                // StreamingCardKitEnabled defaults to true.
+            },
+            NullLogger<ChannelLlmReplyInboxRuntime>.Instance);
+
+        await runtime.ProcessAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-card-stream",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-card-stream",
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+        });
+
+        handled.Any(e => e.Payload.Is(LlmReplyCardStreamChunkEvent.Descriptor)).Should().BeTrue();
+        handled.Any(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor)).Should().BeTrue();
+        var chunk = handled.First(e => e.Payload.Is(LlmReplyCardStreamChunkEvent.Descriptor))
+            .Payload.Unpack<LlmReplyCardStreamChunkEvent>();
+        chunk.AccumulatedText.Should().Be("card streamed reply");
+        chunk.CorrelationId.Should().Be("corr-card-stream");
     }
 
     [Fact]
