@@ -66,14 +66,17 @@ public class NyxIdRelayOptions
     /// Routes streaming replies through Lark CardKit 2.0 streaming cards instead of editing a
     /// regular message in place. CardKit element-content updates are not subject to the per-
     /// message edit cap (Lark code 230072) so long replies never need to freeze on the last
-    /// interim chunk. Default false; the legacy edit-message path remains the only behaviour
-    /// until the bot's CardKit scopes (<c>cardkit:card:read</c> + <c>cardkit:card:write</c>)
-    /// are granted in the Feishu developer console. When enabled, the card sink dispatches
-    /// chunks with <c>card_mode=true</c> and <see cref="ConversationGAgent"/> drives the
-    /// CardKit lifecycle; if card creation fails (rate-limit / table-limit / scope), the
-    /// turn falls back to the legacy edit-message sink for the rest of the chunks.
+    /// interim chunk. Defaults to <c>true</c> so the modern card path is the standard
+    /// behaviour for the aevatar Lark bot (Feishu console grants the bot
+    /// <c>cardkit:card:read</c> + <c>cardkit:card:write</c>). Deployments that have not been
+    /// granted those scopes are not stuck: <see cref="ConversationGAgent"/> watches for the
+    /// scope-error / rate-limit / table-limit responses returned by <c>card.create</c> and
+    /// transitions the turn to the legacy edit-message sink for the rest of the chunks (see
+    /// <c>HandleLarkCardStreamingChunkCoreAsync</c>'s <c>CreationFailed</c> branch). Set this
+    /// to <c>false</c> on a deployment that wants to skip the create-card round-trip entirely
+    /// (e.g. environments that explicitly want the legacy path or do not run a Lark bot).
     /// </summary>
-    public bool StreamingCardKitEnabled { get; set; }
+    public bool StreamingCardKitEnabled { get; set; } = true;
 
     /// <summary>
     /// Minimum interval between CardKit element-content dispatches, in milliseconds. Defaults
