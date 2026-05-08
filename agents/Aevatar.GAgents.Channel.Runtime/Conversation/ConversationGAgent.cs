@@ -311,6 +311,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             "Retired pending LLM reply after inbox drop: correlation={CorrelationId} reason={Reason}",
             evt.CorrelationId,
             reason);
+        await DispatchHeadOfLlmReplyQueueIfChangedAsync(evt.CorrelationId);
     }
 
     [EventHandler]
@@ -344,16 +345,30 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
 
     private async Task DispatchPendingLlmReplyAsync(NeedsLlmReplyEvent request, CancellationToken ct)
     {
-        // Per-conversation parallelism is allowed: if the same conversation has multiple
-        // pending requests (e.g. the user sent two messages within the prior reply window),
-        // each calls executor.StartAsync independently and their LLM work runs concurrently.
-        // The previous host-level FIFO subscriber happened to serialize per-conversation as
-        // a side effect of the silo-wide bottleneck this PR removes — but per-user replies
-        // already require an explicit ack and Lark renders the typing indicator per-message,
-        // so out-of-order arrivals are uncommon and tolerable. If product feedback shows
-        // frequent reordering, the actor can grow an in-flight gate (block subsequent
-        // StartAsync until the current correlation's LlmReplyReadyEvent arrives) without
-        // breaking cross-conversation parallelism.
+        // Per-conversation FIFO gate: at most one LLM reply per ConversationGAgent is
+        // dispatched to an executor at a time. The head of State.PendingLlmReplyRequests is
+        // the in-flight slot; everything behind it waits. When the head retires (success,
+        // terminal failure, or executor crash drop), the corresponding terminal handler
+        // calls DispatchHeadOfLlmReplyQueueIfChangedAsync to start the new head. Cross-
+        // conversation parallelism (the headline win of #599's fix) is unaffected because
+        // each ConversationGAgent owns its own queue.
+        var head = State.PendingLlmReplyRequests.FirstOrDefault();
+        if (head is null)
+        {
+            // The pending entry was already retired (e.g. a duplicate terminal event raced
+            // ahead of this dispatch). Nothing to do.
+            return;
+        }
+        if (!string.Equals(head.CorrelationId, request.CorrelationId, StringComparison.Ordinal))
+        {
+            Logger.LogInformation(
+                "Per-conversation FIFO gate: deferring LLM reply behind in-flight head: head={Head} pending={Pending} conversation={Key}",
+                head.CorrelationId,
+                request.CorrelationId,
+                State.Conversation?.CanonicalKey);
+            return;
+        }
+
         var executor = Services.GetService<IConversationLlmReplyExecutor>();
         if (executor is null)
         {
@@ -388,6 +403,25 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 request.CorrelationId);
             await ScheduleDeferredLlmReplyDispatchAsync(request, DeferredLlmDispatchRetryDelay, ct);
         }
+    }
+
+    private async Task DispatchHeadOfLlmReplyQueueIfChangedAsync(string completedCorrelationId)
+    {
+        var head = State.PendingLlmReplyRequests.FirstOrDefault();
+        if (head is null)
+            return;
+        if (string.Equals(head.CorrelationId, completedCorrelationId, StringComparison.Ordinal))
+        {
+            // Head still alive (e.g. transient failure scheduled a durable retry); the
+            // retry trigger will redispatch when its delay elapses.
+            return;
+        }
+        Logger.LogInformation(
+            "Per-conversation FIFO gate advancing: completed={Completed} nextHead={NextHead} conversation={Key}",
+            completedCorrelationId,
+            head.CorrelationId,
+            State.Conversation?.CanonicalKey);
+        await DispatchPendingLlmReplyAsync(head.Clone(), CancellationToken.None);
     }
 
     private NeedsLlmReplyEvent EnrichWithRuntimeReplyTokenIfNeeded(NeedsLlmReplyEvent request)
@@ -459,6 +493,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             var streamingActivity = referenceActivity ?? evt.Activity;
             if (streamingActivity is not null)
                 _ = ResolveRunner().OnReplyDeliveredAsync(streamingActivity, CancellationToken.None);
+            await DispatchHeadOfLlmReplyQueueIfChangedAsync(evt.CorrelationId);
             return;
         }
 
@@ -489,6 +524,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 evt.CorrelationId,
                 result.SentActivityId,
                 completed.Conversation?.CanonicalKey);
+            await DispatchHeadOfLlmReplyQueueIfChangedAsync(evt.CorrelationId);
             return;
         }
 
@@ -529,6 +565,9 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             evt.CorrelationId,
             result.ErrorCode,
             result.FailureKind);
+        // Advance the per-conversation FIFO gate. Retryable failures don't move the head
+        // (the helper will no-op); terminal failures do.
+        await DispatchHeadOfLlmReplyQueueIfChangedAsync(evt.CorrelationId);
     }
 
     /// <summary>

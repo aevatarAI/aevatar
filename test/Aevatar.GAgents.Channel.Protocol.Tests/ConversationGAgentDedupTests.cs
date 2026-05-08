@@ -462,6 +462,102 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task HandleInboundActivityAsync_WhenLlmReplyAlreadyInFlight_DefersSecondRequestUntilReadyEvent()
+    {
+        // Per-conversation FIFO gate: a second inbound activity arriving while the first
+        // request is still being processed by the executor must NOT spawn a parallel
+        // executor.StartAsync — the head-of-queue is the in-flight slot, the rest wait.
+        // When the head's terminal LlmReplyReadyEvent arrives, the queue advances and the
+        // next pending request is dispatched.
+        var executor = new RecordingExecutor();
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.Id,
+                    TargetActorId = "conversation:actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = 42,
+                }),
+            LlmReplyResultFactory = reply => ConversationTurnResult.Sent(
+                "sent:" + reply.CorrelationId,
+                new MessageContent { Text = "ack" },
+                "bot",
+                new OutboundDeliveryContext()),
+        };
+        var (agent, _) = CreateAgent(runner, "conv-fifo-gate-ready", executor);
+
+        await agent.HandleInboundActivityAsync(CreateActivity("act-1", "conv:slack:C1"));
+        await agent.HandleInboundActivityAsync(CreateActivity("act-2", "conv:slack:C1"));
+
+        // Only the head dispatched; act-2 is parked behind it.
+        executor.Started.Count.ShouldBe(1);
+        executor.Started[0].CorrelationId.ShouldBe("act-1");
+        agent.State.PendingLlmReplyRequests.Select(r => r.CorrelationId)
+            .ShouldBe(new[] { "act-1", "act-2" });
+
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = "act-1",
+            RegistrationId = "reg-1",
+            SourceActorId = "llm-worker-1",
+            Activity = CreateActivity("act-1", "conv:slack:C1"),
+            Outbound = new MessageContent { Text = "reply-1" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        // act-1 retired → act-2 becomes head and dispatches automatically.
+        executor.Started.Count.ShouldBe(2);
+        executor.Started[1].CorrelationId.ShouldBe("act-2");
+        agent.State.PendingLlmReplyRequests.Select(r => r.CorrelationId)
+            .ShouldBe(new[] { "act-2" });
+    }
+
+    [Fact]
+    public async Task HandleInboundActivityAsync_WhenInFlightRequestDropped_DispatchesNextPendingRequest()
+    {
+        // Per-conversation FIFO gate: a DeferredLlmReplyDroppedEvent for the head must
+        // also advance the queue, not just LlmReplyReadyEvent. Otherwise a head that fails
+        // its pre-LLM gate (or crashes inside the executor) would block all subsequent
+        // requests for that conversation.
+        var executor = new RecordingExecutor();
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.Id,
+                    TargetActorId = "conversation:actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = 42,
+                }),
+        };
+        var (agent, _) = CreateAgent(runner, "conv-fifo-gate-drop", executor);
+
+        await agent.HandleInboundActivityAsync(CreateActivity("act-a", "conv:slack:C1"));
+        await agent.HandleInboundActivityAsync(CreateActivity("act-b", "conv:slack:C1"));
+
+        executor.Started.Count.ShouldBe(1);
+        executor.Started[0].CorrelationId.ShouldBe("act-a");
+
+        await agent.HandleDeferredLlmReplyDroppedAsync(new DeferredLlmReplyDroppedEvent
+        {
+            CorrelationId = "act-a",
+            Reason = "executor_crash",
+            DroppedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        executor.Started.Count.ShouldBe(2);
+        executor.Started[1].CorrelationId.ShouldBe("act-b");
+        agent.State.PendingLlmReplyRequests.Select(r => r.CorrelationId)
+            .ShouldBe(new[] { "act-b" });
+    }
+
+    [Fact]
     public async Task HandleNyxRelayInboundActivityAsync_NeverPersistsReplyTokenIntoEventStore()
     {
         // Issue #366 §4 invariant: relay reply_token must stay actor-owned runtime state.
