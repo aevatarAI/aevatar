@@ -113,7 +113,7 @@ public sealed class NyxIdSshExecTool : IAgentTool
         // `timed_out: true`). In practice we have observed the call hang well past 60s
         // (NyxID SSH gateway / NodeAgent stuck on a stale session). Without a hard cap,
         // the LLM run sits on a single tool call long enough to blow the inbox runtime's
-        // 120s budget and the user gets the generic "took too long" fallback instead of
+        // turn budget and the user gets the generic "took too long" fallback instead of
         // a usable error from this tool. Cap at `timeout_secs + 15s` so NyxID has a
         // generous margin to return its own timeout response, then fail this tool with
         // a clear "ssh_timeout" payload that the LLM can summarize for the user.

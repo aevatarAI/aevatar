@@ -93,17 +93,15 @@ public sealed class ChannelLlmReplyInboxRuntime :
     internal const long MaxInboxRequestAgeMs = 5 * 60 * 1000;
 
     /// <summary>
-    /// Hard upper bound on a single LLM reply turn. The relay's
-    /// <c>ResponseTimeoutSeconds</c> (default 120s) is the contract with the upstream
-    /// platform, so we cap the LLM run at the same budget — anything longer would be
-    /// a reply the user has already given up on. Without this cap, a tool that hangs
-    /// (e.g. a misbehaving sandbox or unreachable proxy upstream) would pin the inbox
-    /// task indefinitely and the user's "loading" reaction would never resolve.
+    /// Hard upper bound on a single LLM reply turn. Mirrors
+    /// <c>NyxIdRelayOptions.ResponseTimeoutSeconds</c> (default 300s) — long enough for the
+    /// aevatar Lark bot's multi-step flows (skill search + remote tool + summarize) to land
+    /// without truncation, short enough that a true hang does not pin the inbox task forever.
     /// A configured value of <c>0</c> or negative is treated as "disable the cap" — pass
     /// through with no timeout, mirroring HttpClient/Polly conventions where 0 means
-    /// "no limit". The default of 120s applies when the option is unset.
+    /// "no limit". The default of 300s applies when the option is unset.
     /// </summary>
-    internal const int FallbackTimeoutSecondsDefault = 120;
+    internal const int FallbackTimeoutSecondsDefault = 300;
 
     /// <summary>
     /// Standalone budget for metadata enrichment (scope resolve + UserConfig lookup).
@@ -436,7 +434,7 @@ public sealed class ChannelLlmReplyInboxRuntime :
     /// <summary>
     /// Resolve the LLM-run cap from <c>NyxIdRelayOptions.ResponseTimeoutSeconds</c>.
     /// Conventions:
-    ///   * unset / null  → <see cref="FallbackTimeoutSecondsDefault"/> (120s)
+    ///   * unset / null  → <see cref="FallbackTimeoutSecondsDefault"/> (300s)
     ///   * &gt; 0        → use that exact value
     ///   * 0 or negative → <see cref="TimeSpan.Zero"/> meaning "no timeout"; the caller
     ///     constructs an unbounded <see cref="CancellationTokenSource"/>. Use this only

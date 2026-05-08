@@ -257,7 +257,7 @@ public class NyxIdSshExecToolTests
     public async Task ExecuteAsync_HardTimesOut_WhenNyxIdHangsOnSshPost()
     {
         // Production incident 2026-05-08: NyxID's /api/v1/ssh/{id}/exec hung well past
-        // the user-supplied timeout_secs, dragging the LLM run to its 120s budget. The
+        // the user-supplied timeout_secs, dragging the LLM run to its turn budget. The
         // tool now caps the wall-clock at timeout_secs + 15s and returns ssh_timeout so
         // the LLM can summarize a degraded but real answer rather than the runtime's
         // generic "took too long" fallback.
