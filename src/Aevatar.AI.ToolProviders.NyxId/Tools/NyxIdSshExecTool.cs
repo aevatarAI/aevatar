@@ -96,14 +96,6 @@ public sealed class NyxIdSshExecTool : IAgentTool
         // generic "Service not found" envelope, and the LLM gets stuck retrying the same
         // wrong path.
         var catalogServiceId = await ResolveCatalogServiceIdAsync(token, service, ct);
-        if (string.IsNullOrWhiteSpace(catalogServiceId))
-        {
-            _logger.LogWarning(
-                "[ssh_exec] could not resolve catalog_service_id for service={Service}", service);
-            return $$"""
-                {"error":"Service not found in user-services. Pass a slug or id from `nyxid_proxy` discovery (with no slug) — only SSH-typed user services have a catalog_service_id usable here.","received":{{JsonSerializer.Serialize(service)}}}
-                """;
-        }
 
         _logger.LogInformation(
             "[ssh_exec] service={Service} catalogId={CatalogId} principal={Principal} timeoutSecs={Timeout}",
@@ -125,7 +117,7 @@ public sealed class NyxIdSshExecTool : IAgentTool
     /// <c>catalog_service_id</c>, otherwise fall back to the input (so a raw catalog id passed
     /// directly still works).
     /// </summary>
-    private async Task<string?> ResolveCatalogServiceIdAsync(
+    private async Task<string> ResolveCatalogServiceIdAsync(
         string token, string serviceIdOrSlug, CancellationToken ct)
     {
         try

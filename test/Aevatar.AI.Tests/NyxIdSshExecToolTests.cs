@@ -23,6 +23,27 @@ public class NyxIdSshExecToolTests
     }
 
     [Fact]
+    public void Constructor_NullClient_Throws()
+    {
+        var act = () => new NyxIdSshExecTool(null!);
+
+        act.Should().Throw<ArgumentNullException>()
+            .WithParameterName("client");
+    }
+
+    [Fact]
+    public void Metadata_DescribesSshExecutionContract()
+    {
+        var tool = new NyxIdSshExecTool(CreateDummyClient());
+
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
+        tool.Description.Should().Contain("ssh://");
+        tool.Description.Should().Contain("nyxid_proxy");
+        tool.ParametersSchema.Should().Contain("\"service\"");
+        tool.ParametersSchema.Should().Contain("\"timeout_secs\"");
+    }
+
+    [Fact]
     public void RequiresApproval_AlwaysTrue()
     {
         var tool = new NyxIdSshExecTool(CreateDummyClient());
@@ -55,6 +76,23 @@ public class NyxIdSshExecToolTests
         {
             var result = await tool.ExecuteAsync(args);
             result.Should().Contain("'service', 'command', and 'principal' are required");
+        }
+        finally
+        {
+            ClearMetadata();
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_InvalidJson_ReturnsParseError()
+    {
+        var tool = new NyxIdSshExecTool(CreateDummyClient());
+        SetMetadata("test-token");
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"service":""");
+
+            result.Should().Contain("Failed to parse tool arguments");
         }
         finally
         {
@@ -102,6 +140,33 @@ public class NyxIdSshExecToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_AcceptsLegacySlugArgument()
+    {
+        var handler = new PathHandler();
+        handler.Map(HttpMethod.Get, "/api/v1/keys/sg-alias",
+            $$"""{"id":"u","slug":"sg-alias","catalog_service_id":"{{CatalogId}}"}""");
+        handler.Map(HttpMethod.Post, $"/api/v1/ssh/{CatalogId}/exec", SshOk);
+
+        var tool = new NyxIdSshExecTool(new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(handler)));
+        SetMetadata("test-token");
+        try
+        {
+            var result = await tool.ExecuteAsync(
+                """{"slug":"sg-alias","command":"whoami","principal":"ubuntu"}""");
+
+            result.Should().Contain("\"exit_code\":0");
+            handler.Recorded.Should().Contain(r =>
+                r.Method == HttpMethod.Post && r.Path == $"/api/v1/ssh/{CatalogId}/exec");
+        }
+        finally
+        {
+            ClearMetadata();
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_FallsBackToListServices_WhenDirectKeyLookupMissesCatalogId()
     {
         // /keys/{slug} can return a wrapper without `catalog_service_id` surfaced (e.g. some
@@ -125,6 +190,249 @@ public class NyxIdSshExecToolTests
             result.Should().Contain("\"exit_code\":0");
             handler.Recorded.Should().Contain(r =>
                 r.Method == HttpMethod.Post && r.Path == $"/api/v1/ssh/{CatalogId}/exec");
+        }
+        finally
+        {
+            ClearMetadata();
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_FallsBackToArrayListServices_WhenWrappedListDoesNotMatch()
+    {
+        var handler = new PathHandler();
+        handler.Map(HttpMethod.Get, "/api/v1/keys/edge-router", """[]""");
+        handler.Map(HttpMethod.Get, "/api/v1/keys",
+            $$"""[42,{"id":"other","catalog_service_id":"ignored"},{"service_slug":"edge-router","catalog_service_id":"{{CatalogId}}"}]""");
+        handler.Map(HttpMethod.Post, $"/api/v1/ssh/{CatalogId}/exec", SshOk);
+
+        var tool = new NyxIdSshExecTool(new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(handler)));
+        SetMetadata("test-token");
+        try
+        {
+            var result = await tool.ExecuteAsync(
+                """{"service":"edge-router","command":"uptime","principal":"admin"}""");
+
+            result.Should().Contain("\"exit_code\":0");
+            handler.Recorded.Should().Contain(r =>
+                r.Method == HttpMethod.Post && r.Path == $"/api/v1/ssh/{CatalogId}/exec");
+        }
+        finally
+        {
+            ClearMetadata();
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_FallsBackToRawCatalogId_WhenLookupsDoNotResolveCatalogId()
+    {
+        var rawCatalogId = "raw-catalog-id";
+        var handler = new PathHandler();
+        handler.Map(HttpMethod.Get, $"/api/v1/keys/{rawCatalogId}", """{"error":true}""");
+        handler.Map(HttpMethod.Get, "/api/v1/keys", """{"keys":[{"slug":"other","catalog_service_id":"other-catalog"}]}""");
+        handler.Map(HttpMethod.Post, $"/api/v1/ssh/{rawCatalogId}/exec", SshOk);
+
+        var tool = new NyxIdSshExecTool(new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(handler)));
+        SetMetadata("test-token");
+        try
+        {
+            var result = await tool.ExecuteAsync(
+                $$"""{"service":"{{rawCatalogId}}","command":"hostname","principal":"ubuntu"}""");
+
+            result.Should().Contain("\"exit_code\":0");
+            handler.Recorded.Should().Contain(r =>
+                r.Method == HttpMethod.Post && r.Path == $"/api/v1/ssh/{rawCatalogId}/exec");
+        }
+        finally
+        {
+            ClearMetadata();
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_FallsBackToRawCatalogId_WhenDirectLookupIsEmpty()
+    {
+        var rawCatalogId = "catalog-from-empty-direct";
+        var handler = new PathHandler();
+        handler.Map(HttpMethod.Get, $"/api/v1/keys/{rawCatalogId}", string.Empty);
+        handler.Map(HttpMethod.Get, "/api/v1/keys", "{}");
+        handler.Map(HttpMethod.Post, $"/api/v1/ssh/{rawCatalogId}/exec", SshOk);
+
+        var tool = new NyxIdSshExecTool(new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(handler)));
+        SetMetadata("test-token");
+        try
+        {
+            var result = await tool.ExecuteAsync(
+                $$"""{"service":"{{rawCatalogId}}","command":"date","principal":"ubuntu"}""");
+
+            result.Should().Contain("\"exit_code\":0");
+            handler.Recorded.Should().Contain(r =>
+                r.Method == HttpMethod.Post && r.Path == $"/api/v1/ssh/{rawCatalogId}/exec");
+        }
+        finally
+        {
+            ClearMetadata();
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_FallsBackToRawCatalogId_WhenDirectLookupIsInvalidJson()
+    {
+        var rawCatalogId = "catalog-from-invalid-direct";
+        var handler = new PathHandler();
+        handler.Map(HttpMethod.Get, $"/api/v1/keys/{rawCatalogId}", "not-json");
+        handler.Map(HttpMethod.Get, "/api/v1/keys", "{}");
+        handler.Map(HttpMethod.Post, $"/api/v1/ssh/{rawCatalogId}/exec", SshOk);
+
+        var tool = new NyxIdSshExecTool(new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(handler)));
+        SetMetadata("test-token");
+        try
+        {
+            var result = await tool.ExecuteAsync(
+                $$"""{"service":"{{rawCatalogId}}","command":"date","principal":"ubuntu"}""");
+
+            result.Should().Contain("\"exit_code\":0");
+            handler.Recorded.Should().Contain(r =>
+                r.Method == HttpMethod.Post && r.Path == $"/api/v1/ssh/{rawCatalogId}/exec");
+        }
+        finally
+        {
+            ClearMetadata();
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_IgnoresBlankCatalogServiceIdFromMatchedListEntry()
+    {
+        var rawCatalogId = "catalog-from-blank-list-match";
+        var handler = new PathHandler();
+        handler.Map(HttpMethod.Get, $"/api/v1/keys/{rawCatalogId}", """{"id":"u"}""");
+        handler.Map(HttpMethod.Get, "/api/v1/keys",
+            $$"""{"keys":[{"slug":"{{rawCatalogId}}","catalog_service_id":""}]}""");
+        handler.Map(HttpMethod.Post, $"/api/v1/ssh/{rawCatalogId}/exec", SshOk);
+
+        var tool = new NyxIdSshExecTool(new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(handler)));
+        SetMetadata("test-token");
+        try
+        {
+            var result = await tool.ExecuteAsync(
+                $$"""{"service":"{{rawCatalogId}}","command":"date","principal":"ubuntu"}""");
+
+            result.Should().Contain("\"exit_code\":0");
+            handler.Recorded.Should().Contain(r =>
+                r.Method == HttpMethod.Post && r.Path == $"/api/v1/ssh/{rawCatalogId}/exec");
+        }
+        finally
+        {
+            ClearMetadata();
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_FallsBackToRawService_WhenListResponseIsInvalidJson()
+    {
+        var rawCatalogId = "catalog-from-caller";
+        var handler = new PathHandler();
+        handler.Map(HttpMethod.Get, $"/api/v1/keys/{rawCatalogId}", """{"id":"u"}""");
+        handler.Map(HttpMethod.Get, "/api/v1/keys", "not-json");
+        handler.Map(HttpMethod.Post, $"/api/v1/ssh/{rawCatalogId}/exec", SshOk);
+
+        var tool = new NyxIdSshExecTool(new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(handler)));
+        SetMetadata("test-token");
+        try
+        {
+            var result = await tool.ExecuteAsync(
+                $$"""{"service":"{{rawCatalogId}}","command":"pwd","principal":"ubuntu"}""");
+
+            result.Should().Contain("\"exit_code\":0");
+            handler.Recorded.Should().Contain(r =>
+                r.Method == HttpMethod.Post && r.Path == $"/api/v1/ssh/{rawCatalogId}/exec");
+        }
+        finally
+        {
+            ClearMetadata();
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ThrowsConfiguredBaseUrlError_AfterResolverLookupsFail()
+    {
+        var tool = new NyxIdSshExecTool(new NyxIdApiClient(new NyxIdToolOptions()));
+        SetMetadata("test-token");
+        try
+        {
+            var act = () => tool.ExecuteAsync(
+                """{"service":"raw-catalog","command":"date","principal":"ubuntu"}""");
+
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("NyxID base URL is not configured.");
+        }
+        finally
+        {
+            ClearMetadata();
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_MatchesUnderscoreIdAndClampsTimeoutToMinimum()
+    {
+        var handler = new PathHandler();
+        handler.Map(HttpMethod.Get, "/api/v1/keys/user-service-id", """{"id":"user-service-id"}""");
+        handler.Map(HttpMethod.Get, "/api/v1/keys",
+            $$"""{"keys":[{"_id":"user-service-id","catalog_service_id":"{{CatalogId}}"}]}""");
+        handler.Map(HttpMethod.Post, $"/api/v1/ssh/{CatalogId}/exec", SshOk);
+
+        var tool = new NyxIdSshExecTool(new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(handler)));
+        SetMetadata("test-token");
+        try
+        {
+            await tool.ExecuteAsync(
+                """{"service":"user-service-id","command":"id","principal":"ubuntu","timeout_secs":0}""");
+
+            var exec = handler.Recorded.Last(r => r.Method == HttpMethod.Post);
+            using var doc = JsonDocument.Parse(exec.Body!);
+            doc.RootElement.GetProperty("timeout_secs").GetInt32().Should().Be(1);
+        }
+        finally
+        {
+            ClearMetadata();
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_DefaultsTimeoutWhenValueIsNotAnInteger()
+    {
+        var handler = new PathHandler();
+        handler.Map(HttpMethod.Get, "/api/v1/keys/sg",
+            $$"""{"id":"u","slug":"sg","catalog_service_id":"{{CatalogId}}"}""");
+        handler.Map(HttpMethod.Post, $"/api/v1/ssh/{CatalogId}/exec", SshOk);
+
+        var tool = new NyxIdSshExecTool(new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(handler)));
+        SetMetadata("test-token");
+        try
+        {
+            await tool.ExecuteAsync(
+                """{"service":"sg","command":"sleep 1","principal":"ubuntu","timeout_secs":"soon"}""");
+
+            var exec = handler.Recorded.Last(r => r.Method == HttpMethod.Post);
+            using var doc = JsonDocument.Parse(exec.Body!);
+            doc.RootElement.GetProperty("timeout_secs").GetInt32().Should().Be(30);
         }
         finally
         {
