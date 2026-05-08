@@ -45,6 +45,7 @@ import {
   buildStudioScriptsWorkspaceRoute,
   buildStudioWorkflowEditorRoute,
   buildStudioWorkflowWorkspaceRoute,
+  resolveStudioMemberRouteKey,
 } from "@/shared/studio/navigation";
 import {
   formatStudioMemberLifecycleStage,
@@ -1476,6 +1477,7 @@ const TeamDetailPage: React.FC = () => {
     lens.currentService?.serviceId ||
     lens.currentRun?.serviceId ||
     undefined;
+  const firstTeamRosterMemberId = trimText(teamMembersQuery.data?.members?.[0]?.memberId);
   const currentMemberId =
     trimText(preferredMemberSummary?.memberId) ||
     trimText(preferredMemberId);
@@ -1522,25 +1524,33 @@ const TeamDetailPage: React.FC = () => {
     }),
     [currentPlatformService?.appId, currentPlatformService?.namespace, currentPlatformService?.tenantId, runtimeServiceId, scopeId],
   );
+  const selectedStudioBackendMemberId =
+    firstTeamRosterMemberId || (hasTeamIdentity ? "" : currentMemberId);
+  const selectedStudioLegacyMemberId =
+    hasTeamIdentity
+      ? ""
+      : trimText(runtimeServiceId) ||
+        trimText(serviceRevisionsQuery.data?.serviceId) ||
+        trimText(preferredServiceId) ||
+        trimText(servicesQuery.data?.[0]?.serviceId) ||
+        trimText(activeWorkflowSummary?.serviceKey).split(":").pop()?.trim() ||
+        "";
   const selectedStudioMemberId =
-    currentMemberId ||
-    trimText(runtimeServiceId) ||
-    trimText(serviceRevisionsQuery.data?.serviceId) ||
-    trimText(preferredServiceId) ||
-    trimText(servicesQuery.data?.[0]?.serviceId) ||
-    trimText(activeWorkflowSummary?.serviceKey).split(":").pop()?.trim() ||
-    "";
+    selectedStudioBackendMemberId || selectedStudioLegacyMemberId;
+  const selectedStudioWorkflowMemberKey = buildStudioWorkflowMemberKey({
+    workflowId: activeWorkflowSummary?.workflowId,
+    workflowName:
+      trimText(activeWorkflowSummary?.displayName) ||
+      trimText(activeWorkflowSummary?.workflowName),
+  });
   const selectedStudioMemberKey =
-    trimText(activeWorkflowSummary?.workflowId).length > 0
-      ? buildStudioWorkflowMemberKey({
-          workflowId: activeWorkflowSummary?.workflowId,
-          workflowName:
-            trimText(activeWorkflowSummary?.displayName) ||
-            trimText(activeWorkflowSummary?.workflowName),
-        })
-      : selectedStudioMemberId
-        ? `member:${selectedStudioMemberId}`
-        : undefined;
+    resolveStudioMemberRouteKey({
+      memberId: selectedStudioBackendMemberId,
+      memberKey: selectedStudioWorkflowMemberKey,
+    }) ||
+    resolveStudioMemberRouteKey({
+      memberId: selectedStudioLegacyMemberId,
+    });
 
   const teamBuilderRoute =
     trimText(activeWorkflowSummary?.workflowId).length > 0
@@ -3696,26 +3706,34 @@ const TeamDetailPage: React.FC = () => {
       history.push(
         buildStudioWorkflowEditorRoute({
           scopeId,
-          memberKey:
-            trimText(workflowId).length > 0 ? `workflow:${trimText(workflowId)}` : undefined,
+          teamId: selectedTeamId || undefined,
+          memberKey: resolveStudioMemberRouteKey({
+            memberId: selectedStudioBackendMemberId,
+            memberKey: selectedStudioMemberKey,
+            workflowId,
+          }),
           workflowId,
         }),
       );
     },
-    [scopeId],
+    [scopeId, selectedStudioBackendMemberId, selectedStudioMemberKey, selectedTeamId],
   );
   const handleOpenScriptAsset = React.useCallback(
     (scriptId: string) => {
       history.push(
         buildStudioScriptsWorkspaceRoute({
           scopeId,
-          memberKey:
-            trimText(scriptId).length > 0 ? `script:${trimText(scriptId)}` : undefined,
+          teamId: selectedTeamId || undefined,
+          memberKey: resolveStudioMemberRouteKey({
+            memberId: selectedStudioBackendMemberId,
+            memberKey: selectedStudioMemberKey,
+            scriptId,
+          }),
           scriptId,
         }),
       );
     },
-    [scopeId],
+    [scopeId, selectedStudioBackendMemberId, selectedStudioMemberKey, selectedTeamId],
   );
 
   const renderOverviewTab = () => {

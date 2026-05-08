@@ -456,6 +456,7 @@ function buildMemberRosterPreview(input: {
   readonly runtimeAvailableByMemberId?: ReadonlySet<string>;
   readonly scopeId: string;
   readonly services: readonly ServiceCatalogSnapshot[];
+  readonly teamId?: string | null;
 }): MemberRosterPreview {
   const matchedService = resolveMemberPreviewService({
     member: input.member,
@@ -485,6 +486,7 @@ function buildMemberRosterPreview(input: {
   const title = pickMeaningfulLabel(input.member.displayName, input.member.memberId) || "未命名成员";
   const studioHref = buildStudioWorkflowWorkspaceRoute({
     scopeId: input.scopeId,
+    teamId: input.teamId || undefined,
     memberId,
   });
 
@@ -586,6 +588,7 @@ function buildTeamRosterPreview(input: {
       runtimeAvailableByMemberId: input.runtimeAvailableByMemberId,
       scopeId: input.scopeId,
       services: input.services,
+      teamId: input.team.teamId,
     }),
   );
   const sortedMembers = [...input.members].sort(compareMembers);
@@ -640,6 +643,8 @@ function buildTeamRosterPreview(input: {
   });
   const studioHref = buildStudioWorkflowWorkspaceRoute({
     scopeId: input.scopeId,
+    teamId: input.team.teamId,
+    memberId: primaryMemberPreview?.memberId || undefined,
   });
   const runtimeHref =
     primaryMemberPreview?.serviceId && primaryMemberPreview.serviceId.length > 0
