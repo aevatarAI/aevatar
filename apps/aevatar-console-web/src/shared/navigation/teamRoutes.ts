@@ -102,14 +102,23 @@ export function buildTeamDetailHref(options: {
     return buildTeamsHref();
   }
 
-  return buildHref(`/teams/${encodeURIComponent(scopeId)}`, {
-    memberId: options.memberId,
-    teamId: options.teamId,
-    workflowId: options.workflowId,
-    tab: options.tab,
-    serviceId: options.serviceId,
-    runId: options.runId,
-  });
+  const teamId = trimOptional(options.teamId);
+  if (!teamId) {
+    return buildHref(buildTeamsHref(), {
+      scopeId,
+    });
+  }
+
+  return buildHref(
+    `/teams/${encodeURIComponent(scopeId)}/${encodeURIComponent(teamId)}`,
+    {
+      memberId: options.memberId,
+      workflowId: options.workflowId,
+      tab: options.tab,
+      serviceId: options.serviceId,
+      runId: options.runId,
+    },
+  );
 }
 
 export function readTeamDetailRouteState(
@@ -118,19 +127,24 @@ export function readTeamDetailRouteState(
 ): TeamDetailRouteState {
   const params = new URLSearchParams(search);
   const pathnameSegments = pathname.split('/').filter(Boolean);
+  const isTeamPath = pathnameSegments[0] === 'teams';
   const scopeIdFromPath =
-    pathnameSegments[0] === 'teams' && pathnameSegments[1]
+    isTeamPath && pathnameSegments[1]
       ? decodePathSegment(pathnameSegments[1])
+      : '';
+  const teamIdFromPath =
+    isTeamPath && pathnameSegments[2]
+      ? decodePathSegment(pathnameSegments[2])
       : '';
   const defaultTab: TeamDetailTab = 'overview';
 
   return {
     memberId: trimOptional(params.get('memberId')),
     runId: trimOptional(params.get('runId')),
-    scopeId: trimOptional(params.get('scopeId')) || scopeIdFromPath,
+    scopeId: scopeIdFromPath || trimOptional(params.get('scopeId')),
     serviceId: trimOptional(params.get('serviceId')),
     tab: parseTeamTab(params.get('tab'), defaultTab),
-    teamId: trimOptional(params.get('teamId')),
+    teamId: teamIdFromPath || trimOptional(params.get('teamId')),
     workflowId: trimOptional(params.get('workflowId')),
   };
 }

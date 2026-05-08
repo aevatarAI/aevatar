@@ -39,7 +39,7 @@ import {
   buildRuntimeRunsHref,
 } from "@/shared/navigation/runtimeRoutes";
 import { saveObservedRunSessionPayload } from "@/shared/runs/draftRunSession";
-import { studioApi } from "@/shared/studio/api";
+import { isStudioApiStatus, studioApi } from "@/shared/studio/api";
 import {
   buildStudioWorkflowMemberKey,
   buildStudioScriptsWorkspaceRoute,
@@ -51,6 +51,7 @@ import {
   formatStudioTeamLifecycleStage,
   type StudioWorkflowDocument,
 } from "@/shared/studio/models";
+import type { StudioTeamSummary } from "@/shared/studio/models";
 import { AevatarCompactText } from "@/shared/ui/compactText";
 import { describeError } from "@/shared/ui/errorText";
 import {
@@ -83,6 +84,21 @@ import type {
 import { useTeamRuntimeLens } from "./runtime/useTeamRuntimeLens";
 
 type ObservationStatus = "live" | "delayed" | "partial" | "unavailable";
+
+const teamProjectionRetryLimit = 5;
+const teamProjectionRetryBaseMs = 500;
+const teamProjectionRetryMaxMs = 3_000;
+
+function isProjectionSyncing404(error: unknown): boolean {
+  return isStudioApiStatus(error, 404);
+}
+
+function projectionRetryDelay(attemptIndex: number): number {
+  return Math.min(
+    teamProjectionRetryBaseMs * 2 ** attemptIndex,
+    teamProjectionRetryMaxMs,
+  );
+}
 
 type ObservationBadge = {
   label: string;
@@ -1098,6 +1114,21 @@ const TeamDetailPage: React.FC = () => {
   }, [locationSnapshot]);
   const scopeId = routeState.scopeId.trim();
   const selectedTeamId = trimText(routeState.teamId);
+  const hasTeamIdentity = scopeId.length > 0 && selectedTeamId.length > 0;
+  const teamSummaryQueryKey = React.useMemo(
+    () => ["teams", "team-summary", scopeId, selectedTeamId] as const,
+    [scopeId, selectedTeamId],
+  );
+  const teamMembersQueryKey = React.useMemo(
+    () => ["teams", "team-members", scopeId, selectedTeamId] as const,
+    [scopeId, selectedTeamId],
+  );
+  const cachedTeamSummary = queryClient.getQueryData<StudioTeamSummary>(
+    teamSummaryQueryKey,
+  );
+  const shouldRetryProjectionSync = Boolean(
+    hasTeamIdentity && cachedTeamSummary?.teamId === selectedTeamId,
+  );
   const teamsListHref = React.useMemo(
     () => buildScopeHref("/teams", { scopeId }),
     [scopeId],
@@ -1151,6 +1182,7 @@ const TeamDetailPage: React.FC = () => {
     servicesQuery,
     workflowsQuery,
   } = useTeamRuntimeLens(scopeId, {
+    enabled: hasTeamIdentity,
     graphDepth,
     preferredActorId: selectedActorId || undefined,
     preferredMemberId,
@@ -1159,31 +1191,49 @@ const TeamDetailPage: React.FC = () => {
   });
 
   const workspaceSettingsQuery = useQuery({
-    enabled: scopeId.length > 0,
+    enabled: hasTeamIdentity,
     queryFn: () => studioApi.getWorkspaceSettings(),
     queryKey: ["teams", "workspace-settings"],
     retry: false,
   });
 
   const connectorCatalogQuery = useQuery({
-    enabled: scopeId.length > 0,
+    enabled: hasTeamIdentity,
     queryFn: () => studioApi.getConnectorCatalog(),
     queryKey: ["teams", "connector-catalog"],
     retry: false,
   });
 
   const teamMembersQuery = useQuery({
-    enabled: scopeId.length > 0 && selectedTeamId.length > 0,
+    enabled: hasTeamIdentity,
     queryFn: () => studioApi.listTeamMembers(scopeId, selectedTeamId),
-    queryKey: ["teams", "team-members", scopeId, selectedTeamId],
-    retry: false,
+    queryKey: teamMembersQueryKey,
+    retry: (failureCount, error) =>
+      shouldRetryProjectionSync &&
+      isProjectionSyncing404(error) &&
+      failureCount < teamProjectionRetryLimit,
+    retryDelay: projectionRetryDelay,
   });
   const teamSummaryQuery = useQuery({
-    enabled: scopeId.length > 0 && selectedTeamId.length > 0,
+    enabled: hasTeamIdentity,
     queryFn: () => studioApi.getTeam(scopeId, selectedTeamId),
-    queryKey: ["teams", "team-summary", scopeId, selectedTeamId],
-    retry: false,
+    queryKey: teamSummaryQueryKey,
+    retry: (failureCount, error) =>
+      shouldRetryProjectionSync &&
+      isProjectionSyncing404(error) &&
+      failureCount < teamProjectionRetryLimit,
+    retryDelay: projectionRetryDelay,
   });
+  const isTeamSummaryProjectionSyncing =
+    shouldRetryProjectionSync &&
+    ((teamSummaryQuery.failureCount > 0 &&
+      isProjectionSyncing404(teamSummaryQuery.failureReason)) ||
+      (teamSummaryQuery.isError && isProjectionSyncing404(teamSummaryQuery.error)));
+  const isTeamMembersProjectionSyncing =
+    shouldRetryProjectionSync &&
+    ((teamMembersQuery.failureCount > 0 &&
+      isProjectionSyncing404(teamMembersQuery.failureReason)) ||
+      (teamMembersQuery.isError && isProjectionSyncing404(teamMembersQuery.error)));
 
   React.useEffect(() => {
     if (!teamEditorOpen || !teamSummaryQuery.data) {
@@ -1197,11 +1247,11 @@ const TeamDetailPage: React.FC = () => {
   const refreshTeamAuthority = React.useCallback(async () => {
     await Promise.all([
       queryClient.invalidateQueries({
-        queryKey: ["teams", "team-summary", scopeId, selectedTeamId],
+        queryKey: teamSummaryQueryKey,
       }),
       queryClient.invalidateQueries({ queryKey: ["teams", "roster", scopeId] }),
     ]);
-  }, [queryClient, scopeId, selectedTeamId]);
+  }, [queryClient, scopeId, teamSummaryQueryKey]);
 
   const fallbackWorkflowSummary = React.useMemo(() => {
     if (lens.activeRevision?.implementationKind !== "workflow") {
@@ -1298,7 +1348,7 @@ const TeamDetailPage: React.FC = () => {
 
   const teamWorkflowDetailQuery = useQuery({
     enabled:
-      scopeId.length > 0 &&
+      hasTeamIdentity &&
       lens.activeRevision?.implementationKind === "workflow" &&
       trimText(activeWorkflowSummary?.workflowId).length > 0,
     queryFn: () =>
@@ -1315,6 +1365,7 @@ const TeamDetailPage: React.FC = () => {
 
   const teamWorkflowDocumentsQuery = useQuery({
     enabled:
+      hasTeamIdentity &&
       lens.activeRevision?.implementationKind === "workflow" &&
       Boolean(teamWorkflowDetailQuery.data?.available) &&
       trimText(teamWorkflowDetailQuery.data?.source?.workflowYaml).length > 0,
@@ -1350,11 +1401,13 @@ const TeamDetailPage: React.FC = () => {
   });
 
   const teamScopedRoleLoading =
+    hasTeamIdentity &&
     lens.activeRevision?.implementationKind === "workflow" &&
     (workflowsQuery.isLoading ||
       teamWorkflowDetailQuery.isLoading ||
       teamWorkflowDocumentsQuery.isLoading);
   const teamScopedRoleUnavailable =
+    hasTeamIdentity &&
     lens.activeRevision?.implementationKind === "workflow" &&
     !teamScopedRoleLoading &&
     (!activeWorkflowSummary ||
@@ -1395,6 +1448,11 @@ const TeamDetailPage: React.FC = () => {
     "";
 
   React.useEffect(() => {
+    if (!hasTeamIdentity) {
+      setSelectedConnectorKey("");
+      return;
+    }
+
     if (integrations.items.length === 0) {
       setSelectedConnectorKey("");
       return;
@@ -1406,7 +1464,12 @@ const TeamDetailPage: React.FC = () => {
     ) {
       setSelectedConnectorKey(defaultSelectedConnectorKey);
     }
-  }, [defaultSelectedConnectorKey, integrations.items, selectedConnectorKey]);
+  }, [
+    defaultSelectedConnectorKey,
+    hasTeamIdentity,
+    integrations.items,
+    selectedConnectorKey,
+  ]);
 
   const runtimeServiceId =
     focusedOperationalUnit?.matchedService?.serviceId ||
@@ -1418,7 +1481,11 @@ const TeamDetailPage: React.FC = () => {
     trimText(preferredMemberId);
   React.useEffect(() => {
     const canonicalMemberId = trimText(currentMemberId);
-    if (!scopeId || !canonicalMemberId || trimText(routeState.memberId)) {
+    if (
+      !hasTeamIdentity ||
+      !canonicalMemberId ||
+      trimText(routeState.memberId)
+    ) {
       return;
     }
 
@@ -1441,6 +1508,7 @@ const TeamDetailPage: React.FC = () => {
     routeState.tab,
     routeState.workflowId,
     selectedTeamId,
+    hasTeamIdentity,
     scopeId,
   ]);
   const currentPlatformService =
@@ -1503,6 +1571,11 @@ const TeamDetailPage: React.FC = () => {
     lens.graph.focusActorId || lens.members[0]?.actorId || "";
 
   React.useEffect(() => {
+    if (!hasTeamIdentity) {
+      setSelectedActorId("");
+      return;
+    }
+
     if (availableActorIds.length === 0) {
       setSelectedActorId("");
       return;
@@ -1510,7 +1583,7 @@ const TeamDetailPage: React.FC = () => {
     if (!selectedActorId || !availableActorIds.includes(selectedActorId)) {
       setSelectedActorId(defaultSelectedActorId || availableActorIds[0]);
     }
-  }, [availableActorIds, defaultSelectedActorId, selectedActorId]);
+  }, [availableActorIds, defaultSelectedActorId, hasTeamIdentity, selectedActorId]);
 
   const effectiveActorId = selectedActorId || defaultSelectedActorId;
   const localizedFocusReason = formatTopologyFocusReason(lens.graph.focusReason);
@@ -2600,6 +2673,11 @@ const TeamDetailPage: React.FC = () => {
     [topologyGraph.nodes],
   );
   React.useEffect(() => {
+    if (!hasTeamIdentity) {
+      setSelectedTopologyNodeId("");
+      return;
+    }
+
     if (topologyNodeIds.length === 0) {
       setSelectedTopologyNodeId("");
       return;
@@ -2611,7 +2689,7 @@ const TeamDetailPage: React.FC = () => {
           : topologyNodeIds[0],
       );
     }
-  }, [effectiveActorId, selectedTopologyNodeId, topologyNodeIds]);
+  }, [effectiveActorId, hasTeamIdentity, selectedTopologyNodeId, topologyNodeIds]);
   const selectedTopologyEntity =
     topologyGraph.entityMap.get(selectedTopologyNodeId) ??
     topologyGraph.entityMap.get(effectiveActorId) ??
@@ -2974,6 +3052,8 @@ const TeamDetailPage: React.FC = () => {
   }));
   const teamAuthorityStatusLabel = teamSummaryQuery.data
     ? teamLifecycleLabel
+    : isTeamSummaryProjectionSyncing
+      ? "Projection 同步中"
     : teamSummaryQuery.isError
       ? "Team summary 不可用"
       : selectedTeamId
@@ -2981,16 +3061,22 @@ const TeamDetailPage: React.FC = () => {
         : "未绑定 Team";
   const teamAuthorityStatusStyle = teamSummaryQuery.data
     ? resolveStatusPillStyle(token, teamLifecycleStatus)
+    : isTeamSummaryProjectionSyncing
+      ? resolveTonePillStyle(token, "warning")
     : teamSummaryQuery.isError
       ? resolveTonePillStyle(token, "warning")
       : resolveTonePillStyle(token, "neutral");
   const teamAuthorityTitle = teamSummaryQuery.data
     ? teamTitle
+    : isTeamSummaryProjectionSyncing
+      ? "Team projection 正在同步"
     : selectedTeamId
       ? "Team summary 暂不可用"
       : teamTitle;
   const teamAuthorityDescription = teamSummaryQuery.data
     ? teamSummaryDescription || "Team authority 当前没有描述。"
+    : isTeamSummaryProjectionSyncing
+      ? "Team 已创建，后端正在把 committed state 物化到查询用 read model。这里会自动刷新。"
     : selectedTeamId
       ? "当前仍会显示运行时视图；Team authority summary 暂时无法读取。"
       : "当前详情来自运行时上下文，还没有明确的 Team authority 绑定。";
@@ -3790,8 +3876,9 @@ const TeamDetailPage: React.FC = () => {
         onOpenRuntimeExplorer={handleOpenServiceMapping}
         onOpenServices={handleOpenServices}
         onSelectActor={setSelectedActorId}
-        rosterError={teamMembersQuery.isError}
+        rosterError={teamMembersQuery.isError && !isTeamMembersProjectionSyncing}
         rosterLoading={teamMembersQuery.isLoading}
+        rosterSyncing={isTeamMembersProjectionSyncing}
         rosterRows={teamRosterRows}
         rosterTeamId={selectedTeamId}
       />
@@ -3945,7 +4032,7 @@ const TeamDetailPage: React.FC = () => {
       break;
   }
 
-  if (!scopeId) {
+  if (!hasTeamIdentity) {
     return <TeamDetailEmptyState />;
   }
 
