@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -8,7 +9,7 @@ using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -33,6 +34,9 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     /// Standalone budget for metadata enrichment (scope resolve + UserConfig lookup).
     /// </summary>
     internal static readonly TimeSpan MetadataBuildBudget = TimeSpan.FromSeconds(15);
+
+    internal static readonly TimeSpan TerminalCleanupDelay = TimeSpan.FromMinutes(5);
+    private const string TerminalCleanupCallbackPrefix = "agent-run-terminal-cleanup";
 
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _actorDispatchPort;
@@ -101,6 +105,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 "Ignoring duplicate terminal agent run start: runId={RunId} status={Status}",
                 runId,
                 State.Status);
+            await ScheduleTerminalCleanupAsync(NormalizeOptional(State.RunId) ?? runId);
             return;
         }
 
@@ -115,7 +120,40 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             });
         }
 
-        await ProcessAsync(request, runId);
+        try
+        {
+            await ProcessAsync(request, runId);
+        }
+        catch (AgentRunOutputDispatchException ex)
+        {
+            // The run has not entered a terminal state yet. Leaving it Started lets the
+            // durable dispatcher retry the start command and re-emit the ready/drop signal.
+            _logger.LogWarning(
+                ex,
+                "Agent run output notification was not accepted; run remains retryable: runId={RunId} correlation={CorrelationId}",
+                runId,
+                request.CorrelationId);
+        }
+        catch (Exception ex)
+        {
+            await FailAfterUnexpectedExceptionAsync(request, runId, ex);
+        }
+    }
+
+    [EventHandler]
+    public async Task HandleCleanupAsync(AgentRunCleanupRequested command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (State.Status is not (AgentRunStatus.ReplyProduced or AgentRunStatus.Dropped or AgentRunStatus.Failed))
+            return;
+        if (!string.IsNullOrWhiteSpace(command.RunId) &&
+            !string.IsNullOrWhiteSpace(State.RunId) &&
+            !string.Equals(command.RunId, State.RunId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        await _actorRuntime.DestroyAsync(Id, CancellationToken.None);
     }
 
     private async Task ProcessAsync(NeedsLlmReplyEvent request, string runId)
@@ -278,15 +316,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             return;
         }
 
-        await PersistDomainEventAsync(new AgentRunReplyProducedEvent
-        {
-            RunId = runId,
-            CorrelationId = request.CorrelationId,
-            TargetActorId = request.TargetActorId,
-            TerminalState = terminalState,
-            ProducedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-        });
         await DispatchReadyEventAsync(request, replyText, outboundIntent, terminalState, errorCode, errorSummary);
+        await PersistReplyProducedAsync(request, runId, terminalState, errorCode, errorSummary);
     }
 
     private async Task FailAndDispatchReadyAsync(
@@ -295,6 +326,54 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         string replyText,
         MessageContent? outboundIntent,
         LlmReplyTerminalState terminalState,
+        string errorCode,
+        string errorSummary)
+    {
+        await DispatchReadyEventAsync(request, replyText, outboundIntent, terminalState, errorCode, errorSummary);
+        await PersistFailedAsync(request, runId, errorCode, errorSummary);
+    }
+
+    private async Task DropAsync(NeedsLlmReplyEvent request, string runId, string reason)
+    {
+        if (CanNotifyDrop(request))
+            await DispatchDropNotificationAsync(request, reason);
+
+        await PersistDomainEventAsync(new AgentRunDroppedEvent
+        {
+            RunId = runId,
+            CorrelationId = request.CorrelationId,
+            TargetActorId = request.TargetActorId,
+            Reason = reason,
+            DroppedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+        });
+
+        await ScheduleTerminalCleanupAsync(runId);
+    }
+
+    private async Task PersistReplyProducedAsync(
+        NeedsLlmReplyEvent request,
+        string runId,
+        LlmReplyTerminalState terminalState,
+        string errorCode,
+        string errorSummary)
+    {
+        await PersistDomainEventAsync(new AgentRunReplyProducedEvent
+        {
+            RunId = runId,
+            CorrelationId = request.CorrelationId,
+            TargetActorId = request.TargetActorId,
+            TerminalState = terminalState,
+            ErrorCode = errorCode,
+            ErrorSummary = errorSummary,
+            ProducedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+        });
+
+        await ScheduleTerminalCleanupAsync(runId);
+    }
+
+    private async Task PersistFailedAsync(
+        NeedsLlmReplyEvent request,
+        string runId,
         string errorCode,
         string errorSummary)
     {
@@ -308,21 +387,43 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             FailedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
         });
 
-        await DispatchReadyEventAsync(request, replyText, outboundIntent, terminalState, errorCode, errorSummary);
+        await ScheduleTerminalCleanupAsync(runId);
     }
 
-    private async Task DropAsync(NeedsLlmReplyEvent request, string runId, string reason)
+    private async Task FailAfterUnexpectedExceptionAsync(NeedsLlmReplyEvent request, string runId, Exception ex)
     {
-        await PersistDomainEventAsync(new AgentRunDroppedEvent
-        {
-            RunId = runId,
-            CorrelationId = request.CorrelationId,
-            TargetActorId = request.TargetActorId,
-            Reason = reason,
-            DroppedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-        });
+        const string errorCode = "agent_run_unhandled_exception";
+        var errorSummary = ex.Message;
+        _logger.LogError(
+            ex,
+            "Agent run failed with unhandled exception: runId={RunId} correlation={CorrelationId}",
+            runId,
+            request.CorrelationId);
 
-        await NotifyActorOfDropAsync(request, reason);
+        if (request.Activity is not null && !string.IsNullOrWhiteSpace(request.TargetActorId))
+        {
+            try
+            {
+                await DispatchReadyEventAsync(
+                    request,
+                    "Sorry, I couldn't complete this reply. Please try again.",
+                    null,
+                    LlmReplyTerminalState.Failed,
+                    errorCode,
+                    errorSummary);
+            }
+            catch (AgentRunOutputDispatchException dispatchEx)
+            {
+                _logger.LogWarning(
+                    dispatchEx,
+                    "Unhandled run failure notification was not accepted; run remains retryable: runId={RunId} correlation={CorrelationId}",
+                    runId,
+                    request.CorrelationId);
+                return;
+            }
+        }
+
+        await PersistFailedAsync(request, runId, errorCode, errorSummary);
     }
 
     private async Task DispatchReadyEventAsync(
@@ -353,8 +454,16 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             ReplyToken = request.ReplyToken ?? string.Empty,
             ReplyTokenExpiresAtUnixMs = request.ReplyTokenExpiresAtUnixMs,
         };
-        var envelope = CreateEnvelope(request.TargetActorId, ready, request.CorrelationId);
-        await _actorDispatchPort.DispatchAsync(request.TargetActorId, envelope, CancellationToken.None);
+        try
+        {
+            await SendToAsync(request.TargetActorId, ready, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            throw new AgentRunOutputDispatchException(
+                $"Failed to send LLM reply ready event to conversation actor '{request.TargetActorId}'.",
+                ex);
+        }
     }
 
     private TurnStreamingReplySink? TryBuildStreamingSink(NeedsLlmReplyEvent request, string targetActorId)
@@ -495,54 +604,66 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             CorrelationId.Length: > 0,
         };
 
-    private async Task NotifyActorOfDropAsync(NeedsLlmReplyEvent request, string reason)
+    private static bool CanNotifyDrop(NeedsLlmReplyEvent request) =>
+        !string.IsNullOrWhiteSpace(request.TargetActorId) &&
+        !string.IsNullOrWhiteSpace(request.CorrelationId);
+
+    private async Task DispatchDropNotificationAsync(NeedsLlmReplyEvent request, string reason)
     {
-        if (string.IsNullOrWhiteSpace(request.TargetActorId) ||
-            string.IsNullOrWhiteSpace(request.CorrelationId))
-        {
-            return;
-        }
-
-        IActor? actor;
-        try
-        {
-            actor = await _actorRuntime.GetAsync(request.TargetActorId);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "Failed to resolve actor for run drop notification: runId={RunId} correlation={CorrelationId} target={TargetActorId}",
-                Id,
-                request.CorrelationId,
-                request.TargetActorId);
-            return;
-        }
-
-        if (actor is null)
-            return;
-
         var dropped = new DeferredLlmReplyDroppedEvent
         {
             CorrelationId = request.CorrelationId,
             Reason = reason,
             DroppedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
         };
-        var envelope = CreateEnvelope(request.TargetActorId, dropped, request.CorrelationId);
 
         try
         {
-            await _actorDispatchPort.DispatchAsync(request.TargetActorId, envelope, CancellationToken.None);
+            await SendToAsync(request.TargetActorId, dropped, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            throw new AgentRunOutputDispatchException(
+                $"Failed to send deferred LLM reply drop event to conversation actor '{request.TargetActorId}' (reason '{reason}').",
+                ex);
+        }
+    }
+
+    private async Task ScheduleTerminalCleanupAsync(string runId)
+    {
+        if (Services.GetService<IActorRuntimeCallbackScheduler>() is null)
+            return;
+
+        try
+        {
+            await ScheduleSelfDurableTimeoutAsync(
+                BuildCleanupCallbackId(runId),
+                TerminalCleanupDelay,
+                new AgentRunCleanupRequested
+                {
+                    RunId = runId,
+                    RequestedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                },
+                ct: CancellationToken.None);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(
                 ex,
-                "Failed to deliver run drop notification: runId={RunId} correlation={CorrelationId} reason={Reason}",
-                Id,
-                request.CorrelationId,
-                reason);
+                "Failed to schedule terminal agent run cleanup: runId={RunId} actorId={ActorId}",
+                runId,
+                Id);
         }
+    }
+
+    private static string BuildCleanupCallbackId(string runId)
+    {
+        var normalized = NormalizeOptional(runId) ?? "unknown";
+        var chars = normalized
+            .Select(static ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '_')
+            .Take(96)
+            .ToArray();
+        return $"{TerminalCleanupCallbackPrefix}:{new string(chars)}";
     }
 
     private async Task EnsureTargetActorAsync(string targetActorId)
@@ -569,23 +690,6 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             CorrelationId.Length: > 0,
         };
     }
-
-    private EventEnvelope CreateEnvelope<TPayload>(
-        string targetActorId,
-        TPayload payload,
-        string correlationId)
-        where TPayload : IMessage =>
-        new()
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
-            Payload = Any.Pack(payload),
-            Route = EnvelopeRouteSemantics.CreateDirect(Id, targetActorId),
-            Propagation = new EnvelopePropagation
-            {
-                CorrelationId = correlationId ?? string.Empty,
-            },
-        };
 
     private static AgentRunGAgentState ApplyStarted(AgentRunGAgentState current, AgentRunStartedEvent evt)
     {
@@ -644,4 +748,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var trimmed = value?.Trim();
         return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
     }
+
+    private sealed class AgentRunOutputDispatchException(string message, Exception innerException)
+        : Exception(message, innerException);
 }

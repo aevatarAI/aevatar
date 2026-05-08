@@ -32,6 +32,11 @@ message AgentRunStartRequested {
   aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 1;
 }
 
+message AgentRunCleanupRequested {
+  string run_id = 1;
+  int64 requested_at_unix_ms = 2;
+}
+
 message AgentRunStartedEvent {
   string run_id = 1;
   string correlation_id = 2;

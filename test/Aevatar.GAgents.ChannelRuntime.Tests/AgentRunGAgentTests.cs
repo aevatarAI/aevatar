@@ -5,6 +5,7 @@ using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
@@ -22,9 +23,10 @@ public sealed class AgentRunGAgentTests
     public async Task DispatchAsync_ShouldCreateRunActorAndDispatchStartCommand()
     {
         var actorRuntime = new DispatchingActorRuntime();
+        var streamProvider = new RecordingStreamProvider();
         var dispatcher = new AgentRunDispatcher(
             actorRuntime,
-            actorRuntime,
+            streamProvider,
             NullLogger<AgentRunDispatcher>.Instance);
 
         await dispatcher.DispatchAsync(new NeedsLlmReplyEvent
@@ -36,14 +38,124 @@ public sealed class AgentRunGAgentTests
             ReplyToken = "relay-token-dispatch",
         }, CancellationToken.None);
 
-        actorRuntime.Dispatches.Should().ContainSingle();
-        var (actorId, envelope) = actorRuntime.Dispatches.Single();
+        streamProvider.Produced.Should().ContainSingle();
+        var (actorId, envelope) = streamProvider.Produced.Single();
         actorId.Should().Be(AgentRunGAgent.BuildActorId("corr-dispatch"));
         envelope.Propagation.CorrelationId.Should().Be("corr-dispatch");
         var command = envelope.Payload.Unpack<AgentRunStartRequested>();
         command.Request.CorrelationId.Should().Be("corr-dispatch");
         command.Request.TargetActorId.Should().Be("conversation-actor");
         command.Request.ReplyToken.Should().Be("relay-token-dispatch");
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_ShouldIgnoreDuplicateStart_AfterReadyAcceptedAndTerminalPersisted()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "ok" };
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
+        var request = new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-duplicate",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-duplicate",
+        };
+
+        await runtime.HandleStartAsync(request);
+        await runtime.HandleStartAsync(request.Clone());
+
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
+        replyGenerator.CallCount.Should().Be(1);
+        handled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor));
+    }
+
+    [Fact]
+    public async Task HandleCleanupAsync_ShouldDestroyTerminalRunActor()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            new RecordingReplyGenerator(() => false) { ReplyText = "ok" },
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            });
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-cleanup",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-cleanup",
+        });
+
+        await runtime.HandleCleanupAsync(new AgentRunCleanupRequested
+        {
+            RunId = "corr-cleanup",
+        });
+
+        actorRuntime.DestroyedIds.Should().Contain(runtime.Id);
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_ShouldRetryReadySignal_WhenFirstOutputDispatchIsNotAccepted()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var publisher = new DispatchingEventPublisher(actorRuntime)
+        {
+            FailNextSend = true,
+        };
+        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "ok" };
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            },
+            eventPublisher: publisher);
+        var request = new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-retry-ready",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-retry-ready",
+        };
+
+        await runtime.HandleStartAsync(request);
+
+        runtime.State.Status.Should().Be(AgentRunStatus.Started);
+        handled.Should().BeEmpty();
+
+        await runtime.HandleStartAsync(request.Clone());
+
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
+        replyGenerator.CallCount.Should().Be(2);
+        handled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor));
     }
 
     [Fact]
@@ -687,7 +799,8 @@ public sealed class AgentRunGAgentTests
         IInteractiveReplyCollector? collector,
         Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions relayOptions,
         INyxIdRelayScopeResolver? scopeResolver = null,
-        IUserConfigQueryPort? userConfigQueryPort = null)
+        IUserConfigQueryPort? userConfigQueryPort = null,
+        IEventPublisher? eventPublisher = null)
     {
         var dispatchPort = actorRuntime as IActorDispatchPort ?? Substitute.For<IActorDispatchPort>();
         var agent = new AgentRunGAgent(
@@ -698,12 +811,32 @@ public sealed class AgentRunGAgentTests
             relayOptions,
             NullLogger<AgentRunGAgent>.Instance,
             scopeResolver,
-            userConfigQueryPort)
-        {
-            EventSourcing = new NoOpEventSourcing<AgentRunGAgentState>(),
-        };
+            userConfigQueryPort);
         SetId(agent, AgentRunGAgent.BuildActorId(Guid.NewGuid().ToString("N")));
+        agent.EventSourcing = new StateTransitionEventSourcing<AgentRunGAgentState>((current, evt) =>
+            InvokeAgentTransition(agent, current, evt));
+        agent.EventPublisher = eventPublisher ?? new DispatchingEventPublisher(actorRuntime);
         return agent;
+    }
+
+    private static AgentRunGAgentState InvokeAgentTransition(
+        AgentRunGAgent agent,
+        AgentRunGAgentState current,
+        IMessage evt)
+    {
+        var currentType = agent.GetType();
+        while (currentType is not null)
+        {
+            var transitionMethod = currentType.GetMethod(
+                "TransitionState",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            if (transitionMethod is not null)
+                return (AgentRunGAgentState)transitionMethod.Invoke(agent, [current, evt])!;
+
+            currentType = currentType.BaseType;
+        }
+
+        throw new InvalidOperationException("Unable to invoke AgentRunGAgent transition via reflection.");
     }
 
     private static void SetId(object agent, string id)
@@ -757,6 +890,8 @@ public sealed class AgentRunGAgentTests
 
         public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
 
+        public List<string> DestroyedIds { get; } = [];
+
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
             where TAgent : IAgent
         {
@@ -775,6 +910,7 @@ public sealed class AgentRunGAgentTests
 
         public Task DestroyAsync(string id, CancellationToken ct = default)
         {
+            DestroyedIds.Add(id);
             _actors.Remove(id);
             return Task.CompletedTask;
         }
@@ -799,7 +935,8 @@ public sealed class AgentRunGAgentTests
         }
     }
 
-    private sealed class NoOpEventSourcing<TState> : IEventSourcingBehavior<TState>
+    private sealed class StateTransitionEventSourcing<TState>(Func<TState, IMessage, TState> transition)
+        : IEventSourcingBehavior<TState>
         where TState : class, IMessage<TState>, new()
     {
         private readonly List<IMessage> _pending = [];
@@ -832,12 +969,110 @@ public sealed class AgentRunGAgentTests
             _pending.Clear();
         }
 
-        public TState TransitionState(TState current, IMessage evt) => current;
+        public TState TransitionState(TState current, IMessage evt) => transition(current, evt);
+    }
+
+    private sealed class DispatchingEventPublisher(IActorRuntime actorRuntime) : IEventPublisher
+    {
+        public bool FailNextSend { get; set; }
+
+        public List<(string TargetActorId, IMessage Event)> Sent { get; } = [];
+
+        public Task PublishAsync<T>(
+            T e,
+            TopologyAudience audience = TopologyAudience.Children,
+            CancellationToken c = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where T : IMessage => Task.CompletedTask;
+
+        public async Task SendToAsync<T>(
+            string targetActorId,
+            T e,
+            CancellationToken c = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where T : IMessage
+        {
+            if (FailNextSend)
+            {
+                FailNextSend = false;
+                throw new InvalidOperationException("send not accepted");
+            }
+
+            Sent.Add((targetActorId, e));
+            var actor = await actorRuntime.GetAsync(targetActorId)
+                        ?? throw new InvalidOperationException($"Actor {targetActorId} not found.");
+            await actor.HandleEventAsync(new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                Payload = Any.Pack(e),
+                Route = EnvelopeRouteSemantics.CreateDirect("agent-run-test-publisher", targetActorId),
+                Propagation = new EnvelopePropagation
+                {
+                    CorrelationId = sourceEnvelope?.Propagation?.CorrelationId ?? string.Empty,
+                },
+            }, c);
+        }
+    }
+
+    private sealed class RecordingStreamProvider : IStreamProvider
+    {
+        private readonly Dictionary<string, RecordingStream> _streams = new(StringComparer.Ordinal);
+
+        public List<(string StreamId, EventEnvelope Envelope)> Produced =>
+            _streams.Values.SelectMany(stream => stream.Produced.Select(envelope => (stream.StreamId, envelope))).ToList();
+
+        public IStream GetStream(string actorId)
+        {
+            if (!_streams.TryGetValue(actorId, out var stream))
+            {
+                stream = new RecordingStream(actorId);
+                _streams[actorId] = stream;
+            }
+
+            return stream;
+        }
+    }
+
+    private sealed class RecordingStream(string streamId) : IStream
+    {
+        public string StreamId { get; } = streamId;
+
+        public List<EventEnvelope> Produced { get; } = [];
+
+        public Task ProduceAsync<T>(T message, CancellationToken ct = default) where T : IMessage
+        {
+            if (message is EventEnvelope envelope)
+                Produced.Add(envelope.Clone());
+            return Task.CompletedTask;
+        }
+
+        public Task<IAsyncDisposable> SubscribeAsync<T>(Func<T, Task> handler, CancellationToken ct = default)
+            where T : IMessage, new() =>
+            Task.FromResult<IAsyncDisposable>(new NoopAsyncDisposable());
+
+        public Task UpsertRelayAsync(StreamForwardingBinding binding, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task RemoveRelayAsync(string targetStreamId, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task<IReadOnlyList<StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<StreamForwardingBinding>>([]);
+    }
+
+    private sealed class NoopAsyncDisposable : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class RecordingReplyGenerator(Func<bool> captureAction) : IConversationReplyGenerator
     {
         public string ReplyText { get; init; } = string.Empty;
+
+        public int CallCount { get; private set; }
 
         public bool CaptureSucceeded { get; private set; }
 
@@ -849,6 +1084,7 @@ public sealed class AgentRunGAgentTests
             IStreamingReplySink? streamingSink,
             CancellationToken ct)
         {
+            CallCount++;
             CaptureSucceeded = captureAction();
             MetadataObserver?.Invoke(metadata);
             if (streamingSink is not null && !string.IsNullOrEmpty(ReplyText))
