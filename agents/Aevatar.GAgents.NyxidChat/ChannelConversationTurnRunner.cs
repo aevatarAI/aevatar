@@ -1509,9 +1509,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
 
-        // Carry the relay reply credential through the inbox as transient inbox-only
+        // Carry the relay reply credential through to the executor as transient inbox-only
         // fields. ConversationGAgent strips these before persisting NeedsLlmReplyEvent;
-        // ChannelLlmReplyInboxRuntime echoes them into the LlmReplyReadyEvent so the
+        // ConversationLlmReplyExecutor echoes them into the LlmReplyReadyEvent so the
         // outbound reply does not depend on the actor's in-memory token dict surviving
         // deactivation.
         if (runtimeContext.NyxRelayReplyToken is { } token &&

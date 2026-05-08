@@ -10,7 +10,6 @@ using Aevatar.GAgents.NyxidChat.Slash;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -36,10 +35,12 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<NyxIdRelayTransport>();
         services.TryAddSingleton<NyxIdRelayAuthValidator>();
 
-        // ─── Channel LLM reply inbox runtime + hosted service ───
-        services.TryAddSingleton<ChannelLlmReplyInboxRuntime>();
-        services.TryAddSingleton<IChannelLlmReplyInbox>(sp => sp.GetRequiredService<ChannelLlmReplyInboxRuntime>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, ChannelLlmReplyInboxHostedService>());
+        // ─── Per-conversation LLM reply executor ───
+        // Each ConversationGAgent owns its own LLM reply work via this executor; replaces the
+        // silo-wide stream subscriber that bottlenecked all conversations on a single FIFO.
+        services.TryAddSingleton<ConversationLlmReplyExecutor>();
+        services.TryAddSingleton<IConversationLlmReplyExecutor>(sp =>
+            sp.GetRequiredService<ConversationLlmReplyExecutor>());
 
         // ─── Conversation turn-runner override + reply generator ───
         services.Replace(ServiceDescriptor.Singleton<IConversationTurnRunner, ChannelConversationTurnRunner>());

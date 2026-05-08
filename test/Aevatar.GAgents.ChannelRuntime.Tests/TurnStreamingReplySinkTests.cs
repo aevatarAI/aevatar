@@ -191,8 +191,8 @@ public sealed class TurnStreamingReplySinkTests
     public async Task FinalizeAsync_DispatchInFlight_WaitsForFinalChunkOnWire()
     {
         // Regression for the race where FinalizeAsync would return as soon as the final text
-        // was stashed (while a prior dispatch was still in flight), letting the inbox runtime
-        // send LlmReplyReadyEvent past the late final chunk and triggering the
+        // was stashed (while a prior dispatch was still in flight), letting the LLM reply
+        // executor send LlmReplyReadyEvent past the late final chunk and triggering the
         // ConversationGAgent processed-command guard to drop it.
         var firstDispatchGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var envelopes = new List<EventEnvelope>();

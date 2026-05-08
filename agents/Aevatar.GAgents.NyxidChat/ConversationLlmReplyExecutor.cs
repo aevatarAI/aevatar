@@ -1,26 +1,39 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Channel.NyxIdRelay;
-using Aevatar.GAgents.NyxidChat;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.NyxidChat;
 
-public sealed class ChannelLlmReplyInboxRuntime :
-    IHostedService,
-    IAsyncDisposable,
-    IChannelLlmReplyInbox
+/// <summary>
+/// Drives one LLM reply turn end-to-end on behalf of <see cref="ConversationGAgent"/>:
+/// pre-LLM gates (stale age, missing relay token, malformed payload), bot-owner config
+/// enrichment, the LLM call itself, streaming-sink wiring, and dispatch of the terminal
+/// signal back to the originating actor.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Replaces the silo-wide <c>ChannelLlmReplyInboxRuntime</c> stream subscriber. The actor
+/// invokes <see cref="StartAsync"/> from inside its turn; the executor schedules the LLM
+/// work on a background task so the 60-300s call cannot pin the actor turn, then
+/// dispatches an <c>LlmReplyReadyEvent</c> (or <c>DeferredLlmReplyDroppedEvent</c>) back
+/// to <c>request.TargetActorId</c> via <see cref="IActorDispatchPort"/>.
+/// </para>
+/// <para>
+/// The background task only does external I/O and finishes by signalling the actor; it
+/// never reads or writes actor state directly. All actor-state mutations happen inside
+/// the actor's handler when the dispatched event arrives, preserving the actor's
+/// single-threaded execution invariant.
+/// </para>
+/// </remarks>
+public sealed class ConversationLlmReplyExecutor : IConversationLlmReplyExecutor
 {
-    internal const string InboxStreamId = "channel-runtime:llm-reply:inbox";
+    internal const string PublisherActorId = "channel-runtime.llm-reply-executor";
 
-    private readonly IStreamProvider _streamProvider;
-    private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _actorDispatchPort;
     private readonly IConversationReplyGenerator _replyGenerator;
     private readonly IInteractiveReplyCollector? _interactiveReplyCollector;
@@ -28,26 +41,19 @@ public sealed class ChannelLlmReplyInboxRuntime :
     private readonly INyxIdRelayScopeResolver? _scopeResolver;
     private readonly IUserConfigQueryPort? _userConfigQueryPort;
     private readonly TimeProvider _timeProvider;
-    private readonly ILogger<ChannelLlmReplyInboxRuntime> _logger;
-    private IAsyncDisposable? _subscription;
+    private readonly ILogger<ConversationLlmReplyExecutor> _logger;
 
-    public ChannelLlmReplyInboxRuntime(
-        IStreamProvider streamProvider,
-        IActorRuntime actorRuntime,
+    public ConversationLlmReplyExecutor(
+        IActorDispatchPort actorDispatchPort,
         IConversationReplyGenerator replyGenerator,
         IInteractiveReplyCollector? interactiveReplyCollector,
         Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions,
-        ILogger<ChannelLlmReplyInboxRuntime> logger,
+        ILogger<ConversationLlmReplyExecutor> logger,
         INyxIdRelayScopeResolver? scopeResolver = null,
         IUserConfigQueryPort? userConfigQueryPort = null,
-        TimeProvider? timeProvider = null,
-        IActorDispatchPort? actorDispatchPort = null)
+        TimeProvider? timeProvider = null)
     {
-        _streamProvider = streamProvider ?? throw new ArgumentNullException(nameof(streamProvider));
-        _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
-        _actorDispatchPort = actorDispatchPort
-            ?? actorRuntime as IActorDispatchPort
-            ?? throw new ArgumentNullException(nameof(actorDispatchPort));
+        _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _replyGenerator = replyGenerator ?? throw new ArgumentNullException(nameof(replyGenerator));
         _interactiveReplyCollector = interactiveReplyCollector;
         _relayOptions = relayOptions;
@@ -57,46 +63,19 @@ public sealed class ChannelLlmReplyInboxRuntime :
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public async Task StartAsync(CancellationToken ct)
-    {
-        if (_subscription is not null)
-            return;
-
-        _subscription = await _streamProvider
-            .GetStream(InboxStreamId)
-            .SubscribeAsync<NeedsLlmReplyEvent>(ProcessAsync, ct);
-
-        _logger.LogInformation("Started channel LLM reply inbox on {StreamId}", InboxStreamId);
-    }
-
-    public async Task StopAsync(CancellationToken ct)
-    {
-        if (_subscription is null)
-            return;
-
-        await _subscription.DisposeAsync();
-        _subscription = null;
-        _logger.LogInformation("Stopped channel LLM reply inbox on {StreamId}", InboxStreamId);
-    }
-
-    public Task EnqueueAsync(NeedsLlmReplyEvent request, CancellationToken ct)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        return _streamProvider.GetStream(InboxStreamId).ProduceAsync(request, ct);
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        await StopAsync(CancellationToken.None);
-    }
-
-    internal const long MaxInboxRequestAgeMs = 5 * 60 * 1000;
+    /// <summary>
+    /// Pending LLM reply requests older than this are considered stale and dropped before
+    /// the LLM call: NyxID relay reply tokens have a ~30 min TTL and the user access token
+    /// used for the LLM call expires inside ~15 min, so a request that has been waiting for
+    /// hours cannot lead to a successful reply.
+    /// </summary>
+    internal const long MaxRequestAgeMs = 5 * 60 * 1000;
 
     /// <summary>
     /// Hard upper bound on a single LLM reply turn. Mirrors
-    /// <c>NyxIdRelayOptions.ResponseTimeoutSeconds</c> (default 300s) — long enough for the
+    /// <see cref="Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions.ResponseTimeoutSeconds"/> (default 300s) — long enough for the
     /// aevatar Lark bot's multi-step flows (skill search + remote tool + summarize) to land
-    /// without truncation, short enough that a true hang does not pin the inbox task forever.
+    /// without truncation, short enough that a true hang does not pin the turn forever.
     /// A configured value of <c>0</c> or negative is treated as "disable the cap" — pass
     /// through with no timeout, mirroring HttpClient/Polly conventions where 0 means
     /// "no limit". The default of 300s applies when the option is unset.
@@ -110,6 +89,42 @@ public sealed class ChannelLlmReplyInboxRuntime :
     /// surfaces as a distinct error code rather than a misleading "llm_reply_timeout".
     /// </summary>
     internal static readonly TimeSpan MetadataBuildBudget = TimeSpan.FromSeconds(15);
+
+    public Task StartAsync(NeedsLlmReplyEvent request, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        // Snapshot the request: the caller may mutate the original (e.g. the actor
+        // re-enriches with a fresh reply token on retry) and we are about to hand off
+        // ownership to a background task.
+        var snapshot = request.Clone();
+
+        // Use Task.Run so the LLM work runs on the thread pool, not on the caller's
+        // synchronization context (which, for an actor turn, must not be blocked or the
+        // very bottleneck this seam removes is reintroduced inside one actor). The
+        // background task only does external I/O and finishes by dispatching back to
+        // the actor — it never reads or writes actor state.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await ProcessAsync(snapshot).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // ProcessAsync handles its own errors and dispatches a terminal signal;
+                // an exception bubbling out here means dispatch itself or some outer
+                // step failed unexpectedly. Log and swallow so the unobserved exception
+                // does not crash the host.
+                _logger.LogError(
+                    ex,
+                    "Conversation LLM reply executor crashed before dispatching terminal signal: correlation={CorrelationId} target={TargetActorId}",
+                    snapshot.CorrelationId,
+                    snapshot.TargetActorId);
+            }
+        }, CancellationToken.None);
+
+        return Task.CompletedTask;
+    }
 
     internal async Task ProcessAsync(NeedsLlmReplyEvent request)
     {
@@ -130,12 +145,8 @@ public sealed class ChannelLlmReplyInboxRuntime :
             return;
         }
 
-        // Stale gate: NyxID relay reply tokens have a ~30 min TTL and the user access
-        // token used for the LLM call expires inside ~15 min. A request that has been
-        // sitting in the stream for hours can't lead to a successful reply, so drop it
-        // here instead of spending an LLM round just to fail at the outbound stage.
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        if (request.RequestedAtUnixMs > 0 && nowMs - request.RequestedAtUnixMs > MaxInboxRequestAgeMs)
+        if (request.RequestedAtUnixMs > 0 && nowMs - request.RequestedAtUnixMs > MaxRequestAgeMs)
         {
             _logger.LogInformation(
                 "Dropping stale LLM reply request: correlation={CorrelationId} ageMs={AgeMs}",
@@ -152,14 +163,11 @@ public sealed class ChannelLlmReplyInboxRuntime :
         if (IsRelayRequest(request) && string.IsNullOrWhiteSpace(request.ReplyToken))
         {
             _logger.LogWarning(
-                "Dropping relay LLM reply request without inbox-carried reply_token: correlation={CorrelationId}",
+                "Dropping relay LLM reply request without reply_token: correlation={CorrelationId}",
                 request.CorrelationId);
             await NotifyActorOfDropAsync(request, "missing_relay_reply_token");
             return;
         }
-
-        var actor = await _actorRuntime.GetAsync(request.TargetActorId)
-                    ?? await _actorRuntime.CreateAsync<ConversationGAgent>(request.TargetActorId, CancellationToken.None);
 
         string replyText;
         MessageContent? outboundIntent = null;
@@ -274,7 +282,7 @@ public sealed class ChannelLlmReplyInboxRuntime :
         {
             CorrelationId = request.CorrelationId,
             RegistrationId = request.RegistrationId,
-            SourceActorId = InboxStreamId,
+            SourceActorId = PublisherActorId,
             Activity = request.Activity!.Clone(),
             Outbound = outboundIntent?.Clone() ?? new MessageContent { Text = replyText },
             TerminalState = terminalState,
@@ -292,7 +300,7 @@ public sealed class ChannelLlmReplyInboxRuntime :
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
             Payload = Any.Pack(ready),
-            Route = EnvelopeRouteSemantics.CreateDirect(InboxStreamId, request.TargetActorId),
+            Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, request.TargetActorId),
         };
 
         await _actorDispatchPort.DispatchAsync(request.TargetActorId, envelope, CancellationToken.None);
@@ -432,14 +440,14 @@ public sealed class ChannelLlmReplyInboxRuntime :
     }
 
     /// <summary>
-    /// Resolve the LLM-run cap from <c>NyxIdRelayOptions.ResponseTimeoutSeconds</c>.
+    /// Resolve the LLM-run cap from <see cref="Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions.ResponseTimeoutSeconds"/>.
     /// Conventions:
     ///   * unset / null  → <see cref="FallbackTimeoutSecondsDefault"/> (300s)
     ///   * &gt; 0        → use that exact value
     ///   * 0 or negative → <see cref="TimeSpan.Zero"/> meaning "no timeout"; the caller
     ///     constructs an unbounded <see cref="CancellationTokenSource"/>. Use this only
     ///     in environments that have an external watchdog — without it, a hung tool
-    ///     keeps the inbox task alive indefinitely.
+    ///     keeps the executor task alive indefinitely.
     /// </summary>
     private TimeSpan ResolveFallbackTimeout()
     {
@@ -466,28 +474,6 @@ public sealed class ChannelLlmReplyInboxRuntime :
             return;
         }
 
-        IActor? actor;
-        try
-        {
-            actor = await _actorRuntime.GetAsync(request.TargetActorId);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "Failed to resolve actor for inbox drop notification: correlation={CorrelationId} target={TargetActorId}",
-                request.CorrelationId,
-                request.TargetActorId);
-            return;
-        }
-
-        if (actor is null)
-        {
-            // No active actor means there is nothing pending to clean up; the request
-            // either was never persisted or the actor's state was already retired.
-            return;
-        }
-
         var dropped = new DeferredLlmReplyDroppedEvent
         {
             CorrelationId = request.CorrelationId,
@@ -499,7 +485,7 @@ public sealed class ChannelLlmReplyInboxRuntime :
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Payload = Any.Pack(dropped),
-            Route = EnvelopeRouteSemantics.CreateDirect(InboxStreamId, request.TargetActorId),
+            Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, request.TargetActorId),
         };
 
         try
@@ -530,18 +516,4 @@ public sealed class ChannelLlmReplyInboxRuntime :
             CorrelationId.Length: > 0,
         };
     }
-}
-
-public sealed class ChannelLlmReplyInboxHostedService : IHostedService
-{
-    private readonly ChannelLlmReplyInboxRuntime _runtime;
-
-    public ChannelLlmReplyInboxHostedService(ChannelLlmReplyInboxRuntime runtime)
-    {
-        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
-    }
-
-    public Task StartAsync(CancellationToken ct) => _runtime.StartAsync(ct);
-
-    public Task StopAsync(CancellationToken ct) => _runtime.StopAsync(ct);
 }

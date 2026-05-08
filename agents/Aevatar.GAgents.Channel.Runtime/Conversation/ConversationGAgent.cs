@@ -30,8 +30,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
 {
     // Orleans Reminders (the durable scheduler backing ScheduleSelfDurableTimeoutAsync)
     // round dueTime up to the local reminder service tick (typically ~1 minute), so
-    // sub-minute schedules are unreliable. The inbox dispatch happens inline via
-    // IChannelLlmReplyInbox; the durable timer is reserved for retry/rehydration.
+    // sub-minute schedules are unreliable. Per-turn LLM dispatch happens inline via
+    // IConversationLlmReplyExecutor; the durable timer is reserved for retry/rehydration.
     private static readonly TimeSpan DeferredLlmDispatchRetryDelay = TimeSpan.FromSeconds(60);
     // Pending LLM reply requests older than this are considered stale on rehydration:
     // the user gave up, the relay reply_token (~30 min TTL) is likely already expired,
@@ -344,11 +344,11 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
 
     private async Task DispatchPendingLlmReplyAsync(NeedsLlmReplyEvent request, CancellationToken ct)
     {
-        var inbox = Services.GetService<IChannelLlmReplyInbox>();
-        if (inbox is null)
+        var executor = Services.GetService<IConversationLlmReplyExecutor>();
+        if (executor is null)
         {
             Logger.LogWarning(
-                "Channel LLM reply inbox not registered; scheduling durable retry: correlation={CorrelationId}",
+                "Conversation LLM reply executor not registered; scheduling durable retry: correlation={CorrelationId}",
                 request.CorrelationId);
             await ScheduleDeferredLlmReplyDispatchAsync(request, DeferredLlmDispatchRetryDelay, ct);
             return;
@@ -357,15 +357,15 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         // Retry and rehydration paths read `request` from State.PendingLlmReplyRequests,
         // which always carries an empty ReplyToken (the inbound handler strips it before
         // persist). If the actor is still alive and the in-memory dict still has the
-        // token for this correlation, re-enrich the inbox copy so the subscriber's relay
+        // token for this correlation, re-enrich the executor copy so the executor's relay
         // credential gate does not mistake a legitimate retry for a dead request.
         var enriched = EnrichWithRuntimeReplyTokenIfNeeded(request);
 
         try
         {
-            await inbox.EnqueueAsync(enriched.Clone(), ct);
+            await executor.StartAsync(enriched.Clone(), ct);
             Logger.LogInformation(
-                "Enqueued LLM reply request to inbox: correlation={CorrelationId} conversation={Key} replyTokenSource={Source}",
+                "Started LLM reply work: correlation={CorrelationId} conversation={Key} replyTokenSource={Source}",
                 enriched.CorrelationId,
                 enriched.Activity?.Conversation?.CanonicalKey,
                 DescribeEnqueuedReplyTokenSource(request, enriched));
@@ -374,7 +374,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         {
             Logger.LogError(
                 ex,
-                "Failed to enqueue LLM reply request; scheduling durable retry: correlation={CorrelationId}",
+                "Failed to start LLM reply work; scheduling durable retry: correlation={CorrelationId}",
                 request.CorrelationId);
             await ScheduleDeferredLlmReplyDispatchAsync(request, DeferredLlmDispatchRetryDelay, ct);
         }

@@ -79,7 +79,7 @@ message LlmReplyReadyEvent {
   int64 reply_token_expires_at_unix_ms = 11;
 }
 
-// Per-delta streaming signal dispatched from the LLM inbox runtime to the conversation actor while
+// Per-delta streaming signal dispatched from the LLM reply executor to the conversation actor while
 // the reply is still being generated. The actor owns the outbound reply credential and the
 // placeholder message identifier for the turn, so it must be the one issuing the relay placeholder
 // send and subsequent edit calls. This message carries only the cumulative accumulated text for
@@ -154,7 +154,7 @@ message NyxRelayReplyTokenCleanupRequestedEvent {
   int64 requested_at_unix_ms = 2;
 }
 
-// Sent by ChannelLlmReplyInboxRuntime when its pre-LLM gates (stale age,
+// Sent by ConversationLlmReplyExecutor when its pre-LLM gates (stale age,
 // missing relay credential, malformed payload) refuse to process a deferred
 // LLM reply. The actor consumes this to retire the matching pending entry
 // from State.PendingLlmReplyRequests via a NotRetryable
