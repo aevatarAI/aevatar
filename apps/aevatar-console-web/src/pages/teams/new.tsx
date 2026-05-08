@@ -6,7 +6,6 @@ import { loadRestorableAuthSession } from '@/shared/auth/session';
 import { history } from '@/shared/navigation/history';
 import { buildTeamDetailHref, buildTeamsHref } from '@/shared/navigation/teamRoutes';
 import { studioApi } from '@/shared/studio/api';
-import type { StudioTeamRoster } from '@/shared/studio/models';
 import { buildStudioRoute } from '@/shared/studio/navigation';
 import { AevatarPanel } from '@/shared/ui/aevatarPageShells';
 import ConsoleMetricCard from '@/shared/ui/ConsoleMetricCard';
@@ -203,28 +202,6 @@ const TeamCreatePage: React.FC = () => {
         displayName: teamName.trim(),
         description: teamDescription.trim() || undefined,
       });
-      queryClient.setQueryData(
-        ['teams', 'roster', team.scopeId],
-        (current: StudioTeamRoster | undefined) => {
-          if (!current) {
-            return current;
-          }
-
-          const teams = current.teams.some(
-            (candidate) => candidate.teamId === team.teamId,
-          )
-            ? current.teams.map((candidate) =>
-                candidate.teamId === team.teamId ? team : candidate,
-              )
-            : [team, ...current.teams];
-
-          return {
-            ...current,
-            scopeId: team.scopeId,
-            teams,
-          };
-        },
-      );
       queryClient.setQueryData(
         ['teams', 'team-summary', team.scopeId, team.teamId],
         team,

@@ -95,7 +95,7 @@ function isProjectionSyncing404(error: unknown): boolean {
 
 function projectionRetryDelay(attemptIndex: number): number {
   return Math.min(
-    teamProjectionRetryBaseMs * 2 ** Math.max(0, attemptIndex - 1),
+    teamProjectionRetryBaseMs * 2 ** attemptIndex,
     teamProjectionRetryMaxMs,
   );
 }
