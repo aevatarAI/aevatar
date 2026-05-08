@@ -11,7 +11,7 @@ namespace Aevatar.AI.ToolProviders.Lark.Tests;
 public sealed class LarkCardKitClientTests
 {
     [Fact]
-    public async Task CreateCardAsync_PostsToCardsEndpoint_WithInlineDataObject()
+    public async Task CreateCardAsync_CardJson_SerializesDataAsString()
     {
         var (client, handler) = BuildClient("""{"code":0,"data":{"card_id":"card_x"}}""");
         var dataJson = """{"schema":"2.0","config":{"streaming_mode":true},"body":{"elements":[]}}""";
@@ -24,13 +24,56 @@ public sealed class LarkCardKitClientTests
         handler.LastRequest!.Method.Should().Be(HttpMethod.Post);
         handler.LastRequest!.RequestUri!.ToString().Should().Be(
             "https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/cardkit/v1/cards");
-        // The DataJson string must be embedded as a nested JSON object, not a JSON-encoded
-        // string. Lark CardKit rejects double-encoded payloads with a parse error, so the
-        // serializer-level inline embedding is load-bearing.
+        // Lark CardKit 2.0's open-apis/cardkit/v1/cards expects `data` to be a JSON-encoded
+        // STRING (not an inline object) when `type=card_json`. Inline-object payloads are
+        // rejected with code 9499 ("Invalid parameter type in json: Data") — verified
+        // against the real endpoint on 2026-05-08; the legacy unit test pinned the wrong
+        // contract and the production rollout silently fell back to the text-edit path on
+        // every turn.
         using var body = JsonDocument.Parse(handler.LastBody!);
         body.RootElement.GetProperty("type").GetString().Should().Be("card_json");
+        body.RootElement.GetProperty("data").ValueKind.Should().Be(JsonValueKind.String);
+        var roundTrip = JsonDocument.Parse(body.RootElement.GetProperty("data").GetString()!);
+        roundTrip.RootElement.GetProperty("schema").GetString().Should().Be("2.0");
+        roundTrip.RootElement.GetProperty("config").GetProperty("streaming_mode").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CreateCardAsync_CardId_SerializesDataAsString()
+    {
+        // type=card_id clones an existing card; `data` is just the card_id string.
+        var (client, handler) = BuildClient("""{"code":0,"data":{"card_id":"card_y"}}""");
+
+        await client.CreateCardAsync(
+            "tok-1",
+            new LarkCardKitCreateRequest("card_id", "7637410486966832864"),
+            CancellationToken.None);
+
+        using var body = JsonDocument.Parse(handler.LastBody!);
+        body.RootElement.GetProperty("type").GetString().Should().Be("card_id");
+        body.RootElement.GetProperty("data").ValueKind.Should().Be(JsonValueKind.String);
+        body.RootElement.GetProperty("data").GetString().Should().Be("7637410486966832864");
+    }
+
+    [Fact]
+    public async Task CreateCardAsync_Template_SerializesDataAsInlineObject()
+    {
+        // type=template wants `data: { template_id, template_variable }` as an inline
+        // object, not a string — this is the one path where the original ParseJsonObject
+        // shape was correct.
+        var (client, handler) = BuildClient("""{"code":0,"data":{"card_id":"card_z"}}""");
+        var dataJson = """{"template_id":"AAq01wbtNVnPM","template_variable":{"name":"Aevatar"}}""";
+
+        await client.CreateCardAsync(
+            "tok-1",
+            new LarkCardKitCreateRequest("template", dataJson),
+            CancellationToken.None);
+
+        using var body = JsonDocument.Parse(handler.LastBody!);
+        body.RootElement.GetProperty("type").GetString().Should().Be("template");
         body.RootElement.GetProperty("data").ValueKind.Should().Be(JsonValueKind.Object);
-        body.RootElement.GetProperty("data").GetProperty("schema").GetString().Should().Be("2.0");
+        body.RootElement.GetProperty("data").GetProperty("template_id").GetString().Should().Be("AAq01wbtNVnPM");
+        body.RootElement.GetProperty("data").GetProperty("template_variable").GetProperty("name").GetString().Should().Be("Aevatar");
     }
 
     [Fact]
@@ -104,7 +147,7 @@ public sealed class LarkCardKitClientTests
     }
 
     [Fact]
-    public async Task SetCardSettingsAsync_PatchesSettingsEndpoint_WithInlineSettingsObject()
+    public async Task SetCardSettingsAsync_SerializesSettingsAsString()
     {
         var (client, handler) = BuildClient("""{"code":0,"data":{}}""");
 
@@ -112,7 +155,7 @@ public sealed class LarkCardKitClientTests
             "tok-1",
             new LarkCardKitSettingsRequest(
                 CardId: "card_x",
-                SettingsJson: """{"streaming_mode":false}""",
+                SettingsJson: """{"config":{"streaming_mode":false}}""",
                 Sequence: 99,
                 IdempotencyKey: "uuid-end"),
             CancellationToken.None);
@@ -121,14 +164,18 @@ public sealed class LarkCardKitClientTests
         handler.LastRequest!.RequestUri!.ToString().Should().Be(
             "https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/cardkit/v1/cards/card_x/settings");
         using var body = JsonDocument.Parse(handler.LastBody!);
-        body.RootElement.GetProperty("settings").ValueKind.Should().Be(JsonValueKind.Object);
-        body.RootElement.GetProperty("settings").GetProperty("streaming_mode").GetBoolean().Should().BeFalse();
+        // Same surprise as POST /cards: PATCH /settings expects `settings` to be a
+        // JSON-encoded string, not an inline object. Lark returns code 9499 "Invalid
+        // parameter type in json: Settings" for the inline shape — verified live.
+        body.RootElement.GetProperty("settings").ValueKind.Should().Be(JsonValueKind.String);
+        var roundTrip = JsonDocument.Parse(body.RootElement.GetProperty("settings").GetString()!);
+        roundTrip.RootElement.GetProperty("config").GetProperty("streaming_mode").GetBoolean().Should().BeFalse();
         body.RootElement.GetProperty("sequence").GetInt64().Should().Be(99L);
         body.RootElement.GetProperty("uuid").GetString().Should().Be("uuid-end");
     }
 
     [Fact]
-    public async Task UpdateCardAsync_PutsCardJsonInline_AndCarriesSequence()
+    public async Task UpdateCardAsync_WrapsCardJsonInTypeDataEnvelope()
     {
         var (client, handler) = BuildClient("""{"code":0,"data":{}}""");
         var cardJson = """{"schema":"2.0","body":{"elements":[{"tag":"markdown","content":"final"}]}}""";
@@ -145,8 +192,14 @@ public sealed class LarkCardKitClientTests
         handler.LastRequest!.RequestUri!.ToString().Should().Be(
             "https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/cardkit/v1/cards/card_x");
         using var body = JsonDocument.Parse(handler.LastBody!);
+        // PUT /cards/{id} requires `card` to be `{type, data}` where data is the same
+        // JSON-encoded string used in POST /cards. Inline `{schema, body, ...}` 400s with
+        // `card.type is required` — the wrapper is what Lark validates.
         body.RootElement.GetProperty("card").ValueKind.Should().Be(JsonValueKind.Object);
-        body.RootElement.GetProperty("card").GetProperty("body").GetProperty("elements")[0]
+        body.RootElement.GetProperty("card").GetProperty("type").GetString().Should().Be("card_json");
+        body.RootElement.GetProperty("card").GetProperty("data").ValueKind.Should().Be(JsonValueKind.String);
+        var inner = JsonDocument.Parse(body.RootElement.GetProperty("card").GetProperty("data").GetString()!);
+        inner.RootElement.GetProperty("body").GetProperty("elements")[0]
             .GetProperty("content").GetString().Should().Be("final");
         body.RootElement.GetProperty("sequence").GetInt64().Should().Be(42L);
         body.RootElement.TryGetProperty("uuid", out _).Should().BeFalse();
@@ -155,17 +208,22 @@ public sealed class LarkCardKitClientTests
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
-    public async Task CreateCardAsync_RejectsBlankDataJson(string dataJson)
+    public async Task CreateCardAsync_RejectsBlankDataJson_ForAnyType(string dataJson)
     {
+        // Blank guard fires upfront for every type, so card_json and template both reject
+        // the empty payload at the boundary instead of letting it 400 at Lark.
         var (client, _) = BuildClient("");
 
-        var act = async () => await client.CreateCardAsync(
-            "tok-1",
-            new LarkCardKitCreateRequest("card_json", dataJson),
-            CancellationToken.None);
+        foreach (var type in new[] { "card_json", "template", "card_id" })
+        {
+            var act = async () => await client.CreateCardAsync(
+                "tok-1",
+                new LarkCardKitCreateRequest(type, dataJson),
+                CancellationToken.None);
 
-        await act.Should().ThrowAsync<ArgumentException>()
-            .Where(ex => ex.ParamName == "DataJson");
+            await act.Should().ThrowAsync<ArgumentException>()
+                .Where(ex => ex.ParamName == "DataJson");
+        }
     }
 
     [Fact]
@@ -184,17 +242,17 @@ public sealed class LarkCardKitClientTests
     }
 
     [Fact]
-    public async Task CreateCardAsync_RejectsLiteralNullJson()
+    public async Task CreateCardAsync_Template_RejectsLiteralNullJson()
     {
-        // JsonNode.Parse("null") returns null without throwing — the literal `null` JSON
-        // would otherwise serialize as `"data": null` and Lark rejects it as a missing
-        // field. ParseJsonObject's `?? throw` branch must surface ArgumentException so the
-        // bug is caught at the boundary instead of in production logs.
+        // For type=template the inline-object embedding still goes through
+        // ParseJsonObject, so the literal `null` payload (which JsonNode.Parse returns
+        // as null without throwing) is caught at the boundary. card_json/card_id pass
+        // through as raw strings, so this guard only applies to template.
         var (client, _) = BuildClient("");
 
         var act = async () => await client.CreateCardAsync(
             "tok-1",
-            new LarkCardKitCreateRequest("card_json", "null"),
+            new LarkCardKitCreateRequest("template", "null"),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<ArgumentException>()
