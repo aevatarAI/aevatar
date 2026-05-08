@@ -299,12 +299,22 @@ public sealed class MEAILLMProvider : ILLMProvider
         // reasoning_content field name is also undocumented — any future SDK
         // bump that renames the field, drops Patch, or changes its serializer
         // shape would silently strip reasoning context from request history.
-        // Wrap the call in try/catch so a wire-format break degrades to "no
-        // reasoning replay" instead of crashing the entire chat call. The
-        // happy-path is covered by an integration assertion in
-        // MEAILLMProviderTests, which fails the build the moment the patch
-        // stops landing in the serialized JSON (the only thing that can
-        // actually verify this round-trip survives an SDK bump).
+        //
+        // Mitigations layered here:
+        //   1. SDK version is pinned in Directory.Packages.props
+        //      (`OpenAI Version="2.9.1"`) so an unintentional minor/major bump
+        //      cannot land without an explicit dependency-bump PR.
+        //   2. AIComponentCoverageTests asserts the serialized JSON contains
+        //      `"reasoning_content":"..."` after ConvertMessages — that integration
+        //      test fails the build the moment the patch stops landing in the
+        //      payload, which is the only signal that survives an SDK bump.
+        //   3. The try/catch below degrades a wire-format break into "no
+        //      reasoning replay" rather than crashing the entire chat call.
+        //
+        // Long-term: when the OpenAI SDK exposes a typed reasoning_content
+        // property (tracked at github.com/openai/openai-dotnet — file an issue
+        // referencing this code path before bumping), retire the Patch hack
+        // and remove the SCME0001 suppression.
         try
         {
 #pragma warning disable SCME0001

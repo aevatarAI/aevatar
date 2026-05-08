@@ -414,7 +414,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     /// </summary>
     private SkillRunnerStreamingReplySink? TryCreateStreamingSink()
     {
-        // Issue #439 (PR #569 review, codex P1 on SkillRunnerGAgent.cs:351): when the run
+        // Issue #439 (PR #569 review, codex P1 on EnsureToolStatusAllowsCompletion): when the run
         // is gated by EnsureToolStatusAllowsCompletion (RequiresNyxidProxySuccess set),
         // streaming each delta would POST/PUT the partial text to Lark live — i.e. a
         // hallucinated daily report would already be visible in the user's DM by the

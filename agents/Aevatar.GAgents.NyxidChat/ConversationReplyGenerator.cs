@@ -62,6 +62,21 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         _preferencesStore = preferencesStore;
         _userMemoryStore = userMemoryStore;
         _logger = logger ?? NullLogger<NyxIdConversationReplyGenerator>.Instance;
+
+        // Surface a half-wired skills configuration at startup. When the registry is
+        // present but the remote fetcher is not, use_skill is still advertised to the
+        // LLM (BuildTurnToolsAsync registers it from the registry alone) yet any call
+        // that would have to pull a remote skill silently falls back to "skill not
+        // found". Logging at construction time gives ops a single line they can grep
+        // for instead of debugging a flaky use_skill in production.
+        // (PR #562 review on ConversationReplyGenerator.cs:120, 4-of-5 reviewers.)
+        if (_skillRegistry is not null && _remoteSkillFetcher is null)
+        {
+            _logger.LogWarning(
+                "NyxIdConversationReplyGenerator wired with SkillRegistry but no IRemoteSkillFetcher: " +
+                "use_skill will be advertised to the LLM but cannot pull remote skills. " +
+                "Register an IRemoteSkillFetcher (e.g. AddOrnnSkills) or drop the SkillRegistry to silence this.");
+        }
     }
 
     public async Task<string?> GenerateReplyAsync(

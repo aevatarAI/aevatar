@@ -279,7 +279,6 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
     {
         var current = firstText;
         TaskCompletionSource<bool>? drainSignal = null;
-        TimeSpan? armTimerDelay = null;
         try
         {
             while (true)
@@ -309,17 +308,18 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
 
                     var nextIsFinal = _drainTcs is not null;
 
-                    // Stop dispatching interim chunks once the cap is reached. The pending
-                    // stash remains so FinalizeAsync (which bypasses the cap) still has the
-                    // freshest text to dispatch when the stream ends. The drainSignal capture
-                    // here is a defensive cleanup: when nextIsFinal is false there is by
-                    // construction no _drainTcs (FinalizeAsync would have set it BEFORE this
-                    // re-entry into the lock, flipping nextIsFinal to true and routing past
-                    // the cap), but capturing+clearing keeps the invariant local rather than
-                    // relying on that proof and makes the !_dispatchInProgress hand-off the
-                    // sole owner of any future _drainTcs.
+                    // Stop dispatching interim chunks once the cap is reached. Clear the
+                    // pending stash too — keeping it would only cost a follow-up
+                    // OnDeltaAsync re-overwrites it with newer accumulated text anyway, and
+                    // an explicit drain here matches the invariant the reviewer asked for
+                    // (PR #562 review #14): pending text is never left behind when we
+                    // release _dispatchInProgress=false. FinalizeAsync, when it arrives
+                    // later, uses its `text` parameter (not _pendingText), so this clear
+                    // doesn't affect the final flush.
                     if (!nextIsFinal && _chunksEmitted >= _maxInterimChunks)
                     {
+                        _pendingText = string.Empty;
+                        _hasPending = false;
                         _dispatchInProgress = false;
                         drainSignal = _drainTcs;
                         _drainTcs = null;
@@ -329,25 +329,34 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
                     // Throttle gate between dispatches. Without this, the loop drains stashed
                     // text at network round-trip pace (~50ms) and exhausts the platform-side
                     // per-message edit cap (Lark code 230072). When the throttle window has
-                    // not elapsed since the last emit, hand off to the deferred flush timer
-                    // and let DispatchLoopAsync return so callers (OnDeltaAsync) are not
-                    // blocked on the throttle. Final dispatches bypass the throttle so the
-                    // user sees the complete text immediately when the stream ends.
+                    // not elapsed, arm the deferred timer atomically with releasing
+                    // _dispatchInProgress so a concurrent OnDeltaAsync (PR #562 review #17)
+                    // cannot squeeze in between the release and the arm and observe a stale
+                    // (no-timer + not-dispatching) state. Final dispatches bypass the
+                    // throttle so the user sees the complete text immediately when the
+                    // stream ends.
                     //
                     // Invariant: if we reach this branch, nextIsFinal == false, so _drainTcs
-                    // must be null — FinalizeAsync sets _drainTcs only when it arrives during
-                    // an in-flight dispatch, and that path always re-evaluates nextIsFinal
-                    // inside this same lock acquisition. We do NOT signal drainSignal here:
-                    // a future timer-driven loop (or a fresh FinalizeAsync that races in
-                    // through the !_dispatchInProgress path) is the one that will eventually
-                    // drain _pendingText and signal whatever _drainTcs gets attached.
+                    // must be null. FinalizeAsync sets _drainTcs only when it arrives during
+                    // an in-flight dispatch, and that path re-evaluates nextIsFinal inside
+                    // this same lock acquisition. We do NOT signal drainSignal here: the
+                    // timer-driven loop is the one that eventually drains _pendingText and
+                    // signals whatever _drainTcs gets attached.
                     if (!nextIsFinal && _throttle > TimeSpan.Zero)
                     {
                         var elapsed = _timeProvider.GetUtcNow() - _lastEmitAt;
                         if (elapsed < _throttle)
                         {
+                            var delay = _throttle - elapsed;
                             _dispatchInProgress = false;
-                            armTimerDelay = _throttle - elapsed;
+                            if (!_disposed && _hasPending && _flushTimer is null)
+                            {
+                                _flushTimer = _timeProvider.CreateTimer(
+                                    OnFlushTimerFired,
+                                    state: null,
+                                    dueTime: delay,
+                                    period: Timeout.InfiniteTimeSpan);
+                            }
                             break;
                         }
                     }
@@ -371,25 +380,6 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
             }
             errSignal?.TrySetException(ex);
             throw;
-        }
-
-        // Arm the deferred-flush timer if the loop exited mid-throttle. The timer fires
-        // OnFlushTimerFired which will start a fresh DispatchLoopAsync with the latest
-        // _pendingText. Done outside the lock so the timer callback registration is not
-        // held under our critical section.
-        if (armTimerDelay is { } delay)
-        {
-            lock (_lock)
-            {
-                if (!_disposed && _hasPending && _flushTimer is null)
-                {
-                    _flushTimer = _timeProvider.CreateTimer(
-                        OnFlushTimerFired,
-                        state: null,
-                        dueTime: delay,
-                        period: Timeout.InfiniteTimeSpan);
-                }
-            }
         }
 
         drainSignal?.TrySetResult(true);
