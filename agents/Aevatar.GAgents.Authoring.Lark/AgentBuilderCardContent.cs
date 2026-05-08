@@ -12,16 +12,16 @@ namespace Aevatar.GAgents.Authoring.Lark;
 /// </summary>
 public static class AgentBuilderCardContent
 {
-    private const string DailyReportAction = AgentBuilderActionIds.DailyReport;
+    private const string DailyAction = AgentBuilderActionIds.Daily;
     private const string SocialMediaAction = AgentBuilderActionIds.SocialMedia;
-    private const string OpenDailyReportFormAction = AgentBuilderActionIds.OpenDailyReportForm;
+    private const string OpenDailyFormAction = AgentBuilderActionIds.OpenDailyForm;
     private const string OpenSocialMediaFormAction = AgentBuilderActionIds.OpenSocialMediaForm;
     private const string ListTemplatesAction = AgentBuilderActionIds.ListTemplates;
     private const string ListAgentsAction = AgentBuilderActionIds.ListAgents;
     private const string DefaultScheduleTime = "09:00";
 
-    public static MessageContent BuildDailyReportForm(string? preferredGithubUsername) =>
-        BuildDailyReportForm(preferredGithubUsername, introCard: null);
+    public static MessageContent BuildDailyForm(string? preferredGithubUsername) =>
+        BuildDailyForm(preferredGithubUsername, introCard: null);
 
     /// <summary>
     /// Builds the Daily Report creation form card. When <paramref name="introCard"/> is null the
@@ -29,7 +29,7 @@ public static class AgentBuilderCardContent
     /// example, the credentials-required re-prompt) pass their own <see cref="CardBlock"/> and this
     /// method uses it verbatim instead.
     /// </summary>
-    public static MessageContent BuildDailyReportForm(
+    public static MessageContent BuildDailyForm(
         string? preferredGithubUsername,
         CardBlock? introCard)
     {
@@ -38,7 +38,7 @@ public static class AgentBuilderCardContent
             : preferredGithubUsername!.Trim();
 
         var content = new MessageContent();
-        content.Cards.Add(introCard ?? BuildDefaultDailyReportIntroCard(normalizedSaved));
+        content.Cards.Add(introCard ?? BuildDefaultDailyIntroCard(normalizedSaved));
 
         // Pre-fill the saved GitHub username into the input's default_value so users see it inline
         // and can keep it with one submit click. Placeholder stays as a generic hint so the field
@@ -65,17 +65,17 @@ public static class AgentBuilderCardContent
             SkillRunnerDefaults.DefaultTimezone));
 
         var submit = BuildFormSubmit(
-            "submit_daily_report",
+            "submit_daily",
             "Create Agent",
             isPrimary: true);
-        submit.Arguments["agent_builder_action"] = DailyReportAction;
+        submit.Arguments["agent_builder_action"] = DailyAction;
         submit.Arguments["run_immediately"] = "true";
         content.Actions.Add(submit);
 
         return content;
     }
 
-    private static CardBlock BuildDefaultDailyReportIntroCard(string? savedGithubUsername)
+    private static CardBlock BuildDefaultDailyIntroCard(string? savedGithubUsername)
     {
         var savedNote = savedGithubUsername is null
             ? string.Empty
@@ -84,7 +84,7 @@ public static class AgentBuilderCardContent
         return new CardBlock
         {
             Kind = CardBlockKind.Section,
-            BlockId = "daily_report_intro",
+            BlockId = "daily_intro",
             Title = "Create Daily Report Agent",
             Text =
                 "**Day One template:** Daily GitHub report\n" +
@@ -144,7 +144,7 @@ public static class AgentBuilderCardContent
     /// status, which this method folds into a short text reply that leads with "running now" when
     /// the schedule fired the first report, so the user knows a report is on the way.
     /// </summary>
-    public static MessageContent FormatDailyReportToolReply(JsonElement root)
+    public static MessageContent FormatDailyToolReply(JsonElement root)
     {
         if (TryReadError(root, out var error))
             return TextContent($"Create daily report agent failed: {error}");
@@ -153,7 +153,7 @@ public static class AgentBuilderCardContent
         if (string.Equals(status, "credentials_required", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(status, "oauth_required", StringComparison.OrdinalIgnoreCase))
         {
-            return BuildDailyReportCredentialsCard(root, status);
+            return BuildDailyCredentialsCard(root, status);
         }
 
         var agentId = TryReadString(root, "agent_id") ?? "unknown-agent";
@@ -234,7 +234,7 @@ public static class AgentBuilderCardContent
                 Title = "Your Agents",
                 Text = emptyBody.ToString(),
             });
-            content.Actions.Add(BuildAction("Create Daily Report", OpenDailyReportFormAction, isPrimary: true));
+            content.Actions.Add(BuildAction("Create Daily Report", OpenDailyFormAction, isPrimary: true));
             content.Actions.Add(BuildAction("Create Social Media", OpenSocialMediaFormAction, isPrimary: false));
             content.Actions.Add(BuildAction("Templates", ListTemplatesAction, isPrimary: false));
             return content;
@@ -291,7 +291,7 @@ public static class AgentBuilderCardContent
         // hints in the body cover the same ground without the layout noise.
         content.Actions.Add(BuildAction("Refresh", ListAgentsAction, isPrimary: false));
         content.Actions.Add(BuildAction("Templates", ListTemplatesAction, isPrimary: false));
-        content.Actions.Add(BuildAction("Create Daily Report", OpenDailyReportFormAction, isPrimary: false));
+        content.Actions.Add(BuildAction("Create Daily Report", OpenDailyFormAction, isPrimary: false));
         content.Actions.Add(BuildAction("Create Social Media", OpenSocialMediaFormAction, isPrimary: false));
         return content;
     }
@@ -315,7 +315,7 @@ public static class AgentBuilderCardContent
         return button;
     }
 
-    private static MessageContent BuildDailyReportCredentialsCard(JsonElement root, string status)
+    private static MessageContent BuildDailyCredentialsCard(JsonElement root, string status)
     {
         var providerId = TryReadString(root, "provider_id") ?? "unknown-provider";
         var url = TryReadString(root, "authorization_url")
@@ -341,7 +341,7 @@ public static class AgentBuilderCardContent
         var introCard = new CardBlock
         {
             Kind = CardBlockKind.Section,
-            BlockId = "daily_report_credentials",
+            BlockId = "daily_credentials",
             Title = "Create Daily Report Agent",
             Text = string.Join('\n', descriptionLines),
         };
@@ -353,7 +353,7 @@ public static class AgentBuilderCardContent
         // BuildLeadingMarkdown concatenates Text and the first card body), which is the original
         // duplicate "GitHub authorization required" block users were seeing.
         var submittedGithubUsername = TryReadString(root, "github_username");
-        return BuildDailyReportForm(
+        return BuildDailyForm(
             preferredGithubUsername: submittedGithubUsername,
             introCard: introCard);
     }

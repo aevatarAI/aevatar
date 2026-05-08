@@ -12,7 +12,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class NyxRelayAgentBuilderFlowTests
 {
     [Fact]
-    public void TryResolve_ShouldBuildDailyReportToolCall_ForDailyWithoutArguments()
+    public void TryResolve_ShouldBuildDailyToolCall_ForDailyWithoutArguments()
     {
         var inbound = new ChannelInboundEvent
         {
@@ -26,11 +26,11 @@ public sealed class NyxRelayAgentBuilderFlowTests
         matched.Should().BeTrue();
         decision.Should().NotBeNull();
         decision!.RequiresToolExecution.Should().BeTrue();
-        decision.ToolAction.Should().Be("create_daily_report");
+        decision.ToolAction.Should().Be("create_daily");
 
         using var body = JsonDocument.Parse(decision.ToolArgumentsJson!);
         body.RootElement.GetProperty("action").GetString().Should().Be("create_agent");
-        body.RootElement.GetProperty("template").GetString().Should().Be("daily_report");
+        body.RootElement.GetProperty("template").GetString().Should().Be("daily");
         body.RootElement.GetProperty("github_username").ValueKind.Should().Be(JsonValueKind.Null);
         body.RootElement.GetProperty("schedule_cron").GetString().Should().Be("0 9 * * *");
         body.RootElement.GetProperty("conversation_id").GetString().Should().Be("oc_default_daily");
@@ -51,11 +51,11 @@ public sealed class NyxRelayAgentBuilderFlowTests
         matched.Should().BeTrue();
         decision.Should().NotBeNull();
         decision!.RequiresToolExecution.Should().BeTrue();
-        decision.ToolAction.Should().Be("create_daily_report");
+        decision.ToolAction.Should().Be("create_daily");
 
         using var body = JsonDocument.Parse(decision.ToolArgumentsJson!);
         body.RootElement.GetProperty("action").GetString().Should().Be("create_agent");
-        body.RootElement.GetProperty("template").GetString().Should().Be("daily_report");
+        body.RootElement.GetProperty("template").GetString().Should().Be("daily");
         body.RootElement.GetProperty("github_username").GetString().Should().Be("eanzhao");
         body.RootElement.GetProperty("save_github_username_preference").GetBoolean().Should().BeTrue();
         body.RootElement.GetProperty("run_immediately").GetBoolean().Should().BeTrue();
@@ -100,7 +100,7 @@ public sealed class NyxRelayAgentBuilderFlowTests
         matched.Should().BeTrue();
         decision.Should().NotBeNull();
         decision!.RequiresToolExecution.Should().BeTrue();
-        decision.ToolAction.Should().Be("create_daily_report");
+        decision.ToolAction.Should().Be("create_daily");
 
         using var body = JsonDocument.Parse(decision.ToolArgumentsJson!);
         body.RootElement.GetProperty("github_username").ValueKind.Should().Be(JsonValueKind.Null);
@@ -171,7 +171,7 @@ public sealed class NyxRelayAgentBuilderFlowTests
               "agents": [
                 {
                   "agent_id": "skill-runner-94d754dfdfbb416aa5a676cecd0d7a71",
-                  "template": "daily_report",
+                  "template": "daily",
                   "status": "running",
                   "next_scheduled_run": "2026-04-23T09:00:00Z",
                   "last_run_at": "2026-04-22T09:00:00Z"
@@ -192,7 +192,7 @@ public sealed class NyxRelayAgentBuilderFlowTests
         card.BlockId.Should().Be("agents_list");
         card.Title.Should().Be("Your Agents (2)");
         // Body lists every agent with its identifying fields in markdown.
-        card.Text.Should().Contain("daily_report");
+        card.Text.Should().Contain("daily");
         card.Text.Should().Contain("skill-runner-94d754dfdfbb416aa5a676cecd0d7a71");
         card.Text.Should().Contain("running");
         card.Text.Should().Contain("social_media");
@@ -212,7 +212,7 @@ public sealed class NyxRelayAgentBuilderFlowTests
         {
             "list_agents",
             "list_templates",
-            "open_daily_report_form",
+            "open_daily_form",
             "open_social_media_form",
         });
     }
@@ -224,7 +224,7 @@ public sealed class NyxRelayAgentBuilderFlowTests
         var result = NyxRelayAgentBuilderFlow.FormatToolResult(decision, """{"agents":[]}""");
 
         result.Cards.Should().ContainSingle(card => card.BlockId == "agents_empty");
-        result.Actions.Should().Contain(a => a.ActionId == "open_daily_report_form");
+        result.Actions.Should().Contain(a => a.ActionId == "open_daily_form");
         result.Actions.Should().Contain(a => a.ActionId == "open_social_media_form");
         result.Actions.Should().Contain(a => a.ActionId == "list_templates");
     }
@@ -243,7 +243,7 @@ public sealed class NyxRelayAgentBuilderFlowTests
             """
             {
               "agent_id": "skill-runner-1",
-              "template": "daily_report",
+              "template": "daily",
               "status": "error",
               "schedule_cron": "0 9 * * *",
               "schedule_timezone": "UTC",
@@ -299,7 +299,6 @@ public sealed class NyxRelayAgentBuilderFlowTests
     }
 
     [Theory]
-    [InlineData("/daily_report alice", "Unknown command: /daily_report")]
     [InlineData("/foobar", "Unknown command: /foobar")]
     [InlineData("/", "Unknown command: /")]
     public void TryResolve_ShouldReturnUnknownCommandUsage_ForUnknownSlash(string text, string expected)
@@ -394,11 +393,11 @@ public sealed class NyxRelayAgentBuilderFlowTests
     [Fact]
     public void FormatToolResult_ShouldReturnCardForm_WhenCredentialsRequired()
     {
-        var decision = AgentBuilderFlowDecision.ToolCall("create_daily_report", "{}");
+        var decision = AgentBuilderFlowDecision.ToolCall("create_daily", "{}");
         var toolResultJson = JsonSerializer.Serialize(new
         {
             status = "credentials_required",
-            template = "daily_report",
+            template = "daily",
             provider_id = "p-github",
             note = "Could not resolve github_username. Provide github_username explicitly, save a default preference, or reconnect GitHub in NyxID.",
         });
@@ -408,7 +407,7 @@ public sealed class NyxRelayAgentBuilderFlowTests
         result.Actions.Should().NotBeEmpty();
         result.Actions.Any(action => action.Kind == ActionElementKind.TextInput && action.ActionId == "github_username")
             .Should().BeTrue();
-        result.Actions.Any(action => action.Kind == ActionElementKind.FormSubmit && action.ActionId == "submit_daily_report")
+        result.Actions.Any(action => action.Kind == ActionElementKind.FormSubmit && action.ActionId == "submit_daily")
             .Should().BeTrue();
         result.Cards.Should().HaveCount(1);
         result.Cards[0].Title.Should().Be("Create Daily Report Agent");
@@ -424,13 +423,13 @@ public sealed class NyxRelayAgentBuilderFlowTests
     [Fact]
     public void FormatToolResult_ShouldAckImmediateRun_WithSavedPreference()
     {
-        var decision = AgentBuilderFlowDecision.ToolCall("create_daily_report", "{}");
+        var decision = AgentBuilderFlowDecision.ToolCall("create_daily", "{}");
         var toolResultJson = JsonSerializer.Serialize(new
         {
             status = "created",
             agent_id = "skill-runner-1ba2e9f3",
             agent_type = "skill_runner",
-            template = "daily_report",
+            template = "daily",
             github_username = "eanzhao",
             github_username_preference_saved = true,
             run_immediately_requested = true,
@@ -453,12 +452,12 @@ public sealed class NyxRelayAgentBuilderFlowTests
     [Fact]
     public void FormatToolResult_ShouldNotMentionSavedPreference_WhenSaveNotRequested()
     {
-        var decision = AgentBuilderFlowDecision.ToolCall("create_daily_report", "{}");
+        var decision = AgentBuilderFlowDecision.ToolCall("create_daily", "{}");
         var toolResultJson = JsonSerializer.Serialize(new
         {
             status = "created",
             agent_id = "skill-runner-1",
-            template = "daily_report",
+            template = "daily",
             github_username = "eanzhao",
             github_username_preference_saved = false,
             run_immediately_requested = true,

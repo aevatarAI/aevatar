@@ -317,7 +317,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 content.Append(chunk.DeltaContent);
                 if (sink is not null)
                     // Per-delta `content.ToString()` is O(n) per call → O(n²) for the whole
-                    // turn. Acceptable for daily-report-sized output (≤30 KB capped, and the
+                    // turn. Acceptable for daily-sized output (≤30 KB capped, and the
                     // sink dedupes against `_lastEmittedText` so most allocations don't even
                     // make it onto the wire). If a future skill produces materially longer
                     // output, switch the sink contract to `(StringBuilder, Range)` snapshots
@@ -485,7 +485,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     ///   <item><description>
     ///     <b>never-called</b> (<paramref name="requiresNyxidProxySuccess"/> == true,
     ///     <paramref name="successCount"/> == 0): the LLM bypassed tools entirely and produced
-    ///     text from prior context. For fetch-and-summarize skills like daily_report this is
+    ///     text from prior context. For fetch-and-summarize skills like daily this is
     ///     exactly the original #439 symptom (52 commits in 24h reported as "No meaningful
     ///     public GitHub activity"). Skills that don't depend on tool data (e.g. pure LLM
     ///     transformations) leave the flag false and pass through.
@@ -918,7 +918,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     /// text from prior context is a fake-success failure mode for them).
     /// </summary>
     internal static bool RequiresProxySuccessByTemplate(string? templateName) =>
-        string.Equals(templateName, "daily_report", StringComparison.Ordinal);
+        string.Equals(templateName, "daily", StringComparison.Ordinal);
 
     private static string NormalizeProviderName(string? providerName) =>
         string.IsNullOrWhiteSpace(providerName) ? SkillRunnerDefaults.DefaultProviderName : providerName.Trim();

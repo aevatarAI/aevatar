@@ -67,7 +67,7 @@ public static class NyxRelayAgentBuilderFlow
             using var doc = JsonDocument.Parse(toolResultJson);
             return decision.ToolAction switch
             {
-                "create_daily_report" => FormatCreateDailyReportResult(doc.RootElement),
+                "create_daily" => FormatCreateDailyResult(doc.RootElement),
                 "create_social_media" => TextContent(FormatCreateSocialMediaResult(doc.RootElement)),
                 "list_templates" => TextContent(FormatListTemplatesResult(doc.RootElement)),
                 "list_agents" => AgentBuilderCardContent.FormatListAgentsResult(doc.RootElement),
@@ -110,7 +110,7 @@ public static class NyxRelayAgentBuilderFlow
         switch (command)
         {
             case DailyCommand:
-                return TryResolveDailyReport(tokens, conversationId, out decision);
+                return TryResolveDaily(tokens, conversationId, out decision);
 
             case SocialMediaCommand:
             case SocialMediaAlias:
@@ -145,7 +145,7 @@ public static class NyxRelayAgentBuilderFlow
         }
     }
 
-    private static bool TryResolveDailyReport(
+    private static bool TryResolveDaily(
         IReadOnlyList<string> tokens,
         string? conversationId,
         out AgentBuilderFlowDecision? decision)
@@ -157,7 +157,7 @@ public static class NyxRelayAgentBuilderFlow
 
         if (!TryResolveSchedule(args, out var scheduleCron, out var scheduleTimezone, out var error))
         {
-            decision = AgentBuilderFlowDecision.DirectReply(error! + "\n\n" + BuildDailyReportHelpText());
+            decision = AgentBuilderFlowDecision.DirectReply(error! + "\n\n" + BuildDailyHelpText());
             return true;
         }
 
@@ -167,11 +167,11 @@ public static class NyxRelayAgentBuilderFlow
         // call auto-resolves via the saved preference fallback inside AgentBuilderTool.
         var savePreference = githubUsername is not null;
         decision = AgentBuilderFlowDecision.ToolCall(
-            "create_daily_report",
+            "create_daily",
             JsonSerializer.Serialize(new
             {
                 action = "create_agent",
-                template = "daily_report",
+                template = "daily",
                 github_username = githubUsername,
                 save_github_username_preference = savePreference,
                 repositories,
@@ -296,8 +296,8 @@ public static class NyxRelayAgentBuilderFlow
         return true;
     }
 
-    private static MessageContent FormatCreateDailyReportResult(JsonElement root) =>
-        AgentBuilderCardContent.FormatDailyReportToolReply(root);
+    private static MessageContent FormatCreateDailyResult(JsonElement root) =>
+        AgentBuilderCardContent.FormatDailyToolReply(root);
 
     private static string FormatCreateSocialMediaResult(JsonElement root)
     {
@@ -336,7 +336,7 @@ public static class NyxRelayAgentBuilderFlow
 
         lines.Add(string.Empty);
         lines.Add("Examples:");
-        lines.Add(BuildDailyReportCommandExample());
+        lines.Add(BuildDailyCommandExample());
         lines.Add(BuildSocialMediaCommandExample());
         return string.Join('\n', lines);
     }
@@ -523,12 +523,12 @@ public static class NyxRelayAgentBuilderFlow
     private static string? ReadString(JsonElement element, string propertyName) =>
         AgentBuilderJson.TryReadString(element, propertyName);
 
-    private static string BuildDailyReportHelpText() =>
+    private static string BuildDailyHelpText() =>
         BuildTextBlock(
             "Daily report agent command",
             "GitHub username can be passed explicitly, or omitted to reuse a saved preference when available.",
             "Schedule defaults to 09:00 if schedule_time and schedule_cron are both omitted.",
-            $"Example: {BuildDailyReportCommandExample()}",
+            $"Example: {BuildDailyCommandExample()}",
             "Optional: github_username (otherwise uses your saved preference or connected GitHub login), repositories=owner/repo,owner/repo schedule_timezone=Asia/Singapore run_immediately=false");
 
     private static string BuildSocialMediaHelpText() =>
@@ -538,7 +538,7 @@ public static class NyxRelayAgentBuilderFlow
             $"Example: {BuildSocialMediaCommandExample()}",
             "Optional: audience=\"Developers\" style=\"Confident and concise\" schedule_timezone=Asia/Singapore run_immediately=false");
 
-    private static string BuildDailyReportCommandExample() =>
+    private static string BuildDailyCommandExample() =>
         "/daily [github_username] schedule_time=09:00 repositories=owner/repo";
 
     private static string BuildSocialMediaCommandExample() =>
@@ -552,7 +552,7 @@ public static class NyxRelayAgentBuilderFlow
             {
                 $"Unknown command: {command}",
                 "Supported commands:",
-                BuildDailyReportCommandExample(),
+                BuildDailyCommandExample(),
                 BuildSocialMediaCommandExample(),
                 "/templates",
                 "/agents",

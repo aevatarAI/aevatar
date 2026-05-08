@@ -24,7 +24,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class AgentBuilderToolTests
 {
     [Fact]
-    public async Task ExecuteAsync_ListTemplates_ReturnsDailyReportTemplate()
+    public async Task ExecuteAsync_ListTemplates_ReturnsDailyTemplate()
     {
         var services = new ServiceCollection();
         services.AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>());
@@ -52,7 +52,7 @@ public sealed class AgentBuilderToolTests
 
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("templates").EnumerateArray()
-                .Any(static x => x.GetProperty("name").GetString() == "daily_report")
+                .Any(static x => x.GetProperty("name").GetString() == "daily")
                 .Should().BeTrue();
         }
         finally
@@ -62,13 +62,13 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public void TryBuildDailyReportSpec_SkillContent_PinsStructuredSectionSchema_AndOmitWhenEmptyRule()
+    public void TryBuildDailySpec_SkillContent_PinsStructuredSectionSchema_AndOmitWhenEmptyRule()
     {
         // Pinning test for issue #423: the daily prompt is treated as a fetch-and-summarize
         // SPEC, not a freeform brief. This test fails fast on copy edits that would silently
         // regress the multi-section schema, the per-section line budgets, the "omit empty
         // section" rule, or the "no measurable activity" empty-day fallback.
-        var ok = AgentBuilderTemplates.TryBuildDailyReportSpec(
+        var ok = AgentBuilderTemplates.TryBuildDailySpec(
             githubUsername: "alice",
             repositories: null,
             out var spec,
@@ -137,7 +137,7 @@ public sealed class AgentBuilderToolTests
         skillContent.Should().Contain("/search/commits?q=author:{username}+author-date:>={iso_date}");
         skillContent.Should().Contain("CI section is omitted in no-repo mode");
 
-        // Issue #439 follow-up: daily_report is a fetch-and-summarize skill, so the spec
+        // Issue #439 follow-up: daily is a fetch-and-summarize skill, so the spec
         // must opt in to the runner-layer never-called safety net. A run that completes
         // with zero successful nyxid_proxy calls means the LLM hallucinated the report
         // from prior context — exactly the original #439 symptom — and must be downgraded
@@ -147,7 +147,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public void TryBuildDailyReportSpec_RepoAllowlist_SwitchesToPerRepoQueryGuidance()
+    public void TryBuildDailySpec_RepoAllowlist_SwitchesToPerRepoQueryGuidance()
     {
         // Per issue #423: when `repositories=` is provided, the prompt must steer the LLM toward
         // per-repo searches and explicitly refuse the collapsed-allowlist global query. PR #458
@@ -155,7 +155,7 @@ public sealed class AgentBuilderToolTests
         // form, not /pulls?state=closed which is keyed on update time and ignores author),
         // commit shipping must have its own source, repo-scoped issues must include the
         // commenter case, and the CI query must not embed a {default_branch} placeholder.
-        var ok = AgentBuilderTemplates.TryBuildDailyReportSpec(
+        var ok = AgentBuilderTemplates.TryBuildDailySpec(
             githubUsername: "alice",
             repositories: "acme/api, acme/web",
             out var spec,
@@ -227,7 +227,7 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "github_username": "alice",
                   "schedule_cron": "0 9 * * *"
                 }
@@ -252,7 +252,7 @@ public sealed class AgentBuilderToolTests
             {
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
+                TemplateName = "daily",
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
@@ -315,7 +315,7 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "agent_id": "skill-runner-1",
                   "github_username": "alice",
                   "repositories": "aevatarAI/aevatar",
@@ -336,7 +336,7 @@ public sealed class AgentBuilderToolTests
             await skillRunnerPort.Received(1).InitializeAsync(
                 "skill-runner-1",
                 Arg.Is<InitializeSkillRunnerCommand>(c =>
-                    c.TemplateName == "daily_report" &&
+                    c.TemplateName == "daily" &&
                     c.ScopeId == "scope-1" &&
                     c.OutboundConfig.ConversationId == "oc_chat_1" &&
                     c.OutboundConfig.NyxProviderSlug == "api-lark-bot" &&
@@ -373,7 +373,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_PinsLarkChatId_When_RelayPropagatesIt()
+    public async Task ExecuteAsync_CreateAgent_Daily_PinsLarkChatId_When_RelayPropagatesIt()
     {
         // The new outbound priority pins (chat_id, "chat_id") whenever the relay surfaces
         // ChannelMetadataKeys.LarkChatId — chat_id is the literal DM thread, no user-id
@@ -389,7 +389,7 @@ public sealed class AgentBuilderToolTests
             {
                 AgentId = "skill-runner-union-1",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
+                TemplateName = "daily",
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
@@ -454,7 +454,7 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "agent_id": "skill-runner-union-1",
                   "github_username": "alice",
                   "schedule_cron": "0 9 * * *",
@@ -480,7 +480,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_GithubProxyDeniedForNewKey()
+    public async Task ExecuteAsync_CreateAgent_Daily_FailsClosed_When_GithubProxyDeniedForNewKey()
     {
         // Issue aevatarAI/aevatar#411 + #417: the create flow preflights GitHub proxy access
         // with the freshly minted agent API key. Originally (#411) the failure mode this caught
@@ -569,7 +569,7 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "agent_id": "skill-runner-github-403",
                   "github_username": "alice",
                   "schedule_cron": "0 9 * * *",
@@ -620,7 +620,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_GithubSearchReturns422()
+    public async Task ExecuteAsync_CreateAgent_Daily_FailsClosed_When_GithubSearchReturns422()
     {
         // Issue aevatarAI/aevatar#474: /rate_limit is scope-light — it returns 200 even when the
         // bound OAuth grant lacks the scope GitHub's search engine requires (need public_repo
@@ -698,7 +698,7 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "agent_id": "skill-runner-search-422",
                   "github_username": "Yuezh0127",
                   "schedule_cron": "0 9 * * *",
@@ -740,7 +740,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_GithubSearchCommitsReturn422_ButIssuesSucceed()
+    public async Task ExecuteAsync_CreateAgent_Daily_FailsClosed_When_GithubSearchCommitsReturn422_ButIssuesSucceed()
     {
         // Issue aevatarAI/aevatar#474: production reproduction (issue #473) reported that
         // /search/commits failed with the same 422 surface even when other queries returned
@@ -813,7 +813,7 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "agent_id": "skill-runner-search-422-commits",
                   "github_username": "alice",
                   "schedule_cron": "0 9 * * *",
@@ -843,7 +843,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_Succeeds_When_GithubSearchReturnsEmpty200()
+    public async Task ExecuteAsync_CreateAgent_Daily_Succeeds_When_GithubSearchReturnsEmpty200()
     {
         // Issue aevatarAI/aevatar#474: the new /search/* preflight probes must NOT fail-fast on
         // a genuinely empty result — that's the legitimate "user has no recent activity" case
@@ -860,7 +860,7 @@ public sealed class AgentBuilderToolTests
             {
                 AgentId = "skill-runner-search-empty",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
+                TemplateName = "daily",
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
@@ -922,7 +922,7 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "agent_id": "skill-runner-search-empty",
                   "github_username": "alice",
                   "schedule_cron": "0 9 * * *",
@@ -946,7 +946,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_GithubSearchReturns422_WithUnknown422Body()
+    public async Task ExecuteAsync_CreateAgent_Daily_FailsClosed_When_GithubSearchReturns422_WithUnknown422Body()
     {
         // Issue #474 review (eanzhao on PR #479): only `scope_insufficient_or_user_not_found`
         // was exercised; pin that a 422 body that does NOT match the "cannot be searched"
@@ -1019,7 +1019,7 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "agent_id": "skill-runner-search-422-q",
                   "github_username": "alice",
                   "schedule_cron": "0 9 * * *",
@@ -1040,12 +1040,12 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_RepoScopedSearchReturns422()
+    public async Task ExecuteAsync_CreateAgent_Daily_FailsClosed_When_RepoScopedSearchReturns422()
     {
         // Codex review (PR #479 r3152148327, P1): a token can pass the global /search/*
         // probes (public_repo lets you search public commits/issues globally) yet 422 every
         // repo-qualified call when the configured allowlist contains a private repo the
-        // token cannot see. Pre-this-fix, the daily-report runtime ran `repo:{owner}/{repo}+
+        // token cannot see. Pre-this-fix, the daily runtime ran `repo:{owner}/{repo}+
         // author:{username}` queries (per AgentBuilderTemplates.cs repo-mode URLs) and 422'd
         // every one, persisting a broken agent. Pin: when global /search/issues and
         // /search/commits return 200 but a repo-qualified probe 422s, preflight fails fast
@@ -1119,7 +1119,7 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "agent_id": "skill-runner-search-422-repo",
                   "github_username": "alice",
                   "repositories": "acme/private-svc",
@@ -1153,7 +1153,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_LogsFallbackBreadcrumb_When_LarkUnionIdMissing()
+    public async Task ExecuteAsync_CreateAgent_Daily_LogsFallbackBreadcrumb_When_LarkUnionIdMissing()
     {
         // Reviewer (PR #409 r3141562097): when the relay does not surface LarkUnionId at agent
         // creation, BuildFromInbound returns (ou_*, open_id, FellBack=true). The flag itself is
@@ -1170,7 +1170,7 @@ public sealed class AgentBuilderToolTests
             {
                 AgentId = "skill-runner-fallback-1",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
+                TemplateName = "daily",
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
@@ -1236,7 +1236,7 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "agent_id": "skill-runner-fallback-1",
                   "github_username": "alice",
                   "schedule_cron": "0 9 * * *",
@@ -1267,7 +1267,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_DoesNotLogFallback_When_LarkUnionIdPresent()
+    public async Task ExecuteAsync_CreateAgent_Daily_DoesNotLogFallback_When_LarkUnionIdPresent()
     {
         // Counterpart to the breadcrumb test: when the relay surfaces union_id, the typed
         // delivery target is cross-app safe and we must NOT spam Debug logs on every successful
@@ -1281,7 +1281,7 @@ public sealed class AgentBuilderToolTests
             {
                 AgentId = "skill-runner-no-fallback-1",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
+                TemplateName = "daily",
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
@@ -1347,7 +1347,7 @@ public sealed class AgentBuilderToolTests
             await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "agent_id": "skill-runner-no-fallback-1",
                   "github_username": "alice",
                   "schedule_cron": "0 9 * * *",
@@ -1365,7 +1365,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_UsesSavedGithubUsernamePreference_WhenArgumentMissing()
+    public async Task ExecuteAsync_CreateAgent_Daily_UsesSavedGithubUsernamePreference_WhenArgumentMissing()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetStateVersionForCallerAsync("skill-runner-pref-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
@@ -1375,7 +1375,7 @@ public sealed class AgentBuilderToolTests
             {
                 AgentId = "skill-runner-pref-1",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
+                TemplateName = "daily",
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
@@ -1453,7 +1453,7 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "agent_id": "skill-runner-pref-1",
                   "schedule_cron": "0 9 * * *",
                   "schedule_timezone": "UTC"
@@ -1492,7 +1492,7 @@ public sealed class AgentBuilderToolTests
     /// saved preference. Without isolation, the "last writer wins" on the shared bot scope.
     /// </summary>
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_CrossUserIsolation_UserBDoesNotSeeUserASavedPreference()
+    public async Task ExecuteAsync_CreateAgent_Daily_CrossUserIsolation_UserBDoesNotSeeUserASavedPreference()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetStateVersionForCallerAsync("skill-runner-bob-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
@@ -1502,7 +1502,7 @@ public sealed class AgentBuilderToolTests
             {
                 AgentId = "skill-runner-bob-1",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
+                TemplateName = "daily",
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
@@ -1579,7 +1579,7 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "agent_id": "skill-runner-bob-1",
                   "schedule_cron": "0 9 * * *",
                   "schedule_timezone": "UTC"
@@ -1619,7 +1619,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_DerivesGithubUsername_FromNyxProxy_WhenArgumentAndPreferenceMissing()
+    public async Task ExecuteAsync_CreateAgent_Daily_DerivesGithubUsername_FromNyxProxy_WhenArgumentAndPreferenceMissing()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetStateVersionForCallerAsync("skill-runner-derived-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
@@ -1629,7 +1629,7 @@ public sealed class AgentBuilderToolTests
             {
                 AgentId = "skill-runner-derived-1",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
+                TemplateName = "daily",
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
@@ -1696,7 +1696,7 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "agent_id": "skill-runner-derived-1",
                   "schedule_cron": "0 9 * * *",
                   "schedule_timezone": "UTC"
@@ -1723,7 +1723,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_ReturnsCredentialsRequired_WhenUsernameCannotBeResolved()
+    public async Task ExecuteAsync_CreateAgent_Daily_ReturnsCredentialsRequired_WhenUsernameCannotBeResolved()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
@@ -1786,7 +1786,7 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "schedule_cron": "0 9 * * *",
                   "schedule_timezone": "UTC"
                 }
@@ -1810,7 +1810,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_SavesGithubUsernamePreference_WhenRequested()
+    public async Task ExecuteAsync_CreateAgent_Daily_SavesGithubUsernamePreference_WhenRequested()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetStateVersionForCallerAsync("skill-runner-save-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
@@ -1820,7 +1820,7 @@ public sealed class AgentBuilderToolTests
             {
                 AgentId = "skill-runner-save-1",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
+                TemplateName = "daily",
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
@@ -1886,7 +1886,7 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "agent_id": "skill-runner-save-1",
                   "github_username": "alice",
                   "save_github_username_preference": true,
@@ -1915,7 +1915,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_RequiredProxyServices_AreMissing()
+    public async Task ExecuteAsync_CreateAgent_Daily_FailsClosed_When_RequiredProxyServices_AreMissing()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
@@ -1974,7 +1974,7 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "github_username": "alice",
                   "schedule_cron": "0 9 * * *",
                   "schedule_timezone": "UTC"
@@ -2003,7 +2003,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_RequiredSlug_IsInactive()
+    public async Task ExecuteAsync_CreateAgent_Daily_FailsClosed_When_RequiredSlug_IsInactive()
     {
         // #417: when the user has a UserService row for the required slug but it's marked
         // `is_active: false`, surface `service_inactive` rather than persisting an api-key
@@ -2059,7 +2059,7 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "github_username": "alice",
                   "schedule_cron": "0 9 * * *",
                   "schedule_timezone": "UTC"
@@ -2078,7 +2078,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_FailsClosed_When_OrgSharedSlug_IsViewerOnly()
+    public async Task ExecuteAsync_CreateAgent_Daily_FailsClosed_When_OrgSharedSlug_IsViewerOnly()
     {
         // #417: when the only matching UserService row is org-shared with `allowed: false`
         // (org viewer role), don't bind it as a proxy target — NyxID would reject the proxy
@@ -2135,7 +2135,7 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "github_username": "alice",
                   "schedule_cron": "0 9 * * *",
                   "schedule_timezone": "UTC"
@@ -2154,7 +2154,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_AllowedServiceIds_AreUserServiceIds_NotCatalogIds()
+    public async Task ExecuteAsync_CreateAgent_Daily_AllowedServiceIds_AreUserServiceIds_NotCatalogIds()
     {
         // #417 regression pin. The bug: backend used `GET /proxy/services` (catalog list) and
         // populated the new api-key's `allowed_service_ids` with `DownstreamService.id` (catalog
@@ -2171,7 +2171,7 @@ public sealed class AgentBuilderToolTests
             {
                 AgentId = "skill-runner-id-pin",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
+                TemplateName = "daily",
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
@@ -2229,7 +2229,7 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "agent_id": "skill-runner-id-pin",
                   "github_username": "alice",
                   "schedule_cron": "0 9 * * *",
@@ -2257,7 +2257,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_CapturesFailureNotificationSlug_FromInboundChannelBot()
+    public async Task ExecuteAsync_CreateAgent_Daily_CapturesFailureNotificationSlug_FromInboundChannelBot()
     {
         // Issue #423 §C: capture the inbound channel-bot's NyxID provider slug at agent-create
         // time so SkillRunner.TrySendFailureAsync can route the failure-notification message
@@ -2277,7 +2277,7 @@ public sealed class AgentBuilderToolTests
             {
                 AgentId = "skill-runner-fnf",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
+                TemplateName = "daily",
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
@@ -2341,7 +2341,7 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "agent_id": "skill-runner-fnf",
                   "github_username": "alice",
                   "schedule_cron": "0 9 * * *",
@@ -2383,7 +2383,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_LeavesFailureNotificationSlugEmpty_When_InboundEqualsPrimary()
+    public async Task ExecuteAsync_CreateAgent_Daily_LeavesFailureNotificationSlugEmpty_When_InboundEqualsPrimary()
     {
         // Same-proxy fallback gives no recovery benefit — primary rejection at slug X would
         // also fail at slug X. Pin that AgentBuilderTool detects this and leaves the field
@@ -2396,7 +2396,7 @@ public sealed class AgentBuilderToolTests
             {
                 AgentId = "skill-runner-same",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
+                TemplateName = "daily",
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
@@ -2456,7 +2456,7 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "agent_id": "skill-runner-same",
                   "github_username": "alice",
                   "schedule_cron": "0 9 * * *",
@@ -2482,7 +2482,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_LeavesFailureNotificationSlugEmpty_When_InboundSlugMissingFromUserServices()
+    public async Task ExecuteAsync_CreateAgent_Daily_LeavesFailureNotificationSlugEmpty_When_InboundSlugMissingFromUserServices()
     {
         // Defense-in-depth: if the inbound slug isn't a registered user-service (e.g. an
         // unusual relay setup, or an inbound bot that was disconnected between webhook arrival
@@ -2499,7 +2499,7 @@ public sealed class AgentBuilderToolTests
             {
                 AgentId = "skill-runner-missing",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
+                TemplateName = "daily",
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
@@ -2560,7 +2560,7 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "agent_id": "skill-runner-missing",
                   "github_username": "alice",
                   "schedule_cron": "0 9 * * *",
@@ -2598,7 +2598,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_PicksEligibleRow_When_DuplicateSlugRowsExist()
+    public async Task ExecuteAsync_CreateAgent_Daily_PicksEligibleRow_When_DuplicateSlugRowsExist()
     {
         // Codex review (PR #418 r3141846173): a user with mixed bindings can have multiple
         // UserService rows for the same slug — e.g. an org-shared `allowed:false` row and a
@@ -2613,7 +2613,7 @@ public sealed class AgentBuilderToolTests
             {
                 AgentId = "skill-runner-dup",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
+                TemplateName = "daily",
                 Status = SkillRunnerDefaults.StatusRunning,
             }));
 
@@ -2676,7 +2676,7 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "agent_id": "skill-runner-dup",
                   "github_username": "alice",
                   "schedule_cron": "0 9 * * *",
@@ -2704,7 +2704,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_ReturnsOAuthRequirementBeforeCreatingAgent()
+    public async Task ExecuteAsync_CreateAgent_Daily_ReturnsOAuthRequirementBeforeCreatingAgent()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
@@ -2763,7 +2763,7 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "github_username": "alice",
                   "repositories": "aevatarAI/aevatar",
                   "schedule_cron": "0 9 * * *",
@@ -2795,7 +2795,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_CreateAgent_DailyReport_ReturnsCredentialsRequirementBeforeOAuth()
+    public async Task ExecuteAsync_CreateAgent_Daily_ReturnsCredentialsRequirementBeforeOAuth()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
@@ -2849,7 +2849,7 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "create_agent",
-                  "template": "daily_report",
+                  "template": "daily",
                   "github_username": "alice",
                   "repositories": "aevatarAI/aevatar",
                   "schedule_cron": "0 9 * * *",
@@ -3002,7 +3002,7 @@ public sealed class AgentBuilderToolTests
                     c.ConversationId == "oc_chat_1" &&
                     c.NyxApiKey == "full-key-2" &&
                     c.ApiKeyId == "key-2" &&
-                    // Mirror of the daily_report p2p assertion: BuildFromInbound must pin the
+                    // Mirror of the daily p2p assertion: BuildFromInbound must pin the
                     // sender open_id at delivery-target creation time so FeishuCardHumanInteraction
                     // Port reads it through the catalog projection without re-deriving the type.
                     c.LarkReceiveId == "ou_user_1" &&
@@ -3068,7 +3068,7 @@ public sealed class AgentBuilderToolTests
                 {
                     AgentId = "skill-runner-1",
                     AgentType = SkillRunnerDefaults.AgentType,
-                    TemplateName = "daily_report",
+                    TemplateName = "daily",
                     ApiKeyId = "key-1",
                     OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
                 }),
@@ -3155,7 +3155,7 @@ public sealed class AgentBuilderToolTests
             {
                 AgentId = "skill-runner-stuck",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
+                TemplateName = "daily",
                 ApiKeyId = "key-stuck",
                 OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
             }));
@@ -3248,7 +3248,7 @@ public sealed class AgentBuilderToolTests
             {
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
+                TemplateName = "daily",
             }));
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
@@ -3309,7 +3309,7 @@ public sealed class AgentBuilderToolTests
             {
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,
-                TemplateName = "daily_report",
+                TemplateName = "daily",
                 Status = SkillRunnerDefaults.StatusDisabled,
             }));
 
@@ -3454,7 +3454,7 @@ public sealed class AgentBuilderToolTests
                 {
                     AgentId = "skill-runner-fast",
                     AgentType = SkillRunnerDefaults.AgentType,
-                    TemplateName = "daily_report",
+                    TemplateName = "daily",
                     Status = SkillRunnerDefaults.StatusRunning,
                 }),
                 // Wait helper's first poll sees the materialized disable.
@@ -3462,7 +3462,7 @@ public sealed class AgentBuilderToolTests
                 {
                     AgentId = "skill-runner-fast",
                     AgentType = SkillRunnerDefaults.AgentType,
-                    TemplateName = "daily_report",
+                    TemplateName = "daily",
                     Status = SkillRunnerDefaults.StatusDisabled,
                 }));
         // Caller's pre-dispatch baseline read returns 42; helper's post-
@@ -3542,7 +3542,7 @@ public sealed class AgentBuilderToolTests
                 {
                     AgentId = "skill-runner-stale",
                     AgentType = SkillRunnerDefaults.AgentType,
-                    TemplateName = "daily_report",
+                    TemplateName = "daily",
                     Status = SkillRunnerDefaults.StatusRunning,
                 }),
                 // Helper's terminal fallback (after budget exhausts) returns
@@ -3555,7 +3555,7 @@ public sealed class AgentBuilderToolTests
                 {
                     AgentId = "skill-runner-stale",
                     AgentType = SkillRunnerDefaults.AgentType,
-                    TemplateName = "daily_report",
+                    TemplateName = "daily",
                     Status = SkillRunnerDefaults.StatusDisabled,
                 }));
         // Caller baseline = 7; replica's view never advances past 7. Helper
@@ -3643,7 +3643,7 @@ public sealed class AgentBuilderToolTests
                 {
                     AgentId = "skill-runner-1",
                     AgentType = SkillRunnerDefaults.AgentType,
-                    TemplateName = "daily_report",
+                    TemplateName = "daily",
                     Status = SkillRunnerDefaults.StatusRunning,
                     ScheduleCron = "0 9 * * *",
                     ScheduleTimezone = "UTC",
@@ -3652,7 +3652,7 @@ public sealed class AgentBuilderToolTests
                 {
                     AgentId = "skill-runner-1",
                     AgentType = SkillRunnerDefaults.AgentType,
-                    TemplateName = "daily_report",
+                    TemplateName = "daily",
                     Status = SkillRunnerDefaults.StatusDisabled,
                     ScheduleCron = "0 9 * * *",
                     ScheduleTimezone = "UTC",
@@ -3723,7 +3723,7 @@ public sealed class AgentBuilderToolTests
                 {
                     AgentId = "skill-runner-1",
                     AgentType = SkillRunnerDefaults.AgentType,
-                    TemplateName = "daily_report",
+                    TemplateName = "daily",
                     Status = SkillRunnerDefaults.StatusDisabled,
                     ScheduleCron = "0 9 * * *",
                     ScheduleTimezone = "UTC",
@@ -3732,7 +3732,7 @@ public sealed class AgentBuilderToolTests
                 {
                     AgentId = "skill-runner-1",
                     AgentType = SkillRunnerDefaults.AgentType,
-                    TemplateName = "daily_report",
+                    TemplateName = "daily",
                     Status = SkillRunnerDefaults.StatusRunning,
                     ScheduleCron = "0 9 * * *",
                     ScheduleTimezone = "UTC",
@@ -3957,7 +3957,7 @@ public sealed class AgentBuilderToolTests
             await workflowCommandPort.DidNotReceiveWithAnyArgs().UpsertAsync(default!, default);
             await workflowAgentPort.DidNotReceiveWithAnyArgs().InitializeAsync(default!, default!, default);
 
-            // Orphan-key revocation fires (mirror of #418 r3141846175 for daily_report).
+            // Orphan-key revocation fires (mirror of #418 r3141846175 for daily).
             handler.Requests.Should().Contain(r =>
                 r.Method == HttpMethod.Delete &&
                 r.Path == "/api/v1/api-keys/key-401");
@@ -4121,7 +4121,7 @@ public sealed class AgentBuilderToolTests
             doc.RootElement.GetProperty("error").GetString().Should().Be("service_not_connected");
             doc.RootElement.GetProperty("slug").GetString().Should().Be("api-twitter");
             // Critical invariant: no api-key was ever minted because the slug check failed up
-            // front. Catching this here matters because the daily_report tests already pin the
+            // front. Catching this here matters because the daily tests already pin the
             // same invariant for api-github — keep parity.
             handler.Requests.Should().NotContain(r =>
                 r.Method == HttpMethod.Post && r.Path == "/api/v1/api-keys");

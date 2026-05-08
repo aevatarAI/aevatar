@@ -8,7 +8,7 @@ public static class AgentBuilderTemplates
     [
         new
         {
-            name = "daily_report",
+            name = "daily",
             status = "ready",
             description = "Generate a daily GitHub progress summary and send it back to the current Feishu private chat.",
             required_fields = new[] { "schedule_cron" },
@@ -24,10 +24,10 @@ public static class AgentBuilderTemplates
         },
     ];
 
-    public static bool TryBuildDailyReportSpec(
+    public static bool TryBuildDailySpec(
         string githubUsername,
         string? repositories,
-        out DailyReportTemplateSpec? spec,
+        out DailyTemplateSpec? spec,
         out string? error)
     {
         spec = null;
@@ -36,25 +36,25 @@ public static class AgentBuilderTemplates
         var normalizedUser = (githubUsername ?? string.Empty).Trim();
         if (string.IsNullOrWhiteSpace(normalizedUser))
         {
-            error = "github_username is required for template=daily_report";
+            error = "github_username is required for template=daily";
             return false;
         }
 
         var repoList = NormalizeRepositories(repositories);
-        var skillPrompt = BuildDailyReportSkillPrompt(normalizedUser, repoList);
+        var skillPrompt = BuildDailySkillPrompt(normalizedUser, repoList);
 
         var executionPrompt = repoList.Count == 0
             ? $"Run the daily report for GitHub user `{normalizedUser}` covering the last 24 hours. Follow the section schema in the system prompt. Return plain text only."
             : $"Run the daily report for GitHub user `{normalizedUser}` covering the last 24 hours. Restrict source queries to these repositories (one pass per repo, do not collapse to a global search): {string.Join(", ", repoList)}. Follow the section schema in the system prompt. Return plain text only.";
 
-        spec = new DailyReportTemplateSpec(
-            "daily_report",
-            "daily_report",
+        spec = new DailyTemplateSpec(
+            "daily",
+            "daily",
             skillPrompt,
             executionPrompt,
             ["api-github", "api-lark-bot"],
             repoList,
-            // daily_report is a fetch-and-summarize skill: every legitimate run must hit
+            // daily is a fetch-and-summarize skill: every legitimate run must hit
             // the GitHub proxy at least once. A run that finishes with zero nyxid_proxy
             // successes means the LLM bypassed tools and produced text from prior context,
             // which is exactly the fake-success path issue #439 was filed for. The runner-
@@ -120,7 +120,7 @@ public static class AgentBuilderTemplates
     // freeform creative brief: explicit section order, hard per-section line budgets, and an
     // "omit if empty" rule. See issue #423 for the rationale (current single-paragraph output is
     // too thin and pads when sources are silent).
-    private static string BuildDailyReportSkillPrompt(string normalizedUser, IReadOnlyList<string> repoList)
+    private static string BuildDailySkillPrompt(string normalizedUser, IReadOnlyList<string> repoList)
     {
         var repoScope = repoList.Count == 0
             ? "Repository scope: not pinned. Use the global GitHub search endpoints listed below."
@@ -304,7 +304,7 @@ public static class AgentBuilderTemplates
     }
 }
 
-public sealed record DailyReportTemplateSpec(
+public sealed record DailyTemplateSpec(
     string TemplateName,
     string SkillName,
     string SkillContent,

@@ -618,7 +618,7 @@ public sealed class ChannelConversationTurnRunnerTests
         var runner = CreateRunner(registrationQueryPort, adapter);
 
         var activity = BuildCardActionActivity("evt-card-builder-1");
-        activity.Content.CardAction.Arguments["agent_builder_action"] = "open_daily_report_form";
+        activity.Content.CardAction.Arguments["agent_builder_action"] = "open_daily_form";
 
         var result = await runner.RunInboundAsync(activity, CancellationToken.None);
 
@@ -627,7 +627,7 @@ public sealed class ChannelConversationTurnRunnerTests
         adapter.Replies.Should().ContainSingle();
         adapter.Replies[0].Inbound.ChatType.Should().Be("card_action");
         adapter.Replies[0].Inbound.Extra.Should().ContainKey("agent_builder_action")
-            .WhoseValue.Should().Be("open_daily_report_form");
+            .WhoseValue.Should().Be("open_daily_form");
     }
 
     [Fact]
@@ -638,7 +638,7 @@ public sealed class ChannelConversationTurnRunnerTests
         var runner = CreateRunner(registrationQueryPort, adapter);
 
         var activity = BuildCardActionActivity("evt-card-builder-action-id-1");
-        activity.Content.CardAction.ActionId = "open_daily_report_form";
+        activity.Content.CardAction.ActionId = "open_daily_form";
 
         var result = await runner.RunInboundAsync(activity, CancellationToken.None);
 
@@ -646,7 +646,7 @@ public sealed class ChannelConversationTurnRunnerTests
         result.SentActivityId.Should().Be("direct-reply:evt-card-builder-action-id-1");
         adapter.Replies.Should().ContainSingle();
         adapter.Replies[0].Inbound.Extra.Should().ContainKey("agent_builder_action")
-            .WhoseValue.Should().Be("open_daily_report_form");
+            .WhoseValue.Should().Be("open_daily_form");
     }
 
     [Fact]
@@ -927,7 +927,6 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Theory]
-    [InlineData("/daily_report")]
     [InlineData("/foobar")]
     public async Task RunInboundAsync_ShouldSendRelayUsage_ForUnknownSlashCommand(string command)
     {
@@ -1174,7 +1173,6 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Theory]
-    [InlineData("/daily_report")]
     [InlineData("/foobar")]
     [InlineData("/")]
     public async Task RunInboundAsync_ShouldShortCircuitUnknownSlashCommand_WithUsage(string command)

@@ -182,7 +182,7 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
         {
             BlockId = "agents_list",
             Title = "Your Agents (1)",
-            Text = "1. `daily_report` · running",
+            Text = "1. `daily` · running",
         });
         intent.Actions.Add(new ActionElement
         {
@@ -214,7 +214,7 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
         var cardMarkdown = bodyElements[0].GetProperty("content").GetString();
         cardMarkdown.ShouldNotBeNull();
         cardMarkdown.ShouldNotContain("**Your Agents (1)**");
-        cardMarkdown.ShouldContain("daily_report");
+        cardMarkdown.ShouldContain("daily");
     }
 
     [Fact]
@@ -324,11 +324,11 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
         var submit = new ActionElement
         {
             Kind = ActionElementKind.FormSubmit,
-            ActionId = "submit_daily_report",
+            ActionId = "submit_daily",
             Label = "Create",
             IsPrimary = true,
         };
-        submit.Arguments["agent_builder_action"] = "create_daily_report";
+        submit.Arguments["agent_builder_action"] = "create_daily";
         intent.Actions.Add(submit);
 
         var payload = CreateComposer().Compose(
@@ -355,13 +355,13 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
             .EnumerateArray()
             .First(e => e.TryGetProperty("tag", out var tag) && tag.GetString() == "button");
 
-        submitButton.GetProperty("name").GetString().ShouldBe("submit_daily_report");
+        submitButton.GetProperty("name").GetString().ShouldBe("submit_daily");
         submitButton.GetProperty("form_action_type").GetString().ShouldBe("submit");
         submitButton.TryGetProperty("value", out _).ShouldBeFalse();
         var behavior = submitButton.GetProperty("behaviors")[0];
         behavior.GetProperty("type").GetString().ShouldBe("callback");
         var value = behavior.GetProperty("value");
-        value.GetProperty("action_id").GetString().ShouldBe("submit_daily_report");
-        value.GetProperty("agent_builder_action").GetString().ShouldBe("create_daily_report");
+        value.GetProperty("action_id").GetString().ShouldBe("submit_daily");
+        value.GetProperty("agent_builder_action").GetString().ShouldBe("create_daily");
     }
 }

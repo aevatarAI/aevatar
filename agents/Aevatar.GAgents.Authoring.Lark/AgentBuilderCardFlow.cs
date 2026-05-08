@@ -12,9 +12,9 @@ public static class AgentBuilderCardFlow
 {
     private const string PrivateChatType = "p2p";
     private const string CardActionChatType = "card_action";
-    private const string OpenDailyReportFormAction = AgentBuilderActionIds.OpenDailyReportForm;
+    private const string OpenDailyFormAction = AgentBuilderActionIds.OpenDailyForm;
     private const string OpenSocialMediaFormAction = AgentBuilderActionIds.OpenSocialMediaForm;
-    private const string DailyReportAction = AgentBuilderActionIds.DailyReport;
+    private const string DailyAction = AgentBuilderActionIds.Daily;
     private const string SocialMediaAction = AgentBuilderActionIds.SocialMedia;
     private const string ListTemplatesAction = AgentBuilderActionIds.ListTemplates;
     private const string ListAgentsAction = AgentBuilderActionIds.ListAgents;
@@ -111,11 +111,11 @@ public static class AgentBuilderCardFlow
             if (LaunchIntents.Contains(normalized))
             {
                 // Direct webhook deployments hit this path (no Nyx relay in front); the pre-serialized
-                // Lark JSON card from BuildDailyReportCard used to land in MessageContent.Text and
+                // Lark JSON card from BuildDailyCard used to land in MessageContent.Text and
                 // render as raw JSON. Route through the channel-neutral form builder so the composer
                 // emits a real interactive card.
                 decision = AgentBuilderFlowDecision.DirectReply(
-                    AgentBuilderCardContent.BuildDailyReportForm(preferredGithubUsername));
+                    AgentBuilderCardContent.BuildDailyForm(preferredGithubUsername));
                 return true;
             }
 
@@ -151,23 +151,23 @@ public static class AgentBuilderCardFlow
 
         switch ((action ?? string.Empty).Trim())
         {
-            case OpenDailyReportFormAction:
+            case OpenDailyFormAction:
                 decision = AgentBuilderFlowDecision.DirectReply(
-                    AgentBuilderCardContent.BuildDailyReportForm(preferredGithubUsername));
+                    AgentBuilderCardContent.BuildDailyForm(preferredGithubUsername));
                 return true;
 
             case OpenSocialMediaFormAction:
                 decision = AgentBuilderFlowDecision.DirectReply(AgentBuilderCardContent.BuildSocialMediaForm());
                 return true;
 
-            case DailyReportAction:
-                if (!TryBuildCreateDailyReportArguments(evt, out var argumentsJson, out var validationError))
+            case DailyAction:
+                if (!TryBuildCreateDailyArguments(evt, out var argumentsJson, out var validationError))
                 {
                     decision = AgentBuilderFlowDecision.DirectReply(validationError!);
                     return true;
                 }
 
-                decision = AgentBuilderFlowDecision.ToolCall(DailyReportAction, argumentsJson!);
+                decision = AgentBuilderFlowDecision.ToolCall(DailyAction, argumentsJson!);
                 return true;
 
             case SocialMediaAction:
@@ -278,7 +278,7 @@ public static class AgentBuilderCardFlow
                 // Daily report creation uses the shared formatter so Nyx-relay slash commands and
                 // Feishu card-action submits render the same "running now, I'll reply when done"
                 // acknowledgment.
-                DailyReportAction => AgentBuilderCardContent.FormatDailyReportToolReply(doc.RootElement),
+                DailyAction => AgentBuilderCardContent.FormatDailyToolReply(doc.RootElement),
                 SocialMediaAction => FormatCreateSocialMediaResult(doc.RootElement),
                 ListTemplatesAction => FormatListTemplatesResult(doc.RootElement),
                 // Card-click "Refresh List" and the typed `/agents` command share the same
@@ -311,7 +311,7 @@ public static class AgentBuilderCardFlow
             : evt.ChatType;
     }
 
-    private static bool TryBuildCreateDailyReportArguments(
+    private static bool TryBuildCreateDailyArguments(
         ChannelInboundEvent evt,
         out string? argumentsJson,
         out string? validationError)
@@ -343,7 +343,7 @@ public static class AgentBuilderCardFlow
         argumentsJson = JsonSerializer.Serialize(new
         {
             action = "create_agent",
-            template = "daily_report",
+            template = "daily",
             github_username = githubUsername,
             save_github_username_preference = githubUsername is not null,
             repositories,
@@ -636,7 +636,7 @@ public static class AgentBuilderCardFlow
 
         return string.Equals(evt.ChatType, CardActionChatType, StringComparison.Ordinal) &&
                evt.Extra.TryGetValue("agent_builder_action", out var action) &&
-               string.Equals(action, OpenDailyReportFormAction, StringComparison.Ordinal);
+               string.Equals(action, OpenDailyFormAction, StringComparison.Ordinal);
     }
 
     private static string NormalizeText(string? text) => (text ?? string.Empty).Trim();
@@ -727,7 +727,7 @@ public static class AgentBuilderCardFlow
 
             if (string.Equals(status, "ready", StringComparison.OrdinalIgnoreCase))
             {
-                if (string.Equals(name, "daily_report", StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(name, "daily", StringComparison.OrdinalIgnoreCase))
                     hasReadyDaily = true;
                 else if (string.Equals(name, "social_media", StringComparison.OrdinalIgnoreCase))
                     hasReadySocial = true;
@@ -743,7 +743,7 @@ public static class AgentBuilderCardFlow
         });
 
         if (hasReadyDaily)
-            content.Actions.Add(BuildCardAction("Create Daily Report", OpenDailyReportFormAction, isPrimary: true));
+            content.Actions.Add(BuildCardAction("Create Daily Report", OpenDailyFormAction, isPrimary: true));
         if (hasReadySocial)
             content.Actions.Add(BuildCardAction("Create Social Media", OpenSocialMediaFormAction, isPrimary: !hasReadyDaily));
         content.Actions.Add(BuildCardAction("View Agents", ListAgentsAction, isPrimary: false));

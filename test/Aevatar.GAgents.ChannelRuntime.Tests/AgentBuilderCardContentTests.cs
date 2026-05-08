@@ -10,9 +10,9 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class AgentBuilderCardContentTests
 {
     [Fact]
-    public void BuildDailyReportForm_EmitsTextInputsAndSubmitButton()
+    public void BuildDailyForm_EmitsTextInputsAndSubmitButton()
     {
-        var content = AgentBuilderCardContent.BuildDailyReportForm(preferredGithubUsername: null);
+        var content = AgentBuilderCardContent.BuildDailyForm(preferredGithubUsername: null);
 
         content.Actions.Should().HaveCount(5);
         content.Actions.Where(a => a.Kind == ActionElementKind.TextInput)
@@ -26,9 +26,9 @@ public sealed class AgentBuilderCardContentTests
             });
 
         var submit = content.Actions.Single(a => a.Kind == ActionElementKind.FormSubmit);
-        submit.ActionId.Should().Be("submit_daily_report");
+        submit.ActionId.Should().Be("submit_daily");
         submit.IsPrimary.Should().BeTrue();
-        submit.Arguments["agent_builder_action"].Should().Be("create_daily_report");
+        submit.Arguments["agent_builder_action"].Should().Be("create_daily");
         submit.Arguments["run_immediately"].Should().Be("true");
 
         content.Cards.Should().HaveCount(1);
@@ -36,9 +36,9 @@ public sealed class AgentBuilderCardContentTests
     }
 
     [Fact]
-    public void BuildDailyReportForm_PrefillsSavedGithubUsernameIntoValue_WhenProvided()
+    public void BuildDailyForm_PrefillsSavedGithubUsernameIntoValue_WhenProvided()
     {
-        var content = AgentBuilderCardContent.BuildDailyReportForm("eanzhao");
+        var content = AgentBuilderCardContent.BuildDailyForm("eanzhao");
 
         var githubField = content.Actions.Single(a =>
             a.Kind == ActionElementKind.TextInput && a.ActionId == "github_username");
@@ -53,9 +53,9 @@ public sealed class AgentBuilderCardContentTests
     }
 
     [Fact]
-    public void BuildDailyReportForm_LeavesValueEmpty_WhenNoSavedUsername()
+    public void BuildDailyForm_LeavesValueEmpty_WhenNoSavedUsername()
     {
-        var content = AgentBuilderCardContent.BuildDailyReportForm(preferredGithubUsername: null);
+        var content = AgentBuilderCardContent.BuildDailyForm(preferredGithubUsername: null);
 
         var githubField = content.Actions.Single(a =>
             a.Kind == ActionElementKind.TextInput && a.ActionId == "github_username");
@@ -64,10 +64,10 @@ public sealed class AgentBuilderCardContentTests
     }
 
     [Fact]
-    public void FormatDailyReportToolReply_OauthRequired_DoesNotDuplicateAuthBlockInTextAndCard()
+    public void FormatDailyToolReply_OauthRequired_DoesNotDuplicateAuthBlockInTextAndCard()
     {
         // Regression for the duplicate "GitHub authorization required" block users were seeing
-        // in Lark: BuildDailyReportCredentialsCard used to set both content.Text (intended as a
+        // in Lark: BuildDailyCredentialsCard used to set both content.Text (intended as a
         // non-card fallback) and content.Cards[0].Text with the same auth block, which Lark's
         // form-mode composer concatenated into a single rendered message. The card body is the
         // single source of truth — content.Text must stay empty so the composer renders the
@@ -75,7 +75,7 @@ public sealed class AgentBuilderCardContentTests
         var toolJson = JsonSerializer.Serialize(new
         {
             status = "oauth_required",
-            template = "daily_report",
+            template = "daily",
             provider = "GitHub",
             provider_id = "provider-github-uuid",
             authorization_url = "https://github.com/login/oauth/authorize?client_id=abc",
@@ -83,7 +83,7 @@ public sealed class AgentBuilderCardContentTests
         });
         using var doc = JsonDocument.Parse(toolJson);
 
-        var content = AgentBuilderCardContent.FormatDailyReportToolReply(doc.RootElement);
+        var content = AgentBuilderCardContent.FormatDailyToolReply(doc.RootElement);
 
         content.Text.Should().BeEmpty();
         content.Cards.Should().HaveCount(1);
@@ -93,7 +93,7 @@ public sealed class AgentBuilderCardContentTests
     }
 
     [Fact]
-    public void FormatDailyReportToolReply_OauthRequired_PrefillsSubmittedGithubUsernameInForm()
+    public void FormatDailyToolReply_OauthRequired_PrefillsSubmittedGithubUsernameInForm()
     {
         // When the user typed `/daily eanzhao` and the tool returns oauth_required, the
         // re-prompt form must pre-fill `eanzhao` into the GitHub Username field — otherwise
@@ -102,7 +102,7 @@ public sealed class AgentBuilderCardContentTests
         var toolJson = JsonSerializer.Serialize(new
         {
             status = "oauth_required",
-            template = "daily_report",
+            template = "daily",
             provider = "GitHub",
             provider_id = "provider-github-uuid",
             authorization_url = "https://github.com/login/oauth/authorize?client_id=abc",
@@ -111,7 +111,7 @@ public sealed class AgentBuilderCardContentTests
         });
         using var doc = JsonDocument.Parse(toolJson);
 
-        var content = AgentBuilderCardContent.FormatDailyReportToolReply(doc.RootElement);
+        var content = AgentBuilderCardContent.FormatDailyToolReply(doc.RootElement);
 
         var githubField = content.Actions.Single(a =>
             a.Kind == ActionElementKind.TextInput && a.ActionId == "github_username");
@@ -119,14 +119,14 @@ public sealed class AgentBuilderCardContentTests
     }
 
     [Fact]
-    public void FormatDailyReportToolReply_CredentialsRequired_RendersCredentialsHeading()
+    public void FormatDailyToolReply_CredentialsRequired_RendersCredentialsHeading()
     {
         // The credentials_required branch lacks an authorization_url and uses a "credentials"
         // heading instead of "authorization". Same single-render contract as oauth_required.
         var toolJson = JsonSerializer.Serialize(new
         {
             status = "credentials_required",
-            template = "daily_report",
+            template = "daily",
             provider = "GitHub",
             provider_id = "provider-github-uuid",
             documentation_url = "https://nyxid.example.com/docs/github",
@@ -134,7 +134,7 @@ public sealed class AgentBuilderCardContentTests
         });
         using var doc = JsonDocument.Parse(toolJson);
 
-        var content = AgentBuilderCardContent.FormatDailyReportToolReply(doc.RootElement);
+        var content = AgentBuilderCardContent.FormatDailyToolReply(doc.RootElement);
 
         content.Text.Should().BeEmpty();
         content.Cards.Should().HaveCount(1);

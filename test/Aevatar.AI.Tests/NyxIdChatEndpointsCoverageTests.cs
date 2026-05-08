@@ -1036,7 +1036,7 @@ public class NyxIdChatEndpointsCoverageTests
               "sender":{"platform_id":"ou_user_b","display_name":"Builder User"},
               "content":{
                 "content_type":"card_action",
-                "text":"{\"value\":{\"agent_builder_action\":\"create_daily_report\"},\"form_value\":{\"github_username\":\"eanzhao\",\"schedule_time\":\"09:00\"}}"
+                "text":"{\"value\":{\"agent_builder_action\":\"create_daily\"},\"form_value\":{\"github_username\":\"eanzhao\",\"schedule_time\":\"09:00\"}}"
               }
             }
             """;
@@ -1077,12 +1077,12 @@ public class NyxIdChatEndpointsCoverageTests
         var cardAction = activity.Content.CardAction;
         cardAction.Should().NotBeNull();
         cardAction!.Arguments.Should().ContainKey("agent_builder_action")
-            .WhoseValue.Should().Be("create_daily_report");
+            .WhoseValue.Should().Be("create_daily");
         cardAction.FormFields.Should().ContainKey("github_username")
             .WhoseValue.Should().Be("eanzhao");
         cardAction.FormFields.Should().ContainKey("schedule_time")
             .WhoseValue.Should().Be("09:00");
-        cardAction.ActionId.Should().Be("create_daily_report");
+        cardAction.ActionId.Should().Be("create_daily");
     }
 
     [Fact]

@@ -69,7 +69,7 @@ message SkillRunnerState {
   optional int32 max_history_messages = 20;
   // When true, a run that completes with zero successful nyxid_proxy calls is
   // treated as a failure (the LLM bypassed tools and produced output from prior
-  // context, which for fetch-and-summarize skills like daily_report means the
+  // context, which for fetch-and-summarize skills like daily means the
   // report was hallucinated). Issue #439 review follow-up — closes the gap left
   // by the original safety net, which only fired when ≥1 nyxid_proxy call had
   // failed. Skills that don't fan out to nyxid_proxy at all leave this false.

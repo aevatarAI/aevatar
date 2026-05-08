@@ -91,16 +91,16 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleInitializeAsync_DailyReportLegacyEvent_DerivesProxySuccessRequiredFromTemplate()
+    public async Task HandleInitializeAsync_DailyLegacyEvent_DerivesProxySuccessRequiredFromTemplate()
     {
         // PR #569 review (codex P1 + eanzhao on SkillRunnerGAgent.cs:834): legacy actors
         // created before proto field 16 existed replay an init event whose
         // RequiresNyxidProxySuccess deserializes as false. ApplyInitialized must derive
-        // the effective flag from the template name so a daily_report actor that replays
+        // the effective flag from the template name so a daily actor that replays
         // post-deploy is gated by the safety net regardless of when it was created.
         var command = CreateInitializeCommand();
         command.RequiresNyxidProxySuccess = false; // simulate legacy event
-        command.TemplateName = "daily_report";
+        command.TemplateName = "daily";
 
         await _agent.HandleInitializeAsync(command);
 
@@ -129,9 +129,9 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // EnsureToolStatusAllowsCompletion, streaming each delta to Lark would post the
         // hallucinated text live before the guard ran, then repost it on each retry.
         // TryCreateStreamingSink must short-circuit so chunked dispatch (which only fires
-        // AFTER the guard) is the only path that reaches Lark for daily_report runs.
+        // AFTER the guard) is the only path that reaches Lark for daily runs.
         AttachNyxIdApiClient(_agent, new RecordingHandler("""{"code":0,"msg":"success"}"""));
-        var command = CreateInitializeCommand(); // template=daily_report → flag derived true
+        var command = CreateInitializeCommand(); // template=daily → flag derived true
         await _agent.HandleInitializeAsync(command);
         _agent.State.RequiresNyxidProxySuccess.Should().BeTrue();
 
@@ -1020,8 +1020,8 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
 
     private static InitializeSkillRunnerCommand CreateInitializeCommand() => new()
     {
-        SkillName = "daily_report",
-        TemplateName = "daily_report",
+        SkillName = "daily",
+        TemplateName = "daily",
         SkillContent = "You are a daily report runner.",
         ExecutionPrompt = "Run the report.",
         ScheduleCron = string.Empty,

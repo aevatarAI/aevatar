@@ -285,7 +285,7 @@ public class SkillRunnerToolFailureSafetyNetTests
     {
         // Skills that don't fan out to nyxid_proxy at all (e.g. pure LLM transformations)
         // leave RequiresNyxidProxySuccess false and pass through. The flag-on case below
-        // covers the daily_report path that was flagged in PR #471 review as the remaining
+        // covers the daily path that was flagged in PR #471 review as the remaining
         // hallucinated-report failure mode.
         var act = () => SkillRunnerGAgent.EnsureToolStatusAllowsCompletion(
             failureCount: 0, successCount: 0, requiresNyxidProxySuccess: false);
@@ -297,7 +297,7 @@ public class SkillRunnerToolFailureSafetyNetTests
     public void Policy_NoToolCallsAtAll_FlagOn_Throws()
     {
         // Closes the gap left by the original safety net (PR #471 review): when a
-        // fetch-and-summarize skill like daily_report completes with zero successful
+        // fetch-and-summarize skill like daily completes with zero successful
         // nyxid_proxy calls, the LLM produced text from prior context — the original
         // #439 symptom (52 commits in 24h reported as "No meaningful public GitHub
         // activity") with no tool errors to count.
@@ -335,7 +335,7 @@ public class SkillRunnerToolFailureSafetyNetTests
     // ─── Legacy actor default (PR #569 review) ───
 
     [Theory]
-    [InlineData("daily_report", true)]
+    [InlineData("daily", true)]
     [InlineData("DAILY_REPORT", false)]   // case-sensitive: only the canonical name opts in
     [InlineData("social_media", false)]   // workflow template — no nyxid_proxy fanout
     [InlineData("future_pure_llm", false)]
@@ -350,7 +350,7 @@ public class SkillRunnerToolFailureSafetyNetTests
         // those actors keep the pre-#439 zero-tool-call fake-success behavior even after this
         // fix ships, so production behavior would depend on creation time rather than
         // template semantics. ApplyInitialized ORs the explicit flag with this helper, so a
-        // legacy daily_report actor that replays today is gated by the safety net on activation.
+        // legacy daily actor that replays today is gated by the safety net on activation.
         SkillRunnerGAgent.RequiresProxySuccessByTemplate(templateName).Should().Be(expected);
     }
 

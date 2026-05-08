@@ -13,9 +13,9 @@ namespace Aevatar.GAgents.Authoring.Lark;
 /// </remarks>
 internal static class AgentBuilderActionIds
 {
-    public const string DailyReport = "create_daily_report";
+    public const string Daily = "create_daily";
     public const string SocialMedia = "create_social_media";
-    public const string OpenDailyReportForm = "open_daily_report_form";
+    public const string OpenDailyForm = "open_daily_form";
     public const string OpenSocialMediaForm = "open_social_media_form";
     public const string ListTemplates = "list_templates";
     public const string ListAgents = "list_agents";

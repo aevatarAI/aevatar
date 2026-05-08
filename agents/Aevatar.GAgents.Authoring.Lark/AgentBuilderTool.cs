@@ -62,7 +62,7 @@ public sealed class AgentBuilderTool : IAgentTool
             },
             "template": {
               "type": "string",
-              "description": "Template name, currently supports daily_report and social_media"
+              "description": "Template name, currently supports daily and social_media"
             },
             "agent_id": {
               "type": "string",
@@ -70,11 +70,11 @@ public sealed class AgentBuilderTool : IAgentTool
             },
             "github_username": {
               "type": "string",
-              "description": "GitHub username for the daily_report template"
+              "description": "GitHub username for the daily template"
             },
             "save_github_username_preference": {
               "type": "boolean",
-              "description": "When true, save github_username as the owner-scoped default preference after a successful daily_report creation"
+              "description": "When true, save github_username as the owner-scoped default preference after a successful daily creation"
             },
             "topic": {
               "type": "string",
@@ -205,13 +205,13 @@ public sealed class AgentBuilderTool : IAgentTool
         var template = (args.Str("template") ?? string.Empty).Trim();
         return template.ToLowerInvariant() switch
         {
-            "daily_report" => await CreateDailyReportAgentAsync(args, queryPort, skillRunnerPort, nyxClient, token, caller, ct),
+            "daily" => await CreateDailyAgentAsync(args, queryPort, skillRunnerPort, nyxClient, token, caller, ct),
             "social_media" => await CreateSocialMediaAgentAsync(args, queryPort, workflowAgentPort, nyxClient, token, caller, ct),
-            _ => JsonSerializer.Serialize(new { error = $"Unsupported template '{template}'. Supported templates: daily_report, social_media." }),
+            _ => JsonSerializer.Serialize(new { error = $"Unsupported template '{template}'. Supported templates: daily, social_media." }),
         };
     }
 
-    private async Task<string> CreateDailyReportAgentAsync(
+    private async Task<string> CreateDailyAgentAsync(
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
         ISkillRunnerCommandPort skillRunnerPort,
@@ -228,7 +228,7 @@ public sealed class AgentBuilderTool : IAgentTool
         // scope from the channel sender for personal-preference reads/writes only;
         // SkillRunner.ScopeId stays bot-scoped for downstream NyxID-tenant tools.
         var userConfigScopeId = ChannelUserConfigScope.FromMetadata(AgentToolRequestContext.CurrentMetadata);
-        var githubUsernameResolution = await ResolveDailyReportGithubUsernameAsync(
+        var githubUsernameResolution = await ResolveDailyGithubUsernameAsync(
             args,
             nyxClient,
             token,
@@ -237,7 +237,7 @@ public sealed class AgentBuilderTool : IAgentTool
         if (githubUsernameResolution.ErrorResponse is not null)
             return githubUsernameResolution.ErrorResponse;
 
-        if (!AgentBuilderTemplates.TryBuildDailyReportSpec(
+        if (!AgentBuilderTemplates.TryBuildDailySpec(
                 githubUsernameResolution.GithubUsername ?? string.Empty,
                 args.Str("repositories"),
                 out var templateSpec,
@@ -460,7 +460,7 @@ public sealed class AgentBuilderTool : IAgentTool
         }
 
         // Resolve service IDs from the spec's authoritative slug list (parity with
-        // daily_report's TemplateSpec.RequiredServiceSlugs — PR #461 review item #6). Inlined
+        // daily's TemplateSpec.RequiredServiceSlugs — PR #461 review item #6). Inlined
         // hardcoded `[providerSlug, publishProviderSlug]` was fine for two slugs but would
         // drift if a third slug were ever added; route through the spec so the source of
         // truth lives next to the workflow YAML.
@@ -483,7 +483,7 @@ public sealed class AgentBuilderTool : IAgentTool
         if (!TryParseApiKeyCreateResponse(createKeyResponse, out var apiKeyId, out var apiKeyValue, out var apiKeyError))
             return JsonSerializer.Serialize(new { error = apiKeyError });
 
-        // Mirror the daily_report preflight (#411 / #418) for Twitter: the user may not have
+        // Mirror the daily preflight (#411 / #418) for Twitter: the user may not have
         // connected Twitter at NyxID yet, or may have revoked the OAuth grant at x.com between
         // connect-time and create-time. Surfacing 401/403 here keeps us from persisting a
         // social_media agent whose every approved post would fail at publish time. Best-effort
@@ -1342,7 +1342,7 @@ public sealed class AgentBuilderTool : IAgentTool
                 return JsonSerializer.Serialize(new
                 {
                     status = "credentials_required",
-                    template = "daily_report",
+                    template = "daily",
                     provider = "GitHub",
                     provider_id = providerId,
                     documentation_url = documentationUrl,
@@ -1367,7 +1367,7 @@ public sealed class AgentBuilderTool : IAgentTool
         return JsonSerializer.Serialize(new
         {
             status = preferCredentialsRequiredStatus ? "credentials_required" : "oauth_required",
-            template = "daily_report",
+            template = "daily",
             provider = "GitHub",
             provider_id = providerId,
             authorization_url = authorizationUrl,
@@ -1379,7 +1379,7 @@ public sealed class AgentBuilderTool : IAgentTool
         });
     }
 
-    private async Task<(string? GithubUsername, string? ErrorResponse)> ResolveDailyReportGithubUsernameAsync(
+    private async Task<(string? GithubUsername, string? ErrorResponse)> ResolveDailyGithubUsernameAsync(
         BuilderArgs args,
         NyxIdApiClient nyxClient,
         string token,
@@ -1409,7 +1409,7 @@ public sealed class AgentBuilderTool : IAgentTool
         return (null, JsonSerializer.Serialize(new
         {
             status = "credentials_required",
-            template = "daily_report",
+            template = "daily",
             provider = "GitHub",
             note = "Could not resolve github_username. Provide github_username explicitly, save a default preference, or reconnect GitHub in NyxID.",
         }));
@@ -1867,7 +1867,7 @@ public sealed class AgentBuilderTool : IAgentTool
         // daily report is useless if those endpoints don't work. Probe both with per_page=1 so
         // we exercise the same auth surface the runtime will hit, without paying for full
         // result pages. Skip when no username is bound — the rate_limit step is the only
-        // signal we have in that case (and CreateDailyReportAgentAsync rejects empty
+        // signal we have in that case (and CreateDailyAgentAsync rejects empty
         // github_username earlier, so this guard is defensive only).
         var normalizedUser = (githubUsername ?? string.Empty).Trim();
         if (string.IsNullOrEmpty(normalizedUser))
@@ -1952,7 +1952,7 @@ public sealed class AgentBuilderTool : IAgentTool
     /// <c>status</c>, not <c>code</c>. Reviewer (PR #412 r3141699476): the previous parser only
     /// read <c>code</c>, so for the actual #411 production failures (HTTP 403 from
     /// <c>/api/v1/proxy/s/api-github/rate_limit</c>) it set status=0, returned null, and
-    /// persisted a daily_report agent that would fail at runtime. Read both <c>status</c> (the
+    /// persisted a daily agent that would fail at runtime. Read both <c>status</c> (the
     /// SendAsync envelope) AND <c>code</c> (any future inverted-naming envelope or top-level
     /// Lark code).
     /// </remarks>

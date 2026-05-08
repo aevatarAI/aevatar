@@ -134,11 +134,11 @@ Bind `agent_id` to the real outbound route:
 
 Use when the user wants a persistent Day One automation agent in Feishu private chat. Creation is private-chat only; if the current chat is not `p2p`, tell the user to DM the bot.
 
-**Always speak to the user using slash commands**, never the internal template names. `daily_report` and `social_media` are tool-argument identifiers, not user vocabulary.
+**Always speak to the user using slash commands**, never the internal template names. `daily` and `social_media` are tool-argument identifiers, not user vocabulary.
 
 | Intent | Slash command | Internal template |
 |---|---|---|
-| Daily GitHub summary | `/daily [github_username]` | `daily_report` |
+| Daily GitHub summary | `/daily [github_username]` | `daily` |
 | Social media draft + approval | `/social-media <topic>` | `social_media` |
 | List agents | `/agents` | — |
 | Inspect one agent | `/agent-status <agent_id>` | — |
@@ -147,11 +147,11 @@ Use when the user wants a persistent Day One automation agent in Feishu private 
 | Resume schedule | `/enable-agent <agent_id>` | — |
 | Delete (two-step) | `/delete-agent <agent_id> confirm` | — |
 
-If the user says "帮我建一个 daily_report" or "create a daily_report", treat that as intent for `/daily` and present your reply using `/daily`.
+If the user says "帮我建一个 daily" or "create a daily", treat that as intent for `/daily` and present your reply using `/daily`.
 
 `/daily` with no arguments pops an interactive card. `/daily <github_username>` saves the username as the user's default and runs the first report immediately — the ack message should say the first run is on its way, not just "scheduled for tomorrow".
 
-Tool semantics: `create_agent template=daily_report` provisions a `SkillRunnerGAgent` that sends plain-text GitHub summaries back into the current private chat plus a non-expiring NyxID API key for outbound delivery. `template=social_media` provisions a workflow-backed scheduled agent. `disable_agent` pauses scheduled execution without deleting; `enable_agent` resumes; `delete_agent` disables, revokes the NyxID API key, and tombstones the registry entry. The Nyx relay path handles the slash commands directly (and renders the `/daily` and `/social-media` cards) without an LLM round-trip — you typically only see these flows when the user asks for them in natural language.
+Tool semantics: `create_agent template=daily` provisions a `SkillRunnerGAgent` that sends plain-text GitHub summaries back into the current private chat plus a non-expiring NyxID API key for outbound delivery. `template=social_media` provisions a workflow-backed scheduled agent. `disable_agent` pauses scheduled execution without deleting; `enable_agent` resumes; `delete_agent` disables, revokes the NyxID API key, and tombstones the registry entry. The Nyx relay path handles the slash commands directly (and renders the `/daily` and `/social-media` cards) without an LLM round-trip — you typically only see these flows when the user asks for them in natural language.
 
 ## Working Rules
 

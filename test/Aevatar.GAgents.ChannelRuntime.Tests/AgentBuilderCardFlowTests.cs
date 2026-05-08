@@ -13,7 +13,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class AgentBuilderCardFlowTests
 {
     [Fact]
-    public async Task TryResolveAsync_DailyReportLaunch_PrefillsSavedGithubUsername()
+    public async Task TryResolveAsync_DailyLaunch_PrefillsSavedGithubUsername()
     {
         // Inbound carries Platform + SenderId so the prefill query must hit the per-user
         // scope (`scope-1:lark:ou_alice`), not the bot-level `scope-1` — otherwise multiple
@@ -46,7 +46,7 @@ public sealed class AgentBuilderCardFlowTests
     }
 
     [Fact]
-    public async Task TryResolveAsync_DailyReportLaunch_TwoLarkUsersInSameBot_SeeIndependentSavedUsernames()
+    public async Task TryResolveAsync_DailyLaunch_TwoLarkUsersInSameBot_SeeIndependentSavedUsernames()
     {
         // Issue #436: when colleagues share one Lark bot, the prefill must read each
         // sender's own saved github_username — not the most recent writer's value.
@@ -131,7 +131,7 @@ public sealed class AgentBuilderCardFlowTests
               "agents": [
                 {
                   "agent_id": "skill-runner-card-click-1",
-                  "template": "daily_report",
+                  "template": "daily",
                   "status": "running",
                   "next_scheduled_run": "2026-04-23T09:00:00Z"
                 }
@@ -194,7 +194,7 @@ public sealed class AgentBuilderCardFlowTests
             {
               "templates": [
                 {
-                  "name": "daily_report",
+                  "name": "daily",
                   "status": "ready",
                   "description": "Daily GitHub report.",
                   "required_fields": ["github_username"],
@@ -215,10 +215,10 @@ public sealed class AgentBuilderCardFlowTests
         result.Cards.Should().ContainSingle(card => card.BlockId == "templates_list");
         var card = result.Cards.Single();
         card.Title.Should().Be("Available Templates");
-        card.Text.Should().Contain("daily_report");
+        card.Text.Should().Contain("daily");
         card.Text.Should().Contain("social_media");
         card.Text.Should().NotContain("\"config\"");
-        result.Actions.Should().Contain(a => a.ActionId == "open_daily_report_form");
+        result.Actions.Should().Contain(a => a.ActionId == "open_daily_form");
         result.Actions.Should().Contain(a => a.ActionId == "open_social_media_form");
         result.Actions.Should().Contain(a => a.ActionId == "list_agents");
     }
@@ -232,7 +232,7 @@ public sealed class AgentBuilderCardFlowTests
             """
             {
               "agent_id": "skill-runner-1",
-              "template": "daily_report",
+              "template": "daily",
               "status": "running",
               "schedule_cron": "0 9 * * *",
               "schedule_timezone": "UTC",
@@ -252,7 +252,7 @@ public sealed class AgentBuilderCardFlowTests
         var deleteButton = result.Actions.Should().Contain(a => a.ActionId == "confirm_delete_agent").Subject;
         deleteButton.IsDanger.Should().BeTrue();
         deleteButton.Arguments.Should().Contain(new KeyValuePair<string, string>("agent_id", "skill-runner-1"));
-        deleteButton.Arguments.Should().Contain(new KeyValuePair<string, string>("template", "daily_report"));
+        deleteButton.Arguments.Should().Contain(new KeyValuePair<string, string>("template", "daily"));
     }
 
     [Fact]
@@ -264,7 +264,7 @@ public sealed class AgentBuilderCardFlowTests
             """
             {
               "agent_id": "skill-runner-1",
-              "template": "daily_report",
+              "template": "daily",
               "status": "running",
               "note": "Manual run dispatched."
             }
@@ -369,7 +369,7 @@ public sealed class AgentBuilderCardFlowTests
         };
         inbound.Extra["agent_builder_action"] = "confirm_delete_agent";
         inbound.Extra["agent_id"] = "skill-runner-1";
-        inbound.Extra["template"] = "daily_report";
+        inbound.Extra["template"] = "daily";
 
         var decision = await AgentBuilderCardFlow.TryResolveAsync(inbound, userConfigQueryPort: null);
 
@@ -379,7 +379,7 @@ public sealed class AgentBuilderCardFlowTests
         decision.ReplyContent!.Text.Should().BeNullOrEmpty();
         decision.ReplyContent.Cards.Should().ContainSingle(card =>
             card.BlockId == "delete_confirm:skill-runner-1");
-        decision.ReplyContent.Cards.Single().Text.Should().Contain("daily_report");
+        decision.ReplyContent.Cards.Single().Text.Should().Contain("daily");
         var confirmButton = decision.ReplyContent.Actions.Should()
             .Contain(a => a.ActionId == "delete_agent").Subject;
         confirmButton.IsDanger.Should().BeTrue();
@@ -389,14 +389,14 @@ public sealed class AgentBuilderCardFlowTests
     }
 
     [Fact]
-    public async Task TryResolveAsync_DailyReportSubmit_AllowsMissingGithubUsername_ForUserConfigFallback()
+    public async Task TryResolveAsync_DailySubmit_AllowsMissingGithubUsername_ForUserConfigFallback()
     {
         var inbound = new ChannelInboundEvent
         {
             ChatType = "card_action",
             RegistrationScopeId = "scope-1",
         };
-        inbound.Extra["agent_builder_action"] = "create_daily_report";
+        inbound.Extra["agent_builder_action"] = "create_daily";
         inbound.Extra["schedule_time"] = "09:00";
 
         var decision = await AgentBuilderCardFlow.TryResolveAsync(inbound, userConfigQueryPort: null);
@@ -406,7 +406,7 @@ public sealed class AgentBuilderCardFlowTests
 
         using var body = JsonDocument.Parse(decision.ToolArgumentsJson!);
         body.RootElement.GetProperty("action").GetString().Should().Be("create_agent");
-        body.RootElement.GetProperty("template").GetString().Should().Be("daily_report");
+        body.RootElement.GetProperty("template").GetString().Should().Be("daily");
         body.RootElement.GetProperty("schedule_cron").GetString().Should().Be("0 9 * * *");
         body.RootElement.GetProperty("github_username").ValueKind.Should().Be(JsonValueKind.Null);
     }
