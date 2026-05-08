@@ -108,7 +108,28 @@ public sealed class NyxIdSshExecTool : IAgentTool
             timeout_secs = timeoutSecs,
         });
 
-        return await _client.SshExecAsync(token, catalogServiceId, body, ct);
+        // Hard wall-clock cap: NyxID's HTTP response *should* arrive within
+        // `timeout_secs + a few seconds` (the server-side timer kicks in and returns
+        // `timed_out: true`). In practice we have observed the call hang well past 60s
+        // (NyxID SSH gateway / NodeAgent stuck on a stale session). Without a hard cap,
+        // the LLM run sits on a single tool call long enough to blow the inbox runtime's
+        // 120s budget and the user gets the generic "took too long" fallback instead of
+        // a usable error from this tool. Cap at `timeout_secs + 15s` so NyxID has a
+        // generous margin to return its own timeout response, then fail this tool with
+        // a clear "ssh_timeout" payload that the LLM can summarize for the user.
+        using var sshCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        sshCts.CancelAfter(TimeSpan.FromSeconds(timeoutSecs + 15));
+        try
+        {
+            return await _client.SshExecAsync(token, catalogServiceId, body, sshCts.Token);
+        }
+        catch (OperationCanceledException) when (sshCts.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                "[ssh_exec] hard timeout after {WallClockSecs}s waiting on NyxID for service={Service} catalogId={CatalogId}",
+                timeoutSecs + 15, service, catalogServiceId);
+            return $$"""{"error":"ssh_timeout","detail":"NyxID did not return an SSH exec response within {{timeoutSecs + 15}}s. The remote host or NyxID gateway is unresponsive; try again or pick a different host."}""";
+        }
     }
 
     /// <summary>

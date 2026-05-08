@@ -753,6 +753,15 @@ public sealed class NyxIdApiClient
 
             return content;
         }
+        catch (OperationCanceledException)
+        {
+            // Cancellation is a control-flow signal, not an HTTP failure. Wrapping it as
+            // {"error":true,"message":"A task was canceled."} would swallow per-call hard
+            // timeouts that callers (e.g. NyxIdSshExecTool) install on top of the LLM run's
+            // CT. Let the exception bubble so callers can map their own cancellation source
+            // to a clearer error payload (PR #562 SSH timeout incident, 2026-05-08).
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "NyxID API request exception: {Method} {Url}", request.Method, request.RequestUri);

@@ -254,6 +254,39 @@ public class NyxIdSshExecToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_HardTimesOut_WhenNyxIdHangsOnSshPost()
+    {
+        // Production incident 2026-05-08: NyxID's /api/v1/ssh/{id}/exec hung well past
+        // the user-supplied timeout_secs, dragging the LLM run to its 120s budget. The
+        // tool now caps the wall-clock at timeout_secs + 15s and returns ssh_timeout so
+        // the LLM can summarize a degraded but real answer rather than the runtime's
+        // generic "took too long" fallback.
+        var handler = new PathHandler();
+        handler.Map(HttpMethod.Get, "/api/v1/keys/sg-office",
+            $$"""{"id":"u","slug":"sg-office","catalog_service_id":"{{CatalogId}}"}""");
+        handler.MapHanging(HttpMethod.Post, $"/api/v1/ssh/{CatalogId}/exec");
+
+        var tool = new NyxIdSshExecTool(new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(handler)));
+        SetMetadata("test-token");
+        try
+        {
+            // timeout_secs=1 → wall-clock cap = 1 + 15 = 16s. Use a very short timeout
+            // so the test exits fast; the production cap is timeout_secs + 15 regardless.
+            var result = await tool.ExecuteAsync(
+                """{"service":"sg-office","command":"sleep 30","principal":"ubuntu","timeout_secs":1}""");
+
+            result.Should().Contain("\"error\":\"ssh_timeout\"");
+            result.Should().Contain("16s");
+        }
+        finally
+        {
+            ClearMetadata();
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_FallsBackToRawCatalogId_WhenDirectLookupIsEmpty()
     {
         var rawCatalogId = "catalog-from-empty-direct";
@@ -510,11 +543,22 @@ public class NyxIdSshExecToolTests
     private sealed class PathHandler : HttpMessageHandler
     {
         private readonly Dictionary<(HttpMethod Method, string Path), string> _routes = new();
+        private readonly HashSet<(HttpMethod Method, string Path)> _hangingRoutes = new();
         public List<RecordedRequest> Recorded { get; } = new();
 
         public void Map(HttpMethod method, string path, string responseBody)
         {
             _routes[(method, path)] = responseBody;
+        }
+
+        /// <summary>
+        /// Mark a route to "hang" — the handler awaits the cancellation token instead of
+        /// returning a response, simulating a NyxID gateway that never replies. Used to
+        /// pin the ssh_exec tool's hard wall-clock cap.
+        /// </summary>
+        public void MapHanging(HttpMethod method, string path)
+        {
+            _hangingRoutes.Add((method, path));
         }
 
         protected override async Task<HttpResponseMessage> SendAsync(
@@ -529,6 +573,14 @@ public class NyxIdSshExecToolTests
                 path,
                 body,
                 request.Headers.Authorization?.ToString()));
+
+            if (_hangingRoutes.Contains((request.Method, path)))
+            {
+                // Block until the caller's wall-clock cap fires — exactly what the production
+                // incident looked like (NyxID accepted the POST but never responded).
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+                throw new InvalidOperationException("unreachable: cancellation should have fired");
+            }
 
             if (_routes.TryGetValue((request.Method, path), out var responseBodyText))
             {
