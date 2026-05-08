@@ -1481,6 +1481,7 @@ const TeamsHomePage: React.FC = () => {
                           aria-label="切换到卡片视图"
                           icon={<AppstoreOutlined />}
                           onClick={() => setManualRosterView("cards")}
+                          style={{ height: 44, width: 44 }}
                           type={resolvedRosterView === "cards" ? "primary" : "default"}
                         />
                       </Tooltip>
@@ -1489,6 +1490,7 @@ const TeamsHomePage: React.FC = () => {
                           aria-label="切换到列表视图"
                           icon={<BarsOutlined />}
                           onClick={() => setManualRosterView("list")}
+                          style={{ height: 44, width: 44 }}
                           type={resolvedRosterView === "list" ? "primary" : "default"}
                         />
                       </Tooltip>
