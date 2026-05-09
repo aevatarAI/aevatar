@@ -3943,6 +3943,7 @@ const StudioPage: React.FC = () => {
       history.replace(
         buildStudioRoute({
           scopeId: resolvedStudioScopeId || undefined,
+          teamId: routeState.teamId || undefined,
           memberKey: boundMemberKey,
           step: 'bind',
         }),
@@ -3958,6 +3959,7 @@ const StudioPage: React.FC = () => {
     resolvedStudioScopeId,
     routeState.memberId,
     routeState.memberKey,
+    routeState.teamId,
     selectedScriptId,
     selectedWorkflowMemberKey,
     scopeServicesQuery,
@@ -4684,6 +4686,7 @@ const StudioPage: React.FC = () => {
                 history.replace(
                   buildStudioRoute({
                     scopeId: resolvedStudioScopeId || undefined,
+                    teamId: routeState.teamId || undefined,
                     focus: `workflow:${fallbackWorkflowId}`,
                     step: 'build',
                     tab: 'studio',
@@ -4694,6 +4697,7 @@ const StudioPage: React.FC = () => {
                 history.replace(
                   buildStudioRoute({
                     scopeId: resolvedStudioScopeId || undefined,
+                    teamId: routeState.teamId || undefined,
                     step: 'build',
                     tab: 'studio',
                   }),
@@ -5401,6 +5405,7 @@ const StudioPage: React.FC = () => {
       history.replace(
         buildStudioRoute({
           scopeId: resolvedStudioScopeId || undefined,
+          teamId: routeState.teamId || undefined,
           memberKey:
             trimOptional(routeState.memberKey) ||
             (resolvedMemberId
@@ -5422,6 +5427,7 @@ const StudioPage: React.FC = () => {
       resolvedStudioScopeId,
       routeState.memberId,
       routeState.memberKey,
+      routeState.teamId,
       studioScopeMembers,
     ],
   );
@@ -6744,6 +6750,7 @@ const StudioPage: React.FC = () => {
           history.push(
             buildStudioRoute({
               scopeId: resolvedStudioScopeId || undefined,
+              teamId: routeState.teamId || undefined,
               memberKey: normalizedMemberKey,
               step: currentLifecycleStep,
             }),
@@ -6754,6 +6761,7 @@ const StudioPage: React.FC = () => {
         history.push(
           buildStudioRoute({
             scopeId: resolvedStudioScopeId || undefined,
+            teamId: routeState.teamId || undefined,
             memberKey: normalizedMemberKey,
             tab: 'studio',
           }),
@@ -6783,6 +6791,7 @@ const StudioPage: React.FC = () => {
           history.push(
             buildStudioRoute({
               scopeId: resolvedStudioScopeId || undefined,
+              teamId: routeState.teamId || undefined,
               memberKey: normalizedMemberKey,
               step: currentLifecycleStep,
             }),
@@ -6793,6 +6802,7 @@ const StudioPage: React.FC = () => {
         history.push(
           buildStudioRoute({
             scopeId: resolvedStudioScopeId || undefined,
+            teamId: routeState.teamId || undefined,
             memberKey: normalizedMemberKey,
             tab: 'scripts',
           }),
@@ -6851,6 +6861,7 @@ const StudioPage: React.FC = () => {
               history.push(
                 buildStudioRoute({
                   scopeId: resolvedStudioScopeId || undefined,
+                  teamId: routeState.teamId || undefined,
                   memberKey: workflowMemberKey,
                   tab: 'studio',
                 }),
@@ -6876,6 +6887,7 @@ const StudioPage: React.FC = () => {
               history.push(
                 buildStudioRoute({
                   scopeId: resolvedStudioScopeId || undefined,
+                  teamId: routeState.teamId || undefined,
                   memberKey: `script:${scriptId}`,
                   tab: 'scripts',
                 }),
@@ -6937,6 +6949,7 @@ const StudioPage: React.FC = () => {
           history.push(
             buildStudioRoute({
               scopeId: resolvedStudioScopeId || undefined,
+              teamId: routeState.teamId || undefined,
               memberKey:
                 selectedMemberId ? `member:${selectedMemberId}` : normalizedMemberKey,
               step: currentLifecycleStep,
@@ -6949,6 +6962,7 @@ const StudioPage: React.FC = () => {
           history.push(
             buildStudioRoute({
               scopeId: resolvedStudioScopeId || undefined,
+              teamId: routeState.teamId || undefined,
               memberKey: selectedMemberOwnerKey,
               tab: 'studio',
             }),
@@ -6961,6 +6975,7 @@ const StudioPage: React.FC = () => {
           history.push(
             buildStudioRoute({
               scopeId: resolvedStudioScopeId || undefined,
+              teamId: routeState.teamId || undefined,
               memberKey: selectedMemberOwnerKey,
               tab: 'scripts',
             }),
@@ -6972,6 +6987,7 @@ const StudioPage: React.FC = () => {
         history.push(
           buildStudioRoute({
             scopeId: resolvedStudioScopeId || undefined,
+            teamId: routeState.teamId || undefined,
             memberKey: selectedMemberOwnerKey,
             step: 'bind',
           }),
@@ -7000,6 +7016,7 @@ const StudioPage: React.FC = () => {
       publishedScopeMembers,
       publishedScopeServices,
       resolvedStudioScopeId,
+      routeState.teamId,
       studioSurface,
       visibleWorkflowSummaries,
       workbenchMemberKey,
@@ -7631,7 +7648,18 @@ const StudioPage: React.FC = () => {
     .map((value) => trimOptional(value))
     .filter(Boolean);
   const studioReturnHref = resolvedStudioScopeId
-    ? buildTeamDetailHref({
+    ? routeState.teamId
+      ? buildTeamDetailHref({
+          scopeId: resolvedStudioScopeId,
+          teamId: routeState.teamId,
+          tab: 'advanced',
+          memberId:
+            trimOptional(routeState.memberId) ||
+            readMemberIdFromMemberKey(routeState.memberKey) ||
+            undefined,
+          serviceId: trimOptional(workbenchPublishedService?.serviceId) || undefined,
+        })
+      : buildTeamDetailHref({
         scopeId: resolvedStudioScopeId,
         tab: 'advanced',
         serviceId:
@@ -7915,6 +7943,7 @@ const StudioPage: React.FC = () => {
         history.push(
           buildStudioRoute({
             scopeId: resolvedStudioScopeId || undefined,
+            teamId: routeState.teamId || undefined,
             memberKey: selectedScriptId ? `script:${selectedScriptId}` : undefined,
             step: 'bind',
             tab: 'bindings',

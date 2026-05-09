@@ -133,6 +133,11 @@ const pageContainerChildrenDocumentStyle: React.CSSProperties = {
   width: '100%',
 };
 
+const compactPageContainerChildrenDocumentStyle: React.CSSProperties = {
+  ...pageContainerChildrenDocumentStyle,
+  paddingInline: 0,
+};
+
 const panelInnerViewportStyle: React.CSSProperties = {
   display: 'flex',
   flex: 1,
@@ -238,49 +243,56 @@ export const AevatarPageShell: React.FC<AevatarPageShellProps> = ({
   pageHeaderRender,
   title,
   titleHelp,
-}) => (
-  <AevatarLayoutModeContext.Provider value={layoutMode}>
-    <PageContainer
-      breadcrumbRender={breadcrumbRender}
-      className={
-        layoutMode === 'document'
-          ? 'aevatar-page-shell aevatar-page-shell-document'
-          : 'aevatar-page-shell aevatar-page-shell-viewport'
-      }
-      childrenContentStyle={
-        layoutMode === 'document'
-          ? pageContainerChildrenDocumentStyle
-          : pageContainerChildrenViewportStyle
-      }
-      content={content}
-      extra={extra}
-      onBack={onBack}
-      pageHeaderRender={pageHeaderRender}
-      style={
-        layoutMode === 'document'
-          ? pageContainerDocumentStyle
-          : pageContainerViewportStyle
-      }
-      title={
-        titleHelp ? (
-          <AevatarTitleWithHelp help={titleHelp} title={title} />
-        ) : (
-          title
-        )
-      }
-    >
-      <div
+}) => {
+  const screens = Grid.useBreakpoint();
+  const useCompactDocumentPadding = layoutMode === 'document' && !screens.md;
+
+  return (
+    <AevatarLayoutModeContext.Provider value={layoutMode}>
+      <PageContainer
+        breadcrumbRender={breadcrumbRender}
+        className={
+          layoutMode === 'document'
+            ? 'aevatar-page-shell aevatar-page-shell-document'
+            : 'aevatar-page-shell aevatar-page-shell-viewport'
+        }
+        childrenContentStyle={
+          layoutMode === 'document'
+            ? useCompactDocumentPadding
+              ? compactPageContainerChildrenDocumentStyle
+              : pageContainerChildrenDocumentStyle
+            : pageContainerChildrenViewportStyle
+        }
+        content={content}
+        extra={extra}
+        onBack={onBack}
+        pageHeaderRender={pageHeaderRender}
         style={
           layoutMode === 'document'
-            ? pageContentDocumentStyle
-            : pageContentViewportStyle
+            ? pageContainerDocumentStyle
+            : pageContainerViewportStyle
+        }
+        title={
+          titleHelp ? (
+            <AevatarTitleWithHelp help={titleHelp} title={title} />
+          ) : (
+            title
+          )
         }
       >
-        {children}
-      </div>
-    </PageContainer>
-  </AevatarLayoutModeContext.Provider>
-);
+        <div
+          style={
+            layoutMode === 'document'
+              ? pageContentDocumentStyle
+              : pageContentViewportStyle
+          }
+        >
+          {children}
+        </div>
+      </PageContainer>
+    </AevatarLayoutModeContext.Provider>
+  );
+};
 
 // Default console layout: keep one navigator rail and one primary stage.
 export const AevatarTwoPaneLayout: React.FC<AevatarTwoPaneLayoutProps> = ({
