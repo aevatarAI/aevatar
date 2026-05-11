@@ -15,8 +15,12 @@ export type TeamTabOption = {
 
 type TeamActionRailProps = {
   readonly conversationActionLabel: string;
+  readonly editTeamDisabled?: boolean;
+  readonly editTeamLabel: string;
+  readonly editTeamHint?: string;
   readonly onOpenConversation: () => void;
   readonly onOpenServiceMapping: () => void;
+  readonly onOpenTeamEditor: () => void;
   readonly onOpenTeamBuilder: () => void;
   readonly serviceMappingDisabled?: boolean;
   readonly serviceMappingHint?: string;
@@ -52,17 +56,21 @@ const topActionButtonStyle: React.CSSProperties = {
 };
 
 export const TeamDetailEmptyState: React.FC = () => (
-  <AevatarPageShell title="团队详情" content="请先进入一个具体团队，再查看详情。">
+  <AevatarPageShell title="团队详情" content="请先从团队列表选择一个具体团队，再查看详情。">
     <AevatarPanel title="未选择团队">
-      <AevatarInspectorEmpty description="当前需要一个明确的 scope 才能渲染团队详情。" />
+      <AevatarInspectorEmpty description="当前链接只有工作区上下文，没有具体 Team 标识。返回团队列表后选择一个团队。" />
     </AevatarPanel>
   </AevatarPageShell>
 );
 
 export const TeamActionRail: React.FC<TeamActionRailProps> = ({
   conversationActionLabel,
+  editTeamDisabled = false,
+  editTeamLabel,
+  editTeamHint,
   onOpenConversation,
   onOpenServiceMapping,
+  onOpenTeamEditor,
   onOpenTeamBuilder,
   serviceMappingDisabled = false,
   serviceMappingHint,
@@ -78,6 +86,14 @@ export const TeamActionRail: React.FC<TeamActionRailProps> = ({
       type="primary"
     >
       {serviceMappingActionLabel}
+    </Button>
+    <Button
+      disabled={editTeamDisabled}
+      onClick={onOpenTeamEditor}
+      style={topActionButtonStyle}
+      title={editTeamDisabled ? editTeamHint : undefined}
+    >
+      {editTeamLabel}
     </Button>
     <Button onClick={onOpenConversation} style={topActionButtonStyle}>
       {conversationActionLabel}

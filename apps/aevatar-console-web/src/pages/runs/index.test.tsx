@@ -141,50 +141,50 @@ jest.mock("./components/RunsLaunchRail", () => {
   const normalizePatch = (
     value: Record<string, unknown> = {}
   ): Partial<MockRunFormValues> => ({
-    ...(Object.prototype.hasOwnProperty.call(value, "actorId")
+    ...(Object.hasOwn(value, "actorId")
       ? { actorId: normalizeValues({ actorId: value.actorId }).actorId }
       : {}),
-    ...(Object.prototype.hasOwnProperty.call(value, "endpointId")
+    ...(Object.hasOwn(value, "endpointId")
       ? { endpointId: normalizeValues({ endpointId: value.endpointId }).endpointId }
       : {}),
-    ...(Object.prototype.hasOwnProperty.call(value, "endpointKind")
+    ...(Object.hasOwn(value, "endpointKind")
       ? {
           endpointKind: normalizeValues({
             endpointKind: value.endpointKind,
           }).endpointKind,
         }
       : {}),
-    ...(Object.prototype.hasOwnProperty.call(value, "payloadBase64")
+    ...(Object.hasOwn(value, "payloadBase64")
       ? {
           payloadBase64: normalizeValues({
             payloadBase64: value.payloadBase64,
           }).payloadBase64,
         }
       : {}),
-    ...(Object.prototype.hasOwnProperty.call(value, "payloadTypeUrl")
+    ...(Object.hasOwn(value, "payloadTypeUrl")
       ? {
           payloadTypeUrl: normalizeValues({
             payloadTypeUrl: value.payloadTypeUrl,
           }).payloadTypeUrl,
         }
       : {}),
-    ...(Object.prototype.hasOwnProperty.call(value, "prompt")
+    ...(Object.hasOwn(value, "prompt")
       ? { prompt: normalizeValues({ prompt: value.prompt }).prompt }
       : {}),
-    ...(Object.prototype.hasOwnProperty.call(value, "routeName")
+    ...(Object.hasOwn(value, "routeName")
       ? { routeName: normalizeValues({ routeName: value.routeName }).routeName }
       : {}),
-    ...(Object.prototype.hasOwnProperty.call(value, "scopeId")
+    ...(Object.hasOwn(value, "scopeId")
       ? { scopeId: normalizeValues({ scopeId: value.scopeId }).scopeId }
       : {}),
-    ...(Object.prototype.hasOwnProperty.call(value, "serviceOverrideId")
+    ...(Object.hasOwn(value, "serviceOverrideId")
       ? {
           serviceOverrideId: normalizeValues({
             serviceOverrideId: value.serviceOverrideId,
           }).serviceOverrideId,
         }
       : {}),
-    ...(Object.prototype.hasOwnProperty.call(value, "transport")
+    ...(Object.hasOwn(value, "transport")
       ? { transport: normalizeValues({ transport: value.transport }).transport }
       : {}),
   });
@@ -372,10 +372,10 @@ describe("RunsPage", () => {
       await screen.findByRole("button", { name: "返回团队高级编辑" })
     );
 
-    expect(window.location.pathname).toBe("/teams/scope-1");
-    expect(new URLSearchParams(window.location.search).get("tab")).toBe(
-      "advanced"
-    );
+    expect(window.location.pathname).toBe("/teams");
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("scopeId")).toBe("scope-1");
+    expect(params.get("tab")).toBeNull();
   });
 
   it("returns to the originating studio route when a return target is provided", async () => {

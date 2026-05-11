@@ -89,7 +89,7 @@ describe('TeamCreatePage', () => {
       json: async () => teamResponse,
     } as Response);
 
-    renderWithQueryClient(React.createElement(TeamCreatePage));
+    const { queryClient } = renderWithQueryClient(React.createElement(TeamCreatePage));
 
     fireEvent.change(await screen.findByLabelText('Team name'), {
       target: { value: '订单助手团队' },
@@ -113,12 +113,70 @@ describe('TeamCreatePage', () => {
     });
 
     await waitFor(() => {
-      expect(window.location.pathname).toBe('/teams/scope-a');
+      expect(window.location.pathname).toBe('/teams/scope-a/t-alpha');
     });
+    expect(
+      queryClient.getQueryData(['teams', 'team-summary', 'scope-a', 't-alpha']),
+    ).toEqual(teamResponse);
     const params = new URLSearchParams(window.location.search);
-    expect(params.get('scopeId')).toBe('scope-a');
-    expect(params.get('teamId')).toBe('t-alpha');
+    expect(params.get('scopeId')).toBeNull();
+    expect(params.get('teamId')).toBeNull();
     expect(message.success).toHaveBeenCalledWith('已创建 Team。');
+  });
+
+  it('ignores legacy scopeId=new links and creates under the authenticated scope', async () => {
+    window.history.replaceState({}, '', '/teams/new?scopeId=new&teamName=test');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({
+        enabled: false,
+        scopeId: 'scope-a',
+        scopeSource: 'nyxid',
+      }),
+    } as Response);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 201,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({
+        ...teamResponse,
+        displayName: 'test',
+        description: 'test',
+      }),
+    } as Response);
+
+    renderWithQueryClient(React.createElement(TeamCreatePage));
+
+    expect(await screen.findByLabelText('Team name')).toHaveValue('test');
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get('scopeId')).toBe(
+        'scope-a',
+      );
+    });
+
+    fireEvent.change(screen.getByLabelText('Team description'), {
+      target: { value: 'test' },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Create Team' })[0]);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/scopes/scope-a/teams',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            displayName: 'test',
+            description: 'test',
+          }),
+        }),
+      );
+    });
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      '/api/scopes/new/teams',
+      expect.anything(),
+    );
   });
 
   it('opens Studio with only scope context from the secondary action', async () => {

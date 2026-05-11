@@ -456,6 +456,7 @@ function buildMemberRosterPreview(input: {
   readonly runtimeAvailableByMemberId?: ReadonlySet<string>;
   readonly scopeId: string;
   readonly services: readonly ServiceCatalogSnapshot[];
+  readonly teamId?: string | null;
 }): MemberRosterPreview {
   const matchedService = resolveMemberPreviewService({
     member: input.member,
@@ -485,6 +486,7 @@ function buildMemberRosterPreview(input: {
   const title = pickMeaningfulLabel(input.member.displayName, input.member.memberId) || "未命名成员";
   const studioHref = buildStudioWorkflowWorkspaceRoute({
     scopeId: input.scopeId,
+    teamId: input.teamId || undefined,
     memberId,
   });
 
@@ -586,6 +588,7 @@ function buildTeamRosterPreview(input: {
       runtimeAvailableByMemberId: input.runtimeAvailableByMemberId,
       scopeId: input.scopeId,
       services: input.services,
+      teamId: input.team.teamId,
     }),
   );
   const sortedMembers = [...input.members].sort(compareMembers);
@@ -640,6 +643,8 @@ function buildTeamRosterPreview(input: {
   });
   const studioHref = buildStudioWorkflowWorkspaceRoute({
     scopeId: input.scopeId,
+    teamId: input.team.teamId,
+    memberId: primaryMemberPreview?.memberId || undefined,
   });
   const runtimeHref =
     primaryMemberPreview?.serviceId && primaryMemberPreview.serviceId.length > 0
@@ -1217,7 +1222,9 @@ const TeamsHomePage: React.FC = () => {
         <Space wrap>
           <Button
             icon={<PlusOutlined />}
-            onClick={() => history.push("/teams/new")}
+            onClick={() =>
+              history.push(buildScopeHref("/teams/new", { scopeId }))
+            }
             style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
             type="primary"
           >
@@ -1474,6 +1481,7 @@ const TeamsHomePage: React.FC = () => {
                           aria-label="切换到卡片视图"
                           icon={<AppstoreOutlined />}
                           onClick={() => setManualRosterView("cards")}
+                          style={{ height: 44, width: 44 }}
                           type={resolvedRosterView === "cards" ? "primary" : "default"}
                         />
                       </Tooltip>
@@ -1482,6 +1490,7 @@ const TeamsHomePage: React.FC = () => {
                           aria-label="切换到列表视图"
                           icon={<BarsOutlined />}
                           onClick={() => setManualRosterView("list")}
+                          style={{ height: 44, width: 44 }}
                           type={resolvedRosterView === "list" ? "primary" : "default"}
                         />
                       </Tooltip>
@@ -1523,7 +1532,7 @@ const TeamsHomePage: React.FC = () => {
               >
                 <Button
                   onClick={() =>
-                    history.push("/teams/new")
+                    history.push(buildScopeHref("/teams/new", { scopeId }))
                   }
                   type="primary"
                 >

@@ -182,7 +182,8 @@ describe("TeamsHomePage", () => {
 
     const params = new URLSearchParams(window.location.search);
     expect(params.get("scopeId")).toBe("scope-a");
-    expect(params.get("teamId")).toBeNull();
+    expect(params.get("teamId")).toBe("t-support");
+    expect(params.get("member")).toBe("member:member-alpha");
     expect(params.get("tab")).toBe("studio");
   });
 
@@ -239,11 +240,11 @@ describe("TeamsHomePage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "查看团队" }));
 
     await waitFor(() => {
-      expect(window.location.pathname).toBe("/teams/scope-a");
+      expect(window.location.pathname).toBe("/teams/scope-a/t-support");
     });
 
     const params = new URLSearchParams(window.location.search);
-    expect(params.get("teamId")).toBe("t-support");
+    expect(params.get("teamId")).toBeNull();
     expect(params.get("memberId")).toBe("member-alpha");
     expect(params.get("serviceId")).toBe("service-alpha");
     expect(params.get("runId")).toBe("run-latest");

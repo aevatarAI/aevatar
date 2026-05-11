@@ -1,4 +1,4 @@
-import { studioApi } from './api';
+import { StudioApiError, studioApi } from './api';
 import { persistAuthSession } from '@/shared/auth/session';
 
 describe('studioApi host-session requests', () => {
@@ -290,8 +290,12 @@ describe('studioApi host-session requests', () => {
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
-    await expect(studioApi.getWorkflow('missing-workflow')).rejects.toThrow(
-      'Not Found',
+    await expect(studioApi.getWorkflow('missing-workflow')).rejects.toMatchObject({
+      message: 'Not Found',
+      status: 404,
+    });
+    await expect(studioApi.getWorkflow('missing-workflow')).rejects.toBeInstanceOf(
+      StudioApiError,
     );
   });
 

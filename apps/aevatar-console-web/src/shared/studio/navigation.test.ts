@@ -4,6 +4,7 @@ import {
   buildStudioScriptsWorkspaceRoute,
   buildStudioWorkflowEditorRoute,
   buildStudioWorkflowWorkspaceRoute,
+  resolveStudioMemberRouteKey,
 } from './navigation';
 
 describe('buildStudioRoute', () => {
@@ -223,5 +224,37 @@ describe('buildStudioRoute', () => {
     ).toBe(
       '/studio?scopeId=scope-a&member=member%3Aservice-alpha&focus=workflow%3Aworkflow-1&tab=studio',
     );
+  });
+});
+
+describe('resolveStudioMemberRouteKey', () => {
+  it('prefers backend member identity over implementation identities', () => {
+    expect(
+      resolveStudioMemberRouteKey({
+        memberId: 'member-alpha',
+        memberKey: 'workflow:workflow-1',
+        workflowId: 'workflow-2',
+        scriptId: 'script-1',
+      }),
+    ).toBe('member:member-alpha');
+  });
+
+  it('keeps an existing member key before falling back to workflow or script assets', () => {
+    expect(
+      resolveStudioMemberRouteKey({
+        memberKey: 'workflow:workflow-1',
+        scriptId: 'script-1',
+      }),
+    ).toBe('workflow:workflow-1');
+    expect(resolveStudioMemberRouteKey({ workflowId: 'workflow-2' })).toBe(
+      'workflow:workflow-2',
+    );
+    expect(resolveStudioMemberRouteKey({ scriptId: 'script-1' })).toBe(
+      'script:script-1',
+    );
+  });
+
+  it('returns undefined when no stable route identity is available', () => {
+    expect(resolveStudioMemberRouteKey({ memberId: ' ', memberKey: 'unknown' })).toBeUndefined();
   });
 });

@@ -27,8 +27,12 @@ export function createTestQueryClient(): QueryClient {
 
 export function renderWithQueryClient(
   ui: ReactElement,
+  providedQueryClient?: QueryClient,
 ): RenderResult & { queryClient: QueryClient } {
-  const queryClient = createTestQueryClient();
+  const queryClient = providedQueryClient ?? createTestQueryClient();
+  if (providedQueryClient) {
+    activeQueryClients.add(queryClient);
+  }
   const view = render(
     <ConfigProvider locale={enUS}>
       <ProConfigProvider intl={enUSIntl}>
