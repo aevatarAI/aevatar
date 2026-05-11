@@ -12,7 +12,6 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     private readonly StudioMemberBindingRunStateApplier _agent = new();
 
     [Theory]
-    [InlineData(nameof(StudioMemberBindingRunGAgent.HandlePlatformBindingSucceeded))]
     [InlineData(nameof(StudioMemberBindingRunGAgent.HandlePlatformBindingFailed))]
     public void PlatformBindingContinuationHandlers_ShouldAllowSelfHandling(string handlerName)
     {

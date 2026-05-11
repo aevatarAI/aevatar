@@ -158,7 +158,7 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
             });
     }
 
-    [EventHandler(EndpointName = "completePlatformBinding", AllowSelfHandling = true)]
+    [EventHandler(EndpointName = "completePlatformBinding")]
     public async Task HandlePlatformBindingSucceeded(StudioMemberPlatformBindingSucceeded evt)
     {
         if (!CanAcceptPlatformBindingResult(evt.BindingRunId, evt.PlatformBindingCommandId))
