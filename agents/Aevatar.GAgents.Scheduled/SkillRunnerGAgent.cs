@@ -164,6 +164,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             ScopeId = command.ScopeId?.Trim() ?? string.Empty,
             ProviderName = NormalizeProviderName(command.ProviderName),
             Model = command.Model?.Trim() ?? string.Empty,
+            RequiresNyxidProxySuccess = command.RequiresNyxidProxySuccess,
         };
 
         if (command.HasTemperature)
@@ -316,7 +317,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 content.Append(chunk.DeltaContent);
                 if (sink is not null)
                     // Per-delta `content.ToString()` is O(n) per call → O(n²) for the whole
-                    // turn. Acceptable for daily-report-sized output (≤30 KB capped, and the
+                    // turn. Acceptable for daily-sized output (≤30 KB capped, and the
                     // sink dedupes against `_lastEmittedText` so most allocations don't even
                     // make it onto the wire). If a future skill produces materially longer
                     // output, switch the sink contract to `(StringBuilder, Range)` snapshots
@@ -329,13 +330,25 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             if (string.IsNullOrWhiteSpace(output))
                 output = "No update generated.";
 
-            // Issue #439 safety net (PR #471): if EVERY nyxid_proxy tool call in this run
-            // failed, the LLM's plain-text output is structurally indistinguishable from a
-            // real "no activity" report. Throw before delivery so HandleTriggerAsync's catch
-            // path persists `SkillRunnerExecutionFailedEvent` instead of recording a fake
-            // success — must fire BEFORE chunked dispatch so we don't post part-1 of a
-            // report that we're about to flag as failed.
-            EnsureToolStatusAllowsCompletion(_toolFailureCounter.FailureCount, _toolFailureCounter.SuccessCount);
+            // Issue #439 safety net (PR #471 + this PR): refuse to record fake-success runs.
+            // Two failure modes are caught here:
+            //   * all-fail — every nyxid_proxy call failed, the LLM's plain-text output is
+            //     structurally indistinguishable from a real "no activity" report;
+            //   * never-called — when State.RequiresNyxidProxySuccess is set, a run that
+            //     completes with zero successful nyxid_proxy calls means the LLM bypassed
+            //     tools entirely and produced text from prior context (the original #439
+            //     symptom: 52 commits in 24h reported as "No meaningful public GitHub
+            //     activity"). The original safety net only covered the all-fail case
+            //     (failureCount > 0); this gap was flagged in PR #471 review and is closed
+            //     here for fetch-and-summarize templates that opt in.
+            // Throw before delivery so HandleTriggerAsync's catch path persists
+            // SkillRunnerExecutionFailedEvent instead of a clean SkillRunnerExecutionCompletedEvent —
+            // must fire BEFORE chunked dispatch so we don't post part-1 of a report
+            // we're about to flag as failed.
+            EnsureToolStatusAllowsCompletion(
+                _toolFailureCounter.FailureCount,
+                _toolFailureCounter.SuccessCount,
+                State.RequiresNyxidProxySuccess);
 
             // Issue #423 §C — chunked delivery for outputs that exceed the Lark body cap.
             // For ≤30 KB outputs the chunker returns a single-element list and the dispatch
@@ -401,6 +414,18 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     /// </summary>
     private SkillRunnerStreamingReplySink? TryCreateStreamingSink()
     {
+        // Issue #439 (PR #569 review, codex P1 on EnsureToolStatusAllowsCompletion): when the run
+        // is gated by EnsureToolStatusAllowsCompletion (RequiresNyxidProxySuccess set),
+        // streaming each delta would POST/PUT the partial text to Lark live — i.e. a
+        // hallucinated daily report would already be visible in the user's DM by the
+        // time the guard fires, and each retry would repost it. Disable live streaming
+        // for those skills so the message only POSTs through the chunked-dispatch path
+        // AFTER the guard has confirmed at least one nyxid_proxy success. Trade-off: the
+        // user no longer sees the report grow live, but output integrity wins over the
+        // streaming-edit UX for fetch-and-summarize skills.
+        if (State.RequiresNyxidProxySuccess)
+            return null;
+
         var client = _nyxIdApiClient ?? Services.GetService<NyxIdApiClient>();
         if (client is null)
         {
@@ -448,25 +473,49 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     }
 
     /// <summary>
-    /// Runner-layer safety net for issue #439: when every nyxid_proxy call in a run failed,
-    /// the LLM's plain-text output is structurally indistinguishable from a real "no
-    /// activity" report — the prompt-layer §9 Source health footer can be silently dropped
-    /// by a weaker model, and the runner has no other way to tell. Throwing here routes
-    /// through HandleTriggerAsync's existing catch path, which preserves the retry budget
-    /// and (after retries are exhausted) persists SkillRunnerExecutionFailedEvent so
-    /// <c>/agent-status</c> reports a non-zero <c>error_count</c> with a meaningful
-    /// <c>last_error</c> instead of a fake-success run.
-    /// Mixed runs (any successful nyxid_proxy call) still complete normally — partial data
-    /// is more useful to the user than a blanket failure, and the prompt-layer Source
-    /// health footer surfaces the failed queries.
+    /// Runner-layer safety net for issue #439. Two fake-success modes are caught here:
+    /// <list type="bullet">
+    ///   <item><description>
+    ///     <b>all-fail</b> (<paramref name="failureCount"/> &gt; 0, <paramref name="successCount"/> == 0):
+    ///     every nyxid_proxy call failed, but the LLM's plain-text output is structurally
+    ///     indistinguishable from a real "no activity" report. The prompt-layer §9 Source
+    ///     health footer can be dropped by a weaker model, and the runner has no other way
+    ///     to tell.
+    ///   </description></item>
+    ///   <item><description>
+    ///     <b>never-called</b> (<paramref name="requiresNyxidProxySuccess"/> == true,
+    ///     <paramref name="successCount"/> == 0): the LLM bypassed tools entirely and produced
+    ///     text from prior context. For fetch-and-summarize skills like daily this is
+    ///     exactly the original #439 symptom (52 commits in 24h reported as "No meaningful
+    ///     public GitHub activity"). Skills that don't depend on tool data (e.g. pure LLM
+    ///     transformations) leave the flag false and pass through.
+    ///   </description></item>
+    /// </list>
+    /// Throwing here routes through HandleTriggerAsync's existing catch path, which preserves
+    /// the retry budget and (after retries are exhausted) persists SkillRunnerExecutionFailedEvent
+    /// so <c>/agent-status</c> reports a non-zero <c>error_count</c> with a meaningful
+    /// <c>last_error</c> instead of a fake-success run. Mixed runs (any successful nyxid_proxy
+    /// call) still complete normally — partial data is more useful than a blanket failure, and
+    /// the prompt-layer Source health footer surfaces the failed queries.
     /// </summary>
-    internal static void EnsureToolStatusAllowsCompletion(int failureCount, int successCount)
+    internal static void EnsureToolStatusAllowsCompletion(
+        int failureCount,
+        int successCount,
+        bool requiresNyxidProxySuccess)
     {
         if (failureCount > 0 && successCount == 0)
         {
             throw new InvalidOperationException(
                 $"All {failureCount} nyxid_proxy tool call(s) in this run failed; refusing to record an empty-day report as a successful execution. " +
                 "Inspect the previous attempt's tool output for the underlying NyxID/upstream error envelope.");
+        }
+
+        if (requiresNyxidProxySuccess && successCount == 0)
+        {
+            throw new InvalidOperationException(
+                "Skill requires at least one successful nyxid_proxy tool call but completed with zero. " +
+                "The LLM produced output without fetching source data (e.g. hallucinated a daily report from prior context). " +
+                "Refusing to record this run as a successful execution.");
         }
     }
 
@@ -615,7 +664,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             return
                 $"Lark message delivery rejected (code={larkCode}): {detail}. " +
                 "This agent was created before cross-app union_id ingress existed; " +
-                "delete and recreate it (`/agents` → Delete → `/daily`) to pick up the cross-app safe target.";
+                "delete and recreate it (`/agents` → Delete → recreate) to pick up the cross-app safe target.";
         }
 
         if (larkCode == LarkBotErrorCodes.UserIdCrossTenant)
@@ -628,7 +677,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 $"Lark message delivery rejected (code={larkCode}): {detail}. " +
                 "The outbound Lark app is in a different tenant than the inbound app, so " +
                 "user-id translation is impossible. Delete and recreate the agent " +
-                "(`/agents` → Delete → `/daily`) so the new chat_id-preferred outbound path " +
+                "(`/agents` → Delete → recreate) so the new chat_id-preferred outbound path " +
                 "takes effect, or align the NyxID `s/api-lark-bot` proxy with the channel-bot that " +
                 "received the inbound event.";
         }
@@ -702,7 +751,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             metadata["scope_id"] = State.ScopeId;
 
         // Pin the bot owner's pre-configured model + NyxID route + tool-round cap onto the
-        // outbound LLM metadata, the same pattern ChannelLlmReplyInboxRuntime applies for
+        // outbound LLM metadata, the same pattern AgentRunGAgent applies for
         // nyxid-chat. Without this, scheduled runs fall through to NyxIdLLMProvider's
         // compile-time defaults (`gpt-5.4` against `/api/v1/llm/gateway/v1/`), which the
         // gateway routes to the OpenAI provider — failing for bot owners who pre-configured
@@ -794,6 +843,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         next.ScopeId = evt.ScopeId ?? string.Empty;
         next.ProviderName = NormalizeProviderName(evt.ProviderName);
         next.Model = evt.Model ?? string.Empty;
+        // Legacy actors created before proto field 16 existed replay an init event whose
+        // RequiresNyxidProxySuccess deserializes as false, which would let them keep the
+        // pre-#439 zero-tool-call fake-success path — making post-fix behavior depend on
+        // creation time rather than template semantics. Derive the effective flag from
+        // the template name so known fetch-and-summarize skills get the safety net on
+        // replay regardless of when the actor was created. New templates that need this
+        // protection should be added to RequiresProxySuccessByTemplate.
+        next.RequiresNyxidProxySuccess = evt.RequiresNyxidProxySuccess
+            || RequiresProxySuccessByTemplate(evt.TemplateName);
 
         // Missing sampling fields intentionally use upstream model defaults;
         // missing runner limits fall back to SkillRunner defaults.
@@ -851,6 +909,21 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         next.Enabled = true;
         return next;
     }
+
+    /// <summary>
+    /// Templates whose runs MUST observe at least one successful nyxid_proxy call to be
+    /// considered successful. Used by <see cref="ApplyInitialized"/> as the legacy-actor
+    /// default when the persisted init event predates proto field 16. Add new templates
+    /// here when they're fetch-and-summarize style (the LLM bypassing tools and producing
+    /// text from prior context is a fake-success failure mode for them).
+    /// </summary>
+    internal static bool RequiresProxySuccessByTemplate(string? templateName) =>
+        // Reserved for future fetch-and-summarize templates that need the runner-layer
+        // safety net (issue #439). Currently empty: the in-tree daily template was
+        // removed in favor of the Ornn-hosted skill, and no other template needs the
+        // legacy proto-field-16-default backfill. Keep the method so tests + the apply
+        // path don't need to special-case "no templates" — just add new entries here.
+        templateName is not null && false;
 
     private static string NormalizeProviderName(string? providerName) =>
         string.IsNullOrWhiteSpace(providerName) ? SkillRunnerDefaults.DefaultProviderName : providerName.Trim();

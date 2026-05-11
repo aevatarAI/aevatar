@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
@@ -31,7 +32,7 @@ namespace Aevatar.GAgents.Channel.Runtime;
 /// <item><see cref="FinalizeAsync"/> bypasses the throttle so the actor sees the complete text
 /// once the stream ends; if a dispatch is in flight, the final text reflushes after it and
 /// <see cref="FinalizeAsync"/> awaits the dispatch loop's drain signal before returning so the
-/// caller (the inbox runtime) does not race the ready event past the final chunk.</item>
+/// caller (the run actor) does not race the ready event past the final chunk.</item>
 /// </list>
 /// </para>
 /// <para>
@@ -52,6 +53,8 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
     private readonly string _registrationId;
     private readonly ChatActivity _activityTemplate;
     private readonly TimeSpan _throttle;
+    private readonly int _maxInterimChunks;
+    private readonly bool _cardMode;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger? _logger;
 
@@ -65,7 +68,7 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
     private bool _dispatchInProgress;
     private bool _disposed;
     // Signaled by the dispatch loop when it fully drains. FinalizeAsync awaits this when a
-    // dispatch is already in flight so the caller does not race the inbox runtime's
+    // dispatch is already in flight so the caller does not race AgentRunGAgent's
     // LlmReplyReadyEvent past the final chunk dispatch (the ConversationGAgent
     // processed-command guard would otherwise drop the late chunk).
     private TaskCompletionSource<bool>? _drainTcs;
@@ -78,7 +81,9 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
         ChatActivity activityTemplate,
         TimeSpan throttle,
         TimeProvider timeProvider,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        int maxInterimChunks = int.MaxValue,
+        bool cardMode = false)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         if (string.IsNullOrWhiteSpace(targetActorId))
@@ -90,6 +95,8 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
         _registrationId = registrationId ?? string.Empty;
         _activityTemplate = activityTemplate ?? throw new ArgumentNullException(nameof(activityTemplate));
         _throttle = throttle < TimeSpan.Zero ? TimeSpan.Zero : throttle;
+        _maxInterimChunks = maxInterimChunks < 0 ? 0 : maxInterimChunks;
+        _cardMode = cardMode;
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _logger = logger;
     }
@@ -109,7 +116,7 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
     /// Applies the final accumulated text, bypassing the throttle so the actor can drive the final
     /// edit once the stream ends. If a dispatch is already in flight, the final text is stashed and
     /// this call awaits the dispatch loop's drain signal so the final chunk is on the wire before
-    /// the caller proceeds (the inbox runtime sends LlmReplyReadyEvent immediately after).
+    /// the caller proceeds (AgentRunGAgent sends LlmReplyReadyEvent immediately after).
     /// </summary>
     public Task FinalizeAsync(string finalText, CancellationToken ct) =>
         FlushAsync(finalText, isFinal: true, ct);
@@ -158,6 +165,19 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
                 return;
             }
 
+            // Lark/Feishu refuses message edits past a per-message cap (~20 in mainnet, code
+            // 230072). Once that cap is reached the platform rejects every subsequent edit
+            // including the final flush, leaving the user with a truncated reply. Cap interim
+            // dispatches here so the final always has headroom; we still stash the latest text
+            // so FinalizeAsync can dispatch the complete content when the stream ends.
+            if (!isFinal && _chunksEmitted >= _maxInterimChunks)
+            {
+                _pendingText = text;
+                _hasPending = true;
+                CancelTimerLocked();
+                return;
+            }
+
             if (_dispatchInProgress)
             {
                 // A dispatch is in flight. Stash the latest text; the dispatch loop's reflush
@@ -168,7 +188,7 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
                 if (isFinal)
                 {
                     // Block FinalizeAsync until the dispatch loop drains the stashed final text.
-                    // Without this wait, ChannelLlmReplyInboxRuntime sends LlmReplyReadyEvent
+                    // Without this wait, AgentRunGAgent sends LlmReplyReadyEvent
                     // first and ConversationGAgent's processed-command guard drops the late
                     // final chunk.
                     _drainTcs ??= new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -265,7 +285,7 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
             {
                 await DispatchOneAsync(current, ct).ConfigureAwait(false);
 
-                string? next;
+                string? next = null;
                 lock (_lock)
                 {
                     if (_disposed || !_hasPending)
@@ -284,6 +304,61 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
                         drainSignal = _drainTcs;
                         _drainTcs = null;
                         break;
+                    }
+
+                    var nextIsFinal = _drainTcs is not null;
+
+                    // Stop dispatching interim chunks once the cap is reached. Clear the
+                    // pending stash too — keeping it would only cost a follow-up
+                    // OnDeltaAsync re-overwrites it with newer accumulated text anyway, and
+                    // an explicit drain here matches the invariant the reviewer asked for
+                    // (PR #562 review #14): pending text is never left behind when we
+                    // release _dispatchInProgress=false. FinalizeAsync, when it arrives
+                    // later, uses its `text` parameter (not _pendingText), so this clear
+                    // doesn't affect the final flush.
+                    if (!nextIsFinal && _chunksEmitted >= _maxInterimChunks)
+                    {
+                        _pendingText = string.Empty;
+                        _hasPending = false;
+                        _dispatchInProgress = false;
+                        drainSignal = _drainTcs;
+                        _drainTcs = null;
+                        break;
+                    }
+
+                    // Throttle gate between dispatches. Without this, the loop drains stashed
+                    // text at network round-trip pace (~50ms) and exhausts the platform-side
+                    // per-message edit cap (Lark code 230072). When the throttle window has
+                    // not elapsed, arm the deferred timer atomically with releasing
+                    // _dispatchInProgress so a concurrent OnDeltaAsync (PR #562 review #17)
+                    // cannot squeeze in between the release and the arm and observe a stale
+                    // (no-timer + not-dispatching) state. Final dispatches bypass the
+                    // throttle so the user sees the complete text immediately when the
+                    // stream ends.
+                    //
+                    // Invariant: if we reach this branch, nextIsFinal == false, so _drainTcs
+                    // must be null. FinalizeAsync sets _drainTcs only when it arrives during
+                    // an in-flight dispatch, and that path re-evaluates nextIsFinal inside
+                    // this same lock acquisition. We do NOT signal drainSignal here: the
+                    // timer-driven loop is the one that eventually drains _pendingText and
+                    // signals whatever _drainTcs gets attached.
+                    if (!nextIsFinal && _throttle > TimeSpan.Zero)
+                    {
+                        var elapsed = _timeProvider.GetUtcNow() - _lastEmitAt;
+                        if (elapsed < _throttle)
+                        {
+                            var delay = _throttle - elapsed;
+                            _dispatchInProgress = false;
+                            if (!_disposed && _hasPending && _flushTimer is null)
+                            {
+                                _flushTimer = _timeProvider.CreateTimer(
+                                    OnFlushTimerFired,
+                                    state: null,
+                                    dueTime: delay,
+                                    period: Timeout.InfiniteTimeSpan);
+                            }
+                            break;
+                        }
                     }
 
                     next = _pendingText;
@@ -312,14 +387,26 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
 
     private async Task DispatchOneAsync(string text, CancellationToken ct)
     {
-        var chunk = new LlmReplyStreamChunkEvent
-        {
-            CorrelationId = _correlationId,
-            RegistrationId = _registrationId,
-            Activity = _activityTemplate.Clone(),
-            AccumulatedText = text,
-            ChunkAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-        };
+        // Card mode dispatches a structurally distinct message type so persistence layers
+        // cannot silently re-route a replayed event back to the card sink. The two proto
+        // types carry identical payloads; the type identity itself signals routing.
+        IMessage chunk = _cardMode
+            ? new LlmReplyCardStreamChunkEvent
+            {
+                CorrelationId = _correlationId,
+                RegistrationId = _registrationId,
+                Activity = _activityTemplate.Clone(),
+                AccumulatedText = text,
+                ChunkAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            }
+            : new LlmReplyStreamChunkEvent
+            {
+                CorrelationId = _correlationId,
+                RegistrationId = _registrationId,
+                Activity = _activityTemplate.Clone(),
+                AccumulatedText = text,
+                ChunkAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            };
         var envelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),

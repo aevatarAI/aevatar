@@ -20,4 +20,13 @@ public static class LLMRequestMetadataKeys
     /// caller (Studio API, streaming proxy) — fall back to ambient prefs.
     /// </summary>
     public const string SenderBindingId = "aevatar.sender_binding_id";
+
+    /// <summary>
+    /// Short-lived NyxID access token issued for <see cref="SenderBindingId"/>.
+    /// Channel LLM turns use this only while attempting the sender's own
+    /// configured LLM route. If that attempt fails or the key is missing, the
+    /// request falls back to the bot owner's ambient <see cref="NyxIdAccessToken"/>
+    /// without asking the sender to run <c>/init</c>.
+    /// </summary>
+    public const string SenderNyxIdAccessToken = "nyxid.sender_access_token";
 }

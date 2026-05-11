@@ -470,6 +470,226 @@ public class ToolCallLoopTests
         ToolCallLoop.IsLengthTruncated("").Should().BeFalse();
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenNoToolCalls_ShouldPropagateReasoningContent()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse { Content = "answer", ReasoningContent = "thinking-step" },
+        ]);
+        var loop = new ToolCallLoop(new ToolManager());
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 2, CancellationToken.None);
+
+        result.Should().Be("answer");
+        messages.Should().ContainSingle(m => m.Role == "assistant");
+        var assistant = messages.Single(m => m.Role == "assistant");
+        assistant.Content.Should().Be("answer");
+        assistant.ReasoningContent.Should().Be("thinking-step");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenToolCallThenFollowUp_ShouldPropagateReasoningOnBothRounds()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                Content = "will use tool",
+                ReasoningContent = "first-thought",
+                ToolCalls =
+                [
+                    new ToolCall { Id = "tc-1", Name = "echo", ArgumentsJson = "{}" },
+                ],
+            },
+            new LLMResponse { Content = "final", ReasoningContent = "second-thought" },
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("echo", _ => "ok"));
+        var loop = new ToolCallLoop(tools);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 3, CancellationToken.None);
+
+        result.Should().Be("final");
+        var toolCallAssistant = messages.Single(m => m.Role == "assistant" && m.ToolCalls is { Count: 1 });
+        toolCallAssistant.Content.Should().Be("will use tool");
+        toolCallAssistant.ReasoningContent.Should().Be("first-thought");
+        provider.Requests.Should().HaveCount(2);
+        provider.Requests[1].Messages.Should().Contain(m =>
+            m.Role == "assistant" &&
+            m.ToolCalls != null &&
+            m.ToolCalls.Count == 1 &&
+            m.Content == "will use tool" &&
+            m.ReasoningContent == "first-thought");
+        var finalAssistant = messages.Last(m => m.Role == "assistant");
+        finalAssistant.ReasoningContent.Should().Be("second-thought");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenLengthRecovery_ShouldPropagateReasoningContent()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                Content = "partial",
+                ReasoningContent = "thinking-partial",
+                FinishReason = "length",
+            },
+            new LLMResponse
+            {
+                Content = " continued",
+                ReasoningContent = "thinking-continued",
+            },
+        ]);
+        var loop = new ToolCallLoop(new ToolManager());
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 3, CancellationToken.None);
+
+        result.Should().Be("partial continued");
+        var partialAssistant = messages.First(m => m.Role == "assistant");
+        partialAssistant.ReasoningContent.Should().Be("thinking-partial");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenMaxRoundsExhausted_ShouldPropagateReasoningInFinalCall()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls = [new ToolCall { Id = "tc-1", Name = "echo", ArgumentsJson = "{}" }],
+            },
+            new LLMResponse { Content = "summary", ReasoningContent = "final-thought" },
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("echo", _ => "ok"));
+        var loop = new ToolCallLoop(tools);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 1, CancellationToken.None);
+
+        result.Should().Be("summary");
+        var lastAssistant = messages.Last(m => m.Role == "assistant");
+        lastAssistant.ReasoningContent.Should().Be("final-thought");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenHookBlocksToolCalls_ShouldPropagateReasoningContent()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                Content = "blocked-content",
+                ReasoningContent = "blocked-thinking",
+                ToolCalls = [new ToolCall { Id = "tc-1", Name = "echo", ArgumentsJson = "{}" }],
+            },
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("echo", _ => "ok"));
+        var hook = new BlockPostSamplingHook();
+        var loop = new ToolCallLoop(tools, new AgentHookPipeline([hook]));
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 2, CancellationToken.None);
+
+        result.Should().Be("blocked-content");
+        var assistant = messages.Single(m => m.Role == "assistant");
+        assistant.Content.Should().Be("blocked-content");
+        assistant.ReasoningContent.Should().Be("blocked-thinking");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenDsmlTextToolCalls_ShouldPropagateReasoningContent()
+    {
+        var dsmlContent = "I will search now.\n<function_calls><invoke name=\"echo\"><parameter name=\"q\">test</parameter></invoke></function_calls>";
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse { Content = dsmlContent, ReasoningContent = "dsml-thinking" },
+            new LLMResponse { Content = "final-after-dsml", ReasoningContent = "final-thinking" },
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("echo", _ => "echo-result"));
+        var loop = new ToolCallLoop(tools);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 3, CancellationToken.None);
+
+        result.Should().Be("final-after-dsml");
+        var dsmlAssistant = messages.Single(m =>
+            m.Role == "assistant" &&
+            m.ToolCalls is { Count: 1 } &&
+            m.ToolCalls[0].Name == "echo");
+        dsmlAssistant.Content.Should().Be("I will search now.");
+        dsmlAssistant.ReasoningContent.Should().Be("dsml-thinking");
+        var forwardedDsmlAssistant = provider.Requests[1].Messages.Single(m =>
+            m.Role == "assistant" &&
+            m.ToolCalls is { Count: 1 } &&
+            m.ToolCalls[0].Name == "echo");
+        forwardedDsmlAssistant.ReasoningContent.Should().Be("dsml-thinking");
+        var finalAssistant = messages.Last(m => m.Role == "assistant");
+        finalAssistant.ReasoningContent.Should().Be("final-thinking");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenDsmlToolCallBlockedByHook_ShouldPropagateReasoningContent()
+    {
+        var dsmlContent = "I will search now.\n<function_calls><invoke name=\"echo\"><parameter name=\"q\">test</parameter></invoke></function_calls>";
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse { Content = dsmlContent, ReasoningContent = "blocked-dsml-thinking" },
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("echo", _ => "ok"));
+        var hook = new BlockPostSamplingHook();
+        var loop = new ToolCallLoop(tools, new AgentHookPipeline([hook]));
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 2, CancellationToken.None);
+
+        messages.Should().Contain(m => m.Role == "assistant" && m.ReasoningContent == "blocked-dsml-thinking");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenMaxRoundsExhaustedAndDsmlInFinalCall_ShouldPropagateReasoning()
+    {
+        var dsmlContent = "Final search.\n<function_calls><invoke name=\"echo\"><parameter name=\"q\">final</parameter></invoke></function_calls>";
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse { ToolCalls = [new ToolCall { Id = "tc-1", Name = "echo", ArgumentsJson = "{}" }] },
+            new LLMResponse { Content = dsmlContent, ReasoningContent = "final-dsml-thinking" },
+            new LLMResponse { Content = "summary", ReasoningContent = "summary-thinking" },
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("echo", _ => "ok"));
+        var loop = new ToolCallLoop(tools);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 1, CancellationToken.None);
+
+        result.Should().Be("summary");
+        var forwardedFinalDsmlAssistant = provider.Requests[2].Messages.Single(m =>
+            m.Role == "assistant" &&
+            m.ToolCalls is { Count: 1 } &&
+            m.ToolCalls[0].Name == "echo" &&
+            m.ReasoningContent == "final-dsml-thinking");
+        forwardedFinalDsmlAssistant.ReasoningContent.Should().Be("final-dsml-thinking");
+        var lastAssistant = messages.Last(m => m.Role == "assistant");
+        lastAssistant.ReasoningContent.Should().Be("summary-thinking");
+    }
+
     [Theory]
     [InlineData("base64")]
     [InlineData("data")]
@@ -600,6 +820,18 @@ public class ToolCallLoopTests
             }
 
             await next();
+        }
+    }
+
+    private sealed class BlockPostSamplingHook : IAIGAgentExecutionHook
+    {
+        public string Name => "block-post-sampling";
+        public int Priority => 0;
+
+        public Task OnPostSamplingAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct)
+        {
+            ctx.Items["block_tool_calls"] = true;
+            return Task.CompletedTask;
         }
     }
 

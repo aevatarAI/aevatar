@@ -84,6 +84,8 @@ public static class IdentityServiceCollectionExtensions
         // inbound message's gate keeps re-sending the binding card. See
         // issue #549 follow-up observed 2026-05-01.
         services.TryAddSingleton<ExternalIdentityBindingProjectionPort>();
+        services.TryAddSingleton<IExternalIdentityBindingProjectionPort>(
+            sp => sp.GetRequiredService<ExternalIdentityBindingProjectionPort>());
 
         // ─── Cluster-singleton OAuth client projection ───
         services.AddProjectionMaterializationRuntimeCore<
@@ -111,6 +113,18 @@ public static class IdentityServiceCollectionExtensions
         // AevatarOAuthClientNotProvisionedException even after DCR succeeds
         // (production regression observed 2026-04-30 in aismart-app-mainnet).
         services.TryAddSingleton<AevatarOAuthClientProjectionPort>();
+
+        // Endpoint filter for the operator /rebuild path — rejects unauthenticated
+        // callers before model binding/DI resolution kicks in.
+        services.TryAddTransient<Endpoints.IdentityOAuthEndpoints.RebuildAuthEndpointFilter>();
+
+        // ─── Operator admin surface (rebuild endpoint, issue #549) ───
+        // Bound from configuration when present; absence keeps the rebuild
+        // endpoint fail-secure (503 with "rebuild not configured"). Production
+        // sets the token via env var ChannelIdentity__Admin__RebuildToken.
+        var adminOptions = services.AddOptions<AevatarOAuthAdminOptions>();
+        if (configuration is not null)
+            adminOptions.Bind(configuration.GetSection(AevatarOAuthAdminOptions.SectionName));
 
         // ─── Broker (self-bootstrapping, no appsettings dependency) ───
         // Register broker as a *singleton* and inject IHttpClientFactory so

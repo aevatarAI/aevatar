@@ -40,9 +40,9 @@ public interface INyxIdCapabilityBroker
     /// <see cref="BindingRevokedException"/> when NyxID reports
     /// <c>invalid_grant</c> on a previously-bound subject; throws
     /// <see cref="BindingScopeMismatchException"/> when NyxID reports
-    /// <c>invalid_scope</c> for an existing binding. Callers MUST event-source
-    /// revoke the local binding actor on invalid_grant and prompt the sender
-    /// to re-run <c>/init</c> for both user-remediable cases.
+    /// <c>invalid_scope</c> for an existing binding. Binding-required callers
+    /// can prompt the sender to re-run <c>/init</c>; normal LLM turns can
+    /// continue with bot-owner fallback credentials.
     /// </summary>
     /// <exception cref="BindingNotFoundException">
     /// No active binding exists for the subject (never bound, or readmodel

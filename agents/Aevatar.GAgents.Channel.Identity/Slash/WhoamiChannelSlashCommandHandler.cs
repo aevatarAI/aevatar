@@ -4,15 +4,17 @@ using Aevatar.GAgents.Channel.Abstractions.Slash;
 namespace Aevatar.GAgents.Channel.Identity.Slash;
 
 /// <summary>
-/// /whoami — show the inbound sender their current binding state. Always
-/// requires a binding; the runner short-circuits unbound senders to the
-/// /init prompt before invoking the handler.
+/// /whoami — show the inbound sender their current binding state. Issue #513
+/// Phase 6 specifies <c>/init</c>, <c>/unbind</c>, and <c>/whoami</c> do NOT
+/// require a binding so an unbound sender can introspect their own state
+/// without being bounced through the binding gate. Bound senders see masked
+/// binding info; unbound senders see "未绑定" with a /init hint.
 /// </summary>
 public sealed class WhoamiChannelSlashCommandHandler : IChannelSlashCommandHandler
 {
     public string Name => "whoami";
 
-    public bool RequiresBinding => true;
+    public bool RequiresBinding => false;
 
     public ChannelSlashCommandUsage Usage => new(
         Name,
@@ -28,13 +30,21 @@ public sealed class WhoamiChannelSlashCommandHandler : IChannelSlashCommandHandl
             ? context.SenderId
             : context.SenderName;
 
-        var lines = new[]
-        {
-            $"已绑定 NyxID 账号。",
-            $"- 平台账号:{senderName}",
-            $"- Binding ID:{Mask(bindingId)}",
-            $"- 平台:{context.Subject.Platform}",
-        };
+        var lines = string.IsNullOrEmpty(bindingId)
+            ? new[]
+            {
+                "未绑定 NyxID 账号。",
+                $"- 平台账号:{senderName}",
+                $"- 平台:{context.Subject.Platform}",
+                "发送 /init 完成绑定。",
+            }
+            : new[]
+            {
+                "已绑定 NyxID 账号。",
+                $"- 平台账号:{senderName}",
+                $"- Binding ID:{Mask(bindingId)}",
+                $"- 平台:{context.Subject.Platform}",
+            };
 
         var reply = new MessageContent
         {

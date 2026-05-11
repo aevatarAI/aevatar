@@ -1,8 +1,11 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
+using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.NyxidChat.Slash;
@@ -14,19 +17,23 @@ namespace Aevatar.GAgents.NyxidChat.Slash;
 public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandler
 {
     private static readonly char[] WhitespaceSeparators = [' ', '\t', '\r', '\n'];
+    private const string SelfHealPublisherActorId = "nyxid-chat.model.self-heal";
 
     private readonly IUserLlmOptionsService? _optionsService;
     private readonly IUserLlmSelectionService? _selectionService;
     private readonly IUserLlmOptionsRenderer<MessageContent>? _renderer;
+    private readonly IActorDispatchPort _actorDispatchPort;
     private readonly ILogger<ModelChannelSlashCommandHandler> _logger;
 
     public ModelChannelSlashCommandHandler(
         ILogger<ModelChannelSlashCommandHandler> logger,
+        IActorDispatchPort actorDispatchPort,
         IUserLlmOptionsService? optionsService = null,
         IUserLlmSelectionService? selectionService = null,
         IUserLlmOptionsRenderer<MessageContent>? renderer = null)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _optionsService = optionsService;
         _selectionService = selectionService;
         _renderer = renderer;
@@ -76,21 +83,113 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
         }
         catch (BindingNotFoundException)
         {
-            return new MessageContent { Text = "当前 NyxID 绑定不可用,请先发送 /init 重新绑定。" };
+            return await SelfHealRevokedBindingAsync(
+                context,
+                reason: "auto_self_heal_remote_not_found",
+                submittedMessage: "NyxID 端 binding 已不可用,本地清理已提交。请稍后发送 /init 完成新绑定。",
+                degradedMessage: "NyxID 端 binding 已不可用,本地清理提交失败。请稍后重试 /models,或发送 /unbind 后再发送 /init 重新绑定。",
+                ct).ConfigureAwait(false);
         }
         catch (BindingRevokedException)
         {
-            return new MessageContent { Text = "当前 NyxID 绑定已失效,请先发送 /init 重新绑定。" };
+            return await SelfHealRevokedBindingAsync(
+                context,
+                reason: "auto_self_heal_remote_revoked",
+                submittedMessage: "NyxID 端 binding 已失效,本地清理已提交。请稍后发送 /init 完成新绑定。",
+                degradedMessage: "NyxID 端 binding 已失效,本地清理提交失败。请稍后重试 /models,或发送 /unbind 后再发送 /init 重新绑定。",
+                ct).ConfigureAwait(false);
         }
         catch (BindingScopeMismatchException)
         {
-            return new MessageContent { Text = "当前 NyxID 绑定缺少 LLM route 权限,请先发送 /init 重新绑定。" };
+            return await SelfHealRevokedBindingAsync(
+                context,
+                reason: "auto_self_heal_scope_mismatch",
+                submittedMessage: "当前 NyxID 绑定缺少 LLM route 权限,本地清理已提交。请稍后发送 /init 完成新绑定。",
+                degradedMessage: "当前 NyxID 绑定缺少 LLM route 权限,本地清理提交失败。请稍后重试 /models,或发送 /unbind 后再发送 /init 重新绑定。",
+                ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or HttpRequestException or NotSupportedException)
         {
             _logger.LogWarning(ex, "/model failed to read or update NyxID LLM selection");
             return new MessageContent { Text = BuildUserFacingFailureMessage(ex) };
         }
+    }
+
+    /// <summary>
+    /// Submits a local binding revoke when NyxID reports the binding is gone
+    /// (revoked / not_found / scope-mismatch). This is intentionally dispatch
+    /// only: the slash request path must not activate projection scopes or
+    /// wait for read-model materialization. The user is told cleanup has been
+    /// submitted and can retry <c>/init</c> after the projection catches up.
+    /// </summary>
+    /// <remarks>
+    /// Differs from explicit <c>/unbind</c> because the NyxID-side revoke is
+    /// already known; we only need to flip the local actor, with one retry for
+    /// transient dispatch failure.
+    /// </remarks>
+    private async Task<MessageContent> SelfHealRevokedBindingAsync(
+        ChannelSlashCommandContext context,
+        string reason,
+        string submittedMessage,
+        string degradedMessage,
+        CancellationToken ct)
+    {
+        var submitted = await TryDispatchLocalBindingRevokeAsync(context, reason, ct).ConfigureAwait(false);
+        return new MessageContent { Text = submitted ? submittedMessage : degradedMessage };
+    }
+
+    private async Task<bool> TryDispatchLocalBindingRevokeAsync(
+        ChannelSlashCommandContext context,
+        string reason,
+        CancellationToken ct)
+    {
+        var actorId = context.Subject.ToActorId();
+
+        // Single retry mirrors /unbind: a one-off dispatch hiccup should not
+        // leave the user permanently stuck with a stale local binding.
+        Exception? lastError = null;
+        for (var attempt = 1; attempt <= 2; attempt++)
+        {
+            try
+            {
+                var envelope = new EventEnvelope
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    Payload = Any.Pack(new RevokeBindingCommand
+                    {
+                        ExternalSubject = context.Subject.Clone(),
+                        Reason = reason,
+                    }),
+                    Route = EnvelopeRouteSemantics.CreateDirect(SelfHealPublisherActorId, actorId),
+                };
+                await _actorDispatchPort
+                    .DispatchAsync(actorId, envelope, ct)
+                    .ConfigureAwait(false);
+                _logger.LogWarning(
+                    "/model submitted local binding self-heal actor={ActorId} after NyxID-side rejection: reason={Reason}, attempt={Attempt}/2, subject={Platform}:{Tenant}:{User}",
+                    actorId,
+                    reason,
+                    attempt,
+                    context.Subject.Platform, context.Subject.Tenant, context.Subject.ExternalUserId);
+                return true;
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                lastError = ex;
+                _logger.LogWarning(ex,
+                    "/model: local binding self-heal dispatch failed on attempt {Attempt}/2 for actor={ActorId}, reason={Reason}",
+                    attempt,
+                    actorId,
+                    reason);
+            }
+        }
+
+        _logger.LogError(lastError,
+            "/model failed to self-heal local binding actor={ActorId} after 2 attempts; reason={Reason}. User has been told to /unbind manually.",
+            actorId,
+            reason);
+        return false;
     }
 
     private async Task<MessageContent> HandleUseAsync(
@@ -310,16 +409,32 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
             .Where(option =>
                 option.ServiceSlug.Contains(requested, StringComparison.OrdinalIgnoreCase) ||
                 option.DisplayName.Contains(requested, StringComparison.OrdinalIgnoreCase))
-            .Take(2)
             .ToArray();
+        var selectable = fuzzy.Where(IsSelectable).Take(2).ToArray();
+        if (selectable.Length == 1)
+            return selectable[0];
+
         return fuzzy.Length == 1 ? fuzzy[0] : null;
     }
 
-    private static UserLlmOption? FindExactOption(string requested, IReadOnlyList<UserLlmOption> available) =>
-        available.FirstOrDefault(option =>
-            string.Equals(option.ServiceId, requested, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(option.ServiceSlug, requested, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(option.DisplayName, requested, StringComparison.OrdinalIgnoreCase));
+    private static UserLlmOption? FindExactOption(string requested, IReadOnlyList<UserLlmOption> available)
+    {
+        var matches = available
+            .Where(option =>
+                string.Equals(option.ServiceId, requested, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(option.ServiceSlug, requested, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(option.DisplayName, requested, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        var selectable = matches.Where(IsSelectable).Take(2).ToArray();
+        if (selectable.Length == 1)
+            return selectable[0];
+
+        return matches.FirstOrDefault();
+    }
+
+    private static bool IsSelectable(UserLlmOption option) =>
+        option.Allowed && string.Equals(option.Status, "ready", StringComparison.OrdinalIgnoreCase);
 
     private static bool TryResolveExactOptionPrefix(
         string requested,

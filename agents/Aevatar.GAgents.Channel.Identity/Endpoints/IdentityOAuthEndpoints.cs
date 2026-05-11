@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -8,7 +10,9 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgents.Channel.Identity.Endpoints;
 
@@ -19,6 +23,14 @@ namespace Aevatar.GAgents.Channel.Identity.Endpoints;
 public static class IdentityOAuthEndpoints
 {
     private static readonly TimeSpan ProjectionWaitTimeout = TimeSpan.FromSeconds(3);
+    // 15s leaves comfortable margin under typical reverse-proxy idle-timeout
+    // budgets (Cloudflare 100s, AWS ALB 60s default, stricter corporate
+    // proxies 30s) so the operator does not hit a 504 race on the happy path
+    // even when the readmodel takes a few seconds to materialize. Callers
+    // that hit the timeout still get a 202 with a poll URL — see issue #549
+    // PR #570 review (mimo-v2.5-pro / glm-5.1).
+    private static readonly TimeSpan RebuildObservationTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan RebuildObservationPollDelay = TimeSpan.FromMilliseconds(250);
     private const int MaxWebhookBodyBytes = 64 * 1024;
 
     public static IEndpointRouteBuilder MapIdentityOAuthEndpoints(this IEndpointRouteBuilder app)
@@ -34,6 +46,18 @@ public static class IdentityOAuthEndpoints
         app.MapGet("/api/oauth/aevatar-client/status", HandleAevatarOAuthClientStatusAsync)
             .WithTags("ChannelIdentity")
             .AllowAnonymous();
+        // Operator-only: rebuild the cluster-singleton OAuth client snapshot
+        // to point at an admin-supplied client_id (issue #549 production
+        // unblock). Auth is by static admin token header — see
+        // AevatarOAuthAdminOptions. AllowAnonymous because the auth check is
+        // done inline; no ASP.NET auth handler is wired for this module. The
+        // RebuildAuthEndpointFilter rejects unauthenticated callers BEFORE
+        // model binding / DI resolution so a flooded admin-token-less request
+        // does not run through deserialization and DI on every call.
+        app.MapPost("/api/oauth/aevatar-client/rebuild", HandleAevatarOAuthClientRebuildAsync)
+            .WithTags("ChannelIdentity")
+            .AddEndpointFilter<RebuildAuthEndpointFilter>()
+            .AllowAnonymous();
 
         return app;
     }
@@ -44,11 +68,12 @@ public static class IdentityOAuthEndpoints
         [FromQuery] string? code,
         [FromQuery] string? state,
         [FromQuery] string? error,
+        [FromQuery] string? format,
         [FromServices] INyxIdBrokerCallbackClient brokerCallback,
         [FromServices] IExternalIdentityBindingQueryPort queryPort,
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] IProjectionReadinessPort projectionReadiness,
-        [FromServices] ExternalIdentityBindingProjectionPort bindingProjectionPort,
+        [FromServices] IExternalIdentityBindingProjectionPort bindingProjectionPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -159,7 +184,7 @@ public static class IdentityOAuthEndpoints
             // orphan. Best-effort revoke at NyxID before responding so the
             // orphan does not accumulate at NyxID with no local reference.
             await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
-            return Results.Ok(new { status = "already_bound", detail = "已绑定 NyxID 账号,可以回到 Lark 继续对话" });
+            return RenderBoundSuccess(displayName: null, alreadyBound: true, format: format);
         }
 
         var actor = await TryActivateActorAsync(actorRuntime, actorId, logger, ct).ConfigureAwait(false);
@@ -252,7 +277,7 @@ public static class IdentityOAuthEndpoints
                     resolvedAfterTimeout.Value,
                     exchange.BindingId);
                 await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
-                return Results.Ok(new { status = "already_bound", detail = "已绑定 NyxID 账号,可以回到 Lark 继续对话" });
+                return RenderBoundSuccess(displayName: null, alreadyBound: true, format: format);
             }
 
             logger.LogWarning(
@@ -271,13 +296,7 @@ public static class IdentityOAuthEndpoints
             "Bound external identity {Platform}:{Tenant}:{User} -> binding_id={BindingId}",
             subject.Platform, subject.Tenant, subject.ExternalUserId, exchange.BindingId);
 
-        return Results.Ok(new
-        {
-            status = "bound",
-            detail = displayName is null
-                ? "已绑定 NyxID 账号,可以回到 Lark 继续对话"
-                : $"已绑定 NyxID 账号({displayName}),可以回到 Lark 继续对话",
-        });
+        return RenderBoundSuccess(displayName, alreadyBound: false, format: format);
     }
 
     // ─── Status endpoint ───
@@ -325,6 +344,315 @@ public static class IdentityOAuthEndpoints
                 status = "not_provisioned",
                 detail = "Bootstrap service has not yet completed NyxID dynamic client registration. Wait or check the host startup logs.",
             }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+    }
+
+    // ─── Operator rebuild ───
+
+    /// <summary>
+    /// Body for <c>POST /api/oauth/aevatar-client/rebuild</c>. The operator
+    /// supplies a fresh <c>client_id</c> (typically created via NyxID admin
+    /// after a wedge — see issue #549) and the actor pins its snapshot to
+    /// it. <c>redirect_uri</c> and <c>oauth_scope</c> are NOT operator-
+    /// supplied fields: the endpoint always uses
+    /// <see cref="NyxIdRedirectUriResolver"/> and
+    /// <see cref="AevatarOAuthClientScopes.AuthorizationScope"/> respectively,
+    /// otherwise the next bootstrap pass would observe drift and re-DCR
+    /// away the freshly-pinned client (PR #570 review consensus on the
+    /// drift bug + URL-validation surface).
+    /// </summary>
+    public sealed record RebuildAevatarOAuthClientRequest(
+        string? client_id,
+        long? client_id_issued_at_unix);
+
+    internal static Task<IResult> HandleAevatarOAuthClientRebuildAsync(
+        HttpContext http,
+        [FromBody] RebuildAevatarOAuthClientRequest? body,
+        [FromServices] IOptions<AevatarOAuthAdminOptions> adminOptions,
+        [FromServices] IAevatarOAuthClientProvider provider,
+        [FromServices] AevatarOAuthClientProjectionPort projectionPort,
+        [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IActorDispatchPort actorDispatchPort,
+        [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken ct) =>
+        HandleAevatarOAuthClientRebuildCoreAsync(
+            http,
+            body,
+            adminOptions,
+            provider,
+            projectionPort,
+            actorRuntime,
+            actorDispatchPort,
+            loggerFactory,
+            observationTimeout: RebuildObservationTimeout,
+            observationPollDelay: RebuildObservationPollDelay,
+            ct);
+
+    /// <summary>
+    /// Implementation seam exposed for tests so the readmodel-propagation
+    /// timeout can be tightened without waiting the full operator-grade
+    /// 30-second budget on every assertion. Production routes call the
+    /// thin overload above with the canonical defaults.
+    /// </summary>
+    internal static async Task<IResult> HandleAevatarOAuthClientRebuildCoreAsync(
+        HttpContext http,
+        RebuildAevatarOAuthClientRequest? body,
+        IOptions<AevatarOAuthAdminOptions> adminOptions,
+        IAevatarOAuthClientProvider provider,
+        AevatarOAuthClientProjectionPort projectionPort,
+        IActorRuntime actorRuntime,
+        IActorDispatchPort actorDispatchPort,
+        ILoggerFactory loggerFactory,
+        TimeSpan observationTimeout,
+        TimeSpan observationPollDelay,
+        CancellationToken ct)
+    {
+        var logger = loggerFactory.CreateLogger("Aevatar.Channel.Identity.OAuthRebuild");
+
+        var configuredToken = adminOptions.Value.RebuildToken;
+        if (string.IsNullOrEmpty(configuredToken))
+        {
+            logger.LogWarning(
+                "Rebuild endpoint invoked but ChannelIdentity:Admin:RebuildToken is unset; refusing fail-secure.");
+            return Results.Json(new
+            {
+                error = "rebuild_not_configured",
+                detail = "ChannelIdentity:Admin:RebuildToken is unset. Configure it (env var ChannelIdentity__Admin__RebuildToken) and redeploy before retrying.",
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        if (!http.Request.Headers.TryGetValue(AevatarOAuthAdminOptions.RebuildTokenHeader, out var presented)
+            || !ConstantTimeEquals(configuredToken, presented.ToString()))
+        {
+            logger.LogWarning(
+                "Rebuild endpoint rejected: missing or invalid {Header}.",
+                AevatarOAuthAdminOptions.RebuildTokenHeader);
+            return Results.Unauthorized();
+        }
+
+        if (body is null || string.IsNullOrWhiteSpace(body.client_id))
+        {
+            return Results.BadRequest(new
+            {
+                error = "client_id_required",
+                detail = "Body must include client_id (the NyxID-issued OAuth client_id this cluster should pin to).",
+            });
+        }
+
+        var authority = NyxIdAuthorityResolver.Resolve(logger);
+        var redirectUri = NyxIdRedirectUriResolver.Resolve(logger);
+        var oauthScope = AevatarOAuthClientScopes.AuthorizationScope;
+
+        // Validate Unix-seconds before dispatching: AevatarOAuthClient
+        // ProjectionProvider later calls DateTimeOffset.FromUnixTimeSeconds
+        // on the persisted value, which throws ArgumentOutOfRangeException
+        // for values like long.MaxValue. Surface the bad input as a 400
+        // here instead of letting the read path crash on the next status
+        // poll (codex P1 on PR #570).
+        long issuedAtUnix;
+        if (body.client_id_issued_at_unix is { } supplied)
+        {
+            try
+            {
+                _ = DateTimeOffset.FromUnixTimeSeconds(supplied);
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                return Results.BadRequest(new
+                {
+                    error = "client_id_issued_at_unix_invalid",
+                    detail = "client_id_issued_at_unix must be a Unix-seconds value within DateTimeOffset range.",
+                });
+            }
+            issuedAtUnix = supplied;
+        }
+        else
+        {
+            issuedAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        }
+
+        // Activate the projection scope first so the projector subscribes to
+        // the actor's committed events before we dispatch the provision
+        // command — same pattern as AevatarOAuthClientBootstrapService.
+        // Without this the readmodel never updates and the wait loop below
+        // times out even though the actor committed correctly.
+        await projectionPort
+            .EnsureProjectionForActorAsync(AevatarOAuthClientGAgent.WellKnownId, ct)
+            .ConfigureAwait(false);
+
+        // Dispatch through IActorDispatchPort to match /unbind and the rest of the
+        // codebase. CLAUDE.md "Runtime 与 Dispatch 分责" forbids inline
+        // actor.HandleEventAsync from app/host code — that bypasses the inbox
+        // serialization guarantees and any middleware/logging the dispatch port
+        // owns. The rebuild path deliberately skips DCR mediation (operator
+        // already holds the client_id), so we publish the provision command
+        // directly to the cluster-singleton actor and let the inbox process it.
+        var provisionEnvelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(new ProvisionAevatarOAuthClientCommand
+            {
+                ClientId = body.client_id!.Trim(),
+                ClientIdIssuedAtUnix = issuedAtUnix,
+                NyxidAuthority = authority,
+                OauthScope = oauthScope,
+                RedirectUri = redirectUri,
+            }),
+            Route = new EnvelopeRoute
+            {
+                Direct = new DirectRoute { TargetActorId = AevatarOAuthClientGAgent.WellKnownId },
+            },
+        };
+        try
+        {
+            await actorDispatchPort
+                .DispatchAsync(AevatarOAuthClientGAgent.WellKnownId, provisionEnvelope, ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Rebuild endpoint failed to dispatch ProvisionAevatarOAuthClientCommand.");
+            return Results.Json(new
+            {
+                error = "actor_dispatch_failed",
+                detail = "Failed to dispatch the provision command to the OAuth client actor. Check silo logs.",
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        logger.LogWarning(
+            "Operator rebuild dispatched for AevatarOAuthClientGAgent: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}.",
+            body.client_id,
+            authority,
+            redirectUri);
+
+        var observed = await WaitForRebuildObservedAsync(
+                provider,
+                expectedClientId: body.client_id!.Trim(),
+                expectedAuthority: authority,
+                expectedRedirectUri: redirectUri,
+                expectedOauthScope: oauthScope,
+                timeout: observationTimeout,
+                pollDelay: observationPollDelay,
+                ct)
+            .ConfigureAwait(false);
+        if (observed is null)
+        {
+            return Results.Json(new
+            {
+                status = "rebuild_pending_propagation",
+                detail = $"Provision command dispatched but readmodel has not yet caught up within {observationTimeout.TotalSeconds:n0}s. Re-poll /api/oauth/aevatar-client/status; it will reflect the new client_id once the projection materializes.",
+            }, statusCode: StatusCodes.Status202Accepted);
+        }
+
+        return Results.Ok(new
+        {
+            status = "rebuilt",
+            client_id = observed.ClientId,
+            client_id_issued_at = observed.ClientIdIssuedAt,
+            nyxid_authority = observed.NyxIdAuthority,
+            redirect_uri_registered = observed.RedirectUri,
+            oauth_scope_registered = observed.OauthScope,
+            broker_capability_observed = observed.BrokerCapabilityObserved,
+            detail = "OAuth client rebuilt. New /init flows will use the supplied client_id; the previous client_id is now an orphan at NyxID — delete it via NyxID admin to keep the registration list clean.",
+        });
+    }
+
+    private static async Task<AevatarOAuthClientSnapshot?> WaitForRebuildObservedAsync(
+        IAevatarOAuthClientProvider provider,
+        string expectedClientId,
+        string expectedAuthority,
+        string expectedRedirectUri,
+        string expectedOauthScope,
+        TimeSpan timeout,
+        TimeSpan pollDelay,
+        CancellationToken ct)
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(timeout);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            try
+            {
+                var snapshot = await provider.GetAsync(ct).ConfigureAwait(false);
+                if (string.Equals(snapshot.ClientId, expectedClientId, StringComparison.Ordinal)
+                    && string.Equals(snapshot.NyxIdAuthority, expectedAuthority, StringComparison.Ordinal)
+                    && string.Equals(snapshot.RedirectUri, expectedRedirectUri, StringComparison.Ordinal)
+                    && string.Equals(snapshot.OauthScope, expectedOauthScope, StringComparison.Ordinal))
+                {
+                    return snapshot;
+                }
+            }
+            catch (AevatarOAuthClientNotProvisionedException)
+            {
+                // Projection has not yet materialized the very first state
+                // root for this actor — possible on a brand-new cluster
+                // where rebuild is the first provisioning event.
+            }
+
+            await Task.Delay(pollDelay, ct).ConfigureAwait(false);
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Length-tolerant constant-time string compare. <c>FixedTimeEquals</c>
+    /// itself returns false on length mismatch in O(1), which leaks the
+    /// configured token's length to a timing observer — for an admin
+    /// break-glass surface keyed on a high-entropy token this residual leak
+    /// is acceptable (the attacker still has to brute-force the content).
+    /// The earlier shape returned early on <c>right is null</c>; the call
+    /// site short-circuits via <c>TryGetValue</c> so right is never null in
+    /// practice, but we still treat null as empty to keep the helper's
+    /// signature constant-time-uniform (PR #570 review, 4-model consensus).
+    /// </summary>
+    /// <remarks>
+    /// SCOPE: this helper is intentionally <c>private static</c> and tied to
+    /// the rebuild admin-token check. It is NOT for general callers — if a new
+    /// caller needs constant-time string compare for a lower-entropy secret,
+    /// the length leak above becomes material; do not promote this to
+    /// internal/public without first replacing it with a length-padding scheme.
+    /// </remarks>
+    private static bool ConstantTimeEquals(string left, string? right)
+    {
+        var leftBytes = Encoding.UTF8.GetBytes(left);
+        var rightBytes = Encoding.UTF8.GetBytes(right ?? string.Empty);
+        return CryptographicOperations.FixedTimeEquals(leftBytes, rightBytes);
+    }
+
+    /// <summary>
+    /// Endpoint filter that performs the rebuild admin-token check before model binding
+    /// and per-request DI activation kick in. Without this filter the handler method
+    /// still rejects unauthenticated callers (it re-runs the same check inline), but
+    /// every unauthenticated POST would needlessly deserialize the body and resolve
+    /// IActorRuntime / IActorDispatchPort etc. — a small but real DoS amplifier on a
+    /// /rebuild that is supposed to be operator-only break-glass.
+    /// </summary>
+    internal sealed class RebuildAuthEndpointFilter : IEndpointFilter
+    {
+        public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+        {
+            var http = context.HttpContext;
+            var adminOptions = http.RequestServices
+                .GetRequiredService<IOptions<AevatarOAuthAdminOptions>>()
+                .Value;
+            var configuredToken = adminOptions.RebuildToken;
+            if (string.IsNullOrEmpty(configuredToken))
+            {
+                // Fall through to the handler so it can return the standard
+                // "rebuild_not_configured" 503; we don't want this filter to short-circuit
+                // and bypass that explicit operator-facing error.
+                return await next(context).ConfigureAwait(false);
+            }
+
+            if (!http.Request.Headers.TryGetValue(AevatarOAuthAdminOptions.RebuildTokenHeader, out var presented)
+                || !ConstantTimeEquals(configuredToken, presented.ToString()))
+            {
+                return Results.Unauthorized();
+            }
+
+            return await next(context).ConfigureAwait(false);
         }
     }
 
@@ -485,5 +813,86 @@ public static class IdentityOAuthEndpoints
             case 3: padded += "="; break;
         }
         return Convert.FromBase64String(padded);
+    }
+
+    /// <summary>
+    /// Render the user-facing success page returned in the OAuth-callback
+    /// response. Issue #513 phase 1 asked for a "callback success → please pick
+    /// a model" prompt. The full version is a card update pushed back into
+    /// Lark, which requires capturing the /init card's adapter-owned message
+    /// id and passing it through the OAuth state token — substantial new
+    /// design surface left as a follow-up. This page is the browser-side
+    /// substitute the user sees immediately after the OAuth redirect, and it
+    /// names the next-step commands (<c>/model</c>, <c>/whoami</c>) explicitly
+    /// so the user is not left guessing what to type back in Lark.
+    /// </summary>
+    /// <remarks>
+    /// Display name comes from the id_token "name" / sub claim; HTML-encoded
+    /// before interpolation so a malicious id_token cannot inject markup.
+    /// Other error paths in the callback intentionally keep returning JSON for
+    /// ops/programmatic consumers.
+    /// </remarks>
+    internal static IResult RenderBoundSuccessHtml(string? displayName, bool alreadyBound) =>
+        RenderBoundSuccess(displayName, alreadyBound, format: null);
+
+    /// <summary>
+    /// Render the post-binding success response. Default is the HTML browser page that
+    /// users land on after clicking the OAuth approve button. Programmatic consumers
+    /// (CLI, SDK, integration tests) opt into a JSON envelope by passing
+    /// <c>?format=json</c> on the callback URL — the same shape the endpoint returned
+    /// before the HTML render landed (PR #570 review #24).
+    /// </summary>
+    internal static IResult RenderBoundSuccess(string? displayName, bool alreadyBound, string? format)
+    {
+        if (string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.Json(new
+            {
+                status = "bound",
+                already_bound = alreadyBound,
+                display_name = string.IsNullOrWhiteSpace(displayName) ? null : displayName,
+            });
+        }
+
+        return RenderBoundSuccessHtmlInternal(displayName, alreadyBound);
+    }
+
+    internal static IResult RenderBoundSuccessHtmlInternal(string? displayName, bool alreadyBound)
+    {
+        var badge = alreadyBound ? "已绑定" : "绑定成功";
+        var heading = alreadyBound ? "NyxID 账号已绑定" : "已绑定 NyxID 账号";
+        var displayLine = string.IsNullOrWhiteSpace(displayName)
+            ? string.Empty
+            : $"<p>账号:{System.Net.WebUtility.HtmlEncode(displayName)}</p>";
+        var body = alreadyBound
+            ? "<p>当前账号已经完成绑定,无需重复操作。可以关闭此页,回到 Lark 继续对话。</p>"
+            : "<p>可以关闭此页,回到 Lark 继续对话。</p>";
+
+        var html = $@"<!DOCTYPE html>
+<html lang=""zh-CN"">
+<head>
+<meta charset=""UTF-8"">
+<meta name=""viewport"" content=""width=device-width, initial-scale=1"">
+<title>NyxID 绑定 — {badge}</title>
+<style>
+body {{ font-family: -apple-system, ""Segoe UI"", ""PingFang SC"", ""Microsoft YaHei"", sans-serif; max-width: 480px; margin: 60px auto; padding: 0 20px; color: #1d1d1f; line-height: 1.6; }}
+.badge {{ display: inline-block; padding: 4px 10px; background: #d1f5d3; color: #146c2e; border-radius: 999px; font-size: 13px; font-weight: 500; }}
+h1 {{ font-size: 22px; margin: 16px 0 8px; }}
+.hint {{ background: #f5f5f7; padding: 16px 20px; border-radius: 8px; margin-top: 24px; }}
+.hint code {{ background: #fff; padding: 2px 6px; border-radius: 4px; font-family: ui-monospace, ""SFMono-Regular"", Menlo, monospace; }}
+</style>
+</head>
+<body>
+<span class=""badge"">{badge}</span>
+<h1>{heading}</h1>
+{displayLine}
+{body}
+<div class=""hint"">
+<strong>下一步</strong><br>
+回到 Lark 后,发送 <code>/model</code> 选择想用的模型,或 <code>/whoami</code> 查看当前绑定状态。
+</div>
+</body>
+</html>";
+        return Results.Content(html, "text/html; charset=utf-8");
     }
 }

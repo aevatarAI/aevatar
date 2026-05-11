@@ -157,6 +157,7 @@
     <Project Path="test/Aevatar.Studio.Tests/Aevatar.Studio.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Core.Tests\Aevatar.AI.Core.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Tests\Aevatar.AI.Tests.csproj" />
+    <Project Path="test\Aevatar.AI.ToolProviders.Ornn.Tests\Aevatar.AI.ToolProviders.Ornn.Tests.csproj" />
     <Project Path="test\Aevatar.AI.ToolProviders.ServiceInvoke.Tests\Aevatar.AI.ToolProviders.ServiceInvoke.Tests.csproj" />
     <Project Path="test\Aevatar.AI.ToolProviders.Lark.Tests\Aevatar.AI.ToolProviders.Lark.Tests.csproj" />
     <Project Path="test\Aevatar.AI.ToolProviders.Telegram.Tests\Aevatar.AI.ToolProviders.Telegram.Tests.csproj" />
