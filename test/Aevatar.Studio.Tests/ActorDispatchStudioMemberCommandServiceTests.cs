@@ -280,7 +280,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
             {
                 EndpointId = "chat",
                 DisplayName = "Chat",
-                Kind = "chat",
+                Kind = StudioMemberGAgentEndpointKind.Chat,
                 RequestTypeUrl = "type.googleapis.com/a.Request",
                 ResponseTypeUrl = "type.googleapis.com/a.Response",
                 Description = "chat endpoint",

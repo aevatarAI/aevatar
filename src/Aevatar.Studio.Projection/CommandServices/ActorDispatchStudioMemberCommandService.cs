@@ -338,7 +338,7 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
                     {
                         EndpointId = endpoint.EndpointId,
                         DisplayName = endpoint.DisplayName,
-                        Kind = endpoint.Kind,
+                        Kind = ParseGAgentEndpointKind(endpoint.Kind),
                         RequestTypeUrl = endpoint.RequestTypeUrl,
                         ResponseTypeUrl = endpoint.ResponseTypeUrl,
                         Description = endpoint.Description ?? string.Empty,
@@ -353,6 +353,14 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         request.RequestHash = ComputeRequestHash(request);
         return request;
     }
+
+    private static StudioMemberGAgentEndpointKind ParseGAgentEndpointKind(string? rawValue) =>
+        rawValue?.Trim().ToLowerInvariant() switch
+        {
+            "command" or null or "" => StudioMemberGAgentEndpointKind.Command,
+            "chat" => StudioMemberGAgentEndpointKind.Chat,
+            _ => throw new InvalidOperationException($"Unsupported gagent endpoint kind '{rawValue}'."),
+        };
 
     private static string ComputeRequestHash(StudioMemberBindingRequest request)
     {

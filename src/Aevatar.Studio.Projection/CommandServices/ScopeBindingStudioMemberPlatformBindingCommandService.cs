@@ -58,7 +58,10 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
 
         var executionRequest = request.Clone();
         executionRequest.PlatformBindingCommandId = platformBindingCommandId;
-        return RunBindingAsync(replyActorId, platformBindingCommandId, executionRequest, ct);
+        _ = Task.Run(
+            () => RunBindingAsync(replyActorId, platformBindingCommandId, executionRequest, CancellationToken.None),
+            CancellationToken.None);
+        return Task.CompletedTask;
     }
 
     private async Task RunBindingAsync(
@@ -99,20 +102,31 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                 request.BindingRunId,
                 commandId);
 
-            await DispatchAsync(
-                replyActorId,
-                new StudioMemberPlatformBindingFailed
-                {
-                    BindingRunId = request.BindingRunId,
-                    PlatformBindingCommandId = commandId,
-                    Failure = new StudioMemberBindingFailure
+            try
+            {
+                await DispatchAsync(
+                    replyActorId,
+                    new StudioMemberPlatformBindingFailed
                     {
-                        Code = "STUDIO_MEMBER_PLATFORM_BINDING_FAILED",
-                        Message = ex.Message,
-                        FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                        BindingRunId = request.BindingRunId,
+                        PlatformBindingCommandId = commandId,
+                        Failure = new StudioMemberBindingFailure
+                        {
+                            Code = "STUDIO_MEMBER_PLATFORM_BINDING_FAILED",
+                            Message = ex.Message,
+                            FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                        },
                     },
-                },
-                ct).ConfigureAwait(false);
+                    ct).ConfigureAwait(false);
+            }
+            catch (Exception dispatchEx)
+            {
+                _logger.LogError(
+                    dispatchEx,
+                    "StudioMember platform binding failure continuation dispatch failed. bindingRunId={BindingRunId} platformBindingCommandId={CommandId}",
+                    request.BindingRunId,
+                    commandId);
+            }
         }
     }
 
@@ -207,17 +221,17 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         new(
             endpoint.EndpointId,
             endpoint.DisplayName,
-            ParseEndpointKind(endpoint.Kind),
+            ToEndpointKind(endpoint.Kind),
             endpoint.RequestTypeUrl,
             endpoint.ResponseTypeUrl,
             endpoint.Description);
 
-    private static ServiceEndpointKind ParseEndpointKind(string? rawValue) =>
-        rawValue?.Trim().ToLowerInvariant() switch
+    private static ServiceEndpointKind ToEndpointKind(StudioMemberGAgentEndpointKind kind) =>
+        kind switch
         {
-            "chat" => ServiceEndpointKind.Chat,
-            "command" or null or "" => ServiceEndpointKind.Command,
-            _ => ServiceEndpointKind.Command,
+            StudioMemberGAgentEndpointKind.Command => ServiceEndpointKind.Command,
+            StudioMemberGAgentEndpointKind.Chat => ServiceEndpointKind.Chat,
+            _ => throw new InvalidOperationException($"Unsupported gagent endpoint kind '{kind}'."),
         };
 
     private static StudioMemberImplementationKind ToStudioKind(ScopeBindingImplementationKind kind) =>

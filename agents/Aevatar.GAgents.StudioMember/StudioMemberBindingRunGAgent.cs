@@ -14,7 +14,6 @@ namespace Aevatar.GAgents.StudioMember;
 public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindingRunState>, IProjectedActor
 {
     private static readonly TimeSpan PlatformBindingExecuteInitialDelay = TimeSpan.FromMilliseconds(100);
-    private static readonly TimeSpan PlatformBindingExecuteRetryDelay = TimeSpan.FromSeconds(30);
 
     public static string ProjectionKind => "studio-member-binding-run";
 
@@ -146,10 +145,6 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
             return;
         }
 
-        await SchedulePlatformBindingExecuteRequestedAsync(
-            PlatformBindingExecuteRetryDelay,
-            CancellationToken.None);
-
         await platformBindingPort.ExecuteAsync(
             Id,
             evt.PlatformBindingCommandId,
@@ -163,7 +158,7 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
             });
     }
 
-    [EventHandler(EndpointName = "completePlatformBinding")]
+    [EventHandler(EndpointName = "completePlatformBinding", AllowSelfHandling = true)]
     public async Task HandlePlatformBindingSucceeded(StudioMemberPlatformBindingSucceeded evt)
     {
         if (!CanAcceptPlatformBindingResult(evt.BindingRunId, evt.PlatformBindingCommandId))

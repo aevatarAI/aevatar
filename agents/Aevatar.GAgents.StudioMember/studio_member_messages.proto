@@ -38,6 +38,12 @@ enum StudioMemberBindingRunStatus {
   STUDIO_MEMBER_BINDING_RUN_STATUS_REJECTED = 7;
 }
 
+enum StudioMemberGAgentEndpointKind {
+  STUDIO_MEMBER_GAGENT_ENDPOINT_KIND_UNSPECIFIED = 0;
+  STUDIO_MEMBER_GAGENT_ENDPOINT_KIND_COMMAND = 1;
+  STUDIO_MEMBER_GAGENT_ENDPOINT_KIND_CHAT = 2;
+}
+
 // ─── Implementation refs ───
 //
 // Each implementation kind carries a typed sub-message rather than a generic
@@ -103,7 +109,7 @@ message StudioMemberScriptBindingRequest {
 message StudioMemberGAgentEndpointBindingRequest {
   string endpoint_id = 1;
   string display_name = 2;
-  string kind = 3;
+  StudioMemberGAgentEndpointKind kind = 3;
   string request_type_url = 4;
   string response_type_url = 5;
   string description = 6;

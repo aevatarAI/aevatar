@@ -1,4 +1,5 @@
 using System.Reflection;
+using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.GAgents.StudioMember;
 using FluentAssertions;
 using Google.Protobuf;
@@ -9,6 +10,19 @@ namespace Aevatar.Studio.Tests;
 public sealed class StudioMemberBindingRunGAgentStateTests
 {
     private readonly StudioMemberBindingRunStateApplier _agent = new();
+
+    [Theory]
+    [InlineData(nameof(StudioMemberBindingRunGAgent.HandlePlatformBindingSucceeded))]
+    [InlineData(nameof(StudioMemberBindingRunGAgent.HandlePlatformBindingFailed))]
+    public void PlatformBindingContinuationHandlers_ShouldAllowSelfHandling(string handlerName)
+    {
+        var handler = typeof(StudioMemberBindingRunGAgent).GetMethod(handlerName)
+            ?? throw new InvalidOperationException($"Handler '{handlerName}' not found.");
+
+        handler.GetCustomAttribute<EventHandlerAttribute>()
+            .Should().NotBeNull()
+            .And.Match<EventHandlerAttribute>(attribute => attribute.AllowSelfHandling);
+    }
 
     [Fact]
     public void Requested_ShouldPersistAcceptedRunState()

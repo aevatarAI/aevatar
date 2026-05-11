@@ -70,7 +70,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_ShouldWaitForPlatformBindingBeforeReturning()
+    public async Task ExecuteAsync_ShouldStartPlatformBindingAndReturnBeforeCompletion()
     {
         var releaseUpsert = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var scopeBindingPort = new RecordingScopeBindingCommandPort
@@ -91,12 +91,11 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
 
         var request = await scopeBindingPort.UpsertStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         request.RevisionId.Should().Be("rev-platform-bind-1");
-        executeTask.IsCompleted.Should().BeFalse();
+        executeTask.IsCompletedSuccessfully.Should().BeTrue();
         dispatchPort.Dispatches.Should().BeEmpty();
 
         releaseUpsert.SetResult(null);
-        await executeTask.WaitAsync(TimeSpan.FromSeconds(5));
-        var dispatch = dispatchPort.Dispatches.Should().ContainSingle().Which;
+        var dispatch = await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
         dispatch.Envelope.Payload.Unpack<StudioMemberPlatformBindingSucceeded>()
             .Result.RevisionId.Should().Be("rev-platform-bind-1");
     }
