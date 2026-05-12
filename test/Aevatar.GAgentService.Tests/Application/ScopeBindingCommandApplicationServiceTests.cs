@@ -746,7 +746,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     }
 
     [Fact]
-    public async Task UpsertAsync_ShouldReuseExistingWorkflowRevision_WhenReplayIsAllowed()
+    public async Task UpsertAsync_ShouldRejectExistingWorkflowRevision_WhenReplayIsAllowed()
     {
         const string revisionId = "rev-platform-bind-1";
         var commandPort = new RecordingServiceCommandPort();
@@ -795,7 +795,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         var actorPort = new FakeWorkflowRunActorPort();
         var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
 
-        var result = await service.UpsertAsync(new ScopeBindingUpsertRequest(
+        var act = () => service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
             ScopeBindingImplementationKind.Workflow,
             Workflow: new ScopeBindingWorkflowSpec([
@@ -804,13 +804,77 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             RevisionId: revisionId,
             AllowExistingRevisionReplay: true));
 
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*already exists*");
+        commandPort.Calls.Should().ContainSingle(call => call.Method == "UpdateServiceAsync");
         commandPort.Calls.Should().NotContain(call => call.Method == "CreateRevisionAsync");
-        commandPort.Calls.Select(call => call.Method).Should().ContainInOrder(
-            "PrepareRevisionAsync",
-            "PublishRevisionAsync",
-            "SetDefaultServingRevisionAsync",
-            "ActivateServiceRevisionAsync");
-        result.RevisionId.Should().Be(revisionId);
+        commandPort.Calls.Should().NotContain(call => call.Method == "PrepareRevisionAsync");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldRejectExistingGAgentRevision_WhenReplayIsAllowed()
+    {
+        const string revisionId = "rev-static-bind-1";
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(
+            new ServiceCatalogSnapshot(
+                "scope-a:default:default:default",
+                ScopeId,
+                DefaultOptions.ServiceAppId,
+                DefaultOptions.ServiceNamespace,
+                DefaultOptions.DefaultServiceId,
+                "main",
+                revisionId,
+                revisionId,
+                "dep-1",
+                "actor-1",
+                "Active",
+                [
+                    new ServiceEndpointSnapshot(
+                        "chat",
+                        "chat",
+                        ServiceEndpointKind.Chat.ToString(),
+                        "type.googleapis.com/aevatar.ai.ChatRequestEvent",
+                        "type.googleapis.com/aevatar.ai.ChatResponseEvent",
+                        "Chat endpoint."),
+                ],
+                [],
+                DateTimeOffset.UtcNow),
+            new ServiceRevisionCatalogSnapshot(
+                "scope-a:default:default:default",
+                [
+                    new ServiceRevisionSnapshot(
+                        revisionId,
+                        ServiceImplementationKind.Static.ToString(),
+                        ServiceRevisionStatus.Published.ToString(),
+                        string.Empty,
+                        string.Empty,
+                        [],
+                        DateTimeOffset.UtcNow.AddHours(-1),
+                        DateTimeOffset.UtcNow.AddHours(-1),
+                        DateTimeOffset.UtcNow.AddHours(-1),
+                        null),
+                ],
+                DateTimeOffset.UtcNow));
+        var scopeScriptQueryPort = new FakeScopeScriptQueryPort();
+        var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
+
+        var act = () => service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.GAgent,
+            GAgent: new ScopeBindingGAgentSpec(
+                typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
+                []),
+            RevisionId: revisionId,
+            AllowExistingRevisionReplay: true));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*already exists*");
+        commandPort.Calls.Should().ContainSingle(call => call.Method == "UpdateServiceAsync");
+        commandPort.Calls.Should().NotContain(call => call.Method == "CreateRevisionAsync");
+        commandPort.Calls.Should().NotContain(call => call.Method == "PrepareRevisionAsync");
     }
 
     [Fact]

@@ -225,15 +225,11 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                 $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but has been retired.");
         }
 
-        if (request.ImplementationKind != ScopeBindingImplementationKind.Scripting &&
-            !request.AllowExistingRevisionReplay)
+        if (request.ImplementationKind != ScopeBindingImplementationKind.Scripting)
         {
             throw new InvalidOperationException(
                 $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}'.");
         }
-
-        if (request.ImplementationKind != ScopeBindingImplementationKind.Scripting)
-            return false;
 
         var expectedArtifactHash = await ComputeScriptingArtifactHashAsync(revisionSpec, ct);
         if (!string.Equals(existingRevision.ArtifactHash, expectedArtifactHash, StringComparison.Ordinal))

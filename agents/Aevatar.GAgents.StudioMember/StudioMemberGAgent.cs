@@ -109,6 +109,12 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             return;
         }
 
+        if (TryBuildTerminalBindingRunReplayResponse(State, evt, failedAt, out var terminalReplayResponse))
+        {
+            await SendToAsync(runActorId, terminalReplayResponse);
+            return;
+        }
+
         if (IsTerminalBindingRunReplay(State, evt.BindingRunId))
         {
             return;
@@ -555,6 +561,37 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         return currentBinding != null
                && string.Equals(currentBinding.CurrentBindingRunId, bindingRunId, StringComparison.Ordinal)
                && IsTerminalBindingStatus(currentBinding.CurrentStatus);
+    }
+
+    private static bool TryBuildTerminalBindingRunReplayResponse(
+        StudioMemberState state,
+        StudioMemberBindAdmissionRequested request,
+        Timestamp failedAt,
+        out StudioMemberBindingRejectedEvent response)
+    {
+        response = new StudioMemberBindingRejectedEvent();
+
+        var currentBinding = state.Binding;
+        if (currentBinding == null
+            || !string.Equals(currentBinding.CurrentBindingRunId, request.BindingRunId, StringComparison.Ordinal)
+            || currentBinding.CurrentStatus != StudioMemberBindingRunStatus.Rejected)
+        {
+            return false;
+        }
+
+        response = new StudioMemberBindingRejectedEvent
+        {
+            BindingRunId = request.BindingRunId,
+            ScopeId = state.ScopeId,
+            MemberId = state.MemberId,
+            Failure = currentBinding.LastFailure?.Clone() ?? new StudioMemberBindingFailure
+            {
+                Code = "STUDIO_MEMBER_BINDING_RUN_REJECTED",
+                Message = "binding run was already rejected.",
+                FailedAtUtc = failedAt,
+            },
+        };
+        return true;
     }
 
     private static bool IsCurrentBindingTerminal(StudioMemberState state) =>

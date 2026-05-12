@@ -148,6 +148,61 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         failed.Failure.Message.Should().Be("platform rejected");
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenSuccessContinuationDispatchFails_ShouldNotDispatchFailedContinuation()
+    {
+        var scopeBindingPort = new RecordingScopeBindingCommandPort();
+        var dispatchPort = new RecordingDispatchPort
+        {
+            Failure = new InvalidOperationException("dispatch unavailable"),
+        };
+        var service = new ScopeBindingStudioMemberPlatformBindingCommandService(
+            scopeBindingPort,
+            dispatchPort,
+            NullLogger<ScopeBindingStudioMemberPlatformBindingCommandService>.Instance);
+
+        await service.ExecuteAsync(
+            "studio-member-binding-run:bind-1",
+            "platform-bind-1",
+            NewScriptStartRequest(),
+            CancellationToken.None);
+
+        await dispatchPort.DispatchAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        scopeBindingPort.Requests.Should().ContainSingle();
+        dispatchPort.DispatchAttempts.Should().Be(1);
+        dispatchPort.Dispatches.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenPlatformFailsAndFailureContinuationDispatchFails_ShouldNotRetryAsDifferentOutcome()
+    {
+        var scopeBindingPort = new RecordingScopeBindingCommandPort
+        {
+            Failure = new InvalidOperationException("platform rejected"),
+        };
+        var dispatchPort = new RecordingDispatchPort
+        {
+            Failure = new InvalidOperationException("dispatch unavailable"),
+        };
+        var service = new ScopeBindingStudioMemberPlatformBindingCommandService(
+            scopeBindingPort,
+            dispatchPort,
+            NullLogger<ScopeBindingStudioMemberPlatformBindingCommandService>.Instance);
+
+        await service.ExecuteAsync(
+            "studio-member-binding-run:bind-1",
+            "platform-bind-1",
+            NewScriptStartRequest(),
+            CancellationToken.None);
+
+        await dispatchPort.DispatchAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        scopeBindingPort.Requests.Should().ContainSingle();
+        dispatchPort.DispatchAttempts.Should().Be(1);
+        dispatchPort.Dispatches.Should().BeEmpty();
+    }
+
     private static StudioMemberPlatformBindingStartRequested NewScriptStartRequest(string? revisionId = null)
     {
         var bindingRequest = new StudioMemberBindingRequest
@@ -216,11 +271,20 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
     private sealed class RecordingDispatchPort : IActorDispatchPort
     {
         public List<DispatchedCommand> Dispatches { get; } = [];
+        public Exception? Failure { get; init; }
+        public int DispatchAttempts { get; private set; }
         public TaskCompletionSource<DispatchedCommand> NextDispatch { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<object?> DispatchAttempted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
+            DispatchAttempts++;
+            DispatchAttempted.TrySetResult(null);
+            if (Failure != null)
+                throw Failure;
+
             var dispatch = new DispatchedCommand(actorId, envelope);
             Dispatches.Add(dispatch);
             NextDispatch.TrySetResult(dispatch);

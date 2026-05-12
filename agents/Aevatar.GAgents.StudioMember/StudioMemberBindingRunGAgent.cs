@@ -14,6 +14,7 @@ namespace Aevatar.GAgents.StudioMember;
 public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindingRunState>, IProjectedActor
 {
     private static readonly TimeSpan PlatformBindingExecuteInitialDelay = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan PlatformBindingWatchdogDelay = TimeSpan.FromSeconds(30);
 
     public static string ProjectionKind => "studio-member-binding-run";
 
@@ -156,6 +157,21 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
                 Admitted = State.Admitted.Clone(),
                 RequestedAtUtc = State.UpdatedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             });
+
+        await SchedulePlatformBindingWatchdogAsync();
+    }
+
+    [EventHandler(EndpointName = "platformBindingWatchdog", AllowSelfHandling = true)]
+    public async Task HandlePlatformBindingWatchdogFired(StudioMemberPlatformBindingWatchdogFired evt)
+    {
+        if (!CanAcceptPlatformBindingCommand(evt.BindingRunId, evt.PlatformBindingCommandId))
+            return;
+
+        await SendToAsync(Id, new StudioMemberPlatformBindingExecuteRequested
+        {
+            BindingRunId = evt.BindingRunId,
+            PlatformBindingCommandId = evt.PlatformBindingCommandId,
+        });
     }
 
     [EventHandler(EndpointName = "completePlatformBinding")]
@@ -439,6 +455,22 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
             ct: ct);
     }
 
+    private Task SchedulePlatformBindingWatchdogAsync(CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(State.PlatformBindingCommandId) || State.Admitted == null)
+            return Task.CompletedTask;
+
+        return ScheduleSelfDurableTimeoutAsync(
+            BuildPlatformBindingWatchdogCallbackId(State.BindingRunId, State.PlatformBindingCommandId),
+            PlatformBindingWatchdogDelay,
+            new StudioMemberPlatformBindingWatchdogFired
+            {
+                BindingRunId = State.BindingRunId,
+                PlatformBindingCommandId = State.PlatformBindingCommandId,
+            },
+            ct: ct);
+    }
+
     private static bool IsSameRequest(
         StudioMemberBindingRequest? current,
         StudioMemberBindingRequest incoming,
@@ -468,4 +500,9 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         string bindingRunId,
         string platformBindingCommandId) =>
         $"studio-member-binding-execute:{bindingRunId}:{platformBindingCommandId}";
+
+    private static string BuildPlatformBindingWatchdogCallbackId(
+        string bindingRunId,
+        string platformBindingCommandId) =>
+        $"studio-member-binding-watchdog:{bindingRunId}:{platformBindingCommandId}";
 }

@@ -70,29 +70,12 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         StudioMemberPlatformBindingStartRequested request,
         CancellationToken ct)
     {
+        ScopeBindingUpsertResult result;
         try
         {
-            var result = await _scopeBindingCommandPort
+            result = await _scopeBindingCommandPort
                 .UpsertAsync(BuildScopeBindingRequest(request), ct)
                 .ConfigureAwait(false);
-
-            await DispatchAsync(
-                replyActorId,
-                new StudioMemberPlatformBindingSucceeded
-                {
-                    BindingRunId = request.BindingRunId,
-                    PlatformBindingCommandId = commandId,
-                    CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                    Result = new StudioMemberPlatformBindingResult
-                    {
-                        PublishedServiceId = result.ServiceId,
-                        RevisionId = result.RevisionId,
-                        ImplementationKind = ToStudioKind(result.ImplementationKind),
-                        ExpectedActorId = result.ExpectedActorId,
-                        ImplementationRef = BuildImplementationRef(result),
-                    },
-                },
-                ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -127,6 +110,37 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                     request.BindingRunId,
                     commandId);
             }
+
+            return;
+        }
+
+        try
+        {
+            await DispatchAsync(
+                replyActorId,
+                new StudioMemberPlatformBindingSucceeded
+                {
+                    BindingRunId = request.BindingRunId,
+                    PlatformBindingCommandId = commandId,
+                    CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    Result = new StudioMemberPlatformBindingResult
+                    {
+                        PublishedServiceId = result.ServiceId,
+                        RevisionId = result.RevisionId,
+                        ImplementationKind = ToStudioKind(result.ImplementationKind),
+                        ExpectedActorId = result.ExpectedActorId,
+                        ImplementationRef = BuildImplementationRef(result),
+                    },
+                },
+                ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "StudioMember platform binding succeeded but success continuation dispatch failed. bindingRunId={BindingRunId} platformBindingCommandId={CommandId}",
+                request.BindingRunId,
+                commandId);
         }
     }
 

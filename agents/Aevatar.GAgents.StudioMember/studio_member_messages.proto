@@ -293,6 +293,11 @@ message StudioMemberPlatformBindingExecuteRequested {
   string platform_binding_command_id = 2;
 }
 
+message StudioMemberPlatformBindingWatchdogFired {
+  string binding_run_id = 1;
+  string platform_binding_command_id = 2;
+}
+
 message StudioMemberPlatformBindingSucceeded {
   string binding_run_id = 1;
   string platform_binding_command_id = 2;

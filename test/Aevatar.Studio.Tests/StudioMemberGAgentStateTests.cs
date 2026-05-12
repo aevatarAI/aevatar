@@ -1,4 +1,6 @@
 using System.Reflection;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.StudioMember;
 using FluentAssertions;
 using Google.Protobuf;
@@ -353,6 +355,62 @@ public sealed class StudioMemberGAgentStateTests
         rejected.Binding.LastTerminalBindingRunId.Should().Be("bind-1");
         rejected.Binding.LastFailure.Code.Should().Be("STUDIO_MEMBER_IMPLEMENTATION_KIND_MISMATCH");
         rejected.Binding.UpdatedAtUtc.Should().Be(failedAt);
+    }
+
+    [Fact]
+    public async Task HandleBindingAdmissionRequested_ShouldResendRejectedEvent_WhenSameRunTerminalReplay()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var created = _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DisplayName = "Original",
+            ImplementationKind = StudioMemberImplementationKind.Script,
+            PublishedServiceId = "member-m-1",
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(now),
+        });
+        var pending = _agent.Apply(created, NewAdmissionRequested(
+            bindingRunId: "bind-rejected",
+            requestHash: "hash-bind-rejected",
+            requestedAt: Timestamp.FromDateTimeOffset(now.AddSeconds(1))));
+        var rejected = _agent.Apply(pending, new StudioMemberBindingRejectedEvent
+        {
+            BindingRunId = "bind-rejected",
+            ScopeId = "scope-1",
+            MemberId = "m-1",
+            Failure = new StudioMemberBindingFailure
+            {
+                Code = "STUDIO_MEMBER_IMPLEMENTATION_KIND_MISMATCH",
+                Message = "kind mismatch",
+                FailedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(2)),
+            },
+        });
+        var eventSourcing = new RecordingEventSourcing(rejected);
+        var publisher = new RecordingEventPublisher();
+        var agent = new StudioMemberGAgent
+        {
+            EventSourcing = eventSourcing,
+            EventPublisher = publisher,
+        };
+        StudioMemberStateSetter.Set(agent, rejected);
+
+        await agent.HandleBindingAdmissionRequested(NewAdmissionRequested(
+            bindingRunId: "bind-rejected",
+            requestHash: "hash-bind-rejected",
+            requestedAt: Timestamp.FromDateTimeOffset(now.AddSeconds(3))));
+
+        eventSourcing.RaisedEvents.Should().BeEmpty();
+        eventSourcing.ConfirmCallCount.Should().Be(0);
+        publisher.SentMessages.Should().ContainSingle();
+        var sent = publisher.SentMessages.Single();
+        sent.TargetActorId.Should().Be(StudioMemberConventions.BuildBindingRunActorId("bind-rejected"));
+        var response = sent.Event.Should().BeOfType<StudioMemberBindingRejectedEvent>().Subject;
+        response.BindingRunId.Should().Be("bind-rejected");
+        response.ScopeId.Should().Be("scope-1");
+        response.MemberId.Should().Be("m-1");
+        response.Failure.Code.Should().Be("STUDIO_MEMBER_IMPLEMENTATION_KIND_MISMATCH");
+        response.Failure.Message.Should().Be("kind mismatch");
     }
 
     [Fact]
@@ -766,4 +824,71 @@ public sealed class StudioMemberGAgentStateTests
             return (StudioMemberState)result;
         }
     }
+
+    private static class StudioMemberStateSetter
+    {
+        private static readonly FieldInfo StateField =
+            typeof(StudioMemberGAgent).BaseType!
+                .GetField("_state", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("GAgent state field not found.");
+
+        public static void Set(StudioMemberGAgent agent, StudioMemberState state) =>
+            StateField.SetValue(agent, state.Clone());
+    }
+
+    private sealed class RecordingEventSourcing(StudioMemberState replayState) : IEventSourcingBehavior<StudioMemberState>
+    {
+        public List<IMessage> RaisedEvents { get; } = [];
+        public int ConfirmCallCount { get; private set; }
+        public long CurrentVersion => 0;
+
+        public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage =>
+            RaisedEvents.Add(evt);
+
+        public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
+        {
+            ConfirmCallCount++;
+            return Task.FromResult(new EventStoreCommitResult());
+        }
+
+        public Task PersistSnapshotAsync(StudioMemberState currentState, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task<StudioMemberState?> ReplayAsync(string agentId, CancellationToken ct = default) =>
+            Task.FromResult<StudioMemberState?>(replayState.Clone());
+
+        public void DiscardPendingEvents() =>
+            RaisedEvents.Clear();
+
+        public StudioMemberState TransitionState(StudioMemberState current, IMessage evt) =>
+            current.Clone();
+    }
+
+    private sealed class RecordingEventPublisher : IEventPublisher
+    {
+        public List<SentMessage> SentMessages { get; } = [];
+
+        public Task PublishAsync<TEvent>(
+            TEvent evt,
+            TopologyAudience audience = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage =>
+            Task.CompletedTask;
+
+        public Task SendToAsync<TEvent>(
+            string targetActorId,
+            TEvent evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            SentMessages.Add(new SentMessage(targetActorId, evt));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed record SentMessage(string TargetActorId, IMessage Event);
 }
