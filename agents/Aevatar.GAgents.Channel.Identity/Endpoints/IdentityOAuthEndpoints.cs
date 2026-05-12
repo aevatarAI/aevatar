@@ -32,6 +32,37 @@ public static class IdentityOAuthEndpoints
     private static readonly TimeSpan RebuildObservationTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan RebuildObservationPollDelay = TimeSpan.FromMilliseconds(250);
     private const int MaxWebhookBodyBytes = 64 * 1024;
+    private const string OAuthCallbackPublisherActorId = "channel-identity.oauth-callback";
+    private const string OAuthRebuildPublisherActorId = "channel-identity.oauth-rebuild";
+    private const string BrokerRevocationPublisherActorId = "channel-identity.broker-revocation";
+
+    /// <summary>
+    /// Same-host admission gate for the break-glass OAuth client rebuild endpoint.
+    /// The actor is still the authoritative serializer; this gate prevents two
+    /// operator HTTP calls on one host from dispatching competing rebuild commands
+    /// and then racing each other through the readmodel observation loop.
+    /// </summary>
+    public sealed class AevatarOAuthClientRebuildCoordinator
+    {
+        private readonly SemaphoreSlim _gate = new(1, 1);
+
+        public async ValueTask<IAsyncDisposable?> TryEnterAsync(CancellationToken ct)
+        {
+            if (!await _gate.WaitAsync(millisecondsTimeout: 0, ct).ConfigureAwait(false))
+                return null;
+
+            return new Lease(_gate);
+        }
+
+        private sealed class Lease(SemaphoreSlim gate) : IAsyncDisposable
+        {
+            public ValueTask DisposeAsync()
+            {
+                gate.Release();
+                return ValueTask.CompletedTask;
+            }
+        }
+    }
 
     public static IEndpointRouteBuilder MapIdentityOAuthEndpoints(this IEndpointRouteBuilder app)
     {
@@ -72,6 +103,7 @@ public static class IdentityOAuthEndpoints
         [FromServices] INyxIdBrokerCallbackClient brokerCallback,
         [FromServices] IExternalIdentityBindingQueryPort queryPort,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IActorDispatchPort actorDispatchPort,
         [FromServices] IProjectionReadinessPort projectionReadiness,
         [FromServices] IExternalIdentityBindingProjectionPort bindingProjectionPort,
         [FromServices] ILoggerFactory loggerFactory,
@@ -212,12 +244,9 @@ public static class IdentityOAuthEndpoints
                 ExternalSubject = subject.Clone(),
                 BindingId = exchange.BindingId,
             }),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actorId },
-            },
+            Route = EnvelopeRouteSemantics.CreateDirect(OAuthCallbackPublisherActorId, actorId),
         };
-        await actor.HandleEventAsync(commitEnvelope, ct).ConfigureAwait(false);
+        await actorDispatchPort.DispatchAsync(actor.Id, commitEnvelope, ct).ConfigureAwait(false);
 
         // Observe broker capability on the cluster client (idempotent) — first
         // successful binding_id is proof that NyxID admin enabled the flag.
@@ -226,15 +255,14 @@ public static class IdentityOAuthEndpoints
             var clientActor = await actorRuntime
                 .CreateAsync<AevatarOAuthClientGAgent>(AevatarOAuthClientGAgent.WellKnownId, ct)
                 .ConfigureAwait(false);
-            await clientActor.HandleEventAsync(new EventEnvelope
+            await actorDispatchPort.DispatchAsync(clientActor.Id, new EventEnvelope
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                 Payload = Any.Pack(new ObserveBrokerCapabilityCommand()),
-                Route = new EnvelopeRoute
-                {
-                    Direct = new DirectRoute { TargetActorId = AevatarOAuthClientGAgent.WellKnownId },
-                },
+                Route = EnvelopeRouteSemantics.CreateDirect(
+                    OAuthCallbackPublisherActorId,
+                    AevatarOAuthClientGAgent.WellKnownId),
             }, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -368,11 +396,12 @@ public static class IdentityOAuthEndpoints
     internal static Task<IResult> HandleAevatarOAuthClientRebuildAsync(
         HttpContext http,
         [FromBody] RebuildAevatarOAuthClientRequest? body,
-        [FromServices] IOptions<AevatarOAuthAdminOptions> adminOptions,
+        [FromServices] IOptionsMonitor<AevatarOAuthAdminOptions> adminOptions,
         [FromServices] IAevatarOAuthClientProvider provider,
         [FromServices] AevatarOAuthClientProjectionPort projectionPort,
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] IActorDispatchPort actorDispatchPort,
+        [FromServices] AevatarOAuthClientRebuildCoordinator rebuildCoordinator,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct) =>
         HandleAevatarOAuthClientRebuildCoreAsync(
@@ -383,6 +412,7 @@ public static class IdentityOAuthEndpoints
             projectionPort,
             actorRuntime,
             actorDispatchPort,
+            rebuildCoordinator,
             loggerFactory,
             observationTimeout: RebuildObservationTimeout,
             observationPollDelay: RebuildObservationPollDelay,
@@ -397,11 +427,12 @@ public static class IdentityOAuthEndpoints
     internal static async Task<IResult> HandleAevatarOAuthClientRebuildCoreAsync(
         HttpContext http,
         RebuildAevatarOAuthClientRequest? body,
-        IOptions<AevatarOAuthAdminOptions> adminOptions,
+        IOptionsMonitor<AevatarOAuthAdminOptions> adminOptions,
         IAevatarOAuthClientProvider provider,
         AevatarOAuthClientProjectionPort projectionPort,
         IActorRuntime actorRuntime,
         IActorDispatchPort actorDispatchPort,
+        AevatarOAuthClientRebuildCoordinator? rebuildCoordinator,
         ILoggerFactory loggerFactory,
         TimeSpan observationTimeout,
         TimeSpan observationPollDelay,
@@ -409,7 +440,7 @@ public static class IdentityOAuthEndpoints
     {
         var logger = loggerFactory.CreateLogger("Aevatar.Channel.Identity.OAuthRebuild");
 
-        var configuredToken = adminOptions.Value.RebuildToken;
+        var configuredToken = adminOptions.CurrentValue.RebuildToken;
         if (string.IsNullOrEmpty(configuredToken))
         {
             logger.LogWarning(
@@ -471,6 +502,18 @@ public static class IdentityOAuthEndpoints
             issuedAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         }
 
+        await using var rebuildLease = rebuildCoordinator is null
+            ? null
+            : await rebuildCoordinator.TryEnterAsync(ct).ConfigureAwait(false);
+        if (rebuildCoordinator is not null && rebuildLease is null)
+        {
+            return Results.Json(new
+            {
+                error = "rebuild_in_progress",
+                detail = "Another OAuth client rebuild request is already dispatching or waiting for readmodel observation. Retry after it completes.",
+            }, statusCode: StatusCodes.Status409Conflict);
+        }
+
         // Activate the projection scope first so the projector subscribes to
         // the actor's committed events before we dispatch the provision
         // command — same pattern as AevatarOAuthClientBootstrapService.
@@ -499,10 +542,9 @@ public static class IdentityOAuthEndpoints
                 OauthScope = oauthScope,
                 RedirectUri = redirectUri,
             }),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = AevatarOAuthClientGAgent.WellKnownId },
-            },
+            Route = EnvelopeRouteSemantics.CreateDirect(
+                OAuthRebuildPublisherActorId,
+                AevatarOAuthClientGAgent.WellKnownId),
         };
         try
         {
@@ -592,6 +634,7 @@ public static class IdentityOAuthEndpoints
             }
 
             await Task.Delay(pollDelay, ct).ConfigureAwait(false);
+            pollDelay = TimeSpan.FromMilliseconds(Math.Min(pollDelay.TotalMilliseconds * 2, 1000));
         }
         return null;
     }
@@ -635,8 +678,8 @@ public static class IdentityOAuthEndpoints
         {
             var http = context.HttpContext;
             var adminOptions = http.RequestServices
-                .GetRequiredService<IOptions<AevatarOAuthAdminOptions>>()
-                .Value;
+                .GetRequiredService<IOptionsMonitor<AevatarOAuthAdminOptions>>()
+                .CurrentValue;
             var configuredToken = adminOptions.RebuildToken;
             if (string.IsNullOrEmpty(configuredToken))
             {
@@ -662,6 +705,7 @@ public static class IdentityOAuthEndpoints
         HttpContext http,
         [FromServices] BrokerRevocationWebhookValidator webhookValidator,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IActorDispatchPort actorDispatchPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -714,12 +758,9 @@ public static class IdentityOAuthEndpoints
                         ? "nyxid_cae_revocation"
                         : notification.Reason,
                 }),
-                Route = new EnvelopeRoute
-                {
-                    Direct = new DirectRoute { TargetActorId = actorId },
-                },
+                Route = EnvelopeRouteSemantics.CreateDirect(BrokerRevocationPublisherActorId, actorId),
             };
-            await actor.HandleEventAsync(revokeEnvelope, ct).ConfigureAwait(false);
+            await actorDispatchPort.DispatchAsync(actor.Id, revokeEnvelope, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

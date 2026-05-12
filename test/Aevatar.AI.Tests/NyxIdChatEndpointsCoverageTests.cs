@@ -1991,9 +1991,10 @@ public class NyxIdChatEndpointsCoverageTests
 
     private static async Task<IResult> InvokeResultAsync(string methodName, params object[] args)
     {
-        EnsureEndpointContextServices(args);
         var method = EndpointsType.GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static)!;
-        var result = method.Invoke(null, args);
+        var normalizedArgs = NormalizeEndpointArgs(method, args);
+        EnsureEndpointContextServices(normalizedArgs);
+        var result = method.Invoke(null, normalizedArgs);
         return result switch
         {
             Task<IResult> task => await task,
@@ -2004,9 +2005,10 @@ public class NyxIdChatEndpointsCoverageTests
 
     private static async Task InvokeTaskAsync(string methodName, params object[] args)
     {
-        EnsureEndpointContextServices(args);
         var method = EndpointsType.GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static)!;
-        var result = method.Invoke(null, args)!;
+        var normalizedArgs = NormalizeEndpointArgs(method, args);
+        EnsureEndpointContextServices(normalizedArgs);
+        var result = method.Invoke(null, normalizedArgs)!;
         switch (result)
         {
             case ValueTask valueTask:
@@ -2018,6 +2020,30 @@ public class NyxIdChatEndpointsCoverageTests
             default:
                 throw new InvalidOperationException($"Unexpected return type: {result.GetType().FullName}");
         }
+    }
+
+    private static object[] NormalizeEndpointArgs(MethodInfo method, object[] args)
+    {
+        var parameters = method.GetParameters();
+        if (parameters.Length == args.Length)
+            return args;
+
+        if (parameters.Length == args.Length + 1 && args.All(arg => arg is not IActorDispatchPort))
+        {
+            var dispatchPortIndex = Array.FindIndex(
+                parameters,
+                parameter => parameter.ParameterType == typeof(IActorDispatchPort));
+            if (dispatchPortIndex >= 0)
+            {
+                var actorRuntime = args.OfType<IActorRuntime>().FirstOrDefault()
+                    ?? throw new InvalidOperationException("Endpoint test invocation needs IActorRuntime before IActorDispatchPort can be inferred.");
+                var normalized = args.ToList();
+                normalized.Insert(dispatchPortIndex, new StubActorDispatchPort(actorRuntime));
+                return normalized.ToArray();
+            }
+        }
+
+        return args;
     }
 
     private static async Task<T> InvokeValueTaskAsync<T>(MethodInfo method, params object[] args)
@@ -2316,6 +2342,19 @@ public class NyxIdChatEndpointsCoverageTests
         }
         public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
         public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private sealed class StubActorDispatchPort(IActorRuntime runtime) : IActorDispatchPort
+    {
+        public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
+
+        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            Dispatches.Add((actorId, envelope));
+            var actor = await runtime.GetAsync(actorId);
+            if (actor is not null)
+                await actor.HandleEventAsync(envelope, ct);
+        }
     }
 
     private sealed class StubAgent : IAgent

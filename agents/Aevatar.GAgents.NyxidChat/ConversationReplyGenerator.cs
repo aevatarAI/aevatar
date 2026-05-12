@@ -5,6 +5,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
+using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -25,12 +26,14 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
     private readonly IReadOnlyList<IAgentRunMiddleware> _agentMiddlewares;
     private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares;
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
+    private readonly IToolApprovalHandler? _approvalHandler;
     private readonly SkillRegistry? _skillRegistry;
     private readonly IRemoteSkillFetcher? _remoteSkillFetcher;
     private readonly global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? _relayOptions;
     private readonly INyxIdUserLlmPreferencesStore? _preferencesStore;
     private readonly IUserMemoryStore? _userMemoryStore;
     private readonly ILogger<NyxIdConversationReplyGenerator> _logger;
+    private int _missingRemoteFetcherWarningLogged;
 
     private sealed record EffectiveMetadataPlan(
         IReadOnlyDictionary<string, string> Primary,
@@ -49,6 +52,7 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions = null,
         INyxIdUserLlmPreferencesStore? preferencesStore = null,
         IUserMemoryStore? userMemoryStore = null,
+        IToolApprovalHandler? approvalHandler = null,
         ILogger<NyxIdConversationReplyGenerator>? logger = null)
     {
         _llmProviderFactory = llmProviderFactory ?? throw new ArgumentNullException(nameof(llmProviderFactory));
@@ -56,26 +60,18 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         _agentMiddlewares = (agentMiddlewares ?? []).ToArray();
         _toolMiddlewares = (toolMiddlewares ?? []).ToArray();
         _llmMiddlewares = (llmMiddlewares ?? []).ToArray();
+        _approvalHandler = approvalHandler;
         _skillRegistry = skillRegistry;
         _remoteSkillFetcher = remoteSkillFetcher;
         _relayOptions = relayOptions;
         _preferencesStore = preferencesStore;
         _userMemoryStore = userMemoryStore;
         _logger = logger ?? NullLogger<NyxIdConversationReplyGenerator>.Instance;
-
-        // Surface a half-wired skills configuration at startup. When the registry is
-        // present but the remote fetcher is not, use_skill is still advertised to the
-        // LLM (BuildTurnToolsAsync registers it from the registry alone) yet any call
-        // that would have to pull a remote skill silently falls back to "skill not
-        // found". Logging at construction time gives ops a single line they can grep
-        // for instead of debugging a flaky use_skill in production.
-        // (PR #562 review on ConversationReplyGenerator.cs:120, 4-of-5 reviewers.)
         if (_skillRegistry is not null && _remoteSkillFetcher is null)
         {
             _logger.LogWarning(
-                "NyxIdConversationReplyGenerator wired with SkillRegistry but no IRemoteSkillFetcher: " +
-                "use_skill will be advertised to the LLM but cannot pull remote skills. " +
-                "Register an IRemoteSkillFetcher (e.g. AddOrnnSkills) or drop the SkillRegistry to silence this.");
+                "SkillRegistry is registered without IRemoteSkillFetcher; local skills remain available, but remote skills cannot be refreshed or fetched by use_skill.");
+            _missingRemoteFetcherWarningLogged = 1;
         }
     }
 
@@ -147,9 +143,26 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         ex is HttpRequestException
             or TimeoutException
             or System.Text.Json.JsonException
-            or InvalidOperationException
             or TaskCanceledException
-            or System.IO.IOException;
+            or System.IO.IOException
+        || ex is InvalidOperationException invalid && IsKnownNyxIdRouteFailure(invalid.Message);
+
+    private static bool IsKnownNyxIdRouteFailure(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+            return false;
+        var lowered = message.ToLowerInvariant();
+        return lowered.Contains("nyxid", StringComparison.Ordinal)
+               || lowered.Contains("binding", StringComparison.Ordinal)
+               || lowered.Contains("scope", StringComparison.Ordinal)
+               || lowered.Contains("token", StringComparison.Ordinal)
+               || lowered.Contains("401", StringComparison.Ordinal)
+               || lowered.Contains("403", StringComparison.Ordinal)
+               || lowered.Contains("not found", StringComparison.Ordinal)
+               || lowered.Contains("revoked", StringComparison.Ordinal)
+               || lowered.Contains("route", StringComparison.Ordinal)
+               || lowered.Contains("proxy", StringComparison.Ordinal);
+    }
 
     private async Task<ToolManager> BuildTurnToolsAsync(CancellationToken ct)
     {
@@ -162,9 +175,30 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         // minimal hosts that registered AddOrnnSkills (IRemoteSkillFetcher) without
         // AddSkills. ToolManager.Register is last-write-wins so the duplicate is harmless.
         if (_skillRegistry is not null || _remoteSkillFetcher is not null)
+        {
+            LogMissingRemoteSkillFetcherOnce();
             tools.Register(new UseSkillTool(_skillRegistry ?? new SkillRegistry(), _remoteSkillFetcher));
+        }
 
         return tools;
+    }
+
+    private void LogMissingRemoteSkillFetcherOnce()
+    {
+        if (_skillRegistry is null || _remoteSkillFetcher is not null)
+            return;
+        if (Interlocked.Exchange(ref _missingRemoteFetcherWarningLogged, 1) != 0)
+            return;
+
+        if (_skillRegistry.GetAll().Any(static skill => skill.Source == SkillSource.Remote))
+        {
+            _logger.LogWarning(
+                "SkillRegistry contains remote skills but no IRemoteSkillFetcher is registered; use_skill cannot refresh or fetch remote skill bodies.");
+            return;
+        }
+
+        _logger.LogDebug(
+            "SkillRegistry registered without IRemoteSkillFetcher; local skills remain available and no remote skills are currently advertised.");
     }
 
     private async Task<string?> GenerateWithMetadataAsync(
@@ -184,7 +218,7 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
             toolLoop: new ToolCallLoop(
                 tools,
                 hooks: null,
-                toolMiddlewares: _toolMiddlewares,
+                toolMiddlewares: BuildToolMiddlewaresForTurn(),
                 llmMiddlewares: _llmMiddlewares),
             hooks: null,
             requestBuilder: () => new LLMRequest
@@ -219,6 +253,19 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         }
 
         return output.ToString();
+    }
+
+    private IReadOnlyList<IToolCallMiddleware> BuildToolMiddlewaresForTurn()
+    {
+        if (_approvalHandler is null)
+            return _toolMiddlewares;
+
+        var effective = new List<IToolCallMiddleware>(_toolMiddlewares.Count + 1)
+        {
+            new ToolApprovalMiddleware(_approvalHandler),
+        };
+        effective.AddRange(_toolMiddlewares);
+        return effective;
     }
 
     private async Task<EffectiveMetadataPlan> BuildEffectiveMetadataPlanAsync(

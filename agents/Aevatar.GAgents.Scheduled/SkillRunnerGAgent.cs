@@ -40,7 +40,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         IEnumerable<IAgentToolSource>? toolSources = null,
         NyxIdApiClient? nyxIdApiClient = null,
-        IOwnerLlmConfigSource? ownerLlmConfigSource = null)
+        IOwnerLlmConfigSource? ownerLlmConfigSource = null,
+        IToolApprovalHandler? approvalHandler = null)
         : this(
             BuildToolMiddlewareChain(toolMiddlewares),
             llmProviderFactory,
@@ -49,7 +50,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             llmMiddlewares,
             toolSources,
             nyxIdApiClient,
-            ownerLlmConfigSource)
+            ownerLlmConfigSource,
+            approvalHandler)
     {
     }
 
@@ -61,14 +63,16 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares,
         IEnumerable<IAgentToolSource>? toolSources,
         NyxIdApiClient? nyxIdApiClient,
-        IOwnerLlmConfigSource? ownerLlmConfigSource)
+        IOwnerLlmConfigSource? ownerLlmConfigSource,
+        IToolApprovalHandler? approvalHandler)
         : base(
             llmProviderFactory,
             additionalHooks,
             agentMiddlewares,
             toolMiddlewareChain.Middlewares,
             llmMiddlewares,
-            toolSources)
+            toolSources,
+            approvalHandler)
     {
         _nyxIdApiClient = nyxIdApiClient;
         _ownerLlmConfigSource = ownerLlmConfigSource;
@@ -414,7 +418,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     /// </summary>
     private SkillRunnerStreamingReplySink? TryCreateStreamingSink()
     {
-        // Issue #439 (PR #569 review, codex P1 on EnsureToolStatusAllowsCompletion): when the run
+        // Issue #439: when the run
         // is gated by EnsureToolStatusAllowsCompletion (RequiresNyxidProxySuccess set),
         // streaming each delta would POST/PUT the partial text to Lark live — i.e. a
         // hallucinated daily report would already be visible in the user's DM by the

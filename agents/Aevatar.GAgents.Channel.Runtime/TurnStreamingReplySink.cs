@@ -308,21 +308,12 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
 
                     var nextIsFinal = _drainTcs is not null;
 
-                    // Stop dispatching interim chunks once the cap is reached. Clear the
-                    // pending stash too — keeping it would only cost a follow-up
-                    // OnDeltaAsync re-overwrites it with newer accumulated text anyway, and
-                    // an explicit drain here matches the invariant the reviewer asked for
-                    // (PR #562 review #14): pending text is never left behind when we
-                    // release _dispatchInProgress=false. FinalizeAsync, when it arrives
-                    // later, uses its `text` parameter (not _pendingText), so this clear
-                    // doesn't affect the final flush.
+                    // Stop dispatching interim chunks once the cap is reached. Leave the
+                    // latest text pending so FinalizeAsync can still observe that an interim
+                    // update is deferred, but do not signal a drain for non-final text.
                     if (!nextIsFinal && _chunksEmitted >= _maxInterimChunks)
                     {
-                        _pendingText = string.Empty;
-                        _hasPending = false;
                         _dispatchInProgress = false;
-                        drainSignal = _drainTcs;
-                        _drainTcs = null;
                         break;
                     }
 
@@ -337,18 +328,14 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
                     // stream ends.
                     //
                     // Invariant: if we reach this branch, nextIsFinal == false, so _drainTcs
-                    // must be null. FinalizeAsync sets _drainTcs only when it arrives during
-                    // an in-flight dispatch, and that path re-evaluates nextIsFinal inside
-                    // this same lock acquisition. We do NOT signal drainSignal here: the
-                    // timer-driven loop is the one that eventually drains _pendingText and
-                    // signals whatever _drainTcs gets attached.
+                    // must be null. The timer is armed before _dispatchInProgress is released,
+                    // so a concurrent delta cannot observe a no-timer + not-dispatching gap.
                     if (!nextIsFinal && _throttle > TimeSpan.Zero)
                     {
                         var elapsed = _timeProvider.GetUtcNow() - _lastEmitAt;
                         if (elapsed < _throttle)
                         {
                             var delay = _throttle - elapsed;
-                            _dispatchInProgress = false;
                             if (!_disposed && _hasPending && _flushTimer is null)
                             {
                                 _flushTimer = _timeProvider.CreateTimer(
@@ -357,6 +344,7 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
                                     dueTime: delay,
                                     period: Timeout.InfiniteTimeSpan);
                             }
+                            _dispatchInProgress = false;
                             break;
                         }
                     }

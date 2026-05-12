@@ -211,7 +211,7 @@ public sealed class ChannelConversationTurnRunnerTests
         nyxHandler.Requests.Should().ContainSingle();
         nyxHandler.Requests[0].Path.Should().Be("/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_123/reactions");
         nyxHandler.Requests[0].Authorization.Should().Be("Bearer user-token-1");
-        nyxHandler.Requests[0].Body.Should().Contain("\"emoji_type\":\"Typing\"");
+        nyxHandler.Requests[0].Body.Should().Contain("\"emoji_type\":\"TYPING\"");
     }
 
     [Fact]
@@ -1332,7 +1332,7 @@ public sealed class ChannelConversationTurnRunnerTests
         // clear must leave alone.
         var nyxHandler = new SequencedJsonHandler(
             expectedCallCount: 2,
-            """{"code":0,"data":{"items":[{"reaction_id":"r-bot-1","operator":{"operator_type":"app","operator_id":"bot-1"},"reaction_type":{"emoji_type":"Typing"}},{"reaction_id":"r-user-1","operator":{"operator_type":"user","operator_id":"u-1"},"reaction_type":{"emoji_type":"Typing"}}],"has_more":false}}""",
+            """{"code":0,"data":{"items":[{"reaction_id":"r-bot-1","operator":{"operator_type":"app","operator_id":"bot-1"},"reaction_type":{"emoji_type":"TYPING"}},{"reaction_id":"r-user-1","operator":{"operator_type":"user","operator_id":"u-1"},"reaction_type":{"emoji_type":"TYPING"}}],"has_more":false}}""",
             """{"code":0,"data":{}}""");
         var runner = CreateRunner(
             registrationQueryPort,
@@ -1377,7 +1377,7 @@ public sealed class ChannelConversationTurnRunnerTests
         // 1. List the Typing reactions on the inbound message id.
         nyxHandler.Requests[0].Method.Should().Be("GET");
         nyxHandler.Requests[0].Path.Should().Be(
-            "/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_swap_1/reactions?reaction_type=Typing&page_size=50");
+            "/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_swap_1/reactions?reaction_type=TYPING&page_size=50");
         nyxHandler.Requests[0].Authorization.Should().Be("Bearer user-token-1");
         // 2. Only the bot-owned reaction is deleted; the user-owned one is preserved.
         nyxHandler.Requests[1].Method.Should().Be("DELETE");
@@ -1398,7 +1398,7 @@ public sealed class ChannelConversationTurnRunnerTests
         var adapter = new RecordingPlatformAdapter();
         var nyxHandler = new SequencedJsonHandler(
             expectedCallCount: 2,
-            """{"code":0,"data":{"items":[{"reaction_id":"r-bot-stream","operator":{"operator_type":"app","operator_id":"bot-1"},"reaction_type":{"emoji_type":"Typing"}}],"has_more":false}}""",
+            """{"code":0,"data":{"items":[{"reaction_id":"r-bot-stream","operator":{"operator_type":"app","operator_id":"bot-1"},"reaction_type":{"emoji_type":"TYPING"}}],"has_more":false}}""",
             """{"code":0,"data":{}}""");
         var runner = CreateRunner(registrationQueryPort, adapter, nyxHandler: nyxHandler);
         var activity = BuildInboundActivity(
@@ -1417,7 +1417,7 @@ public sealed class ChannelConversationTurnRunnerTests
         nyxHandler.Requests.Should().HaveCount(2);
         nyxHandler.Requests[0].Method.Should().Be("GET");
         nyxHandler.Requests[0].Path.Should().Be(
-            "/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_stream_swap_1/reactions?reaction_type=Typing&page_size=50");
+            "/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_stream_swap_1/reactions?reaction_type=TYPING&page_size=50");
         nyxHandler.Requests[1].Method.Should().Be("DELETE");
         nyxHandler.Requests[1].Path.Should().Be(
             "/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_stream_swap_1/reactions/r-bot-stream");
@@ -1497,8 +1497,8 @@ public sealed class ChannelConversationTurnRunnerTests
         // re-issues GET with page_token.)
         var nyxHandler = new SequencedJsonHandler(
             expectedCallCount: 3,
-            """{"code":0,"data":{"items":[{"reaction_id":"r-user-1","operator":{"operator_type":"user","operator_id":"u-1"},"reaction_type":{"emoji_type":"Typing"}}],"has_more":true,"page_token":"page-2-token"}}""",
-            """{"code":0,"data":{"items":[{"reaction_id":"r-bot-late","operator":{"operator_type":"app","operator_id":"bot-1"},"reaction_type":{"emoji_type":"Typing"}}],"has_more":false}}""",
+            """{"code":0,"data":{"items":[{"reaction_id":"r-user-1","operator":{"operator_type":"user","operator_id":"u-1"},"reaction_type":{"emoji_type":"TYPING"}}],"has_more":true,"page_token":"page-2-token"}}""",
+            """{"code":0,"data":{"items":[{"reaction_id":"r-bot-late","operator":{"operator_type":"app","operator_id":"bot-1"},"reaction_type":{"emoji_type":"TYPING"}}],"has_more":false}}""",
             """{"code":0,"data":{}}""");
         var runner = CreateRunner(
             registrationQueryPort,
@@ -1543,11 +1543,11 @@ public sealed class ChannelConversationTurnRunnerTests
         // 1. List page 1 — no page_token query param.
         nyxHandler.Requests[0].Method.Should().Be("GET");
         nyxHandler.Requests[0].Path.Should().Be(
-            "/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_paginated_1/reactions?reaction_type=Typing&page_size=50");
+            "/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_paginated_1/reactions?reaction_type=TYPING&page_size=50");
         // 2. List page 2 — same URL with page_token from page 1's response.
         nyxHandler.Requests[1].Method.Should().Be("GET");
         nyxHandler.Requests[1].Path.Should().Be(
-            "/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_paginated_1/reactions?reaction_type=Typing&page_size=50&page_token=page-2-token");
+            "/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_paginated_1/reactions?reaction_type=TYPING&page_size=50&page_token=page-2-token");
         // 3. DELETE the bot-owned reaction discovered on page 2.
         nyxHandler.Requests[2].Method.Should().Be("DELETE");
         nyxHandler.Requests[2].Path.Should().Be(
@@ -1585,7 +1585,7 @@ public sealed class ChannelConversationTurnRunnerTests
         var nyxHandler = new TypingReactionGateHandler(
             expectedTotalCallCount: 3,
             """{"code":0,"data":{"reaction_id":"r-bot-direct"}}""",
-            """{"code":0,"data":{"items":[{"reaction_id":"r-bot-direct","operator":{"operator_type":"app","operator_id":"bot-1"},"reaction_type":{"emoji_type":"Typing"}}],"has_more":false}}""",
+            """{"code":0,"data":{"items":[{"reaction_id":"r-bot-direct","operator":{"operator_type":"app","operator_id":"bot-1"},"reaction_type":{"emoji_type":"TYPING"}}],"has_more":false}}""",
             """{"code":0,"data":{}}""");
         var runner = CreateRunner(registrationQueryPort, adapter, nyxHandler: nyxHandler);
 
@@ -1625,9 +1625,9 @@ public sealed class ChannelConversationTurnRunnerTests
         // After release: POST Typing landed first, then GET → DELETE in order.
         nyxHandler.Requests.Should().HaveCount(3);
         nyxHandler.Requests[0].Method.Should().Be("POST");
-        nyxHandler.Requests[0].Body.Should().Contain("\"emoji_type\":\"Typing\"");
+        nyxHandler.Requests[0].Body.Should().Contain("\"emoji_type\":\"TYPING\"");
         nyxHandler.Requests[1].Method.Should().Be("GET");
-        nyxHandler.Requests[1].Path.Should().Contain("reaction_type=Typing");
+        nyxHandler.Requests[1].Path.Should().Contain("reaction_type=TYPING");
         nyxHandler.Requests[2].Method.Should().Be("DELETE");
         nyxHandler.Requests[2].Path.Should().Contain("/reactions/r-bot-direct");
     }

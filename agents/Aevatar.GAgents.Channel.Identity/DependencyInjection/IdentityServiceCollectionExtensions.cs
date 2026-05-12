@@ -117,6 +117,7 @@ public static class IdentityServiceCollectionExtensions
         // Endpoint filter for the operator /rebuild path — rejects unauthenticated
         // callers before model binding/DI resolution kicks in.
         services.TryAddTransient<Endpoints.IdentityOAuthEndpoints.RebuildAuthEndpointFilter>();
+        services.TryAddSingleton<Endpoints.IdentityOAuthEndpoints.AevatarOAuthClientRebuildCoordinator>();
 
         // ─── Operator admin surface (rebuild endpoint, issue #549) ───
         // Bound from configuration when present; absence keeps the rebuild

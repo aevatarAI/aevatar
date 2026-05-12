@@ -25,10 +25,9 @@ public sealed class AgentRunGAgentTests
     public async Task DispatchAsync_ShouldCreateRunActorAndDispatchStartCommand()
     {
         var actorRuntime = new DispatchingActorRuntime();
-        var streamProvider = new RecordingStreamProvider();
         var dispatcher = new AgentRunDispatcher(
             actorRuntime,
-            streamProvider,
+            actorRuntime,
             NullLogger<AgentRunDispatcher>.Instance);
 
         await dispatcher.DispatchAsync(new NeedsLlmReplyEvent
@@ -40,8 +39,8 @@ public sealed class AgentRunGAgentTests
             ReplyToken = "relay-token-dispatch",
         }, CancellationToken.None);
 
-        streamProvider.Produced.Should().ContainSingle();
-        var (actorId, envelope) = streamProvider.Produced.Single();
+        actorRuntime.Dispatches.Should().ContainSingle();
+        var (actorId, envelope) = actorRuntime.Dispatches.Single();
         actorId.Should().Be(AgentRunGAgent.BuildActorId("corr-dispatch"));
         envelope.Propagation.CorrelationId.Should().Be("corr-dispatch");
         var command = envelope.Payload.Unpack<AgentRunStartRequested>();
@@ -97,8 +96,8 @@ public sealed class AgentRunGAgentTests
             {
                 InteractiveRepliesEnabled = true,
                 StreamingRepliesEnabled = false,
-            });
-        AttachScheduler(runtime, scheduler);
+            },
+            callbackScheduler: scheduler);
 
         await runtime.HandleStartAsync(new NeedsLlmReplyEvent
         {
@@ -173,8 +172,8 @@ public sealed class AgentRunGAgentTests
                 InteractiveRepliesEnabled = true,
                 StreamingRepliesEnabled = false,
             },
-            eventPublisher: publisher);
-        AttachScheduler(runtime, scheduler);
+            eventPublisher: publisher,
+            callbackScheduler: scheduler);
         var request = new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-retry-ready",
@@ -226,8 +225,8 @@ public sealed class AgentRunGAgentTests
                 InteractiveRepliesEnabled = true,
                 StreamingRepliesEnabled = false,
             },
-            eventPublisher: publisher);
-        AttachScheduler(runtime, scheduler);
+            eventPublisher: publisher,
+            callbackScheduler: scheduler);
         var request = new NeedsLlmReplyEvent
         {
             CorrelationId = "corr-retry-drop",
@@ -933,7 +932,8 @@ public sealed class AgentRunGAgentTests
         Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions relayOptions,
         INyxIdRelayScopeResolver? scopeResolver = null,
         IUserConfigQueryPort? userConfigQueryPort = null,
-        IEventPublisher? eventPublisher = null)
+        IEventPublisher? eventPublisher = null,
+        IActorRuntimeCallbackScheduler? callbackScheduler = null)
     {
         var dispatchPort = actorRuntime as IActorDispatchPort ?? Substitute.For<IActorDispatchPort>();
         var agent = new AgentRunGAgent(
@@ -944,7 +944,8 @@ public sealed class AgentRunGAgentTests
             relayOptions,
             NullLogger<AgentRunGAgent>.Instance,
             scopeResolver,
-            userConfigQueryPort);
+            userConfigQueryPort,
+            callbackScheduler);
         SetId(agent, AgentRunGAgent.BuildActorId(Guid.NewGuid().ToString("N")));
         agent.EventSourcing = new StateTransitionEventSourcing<AgentRunGAgentState>((current, evt) =>
             InvokeAgentTransition(agent, current, evt));

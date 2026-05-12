@@ -33,10 +33,12 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
     private const string RetiredSkillRunnerType = "Aevatar.GAgents.ChannelRuntime.SkillRunnerGAgent";
     // Retained as a string literal so legacy clusters still clean up workflow_agent
     // event streams persisted before the social_media template was removed (issue #598).
+    // Delete once all legacy actors have been retired from production clusters.
     private const string RetiredWorkflowAgentType = "Aevatar.GAgents.ChannelRuntime.WorkflowAgentGAgent";
     // Mirror of the deleted WorkflowAgentDefaults — kept here so retired-actor discovery
     // can still recognize legacy workflow_agent rows persisted in the catalog read model
-    // and drive their cleanup. New agents never carry these tokens.
+    // and drive their cleanup. New agents never carry these tokens; delete with the
+    // retired workflow_agent constants once all legacy actors are gone.
     private const string LegacyWorkflowAgentType = "workflow_agent";
     private const string LegacyWorkflowAgentActorIdPrefix = "workflow-agent";
     private const int ReadModelPageSize = 500;

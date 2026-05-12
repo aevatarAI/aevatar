@@ -574,7 +574,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         {
             CorrelationId = evt.CorrelationId,
             RegistrationId = evt.RegistrationId,
-            Activity = evt.Activity?.Clone() ?? new ChatActivity(),
+            Activity = evt.Activity.Clone(),
             AccumulatedText = evt.AccumulatedText,
             ChunkAtUnixMs = evt.ChunkAtUnixMs,
         });

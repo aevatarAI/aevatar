@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.GAgents.Channel.Abstractions;
 using FluentAssertions;
@@ -129,6 +130,34 @@ public sealed class ConversationReplyGeneratorTests
             CancellationToken.None);
 
         reply.Should().Be("ok");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_CreatesApprovalMiddlewarePerTurn()
+    {
+        var approvalHandler = new CountingApprovalHandler();
+        var generator = new NyxIdConversationReplyGenerator(
+            new ToolCallingProviderFactory(),
+            toolSources: [new SingleToolSource(new ApprovalRequiredTool())],
+            approvalHandler: approvalHandler);
+
+        for (var i = 0; i < 4; i++)
+        {
+            var reply = await generator.GenerateReplyAsync(
+                new ChatActivity
+                {
+                    Id = $"msg-approval-{i}",
+                    Conversation = new ConversationReference { CanonicalKey = $"lark:dm:user-{i}" },
+                    Content = new MessageContent { Text = "run tool" },
+                },
+                new Dictionary<string, string>(),
+                streamingSink: null,
+                CancellationToken.None);
+
+            reply.Should().Be("done");
+        }
+
+        approvalHandler.RequestCount.Should().Be(4);
     }
 
     [Fact]
@@ -532,6 +561,78 @@ public sealed class ConversationReplyGeneratorTests
             {
                 IsLast = true,
             };
+        }
+    }
+
+    private sealed class ToolCallingProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "tool-calling";
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default) =>
+            Task.FromResult(new LLMResponse { Content = "non-streaming path should not be used" });
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            if (request.Messages.Any(static message => message.Role == "tool"))
+            {
+                yield return new LLMStreamChunk { DeltaContent = "done" };
+                yield return new LLMStreamChunk { IsLast = true };
+                await Task.CompletedTask;
+                yield break;
+            }
+
+            yield return new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "call-approval",
+                    Name = ApprovalRequiredTool.ToolName,
+                    ArgumentsJson = "{}",
+                },
+            };
+            yield return new LLMStreamChunk { IsLast = true };
+            await Task.CompletedTask;
+        }
+    }
+
+    private sealed class SingleToolSource(IAgentTool tool) : IAgentToolSource
+    {
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<IAgentTool>>([tool]);
+    }
+
+    private sealed class ApprovalRequiredTool : IAgentTool
+    {
+        public const string ToolName = "approval_required_tool";
+
+        public string Name => ToolName;
+
+        public string Description => "Requires approval.";
+
+        public string ParametersSchema => "{}";
+
+        public ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("""{"executed":true}""");
+    }
+
+    private sealed class CountingApprovalHandler : IToolApprovalHandler
+    {
+        public int RequestCount { get; private set; }
+
+        public Task<ToolApprovalResult> RequestApprovalAsync(ToolApprovalRequest request, CancellationToken ct)
+        {
+            RequestCount++;
+            return Task.FromResult(ToolApprovalResult.Denied("test denial"));
         }
     }
 }

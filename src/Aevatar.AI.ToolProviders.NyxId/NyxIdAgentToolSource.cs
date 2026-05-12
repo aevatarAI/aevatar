@@ -16,18 +16,21 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
     private readonly NyxIdSpecCatalog _specCatalog;
     private readonly IServiceDiscoveryCache _cache;
     private readonly ILogger _logger;
+    private readonly bool _toolApprovalHandlerAvailable;
 
     public NyxIdAgentToolSource(
         NyxIdToolOptions options,
         NyxIdApiClient client,
         NyxIdSpecCatalog specCatalog,
         IServiceDiscoveryCache? cache = null,
+        IToolApprovalHandler? approvalHandler = null,
         ILogger<NyxIdAgentToolSource>? logger = null)
     {
         _options = options;
         _client = client;
         _specCatalog = specCatalog;
         _cache = cache ?? new InMemoryServiceDiscoveryCache();
+        _toolApprovalHandlerAvailable = approvalHandler is not null;
         _logger = logger ?? NullLogger<NyxIdAgentToolSource>.Instance;
     }
 
@@ -72,6 +75,13 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
         // explicitly so that exposure is a deliberate decision.
         if (_options.EnableSshExecTool)
         {
+            if (!_toolApprovalHandlerAvailable)
+            {
+                throw new InvalidOperationException(
+                    "NyxID ssh_exec is enabled but no IToolApprovalHandler is registered. " +
+                    "Call AddNyxIdTools or register an approval handler before exposing ssh_exec.");
+            }
+
             tools.Add(new NyxIdSshExecTool(_client, _logger));
         }
 

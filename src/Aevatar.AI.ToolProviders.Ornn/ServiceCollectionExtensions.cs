@@ -1,7 +1,9 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Skills;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.ToolProviders.Ornn;
 
@@ -31,7 +33,16 @@ public static class ServiceCollectionExtensions
         var options = new OrnnOptions();
         configure?.Invoke(options);
         services.TryAddSingleton(options);
-        services.TryAddSingleton<OrnnSkillClient>();
+        services.TryAddSingleton(sp =>
+        {
+            var nyxIdApiClient = sp.GetService<NyxIdApiClient>()
+                                 ?? throw new InvalidOperationException(
+                                     "AddOrnnSkills requires NyxIdApiClient. Call AddNyxIdTools before building the provider, or register NyxIdApiClient explicitly.");
+            return new OrnnSkillClient(
+                sp.GetRequiredService<OrnnOptions>(),
+                nyxIdApiClient,
+                sp.GetService<ILogger<OrnnSkillClient>>());
+        });
         services.TryAddSingleton<IRemoteSkillFetcher, OrnnRemoteSkillFetcher>();
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IAgentToolSource, OrnnAgentToolSource>());

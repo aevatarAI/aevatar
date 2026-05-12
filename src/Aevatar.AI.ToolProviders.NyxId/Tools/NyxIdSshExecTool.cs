@@ -149,6 +149,10 @@ public sealed class NyxIdSshExecTool : IAgentTool
             if (!string.IsNullOrWhiteSpace(catalog))
                 return catalog;
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogDebug(
@@ -193,6 +197,10 @@ public sealed class NyxIdSshExecTool : IAgentTool
                     }
                 }
             }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {

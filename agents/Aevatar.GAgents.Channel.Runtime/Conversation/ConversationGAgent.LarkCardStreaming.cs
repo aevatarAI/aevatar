@@ -192,7 +192,10 @@ public sealed partial class ConversationGAgent
 
         // Already-decided text-edit fallback: let the caller continue down the text-edit path.
         if (state.Phase is LarkCardStreamingPhase.CreationFailed)
+        {
+            _larkCardStreamingStates.Remove(correlationId);
             return false;
+        }
 
         if (ShouldSkipLarkCardStreamingForUnavailable(state, LarkCardStreamingGuardSource.AcceptInterimChunk))
             return true;
@@ -379,9 +382,13 @@ public sealed partial class ConversationGAgent
         // legacy edit-message finalize path handle it. CreationFailed: card create rejected
         // pre-send, which already routed the chunks to the text-edit sink, so the text-edit
         // finalize must run too. Both → return false to fall through.
-        if (state.Phase is LarkCardStreamingPhase.Idle
-                       or LarkCardStreamingPhase.CreationFailed)
+        if (state.Phase is LarkCardStreamingPhase.Idle)
             return false;
+        if (state.Phase is LarkCardStreamingPhase.CreationFailed)
+        {
+            _larkCardStreamingStates.Remove(correlationId);
+            return false;
+        }
 
         // Already-terminal card phase (post-send-failure, mid-stream rate/unavailable, or
         // a previous finalize): persistence already happened at the transition site, so
@@ -391,7 +398,10 @@ public sealed partial class ConversationGAgent
         if (state.Phase is LarkCardStreamingPhase.Completed
                        or LarkCardStreamingPhase.Aborted
                        or LarkCardStreamingPhase.Terminated)
+        {
+            _larkCardStreamingStates.Remove(correlationId);
             return true;
+        }
 
         // Phase is Streaming or Creating. Creating during finalize is unexpected (card.create
         // is synchronous within a single chunk's handler); treat it as Streaming with no
@@ -503,6 +513,7 @@ public sealed partial class ConversationGAgent
         };
         await PersistDomainEventAsync(completed);
         RemoveNyxRelayReplyToken(correlationId, referenceActivity);
+        _larkCardStreamingStates.Remove(correlationId);
         Logger.LogInformation(
             "Completed card-streamed LLM reply: correlation={CorrelationId} cardMessageId={CardMessageId} conversation={Key}",
             correlationId,
