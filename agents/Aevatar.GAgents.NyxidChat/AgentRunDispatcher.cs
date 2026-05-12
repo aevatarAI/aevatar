@@ -12,18 +12,18 @@ namespace Aevatar.GAgents.NyxidChat;
 public sealed class AgentRunDispatcher : IChannelLlmReplyRunDispatcher
 {
     private readonly IActorRuntime _actorRuntime;
-    private readonly IActorDispatchPort _actorDispatchPort;
+    private readonly IStreamProvider _streamProvider;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AgentRunDispatcher> _logger;
 
     public AgentRunDispatcher(
         IActorRuntime actorRuntime,
-        IActorDispatchPort actorDispatchPort,
+        IStreamProvider streamProvider,
         ILogger<AgentRunDispatcher> logger,
         TimeProvider? timeProvider = null)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
-        _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
+        _streamProvider = streamProvider ?? throw new ArgumentNullException(nameof(streamProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
@@ -55,7 +55,7 @@ public sealed class AgentRunDispatcher : IChannelLlmReplyRunDispatcher
             },
         };
 
-        await _actorDispatchPort.DispatchAsync(actor.Id, envelope, ct);
+        await _streamProvider.GetStream(actor.Id).ProduceAsync(envelope, ct);
         _logger.LogInformation(
             "Accepted deferred LLM reply run for actor inbox: runId={RunId} actorId={ActorId} target={TargetActorId}",
             runId,

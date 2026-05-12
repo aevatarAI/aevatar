@@ -25,9 +25,10 @@ public sealed class AgentRunGAgentTests
     public async Task DispatchAsync_ShouldCreateRunActorAndDispatchStartCommand()
     {
         var actorRuntime = new DispatchingActorRuntime();
+        var streamProvider = new RecordingStreamProvider();
         var dispatcher = new AgentRunDispatcher(
             actorRuntime,
-            actorRuntime,
+            streamProvider,
             NullLogger<AgentRunDispatcher>.Instance);
 
         await dispatcher.DispatchAsync(new NeedsLlmReplyEvent
@@ -39,8 +40,8 @@ public sealed class AgentRunGAgentTests
             ReplyToken = "relay-token-dispatch",
         }, CancellationToken.None);
 
-        actorRuntime.Dispatches.Should().ContainSingle();
-        var (actorId, envelope) = actorRuntime.Dispatches.Single();
+        streamProvider.Produced.Should().ContainSingle();
+        var (actorId, envelope) = streamProvider.Produced.Single();
         actorId.Should().Be(AgentRunGAgent.BuildActorId("corr-dispatch"));
         envelope.Propagation.CorrelationId.Should().Be("corr-dispatch");
         var command = envelope.Payload.Unpack<AgentRunStartRequested>();
