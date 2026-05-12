@@ -1,0 +1,249 @@
+syntax = "proto3";
+
+package aevatar.gagentservice;
+
+option csharp_namespace = "Aevatar.GAgentService.Abstractions";
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+enum ResponseSessionOriginKind {
+  RESPONSE_SESSION_ORIGIN_KIND_UNSPECIFIED = 0;
+  RESPONSE_SESSION_ORIGIN_KIND_API_KEY = 1;
+  RESPONSE_SESSION_ORIGIN_KIND_CHANNEL = 2;
+}
+
+enum ResponseSessionStatus {
+  RESPONSE_SESSION_STATUS_UNSPECIFIED = 0;
+  RESPONSE_SESSION_STATUS_ACCEPTED = 1;
+  RESPONSE_SESSION_STATUS_COMPLETED = 2;
+  RESPONSE_SESSION_STATUS_FAILED = 3;
+  RESPONSE_SESSION_STATUS_CANCELLED = 4;
+  RESPONSE_SESSION_STATUS_EXPIRED = 5;
+}
+
+enum ResponseSessionForwardedToolCallStatus {
+  RESPONSE_SESSION_FORWARDED_TOOL_CALL_STATUS_UNSPECIFIED = 0;
+  RESPONSE_SESSION_FORWARDED_TOOL_CALL_STATUS_PENDING = 1;
+  RESPONSE_SESSION_FORWARDED_TOOL_CALL_STATUS_RECEIVED = 2;
+  RESPONSE_SESSION_FORWARDED_TOOL_CALL_STATUS_RESOLVED = 3;
+  RESPONSE_SESSION_FORWARDED_TOOL_CALL_STATUS_EXPIRED = 4;
+  RESPONSE_SESSION_FORWARDED_TOOL_CALL_STATUS_CANCELLED = 5;
+}
+
+message ResponseSessionRecord {
+  string response_id = 1;
+  string scope_id = 2;
+  string owner_subject = 3;
+  ResponseSessionOriginKind origin_kind = 4;
+  string previous_response_id = 5;
+  ResponseSessionStatus status = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Duration ttl = 8;
+  google.protobuf.Timestamp cancelled_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+message ResponseSessionForwardedToolCall {
+  string call_id = 1;
+  string tool_name = 2;
+  string schema_hash = 3;
+  string arguments_json = 4;
+  ResponseSessionForwardedToolCallStatus status = 5;
+  google.protobuf.Timestamp expiry = 6;
+  string result_json = 7;
+  google.protobuf.Timestamp emitted_at = 8;
+  google.protobuf.Timestamp received_at = 9;
+  google.protobuf.Timestamp resolved_at = 10;
+}
+
+message ResponseSessionState {
+  ResponseSessionRecord record = 1;
+  int64 last_applied_event_version = 2;
+  string last_event_id = 3;
+  repeated ResponseSessionForwardedToolCall forwarded_tool_calls = 4;
+}
+
+message RegisterResponseSessionRequested {
+  ResponseSessionRecord record = 1;
+}
+
+message ResponseSessionRegisteredEvent {
+  ResponseSessionRecord record = 1;
+}
+
+message UpdateResponseSessionStatusRequested {
+  string response_id = 1;
+  ResponseSessionStatus status = 2;
+  google.protobuf.Timestamp updated_at = 3;
+}
+
+message ResponseSessionStatusUpdatedEvent {
+  string response_id = 1;
+  ResponseSessionStatus status = 2;
+  google.protobuf.Timestamp updated_at = 3;
+}
+
+message ExpireResponseSessionRequested {
+  string response_id = 1;
+  google.protobuf.Timestamp observed_at = 2;
+}
+
+message RecordForwardedToolCallRequested {
+  string response_id = 1;
+  ResponseSessionForwardedToolCall call = 2;
+}
+
+message ResponseSessionForwardedToolCallEmittedEvent {
+  string response_id = 1;
+  ResponseSessionForwardedToolCall call = 2;
+}
+
+message ReceiveForwardedToolResultRequested {
+  string response_id = 1;
+  string call_id = 2;
+  string schema_hash = 3;
+  string result_json = 4;
+  google.protobuf.Timestamp received_at = 5;
+}
+
+message ResponseSessionForwardedToolResultReceivedEvent {
+  string response_id = 1;
+  string call_id = 2;
+  string schema_hash = 3;
+  string result_json = 4;
+  google.protobuf.Timestamp received_at = 5;
+}
+
+message ResolveForwardedToolResultRequested {
+  string response_id = 1;
+  string call_id = 2;
+  google.protobuf.Timestamp resolved_at = 3;
+}
+
+message ResponseSessionForwardedToolCallResolvedEvent {
+  string response_id = 1;
+  string call_id = 2;
+  google.protobuf.Timestamp resolved_at = 3;
+}
+
+enum ResponsesAgentToolTaskStatus {
+  RESPONSES_AGENT_TOOL_TASK_STATUS_UNSPECIFIED = 0;
+  RESPONSES_AGENT_TOOL_TASK_STATUS_ACCEPTED = 1;
+  RESPONSES_AGENT_TOOL_TASK_STATUS_REJECTED = 2;
+}
+
+message ResponsesAgentToolStateRecord {
+  string scope_id = 1;
+  string owner_subject = 2;
+  google.protobuf.Timestamp created_at = 3;
+  google.protobuf.Timestamp updated_at = 4;
+}
+
+message ResponsesTodoItem {
+  string id = 1;
+  string content = 2;
+  string status = 3;
+  string source_response_id = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+message ResponsesTaskTrace {
+  string task_id = 1;
+  string source_response_id = 2;
+  string child_actor_id = 3;
+  string description = 4;
+  ResponsesAgentToolTaskStatus status = 5;
+  string arguments_json = 6;
+  string result_json = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+}
+
+message ResponsesWebTrace {
+  string trace_id = 1;
+  string source_response_id = 2;
+  string tool_name = 3;
+  string cache_key = 4;
+  string url = 5;
+  string query = 6;
+  bool cache_hit = 7;
+  string result_json = 8;
+  google.protobuf.Timestamp observed_at = 9;
+}
+
+message ResponsesWebCacheEntry {
+  string cache_key = 1;
+  string tool_name = 2;
+  string url = 3;
+  string query = 4;
+  string result_json = 5;
+  google.protobuf.Timestamp cached_at = 6;
+  google.protobuf.Timestamp last_hit_at = 7;
+  int64 hit_count = 8;
+}
+
+message ResponsesAgentToolState {
+  ResponsesAgentToolStateRecord record = 1;
+  int64 last_applied_event_version = 2;
+  string last_event_id = 3;
+  repeated ResponsesTodoItem todo_items = 4;
+  repeated ResponsesTaskTrace task_traces = 5;
+  repeated ResponsesWebTrace web_traces = 6;
+  repeated ResponsesWebCacheEntry web_cache_entries = 7;
+}
+
+message RegisterResponsesAgentToolStateRequested {
+  ResponsesAgentToolStateRecord record = 1;
+}
+
+message ResponsesAgentToolStateRegisteredEvent {
+  ResponsesAgentToolStateRecord record = 1;
+}
+
+message ApplyResponsesTodoWriteRequested {
+  string scope_id = 1;
+  string owner_subject = 2;
+  string source_response_id = 3;
+  string arguments_json = 4;
+  google.protobuf.Timestamp observed_at = 5;
+}
+
+message ResponsesTodoWriteAppliedEvent {
+  string source_response_id = 1;
+  string arguments_json = 2;
+  repeated ResponsesTodoItem todo_items = 3;
+  google.protobuf.Timestamp observed_at = 4;
+}
+
+message RecordResponsesTaskRequested {
+  string source_response_id = 1;
+  string task_id = 2;
+  string child_actor_id = 3;
+  string description = 4;
+  string arguments_json = 5;
+  string result_json = 6;
+  ResponsesAgentToolTaskStatus status = 7;
+  google.protobuf.Timestamp observed_at = 8;
+}
+
+message ResponsesTaskRecordedEvent {
+  ResponsesTaskTrace task = 1;
+}
+
+message RecordResponsesWebTraceRequested {
+  string source_response_id = 1;
+  string trace_id = 2;
+  string tool_name = 3;
+  string cache_key = 4;
+  string url = 5;
+  string query = 6;
+  bool cache_hit = 7;
+  string result_json = 8;
+  google.protobuf.Timestamp observed_at = 9;
+}
+
+message ResponsesWebTraceRecordedEvent {
+  ResponsesWebTrace trace = 1;
+}
