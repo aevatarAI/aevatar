@@ -84,6 +84,50 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public void ApplyReplyProduced_NewInteractiveOnlyEvent_EmptyReplyText_ButNonNullOutbound_IsNotMisclassifiedAsHistorical()
+    {
+        // Interactive-only turns (reply_with_interaction, card-only intents) produce an
+        // empty reply_text but a non-null outbound (card / button payload). The historical-
+        // event discriminator MUST require BOTH empty reply_text AND null outbound,
+        // otherwise this event would be marked ReplyDispatched=true on replay and
+        // ReDispatchProducedReplyAsync would never fire after a failed dispatch — the user
+        // would silently lose the interactive reply.
+        var runtime = CreateRunAgent(
+            new DispatchingActorRuntime(),
+            new RecordingReplyGenerator(() => false),
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
+
+        var interactiveCard = new MessageContent { Text = string.Empty };
+        interactiveCard.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = "confirm",
+            Label = "Confirm",
+            IsPrimary = true,
+        });
+
+        var interactiveOnly = new AgentRunReplyProducedEvent
+        {
+            RunId = "run-interactive",
+            CorrelationId = "corr-interactive",
+            TargetActorId = "actor-1",
+            ProducedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReplyText = string.Empty, // intentionally empty — interactive-only turn
+            Outbound = interactiveCard,
+        };
+
+        var next = InvokeAgentTransition(runtime, new AgentRunGAgentState(), interactiveOnly);
+
+        next.Status.Should().Be(AgentRunStatus.ReplyProduced);
+        next.ReplyDispatched.Should().BeFalse();
+        next.ProducedReplyText.Should().BeEmpty();
+        next.ProducedOutbound.Should().NotBeNull();
+        next.ProducedOutbound!.Actions.Should().ContainSingle(a => a.ActionId == "confirm");
+    }
+
+    [Fact]
     public void ApplyReplyProduced_NewEventWithReplyText_LeavesReplyAsNotYetDispatched()
     {
         // New events always carry a non-empty reply_text (empty replies get replaced with a

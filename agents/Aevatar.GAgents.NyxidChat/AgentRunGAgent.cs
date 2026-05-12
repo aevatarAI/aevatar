@@ -979,17 +979,21 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.ProducedOutbound = evt.Outbound?.Clone();
         next.ProducedTerminalState = evt.TerminalState;
         // Backward-compat: AgentRunReplyProducedEvents persisted by the pre-refactor
-        // codepath have no reply_text / outbound / terminal_state fields (proto3 defaults).
-        // Historically, Status=ReplyProduced was only written *after* the LlmReplyReadyEvent
-        // was successfully dispatched (old code's `await Dispatch...; await PersistReplyProduced...;`
-        // order), so those events semantically mean "delivered". Treat them as ReplyDispatched=true
-        // on replay so:
-        //   1. Re-dispatch path doesn't fire ReDispatchProducedReplyAsync with an empty payload
+        // codepath have no reply_text / outbound / terminal_state fields (proto3 defaults
+        // on deserialize). Historically, Status=ReplyProduced was only written *after* the
+        // LlmReplyReadyEvent was successfully dispatched (old code's `await Dispatch...;
+        // await PersistReplyProduced...;` order), so those events semantically mean
+        // "delivered". Treat them as ReplyDispatched=true on replay so:
+        //   1. ReDispatchProducedReplyAsync doesn't fire with an empty payload
         //      (would surface as a blank reply / structural error to the user).
         //   2. HandleCleanupAsync recognizes them as terminal so the actor can be destroyed.
-        // New code always populates reply_text (empty replies fall back to a non-empty user
-        // message before persisting), so empty reply_text reliably identifies legacy events.
-        if (string.IsNullOrEmpty(evt.ReplyText))
+        //
+        // Discriminator: legacy events have BOTH an empty reply_text AND a null outbound.
+        // The empty-text-alone check is not enough — interactive-only turns
+        // (reply_with_interaction etc.) legitimately produce empty reply_text + non-null
+        // outbound (card / button intent). Misclassifying those as "historical" would skip
+        // the dispatch retry on failure and silently drop the user's interactive reply.
+        if (string.IsNullOrEmpty(evt.ReplyText) && evt.Outbound is null)
             next.ReplyDispatched = true;
         // For new events, ReplyDispatched stays false here; flipped to true by
         // ApplyReplyDispatched once the LlmReplyReadyEvent is delivered.
