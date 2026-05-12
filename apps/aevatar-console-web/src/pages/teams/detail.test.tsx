@@ -822,7 +822,7 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("Runtime deltas")).toBeTruthy();
     expect(await screen.findByText("Step deltas")).toBeTruthy();
     expect(await screen.findByText("Handoff deltas")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "本次对话" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "本次成员对话" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "服务映射" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "高级编辑" })).toBeTruthy();
     expect(studioApi.getTeam).toHaveBeenCalledWith("scope-1", "t-alpha");
@@ -1381,7 +1381,7 @@ describe("TeamDetailPage", () => {
     await screen.findByRole("button", { name: "服务映射" });
     fireEvent.click(screen.getByRole("button", { name: "事件流" }));
     await screen.findAllByText(/risk_review/);
-    fireEvent.click(screen.getAllByRole("button", { name: "本次对话" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "本次成员对话" })[0]);
 
     await waitFor(() => {
       expect(window.location.pathname).toBe("/runtime/runs");

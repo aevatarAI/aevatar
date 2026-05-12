@@ -515,7 +515,7 @@ function buildMemberRosterPreview(input: {
     input.member.lifecycleStage === "bind_ready"
   ) {
     attention = "no-bound-service";
-    attentionDetail = "当前成员已经准备好绑定，但还没有稳定的可调用入口。";
+    attentionDetail = "当前成员已经准备好绑定，但还没有稳定的成员调用入口。";
   }
 
   const detailHref = serviceId
@@ -541,7 +541,7 @@ function buildMemberRosterPreview(input: {
   if (runtimeHref) {
     moreActions.push({
       key: "runtime",
-      label: "查看运行",
+      label: "查看成员运行",
       onClick: () => history.push(runtimeHref),
     });
   }
@@ -663,7 +663,7 @@ function buildTeamRosterPreview(input: {
   if (runtimeHref) {
     moreActions.push({
       key: "runtime",
-      label: "查看运行",
+      label: "查看默认成员运行",
       onClick: () => history.push(runtimeHref),
     });
   }
@@ -1429,7 +1429,7 @@ const TeamsHomePage: React.FC = () => {
                     打开 Studio
                   </Button>
                 }
-                description={`其中 ${membersPendingBindingCount} 个成员还没有完成独立绑定，或还没有形成稳定的可调用入口。`}
+                description={`其中 ${membersPendingBindingCount} 个成员还没有完成独立绑定，或还没有形成稳定的成员调用入口。`}
                 showIcon
                 title="还有成员待整理"
                 type="info"

@@ -2089,6 +2089,18 @@ jest.mock("./components/bind/StudioMemberBindPanel", () => ({
         `workflow-yamls:${props.buildWorkflowYamls ? "present" : "none"}`
       ),
       React.createElement(
+        "div",
+        { key: "member" },
+        `member:${props.memberId || "no-member"}`
+      ),
+      !props.memberId
+        ? React.createElement(
+            "div",
+            { key: "member-warning" },
+            "Select a Team member before using Invoke."
+          )
+        : null,
+      React.createElement(
         "button",
         {
           key: "select-endpoint",
@@ -2115,7 +2127,11 @@ jest.mock("./components/bind/StudioMemberBindPanel", () => ({
         {
           key: "continue",
           type: "button",
-          onClick: () => props.onContinueToInvoke?.("default", "support-chat"),
+          disabled: !props.memberId,
+          onClick: () =>
+            props.memberId
+              ? props.onContinueToInvoke?.("default", "support-chat")
+              : undefined,
         },
         "Continue to Invoke"
       ),
@@ -3176,6 +3192,21 @@ describe("StudioPage", () => {
       scopeResolved: true,
       workflowStorageMode: "scope",
     });
+    mockStudioMembers = [
+      ...mockStudioMembers,
+      {
+        memberId: "joker",
+        scopeId: "scope-1",
+        displayName: "joker",
+        description: "Joker workflow member",
+        implementationKind: "workflow",
+        lifecycleStage: "bind_ready",
+        publishedServiceId: "joker",
+        lastBoundRevisionId: "rev-joker",
+        createdAt: "2026-04-27T08:00:00Z",
+        updatedAt: "2026-04-27T08:05:00Z",
+      },
+    ];
     mockWorkflowFile = {
       ...mockWorkflowFile,
       name: "scope-demo",
@@ -3859,19 +3890,40 @@ describe("StudioPage", () => {
   });
 
   it("carries the selected bind contract into invoke after continuing from build", async () => {
-    renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
+    renderStudioPage("/studio?scopeId=scope-1&memberId=workspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
 
     expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Continue to Bind" }));
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
 
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Continue to Invoke" })).not.toBeDisabled();
+    });
     fireEvent.click(screen.getByRole("button", { name: "Continue to Invoke" }));
 
     expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
     expect(screen.getByText("service:default")).toBeTruthy();
     expect(screen.getByText("services:default")).toBeTruthy();
     expect(screen.getByText("endpoint:support-chat")).toBeTruthy();
+  });
+
+  it("does not continue from Bind to Invoke without backend member identity", async () => {
+    renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
+
+    expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Bind" }));
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    expect(screen.getByText("Select a Team member before using Invoke.")).toBeTruthy();
+
+    const continueButton = screen.getByRole("button", { name: "Continue to Invoke" });
+    expect(continueButton).toBeDisabled();
+    fireEvent.click(continueButton);
+
+    expect(screen.queryByTestId("studio-invoke-surface")).toBeNull();
+    const searchParams = new URLSearchParams(window.location.search);
+    expect(searchParams.get("step")).not.toBe("invoke");
   });
 
   it("pins Invoke to the selected member instead of exposing every runtime service", async () => {
@@ -3940,7 +3992,7 @@ describe("StudioPage", () => {
     expect(screen.getByText("service:script-alpha")).toBeTruthy();
     expect(screen.getByText("services:none")).toBeTruthy();
     expect(screen.getByText("endpoint:no-endpoint")).toBeTruthy();
-    expect(screen.getByText(/empty:script-alpha 还不能直接调用。/)).toBeTruthy();
+    expect(screen.getByText(/empty:当前选择还不能直接调用。/)).toBeTruthy();
   });
 
   it("surfaces the current workflow as a bind candidate before any published service exists", async () => {
@@ -3967,7 +4019,7 @@ describe("StudioPage", () => {
       ]);
     (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
 
-    renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
+    renderStudioPage("/studio?scopeId=scope-1&memberId=workspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
 
     expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
 
@@ -3975,7 +4027,8 @@ describe("StudioPage", () => {
 
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
     await waitFor(() => {
-      expect(screen.getByText("candidate:workspace-demo")).toBeTruthy();
+      expect(screen.getByText("service:default")).toBeTruthy();
+      expect(screen.getByText("candidate:none")).toBeTruthy();
     });
 
     await act(async () => {
@@ -4094,7 +4147,7 @@ describe("StudioPage", () => {
     await waitFor(() => {
       expect(screen.getByText("service:default")).toBeTruthy();
       const searchParams = new URLSearchParams(window.location.search);
-      expect(searchParams.get("member")).toBe("workflow:workflow-1");
+      expect(searchParams.get("member")).toBe("member:workspace-demo");
       expect(searchParams.get("focus")).toBeNull();
       expect(searchParams.get("step")).toBe("bind");
     });
@@ -4107,7 +4160,7 @@ describe("StudioPage", () => {
       expect(screen.getByText("service:default")).toBeTruthy();
       expect(screen.queryByText("service:no-service")).toBeNull();
       const searchParams = new URLSearchParams(window.location.search);
-      expect(searchParams.get("member")).toBe("workflow:workflow-1");
+      expect(searchParams.get("member")).toBe("member:workspace-demo");
     });
   });
 
@@ -4123,6 +4176,21 @@ describe("StudioPage", () => {
         name: "draft1",
       },
     };
+    mockStudioMembers = [
+      ...mockStudioMembers,
+      {
+        memberId: "joker",
+        scopeId: "scope-1",
+        displayName: "joker",
+        description: "Joker workflow member",
+        implementationKind: "workflow",
+        lifecycleStage: "bind_ready",
+        publishedServiceId: "joker",
+        lastBoundRevisionId: "rev-joker",
+        createdAt: "2026-04-27T08:00:00Z",
+        updatedAt: "2026-04-27T08:05:00Z",
+      },
+    ];
     (studioApi.listWorkflows as jest.Mock).mockResolvedValueOnce([
       {
         workflowId: "workflow-1",
@@ -4279,6 +4347,21 @@ describe("StudioPage", () => {
         name: "draft1",
       },
     };
+    mockStudioMembers = [
+      ...mockStudioMembers,
+      {
+        memberId: "joker",
+        scopeId: "scope-1",
+        displayName: "joker",
+        description: "Joker workflow member",
+        implementationKind: "workflow",
+        lifecycleStage: "bind_ready",
+        publishedServiceId: "joker",
+        lastBoundRevisionId: "rev-joker",
+        createdAt: "2026-04-27T08:00:00Z",
+        updatedAt: "2026-04-27T08:05:00Z",
+      },
+    ];
     (studioApi.listWorkflows as jest.Mock).mockResolvedValueOnce([
       {
         workflowId: "workflow-1",
@@ -5753,7 +5836,10 @@ describe("StudioPage", () => {
     renderStudioPage("/studio?scopeId=scope-1&teamId=t-alpha&memberId=workspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
 
     fireEvent.click(await screen.findByRole("button", { name: "Bind" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Continue to Invoke" }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Continue to Invoke" })).not.toBeDisabled();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Invoke" }));
 
     expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
     await waitFor(() => {
@@ -5904,13 +5990,16 @@ describe("StudioPage", () => {
   });
 
   it("walks the lifecycle flow from build to bind to invoke to observe", async () => {
-    renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
+    renderStudioPage("/studio?scopeId=scope-1&memberId=workspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
 
     expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Continue to Bind" }));
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
 
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Continue to Invoke" })).not.toBeDisabled();
+    });
     fireEvent.click(screen.getByRole("button", { name: "Continue to Invoke" }));
     expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
 
