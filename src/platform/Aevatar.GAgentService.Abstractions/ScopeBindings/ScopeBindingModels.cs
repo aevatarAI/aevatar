@@ -37,7 +37,8 @@ public sealed record ScopeBindingUpsertRequest(
     string? RevisionId = null,
     string? AppId = null,
     string? ServiceId = null,
-    bool AllowExistingRevisionReplay = false);
+    bool AllowExistingRevisionReplay = false,
+    string? ReplayRevisionId = null);
 
 public sealed record ScopeBindingWorkflowResult(
     string WorkflowName,

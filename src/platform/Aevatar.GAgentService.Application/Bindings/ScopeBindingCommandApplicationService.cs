@@ -227,8 +227,14 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
 
         if (request.ImplementationKind != ScopeBindingImplementationKind.Scripting)
         {
-            throw new InvalidOperationException(
-                $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}'.");
+            if (!request.AllowExistingRevisionReplay ||
+                !string.Equals(request.ReplayRevisionId, revisionId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}'.");
+            }
+
+            return false;
         }
 
         var expectedArtifactHash = await ComputeScriptingArtifactHashAsync(revisionSpec, ct);

@@ -67,6 +67,8 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         scopeBindingPort.Requests[0].Script!.ScriptId.Should().Be("script-1");
         scopeBindingPort.Requests[0].Script!.ScriptRevision.Should().Be("draft-1");
         scopeBindingPort.Requests[0].RevisionId.Should().Be("rev-platform-bind-1");
+        scopeBindingPort.Requests[0].AllowExistingRevisionReplay.Should().BeTrue();
+        scopeBindingPort.Requests[0].ReplayRevisionId.Should().Be("rev-platform-bind-1");
     }
 
     [Fact]
@@ -117,8 +119,9 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             CancellationToken.None);
 
         await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        scopeBindingPort.Requests.Should().ContainSingle()
-            .Which.RevisionId.Should().Be("rev-explicit");
+        var request = scopeBindingPort.Requests.Should().ContainSingle().Subject;
+        request.RevisionId.Should().Be("rev-explicit");
+        request.ReplayRevisionId.Should().BeNull();
     }
 
     [Fact]

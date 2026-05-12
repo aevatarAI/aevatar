@@ -161,6 +161,8 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         StudioMemberPlatformBindingStartRequested request)
     {
         var bindingRequest = request.Request;
+        var revisionId = ResolveRevisionId(request);
+        var replayRevisionId = ResolveReplayRevisionId(request, revisionId);
         return bindingRequest.ImplementationCase switch
         {
             StudioMemberBindingRequest.ImplementationOneofCase.Workflow => new ScopeBindingUpsertRequest(
@@ -168,9 +170,10 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                 ImplementationKind: ScopeBindingImplementationKind.Workflow,
                 Workflow: new ScopeBindingWorkflowSpec(bindingRequest.Workflow.WorkflowYamls.ToArray()),
                 DisplayName: request.Admitted.DisplayName,
-                RevisionId: ResolveRevisionId(request),
+                RevisionId: revisionId,
                 ServiceId: request.Admitted.PublishedServiceId,
-                AllowExistingRevisionReplay: true),
+                AllowExistingRevisionReplay: replayRevisionId != null,
+                ReplayRevisionId: replayRevisionId),
             StudioMemberBindingRequest.ImplementationOneofCase.Script => new ScopeBindingUpsertRequest(
                 ScopeId: bindingRequest.ScopeId,
                 ImplementationKind: ScopeBindingImplementationKind.Scripting,
@@ -178,9 +181,10 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                     bindingRequest.Script.ScriptId,
                     bindingRequest.Script.HasScriptRevision ? bindingRequest.Script.ScriptRevision : null),
                 DisplayName: request.Admitted.DisplayName,
-                RevisionId: ResolveRevisionId(request),
+                RevisionId: revisionId,
                 ServiceId: request.Admitted.PublishedServiceId,
-                AllowExistingRevisionReplay: true),
+                AllowExistingRevisionReplay: true,
+                ReplayRevisionId: replayRevisionId),
             StudioMemberBindingRequest.ImplementationOneofCase.Gagent => new ScopeBindingUpsertRequest(
                 ScopeId: bindingRequest.ScopeId,
                 ImplementationKind: ScopeBindingImplementationKind.GAgent,
@@ -188,9 +192,10 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                     bindingRequest.Gagent.ActorTypeName,
                     bindingRequest.Gagent.Endpoints.Select(ToScopeBindingEndpoint).ToArray()),
                 DisplayName: request.Admitted.DisplayName,
-                RevisionId: ResolveRevisionId(request),
+                RevisionId: revisionId,
                 ServiceId: request.Admitted.PublishedServiceId,
-                AllowExistingRevisionReplay: true),
+                AllowExistingRevisionReplay: replayRevisionId != null,
+                ReplayRevisionId: replayRevisionId),
             _ => throw new InvalidOperationException("binding request must carry exactly one implementation payload."),
         };
     }
@@ -207,6 +212,22 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             ? request.PlatformBindingCommandId
             : request.BindingRunId;
         return $"rev-{BuildStableRevisionComponent(source)}";
+    }
+
+    private static string? ResolveReplayRevisionId(
+        StudioMemberPlatformBindingStartRequested request,
+        string revisionId)
+    {
+        var explicitRevisionId = request.Request.HasRevisionId
+            ? request.Request.RevisionId?.Trim()
+            : null;
+        if (!string.IsNullOrWhiteSpace(explicitRevisionId))
+            return null;
+
+        var expectedRevisionId = $"rev-{BuildStableRevisionComponent(request.PlatformBindingCommandId)}";
+        return string.Equals(revisionId, expectedRevisionId, StringComparison.Ordinal)
+            ? revisionId
+            : null;
     }
 
     private static string BuildStableRevisionComponent(string value)
