@@ -109,6 +109,7 @@ import type { ServiceCatalogSnapshot } from '@/shared/models/services';
 import type {
   StudioExecutionDetail,
   StudioExecutionSummary,
+  StudioMemberRoster,
   StudioMemberBindingRevision,
   StudioMemberSummary,
   StudioValidationFinding,
@@ -964,6 +965,41 @@ function buildInventoryScriptName(
   }
 
   return `script-${Date.now()}`;
+}
+
+function upsertStudioMemberRosterMember(
+  roster: StudioMemberRoster | undefined,
+  scopeId: string,
+  member: StudioMemberSummary,
+): StudioMemberRoster {
+  const normalizedMemberId = trimOptional(member.memberId);
+  const normalizedScopeId =
+    trimOptional(roster?.scopeId) ||
+    trimOptional(member.scopeId) ||
+    trimOptional(scopeId);
+  const currentMembers = roster?.members ?? [];
+  let matched = false;
+  const members = currentMembers.map((currentMember) => {
+    if (
+      normalizedMemberId &&
+      trimOptional(currentMember.memberId) === normalizedMemberId
+    ) {
+      matched = true;
+      return member;
+    }
+
+    return currentMember;
+  });
+
+  if (!matched) {
+    members.push(member);
+  }
+
+  return {
+    scopeId: normalizedScopeId,
+    members,
+    nextPageToken: roster?.nextPageToken ?? null,
+  };
 }
 
 function readStoredScriptDrafts(): Record<string, StudioPendingScriptDraft> {
@@ -1919,12 +1955,16 @@ function buildStudioFocusKey(input: {
   routeMemberKey?: string;
   routeMemberId?: string;
 }): string {
+  const routeMemberKey = parseStudioRouteMember(input.routeMemberKey).key;
+  if (routeMemberKey.startsWith('member:')) {
+    return routeMemberKey;
+  }
+
   const activeBuildFocusKey = trimOptional(input.activeBuildFocusKey);
   if (activeBuildFocusKey) {
     return activeBuildFocusKey;
   }
 
-  const routeMemberKey = parseStudioRouteMember(input.routeMemberKey).key;
   if (routeMemberKey) {
     return routeMemberKey;
   }
@@ -3796,8 +3836,77 @@ const StudioPage: React.FC = () => {
     isBindSurface,
   ]);
   const buildPendingMemberSummary = useMemo(() => {
-    if (buildPendingBindCandidate?.kind !== 'workflow') {
+    if (!buildPendingBindCandidate) {
       return null;
+    }
+
+    const routeMemberId = trimOptional(routeState.memberId);
+    if (routeMemberId) {
+      const routeMember = studioScopeMembers.find(
+        (member) => trimOptional(member.memberId) === routeMemberId,
+      );
+      if (
+        routeMember &&
+        normalizeStudioMemberBindingImplementationKind(
+          routeMember.implementationKind,
+        ) === buildPendingBindCandidate.kind
+      ) {
+        return routeMember;
+      }
+    }
+
+    if (buildPendingBindCandidate.kind === 'script') {
+      const scriptId = trimOptional(buildPendingBindCandidate.scriptId);
+      const normalizedCandidateName = normalizeComparableText(
+        buildPendingBindCandidate.displayName || scriptId,
+      );
+
+      const publishedMatch = publishedScopeMembers.find(
+        ({ matchedScript, memberSummary, service }) => {
+          if (
+            scriptId &&
+            trimOptional(matchedScript?.script?.scriptId) === scriptId
+          ) {
+            return true;
+          }
+
+          if (
+            scriptId &&
+            trimOptional(service.serviceId) === scriptId
+          ) {
+            return true;
+          }
+
+          const memberDisplayName = trimOptional(memberSummary?.displayName);
+          return (
+            Boolean(memberDisplayName) &&
+            normalizeComparableText(memberDisplayName) === normalizedCandidateName
+          );
+        },
+      )?.memberSummary;
+      if (publishedMatch) {
+        return publishedMatch;
+      }
+
+      const rosterMatches = studioScopeMembers.filter((member) => {
+        if (
+          normalizeStudioMemberBindingImplementationKind(
+            member.implementationKind,
+          ) !== 'script'
+        ) {
+          return false;
+        }
+
+        const displayName = normalizeComparableText(member.displayName);
+        const publishedServiceId = trimOptional(member.publishedServiceId);
+        const memberId = trimOptional(member.memberId);
+        return (
+          Boolean(displayName && displayName === normalizedCandidateName) ||
+          Boolean(scriptId && publishedServiceId === scriptId) ||
+          Boolean(scriptId && memberId === scriptId)
+        );
+      });
+      return rosterMatches.length === 1 ? rosterMatches[0] : null;
     }
 
     const candidateWorkflowId = trimOptional(
@@ -3845,6 +3954,7 @@ const StudioPage: React.FC = () => {
     activeWorkflowFile?.workflowId,
     buildPendingBindCandidate,
     publishedScopeMembers,
+    routeState.memberId,
     selectedWorkflowId,
     studioScopeMembers,
   ]);
@@ -3853,7 +3963,10 @@ const StudioPage: React.FC = () => {
       throw new Error('Resolve the current scope before binding this member.');
     }
 
-    const resolvedBuildMemberId = trimOptional(buildPendingMemberSummary?.memberId);
+    const resolvedBuildMemberId =
+      trimOptional(buildPendingMemberSummary?.memberId) ||
+      readMemberIdFromMemberKey(routeState.memberKey) ||
+      trimOptional(routeState.memberId);
     const result =
       buildPendingBindCandidate.kind === 'workflow'
         ? resolvedBuildMemberId
@@ -3868,13 +3981,21 @@ const StudioPage: React.FC = () => {
               displayName: buildPendingBindCandidate.displayName,
               workflowYamls: await buildWorkflowYamlBundle(),
             })
-        : await studioApi.bindScopeScript({
-            scopeId: resolvedStudioScopeId,
-            displayName: buildPendingBindCandidate.displayName,
-            serviceId: buildPendingBindCandidate.scriptId,
-            scriptId: buildPendingBindCandidate.scriptId,
-            scriptRevision: buildPendingBindCandidate.scriptRevision,
-          });
+        : resolvedBuildMemberId
+          ? await studioApi.bindMemberScript({
+              scopeId: resolvedStudioScopeId,
+              memberId: resolvedBuildMemberId,
+              displayName: buildPendingBindCandidate.displayName,
+              scriptId: buildPendingBindCandidate.scriptId,
+              scriptRevision: buildPendingBindCandidate.scriptRevision,
+            })
+          : await studioApi.bindScopeScript({
+              scopeId: resolvedStudioScopeId,
+              displayName: buildPendingBindCandidate.displayName,
+              serviceId: buildPendingBindCandidate.scriptId,
+              scriptId: buildPendingBindCandidate.scriptId,
+              scriptRevision: buildPendingBindCandidate.scriptRevision,
+            });
     await queryClient.invalidateQueries({
       queryKey: ['studio-scope-members', resolvedStudioScopeId],
     });
@@ -3966,7 +4087,12 @@ const StudioPage: React.FC = () => {
           scopeId: resolvedStudioScopeId || undefined,
           teamId: routeState.teamId || undefined,
           memberKey: routedBoundMemberKey,
+          focus:
+            buildPendingBindCandidate.kind === 'script'
+              ? `script:${buildPendingBindCandidate.scriptId}`
+              : undefined,
           step: 'bind',
+          tab: 'bindings',
         }),
       );
     }
@@ -4309,6 +4435,41 @@ const StudioPage: React.FC = () => {
           return;
         }
 
+        let createdScriptMember: StudioMemberSummary | null = null;
+        if (resolvedStudioScopeId) {
+          setInventoryBusyKey('create');
+          setInventoryBusyAction('create');
+          try {
+            createdScriptMember = await studioApi.createMember({
+              scopeId: resolvedStudioScopeId,
+              displayName: scriptDisplayName,
+              implementationKind: 'script',
+              ...(createMemberTeamId ? { teamId: createMemberTeamId } : {}),
+            });
+            queryClient.setQueryData<StudioMemberRoster>(
+              ['studio-scope-members', resolvedStudioScopeId],
+              (current) =>
+                upsertStudioMemberRosterMember(
+                  current,
+                  resolvedStudioScopeId,
+                  createdScriptMember as StudioMemberSummary,
+                ),
+            );
+            void queryClient.invalidateQueries({
+              queryKey: ['studio-scope-members', resolvedStudioScopeId],
+            });
+          } catch (memberError) {
+            setInventoryBusyKey('');
+            setInventoryBusyAction('');
+            void message.error(
+              memberError instanceof Error
+                ? `Studio could not register the Script member authority: ${memberError.message}`
+                : 'Studio could not register the Script member authority.',
+            );
+            return;
+          }
+        }
+
         const nextDraft = {
           scriptId,
           displayName: scriptDisplayName,
@@ -4323,6 +4484,9 @@ const StudioPage: React.FC = () => {
           buildStudioRoute({
             scopeId: resolvedStudioScopeId || undefined,
             teamId: createMemberTeamId || undefined,
+            memberKey: createdScriptMember?.memberId
+              ? `member:${createdScriptMember.memberId}`
+              : undefined,
             focus: `script:${scriptId}`,
             step: 'build',
             tab: 'scripts',
@@ -4330,7 +4494,13 @@ const StudioPage: React.FC = () => {
         );
         setBuildSurface('scripts');
         setStudioSurface('build');
-        void message.success(`Created Script draft ${scriptId}.`);
+        setInventoryBusyKey('');
+        setInventoryBusyAction('');
+        void message.success(
+          createdScriptMember
+            ? `Created Script member ${createdScriptMember.displayName} and opened its draft.`
+            : `Created Script draft ${scriptId}.`,
+        );
         return;
       }
 
@@ -5778,7 +5948,7 @@ const StudioPage: React.FC = () => {
 
     const tab: StudioTab | undefined =
       studioSurface === 'bind'
-        ? undefined
+        ? 'bindings'
         : studioSurface === 'invoke'
           ? 'invoke'
           : studioSurface === 'observe'
@@ -5809,11 +5979,16 @@ const StudioPage: React.FC = () => {
       studioSurface === 'build'
         ? trimOptional(persistableBuildMemberKey) || undefined
         : trimOptional(lifecycleSurfaceMemberKey) || undefined;
+    const persistedLifecycleFocus =
+      studioSurface === 'bind' && routeBuildFocus.kind === 'script'
+        ? (`script:${routeBuildFocus.value}` as const)
+        : undefined;
     const persistedFocus =
-      persistBuildFocusRoute &&
+      persistedLifecycleFocus ||
+      (persistBuildFocusRoute &&
       trimOptional(activeBuildFocusKey) !== trimOptional(persistedMemberKey)
         ? activeBuildFocusKey || undefined
-        : undefined;
+        : undefined);
 
     history.replace(buildStudioRoute({
       scopeId: resolvedStudioScopeId || undefined,
@@ -5878,8 +6053,17 @@ const StudioPage: React.FC = () => {
     [publishedScopeMembers, studioScopeMembers, workbenchMemberKey],
   );
   const workbenchStudioMemberId = useMemo(
-    () => trimOptional(workbenchStudioMemberSummary?.memberId),
-    [workbenchStudioMemberSummary?.memberId],
+    () =>
+      trimOptional(workbenchStudioMemberSummary?.memberId) ||
+      readMemberIdFromMemberKey(workbenchMemberKey) ||
+      readMemberIdFromMemberKey(routeState.memberKey) ||
+      trimOptional(routeState.memberId),
+    [
+      routeState.memberId,
+      routeState.memberKey,
+      workbenchMemberKey,
+      workbenchStudioMemberSummary?.memberId,
+    ],
   );
   const workbenchStudioMemberDetailQuery = useQuery({
     queryKey: ['studio-scope-member', resolvedStudioScopeId, workbenchStudioMemberId],
@@ -6453,18 +6637,34 @@ const StudioPage: React.FC = () => {
   const bindSelectedMemberServiceId =
     currentSelectedMemberServiceId ||
     (isBindSurface ? recentBindSelectedMemberServiceId : '');
+  const bindPublishedService = useMemo(
+    () =>
+      bindSelectedMemberServiceId
+        ? publishedScopeServices.find(
+            (service) => service.serviceId === bindSelectedMemberServiceId,
+          ) ?? null
+        : null,
+    [bindSelectedMemberServiceId, publishedScopeServices],
+  );
+  const bindPendingCandidate =
+    buildPendingBindCandidate &&
+    !bindPublishedService &&
+    (workbenchMemberKey.startsWith('workflow:') ||
+      workbenchMemberKey.startsWith('script:') ||
+      (workbenchMemberKey.startsWith('member:') &&
+        normalizeStudioMemberBindingImplementationKind(
+          workbenchStudioMember?.implementationKind,
+        ) === buildPendingBindCandidate.kind))
+      ? buildPendingBindCandidate
+      : null;
   const bindTargetService = useMemo(
     () => {
-      if (!bindSelectedMemberServiceId) {
+      if (!bindSelectedMemberServiceId || bindPendingCandidate) {
         return null;
       }
 
-      const matchedPublishedService =
-        publishedScopeServices.find(
-          (service) => service.serviceId === bindSelectedMemberServiceId,
-        ) ?? null;
-      if (matchedPublishedService) {
-        return matchedPublishedService;
+      if (bindPublishedService) {
+        return bindPublishedService;
       }
 
       return {
@@ -6487,9 +6687,10 @@ const StudioPage: React.FC = () => {
       };
     },
     [
+      bindPendingCandidate,
+      bindPublishedService,
       bindSelectedMemberServiceId,
       currentMemberLabel,
-      publishedScopeServices,
       resolvedStudioScopeId,
     ],
   );
@@ -6501,14 +6702,6 @@ const StudioPage: React.FC = () => {
     () => resolveStudioServiceDefaultEndpointId(bindTargetService),
     [bindTargetService],
   );
-  const bindPendingCandidate =
-    bindSelectedMemberServiceId ||
-    !(
-      workbenchMemberKey.startsWith('workflow:') ||
-      workbenchMemberKey.startsWith('script:')
-    )
-      ? null
-      : buildPendingBindCandidate;
   const bindInitialEndpointId = bindSelectedMemberServiceId
     ? currentBindingSelectionServiceId === bindSelectedMemberServiceId &&
       currentBindingSelectionEndpointId
@@ -7677,7 +7870,7 @@ const StudioPage: React.FC = () => {
       ? buildTeamDetailHref({
           scopeId: resolvedStudioScopeId,
           teamId: routeState.teamId,
-          tab: 'advanced',
+          tab: 'overview',
           memberId:
             trimOptional(routeState.memberId) ||
             readMemberIdFromMemberKey(routeState.memberKey) ||
@@ -7686,7 +7879,7 @@ const StudioPage: React.FC = () => {
         })
       : buildTeamDetailHref({
         scopeId: resolvedStudioScopeId,
-        tab: 'advanced',
+        tab: 'overview',
         serviceId:
           trimOptional(routeState.memberId) ||
           trimOptional(workbenchPublishedService?.serviceId) ||
@@ -7965,11 +8158,17 @@ const StudioPage: React.FC = () => {
         }
       }}
       onContinueToBind={() => {
+        const scriptFocusId =
+          trimOptional(selectedScriptId) ||
+          (routeBuildFocus.kind === 'script' ? routeBuildFocus.value : '') ||
+          (routeSelectedMember.kind === 'script' ? routeSelectedMember.value : '') ||
+          trimOptional(scriptBuildState?.scriptId);
         history.push(
           buildStudioRoute({
             scopeId: resolvedStudioScopeId || undefined,
             teamId: routeState.teamId || undefined,
-            memberKey: selectedScriptId ? `script:${selectedScriptId}` : undefined,
+            memberKey: routeSelectedMemberKey || undefined,
+            focus: scriptFocusId ? `script:${scriptFocusId}` : undefined,
             step: 'bind',
             tab: 'bindings',
           }),

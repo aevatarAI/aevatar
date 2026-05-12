@@ -1070,6 +1070,44 @@ jest.mock("@/shared/studio/api", () => ({
       },
       expectedActorId: `scope-script:${input.scopeId}:${input.scriptId}:dep-1`,
     })),
+    bindMemberScript: jest.fn(async (input: {
+      scopeId: string;
+      memberId: string;
+      displayName?: string;
+      scriptId: string;
+      scriptRevision: string;
+    }) => {
+      const existingMember = mockStudioMembers.find(
+        (member) => member.memberId === input.memberId
+      );
+      const serviceId = existingMember?.publishedServiceId || `member-${input.memberId}`;
+      mockStudioMembers = mockStudioMembers.map((member) =>
+        member.memberId === input.memberId
+          ? {
+              ...member,
+              lifecycleStage: "bind_ready",
+              publishedServiceId: serviceId,
+              lastBoundRevisionId: "rev-script-binding",
+              updatedAt: "2026-04-27T08:15:00Z",
+            }
+          : member
+      );
+
+      return {
+        scopeId: input.scopeId,
+        serviceId,
+        displayName: input.displayName || input.scriptId,
+        targetKind: "script",
+        targetName: input.scriptId,
+        revisionId: "rev-script-binding",
+        script: {
+          scriptId: input.scriptId,
+          scriptRevision: input.scriptRevision,
+          definitionActorId: "definition-1",
+        },
+        expectedActorId: `scope-script:${input.scopeId}:${serviceId}:dep-1`,
+      };
+    }),
     bindMemberWorkflow: jest.fn(async (input: {
       scopeId: string;
       memberId: string;
@@ -3528,7 +3566,7 @@ describe("StudioPage", () => {
     expect(window.location.pathname).toBe("/teams/scope-1/t-alpha");
     const searchParams = new URLSearchParams(window.location.search);
     expect(searchParams.get("memberId")).toBe("workspace-demo");
-    expect(searchParams.get("tab")).toBe("advanced");
+    expect(searchParams.get("tab")).toBe("overview");
   });
 
   it("moves focus from a Script draft to the new Workflow member after create", async () => {
@@ -3594,7 +3632,7 @@ describe("StudioPage", () => {
     expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
   });
 
-  it("creates a named Script draft from the create-member modal before bind", async () => {
+  it("creates a named Script member authority and opens its draft before bind", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,
       scopeId: "scope-1",
@@ -3640,8 +3678,10 @@ describe("StudioPage", () => {
     expect(
       window.localStorage.getItem("aevatar:studio:script-drafts:v1"),
     ).toContain("refund-handler");
-    expect(studioApi.createMember).not.toHaveBeenCalledWith(
+    expect(studioApi.createMember).toHaveBeenCalledWith(
       expect.objectContaining({
+        scopeId: "scope-1",
+        displayName: "Refund Handler",
         implementationKind: "script",
       }),
     );
@@ -3649,6 +3689,7 @@ describe("StudioPage", () => {
       const searchParams = new URLSearchParams(window.location.search);
       expect(searchParams.get("tab")).toBe("scripts");
       expect(searchParams.get("step")).toBe("build");
+      expect(searchParams.get("member")).toBe("member:refund-handler");
       expect(searchParams.get("focus")).toBe("script:refund-handler");
     });
   });
@@ -3990,9 +4031,10 @@ describe("StudioPage", () => {
 
     expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
     expect(screen.getByText("service:script-alpha")).toBeTruthy();
+    expect(screen.getByText("member:script-alpha")).toBeTruthy();
     expect(screen.getByText("services:none")).toBeTruthy();
     expect(screen.getByText("endpoint:no-endpoint")).toBeTruthy();
-    expect(screen.getByText(/empty:当前选择还不能直接调用。/)).toBeTruthy();
+    expect(screen.getByText(/empty:script-alpha 还不能直接调用。/)).toBeTruthy();
   });
 
   it("surfaces the current workflow as a bind candidate before any published service exists", async () => {
@@ -5633,7 +5675,7 @@ describe("StudioPage", () => {
     expect(screen.queryByTestId("studio-workflow-build-panel")).toBeNull();
   });
 
-  it("binds a catalog-applied Script build candidate through the script binding API", async () => {
+  it("binds a catalog-applied Script member through the member binding API", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,
       features: {
@@ -5643,6 +5685,21 @@ describe("StudioPage", () => {
       scopeId: "scope-1",
       scopeResolved: true,
     });
+    mockStudioMembers = [
+      ...mockStudioMembers,
+      {
+        memberId: "script-member",
+        scopeId: "scope-1",
+        displayName: "script-alpha",
+        description: "Script member",
+        implementationKind: "script",
+        lifecycleStage: "created",
+        publishedServiceId: "member-script-member",
+        lastBoundRevisionId: null,
+        createdAt: "2026-04-27T08:00:00Z",
+        updatedAt: "2026-04-27T08:05:00Z",
+      },
+    ];
     (scriptsApi.listScripts as jest.Mock).mockResolvedValue([
       {
         available: true,
@@ -5664,57 +5721,74 @@ describe("StudioPage", () => {
         },
       },
     ]);
-    mockScopeRuntimeApi.listServices.mockResolvedValue([
-      {
-        serviceId: "script-alpha",
-        displayName: "script-alpha",
-        deploymentStatus: "Active",
-        primaryActorId: "actor-script-alpha",
-        endpoints: [
-          {
-            endpointId: "script-command",
-            displayName: "Script command",
-            kind: "command",
-            description: "Invoke the script command.",
-            requestTypeUrl: "type.googleapis.com/example.ScriptCommand",
-            responseTypeUrl: "type.googleapis.com/example.ScriptResult",
-          },
-        ],
-      },
-    ]);
+    mockScopeRuntimeApi.listServices
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([
+        {
+          serviceId: "member-script-member",
+          displayName: "script-alpha",
+          deploymentStatus: "Active",
+          primaryActorId: "actor-script-alpha",
+          endpoints: [
+            {
+              endpointId: "script-command",
+              displayName: "Script command",
+              kind: "command",
+              description: "Invoke the script command.",
+              requestTypeUrl: "type.googleapis.com/example.ScriptCommand",
+              responseTypeUrl: "type.googleapis.com/example.ScriptResult",
+            },
+          ],
+        },
+      ]);
     (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
     mockScopeRuntimeApi.getServiceRevisions.mockImplementation(
       async (_scopeId: string, serviceId: string) =>
-        mockBuildServiceRevisionCatalog({
+        mockBuildScriptServiceRevisionCatalog({
           serviceId,
           displayName: "script-alpha",
+          scriptId: "script-alpha",
           revisionId: "rev-script-binding",
         })
     );
 
     renderStudioPage(
-      "/studio?scopeId=scope-1&member=script%3Ascript-alpha&step=bind&tab=bindings"
+      "/studio?scopeId=scope-1&member=member%3Ascript-member&focus=script%3Ascript-alpha&tab=scripts"
     );
+
+    expect(await screen.findByTestId("studio-script-build-panel")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Bind" }));
 
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
     await waitFor(() => {
       expect(screen.getByText("candidate:script-alpha")).toBeTruthy();
-      expect(screen.getByText("service:no-service")).toBeTruthy();
+      expect(screen.getByText("service:member-script-member")).toBeTruthy();
+      expect(screen.getByText("member:script-member")).toBeTruthy();
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Bind current member" }));
 
     await waitFor(() => {
-      expect(studioApi.bindScopeScript).toHaveBeenCalledWith(
+      expect(studioApi.bindMemberScript).toHaveBeenCalledWith(
         expect.objectContaining({
           scopeId: "scope-1",
+          memberId: "script-member",
           displayName: "script-alpha",
-          serviceId: "script-alpha",
           scriptId: "script-alpha",
           scriptRevision: "rev-1",
         })
       );
     });
+    expect(studioApi.bindScopeScript).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.getByText("services:member-script-member")).toBeTruthy();
+      expect(screen.getByText("candidate:none")).toBeTruthy();
+    });
+    const searchParams = new URLSearchParams(window.location.search);
+    expect(searchParams.get("member")).toBe("member:script-member");
+    expect(searchParams.get("focus")).toBe("script:script-alpha");
+    expect(searchParams.get("step")).toBe("bind");
+    expect(searchParams.get("tab")).toBe("bindings");
   });
 
   it("loads discovered GAgent types and the published service revision catalog", async () => {
