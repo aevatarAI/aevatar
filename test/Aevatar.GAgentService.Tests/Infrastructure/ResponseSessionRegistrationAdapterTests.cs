@@ -191,7 +191,7 @@ public sealed class ResponseSessionRegistrationAdapterTests
         var packed = dispatch.Calls[0].envelope.Payload.Unpack<ReceiveForwardedToolResultRequested>();
         packed.CallId.Should().Be("call-1");
         packed.SchemaHash.Should().Be("hash-1");
-        packed.ResultJson.Should().BeEmpty();
+        packed.ResultPayload.IsEmpty.Should().BeTrue();
     }
 
     [Theory]

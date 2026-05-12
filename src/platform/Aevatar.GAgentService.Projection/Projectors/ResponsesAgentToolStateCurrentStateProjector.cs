@@ -5,6 +5,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.ReadModels;
+using Google.Protobuf;
 
 namespace Aevatar.GAgentService.Projection.Projectors;
 
@@ -68,8 +69,8 @@ public sealed class ResponsesAgentToolStateCurrentStateProjector
                 ChildActorId = task.ChildActorId,
                 Description = task.Description,
                 Status = task.Status.ToString(),
-                ArgumentsJson = task.ArgumentsJson,
-                ResultJson = task.ResultJson,
+                ArgumentsPayload = task.ArgumentsPayload ?? ByteString.Empty,
+                ResultPayload = task.ResultPayload ?? ByteString.Empty,
                 CreatedAt = task.CreatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
                 UpdatedAt = task.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
             }).ToList(),
@@ -82,7 +83,7 @@ public sealed class ResponsesAgentToolStateCurrentStateProjector
                 Url = trace.Url,
                 Query = trace.Query,
                 CacheHit = trace.CacheHit,
-                ResultJson = trace.ResultJson,
+                ResultPayload = trace.ResultPayload ?? ByteString.Empty,
                 ObservedAt = trace.ObservedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
             }).ToList(),
             WebCacheEntries = state.WebCacheEntries.Select(static entry => new ResponsesWebCacheEntryReadModel
@@ -91,7 +92,7 @@ public sealed class ResponsesAgentToolStateCurrentStateProjector
                 ToolName = entry.ToolName,
                 Url = entry.Url,
                 Query = entry.Query,
-                ResultJson = entry.ResultJson,
+                ResultPayload = entry.ResultPayload ?? ByteString.Empty,
                 CachedAt = entry.CachedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
                 LastHitAt = entry.LastHitAt?.ToDateTimeOffset(),
                 HitCount = entry.HitCount,

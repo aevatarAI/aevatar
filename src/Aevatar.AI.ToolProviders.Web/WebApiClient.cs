@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.AI.ToolProviders.Web;
 
 /// <summary>HTTP client for web search and fetch operations.</summary>
-public sealed class WebApiClient
+public sealed class WebApiClient : IWebApiClient
 {
     private readonly HttpClient _http;
     private readonly WebToolOptions _options;

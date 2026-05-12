@@ -4,7 +4,6 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
-using System.Text.Json;
 
 namespace Aevatar.GAgentService.Core.GAgents;
 
@@ -65,6 +64,16 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
         if (existing.Status == command.Status)
             return;
 
+        if (IsTerminal(existing.Status))
+        {
+            // Terminal states are authoritative — a late Completed/Failed update
+            // from the original create path must not overwrite a Cancelled/Expired
+            // session, otherwise /cancel reports success while the session ends up
+            // Completed and forwarded tool calls stay open.
+            throw new InvalidOperationException(
+                $"Response session '{existing.ResponseId}' is {existing.Status} and cannot transition to {command.Status}.");
+        }
+
         await PersistDomainEventAsync(new ResponseSessionStatusUpdatedEvent
         {
             ResponseId = existing.ResponseId,
@@ -79,12 +88,8 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
         ArgumentNullException.ThrowIfNull(command);
 
         var existing = EnsureRegisteredSession(command.ResponseId);
-        if (existing.Status is ResponseSessionStatus.Cancelled
-            or ResponseSessionStatus.Expired
-            or ResponseSessionStatus.Failed)
-        {
+        if (IsTerminal(existing.Status))
             return;
-        }
 
         var observedAt = command.ObservedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
         var expiresAt = ResolveExpiry(existing);
@@ -109,6 +114,12 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
         ArgumentNullException.ThrowIfNull(command.Call);
 
         var existing = EnsureRegisteredSession(command.ResponseId);
+        if (IsTerminal(existing.Status))
+        {
+            throw new InvalidOperationException(
+                $"Response session '{existing.ResponseId}' is {existing.Status} and cannot record new forwarded tool calls.");
+        }
+
         var call = NormalizeToolCall(command.Call.Clone());
         ValidateToolCall(call);
 
@@ -135,7 +146,6 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
         var existing = EnsureRegisteredSession(command.ResponseId);
         var callId = NormalizeRequired(command.CallId);
         var schemaHash = NormalizeRequired(command.SchemaHash);
-        var resultJson = command.ResultJson ?? string.Empty;
         if (string.IsNullOrWhiteSpace(callId))
             throw new InvalidOperationException("call_id is required.");
         if (string.IsNullOrWhiteSpace(schemaHash))
@@ -173,7 +183,7 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
             ResponseId = existing.ResponseId,
             CallId = callId,
             SchemaHash = schemaHash,
-            ResultJson = resultJson,
+            ResultPayload = command.ResultPayload ?? ByteString.Empty,
             ReceivedAt = command.ReceivedAt ?? Timestamp.FromDateTime(DateTime.UtcNow),
         });
     }
@@ -278,7 +288,7 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
         if (call != null)
         {
             call.Status = ResponseSessionForwardedToolCallStatus.Received;
-            call.ResultJson = evt.ResultJson ?? string.Empty;
+            call.ResultPayload = evt.ResultPayload ?? ByteString.Empty;
             call.ReceivedAt = evt.ReceivedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
         }
 
@@ -360,8 +370,8 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
         call.CallId = NormalizeRequired(call.CallId);
         call.ToolName = NormalizeRequired(call.ToolName);
         call.SchemaHash = NormalizeRequired(call.SchemaHash);
-        call.ArgumentsJson = NormalizeOptional(call.ArgumentsJson) ?? "{}";
-        call.ResultJson = NormalizeOptional(call.ResultJson) ?? string.Empty;
+        call.ArgumentsPayload ??= ByteString.Empty;
+        call.ResultPayload ??= ByteString.Empty;
         if (call.Status == ResponseSessionForwardedToolCallStatus.Unspecified)
             call.Status = ResponseSessionForwardedToolCallStatus.Pending;
         if (call.EmittedAt == null)
@@ -427,7 +437,7 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
     {
         if (!string.Equals(existing.ToolName, incoming.ToolName, StringComparison.Ordinal) ||
             !string.Equals(existing.SchemaHash, incoming.SchemaHash, StringComparison.Ordinal) ||
-            !string.Equals(existing.ArgumentsJson, incoming.ArgumentsJson, StringComparison.Ordinal))
+            !Equals(existing.ArgumentsPayload ?? ByteString.Empty, incoming.ArgumentsPayload ?? ByteString.Empty))
         {
             throw new InvalidOperationException(
                 $"Forwarded tool call '{existing.CallId}' cannot be rebound to different tool call facts.");
@@ -444,12 +454,14 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
                 or ResponseSessionForwardedToolCallStatus.Received)
             {
                 call.Status = status;
-                if (status == ResponseSessionForwardedToolCallStatus.Expired &&
-                    string.IsNullOrWhiteSpace(call.ResultJson))
+                if (status == ResponseSessionForwardedToolCallStatus.Expired)
                 {
-                    call.ResultJson = BuildExpiredToolCallResult(call.CallId);
-                    call.ReceivedAt = state.Record?.UpdatedAt?.Clone()
-                                      ?? Timestamp.FromDateTime(DateTime.UtcNow);
+                    // Mark received timestamp so downstream snapshots know when
+                    // expiry happened. The result payload stays empty —
+                    // adapters/readers synthesize the "tool_call_expired" surface
+                    // when shaping the response back to the client.
+                    call.ReceivedAt ??= state.Record?.UpdatedAt?.Clone()
+                                        ?? Timestamp.FromDateTime(DateTime.UtcNow);
                 }
             }
         }
@@ -482,8 +494,11 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
         return createdAt.Add(ttl);
     }
 
-    private static string BuildExpiredToolCallResult(string? callId) =>
-        JsonSerializer.Serialize(new { error = "tool_call_expired", call_id = callId ?? string.Empty });
+    private static bool IsTerminal(ResponseSessionStatus status) =>
+        status is ResponseSessionStatus.Completed
+            or ResponseSessionStatus.Failed
+            or ResponseSessionStatus.Cancelled
+            or ResponseSessionStatus.Expired;
 
     private static bool DurationEquals(Duration? left, Duration? right) =>
         left?.ToTimeSpan() == right?.ToTimeSpan();

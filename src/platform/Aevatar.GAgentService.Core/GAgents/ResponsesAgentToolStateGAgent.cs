@@ -1,6 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -44,16 +41,18 @@ public sealed class ResponsesAgentToolStateGAgent : GAgentBase<ResponsesAgentToo
         EnsureRegistered(command.ScopeId, command.OwnerSubject);
 
         var observedAt = command.ObservedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
-        var todos = ParseTodoItems(command.ArgumentsJson, command.SourceResponseId, observedAt);
-        if (TodoItemsEqual(State.TodoItems, todos))
+        var incoming = command.TodoItems
+            .Select(static item => item.Clone())
+            .ToList();
+        if (TodoItemsEqual(State.TodoItems, incoming))
             return;
 
         await PersistDomainEventAsync(new ResponsesTodoWriteAppliedEvent
         {
             SourceResponseId = NormalizeOptional(command.SourceResponseId) ?? string.Empty,
-            ArgumentsJson = NormalizeOptional(command.ArgumentsJson) ?? "{}",
+            ArgumentsPayload = command.ArgumentsPayload ?? ByteString.Empty,
             ObservedAt = observedAt,
-            TodoItems = { todos },
+            TodoItems = { incoming },
         });
     }
 
@@ -70,8 +69,8 @@ public sealed class ResponsesAgentToolStateGAgent : GAgentBase<ResponsesAgentToo
             SourceResponseId = NormalizeOptional(command.SourceResponseId) ?? string.Empty,
             ChildActorId = NormalizeRequired(command.ChildActorId),
             Description = NormalizeOptional(command.Description) ?? string.Empty,
-            ArgumentsJson = NormalizeOptional(command.ArgumentsJson) ?? "{}",
-            ResultJson = NormalizeOptional(command.ResultJson) ?? "{}",
+            ArgumentsPayload = command.ArgumentsPayload ?? ByteString.Empty,
+            ResultPayload = command.ResultPayload ?? ByteString.Empty,
             Status = command.Status == ResponsesAgentToolTaskStatus.Unspecified
                 ? ResponsesAgentToolTaskStatus.Accepted
                 : command.Status,
@@ -105,7 +104,7 @@ public sealed class ResponsesAgentToolStateGAgent : GAgentBase<ResponsesAgentToo
             Url = NormalizeOptional(command.Url) ?? string.Empty,
             Query = NormalizeOptional(command.Query) ?? string.Empty,
             CacheHit = command.CacheHit,
-            ResultJson = NormalizeOptional(command.ResultJson) ?? "{}",
+            ResultPayload = command.ResultPayload ?? ByteString.Empty,
             ObservedAt = observedAt,
         };
         ValidateWebTrace(trace);
@@ -191,7 +190,7 @@ public sealed class ResponsesAgentToolStateGAgent : GAgentBase<ResponsesAgentToo
                 CacheKey = trace.CacheKey,
                 Url = trace.Url,
                 Query = trace.Query,
-                ResultJson = trace.ResultJson,
+                ResultPayload = trace.ResultPayload ?? ByteString.Empty,
                 CachedAt = trace.ObservedAt.Clone(),
                 LastHitAt = trace.CacheHit ? trace.ObservedAt.Clone() : null,
                 HitCount = trace.CacheHit ? 1 : 0,
@@ -206,110 +205,10 @@ public sealed class ResponsesAgentToolStateGAgent : GAgentBase<ResponsesAgentToo
             return;
         }
 
-        existing.ResultJson = trace.ResultJson;
+        existing.ResultPayload = trace.ResultPayload ?? ByteString.Empty;
         existing.Url = trace.Url;
         existing.Query = trace.Query;
         existing.CachedAt = trace.ObservedAt.Clone();
-    }
-
-    private static List<ResponsesTodoItem> ParseTodoItems(
-        string? argumentsJson,
-        string? sourceResponseId,
-        Timestamp observedAt)
-    {
-        var items = new List<ResponsesTodoItem>();
-        if (string.IsNullOrWhiteSpace(argumentsJson))
-            return items;
-
-        try
-        {
-            using var document = JsonDocument.Parse(argumentsJson);
-            var root = document.RootElement;
-            if (root.ValueKind == JsonValueKind.Object &&
-                root.TryGetProperty("todos", out var todos) &&
-                todos.ValueKind == JsonValueKind.Array)
-            {
-                var index = 0;
-                foreach (var todo in todos.EnumerateArray())
-                {
-                    var item = ParseTodoItem(todo, index, sourceResponseId, observedAt);
-                    if (item != null)
-                        items.Add(item);
-                    index++;
-                }
-                return items;
-            }
-
-            var single = ParseTodoItem(root, 0, sourceResponseId, observedAt);
-            if (single != null)
-                items.Add(single);
-        }
-        catch (JsonException)
-        {
-            var content = NormalizeOptional(argumentsJson);
-            if (content != null)
-                items.Add(CreateTodoItem(null, content, "pending", 0, sourceResponseId, observedAt));
-        }
-
-        return items;
-    }
-
-    private static ResponsesTodoItem? ParseTodoItem(
-        JsonElement element,
-        int index,
-        string? sourceResponseId,
-        Timestamp observedAt)
-    {
-        if (element.ValueKind == JsonValueKind.String)
-            return CreateTodoItem(null, element.GetString(), "pending", index, sourceResponseId, observedAt);
-        if (element.ValueKind != JsonValueKind.Object)
-            return null;
-
-        var content = GetString(element, "content")
-                      ?? GetString(element, "task")
-                      ?? GetString(element, "title")
-                      ?? GetString(element, "text");
-        if (string.IsNullOrWhiteSpace(content))
-            return null;
-
-        var id = GetString(element, "id");
-        var status = GetString(element, "status") ?? "pending";
-        return CreateTodoItem(id, content, status, index, sourceResponseId, observedAt);
-    }
-
-    private static ResponsesTodoItem CreateTodoItem(
-        string? id,
-        string? content,
-        string status,
-        int index,
-        string? sourceResponseId,
-        Timestamp observedAt)
-    {
-        var normalizedContent = NormalizeRequired(content);
-        var normalizedStatus = NormalizeOptional(status) ?? "pending";
-        var itemId = NormalizeOptional(id) ?? BuildStableTodoId(normalizedContent, index);
-        return new ResponsesTodoItem
-        {
-            Id = itemId,
-            Content = normalizedContent,
-            Status = normalizedStatus,
-            SourceResponseId = NormalizeOptional(sourceResponseId) ?? string.Empty,
-            CreatedAt = observedAt.Clone(),
-            UpdatedAt = observedAt.Clone(),
-        };
-    }
-
-    private static string BuildStableTodoId(string content, int index)
-    {
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes($"{index}\n{content}"));
-        return "todo_" + Convert.ToHexString(hash[..8]).ToLowerInvariant();
-    }
-
-    private static string? GetString(JsonElement element, string propertyName)
-    {
-        if (!element.TryGetProperty(propertyName, out var value))
-            return null;
-        return value.ValueKind == JsonValueKind.String ? value.GetString() : value.ToString();
     }
 
     private void EnsureRegistered(string? scopeId = null, string? ownerSubject = null)

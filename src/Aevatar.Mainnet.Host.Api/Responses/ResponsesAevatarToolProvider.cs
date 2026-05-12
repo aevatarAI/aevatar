@@ -13,13 +13,13 @@ internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider
 {
     private readonly IResponsesAgentToolStateCommandPort _commandPort;
     private readonly IResponsesAgentToolStateQueryPort _queryPort;
-    private readonly WebApiClient _webClient;
+    private readonly IWebApiClient _webClient;
     private readonly WebToolOptions _webOptions;
 
     public ResponsesAevatarToolProvider(
         IResponsesAgentToolStateCommandPort commandPort,
         IResponsesAgentToolStateQueryPort queryPort,
-        WebApiClient webClient,
+        IWebApiClient webClient,
         WebToolOptions webOptions)
     {
         _commandPort = commandPort ?? throw new ArgumentNullException(nameof(commandPort));
@@ -192,13 +192,13 @@ internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider
         private readonly string _name;
         private readonly IResponsesAgentToolStateCommandPort _commandPort;
         private readonly IResponsesAgentToolStateQueryPort _queryPort;
-        private readonly WebApiClient _webClient;
+        private readonly IWebApiClient _webClient;
 
         public WebFetchTool(
             string name,
             IResponsesAgentToolStateCommandPort commandPort,
             IResponsesAgentToolStateQueryPort queryPort,
-            WebApiClient webClient)
+            IWebApiClient webClient)
         {
             _name = name;
             _commandPort = commandPort;
@@ -233,10 +233,16 @@ internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider
         public override async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
             var scope = ResolveScope();
-            var url = NormalizeUrl(ExtractUrl(argumentsJson));
-            if (string.IsNullOrWhiteSpace(url))
-                return """{"error":"'url' is required"}""";
+            var validation = WebFetchUrlGuard.Validate(NormalizeUrl(ExtractUrl(argumentsJson)));
+            if (!validation.IsAllowed)
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    error = validation.RejectionCode ?? "url_rejected",
+                });
+            }
 
+            var url = validation.NormalizedUrl!;
             var cacheKey = ComputeCacheKey(Name, url);
             var cached = await _queryPort.GetWebCacheEntryAsync(
                 scope.ScopeId,
@@ -250,8 +256,12 @@ internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider
                 return cached.ResultJson;
             }
 
-            var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken) ?? string.Empty;
-            var result = await _webClient.FetchUrlAsync(token, url, ct);
+            // The URL came from the LLM (and ultimately from upstream prompts/user
+            // input). Forwarding the caller's NyxID bearer to that target would
+            // let a prompt exfiltrate the token to an attacker-controlled host.
+            // WebFetch is unauthenticated by design — anything that needs auth
+            // must route through a typed NyxID-proxied tool.
+            var result = await _webClient.FetchUrlAsync(token: string.Empty, url, ct);
             var resultJson = JsonSerializer.Serialize(new
             {
                 url = result.OriginalUrl,
@@ -321,14 +331,14 @@ internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider
         private readonly string _name;
         private readonly IResponsesAgentToolStateCommandPort _commandPort;
         private readonly IResponsesAgentToolStateQueryPort _queryPort;
-        private readonly WebApiClient _webClient;
+        private readonly IWebApiClient _webClient;
         private readonly WebToolOptions _webOptions;
 
         public WebSearchTool(
             string name,
             IResponsesAgentToolStateCommandPort commandPort,
             IResponsesAgentToolStateQueryPort queryPort,
-            WebApiClient webClient,
+            IWebApiClient webClient,
             WebToolOptions webOptions)
         {
             _name = name;

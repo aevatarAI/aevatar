@@ -127,35 +127,44 @@ internal static class ResponsesApiEndpoints
         }
         catch (OperationCanceledException)
         {
-            return Results.StatusCode(499);
+            return Results.StatusCode(StatusCodes.Status408RequestTimeout);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            var correlation = LogAndCorrelate(logger, ex, "session_registration", normalized.ResponseId);
             return ToErrorResult(
                 StatusCodes.Status500InternalServerError,
                 "session_registration_failed",
-                ex.Message);
+                $"Failed to register response session. Correlation: {correlation}");
         }
 
         var toolClassification = ResponsesToolClassifier.Classify(
             normalized.DeclaredTools,
             toolProviders,
             logger);
-        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        // LLMRequest.Metadata flows into the LLM provider, where its values may be
+        // serialized into logs, traces, or third-party SDKs. Keep only safe-to-log
+        // identifiers here — the NyxID bearer token is set via
+        // AgentToolRequestContext below (AsyncLocal-scoped to this request) so
+        // tool providers can still read it.
+        var llmMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken,
             [LLMRequestMetadataKeys.RequestId] = normalized.ResponseId,
             [LLMRequestMetadataKeys.ResponseId] = normalized.ResponseId,
             [LLMRequestMetadataKeys.ScopeId] = callerScope.ScopeId,
             [LLMRequestMetadataKeys.OwnerSubject] = callerScope.OwnerSubject,
             [ChannelMetadataKeys.RegistrationScopeId] = callerScope.ScopeId,
         };
+        var toolContextMetadata = new Dictionary<string, string>(llmMetadata, StringComparer.Ordinal)
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken,
+        };
 
         var llmRequest = new LLMRequest
         {
             Messages = BuildLlmMessages(normalized, previousSnapshot),
             RequestId = normalized.ResponseId,
-            Metadata = metadata,
+            Metadata = llmMetadata,
             Tools = toolClassification.EffectiveTools,
             Model = normalized.Model,
             Temperature = normalized.Temperature,
@@ -171,6 +180,7 @@ internal static class ResponsesApiEndpoints
                 logger,
                 responseSession,
                 llmRequest,
+                toolContextMetadata,
                 normalized,
                 previousSnapshot,
                 toolClassification,
@@ -185,6 +195,7 @@ internal static class ResponsesApiEndpoints
             var completion = await CollectToolAwareCompletionAsync(
                 provider,
                 llmRequest,
+                toolContextMetadata,
                 toolClassification,
                 ct);
             var forwardedToolCalls = completion.ForwardedToolCalls;
@@ -201,14 +212,14 @@ internal static class ResponsesApiEndpoints
                 logger,
                 previousSnapshot,
                 normalized,
-                CancellationToken.None);
+                ct);
             var completedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             await TryUpdateSessionStatusAsync(
                 responseSessionRegistrationPort,
                 logger,
                 responseSession,
                 ResponseSessionStatus.Completed,
-                CancellationToken.None);
+                ct);
             var completed = BuildCompletedResponse(
                 normalized,
                 createdAt.ToUnixTimeSeconds(),
@@ -226,6 +237,9 @@ internal static class ResponsesApiEndpoints
                 responseSession,
                 ResponseSessionStatus.Failed,
                 CancellationToken.None);
+            // Authentication failure messages from NyxID are intentionally surfaced
+            // — they describe why the caller's own token was rejected and don't
+            // contain server-side internals.
             return ToErrorResult(StatusCodes.Status401Unauthorized, "authentication_required", ex.Message);
         }
         catch (NyxIdUpstreamException ex)
@@ -246,7 +260,11 @@ internal static class ResponsesApiEndpoints
                 _ => StatusCodes.Status502BadGateway,
             };
 
-            return ToErrorResult(statusCode, ex.Kind.ToString().ToLowerInvariant(), ex.Message);
+            var correlation = LogAndCorrelate(logger, ex, "nyxid_upstream", normalized.ResponseId);
+            return ToErrorResult(
+                statusCode,
+                ex.Kind.ToString().ToLowerInvariant(),
+                $"Upstream provider error. Correlation: {correlation}");
         }
         catch (OperationCanceledException)
         {
@@ -256,7 +274,7 @@ internal static class ResponsesApiEndpoints
                 responseSession,
                 ResponseSessionStatus.Cancelled,
                 CancellationToken.None);
-            return Results.StatusCode(499);
+            return Results.StatusCode(StatusCodes.Status408RequestTimeout);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -266,11 +284,28 @@ internal static class ResponsesApiEndpoints
                 responseSession,
                 ResponseSessionStatus.Failed,
                 CancellationToken.None);
+            var correlation = LogAndCorrelate(logger, ex, "execution", normalized.ResponseId);
             return ToErrorResult(
                 StatusCodes.Status500InternalServerError,
                 "execution_failed",
-                ex.Message);
+                $"Execution failed. Correlation: {correlation}");
         }
+    }
+
+    private static string LogAndCorrelate(
+        ILogger logger,
+        Exception ex,
+        string stage,
+        string responseId)
+    {
+        var correlation = Guid.NewGuid().ToString("N")[..16];
+        logger.LogError(
+            ex,
+            "Responses {Stage} failure for {ResponseId} (correlation {Correlation}).",
+            stage,
+            responseId,
+            correlation);
+        return correlation;
     }
 
     internal static async Task<IResult> HandleCancelResponseAsync(
@@ -343,10 +378,14 @@ internal static class ResponsesApiEndpoints
             }
             catch (OperationCanceledException)
             {
-                return Results.StatusCode(499);
+                return Results.StatusCode(StatusCodes.Status408RequestTimeout);
             }
             catch (InvalidOperationException ex)
             {
+                // InvalidOperationException here originates from the actor's
+                // own validation messages (e.g. terminal-state guard). They're
+                // safe to surface — they describe the protocol violation, not
+                // server internals.
                 return ToErrorResult(
                     StatusCodes.Status400BadRequest,
                     "response_cancel_rejected",
@@ -370,6 +409,7 @@ internal static class ResponsesApiEndpoints
         ILogger logger,
         ResponseSessionRegistrationResult responseSession,
         LLMRequest request,
+        IReadOnlyDictionary<string, string> toolContextMetadata,
         NormalizedResponsesRequest normalized,
         ResponseSessionSnapshot? previousSnapshot,
         ResponsesToolClassification toolClassification,
@@ -420,6 +460,7 @@ internal static class ResponsesApiEndpoints
                 response,
                 provider,
                 request,
+                toolContextMetadata,
                 normalized,
                 toolClassification,
                 sequenceNumber,
@@ -470,7 +511,7 @@ internal static class ResponsesApiEndpoints
                 logger,
                 previousSnapshot,
                 normalized,
-                CancellationToken.None);
+                ct);
 
             var nextOutputIndex = 1;
             foreach (var toolCall in completedToolCalls)
@@ -524,7 +565,7 @@ internal static class ResponsesApiEndpoints
                 logger,
                 responseSession,
                 ResponseSessionStatus.Completed,
-                CancellationToken.None);
+                ct);
         }
         catch (NyxIdAuthenticationRequiredException ex)
         {
@@ -534,6 +575,8 @@ internal static class ResponsesApiEndpoints
                 responseSession,
                 ResponseSessionStatus.Failed,
                 CancellationToken.None);
+            // NyxID authentication-required messages describe why the caller's
+            // token was rejected; surface verbatim (not server internals).
             await WriteStreamFailureAsync(
                 response,
                 normalized,
@@ -551,13 +594,14 @@ internal static class ResponsesApiEndpoints
                 responseSession,
                 ResponseSessionStatus.Failed,
                 CancellationToken.None);
+            var correlation = LogAndCorrelate(logger, ex, "stream_nyxid_upstream", normalized.ResponseId);
             await WriteStreamFailureAsync(
                 response,
                 normalized,
                 createdAt,
                 ++sequenceNumber,
                 ex.Kind.ToString().ToLowerInvariant(),
-                ex.Message,
+                $"Upstream provider error. Correlation: {correlation}",
                 ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -577,13 +621,14 @@ internal static class ResponsesApiEndpoints
                 responseSession,
                 ResponseSessionStatus.Failed,
                 CancellationToken.None);
+            var correlation = LogAndCorrelate(logger, ex, "stream_execution", normalized.ResponseId);
             await WriteStreamFailureAsync(
                 response,
                 normalized,
                 createdAt,
                 ++sequenceNumber,
                 "execution_failed",
-                ex.Message,
+                $"Execution failed. Correlation: {correlation}",
                 ct);
         }
     }
@@ -962,12 +1007,13 @@ internal static class ResponsesApiEndpoints
                     $"Forwarded tool call '{toolCall.Id}' references undeclared tool '{toolCall.Name}'.");
             }
 
+            var argumentsJson = string.IsNullOrWhiteSpace(toolCall.ArgumentsJson) ? "{}" : toolCall.ArgumentsJson;
             var call = new ResponseSessionForwardedToolCall
             {
                 CallId = toolCall.Id,
                 ToolName = toolCall.Name,
                 SchemaHash = declaration.SchemaHash,
-                ArgumentsJson = string.IsNullOrWhiteSpace(toolCall.ArgumentsJson) ? "{}" : toolCall.ArgumentsJson,
+                ArgumentsPayload = Google.Protobuf.ByteString.CopyFromUtf8(argumentsJson),
                 Status = ResponseSessionForwardedToolCallStatus.Pending,
                 EmittedAt = Timestamp.FromDateTimeOffset(emittedAt),
                 Expiry = Timestamp.FromDateTimeOffset(expiry),
@@ -1011,9 +1057,15 @@ internal static class ResponsesApiEndpoints
         IReadOnlyList<ToolCall> ForwardedToolCalls,
         int SequenceNumber);
 
+    // Bounded tool-loop. The cap stops a runaway model from looping forever between
+    // local tool calls; eight rounds matches the bound observed in similar
+    // multi-round agent loops in this repo (e.g. SkillRunnerGAgent).
+    private const int MaxToolRounds = 8;
+
     private static async Task<ResponsesCompletionResult> CollectToolAwareCompletionAsync(
         ILLMProvider provider,
         LLMRequest request,
+        IReadOnlyDictionary<string, string> toolContextMetadata,
         ResponsesToolClassification toolClassification,
         CancellationToken ct)
     {
@@ -1021,10 +1073,11 @@ internal static class ResponsesApiEndpoints
         var outputText = new StringBuilder();
         ResponsesUsage? usage = null;
 
-        for (var round = 0; round < 8; round++)
+        for (var round = 0; round < MaxToolRounds; round++)
         {
             var roundRequest = CloneRequestWithMessages(request, messages);
-            var (roundText, roundUsage, toolCalls) = await CollectStreamCompletionAsync(provider, roundRequest, ct);
+            var (roundText, roundUsage, toolCalls) = await CollectStreamCompletionAsync(
+                provider, roundRequest, toolContextMetadata, ct);
             outputText.Append(roundText);
             usage = roundUsage ?? usage;
 
@@ -1041,7 +1094,7 @@ internal static class ResponsesApiEndpoints
                 Role = "assistant",
                 ToolCalls = localToolCalls,
             });
-            await ExecuteLocalToolCallsAsync(request, localToolCalls, messages, ct);
+            await ExecuteLocalToolCallsAsync(request, toolContextMetadata, localToolCalls, messages, ct);
         }
 
         return new ResponsesCompletionResult(outputText.ToString(), usage, []);
@@ -1051,6 +1104,7 @@ internal static class ResponsesApiEndpoints
         HttpResponse response,
         ILLMProvider provider,
         LLMRequest request,
+        IReadOnlyDictionary<string, string> toolContextMetadata,
         NormalizedResponsesRequest normalized,
         ResponsesToolClassification toolClassification,
         int sequenceNumber,
@@ -1060,14 +1114,17 @@ internal static class ResponsesApiEndpoints
         var outputText = new StringBuilder();
         ResponsesUsage? usage = null;
 
-        for (var round = 0; round < 8; round++)
+        for (var round = 0; round < MaxToolRounds; round++)
         {
             var roundRequest = CloneRequestWithMessages(request, messages);
             var toolCalls = new ResponsesToolCallAccumulator();
+            // AgentToolRequestContext is AsyncLocal-backed (see
+            // AgentToolRequestContext.cs), so this scope is safe under
+            // concurrent requests sharing a thread-pool thread.
             var previousMetadata = AgentToolRequestContext.CurrentMetadata;
             try
             {
-                AgentToolRequestContext.CurrentMetadata = roundRequest.Metadata;
+                AgentToolRequestContext.CurrentMetadata = toolContextMetadata;
                 await foreach (var chunk in provider.ChatStreamAsync(roundRequest, ct))
                 {
                     var delta = ExtractChunkText(chunk);
@@ -1130,7 +1187,7 @@ internal static class ResponsesApiEndpoints
                 Role = "assistant",
                 ToolCalls = localToolCalls,
             });
-            await ExecuteLocalToolCallsAsync(request, localToolCalls, messages, ct);
+            await ExecuteLocalToolCallsAsync(request, toolContextMetadata, localToolCalls, messages, ct);
         }
 
         return new ResponsesStreamCompletionResult(outputText.ToString(), usage, [], sequenceNumber);
@@ -1172,6 +1229,7 @@ internal static class ResponsesApiEndpoints
 
     private static async Task ExecuteLocalToolCallsAsync(
         LLMRequest request,
+        IReadOnlyDictionary<string, string> toolContextMetadata,
         IReadOnlyList<ToolCall> toolCalls,
         List<ChatMessage> messages,
         CancellationToken ct)
@@ -1185,7 +1243,7 @@ internal static class ResponsesApiEndpoints
         var previousMetadata = AgentToolRequestContext.CurrentMetadata;
         try
         {
-            AgentToolRequestContext.CurrentMetadata = request.Metadata;
+            AgentToolRequestContext.CurrentMetadata = toolContextMetadata;
             foreach (var toolCall in toolCalls)
             {
                 var result = toolsByName.TryGetValue(toolCall.Name, out var tool)
@@ -1209,6 +1267,7 @@ internal static class ResponsesApiEndpoints
     private static async Task<(string Text, ResponsesUsage? Usage, IReadOnlyList<ToolCall> ToolCalls)> CollectStreamCompletionAsync(
         ILLMProvider provider,
         LLMRequest request,
+        IReadOnlyDictionary<string, string> toolContextMetadata,
         CancellationToken ct)
     {
         var outputText = new StringBuilder();
@@ -1218,7 +1277,7 @@ internal static class ResponsesApiEndpoints
         var previousMetadata = AgentToolRequestContext.CurrentMetadata;
         try
         {
-            AgentToolRequestContext.CurrentMetadata = request.Metadata;
+            AgentToolRequestContext.CurrentMetadata = toolContextMetadata;
             await foreach (var chunk in provider.ChatStreamAsync(request, ct))
             {
                 var delta = ExtractChunkText(chunk);

@@ -3,11 +3,21 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Core.GAgents;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Infrastructure.Adapters;
 
+/// <summary>
+/// Host-side adapter for the <see cref="IResponsesAgentToolStateCommandPort"/>.
+/// JSON payloads arriving at the HTTP boundary are parsed into typed proto here
+/// and the raw bytes are kept only as an audit trail; the actor itself never
+/// deserializes JSON. The shared <see cref="ResponsesTodoItemParser"/> drives
+/// both the dispatched command and the preview returned to the caller so there
+/// is only one parser implementation.
+/// </summary>
 public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolStateCommandPort
 {
     private const string PublisherId = "gagent-service.responses-agent-tools";
@@ -35,23 +45,38 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
     {
         var actor = await EnsureActorAsync(scopeId, ownerSubject, ct);
         var observedAt = Timestamp.FromDateTime(DateTime.UtcNow);
+        var todos = ResponsesTodoItemParser.Parse(argumentsJson, sourceResponseId, observedAt);
+
+        var apply = new ApplyResponsesTodoWriteRequested
+        {
+            ScopeId = scopeId.Trim(),
+            OwnerSubject = ownerSubject.Trim(),
+            SourceResponseId = NormalizeOptional(sourceResponseId) ?? string.Empty,
+            ArgumentsPayload = string.IsNullOrEmpty(argumentsJson)
+                ? ByteString.Empty
+                : ByteString.CopyFromUtf8(argumentsJson),
+            ObservedAt = observedAt,
+        };
+        apply.TodoItems.AddRange(todos.Select(static x => x.Clone()));
+
         await _dispatchPort.DispatchAsync(
             actor.Id,
             CreateEnvelope(
                 actor.Id,
-                Any.Pack(new ApplyResponsesTodoWriteRequested
-                {
-                    ScopeId = scopeId.Trim(),
-                    OwnerSubject = ownerSubject.Trim(),
-                    SourceResponseId = NormalizeOptional(sourceResponseId) ?? string.Empty,
-                    ArgumentsJson = NormalizeOptional(argumentsJson) ?? "{}",
-                    ObservedAt = observedAt,
-                }),
+                Any.Pack(apply),
                 $"{sourceResponseId}:todo:{Guid.NewGuid():N}"),
             ct);
 
-        var todos = PreviewTodoItems(argumentsJson, sourceResponseId, observedAt.ToDateTimeOffset());
-        return new ResponsesTodoWriteResult(actor.Id, sourceResponseId, todos);
+        var snapshots = todos
+            .Select(item => new ResponsesTodoItemSnapshot(
+                item.Id,
+                item.Content,
+                item.Status,
+                item.SourceResponseId,
+                item.CreatedAt.ToDateTimeOffset(),
+                item.UpdatedAt.ToDateTimeOffset()))
+            .ToArray();
+        return new ResponsesTodoWriteResult(actor.Id, sourceResponseId, snapshots);
     }
 
     public async Task<ResponsesTaskDispatchResult> RecordTaskAsync(
@@ -73,6 +98,11 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
             note = "Task dispatch has been recorded in Aevatar task topology state. Full sub-agent execution is owned by the GAgent topology issue.",
         });
 
+        var argumentsBytes = string.IsNullOrEmpty(argumentsJson)
+            ? ByteString.Empty
+            : ByteString.CopyFromUtf8(argumentsJson);
+        var resultBytes = ByteString.CopyFromUtf8(resultJson);
+
         await _dispatchPort.DispatchAsync(
             actor.Id,
             CreateEnvelope(
@@ -83,8 +113,8 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
                     TaskId = taskId,
                     ChildActorId = childActorId,
                     Description = description,
-                    ArgumentsJson = NormalizeOptional(argumentsJson) ?? "{}",
-                    ResultJson = resultJson,
+                    ArgumentsPayload = argumentsBytes,
+                    ResultPayload = resultBytes,
                     Status = ResponsesAgentToolTaskStatus.Accepted,
                     ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
                 }),
@@ -107,6 +137,10 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
         var traceId = string.IsNullOrWhiteSpace(trace.TraceId)
             ? ResponseAgentToolStateIds.NewWebTraceId()
             : trace.TraceId.Trim();
+        var resultPayload = string.IsNullOrEmpty(trace.ResultJson)
+            ? ByteString.CopyFromUtf8("{}")
+            : ByteString.CopyFromUtf8(trace.ResultJson);
+
         await _dispatchPort.DispatchAsync(
             actor.Id,
             CreateEnvelope(
@@ -120,7 +154,7 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
                     Url = NormalizeOptional(trace.Url) ?? string.Empty,
                     Query = NormalizeOptional(trace.Query) ?? string.Empty,
                     CacheHit = trace.CacheHit,
-                    ResultJson = NormalizeOptional(trace.ResultJson) ?? "{}",
+                    ResultPayload = resultPayload,
                     ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
                 }),
                 $"{sourceResponseId}:web:{traceId}"),
@@ -142,6 +176,13 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
         var actorId = ResponseAgentToolStateIds.BuildActorId(scopeId, ownerSubject);
         var actor = await _runtime.CreateAsync<ResponsesAgentToolStateGAgent>(actorId, ct: ct);
         await _projectionPort.EnsureProjectionAsync(actor.Id, ct);
+        // The register dispatch is idempotent at the actor (HandleRegisterAsync
+        // returns early when scope/owner already match). We do not cache a
+        // "registered" set in this adapter — that would violate the
+        // middle-tier state constraint in CLAUDE.md (no service-level
+        // entity-id → fact-state dictionary). The cost is one extra ignored
+        // envelope per command, which is dwarfed by the projection write the
+        // command itself triggers.
         await _dispatchPort.DispatchAsync(
             actor.Id,
             CreateEnvelope(
@@ -176,83 +217,6 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
                 CorrelationId = commandId,
             },
         };
-
-    private static IReadOnlyList<ResponsesTodoItemSnapshot> PreviewTodoItems(
-        string? argumentsJson,
-        string sourceResponseId,
-        DateTimeOffset observedAt)
-    {
-        if (string.IsNullOrWhiteSpace(argumentsJson))
-            return [];
-
-        var result = new List<ResponsesTodoItemSnapshot>();
-        try
-        {
-            using var document = JsonDocument.Parse(argumentsJson);
-            var root = document.RootElement;
-            if (root.ValueKind == JsonValueKind.Object &&
-                root.TryGetProperty("todos", out var todos) &&
-                todos.ValueKind == JsonValueKind.Array)
-            {
-                var index = 0;
-                foreach (var todo in todos.EnumerateArray())
-                {
-                    var item = PreviewTodoItem(todo, index, sourceResponseId, observedAt);
-                    if (item != null)
-                        result.Add(item);
-                    index++;
-                }
-                return result;
-            }
-
-            var single = PreviewTodoItem(root, 0, sourceResponseId, observedAt);
-            return single == null ? [] : [single];
-        }
-        catch (JsonException)
-        {
-            return [];
-        }
-    }
-
-    private static ResponsesTodoItemSnapshot? PreviewTodoItem(
-        JsonElement element,
-        int index,
-        string sourceResponseId,
-        DateTimeOffset observedAt)
-    {
-        string? content;
-        string? id = null;
-        var status = "pending";
-        if (element.ValueKind == JsonValueKind.String)
-        {
-            content = element.GetString();
-        }
-        else if (element.ValueKind == JsonValueKind.Object)
-        {
-            content = GetString(element, "content")
-                      ?? GetString(element, "task")
-                      ?? GetString(element, "title")
-                      ?? GetString(element, "text");
-            id = GetString(element, "id");
-            status = GetString(element, "status") ?? status;
-        }
-        else
-        {
-            return null;
-        }
-
-        if (string.IsNullOrWhiteSpace(content))
-            return null;
-
-        id = NormalizeOptional(id) ?? "todo_" + index.ToString("D4");
-        return new ResponsesTodoItemSnapshot(
-            id,
-            content.Trim(),
-            status.Trim(),
-            sourceResponseId,
-            observedAt,
-            observedAt);
-    }
 
     private static string ExtractTaskDescription(string? argumentsJson)
     {

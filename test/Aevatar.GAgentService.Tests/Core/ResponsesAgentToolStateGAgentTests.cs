@@ -1,8 +1,10 @@
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Core.GAgents;
 using Aevatar.GAgentService.Tests.TestSupport;
 using Aevatar.Foundation.Runtime.Persistence;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Tests.Core;
@@ -15,14 +17,18 @@ public sealed class ResponsesAgentToolStateGAgentTests
         var actor = CreateActor();
         await RegisterAsync(actor);
 
-        await actor.HandleApplyTodoWriteAsync(new ApplyResponsesTodoWriteRequested
+        var observedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-12T00:00:00+00:00"));
+        const string argumentsJson = """{"todos":[{"id":"todo-1","content":"Ship","status":"pending"}]}""";
+        var apply = new ApplyResponsesTodoWriteRequested
         {
             ScopeId = "scope-1",
             OwnerSubject = "owner-1",
             SourceResponseId = "resp_1",
-            ArgumentsJson = """{"todos":[{"id":"todo-1","content":"Ship","status":"pending"}]}""",
-            ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-12T00:00:00+00:00")),
-        });
+            ArgumentsPayload = ByteString.CopyFromUtf8(argumentsJson),
+            ObservedAt = observedAt,
+        };
+        apply.TodoItems.AddRange(ResponsesTodoItemParser.Parse(argumentsJson, "resp_1", observedAt));
+        await actor.HandleApplyTodoWriteAsync(apply);
 
         actor.State.TodoItems.Should().ContainSingle();
         actor.State.TodoItems[0].Id.Should().Be("todo-1");
@@ -36,6 +42,7 @@ public sealed class ResponsesAgentToolStateGAgentTests
         var actor = CreateActor();
         await RegisterAsync(actor);
 
+        var resultPayload = ByteString.CopyFromUtf8("""{"content":"fresh"}""");
         await actor.HandleRecordWebTraceAsync(new RecordResponsesWebTraceRequested
         {
             SourceResponseId = "resp_1",
@@ -43,7 +50,7 @@ public sealed class ResponsesAgentToolStateGAgentTests
             ToolName = "WebFetch",
             CacheKey = "cache-1",
             Url = "https://example.com",
-            ResultJson = """{"content":"fresh"}""",
+            ResultPayload = resultPayload,
             ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-12T00:00:00+00:00")),
         });
         await actor.HandleRecordWebTraceAsync(new RecordResponsesWebTraceRequested
@@ -54,7 +61,7 @@ public sealed class ResponsesAgentToolStateGAgentTests
             CacheKey = "cache-1",
             Url = "https://example.com",
             CacheHit = true,
-            ResultJson = """{"content":"fresh"}""",
+            ResultPayload = resultPayload,
             ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-12T00:01:00+00:00")),
         });
 
@@ -76,8 +83,8 @@ public sealed class ResponsesAgentToolStateGAgentTests
             TaskId = "task_1",
             ChildActorId = "responses-agent-tools-scope-task-1",
             Description = "summarize",
-            ArgumentsJson = """{"prompt":"summarize"}""",
-            ResultJson = """{"status":"accepted"}""",
+            ArgumentsPayload = ByteString.CopyFromUtf8("""{"prompt":"summarize"}"""),
+            ResultPayload = ByteString.CopyFromUtf8("""{"status":"accepted"}"""),
             Status = ResponsesAgentToolTaskStatus.Accepted,
         });
 

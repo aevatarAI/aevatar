@@ -6,6 +6,7 @@ using Aevatar.GAgentService.Projection.Projectors;
 using Aevatar.GAgentService.Projection.Queries;
 using Aevatar.GAgentService.Projection.ReadModels;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Tests.Projection;
@@ -81,8 +82,8 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
             ChildActorId = "child-1",
             Description = "summarize",
             Status = ResponsesAgentToolTaskStatus.Accepted,
-            ArgumentsJson = "{}",
-            ResultJson = """{"status":"accepted"}""",
+            ArgumentsPayload = ByteString.CopyFromUtf8("{}"),
+            ResultPayload = ByteString.CopyFromUtf8("""{"status":"accepted"}"""),
             CreatedAt = Timestamp.FromDateTimeOffset(observedAt),
             UpdatedAt = Timestamp.FromDateTimeOffset(observedAt),
         });
@@ -93,7 +94,7 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
             ToolName = "WebFetch",
             CacheKey = "cache-1",
             Url = "https://example.com",
-            ResultJson = """{"content":"fresh"}""",
+            ResultPayload = ByteString.CopyFromUtf8("""{"content":"fresh"}"""),
             ObservedAt = Timestamp.FromDateTimeOffset(observedAt),
         });
         state.WebCacheEntries.Add(new ResponsesWebCacheEntry
@@ -101,7 +102,7 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
             CacheKey = "cache-1",
             ToolName = "WebFetch",
             Url = "https://example.com",
-            ResultJson = """{"content":"fresh"}""",
+            ResultPayload = ByteString.CopyFromUtf8("""{"content":"fresh"}"""),
             CachedAt = Timestamp.FromDateTimeOffset(observedAt),
         });
 

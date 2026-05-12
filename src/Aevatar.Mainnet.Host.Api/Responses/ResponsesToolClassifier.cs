@@ -19,16 +19,6 @@ internal sealed record ResponsesToolClassification(
 
 internal static class ResponsesToolClassifier
 {
-    private static readonly string[] SubstituteToolNames =
-    [
-        "Task",
-        "WebFetch",
-        "WebSearch",
-        "web_fetch",
-        "web_search",
-        "task",
-    ];
-
     public static ResponsesToolClassification Classify(
         IReadOnlyList<ResponsesToolDeclaration> declaredTools,
         IEnumerable<IResponsesToolProvider> providers,
@@ -38,11 +28,17 @@ internal static class ResponsesToolClassifier
         ArgumentNullException.ThrowIfNull(providers);
         ArgumentNullException.ThrowIfNull(logger);
 
-        var substituteTools = providers
+        // Materialize providers once — substitute names are derived from the
+        // provider's actual tool list, so there is no second hardcoded
+        // registry to keep in sync.
+        var providerList = providers as IReadOnlyList<IResponsesToolProvider>
+                           ?? providers.ToArray();
+        var substituteTools = providerList
             .SelectMany(static provider => provider.GetSubstituteTools())
             .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
             .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
-        var additiveTools = providers
+        var substituteNames = new HashSet<string>(substituteTools.Keys, StringComparer.Ordinal);
+        var additiveTools = providerList
             .SelectMany(static provider => provider.GetAdditiveTools())
             .Where(static tool => tool.Name.StartsWith("aevatar_", StringComparison.Ordinal))
             .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
@@ -55,7 +51,7 @@ internal static class ResponsesToolClassifier
 
         foreach (var declaration in declaredTools)
         {
-            if (!RequiresSubstitution(declaration.Name))
+            if (!substituteNames.Contains(declaration.Name))
             {
                 forwarded.Add(declaration);
                 effective.Add(new ResponsesForwardedTool(declaration));
@@ -92,16 +88,6 @@ internal static class ResponsesToolClassifier
             effective,
             substitutedNames,
             additiveTools.Select(static tool => tool.Name).ToArray());
-    }
-
-    private static bool RequiresSubstitution(string toolName)
-    {
-        if (string.IsNullOrWhiteSpace(toolName))
-            return false;
-
-        return SubstituteToolNames.Contains(toolName, StringComparer.Ordinal) ||
-               toolName.StartsWith("Todo", StringComparison.Ordinal) ||
-               toolName.StartsWith("todo", StringComparison.Ordinal);
     }
 
     private sealed class ResponsesUnavailableSubstituteTool : IAgentTool

@@ -95,9 +95,12 @@ public sealed class MainnetResponsesEndpointsTests
         provider.LastRequest.Temperature.Should().Be(0.2);
         provider.LastRequest.Messages.Should().ContainSingle();
         provider.LastRequest.Messages[0].Content.Should().Be("ping");
-        provider.LastRequest.Metadata.Should().Contain(LLMRequestMetadataKeys.NyxIdAccessToken, "secret-token");
         provider.LastRequest.Metadata.Should().ContainKey(LLMRequestMetadataKeys.RequestId);
-        provider.LastRequest.Metadata.Should().Contain("scope_id", "user-1");
+        provider.LastRequest.Metadata.Should().Contain(LLMRequestMetadataKeys.ScopeId, "user-1");
+        // The NyxID bearer token is intentionally NOT placed in LLMRequest.Metadata
+        // (which crosses into the LLM provider's request and may be logged downstream).
+        // Tool providers read it from AgentToolRequestContext instead.
+        provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
 
         sessions.Registered.Should().ContainSingle();
         sessions.Registered[0].ScopeId.Should().Be("user-1");
@@ -152,7 +155,7 @@ public sealed class MainnetResponsesEndpointsTests
 
         provider.StreamCallCount.Should().Be(1);
         provider.LastRequest.Should().NotBeNull();
-        provider.LastRequest!.Metadata.Should().Contain(LLMRequestMetadataKeys.NyxIdAccessToken, "stream-secret");
+        provider.LastRequest!.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
         sessions.StatusUpdates.Should().ContainSingle(x => x.Status == ResponseSessionStatus.Completed);
     }
 
@@ -218,7 +221,7 @@ public sealed class MainnetResponsesEndpointsTests
         persisted.CallId.Should().Be("call_weather_1");
         persisted.ToolName.Should().Be("get_weather");
         persisted.SchemaHash.Should().Be(ResponsesToolSchemaHashes.Compute(parametersJson));
-        persisted.ArgumentsJson.Should().Be("""{"city":"Singapore"}""");
+        persisted.ArgumentsPayload.ToStringUtf8().Should().Be("""{"city":"Singapore"}""");
         persisted.Status.Should().Be(ResponseSessionForwardedToolCallStatus.Pending);
         persisted.Expiry.Should().NotBeNull();
     }
@@ -1299,10 +1302,10 @@ public sealed class MainnetResponsesEndpointsTests
                         clone.CallId,
                         clone.ToolName,
                         clone.SchemaHash,
-                        clone.ArgumentsJson,
+                        clone.ArgumentsPayload.IsEmpty ? string.Empty : clone.ArgumentsPayload.ToStringUtf8(),
                         clone.Status,
                         clone.Expiry?.ToDateTimeOffset(),
-                        string.IsNullOrWhiteSpace(clone.ResultJson) ? null : clone.ResultJson,
+                        clone.ResultPayload.IsEmpty ? null : clone.ResultPayload.ToStringUtf8(),
                         clone.EmittedAt?.ToDateTimeOffset(),
                         clone.ReceivedAt?.ToDateTimeOffset(),
                         clone.ResolvedAt?.ToDateTimeOffset()))

@@ -218,7 +218,7 @@ public sealed class ResponsesAgentToolStateCommandAdapterTests
         result.CacheHit.Should().BeTrue();
         var packed = dispatch.Calls[1].envelope.Payload.Unpack<RecordResponsesWebTraceRequested>();
         packed.TraceId.Should().Be(result.TraceId);
-        packed.ResultJson.Should().Be("{}");
+        packed.ResultPayload.ToStringUtf8().Should().Be("{}");
     }
 
     private static (ResponsesAgentToolStateCommandAdapter adapter, RecordingRuntime runtime, RecordingDispatchPort dispatch, RecordingProjectionPort projection) CreateAdapter()
