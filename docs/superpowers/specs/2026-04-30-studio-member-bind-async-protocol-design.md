@@ -175,9 +175,10 @@ enum StudioMemberBindingRunStatus {
   STUDIO_MEMBER_BINDING_RUN_STATUS_ADMISSION_PENDING = 2;
   STUDIO_MEMBER_BINDING_RUN_STATUS_ADMITTED = 3;
   STUDIO_MEMBER_BINDING_RUN_STATUS_PLATFORM_BINDING_PENDING = 4;
-  STUDIO_MEMBER_BINDING_RUN_STATUS_SUCCEEDED = 5;
-  STUDIO_MEMBER_BINDING_RUN_STATUS_FAILED = 6;
-  STUDIO_MEMBER_BINDING_RUN_STATUS_REJECTED = 7;
+  STUDIO_MEMBER_BINDING_RUN_STATUS_MEMBER_NOTIFICATION_PENDING = 5;
+  STUDIO_MEMBER_BINDING_RUN_STATUS_SUCCEEDED = 6;
+  STUDIO_MEMBER_BINDING_RUN_STATUS_FAILED = 7;
+  STUDIO_MEMBER_BINDING_RUN_STATUS_REJECTED = 8;
 }
 
 message StudioMemberBindingRequest {
@@ -230,6 +231,8 @@ message StudioMemberBindingRunState {
   google.protobuf.Timestamp updated_at_utc = 11;
   int32 attempt_count = 12;
   string platform_binding_command_id = 13;
+  bool platform_execution_in_flight = 14;
+  google.protobuf.Timestamp platform_execution_started_at_utc = 15;
 }
 
 message StudioMemberBindingAuthorityState {
@@ -335,10 +338,16 @@ message StudioMemberPlatformBindingFailed {
   StudioMemberBindingFailure failure = 3;
 }
 
-message StudioMemberBindingRetryFired {
+message StudioMemberPlatformBindingExecutionStarted {
   string binding_run_id = 1;
-  int32 attempt = 2;
-  google.protobuf.Timestamp fired_at_utc = 3;
+  string platform_binding_command_id = 2;
+  google.protobuf.Timestamp started_at_utc = 3;
+}
+
+message StudioMemberBindingTerminalAcknowledged {
+  string binding_run_id = 1;
+  StudioMemberBindingRunStatus status = 2;
+  google.protobuf.Timestamp acknowledged_at_utc = 3;
 }
 
 message StudioMemberBindingCompletedEvent {

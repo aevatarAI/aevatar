@@ -3891,9 +3891,6 @@ const StudioPage: React.FC = () => {
         } catch (error) {
           // The run status is read-model backed, so the first request can
           // legitimately arrive before projection catches up to the accepted ACK.
-          if (attempt === MEMBER_BINDING_RUN_POLL_ATTEMPTS - 1) {
-            throw error;
-          }
           continue;
         }
 
@@ -3951,13 +3948,43 @@ const StudioPage: React.FC = () => {
         });
       }
     } else {
-      result = await studioApi.bindScopeScript({
-        scopeId: resolvedStudioScopeId,
-        displayName: buildPendingBindCandidate.displayName,
-        serviceId: buildPendingBindCandidate.scriptId,
-        scriptId: buildPendingBindCandidate.scriptId,
-        scriptRevision: buildPendingBindCandidate.scriptRevision,
-      });
+      if (resolvedBuildMemberId) {
+        const receipt = await studioApi.bindMemberScript({
+          scopeId: resolvedStudioScopeId,
+          memberId: resolvedBuildMemberId,
+          displayName: buildPendingBindCandidate.displayName,
+          scriptId: buildPendingBindCandidate.scriptId,
+          scriptRevision: buildPendingBindCandidate.scriptRevision,
+        });
+        await queryClient.invalidateQueries({
+          queryKey: [
+            'studio-bind',
+            'member-binding',
+            resolvedStudioScopeId,
+            resolvedBuildMemberId,
+          ],
+        });
+        memberBindingRun = await waitForMemberBindingRun(receipt);
+        await queryClient.invalidateQueries({
+          queryKey: [
+            'studio-bind',
+            'member-binding',
+            resolvedStudioScopeId,
+            resolvedBuildMemberId,
+          ],
+        });
+        if (memberBindingRun?.status === 'failed' || memberBindingRun?.status === 'rejected') {
+          throw new Error(buildStudioMemberBindingFailureMessage(memberBindingRun));
+        }
+      } else {
+        result = await studioApi.bindScopeScript({
+          scopeId: resolvedStudioScopeId,
+          displayName: buildPendingBindCandidate.displayName,
+          serviceId: buildPendingBindCandidate.scriptId,
+          scriptId: buildPendingBindCandidate.scriptId,
+          scriptRevision: buildPendingBindCandidate.scriptRevision,
+        });
+      }
     }
     await queryClient.invalidateQueries({
       queryKey: ['studio-scope-members', resolvedStudioScopeId],

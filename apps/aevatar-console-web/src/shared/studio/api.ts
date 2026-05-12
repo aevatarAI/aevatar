@@ -1223,9 +1223,10 @@ function normalizeStudioMemberBindingRunStatus(
     "2": "admission_pending",
     "3": "admitted",
     "4": "platform_binding_pending",
-    "5": "succeeded",
-    "6": "failed",
-    "7": "rejected",
+    "5": "member_notification_pending",
+    "6": "succeeded",
+    "7": "failed",
+    "8": "rejected",
     accepted: "accepted",
     admission_pending: "admission_pending",
     admissionpending: "admission_pending",
@@ -1234,6 +1235,10 @@ function normalizeStudioMemberBindingRunStatus(
     platformbindingpending: "platform_binding_pending",
     platform_pending: "platform_binding_pending",
     platformpending: "platform_binding_pending",
+    member_notification_pending: "member_notification_pending",
+    membernotificationpending: "member_notification_pending",
+    notification_pending: "member_notification_pending",
+    notificationpending: "member_notification_pending",
     succeeded: "succeeded",
     completed: "succeeded",
     failed: "failed",
@@ -1293,13 +1298,6 @@ function decodeStudioMemberBindingRunStatusResponse(
         ["platformBindingCommandId", "PlatformBindingCommandId"],
         "StudioMemberBindingRunStatusResponse.platformBindingCommandId"
       ) ?? null,
-    lastSuccessfulBinding:
-      record.lastSuccessfulBinding == null &&
-      record.LastSuccessfulBinding == null
-        ? null
-        : decodeStudioMemberBindingContract(
-            record.lastSuccessfulBinding ?? record.LastSuccessfulBinding
-          ),
     failure:
       record.failure == null && record.Failure == null
         ? null

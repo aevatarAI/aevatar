@@ -213,6 +213,7 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
         StudioMemberBindingRunStatusNames.AdmissionPending => StudioMemberBindingRunStatusNames.AdmissionPending,
         StudioMemberBindingRunStatusNames.Admitted => StudioMemberBindingRunStatusNames.Admitted,
         StudioMemberBindingRunStatusNames.PlatformBindingPending => StudioMemberBindingRunStatusNames.PlatformBindingPending,
+        StudioMemberBindingRunStatusNames.MemberNotificationPending => StudioMemberBindingRunStatusNames.MemberNotificationPending,
         StudioMemberBindingRunStatusNames.Succeeded => StudioMemberBindingRunStatusNames.Succeeded,
         StudioMemberBindingRunStatusNames.Failed => StudioMemberBindingRunStatusNames.Failed,
         StudioMemberBindingRunStatusNames.Rejected => StudioMemberBindingRunStatusNames.Rejected,

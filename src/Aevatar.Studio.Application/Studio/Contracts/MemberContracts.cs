@@ -31,6 +31,7 @@ public static class StudioMemberBindingRunStatusNames
     public const string AdmissionPending = "admission_pending";
     public const string Admitted = "admitted";
     public const string PlatformBindingPending = "platform_binding_pending";
+    public const string MemberNotificationPending = "member_notification_pending";
     public const string Succeeded = "succeeded";
     public const string Failed = "failed";
     public const string Rejected = "rejected";

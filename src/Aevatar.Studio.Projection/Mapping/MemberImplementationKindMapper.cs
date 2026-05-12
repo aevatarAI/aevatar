@@ -52,6 +52,7 @@ public static class MemberImplementationKindMapper
         StudioMemberBindingRunStatus.AdmissionPending => StudioMemberBindingRunStatusNames.AdmissionPending,
         StudioMemberBindingRunStatus.Admitted => StudioMemberBindingRunStatusNames.Admitted,
         StudioMemberBindingRunStatus.PlatformBindingPending => StudioMemberBindingRunStatusNames.PlatformBindingPending,
+        StudioMemberBindingRunStatus.MemberNotificationPending => StudioMemberBindingRunStatusNames.MemberNotificationPending,
         StudioMemberBindingRunStatus.Succeeded => StudioMemberBindingRunStatusNames.Succeeded,
         StudioMemberBindingRunStatus.Failed => StudioMemberBindingRunStatusNames.Failed,
         StudioMemberBindingRunStatus.Rejected => StudioMemberBindingRunStatusNames.Rejected,

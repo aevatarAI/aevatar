@@ -30,6 +30,8 @@ import {
   describeStudioMemberBindingRevisionTarget,
   formatStudioMemberBindingImplementationKind,
   type StudioAuthSession,
+  type StudioMemberBindingContract,
+  type StudioMemberBindingRevision,
   type StudioMemberBindingRunStatusResponse,
 } from '@/shared/studio/models';
 import { studioApi } from '@/shared/studio/api';
@@ -132,6 +134,41 @@ function describeStudioMemberBindingRunStatus(
   return {
     message: 'Binding accepted. Studio is waiting for the member authority to advance the run.',
     type: 'info',
+  };
+}
+
+function buildRevisionFromMemberBinding(
+  binding: StudioMemberBindingContract | null | undefined,
+): StudioMemberBindingRevision | null {
+  if (!binding) {
+    return null;
+  }
+
+  return {
+    allocationWeight: 100,
+    artifactHash: '',
+    createdAt: binding.boundAt,
+    deploymentId: '',
+    failureReason: '',
+    implementationKind: binding.implementationKind,
+    inlineWorkflowCount: 0,
+    isActiveServing: true,
+    isDefaultServing: true,
+    isServingTarget: true,
+    preparedAt: binding.boundAt,
+    primaryActorId: '',
+    publishedAt: binding.boundAt,
+    retiredAt: null,
+    revisionId: binding.revisionId,
+    scriptDefinitionActorId: '',
+    scriptId: '',
+    scriptRevision: '',
+    scriptSourceHash: '',
+    servingState: 'active',
+    staticActorTypeName: '',
+    status: 'active',
+    workflowDefinitionActorId: '',
+    workflowName: '',
   };
 }
 
@@ -521,13 +558,14 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
         : false;
     },
   });
+  const currentBindingRun = memberBindingStatusQuery.data?.currentBindingRun ?? null;
   const revisionCatalogQuery = revisionsQuery;
   const currentPublishedRevision = useMemo(
     () =>
+      buildRevisionFromMemberBinding(memberBindingStatusQuery.data?.lastBinding) ??
       getScopeServiceCurrentRevision(revisionsQuery.data),
-    [revisionsQuery.data],
+    [memberBindingStatusQuery.data?.lastBinding, revisionsQuery.data],
   );
-  const currentBindingRun = memberBindingStatusQuery.data?.currentBindingRun ?? null;
   const currentBindingRunNotice = currentBindingRun
     ? describeStudioMemberBindingRunStatus(currentBindingRun)
     : null;

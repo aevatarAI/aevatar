@@ -466,6 +466,7 @@ export type StudioMemberBindingRunStatus =
   | 'admission_pending'
   | 'admitted'
   | 'platform_binding_pending'
+  | 'member_notification_pending'
   | 'succeeded'
   | 'failed'
   | 'rejected'
@@ -483,7 +484,6 @@ export interface StudioMemberBindingRunStatusResponse {
   readonly scopeId: string;
   readonly memberId: string;
   readonly platformBindingCommandId?: string | null;
-  readonly lastSuccessfulBinding?: StudioMemberBindingContract | null;
   readonly failure?: StudioMemberBindingFailure | null;
   readonly updatedAt?: string | null;
 }

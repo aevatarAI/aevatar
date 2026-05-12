@@ -131,9 +131,38 @@ public sealed class StudioMemberBindingRunGAgentStateTests
             },
         });
 
-        succeeded.Status.Should().Be(StudioMemberBindingRunStatus.Succeeded);
+        succeeded.Status.Should().Be(StudioMemberBindingRunStatus.MemberNotificationPending);
         succeeded.PlatformResult.RevisionId.Should().Be("rev-1");
         succeeded.UpdatedAtUtc.Should().Be(completedAt);
+    }
+
+    [Fact]
+    public void MemberTerminalAcknowledged_AfterPlatformSuccess_ShouldMarkRunSucceeded()
+    {
+        var pendingNotification = _agent.Apply(NewPlatformPendingState(), new StudioMemberPlatformBindingSucceeded
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(2)),
+            Result = new StudioMemberPlatformBindingResult
+            {
+                PublishedServiceId = "member-m-1",
+                RevisionId = "rev-1",
+                ImplementationKind = StudioMemberImplementationKind.Script,
+            },
+        });
+        var acknowledgedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(3));
+
+        var succeeded = _agent.Apply(pendingNotification, new StudioMemberBindingTerminalAcknowledged
+        {
+            BindingRunId = "bind-1",
+            Status = StudioMemberBindingRunStatus.Succeeded,
+            AcknowledgedAtUtc = acknowledgedAt,
+        });
+
+        succeeded.Status.Should().Be(StudioMemberBindingRunStatus.Succeeded);
+        succeeded.PlatformResult.RevisionId.Should().Be("rev-1");
+        succeeded.UpdatedAtUtc.Should().Be(acknowledgedAt);
     }
 
     [Fact]
@@ -176,9 +205,27 @@ public sealed class StudioMemberBindingRunGAgentStateTests
             },
         });
 
-        failed.Status.Should().Be(StudioMemberBindingRunStatus.Failed);
+        failed.Status.Should().Be(StudioMemberBindingRunStatus.MemberNotificationPending);
         failed.Failure.Code.Should().Be("SCOPE_BINDING_FAILED");
         failed.UpdatedAtUtc.Should().Be(failedAt);
+    }
+
+    [Fact]
+    public void PlatformExecutionStarted_ShouldMarkExecutionInFlight()
+    {
+        var accepted = NewPlatformPendingState();
+        var startedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(2));
+
+        var started = _agent.Apply(accepted, new StudioMemberPlatformBindingExecutionStarted
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            StartedAtUtc = startedAt,
+        });
+
+        started.PlatformExecutionInFlight.Should().BeTrue();
+        started.PlatformExecutionStartedAtUtc.Should().Be(startedAt);
+        started.UpdatedAtUtc.Should().Be(startedAt);
     }
 
     [Fact]
@@ -234,7 +281,7 @@ public sealed class StudioMemberBindingRunGAgentStateTests
             },
         });
 
-        afterFailure.Status.Should().Be(StudioMemberBindingRunStatus.Succeeded);
+        afterFailure.Status.Should().Be(StudioMemberBindingRunStatus.MemberNotificationPending);
         afterFailure.PlatformResult.RevisionId.Should().Be("rev-1");
         afterFailure.Failure.Should().BeNull();
     }

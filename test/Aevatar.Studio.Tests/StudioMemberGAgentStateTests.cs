@@ -650,6 +650,31 @@ public sealed class StudioMemberGAgentStateTests
     }
 
     [Fact]
+    public void BindingAdmissionRequested_ShouldKeepActiveRunWhenNewerRunArrives()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var created = _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DisplayName = "Original",
+            ImplementationKind = StudioMemberImplementationKind.Script,
+            PublishedServiceId = "member-m-1",
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(now),
+        });
+        var active = StartScriptBindingRun(created, "bind-active", now.AddSeconds(1));
+
+        var afterNewerAdmission = _agent.Apply(active, NewAdmissionRequested(
+            bindingRunId: "bind-newer",
+            requestHash: "hash-newer",
+            requestedAt: Timestamp.FromDateTimeOffset(now.AddSeconds(10))));
+
+        afterNewerAdmission.Binding.CurrentBindingRunId.Should().Be("bind-active");
+        afterNewerAdmission.Binding.CurrentStatus.Should().Be(StudioMemberBindingRunStatus.PlatformBindingPending);
+        afterNewerAdmission.Binding.UpdatedAtUtc.Should().Be(active.Binding.UpdatedAtUtc);
+    }
+
+    [Fact]
     public void BindingAdmissionRequested_ShouldStartNewRunAfterTerminalWhenNewer()
     {
         var now = DateTimeOffset.UtcNow;

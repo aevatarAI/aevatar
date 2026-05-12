@@ -120,6 +120,16 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             return;
         }
 
+        if (HasActiveBindingRun(State, evt.BindingRunId))
+        {
+            await SendToAsync(runActorId, BuildRejected(
+                evt,
+                "STUDIO_MEMBER_BINDING_RUN_ALREADY_ACTIVE",
+                "member already has an active binding run.",
+                failedAt));
+            return;
+        }
+
         if (IsSupersededBindingRun(State, evt.BindingRunId, evt.RequestedAtUtc))
         {
             await SendToAsync(runActorId, BuildRejected(evt, "STUDIO_MEMBER_BINDING_RUN_SUPERSEDED", "binding run was superseded by a newer member binding run.", failedAt));
@@ -162,6 +172,12 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             throw new InvalidOperationException("member not yet created.");
         }
 
+        if (IsTerminalBindingRunReplay(State, evt.BindingRunId, StudioMemberBindingRunStatus.Succeeded))
+        {
+            await SendTerminalAcknowledgementAsync(evt.BindingRunId, StudioMemberBindingRunStatus.Succeeded);
+            return;
+        }
+
         if (!CanAcceptBindingRunProgress(State, evt.BindingRunId))
         {
             return;
@@ -174,6 +190,7 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         }
 
         await PersistDomainEventAsync(evt);
+        await SendTerminalAcknowledgementAsync(evt.BindingRunId, StudioMemberBindingRunStatus.Succeeded);
     }
 
     [EventHandler(EndpointName = "completeBinding")]
@@ -184,12 +201,19 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             throw new InvalidOperationException("member not yet created.");
         }
 
+        if (IsTerminalBindingRunReplay(State, evt.BindingRunId, StudioMemberBindingRunStatus.Failed))
+        {
+            await SendTerminalAcknowledgementAsync(evt.BindingRunId, StudioMemberBindingRunStatus.Failed);
+            return;
+        }
+
         if (!CanAcceptBindingRunProgress(State, evt.BindingRunId))
         {
             return;
         }
 
         await PersistDomainEventAsync(evt);
+        await SendTerminalAcknowledgementAsync(evt.BindingRunId, StudioMemberBindingRunStatus.Failed);
     }
 
     [EventHandler(EndpointName = "failBinding")]
@@ -519,6 +543,15 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
                && !IsCurrentBindingTerminal(state);
     }
 
+    private static bool HasActiveBindingRun(StudioMemberState state, string incomingBindingRunId)
+    {
+        var currentBinding = state.Binding;
+        return currentBinding != null
+               && !string.IsNullOrEmpty(currentBinding.CurrentBindingRunId)
+               && !string.Equals(currentBinding.CurrentBindingRunId, incomingBindingRunId, StringComparison.Ordinal)
+               && !IsTerminalBindingStatus(currentBinding.CurrentStatus);
+    }
+
     private static bool ShouldIgnoreBindingRunStart(
         StudioMemberState state,
         string bindingRunId,
@@ -529,6 +562,9 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             return false;
 
         if (string.Equals(currentBinding.CurrentBindingRunId, bindingRunId, StringComparison.Ordinal))
+            return true;
+
+        if (!IsTerminalBindingStatus(currentBinding.CurrentStatus))
             return true;
 
         if (currentBinding.UpdatedAtUtc == null)
@@ -561,6 +597,17 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         return currentBinding != null
                && string.Equals(currentBinding.CurrentBindingRunId, bindingRunId, StringComparison.Ordinal)
                && IsTerminalBindingStatus(currentBinding.CurrentStatus);
+    }
+
+    private static bool IsTerminalBindingRunReplay(
+        StudioMemberState state,
+        string bindingRunId,
+        StudioMemberBindingRunStatus expectedStatus)
+    {
+        var currentBinding = state.Binding;
+        return currentBinding != null
+               && string.Equals(currentBinding.CurrentBindingRunId, bindingRunId, StringComparison.Ordinal)
+               && currentBinding.CurrentStatus == expectedStatus;
     }
 
     private static bool TryBuildTerminalBindingRunReplayResponse(
@@ -601,6 +648,16 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         status is StudioMemberBindingRunStatus.Succeeded
             or StudioMemberBindingRunStatus.Failed
             or StudioMemberBindingRunStatus.Rejected;
+
+    private Task SendTerminalAcknowledgementAsync(string bindingRunId, StudioMemberBindingRunStatus status) =>
+        SendToAsync(
+            StudioMemberConventions.BuildBindingRunActorId(bindingRunId),
+            new StudioMemberBindingTerminalAcknowledged
+            {
+                BindingRunId = bindingRunId,
+                Status = status,
+                AcknowledgedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            });
 
     private static int CompareTimestamp(Timestamp? left, Timestamp? right)
     {
