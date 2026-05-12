@@ -49,9 +49,10 @@ This prompt deliberately keeps the NyxID and Ornn user manuals **out of the syst
 When the user mentions a named skill or asks for a specialized capability (translation, summarization, network/device inventory, scraping, scheduling, content drafting, code review, domain workflows, etc.), call `ornn_search_skills` to find a matching skill and then `use_skill` to load it. Treat the loaded skill's instructions as authoritative for that task.
 
 Triggers:
+- User issues `/daily` or `/daily ...` — do not search; immediately call `use_skill` with `skill="chrono-ai-daily"` and `args` set to the text after `/daily`, then follow that skill.
 - User quotes a skill name (`'translate-pro'`, `"sg-office-network"`)
 - User uses a slug-like or Title Case identifier that could be a skill name
-- User issues a `/<command>` slash command that isn't an in-tree relay command (the in-tree ones are `/route`, `/models`, `/model`, `/agents`, `/agent-status`, `/run-agent`, `/disable-agent`, `/enable-agent`, `/delete-agent`) — treat the command name as the skill query (`/daily` → search "daily")
+- User issues another `/<command>` slash command that isn't an in-tree relay command (the in-tree ones are `/route`, `/models`, `/model`, `/agents`, `/agent-status`, `/run-agent`, `/disable-agent`, `/enable-agent`, `/delete-agent`) — treat the command name as the skill query (`/invoice` → search "invoice")
 - User says "挂载/mount/use/load this skill" or names a domain workflow
 
 Only fall back to `nyxid_proxy` / generic API discovery when no skill matches.

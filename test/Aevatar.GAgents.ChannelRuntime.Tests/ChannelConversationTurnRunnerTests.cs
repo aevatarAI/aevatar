@@ -859,7 +859,7 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
-    public async Task RunInboundAsync_ShouldFailRelayDailySlashCommand_WhenReplyTokenIsMissing()
+    public async Task RunInboundAsync_ShouldRouteDailySlashCommandToChronoAiDailySkill()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();
         var adapter = new RecordingPlatformAdapter();
@@ -884,11 +884,19 @@ public sealed class ChannelConversationTurnRunnerTests
                 {
                     NyxPlatform = "lark",
                 }),
-            ConversationTurnRuntimeContext.Empty,
+            RelayRuntimeContext(
+                "corr-missing-token-1",
+                "relay-token-daily-1",
+                "relay-msg-missing-token-1"),
             CancellationToken.None);
 
-        result.Success.Should().BeFalse();
-        result.ErrorCode.Should().Be("reply_token_missing_or_expired");
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.ReplyToken.Should().Be("relay-token-daily-1");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("chrono-ai-daily");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("use_skill");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("alice");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("/daily alice");
         adapter.Replies.Should().BeEmpty();
         relayHandler.Requests.Should().BeEmpty();
     }
