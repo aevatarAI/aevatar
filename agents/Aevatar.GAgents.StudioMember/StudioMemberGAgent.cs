@@ -172,12 +172,6 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             throw new InvalidOperationException("member not yet created.");
         }
 
-        if (IsTerminalBindingRunReplay(State, evt.BindingRunId, StudioMemberBindingRunStatus.Succeeded))
-        {
-            await SendTerminalAcknowledgementAsync(evt.BindingRunId, StudioMemberBindingRunStatus.Succeeded);
-            return;
-        }
-
         if (!CanAcceptBindingRunProgress(State, evt.BindingRunId))
         {
             return;
@@ -190,11 +184,33 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         }
 
         await PersistDomainEventAsync(evt);
-        await SendTerminalAcknowledgementAsync(evt.BindingRunId, StudioMemberBindingRunStatus.Succeeded);
     }
 
     [EventHandler(EndpointName = "completeBinding")]
     public async Task HandleBindingCompleted(StudioMemberBindingCompletedEvent evt)
+    {
+        if (string.IsNullOrEmpty(State.MemberId))
+        {
+            throw new InvalidOperationException("member not yet created.");
+        }
+
+        if (IsTerminalBindingRunReplay(State, evt.BindingRunId, StudioMemberBindingRunStatus.Succeeded))
+        {
+            await SendTerminalAcknowledgementAsync(evt.BindingRunId, StudioMemberBindingRunStatus.Succeeded);
+            return;
+        }
+
+        if (!CanAcceptBindingRunProgress(State, evt.BindingRunId))
+        {
+            return;
+        }
+
+        await PersistDomainEventAsync(evt);
+        await SendTerminalAcknowledgementAsync(evt.BindingRunId, StudioMemberBindingRunStatus.Succeeded);
+    }
+
+    [EventHandler(EndpointName = "failBinding")]
+    public async Task HandleBindingFailed(StudioMemberBindingFailedEvent evt)
     {
         if (string.IsNullOrEmpty(State.MemberId))
         {
@@ -214,22 +230,6 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
 
         await PersistDomainEventAsync(evt);
         await SendTerminalAcknowledgementAsync(evt.BindingRunId, StudioMemberBindingRunStatus.Failed);
-    }
-
-    [EventHandler(EndpointName = "failBinding")]
-    public async Task HandleBindingFailed(StudioMemberBindingFailedEvent evt)
-    {
-        if (string.IsNullOrEmpty(State.MemberId))
-        {
-            throw new InvalidOperationException("member not yet created.");
-        }
-
-        if (!CanAcceptBindingRunProgress(State, evt.BindingRunId))
-        {
-            return;
-        }
-
-        await PersistDomainEventAsync(evt);
     }
 
     /// <summary>

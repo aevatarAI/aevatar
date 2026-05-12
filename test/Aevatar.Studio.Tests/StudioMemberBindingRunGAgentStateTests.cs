@@ -1,5 +1,7 @@
 using System.Reflection;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.StudioMember;
 using FluentAssertions;
 using Google.Protobuf;
@@ -229,6 +231,42 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     }
 
     [Fact]
+    public async Task HandlePlatformBindingWatchdogFired_WhenInFlightIsFresh_ShouldNotReexecute()
+    {
+        var state = NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10));
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(state, publisher);
+
+        await agent.HandlePlatformBindingWatchdogFired(new StudioMemberPlatformBindingWatchdogFired
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+        });
+
+        publisher.SentMessages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandlePlatformBindingWatchdogFired_WhenInFlightIsStale_ShouldReexecuteAsRecovery()
+    {
+        var state = NewInFlightState(DateTimeOffset.UtcNow.AddMinutes(-3));
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(state, publisher);
+
+        await agent.HandlePlatformBindingWatchdogFired(new StudioMemberPlatformBindingWatchdogFired
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+        });
+
+        var retry = publisher.SentMessages.Should().ContainSingle().Subject.Event
+            .Should().BeOfType<StudioMemberPlatformBindingExecuteRequested>().Subject;
+        retry.BindingRunId.Should().Be("bind-1");
+        retry.PlatformBindingCommandId.Should().Be("platform-1");
+        retry.RecoveryExecution.Should().BeTrue();
+    }
+
+    [Fact]
     public void Rejected_ShouldRecordTerminalFailure()
     {
         var accepted = _agent.Apply(new StudioMemberBindingRunState(), NewRequested());
@@ -318,6 +356,30 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         });
     }
 
+    private StudioMemberBindingRunState NewInFlightState(DateTimeOffset startedAt)
+    {
+        var pending = NewPlatformPendingState();
+        return _agent.Apply(pending, new StudioMemberPlatformBindingExecutionStarted
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            StartedAtUtc = Timestamp.FromDateTimeOffset(startedAt),
+        });
+    }
+
+    private static StudioMemberBindingRunGAgent NewHandlerAgent(
+        StudioMemberBindingRunState state,
+        RecordingEventPublisher publisher)
+    {
+        var agent = new StudioMemberBindingRunGAgent
+        {
+            EventSourcing = new RecordingEventSourcing(state),
+            EventPublisher = publisher,
+        };
+        StudioMemberBindingRunStateSetter.Set(agent, state);
+        return agent;
+    }
+
     private sealed class StudioMemberBindingRunStateApplier
     {
         private static readonly MethodInfo TransitionStateMethod =
@@ -351,4 +413,69 @@ public sealed class StudioMemberBindingRunGAgentStateTests
             return (bool)result;
         }
     }
+
+    private static class StudioMemberBindingRunStateSetter
+    {
+        private static readonly FieldInfo StateField =
+            typeof(StudioMemberBindingRunGAgent).BaseType!
+                .GetField("_state", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("GAgent state field not found.");
+
+        public static void Set(StudioMemberBindingRunGAgent agent, StudioMemberBindingRunState state) =>
+            StateField.SetValue(agent, state.Clone());
+    }
+
+    private sealed class RecordingEventSourcing(StudioMemberBindingRunState replayState)
+        : IEventSourcingBehavior<StudioMemberBindingRunState>
+    {
+        public long CurrentVersion => 0;
+
+        public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage
+        {
+        }
+
+        public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default) =>
+            Task.FromResult(new EventStoreCommitResult());
+
+        public Task PersistSnapshotAsync(StudioMemberBindingRunState currentState, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task<StudioMemberBindingRunState?> ReplayAsync(string agentId, CancellationToken ct = default) =>
+            Task.FromResult<StudioMemberBindingRunState?>(replayState.Clone());
+
+        public void DiscardPendingEvents()
+        {
+        }
+
+        public StudioMemberBindingRunState TransitionState(StudioMemberBindingRunState current, IMessage evt) =>
+            current.Clone();
+    }
+
+    private sealed class RecordingEventPublisher : IEventPublisher
+    {
+        public List<SentMessage> SentMessages { get; } = [];
+
+        public Task PublishAsync<TEvent>(
+            TEvent evt,
+            TopologyAudience audience = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage =>
+            Task.CompletedTask;
+
+        public Task SendToAsync<TEvent>(
+            string targetActorId,
+            TEvent evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            SentMessages.Add(new SentMessage(targetActorId, evt));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed record SentMessage(string TargetActorId, IMessage Event);
 }

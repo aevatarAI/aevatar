@@ -15,6 +15,7 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
 {
     private static readonly TimeSpan PlatformBindingExecuteInitialDelay = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan PlatformBindingWatchdogDelay = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan PlatformBindingExecutionStaleAfter = TimeSpan.FromMinutes(2);
 
     public static string ProjectionKind => "studio-member-binding-run";
 
@@ -188,7 +189,21 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
                 BindingRunId = evt.BindingRunId,
                 PlatformBindingCommandId = evt.PlatformBindingCommandId,
             });
+            return;
         }
+
+        if (IsPlatformExecutionStale())
+        {
+            await SendToAsync(Id, new StudioMemberPlatformBindingExecuteRequested
+            {
+                BindingRunId = evt.BindingRunId,
+                PlatformBindingCommandId = evt.PlatformBindingCommandId,
+                RecoveryExecution = true,
+            });
+            return;
+        }
+
+        await SchedulePlatformBindingWatchdogAsync();
     }
 
     [EventHandler(EndpointName = "completePlatformBinding")]
@@ -430,6 +445,15 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         && (status == StudioMemberBindingRunStatus.Succeeded || status == StudioMemberBindingRunStatus.Failed)
         && ((status == StudioMemberBindingRunStatus.Succeeded && State.PlatformResult != null)
             || (status == StudioMemberBindingRunStatus.Failed && State.Failure != null));
+
+    private bool IsPlatformExecutionStale()
+    {
+        if (!State.PlatformExecutionInFlight || State.PlatformExecutionStartedAtUtc == null)
+            return false;
+
+        var startedAt = State.PlatformExecutionStartedAtUtc.ToDateTimeOffset();
+        return DateTimeOffset.UtcNow - startedAt >= PlatformBindingExecutionStaleAfter;
+    }
 
     private static bool CanApplyPlatformBindingResult(
         StudioMemberBindingRunState state,

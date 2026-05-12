@@ -1,4 +1,15 @@
+---
+title: "StudioMember Bind Async Protocol Design"
+status: history
+owner: codex
+---
+
 # StudioMember Bind Async Protocol Design
+
+This is an archived design snapshot for the StudioMember async binding work tracked by
+[#516](https://github.com/aevatarAI/aevatar/issues/516). It is retained for PR review
+context only; the authoritative behavior is the committed actor protocol, generated proto
+contracts, tests, and any future document promoted under `docs/canon/`.
 
 ## Background
 

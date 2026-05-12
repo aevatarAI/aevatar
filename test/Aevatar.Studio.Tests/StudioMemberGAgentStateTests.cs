@@ -414,6 +414,138 @@ public sealed class StudioMemberGAgentStateTests
     }
 
     [Fact]
+    public async Task HandleBindingPlatformPending_ShouldNotSendTerminalAcknowledgement()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var pending = StartScriptBindingRun(NewCreatedScriptMember(now), "bind-1", now.AddSeconds(1));
+        var eventSourcing = new RecordingEventSourcing(pending);
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(pending, eventSourcing, publisher);
+
+        await agent.HandleBindingPlatformPending(new StudioMemberBindingPlatformPendingEvent
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-bind-1",
+            PendingAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(4)),
+        });
+
+        publisher.SentMessages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleBindingCompleted_ShouldSendSucceededTerminalAcknowledgement()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var pending = StartScriptBindingRun(NewCreatedScriptMember(now), "bind-1", now.AddSeconds(1));
+        var eventSourcing = new RecordingEventSourcing(pending);
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(pending, eventSourcing, publisher);
+
+        await agent.HandleBindingCompleted(new StudioMemberBindingCompletedEvent
+        {
+            BindingRunId = "bind-1",
+            PublishedServiceId = "member-m-1",
+            RevisionId = "rev-1",
+            ImplementationKind = StudioMemberImplementationKind.Script,
+            CompletedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(4)),
+        });
+
+        var ack = publisher.SentMessages.Should().ContainSingle().Subject.Event
+            .Should().BeOfType<StudioMemberBindingTerminalAcknowledged>().Subject;
+        ack.BindingRunId.Should().Be("bind-1");
+        ack.Status.Should().Be(StudioMemberBindingRunStatus.Succeeded);
+    }
+
+    [Fact]
+    public async Task HandleBindingFailed_ShouldSendFailedTerminalAcknowledgement()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var pending = StartScriptBindingRun(NewCreatedScriptMember(now), "bind-1", now.AddSeconds(1));
+        var eventSourcing = new RecordingEventSourcing(pending);
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(pending, eventSourcing, publisher);
+
+        await agent.HandleBindingFailed(new StudioMemberBindingFailedEvent
+        {
+            BindingRunId = "bind-1",
+            Failure = new StudioMemberBindingFailure
+            {
+                Code = "SCOPE_BINDING_FAILED",
+                Message = "platform failed",
+                FailedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(4)),
+            },
+        });
+
+        var ack = publisher.SentMessages.Should().ContainSingle().Subject.Event
+            .Should().BeOfType<StudioMemberBindingTerminalAcknowledged>().Subject;
+        ack.BindingRunId.Should().Be("bind-1");
+        ack.Status.Should().Be(StudioMemberBindingRunStatus.Failed);
+    }
+
+    [Fact]
+    public async Task HandleBindingCompleted_ShouldResendSucceededAcknowledgement_WhenTerminalReplay()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var pending = StartScriptBindingRun(NewCreatedScriptMember(now), "bind-1", now.AddSeconds(1));
+        var completed = _agent.Apply(pending, new StudioMemberBindingCompletedEvent
+        {
+            BindingRunId = "bind-1",
+            PublishedServiceId = "member-m-1",
+            RevisionId = "rev-1",
+            ImplementationKind = StudioMemberImplementationKind.Script,
+            CompletedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(4)),
+        });
+        var eventSourcing = new RecordingEventSourcing(completed);
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(completed, eventSourcing, publisher);
+
+        await agent.HandleBindingCompleted(new StudioMemberBindingCompletedEvent
+        {
+            BindingRunId = "bind-1",
+            PublishedServiceId = "member-m-1",
+            RevisionId = "rev-1",
+            ImplementationKind = StudioMemberImplementationKind.Script,
+            CompletedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(5)),
+        });
+
+        eventSourcing.RaisedEvents.Should().BeEmpty();
+        var ack = publisher.SentMessages.Should().ContainSingle().Subject.Event
+            .Should().BeOfType<StudioMemberBindingTerminalAcknowledged>().Subject;
+        ack.Status.Should().Be(StudioMemberBindingRunStatus.Succeeded);
+    }
+
+    [Fact]
+    public async Task HandleBindingFailed_ShouldResendFailedAcknowledgement_WhenTerminalReplay()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var pending = StartScriptBindingRun(NewCreatedScriptMember(now), "bind-1", now.AddSeconds(1));
+        var failed = _agent.Apply(pending, new StudioMemberBindingFailedEvent
+        {
+            BindingRunId = "bind-1",
+            Failure = new StudioMemberBindingFailure
+            {
+                Code = "SCOPE_BINDING_FAILED",
+                Message = "platform failed",
+                FailedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(4)),
+            },
+        });
+        var eventSourcing = new RecordingEventSourcing(failed);
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(failed, eventSourcing, publisher);
+
+        await agent.HandleBindingFailed(new StudioMemberBindingFailedEvent
+        {
+            BindingRunId = "bind-1",
+            Failure = failed.Binding.LastFailure.Clone(),
+        });
+
+        eventSourcing.RaisedEvents.Should().BeEmpty();
+        var ack = publisher.SentMessages.Should().ContainSingle().Subject.Event
+            .Should().BeOfType<StudioMemberBindingTerminalAcknowledged>().Subject;
+        ack.Status.Should().Be(StudioMemberBindingRunStatus.Failed);
+    }
+
+    [Fact]
     public void BindingCompleted_ShouldCaptureLastBindingAndAuthorityState()
     {
         var now = DateTimeOffset.UtcNow;
@@ -765,6 +897,31 @@ public sealed class StudioMemberGAgentStateTests
                 },
             },
         };
+
+    private StudioMemberState NewCreatedScriptMember(DateTimeOffset createdAt) =>
+        _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DisplayName = "Original",
+            ImplementationKind = StudioMemberImplementationKind.Script,
+            PublishedServiceId = "member-m-1",
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(createdAt),
+        });
+
+    private static StudioMemberGAgent NewHandlerAgent(
+        StudioMemberState state,
+        RecordingEventSourcing eventSourcing,
+        RecordingEventPublisher publisher)
+    {
+        var agent = new StudioMemberGAgent
+        {
+            EventSourcing = eventSourcing,
+            EventPublisher = publisher,
+        };
+        StudioMemberStateSetter.Set(agent, state);
+        return agent;
+    }
 
     private StudioMemberState StartWorkflowBindingRun(
         StudioMemberState state,
