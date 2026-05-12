@@ -7870,7 +7870,7 @@ const StudioPage: React.FC = () => {
       ? buildTeamDetailHref({
           scopeId: resolvedStudioScopeId,
           teamId: routeState.teamId,
-          tab: 'advanced',
+          tab: 'overview',
           memberId:
             trimOptional(routeState.memberId) ||
             readMemberIdFromMemberKey(routeState.memberKey) ||
@@ -7879,7 +7879,7 @@ const StudioPage: React.FC = () => {
         })
       : buildTeamDetailHref({
         scopeId: resolvedStudioScopeId,
-        tab: 'advanced',
+        tab: 'overview',
         serviceId:
           trimOptional(routeState.memberId) ||
           trimOptional(workbenchPublishedService?.serviceId) ||
