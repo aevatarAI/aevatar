@@ -63,6 +63,35 @@ export function buildStudioWorkflowMemberKey(options?: {
   return routeValue ? (`workflow:${routeValue}` as const) : undefined;
 }
 
+export function resolveStudioMemberRouteKey(input?: {
+  memberId?: string | null;
+  memberKey?: StudioMemberKey | string | null;
+  workflowId?: string | null;
+  scriptId?: string | null;
+}): StudioMemberKey | undefined {
+  const memberId = trimOptional(input?.memberId);
+  if (memberId) {
+    return `member:${memberId}`;
+  }
+
+  const memberKey = normalizeStudioMemberKey(input?.memberKey);
+  if (memberKey) {
+    return memberKey;
+  }
+
+  const workflowId = trimOptional(input?.workflowId);
+  if (workflowId) {
+    return `workflow:${workflowId}`;
+  }
+
+  const scriptId = trimOptional(input?.scriptId);
+  if (scriptId) {
+    return `script:${scriptId}`;
+  }
+
+  return undefined;
+}
+
 function normalizeStudioBuildFocus(
   value: StudioBuildFocus | string | null | undefined,
 ): StudioBuildFocus | undefined {

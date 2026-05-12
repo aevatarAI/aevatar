@@ -182,7 +182,8 @@ describe("TeamsHomePage", () => {
 
     const params = new URLSearchParams(window.location.search);
     expect(params.get("scopeId")).toBe("scope-a");
-    expect(params.get("teamId")).toBeNull();
+    expect(params.get("teamId")).toBe("t-support");
+    expect(params.get("member")).toBe("member:member-alpha");
     expect(params.get("tab")).toBe("studio");
   });
 
