@@ -321,7 +321,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     trimOptional(selectedService?.displayName) ||
     trimOptional(selectedService?.serviceId) ||
     '当前成员';
-  const canInvoke = Boolean(scopeId && selectedService && selectedEndpoint);
+  const canInvoke = Boolean(
+    scopeId && normalizedMemberId && selectedService && selectedEndpoint,
+  );
   const visibleRequestHistory = useMemo(() => {
     const currentServiceId =
       trimOptional(selectedService?.serviceId) || trimOptional(initialServiceId);
@@ -363,11 +365,11 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const currentRawOutput = currentRunViewModel.rawOutput;
   const currentContractStatusLabel = getContractStatusLabel({
     hasEndpoint: Boolean(selectedEndpoint),
-    hasMember: Boolean(selectedService),
+    hasMember: Boolean(normalizedMemberId),
   });
   const currentContractStatus = getContractStatus({
     hasEndpoint: Boolean(selectedEndpoint),
-    hasMember: Boolean(selectedService),
+    hasMember: Boolean(normalizedMemberId),
   });
   const consoleMinHeight = screens.xl || screens.lg ? 280 : 220;
   const runElapsedLabel = formatElapsedTime(
@@ -463,7 +465,13 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   useEffect(() => {
     const endpointId = trimOptional(selectedEndpoint?.endpointId);
     const serviceId = trimOptional(selectedService?.serviceId);
-    if (!scopeId || !endpointId || !serviceId || selectedService?.kind === 'nyxid-chat') {
+    if (
+      !scopeId ||
+      !normalizedMemberId ||
+      !endpointId ||
+      !serviceId ||
+      selectedService?.kind === 'nyxid-chat'
+    ) {
       setEndpointContract(null);
       setEndpointContractError('');
       return;
@@ -473,13 +481,11 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     setEndpointContract(null);
     setEndpointContractError('');
 
-    const request = normalizedMemberId
-      ? scopeRuntimeApi.getMemberEndpointContract(
-          scopeId,
-          normalizedMemberId,
-          endpointId,
-        )
-      : scopeRuntimeApi.getServiceEndpointContract(scopeId, serviceId, endpointId);
+    const request = scopeRuntimeApi.getMemberEndpointContract(
+      scopeId,
+      normalizedMemberId,
+      endpointId,
+    );
 
     request
       .then((contract) => {
@@ -631,7 +637,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   }, []);
 
   const handleInvoke = useCallback(async () => {
-    if (!scopeId || !selectedService || !selectedEndpoint) {
+    if (!scopeId || !normalizedMemberId || !selectedService || !selectedEndpoint) {
       return;
     }
 
@@ -722,7 +728,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
           },
           controller.signal,
           {
-            memberId: normalizedMemberId || undefined,
+            memberId: normalizedMemberId,
             serviceId: selectedService.serviceId,
           },
         );
@@ -897,7 +903,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
           prompt: trimmedPrompt,
         },
         {
-          memberId: normalizedMemberId || undefined,
+          memberId: normalizedMemberId,
           serviceId: selectedService.serviceId,
         },
       );
@@ -1012,6 +1018,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   }, [
     appendRequestHistory,
     ensureNyxIdChatBound,
+    normalizedMemberId,
     payloadBase64,
     payloadTypeUrl,
     prompt,
@@ -1021,7 +1028,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   ]);
 
   const handleOpenRuns = useCallback(() => {
-    if (!scopeId || !selectedEndpoint) {
+    if (!scopeId || !normalizedMemberId || !selectedEndpoint) {
       return;
     }
 
@@ -1072,6 +1079,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     invokeResult.endpointId,
     invokeResult.events,
     invokeResult.runId,
+    normalizedMemberId,
     payloadBase64,
     payloadTypeUrl,
     prompt,

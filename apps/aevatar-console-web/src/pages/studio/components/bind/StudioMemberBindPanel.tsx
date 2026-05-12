@@ -591,6 +591,9 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
   const publishedSmokeRequiresAuth =
     !runsCurrentWorkflowDraft &&
     Boolean(bindContract?.authEnabled && !bindContract.authAuthenticated);
+  const canUsePublishedMemberInvoke = Boolean(
+    normalizedMemberId && selectedService && selectedEndpoint && bindContract,
+  );
 
   useEffect(() => {
     const nextDefaultInput = createDefaultBindSampleInput(bindContract);
@@ -640,7 +643,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
         return;
       }
 
-      if (!selectedService || !selectedEndpoint) {
+      if (!selectedService || !selectedEndpoint || !normalizedMemberId || !bindContract) {
         return;
       }
 
@@ -653,7 +656,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
           },
           new AbortController().signal,
           {
-            memberId: normalizedMemberId || undefined,
+            memberId: normalizedMemberId,
             serviceId: selectedService.serviceId,
           },
         );
@@ -684,7 +687,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
           prompt: smokeInput.trim() || createDefaultBindSampleInput(bindContract),
         },
         {
-          memberId: normalizedMemberId || undefined,
+          memberId: normalizedMemberId,
           serviceId: selectedService.serviceId,
         },
       );
@@ -713,6 +716,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
   }, [
     bindContract,
     buildWorkflowYamls,
+    normalizedMemberId,
     scopeId,
     selectedEndpoint,
     selectedService,
@@ -1030,6 +1034,14 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 type="warning"
               />
             ) : null}
+            {!normalizedMemberId && selectedService && selectedEndpoint ? (
+              <Alert
+                showIcon
+                message="Select a Team member before using Invoke."
+                description="Bind can inspect the published service, but Studio only reveals invoke URLs and live requests after the route resolves to a backend member."
+                type="info"
+              />
+            ) : null}
           </div>
         </AevatarPanel>
 
@@ -1080,7 +1092,11 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 <Alert
                   showIcon
                   message="Select an endpoint to reveal the invoke contract."
-                  description="The contract URL, revision badge, snippets, and smoke test are generated from the selected service endpoint."
+                  description={
+                    normalizedMemberId
+                      ? 'The contract URL, revision badge, snippets, and smoke test are generated from the selected member endpoint.'
+                      : 'Invoke is member-scoped. Select or create a backend member before Studio reveals the invoke contract.'
+                  }
                   type="info"
                 />
               )}
@@ -1161,8 +1177,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   loading={smokeTestResult.status === 'running'}
                   type="primary"
                   disabled={
-                    (!runsCurrentWorkflowDraft &&
-                      (!selectedService || !selectedEndpoint)) ||
+                    (!runsCurrentWorkflowDraft && !canUsePublishedMemberInvoke) ||
                     publishedSmokeRequiresAuth
                   }
                   onClick={() => void handleRunSmokeTest()}
@@ -1172,9 +1187,9 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 <Button
                   block
                   icon={<LinkOutlined />}
-                  disabled={!selectedService || !selectedEndpoint}
+                  disabled={!canUsePublishedMemberInvoke}
                   onClick={() => {
-                    if (!selectedService || !selectedEndpoint) {
+                    if (!canUsePublishedMemberInvoke || !selectedService || !selectedEndpoint) {
                       return;
                     }
 
