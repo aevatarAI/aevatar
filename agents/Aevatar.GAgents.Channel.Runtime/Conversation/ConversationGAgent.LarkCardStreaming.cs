@@ -207,11 +207,16 @@ public sealed partial class ConversationGAgent
             ConversationCardCreateResult createResult;
             try
             {
+                // Bound the CardKit create round-trip so a stuck NyxID/Lark upstream can't
+                // pin the actor turn forever. Mirrors the text-edit streaming path's
+                // per-call cap (StreamingFailureUpdateTimeout); on timeout, the catch
+                // below routes the turn to the text-edit fallback path.
+                using var createCts = new CancellationTokenSource(StreamingFailureUpdateTimeout);
                 createResult = await runner.RunCardCreateAsync(
                     evt,
                     creating.StreamingElementId,
                     runtimeContext,
-                    CancellationToken.None);
+                    createCts.Token);
             }
             catch (Exception ex)
             {
@@ -295,13 +300,16 @@ public sealed partial class ConversationGAgent
         ConversationCardStreamResult streamResult;
         try
         {
+            // Per-frame cap so a hung CardKit update can't pin the actor turn forever.
+            // On timeout the frame is dropped and the next chunk will retry the slot.
+            using var streamCts = new CancellationTokenSource(StreamingFailureUpdateTimeout);
             streamResult = await runner.RunCardStreamAsync(
                 evt,
                 state.CardId ?? string.Empty,
                 state.StreamingElementId,
                 nextSequence,
                 runtimeContext,
-                CancellationToken.None);
+                streamCts.Token);
         }
         catch (Exception ex)
         {
@@ -409,6 +417,10 @@ public sealed partial class ConversationGAgent
         ConversationCardFinalizeResult finalizeResult;
         try
         {
+            // Per-call cap so a hung CardKit finalize can't pin the actor turn forever.
+            // On timeout the catch below persists the last-flushed partial and transitions
+            // to Terminated, matching the existing finalize-throw recovery.
+            using var finalizeCts = new CancellationTokenSource(StreamingFailureUpdateTimeout);
             finalizeResult = await runner.RunCardFinalizeAsync(
                 activityForToken,
                 state.CardId ?? string.Empty,
@@ -417,7 +429,7 @@ public sealed partial class ConversationGAgent
                 finalDiffers,
                 nextSequence,
                 runtimeContext,
-                CancellationToken.None);
+                finalizeCts.Token);
         }
         catch (Exception ex)
         {

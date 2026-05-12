@@ -83,6 +83,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             .Match(current, evt)
             .On<AgentRunStartedEvent>(ApplyStarted)
             .On<AgentRunReplyProducedEvent>(ApplyReplyProduced)
+            .On<AgentRunReplyDispatchedEvent>(ApplyReplyDispatched)
             .On<AgentRunDroppedEvent>(ApplyDropped)
             .On<AgentRunFailedEvent>(ApplyFailed)
             .OrCurrent();
@@ -101,13 +102,38 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var runId = NormalizeOptional(request.CorrelationId) ?? Id;
         var startedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
 
-        if (State.Status is AgentRunStatus.ReplyProduced or AgentRunStatus.Dropped or AgentRunStatus.Failed)
+        // Reply already produced AND dispatched: terminal, only schedule cleanup.
+        // Reply produced but NOT dispatched: this is the output-dispatch retry path —
+        // re-deliver the persisted payload without re-running the LLM / tool chain so
+        // we don't repeat tool side effects (SSH exec, external API calls, billing)
+        // or produce a different reply.
+        if (State.Status is AgentRunStatus.Dropped or AgentRunStatus.Failed ||
+            (State.Status is AgentRunStatus.ReplyProduced && State.ReplyDispatched))
         {
             _logger.LogInformation(
-                "Ignoring duplicate terminal agent run start: runId={RunId} status={Status}",
+                "Ignoring duplicate terminal agent run start: runId={RunId} status={Status} dispatched={Dispatched}",
                 runId,
-                State.Status);
+                State.Status,
+                State.ReplyDispatched);
             await ScheduleTerminalCleanupAsync(NormalizeOptional(State.RunId) ?? runId);
+            return;
+        }
+
+        if (State.Status is AgentRunStatus.ReplyProduced && !State.ReplyDispatched)
+        {
+            _logger.LogInformation(
+                "Re-dispatching previously produced reply (output-dispatch retry): runId={RunId} correlation={CorrelationId}",
+                runId,
+                request.CorrelationId);
+            try
+            {
+                await ReDispatchProducedReplyAsync(request, runId);
+            }
+            catch (AgentRunOutputDispatchException ex)
+            {
+                if (!await TryHandleOutputDispatchFailureAsync(request, runId, ex))
+                    throw;
+            }
             return;
         }
 
@@ -141,7 +167,10 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     public async Task HandleCleanupAsync(AgentRunCleanupRequested command)
     {
         ArgumentNullException.ThrowIfNull(command);
-        if (State.Status is not (AgentRunStatus.ReplyProduced or AgentRunStatus.Dropped or AgentRunStatus.Failed))
+        var terminal =
+            State.Status is AgentRunStatus.Dropped or AgentRunStatus.Failed ||
+            (State.Status is AgentRunStatus.ReplyProduced && State.ReplyDispatched);
+        if (!terminal)
             return;
         if (!string.IsNullOrWhiteSpace(command.RunId) &&
             !string.IsNullOrWhiteSpace(State.RunId) &&
@@ -228,7 +257,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 terminalState = LlmReplyTerminalState.Failed;
                 errorCode = "llm_reply_metadata_timeout";
                 errorSummary = $"Metadata enrichment exceeded {(int)MetadataBuildBudget.TotalSeconds}s budget.";
-                await FailAndDispatchReadyAsync(request, runId, replyText, outboundIntent, terminalState, errorCode, errorSummary);
+                await ProduceAndDispatchAsync(request, runId, replyText, outboundIntent, terminalState, errorCode, errorSummary);
                 return;
             }
         }
@@ -300,24 +329,25 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 request.CorrelationId);
         }
 
-        if (terminalState == LlmReplyTerminalState.Failed)
-        {
-            await FailAndDispatchReadyAsync(
-                request,
-                runId,
-                replyText,
-                outboundIntent,
-                terminalState,
-                errorCode,
-                errorSummary);
-            return;
-        }
-
-        await DispatchReadyEventAsync(request, replyText, outboundIntent, terminalState, errorCode, errorSummary);
-        await PersistReplyProducedAsync(request, runId, terminalState, errorCode, errorSummary);
+        await ProduceAndDispatchAsync(
+            request,
+            runId,
+            replyText,
+            outboundIntent,
+            terminalState,
+            errorCode,
+            errorSummary);
     }
 
-    private async Task FailAndDispatchReadyAsync(
+    /// <summary>
+    /// Persists the immutable produced reply payload BEFORE attempting to dispatch the
+    /// LlmReplyReadyEvent to the conversation actor. If dispatch then fails, the
+    /// output-dispatch retry path replays from state via
+    /// <see cref="ReDispatchProducedReplyAsync"/> instead of re-running the LLM /
+    /// tool chain — which would otherwise repeat side effects (SSH exec, external API
+    /// calls, billing) and could surface a different reply than the persisted one.
+    /// </summary>
+    private async Task ProduceAndDispatchAsync(
         NeedsLlmReplyEvent request,
         string runId,
         string replyText,
@@ -326,8 +356,39 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         string errorCode,
         string errorSummary)
     {
+        await PersistReplyProducedAsync(
+            request,
+            runId,
+            replyText,
+            outboundIntent,
+            terminalState,
+            errorCode,
+            errorSummary);
+
         await DispatchReadyEventAsync(request, replyText, outboundIntent, terminalState, errorCode, errorSummary);
-        await PersistFailedAsync(request, runId, errorCode, errorSummary);
+
+        await PersistReplyDispatchedAsync(request, runId);
+        await ScheduleTerminalCleanupAsync(runId);
+    }
+
+    /// <summary>
+    /// Output-dispatch retry path: re-deliver the produced payload from state without
+    /// re-running the LLM. Triggered when <see cref="HandleStartAsync"/> sees
+    /// <c>State.Status == ReplyProduced &amp;&amp; !State.ReplyDispatched</c>.
+    /// </summary>
+    private async Task ReDispatchProducedReplyAsync(NeedsLlmReplyEvent request, string runId)
+    {
+        var outbound = State.ProducedOutbound;
+        await DispatchReadyEventAsync(
+            request,
+            State.ProducedReplyText ?? string.Empty,
+            outbound,
+            State.ProducedTerminalState,
+            State.ErrorCode ?? string.Empty,
+            State.ErrorSummary ?? string.Empty);
+
+        await PersistReplyDispatchedAsync(request, runId);
+        await ScheduleTerminalCleanupAsync(runId);
     }
 
     private async Task DropAsync(NeedsLlmReplyEvent request, string runId, string reason)
@@ -350,11 +411,13 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     private async Task PersistReplyProducedAsync(
         NeedsLlmReplyEvent request,
         string runId,
+        string replyText,
+        MessageContent? outbound,
         LlmReplyTerminalState terminalState,
         string errorCode,
         string errorSummary)
     {
-        await PersistDomainEventAsync(new AgentRunReplyProducedEvent
+        var evt = new AgentRunReplyProducedEvent
         {
             RunId = runId,
             CorrelationId = request.CorrelationId,
@@ -363,9 +426,22 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             ErrorCode = errorCode,
             ErrorSummary = errorSummary,
             ProducedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-        });
+            ReplyText = replyText ?? string.Empty,
+        };
+        if (outbound is not null)
+            evt.Outbound = outbound.Clone();
+        await PersistDomainEventAsync(evt);
+    }
 
-        await ScheduleTerminalCleanupAsync(runId);
+    private async Task PersistReplyDispatchedAsync(NeedsLlmReplyEvent request, string runId)
+    {
+        await PersistDomainEventAsync(new AgentRunReplyDispatchedEvent
+        {
+            RunId = runId,
+            CorrelationId = request.CorrelationId,
+            TargetActorId = request.TargetActorId,
+            DispatchedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+        });
     }
 
     private async Task PersistFailedAsync(
@@ -397,27 +473,24 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             runId,
             request.CorrelationId);
 
-        if (request.Activity is not null && !string.IsNullOrWhiteSpace(request.TargetActorId))
+        if (request.Activity is null || string.IsNullOrWhiteSpace(request.TargetActorId))
         {
-            try
-            {
-                await DispatchReadyEventAsync(
-                    request,
-                    "Sorry, I couldn't complete this reply. Please try again.",
-                    null,
-                    LlmReplyTerminalState.Failed,
-                    errorCode,
-                    errorSummary);
-            }
-            catch (AgentRunOutputDispatchException dispatchEx)
-            {
-                if (!await TryHandleOutputDispatchFailureAsync(request, runId, dispatchEx))
-                    throw;
-                return;
-            }
+            // Cannot dispatch a fallback reply at all; terminate the run as Failed so the
+            // state is not left stuck in Started.
+            await PersistFailedAsync(request, runId, errorCode, errorSummary);
+            return;
         }
 
-        await PersistFailedAsync(request, runId, errorCode, errorSummary);
+        // Persist the fallback reply BEFORE dispatching so a dispatch retry replays from
+        // state rather than re-entering ProcessAsync (which would just throw again).
+        await ProduceAndDispatchAsync(
+            request,
+            runId,
+            "Sorry, I couldn't complete this reply. Please try again.",
+            null,
+            LlmReplyTerminalState.Failed,
+            errorCode,
+            errorSummary);
     }
 
     private async Task DispatchReadyEventAsync(
@@ -768,6 +841,23 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.CompletedAtUnixMs = evt.ProducedAtUnixMs;
         next.ErrorCode = evt.ErrorCode;
         next.ErrorSummary = evt.ErrorSummary;
+        next.ProducedReplyText = evt.ReplyText ?? string.Empty;
+        next.ProducedOutbound = evt.Outbound?.Clone();
+        next.ProducedTerminalState = evt.TerminalState;
+        // ReplyDispatched stays false here; flipped to true by ApplyReplyDispatched
+        // once the LlmReplyReadyEvent is delivered.
+        return next;
+    }
+
+    private static AgentRunGAgentState ApplyReplyDispatched(
+        AgentRunGAgentState current,
+        AgentRunReplyDispatchedEvent evt)
+    {
+        var next = current.Clone();
+        next.RunId = string.IsNullOrWhiteSpace(next.RunId) ? evt.RunId : next.RunId;
+        next.CorrelationId = string.IsNullOrWhiteSpace(next.CorrelationId) ? evt.CorrelationId : next.CorrelationId;
+        next.TargetActorId = string.IsNullOrWhiteSpace(next.TargetActorId) ? evt.TargetActorId : next.TargetActorId;
+        next.ReplyDispatched = true;
         return next;
     }
 

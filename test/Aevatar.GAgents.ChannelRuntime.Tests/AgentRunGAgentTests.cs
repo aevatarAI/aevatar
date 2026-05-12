@@ -150,8 +150,12 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
-    public async Task HandleStartAsync_ShouldScheduleRetry_WhenReadySignalIsNotAccepted()
+    public async Task HandleStartAsync_OnOutputDispatchFailure_PersistsProducedReply_AndRetryReDispatchesWithoutRerunningLlm()
     {
+        // Iron rule: output-dispatch failure must NOT replay the LLM/tool chain. The first
+        // turn produces the reply, persists it to state, and only then attempts dispatch.
+        // The retry must read from state and only re-deliver — repeating the LLM call could
+        // repeat tool side effects (SSH exec, external API calls) and incur duplicate billing.
         var actor = Substitute.For<IActor>();
         actor.Id.Returns("actor-1");
         var handled = new List<EventEnvelope>();
@@ -186,7 +190,12 @@ public sealed class AgentRunGAgentTests
 
         await runtime.HandleStartAsync(request);
 
-        runtime.State.Status.Should().Be(AgentRunStatus.Started);
+        // After the first call the LLM ran once and the produced payload is persisted, but
+        // dispatch failed so ReplyDispatched is false.
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
+        runtime.State.ReplyDispatched.Should().BeFalse();
+        runtime.State.ProducedReplyText.Should().Be("ok");
+        replyGenerator.CallCount.Should().Be(1);
         handled.Should().BeEmpty();
 
         var retry = scheduler.Timeouts.Should().ContainSingle(
@@ -197,8 +206,11 @@ public sealed class AgentRunGAgentTests
 
         await runtime.HandleStartAsync(retryCommand);
 
+        // After the retry the same persisted reply is delivered — but the LLM was not
+        // re-invoked.
         runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
-        replyGenerator.CallCount.Should().Be(2);
+        runtime.State.ReplyDispatched.Should().BeTrue();
+        replyGenerator.CallCount.Should().Be(1);
         handled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor));
     }
 
@@ -254,7 +266,7 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
-    public async Task HandleStartAsync_ShouldPersistFailed_WhenUnexpectedExceptionFollowsStartedEvent()
+    public async Task HandleStartAsync_OnUnexpectedException_PersistsFailedProducedReply_AndDispatchesFallback()
     {
         var actor = Substitute.For<IActor>();
         actor.Id.Returns("actor-1");
@@ -282,7 +294,12 @@ public sealed class AgentRunGAgentTests
             ReplyToken = "relay-token-unexpected",
         });
 
-        runtime.State.Status.Should().Be(AgentRunStatus.Failed);
+        // The unhandled exception fires the persist-before-dispatch path: the failure
+        // terminal state lands as ProducedTerminalState=Failed with a user-visible fallback,
+        // and dispatch succeeds so ReplyDispatched is true. The LLM was never invoked.
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
+        runtime.State.ReplyDispatched.Should().BeTrue();
+        runtime.State.ProducedTerminalState.Should().Be(LlmReplyTerminalState.Failed);
         runtime.State.ErrorCode.Should().Be("agent_run_unhandled_exception");
         replyGenerator.CallCount.Should().Be(0);
         handled.Should().NotBeNull();

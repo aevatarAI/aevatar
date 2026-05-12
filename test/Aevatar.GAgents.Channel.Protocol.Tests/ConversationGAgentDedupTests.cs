@@ -699,6 +699,73 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task HandleInboundActivityAsync_StripsCredentialMetadataKeysFromPersistedNeedsLlmReplyEvent_ButKeepsThemOnRunCommandCopy()
+    {
+        // Strip-on-persist invariant for per-call NyxID credentials carried in Metadata.
+        // The run-command copy keeps them so AgentRunGAgent can forward them to the LLM
+        // call, but the persisted state copy must never carry them into event store /
+        // projection / read model.
+        const string sentinelSenderToken = "sentinel-sender-nyxid-token-9c4f";
+        const string sentinelOwnerToken = "sentinel-owner-nyxid-token-7a12";
+        const string sentinelOrgToken = "sentinel-owner-org-token-3e09";
+        var dispatcher = new RecordingRunDispatcher();
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity =>
+            {
+                var request = new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.OutboundDelivery?.CorrelationId ?? activity.Id,
+                    TargetActorId = "conversation:actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                };
+                request.Metadata["nyxid.sender_access_token"] = sentinelSenderToken;
+                request.Metadata["nyxid.access_token"] = sentinelOwnerToken;
+                request.Metadata["nyxid.org_token"] = sentinelOrgToken;
+                request.Metadata["aevatar.sender_binding_id"] = "bnd-keep";
+                return ConversationTurnResult.LlmReplyRequested(request);
+            },
+        };
+        var (agent, store) = CreateAgent(runner, "conv-strip-credential-meta", dispatcher);
+
+        var inboundActivity = CreateActivity("act-strip-cred", "conv:slack:C1");
+        inboundActivity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "relay-msg-strip-cred",
+            CorrelationId = "corr-strip-cred",
+        };
+        await agent.HandleInboundActivityAsync(inboundActivity);
+
+        dispatcher.Dispatched.Count.ShouldBe(1);
+        dispatcher.Dispatched[0].Metadata["nyxid.sender_access_token"].ShouldBe(sentinelSenderToken);
+        dispatcher.Dispatched[0].Metadata["nyxid.access_token"].ShouldBe(sentinelOwnerToken);
+        dispatcher.Dispatched[0].Metadata["nyxid.org_token"].ShouldBe(sentinelOrgToken);
+
+        var pending = agent.State.PendingLlmReplyRequests.Single();
+        pending.Metadata.ContainsKey("nyxid.sender_access_token").ShouldBeFalse();
+        pending.Metadata.ContainsKey("nyxid.access_token").ShouldBeFalse();
+        pending.Metadata.ContainsKey("nyxid.org_token").ShouldBeFalse();
+        // Non-credential metadata stays — only credential keys are scrubbed.
+        pending.Metadata["aevatar.sender_binding_id"].ShouldBe("bnd-keep");
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events.ShouldNotBeEmpty();
+        foreach (var sentinel in new[] { sentinelSenderToken, sentinelOwnerToken, sentinelOrgToken })
+        {
+            var sentinelBytes = Encoding.UTF8.GetBytes(sentinel);
+            foreach (var record in events)
+            {
+                var payloadBytes = record.EventData?.Value?.ToByteArray() ?? Array.Empty<byte>();
+                ContainsSubsequence(payloadBytes, sentinelBytes)
+                    .ShouldBeFalse(
+                        $"persisted event {record.EventType} must not contain credential bytes for {sentinel}");
+            }
+        }
+    }
+
+    [Fact]
     public async Task HandleDeferredLlmReplyDispatchRequestedAsync_ReEnrichesStrippedPendingRequestWithActorRuntimeToken()
     {
         // Regression for Codex review: the persisted NeedsLlmReplyEvent in
