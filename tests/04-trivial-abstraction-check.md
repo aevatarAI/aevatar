@@ -96,3 +96,55 @@ public sealed class AgentRunGAgent : GAgentBase<...> { ... }
 理由："让 schema-level 治理对每个 GAgent 都成立。"
 
 ## 答题区
+
+### 提案 1：`AgentGovernanceProfile`
+
+(a) 是 trivial 抽象。
+
+(b) 它把已有治理结构重新编目：`IAgentTool.ApprovalMode / IsReadOnly / IsDestructive / RequiresApproval(...)`，`ToolApprovalMiddleware` / `YieldApprovalHandler`，以及 `RoleGAgentState.pending_approval` / `PendingToolApprovalState`。#568 §4 原文已经点名：`AgentGovernanceProfile` 只是把已有规则编目，没有产生新约束。
+
+(c) 不适用。它不在 schema / boundary / actor / topology 四层里，也不对应 `Domain / Application / Infrastructure / Host` 的新职责。
+
+(d) 拒绝。按 #568 §4，把规则落回 typed schema、connector boundary、GAgent command handler、topology link；Denied Ledger 只做观察，不做中心 policy。
+
+### 提案 2：`ICapabilityRegistry`
+
+情形 1：`source` 只给前端展示。
+
+(a) 是 trivial 抽象。
+
+(b) 它包装了 `IAgentToolSource.DiscoverToolsAsync(...)`、`IAgentTool.Name / ParametersSchema / IsReadOnly / RequiresApproval(...)`，形态上也接近已有的 `AgentToolVoiceCatalog` / `AgentToolVoiceInvoker` 这种“枚举工具再映射”的 adapter。
+
+(c) 不适用。没有新增运行时约束，只是给 UI 多一层名字。
+
+(d) 拒绝作为运行时 registry；最多改写为 readmodel / view DTO，由现有 tool source fan-out 出“能力中心”展示。
+
+情形 2：`source` 被运行时消费，参与路由 / 治理 / approval 分流。
+
+(a) 不是 trivial 抽象，前提是 `source` 变成强类型边界语义，而不是字符串展示字段。
+
+(b) 不适用。
+
+(c) 新能力是让 NyxID-backed / Aevatar-native 工具走不同 hard boundary 与 approval 路径。落点：Application 层定义窄 `CapabilityDispatchPolicy`/query 契约，Infrastructure 适配 NyxID 或 native provider；治理层属于 #568 §4 的 Boundary-level + Schema-level。
+
+(d) 改写为 typed `CapabilityOrigin` + `CapabilityDispatchPolicy`，由 tool dispatch / connector boundary 消费；不要做全能 `Registry`。
+
+### 提案 3：`ITurnContextStore`
+
+(a) 是 trivial 抽象，而且实现方式违规。
+
+(b) 它把 `RoleGAgentState.sessions`、`PendingToolApprovalState`、`AgentRunGAgentState`、committed event log / projection 这些已有 actor-owned continuation state 包成旁挂 store；`InMemoryTurnContextStore : ConcurrentDictionary<string, TurnContext>` 又退回进程内 run/turn 上下文表。
+
+(c) 不适用。它没有新约束，还违反 #568 §3 “Memory 作为独立 Harness 模块作废”和 `CLAUDE.md` 的中间层状态约束。
+
+(d) 拒绝。工具回调需要恢复上下文时，应把 pending tool / approval / run state 放进对应 actor state，以 reply/timeout event 唤醒继续。
+
+### 提案 4：`AgentProtocolDescriptor`
+
+(a) 不是 trivial 抽象，前提是它真的参与编译期 manifest 和 dispatch hard gate。
+
+(b) 不适用。
+
+(c) 它新增“哪些事件可到达哪个 GAgent、能否跨 scope、默认 timeout / approval 要求”的 schema-level / topology-level 约束，让违规投递无法构造或无法到达。落点：Domain/Application 的 GAgent contract + proto/attribute 元数据，Infrastructure 的 dispatch port 执行校验。
+
+(d) 接受方向，但要改写为 typed proto option / attribute + 生成 manifest + dispatch 校验；禁止变成 `Dictionary<string,string>` metadata 或中心 profile。

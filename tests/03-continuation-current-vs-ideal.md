@@ -45,3 +45,48 @@ loning 在 §1 第二轮回复中说：*"ChatRuntime 感觉也不该存在. 实�
 - (c) 给出一个判断：**如果今天让你只能改三个文件**把 `ChatRuntime` 的 loop 性质再削弱一档，你会改哪三个文件？每个写一行该改什么。
 
 ## 答题区
+
+说明：与 02 一样，`AgentRunGAgent` 相关代码按 `origin/feature/lark-bot` 核对；`ChatRuntime` / `ToolCallLoop` 与当前分支同源，行号也按该基线记录。
+
+### 3.1 loop 的案发现场
+
+(a) `src/Aevatar.AI.Core/Chat/ChatRuntime.cs:260`
+
+```diff
++                    for (var round = 0; round < effectiveMaxToolRounds; round++)
+```
+
+(b) 单轮里至少有这些跨边界 / 长耗时 / 副作用：
+
+- `StreamLlmRoundAsync(provider, roundRequest, channel.Writer, ...)`（`ChatRuntime.cs:298-310`）进入 LLM streaming；内部 `provider.ChatStreamAsync(...)` 是外部网络/SSE 流（`ChatRuntime.cs:653`）。
+- `channel.Writer.WriteAsync(...)` 把分隔符或 token chunk 推给外部消费者（`ChatRuntime.cs:267-268`、`ChatRuntime.cs:659`）。
+- `_hooks.RunPostSamplingAsync(...)` 在 LLM 输出后执行 hook（`ChatRuntime.cs:418`）。
+- `streamingExecutor.GetRemainingResultsAsync(...)` 等待工具结果（`ChatRuntime.cs:448`）；工具执行实际进 `MiddlewarePipeline.RunToolCallAsync` 和 `_tools.ExecuteToolCallAsync(...)`（`StreamingToolExecutor.cs:348-360`）。
+
+(c) 它在同一个 actor turn / 调用栈里 `await` LLM、tool、hook 和 writer；而 `CLAUDE.md:110` 要求跨 actor / 外部等待是“发送请求 → 结束当前 turn → reply/timeout event 唤醒继续”。
+
+### 3.2 AgentRunGAgent 与 §1 最小闭环
+
+| 维度 | §1 理想形态怎么说 | AgentRunGAgent 当前怎么做 | 是否对齐 |
+|-----|------------------|--------------------------|--------|
+| LLM sampling 是 actor inbox 一拍吗 | `LLMSamplingRequested/Completed` | `GenerateReplyAsync` 内部 await | 否 |
+| tool 调用是 actor inbox 一拍吗 | `ToolInvocationRequested/Completed` | `ChatRuntime`/executor 栈内等 | 否 |
+| approval / timeout 是事件还是循环内特殊分支 | 平等事件唤醒继续 | timeout 是 CTS/catch 分支 | 部分否 |
+| 当 actor turn 结束时，下一拍由谁触发 | self-message 或外部事件 | 本 turn 等到终态 | 否 |
+
+结论：当前把 LLM/tool 多拍折进一次 `HandleStartAsync`。
+
+### 3.3 loning 的 “ChatRuntime 不该存在”
+
+(a) loning 不接受这个折中，因为只要还有 `ChatRuntime` 这种中间 orchestrator，就仍是把多维因果压成一根调用栈上的 loop，而不是提示词 + gates + actor event choreography。
+
+(b) Issue #596 没完全照搬极端方案的两个理由：
+
+- Phase A 第一目标是先杀 hosted-service，落 `AgentRunGAgent[runId]`。
+- Phase A 明说初期仍可调用 `IConversationReplyGenerator` / `ChatRuntime`；Phase E 才拆它。
+
+(c) 只改三个文件，我会这样削弱 loop：
+
+- `agents/Aevatar.GAgents.NyxidChat/AgentRunGAgent.cs`：新增 `SamplingRequested/Completed` self-message handler，让每轮采样回 actor inbox。
+- `agents/Aevatar.GAgents.NyxidChat/ConversationReplyGenerator.cs`：把 `GenerateReplyAsync` 拆成单轮 request builder + result mapper，不再自己跑完整多轮。
+- `src/Aevatar.AI.Core/Chat/ChatRuntime.cs`：把 `StreamLlmRoundAsync` 提成单轮 IO adapter，外层 `for` 迁出到 actor 事件编排。

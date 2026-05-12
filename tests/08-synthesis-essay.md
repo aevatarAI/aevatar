@@ -26,3 +26,5 @@
 > 评分时会按上面 5 条逐一打钩。每漏一条扣 2 分。300 字以内的限制不是建议，是上限：超过 320 字（中文计，不含标点）按超界扣分。
 
 ## 答题区
+
+Aevatar 不复刻通用 harness，因为底座是 Orleans 上的 GAgent runtime、`EventEnvelope`+stream 消息面、event-sourcing actor-owned state、`CommittedStateEventPublished`→projection/readmodel 这一整条事实链。栈内 `while`-loop、旁挂 vector memory、中心 policy config 这些 LangChain/Assistants 的习惯不是“也能做”，是结构性多余：loop 绕过 actor 单线程事实源、vector memory 让旁挂记忆冒充权威态、中心 policy 把治理从四层结构压回字符串 bag，#568 警告这是“第二系统”。`CLAUDE.md`：“核心层只承载稳定不变量与通用机制”。代价很实在：不能像 LangChain 几行代码拼 demo；新工具/审批/超时要先 `.proto` 再补 projection 再加 readmodel 字段才能 query；调一次坏 turn 不看单栈 stacktrace 而要追 committed event 和 readmodel 两条链；现阶段也不能像通用 SDK 那样几行接 vector memory 做长上下文。回报是这套主干长上去后，turn 可重放、跨节点观察一致、读写分离不靠补丁。

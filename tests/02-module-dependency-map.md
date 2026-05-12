@@ -61,3 +61,46 @@ N. <项目相对路径>::<类型/接口名> — 它在这一拍干了什么（�
 > 说明：4 类中**允许有某一类为空**（只要 5 个名字全部分类完毕、证据成立即可）。如果你判定某类为空，请在答题区末尾写一句 *"X 类为空，因为 …"* 说明。把名字硬塞进不合适的类反而扣分。
 
 ## 答题区
+
+说明：当前工作树 `test/20260511` 缺少题面要求的 `AgentRunGAgent.cs` / `AgentRunDispatcher.cs` / `IChannelLlmReplyRunDispatcher.cs`；下面按题面匹配的 `origin/feature/lark-bot`（已合入 `refactor/2026-05-08_agent-run-continuation-phase-a`）核对代码。
+
+### 2.1 依赖链
+
+1. `agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.Relay.cs::NyxIdChatEndpoints.HandleRelayWebhookAsync` — 验签解析回调
+2. `agents/Aevatar.GAgents.Channel.Runtime/Conversation/ConversationGAgent.cs::ConversationGAgent` — 收 `EventEnvelope` [event]
+3. `agents/Aevatar.GAgents.NyxidChat/ChannelConversationTurnRunner.cs::ChannelConversationTurnRunner.RunInboundAsync` — 产出 LLM 请求
+4. `agents/Aevatar.GAgents.Channel.Runtime/Conversation/ConversationGAgent.cs::ConversationGAgent.DispatchPendingLlmReplyAsync` — 交给 run 端口
+5. `agents/Aevatar.GAgents.NyxidChat/AgentRunDispatcher.cs::AgentRunDispatcher.DispatchAsync` — 包 run `EventEnvelope` [event]
+6. `agents/Aevatar.GAgents.NyxidChat/AgentRunGAgent.cs::AgentRunGAgent.HandleStartAsync` — 接管 run [event]
+7. `agents/Aevatar.GAgents.NyxidChat/ConversationReplyGenerator.cs::NyxIdConversationReplyGenerator.GenerateReplyAsync` — 组 ChatRuntime
+8. `src/Aevatar.AI.Core/Chat/ChatRuntime.cs::ChatRuntime.ChatStreamAsync` — 流式采样工具
+9. `agents/Aevatar.GAgents.Channel.Runtime/TurnStreamingReplySink.cs::TurnStreamingReplySink.DispatchOneAsync` — chunk 投回会话 [event]
+10. `agents/Aevatar.GAgents.Channel.Runtime/Conversation/ConversationGAgent.cs::ConversationGAgent.HandleLlmReplyStreamChunkAsync` — 收 chunk [event]
+11. `agents/Aevatar.GAgents.NyxidChat/ChannelConversationTurnRunner.cs::ChannelConversationTurnRunner.RunStreamChunkAsync` — 转平台出站
+12. `agents/channels/Aevatar.GAgents.Channel.NyxIdRelay/NyxIdRelayOutboundPort.cs::NyxIdRelayOutboundPort.SendAsync/UpdateAsync` — 发出 NyxID
+
+### 2.2 边界
+
+(a) 拒绝长耗时 LLM/tool IO；由 `AgentRunGAgent.ProcessAsync` 承担。
+
+(b) `actorId = "channel-agent-run:" + correlationId.Trim()`（`AgentRunGAgent.cs:22` `ActorIdPrefix = "channel-agent-run:"` + `:75-79` `BuildActorId`），只做寻址/幂等，不做 stale gate。dispatcher 构造点是 `AgentRunDispatcher.cs:37-38`；stale 判定是 `RequestedAtUnixMs` 对 `MaxRunRequestAgeMs`，见 `AgentRunGAgent.cs:175-186`。
+
+(c) 没有。它先持久化为 conversation 事实，再由 `AgentRunDispatcher` 包 `AgentRunStartRequested` 进 `EventEnvelope` 投 actor inbox；Projection 只物化 committed facts，不负责 command 投递。
+
+### 2.3 演进状态识别
+
+实际跑过的命令：
+
+```bash
+git ls-tree -r --name-only origin/feature/lark-bot | rg 'ChannelLlmReplyInboxRuntime|IChannelLlmReplyInbox|IChannelLlmReplyRunDispatcher|AgentRunGAgent|ToolCallLoop'
+git grep -n "ChannelLlmReplyInboxRuntime\\|IChannelLlmReplyInbox\\|IChannelLlmReplyRunDispatcher\\|AgentRunGAgent\\|ToolCallLoop" origin/feature/lark-bot -- agents src test docs
+gh issue view 596 --repo aevatarAI/aevatar --json title,body,comments
+```
+
+`当前主链路`：`AgentRunGAgent`。证据：`AgentRunDispatcher.cs:38-40` 构造/创建 `AgentRunGAgent[runId]`，`AgentRunDispatcher.cs:58` 向该 actor stream 投递，`AgentRunGAgent.cs:91-128` 处理 `AgentRunStartRequested` 并进入 `ProcessAsync`。
+
+`保留的边界 / 适配点`：`IChannelLlmReplyRunDispatcher`。证据：`IChannelLlmReplyRunDispatcher.cs:3-9` 写明它是把 deferred LLM reply run 交给 run-scoped continuation owner 的 stateless port；`ServiceCollectionExtensions.cs:40` 注册实现为 `AgentRunDispatcher`。
+
+`历史 / 已下线`：`ChannelLlmReplyInboxRuntime`、`IChannelLlmReplyInbox`。证据：`git ls-tree` 在 `origin/feature/lark-bot` 下只剩 `IChannelLlmReplyRunDispatcher.cs`，没有这两个文件；Issue #596 验收标准原文是：`ChannelLlmReplyInboxRuntime 不再作为 hosted service 参与生产链路`，Phase A 也写了移除或废弃 `IChannelLlmReplyInbox`。
+
+`待后续收敛`：`ToolCallLoop`。证据：当前仍由 `ConversationReplyGenerator.cs:181-188` 创建并交给 `ChatRuntime`，但 Issue #596 把 `ChatRuntime` 标为 `transitional local loop`，Phase E 原文要求 `ToolCallLoop / StreamingToolExecutor 逐步退化为局部 helper 或删除`。

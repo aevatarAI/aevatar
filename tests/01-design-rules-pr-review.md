@@ -90,3 +90,102 @@ public sealed record ChatTurnAppendedEvent
 ```
 
 ## 答题区
+
+### A
+
+违规规则：§中间层状态约束（强制）。`CLAUDE.md:115` 原文：`禁止中间层维护 entity/actor/workflow-run/session 等 ID → 上下文/事实状态的进程内映射（Dictionary<>/ConcurrentDictionary<>/HashSet<>/Queue<>）。` 这个 `WorkflowRunIndex` 正是在 `Aevatar.CQRS.Projection.Core` 中用 `_runs: runId -> WorkflowRunContext` 做进程内事实索引。
+
+合规改写：
+
+```csharp
+public sealed class WorkflowRunProjectionActor : GAgentBase<WorkflowRunProjectionState>
+{
+    public Task HandleAsync(TrackWorkflowRun cmd) =>
+        PersistDomainEventAsync(new WorkflowRunTrackedEvent(cmd.RunId, cmd.Context));
+}
+
+await _dispatchPort.SendAsync(WorkflowRunActorId.From(runId), new TrackWorkflowRun(runId, ctx), ct);
+var ctx = await _queryPort.GetRunContextAsync(runId, ct);
+```
+
+CI 门禁：`tools/ci/architecture_guards.sh`。它扫描 `src/Aevatar.CQRS.Projection.Core` 等目录里的 `actor/entity/run/session` ID 映射字典字段（见 `architecture_guards.sh:783-829`）。
+
+### B
+
+违规规则：§Actor 执行模型（强制）-- 单线程事实源 / 回调只发信号。`CLAUDE.md:105` 原文：`运行态只在事件处理主线程修改；禁止 lock/Monitor/ConcurrentDictionary 作为并发补丁维护事实状态。` `CLAUDE.md:106` 也写了：`线程池回调不直接读写运行态或推进业务；只发布内部触发事件`。该 diff 在工具回调里 `lock`、改 `State.Stage`、再提交领域事件，业务推进没有回到 actor inbox。
+
+合规改写：
+
+```csharp
+private Task OnHttpToolFinishedAsync(ToolResult result) =>
+    PublishAsync(
+        new ToolFinishedSignal(result.RunId, result.TurnId, result.ToolCallId),
+        TopologyAudience.Self,
+        default);
+
+[EventHandler]
+public Task HandleToolFinishedAsync(ToolFinishedSignal signal)
+{
+    if (!State.ActiveTurnId.Equals(signal.TurnId)) return Task.CompletedTask;
+    State.PendingToolIds.Remove(signal.ToolCallId);
+    return State.PendingToolIds.Count == 0 ? PersistDomainEventAsync(new TurnCompletedEvent()) : Task.CompletedTask;
+}
+```
+
+CI 门禁：无对应 CI 脚本，规则仅在 `CLAUDE.md` 文字层。现有脚本能扫部分 `ConcurrentDictionary` 模式，但没有看到针对 `lock` 或“回调直接改 Actor State”的通用扫描。
+
+### C
+
+违规规则：§测试与质量门禁 -- 轮询等待门禁。`CLAUDE.md:187` 原文：`禁止随意 Task.Delay(...)/WaitUntilAsync(...)。确属跨进程最终一致性探测且无法改为确定性同步时，须加入 tools/ci/test_polling_allowlist.txt 并说明原因。` 这里用 `Task.Delay(2000)` 等投影，是不确定的轮询等待。
+
+合规改写：
+
+```csharp
+var completed = new TaskCompletionSource<RunSnapshot>();
+await using var sub = await observer.SubscribeRunAsync(runId, s =>
+    s.Status == "Completed" ? completed.TrySetResult(s) : false, ct);
+
+await client.PostAsync("/api/scopes/x/workflows/y/runs", body, ct);
+var snap = await completed.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+snap.Status.Should().Be("Completed");
+```
+
+CI 门禁：`tools/ci/test_stability_guards.sh`。它直接扫描测试中的 `Task.Delay(` / `WaitUntilAsync(`，且要求不在 allowlist 的命中失败（见 `test_stability_guards.sh:16-35`）。
+
+### D
+
+违规规则：§权威状态 / ReadModel / Projection（强制）-- 读写边界。`CLAUDE.md:62` 原文：`对外查询只读 readmodel；不暴露 actor 内部状态、state mirror payload 或 event replay 为查询主路径。` `CLAUDE.md:65` 还明确：`QueryPort/QueryService/ApplicationService 不得在请求路径读 IEventStore、重放 events、临时重建 state mirror`。该 `WorkflowRunQueryService` 在 Application 层从 event store replay 出状态后返回 DTO，正是 query-time replay。
+
+合规改写：
+
+```csharp
+public sealed class WorkflowRunQueryService
+{
+    public Task<RunDto?> GetAsync(string runId, CancellationToken ct) =>
+        _workflowRunQueryPort.GetCurrentAsync(runId, ct);
+}
+
+// IWorkflowRunQueryPort 的实现只读 workflow_run_current_state readmodel，并返回 stateVersion。
+```
+
+CI 门禁：`tools/ci/cqrs_eventsourcing_boundary_guard.sh`，并由 `tools/ci/architecture_guards.sh` 调用（见 `architecture_guards.sh:964-965`）。该脚本扫描 read/query 路径里的 `IEventStore` 等用法，报错文案是 `Read/query paths must not read or replay committed facts from IEventStore`（见 `cqrs_eventsourcing_boundary_guard.sh:16-44`）。
+
+### E
+
+违规规则：§序列化（强制）。`CLAUDE.md:123` 原文：`State、领域事件、命令、回调载荷、快照、缓存载荷、跨 Actor/跨节点内部传输对象全部使用 Protobuf。` `CLAUDE.md:126` 还要求：`新增状态/事件/持久化载荷：先定义 .proto 并生成类型，再接入实现；禁止先写临时结构后补 Protobuf。` `PayloadJson` 把领域事件载荷先塞进 JSON 字符串，后续再解析，违反了事件契约强类型和 Protobuf 优先。
+
+合规改写：
+
+```proto
+message ChatTurnAppendedEvent {
+  string run_id = 1;
+  ChatTurnPayload payload = 2;
+}
+
+message ChatTurnPayload {
+  string role = 1;
+  repeated ChatContentPart parts = 2;
+}
+```
+
+CI 门禁：无对应 CI 脚本，规则仅在 `CLAUDE.md` 文字层。没有找到针对领域事件里 `PayloadJson` / JSON 字符串载荷的通用门禁。

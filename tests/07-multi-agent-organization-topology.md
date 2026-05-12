@@ -44,3 +44,62 @@ Issue #560 提示了一个命名警告：
 - (c) §5 的 loning reply 中提到："*StreamProxyGAgent 未来支持多模态的话, 那么 RoleGAgent 现在不能处理多模态. 整个体系感觉是要用策略模式之类的.*" — 把这条话转写成：**当前 `RoleGAgent` 的输入 / 输出契约面向多模态需要补什么**？给一个具体改造点（一句话即可，可以是新 proto field、新 message、新 sub-state）。
 
 ## 答题区
+
+### 7.1
+
+(a)
+
+命令：
+
+```bash
+find . -name TaskBoardGAgent.cs -print
+```
+
+输出第一行：
+
+```text
+./src/Aevatar.Foundation.Core/MultiAgent/TaskBoardGAgent.cs
+```
+
+(b)
+
+`Aevatar.Foundation.Core` 属于 Foundation / 核心层，不是 application example 层。`CLAUDE.md` 的对应原文是：
+
+> “内核最小化：核心层只承载稳定不变量与通用机制；波动能力下沉到扩展层。”
+
+`docs/canon/architecture-vocabulary.md` 也把 `architecture.md` 标成 “Foundation 层接口与运行时模型”。
+
+(c)
+
+存在至少 4 条矛盾：
+
+- 平台 primitive 被扩张。
+- application pattern 留在内核。
+- 任务分发语义污染 Foundation。
+- 未移到 examples/samples。
+- 未改成具体业务名。
+
+### 7.2
+
+(a)
+
+- `src/Aevatar.Foundation.Abstractions/IActorRuntime.cs::LinkAsync`：抽象 API，注释是 “Creates a parent-child link”。
+- `src/Aevatar.Foundation.Runtime.Implementations.Orleans/Actors/OrleansActorRuntime.cs::LinkAsync`：Orleans 实现，写 parent child，并注册 stream hierarchy binding。
+
+这两者是 **interface ↔ impl** 的一对。另一个独立实现是 `src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActorRuntime.cs::LinkAsync`。
+
+(b)
+
+对应 **“Actor 执行模型（强制）/ 业务推进内聚”**：workflow 已定义接收什么消息、如何处理，actor 等 inbox 事件推进即可，不应再去外部任务源拉取控制流。
+
+(c)
+
+仅靠三件套不容易表达 **协议发现与兼容性校验**：某个 agent 接受哪些 typed command/event、产出哪些 reply、需要哪些能力。需要补 schema-level `AgentProtocolDescriptor` / manifest，并在注册或 dispatch 前校验。
+
+### 7.3
+
+(a) 当前 `StreamingProxyGAgent` 是群聊房间 broker：维护 participants/messages 并广播。
+
+(b) `SessionStreamGAgent` 想抽象外部长连接 session：seq/ack/heartbeat/reconnect/replay。
+
+(c) 具体改造点：在现有 `ChatContentPart input_parts/output_parts` 之外，为音频/视频补 `MediaFrameEvent` 或 `RoleMediaStreamState`，并用 modality strategy 决定 text/control 进 actor inbox、media 走 fast path。

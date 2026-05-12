@@ -73,3 +73,36 @@ public interface IConversationQueryPort
 > 提示：这是开放题。结论本身不计分（1～5 都可能被接受），评分点是 (a)(b)(c) 是否言之有据。
 
 ## 答题区
+
+### 6.1
+
+(a)
+
+- 候选 1：不合规。对外 query 不读 actor 内部态。
+- 候选 2：最不合规。query path 禁止 event replay。
+- 候选 3：合规。读 readmodel 且返回 stateVersion。
+
+(b)
+
+最不合规的是候选 2。它不止违反一条：
+
+- **“查询始终走 readmodel”**：对外查询只读 readmodel，不暴露 actor 内部状态、state mirror payload 或 event replay 为查询主路径。
+- **“禁止侧读冒充 query”**：禁止直读其他 actor 的 event store、持久态快照或“事实重建器”拼装查询结果。
+- **“正常路径禁止 replay”**：query path 和 projection path 不依赖 `event replay/rebuild/backfill`；replay 只属于后台修复、迁移、灾难恢复。
+- **“业务一致性与查询一致性分层”**：readmodel 对“某个 `StateVersion` 已物化可见”负责；候选 2 临时 replay 没有 honest readmodel 水位。
+
+(c)
+
+情形 1：不该。消息 readmodel 的 `stateVersion` 只覆盖消息；`is_thinking` 属 run 态，混入会伪造同一水位。
+
+情形 2：合规。`run_current_state.is_sampling` 若带 `StateVersion/UpdatedAt` 是弱读；但不适合瞬时流式态，只适合诊断/刷新。
+
+### 6.2
+
+(a) 它对应 §3 表里的“用户长期偏好/上下文”。已有结构不是新 Memory 模块，而是 `UserMemoryGAgent` state + committed event log + current-state readmodel。
+
+(b) 不是旁挂 sidecar memory。`UserMemoryState` 是 protobuf，`MemoryEntryAddedEvent` 等事件经 `PersistDomainEventAsync` 提交，再由投影物化。
+
+(c) 命名有一点犯错：`Memory` 容易暗示独立 Harness 模块。更稳的名字是 `UserProfileGAgent` 或 `UserPreferenceGAgent`。
+
+(d) 我给 **4 分**。结构上合规，不是 vector DB/chat history sidecar；扣 1 分给命名，它仍会让人误会“Memory 是一套独立抽象”。
