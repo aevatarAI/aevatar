@@ -1,6 +1,11 @@
+using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.Runtime;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Runtime.Observability;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
+using System.Collections.Concurrent;
+using System.Diagnostics;
 
 namespace Aevatar.CQRS.Projection.Core.Tests;
 
@@ -123,6 +128,57 @@ public class ProjectionStoreDispatcherTests
     }
 
     [Fact]
+    public async Task ObservedProjectionWriteDispatcher_ShouldEmitUpsertAndDeleteActivities()
+    {
+        var stopped = new ConcurrentQueue<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == AevatarActivitySource.ActivitySourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            SampleUsingParentId = static (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = stopped.Enqueue,
+        };
+        ActivitySource.AddActivityListener(listener);
+        var binding = new RecordingBinding("document");
+        var inner = new ProjectionStoreDispatcher<TestReadModel>([binding]);
+        var dispatcher = new ObservedProjectionWriteDispatcher<TestReadModel>(inner);
+
+        await dispatcher.UpsertAsync(new TestReadModel
+        {
+            Id = "id-1",
+            StateVersion = 11,
+            Value = "v1",
+        });
+        await dispatcher.DeleteAsync("id-1");
+
+        var upsert = stopped.ShouldContainActivity(
+            AevatarActivitySource.ReadModelUpsertActivityName,
+            AevatarActivitySource.ReadModelNameTag,
+            nameof(TestReadModel));
+        upsert.GetTagItem(AevatarActivitySource.ReadModelStateVersionTag).Should().Be(11L);
+
+        var delete = stopped.ShouldContainActivity(
+            AevatarActivitySource.ReadModelDeleteActivityName,
+            AevatarActivitySource.ReadModelNameTag,
+            nameof(TestReadModel));
+        delete.GetTagItem(AevatarActivitySource.ReadModelIdTag).Should().Be("id-1");
+    }
+
+    [Fact]
+    public void AddProjectionReadModelRuntime_ShouldResolveObservedDispatcherAroundStoreDispatcher()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IProjectionWriteSink<TestReadModel>>(new RecordingBinding("document"));
+
+        services.AddProjectionReadModelRuntime();
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<ProjectionStoreDispatcher<TestReadModel>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionWriteDispatcher<TestReadModel>>()
+            .Should().BeOfType<ObservedProjectionWriteDispatcher<TestReadModel>>();
+    }
+
+    [Fact]
     public async Task DeleteAsync_ShouldThrow_WhenIdIsBlank()
     {
         var binding = new RecordingBinding("document");
@@ -242,4 +298,25 @@ public class ProjectionStoreDispatcherTests
         }
     }
 
+}
+
+file static class ProjectionActivityAssertions
+{
+    public static Activity ShouldContainActivity(
+        this ConcurrentQueue<Activity> activities,
+        string displayName,
+        string tagName,
+        string tagValue)
+    {
+        return activities
+            .Where(activity =>
+                activity.DisplayName == displayName &&
+                string.Equals(
+                    activity.GetTagItem(tagName) as string,
+                    tagValue,
+                    StringComparison.Ordinal))
+            .Should()
+            .ContainSingle()
+            .Which;
+    }
 }

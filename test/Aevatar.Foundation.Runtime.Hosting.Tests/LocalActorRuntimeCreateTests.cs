@@ -3,10 +3,12 @@ using System.Threading;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
+using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Streaming;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Diagnostics;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
@@ -21,6 +23,38 @@ public sealed class LocalActorRuntimeCreateTests
         var second = await runtime.CreateAsync<SequentialAgent>("shared-id");
 
         second.Should().BeSameAs(first);
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldEmitSpawnActivityOnlyForFirstActivation()
+    {
+        var stopped = new ConcurrentQueue<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == AevatarActivitySource.ActivitySourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            SampleUsingParentId = static (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = stopped.Enqueue,
+        };
+        ActivitySource.AddActivityListener(listener);
+        var runtime = CreateRuntime();
+
+        var first = await runtime.CreateAsync<SequentialAgent>("spawn-once");
+        var second = await runtime.CreateAsync<SequentialAgent>("spawn-once");
+
+        second.Should().BeSameAs(first);
+        var spawnActivities = stopped
+            .Where(activity =>
+                activity.DisplayName == AevatarActivitySource.AgentSpawnActivityName &&
+                string.Equals(
+                    activity.GetTagItem(AevatarActivitySource.AgentIdTag) as string,
+                    "spawn-once",
+                    StringComparison.Ordinal))
+            .ToList();
+
+        spawnActivities.Should().ContainSingle();
+        spawnActivities[0].GetTagItem(AevatarActivitySource.AgentTypeTag)
+            .Should().Be(typeof(SequentialAgent).AssemblyQualifiedName);
     }
 
     [Fact]

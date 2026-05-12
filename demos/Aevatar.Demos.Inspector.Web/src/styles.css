@@ -1,0 +1,114 @@
+:root {
+  background: #0E0F12;
+  color: #C8CED4;
+  font-family: "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+body {
+  margin: 0;
+  min-width: 1280px;
+}
+
+.topbar {
+  height: 72px;
+  display: grid;
+  grid-template-columns: 1fr 280px auto;
+  gap: 14px;
+  align-items: center;
+  padding: 0 18px;
+  border-bottom: 1px solid #2A2D32;
+}
+
+h1 {
+  margin: 0;
+  font-size: 18px;
+}
+
+p {
+  margin: 6px 0;
+  color: #8A929B;
+}
+
+input,
+button {
+  height: 34px;
+  border: 1px solid #2A2D32;
+  border-radius: 3px;
+  background: #101216;
+  color: #C8CED4;
+  font: inherit;
+}
+
+button {
+  color: #E89E5B;
+  cursor: pointer;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 300px 1fr 340px;
+  min-height: calc(100vh - 224px);
+}
+
+aside,
+footer section {
+  background: #15171B;
+  padding: 16px;
+  border-right: 1px solid #2A2D32;
+}
+
+.label {
+  color: #8A929B;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.actor {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+  padding: 0 8px;
+}
+
+.canvas {
+  position: relative;
+  overflow: hidden;
+}
+
+.node {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #C8CED4;
+}
+
+.node span {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #3B4A52;
+  border: 1px solid #5B6E78;
+}
+
+.event {
+  border: 1px solid #2A2D32;
+  border-radius: 3px;
+  padding: 8px;
+}
+
+footer {
+  height: 152px;
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  border-top: 1px solid #2A2D32;
+}
+
+.ok {
+  color: #7EB78A;
+}
+
+.bad {
+  color: #D16B6B;
+}
