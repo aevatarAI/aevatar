@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
@@ -135,6 +137,41 @@ public sealed class InspectorEndpointsTests
         json.Should().Contain("InspectorCollectorAgent");
     }
 
+    [Fact]
+    public async Task DemoHierarchyEndpoint_ShouldEmitMessageActivity_WhenActorsAlreadyExist()
+    {
+        await using var host = await InspectorTestHost.StartAsync();
+        var stopped = new ConcurrentQueue<Activity>();
+        TaskCompletionSource? parentHandled = null;
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == AevatarActivitySource.ActivitySourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            SampleUsingParentId = static (ref ActivityCreationOptions<string> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activity =>
+            {
+                stopped.Enqueue(activity);
+                if (IsActorHandleActivity(activity, "HandleEvent:InspectorPingEvent", "inspector-parent"))
+                    parentHandled?.TrySetResult();
+            },
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        var first = await host.Client.PostAsync("/api/inspector/demo/hierarchy", null);
+        first.EnsureSuccessStatusCode();
+        while (stopped.TryDequeue(out _))
+        {
+        }
+        parentHandled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var second = await host.Client.PostAsync("/api/inspector/demo/hierarchy", null);
+        second.EnsureSuccessStatusCode();
+
+        await parentHandled.Task.WaitAsync(TimeSpan.FromSeconds(3));
+    }
+
     private static async Task SeedRegistryAsync(IServiceProvider services)
     {
         var writer = services.GetRequiredService<IProjectionDocumentWriter<GAgentRegistryCurrentStateDocument>>();
@@ -169,6 +206,13 @@ public sealed class InspectorEndpointsTests
             {
                 [AevatarActivitySource.AgentIdTag] = id,
             });
+
+    private static bool IsActorHandleActivity(Activity activity, string displayName, string actorId) =>
+        activity.DisplayName == displayName &&
+        string.Equals(
+            activity.GetTagItem(AevatarActivitySource.AgentIdTag) as string,
+            actorId,
+            StringComparison.Ordinal);
 
     private sealed class InspectorTestHost : IAsyncDisposable
     {

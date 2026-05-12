@@ -69,6 +69,18 @@ footer section {
   justify-content: space-between;
   margin-top: 8px;
   padding: 0 8px;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+
+.actor.is-hovered,
+.actor.is-selected,
+.actor.is-active {
+  border-color: #5B6E78;
+  background: #1B2026;
+}
+
+.actor.is-active {
+  color: #F4BE7D;
 }
 
 .canvas {
@@ -82,6 +94,7 @@ footer section {
   align-items: center;
   gap: 8px;
   color: #C8CED4;
+  transition: color 140ms ease, transform 140ms ease;
 }
 
 .node span {
@@ -90,6 +103,25 @@ footer section {
   border-radius: 50%;
   background: #3B4A52;
   border: 1px solid #5B6E78;
+  transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.node.is-hovered,
+.node.is-selected {
+  color: #F4BE7D;
+  transform: translateY(-1px);
+}
+
+.node.is-hovered span,
+.node.is-selected span {
+  border-color: #E89E5B;
+  box-shadow: 0 0 0 4px rgb(232 158 91 / 12%);
+}
+
+.node.is-active span {
+  animation: node-pulse 900ms ease-out;
+  background: #4E645C;
+  border-color: #7EB78A;
 }
 
 .event {
@@ -111,4 +143,19 @@ footer {
 
 .bad {
   color: #D16B6B;
+}
+
+@keyframes node-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgb(126 183 138 / 46%);
+    transform: scale(1);
+  }
+  70% {
+    box-shadow: 0 0 0 14px rgb(126 183 138 / 0%);
+    transform: scale(1.12);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgb(126 183 138 / 0%);
+    transform: scale(1);
+  }
 }

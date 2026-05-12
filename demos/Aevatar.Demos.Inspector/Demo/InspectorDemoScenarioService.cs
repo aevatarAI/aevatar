@@ -1,6 +1,5 @@
 using Aevatar.Demos.Inspector.Messages;
 using Aevatar.Demos.Inspector.ReadModels;
-using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Demos.Inspector.Demo;
 
@@ -25,13 +24,10 @@ public sealed class InspectorDemoScenarioService
         await _registry.RegisterActorAsync(nameof(InspectorCollectorAgent), child.Id, ct);
         await _runtime.LinkAsync(parent.Id, child.Id);
 
-        await parent.HandleEventAsync(new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(new InspectorPingEvent { Message = "hello-inspector" }),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication("inspector-demo", TopologyAudience.Self),
-        }, ct);
+        await ((GAgentBase)parent.Agent).EventPublisher.PublishAsync(
+            new InspectorPingEvent { Message = "hello-inspector" },
+            TopologyAudience.Self,
+            ct);
 
         return new InspectorDemoRunResponse(
             "hierarchy",

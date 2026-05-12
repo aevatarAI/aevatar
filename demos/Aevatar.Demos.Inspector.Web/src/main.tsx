@@ -32,6 +32,9 @@ type TelemetryFrame = {
   tags?: Record<string, string>
 }
 
+const AgentIdTag = 'aevatar.agent.id'
+const AgentParentTag = 'aevatar.agent.parent'
+
 function App() {
   const [actors, setActors] = React.useState<ActorItem[]>([])
   const [workflows, setWorkflows] = React.useState<WorkflowRun[]>([])
@@ -39,7 +42,30 @@ function App() {
   const [events, setEvents] = React.useState<TelemetryFrame[]>([])
   const [filter, setFilter] = React.useState('')
   const [selected, setSelected] = React.useState<string | null>(null)
+  const [hovered, setHovered] = React.useState<string | null>(null)
+  const [activeActors, setActiveActors] = React.useState<Record<string, number>>({})
   const [live, setLive] = React.useState(false)
+
+  const pulseActors = React.useCallback((frame: TelemetryFrame) => {
+    const actorIds = [
+      frame.tags?.[AgentIdTag],
+      frame.tags?.[AgentParentTag],
+    ].filter((actorId): actorId is string => Boolean(actorId))
+    if (actorIds.length === 0) return
+
+    const expiresAt = Date.now() + 1200
+    setActiveActors((current) => ({
+      ...current,
+      ...Object.fromEntries(actorIds.map((actorId) => [actorId, expiresAt])),
+    }))
+
+    window.setTimeout(() => {
+      const now = Date.now()
+      setActiveActors((current) => Object.fromEntries(
+        Object.entries(current).filter(([, expires]) => expires > now)
+      ))
+    }, 1300)
+  }, [])
 
   const refresh = React.useCallback(async () => {
     const [actorResponse, workflowResponse, readmodelResponse] = await Promise.all([
@@ -61,13 +87,15 @@ function App() {
     source.onopen = () => setLive(true)
     source.onerror = () => setLive(false)
     source.addEventListener('activity', (event) => {
-      setEvents((current) => [JSON.parse(event.data), ...current].slice(0, 24))
+      const frame = JSON.parse(event.data) as TelemetryFrame
+      pulseActors(frame)
+      setEvents((current) => [frame, ...current].slice(0, 24))
     })
     return () => {
       window.clearInterval(interval)
       source.close()
     }
-  }, [refresh])
+  }, [pulseActors, refresh])
 
   const visible = actors.filter((actor) =>
     actor.actorId.toLowerCase().includes(filter.toLowerCase()) ||
@@ -88,7 +116,21 @@ function App() {
         <aside>
           <div className="label">Actors</div>
           {visible.map((actor) => (
-            <button key={actor.actorId} type="button" className="actor" onClick={() => setSelected(actor.actorId)}>
+            <button
+              key={actor.actorId}
+              type="button"
+              className={[
+                'actor',
+                actor.actorId === selected ? 'is-selected' : '',
+                actor.actorId === hovered ? 'is-hovered' : '',
+                activeActors[actor.actorId] ? 'is-active' : '',
+              ].filter(Boolean).join(' ')}
+              onMouseEnter={() => setHovered(actor.actorId)}
+              onMouseLeave={() => setHovered(null)}
+              onFocus={() => setHovered(actor.actorId)}
+              onBlur={() => setHovered(null)}
+              onClick={() => setSelected(actor.actorId)}
+            >
               <span>{actor.actorId}</span><span>{actor.type}</span>
             </button>
           ))}
@@ -97,8 +139,15 @@ function App() {
           {visible.map((actor, index) => (
             <div
               key={actor.actorId}
-              className="node"
+              className={[
+                'node',
+                actor.actorId === selected ? 'is-selected' : '',
+                actor.actorId === hovered ? 'is-hovered' : '',
+                activeActors[actor.actorId] ? 'is-active' : '',
+              ].filter(Boolean).join(' ')}
               style={{ left: `${16 + (index % 4) * 21}%`, top: `${18 + Math.floor(index / 4) * 18}%` }}
+              onMouseEnter={() => setHovered(actor.actorId)}
+              onMouseLeave={() => setHovered(null)}
             >
               <span />
               <strong>{actor.actorId}</strong>
