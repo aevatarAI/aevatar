@@ -50,6 +50,125 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public void ApplyReplyProduced_HistoricalEventWithoutReplyText_MarksAsAlreadyDispatched()
+    {
+        // Backward-compat for pre-refactor live state: AgentRunReplyProducedEvents persisted
+        // by the old code path have no reply_text / outbound / terminal_state fields (proto3
+        // defaults on deserialize). The old code only wrote this event AFTER a successful
+        // dispatch, so on replay we MUST treat these as ReplyDispatched=true. Otherwise:
+        //   1. HandleStartAsync would fire ReDispatchProducedReplyAsync with an empty payload
+        //      (would surface as a blank or structural-error reply).
+        //   2. HandleCleanupAsync would refuse to destroy the actor, leaking grain state.
+        var runtime = CreateRunAgent(
+            new DispatchingActorRuntime(),
+            new RecordingReplyGenerator(() => false),
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
+
+        var historical = new AgentRunReplyProducedEvent
+        {
+            RunId = "run-historic",
+            CorrelationId = "corr-historic",
+            TargetActorId = "actor-1",
+            ProducedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            // ReplyText, Outbound, TerminalState intentionally left default — this is the
+            // shape proto3 deserialization gives for an event persisted before those fields
+            // existed.
+        };
+
+        var next = InvokeAgentTransition(runtime, new AgentRunGAgentState(), historical);
+
+        next.Status.Should().Be(AgentRunStatus.ReplyProduced);
+        next.ReplyDispatched.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ApplyReplyProduced_NewEventWithReplyText_LeavesReplyAsNotYetDispatched()
+    {
+        // New events always carry a non-empty reply_text (empty replies get replaced with a
+        // user-visible fallback before persisting). Those events represent "payload persisted
+        // but not yet dispatched" — ReplyDispatched stays false here; the subsequent
+        // AgentRunReplyDispatchedEvent flips it after the conversation actor accepts the
+        // LlmReplyReadyEvent.
+        var runtime = CreateRunAgent(
+            new DispatchingActorRuntime(),
+            new RecordingReplyGenerator(() => false),
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
+
+        var fresh = new AgentRunReplyProducedEvent
+        {
+            RunId = "run-fresh",
+            CorrelationId = "corr-fresh",
+            TargetActorId = "actor-1",
+            ProducedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReplyText = "hello",
+        };
+
+        var next = InvokeAgentTransition(runtime, new AgentRunGAgentState(), fresh);
+
+        next.Status.Should().Be(AgentRunStatus.ReplyProduced);
+        next.ReplyDispatched.Should().BeFalse();
+        next.ProducedReplyText.Should().Be("hello");
+        next.ProducedTerminalState.Should().Be(LlmReplyTerminalState.Completed);
+    }
+
+    [Fact]
+    public async Task ProduceAndDispatch_WhenPersistDispatchedFails_DoesNotDeliverDuplicateFallbackReply()
+    {
+        // Once DispatchReadyEventAsync delivers the reply to the conversation actor, the user
+        // has the response. If PersistReplyDispatchedAsync then fails, the actor MUST swallow
+        // that error locally — otherwise HandleStartAsync's outer `catch (Exception)` would
+        // call FailAfterUnexpectedExceptionAsync, which would re-enter ProduceAndDispatchAsync
+        // with the "Sorry, I couldn't complete this reply" fallback and deliver a SECOND
+        // user-visible message on top of the real one.
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "the real reply" };
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            });
+        // Inject a transient failure on the AgentRunReplyDispatchedEvent persist only.
+        runtime.EventSourcing = new FailOnEventTypeSourcing<AgentRunGAgentState, AgentRunReplyDispatchedEvent>(
+            (current, evt) => InvokeAgentTransition(runtime, current, evt));
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-dispatched-persist-fail",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-dispatched-persist-fail",
+        });
+
+        // Exactly one reply delivered to the conversation actor — the real one. No duplicate
+        // fallback was emitted.
+        handled.Should().HaveCount(1);
+        var ready = handled[0].Payload.Unpack<LlmReplyReadyEvent>();
+        ready.Outbound.Text.Should().Be("the real reply");
+        ready.TerminalState.Should().Be(LlmReplyTerminalState.Completed);
+        replyGenerator.CallCount.Should().Be(1);
+
+        // State stays at ReplyProduced+!ReplyDispatched (the Dispatched event failed to
+        // persist). The actor lingers until idle eviction — acceptable trade-off vs.
+        // delivering a duplicate user-visible fallback.
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
+        runtime.State.ReplyDispatched.Should().BeFalse();
+        runtime.State.ProducedReplyText.Should().Be("the real reply");
+    }
+
+    [Fact]
     public async Task HandleStartAsync_ShouldIgnoreDuplicateStart_AfterReadyAcceptedAndTerminalPersisted()
     {
         var actor = Substitute.For<IActor>();
@@ -1126,6 +1245,50 @@ public sealed class AgentRunGAgentTests
 
         public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
             _inner.UnlinkAsync(childId, ct);
+    }
+
+    /// <summary>
+    /// Test stub that fails <see cref="ConfirmEventsAsync"/> only when an event of type
+    /// <typeparamref name="TFailEvent"/> is in the pending list. Used to simulate
+    /// "persistence succeeded for produced event but failed for dispatched event" so we
+    /// can verify the actor does NOT escalate that into a duplicate fallback reply.
+    /// </summary>
+    private sealed class FailOnEventTypeSourcing<TState, TFailEvent>(Func<TState, IMessage, TState> transition)
+        : IEventSourcingBehavior<TState>
+        where TState : class, IMessage<TState>, new()
+        where TFailEvent : IMessage
+    {
+        private readonly List<IMessage> _pending = [];
+
+        public long CurrentVersion { get; private set; }
+
+        public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage
+        {
+            _pending.Add(evt);
+        }
+
+        public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
+        {
+            if (_pending.OfType<TFailEvent>().Any())
+            {
+                _pending.Clear();
+                throw new InvalidOperationException(
+                    $"Simulated persistence failure for event type {typeof(TFailEvent).Name}");
+            }
+            CurrentVersion += _pending.Count;
+            _pending.Clear();
+            return Task.FromResult(new EventStoreCommitResult { LatestVersion = CurrentVersion });
+        }
+
+        public Task PersistSnapshotAsync(TState currentState, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task<TState?> ReplayAsync(string agentId, CancellationToken ct = default) =>
+            Task.FromResult<TState?>(null);
+
+        public void DiscardPendingEvents() => _pending.Clear();
+
+        public TState TransitionState(TState current, IMessage evt) => transition(current, evt);
     }
 
     private sealed class StateTransitionEventSourcing<TState>(Func<TState, IMessage, TState> transition)

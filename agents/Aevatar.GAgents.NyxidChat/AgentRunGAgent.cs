@@ -407,8 +407,15 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         await DispatchReadyEventAsync(request, replyText, outboundIntent, terminalState, errorCode, errorSummary);
 
-        await PersistReplyDispatchedAsync(request, runId);
-        await ScheduleTerminalCleanupAsync(runId);
+        // Past the point of user-visible delivery. State persistence failures and cleanup
+        // scheduling failures MUST NOT propagate out — otherwise HandleStartAsync's outer
+        // `catch (Exception)` would call FailAfterUnexpectedExceptionAsync, which would
+        // re-enter ProduceAndDispatchAsync with a fallback reply and deliver a SECOND
+        // user-visible message ("Sorry, I couldn't complete this reply..."). Log and
+        // continue; the actor stays at Status=ReplyProduced && !ReplyDispatched, and the
+        // terminal cleanup callback simply doesn't fire (actor lingers until normal
+        // grain idle eviction). The conversation actor has already accepted the reply.
+        await TryFinalizeAfterDispatchAsync(request, runId);
     }
 
     /// <summary>
@@ -427,8 +434,49 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             State.ErrorCode ?? string.Empty,
             State.ErrorSummary ?? string.Empty);
 
-        await PersistReplyDispatchedAsync(request, runId);
-        await ScheduleTerminalCleanupAsync(runId);
+        // Past the point of user-visible delivery — swallow persistence/cleanup errors so
+        // they don't escalate to a duplicate fallback dispatch. See ProduceAndDispatchAsync
+        // for the full rationale.
+        await TryFinalizeAfterDispatchAsync(request, runId);
+    }
+
+    /// <summary>
+    /// Post-dispatch state finalization. Once <see cref="DispatchReadyEventAsync"/> has
+    /// succeeded the user has the reply, so any state-persistence or cleanup-scheduling
+    /// failure from here on must NOT bubble up — otherwise the outer exception path
+    /// would treat this as an unhandled failure and re-dispatch a fallback reply,
+    /// surfacing a duplicate message to the user.
+    /// </summary>
+    private async Task TryFinalizeAfterDispatchAsync(NeedsLlmReplyEvent request, string runId)
+    {
+        try
+        {
+            await PersistReplyDispatchedAsync(request, runId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Failed to persist AgentRunReplyDispatchedEvent after successful dispatch; " +
+                "state will replay as ReplyProduced+!ReplyDispatched until next reconciliation. " +
+                "runId={RunId} correlation={CorrelationId}",
+                runId,
+                request.CorrelationId);
+        }
+
+        try
+        {
+            await ScheduleTerminalCleanupAsync(runId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to schedule terminal cleanup after successful dispatch; actor may " +
+                "linger until normal grain idle eviction. runId={RunId} correlation={CorrelationId}",
+                runId,
+                request.CorrelationId);
+        }
     }
 
     private async Task DropAsync(NeedsLlmReplyEvent request, string runId, string reason)
@@ -930,8 +978,21 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.ProducedReplyText = evt.ReplyText ?? string.Empty;
         next.ProducedOutbound = evt.Outbound?.Clone();
         next.ProducedTerminalState = evt.TerminalState;
-        // ReplyDispatched stays false here; flipped to true by ApplyReplyDispatched
-        // once the LlmReplyReadyEvent is delivered.
+        // Backward-compat: AgentRunReplyProducedEvents persisted by the pre-refactor
+        // codepath have no reply_text / outbound / terminal_state fields (proto3 defaults).
+        // Historically, Status=ReplyProduced was only written *after* the LlmReplyReadyEvent
+        // was successfully dispatched (old code's `await Dispatch...; await PersistReplyProduced...;`
+        // order), so those events semantically mean "delivered". Treat them as ReplyDispatched=true
+        // on replay so:
+        //   1. Re-dispatch path doesn't fire ReDispatchProducedReplyAsync with an empty payload
+        //      (would surface as a blank reply / structural error to the user).
+        //   2. HandleCleanupAsync recognizes them as terminal so the actor can be destroyed.
+        // New code always populates reply_text (empty replies fall back to a non-empty user
+        // message before persisting), so empty reply_text reliably identifies legacy events.
+        if (string.IsNullOrEmpty(evt.ReplyText))
+            next.ReplyDispatched = true;
+        // For new events, ReplyDispatched stays false here; flipped to true by
+        // ApplyReplyDispatched once the LlmReplyReadyEvent is delivered.
         return next;
     }
 
