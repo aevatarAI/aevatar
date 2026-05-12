@@ -1686,7 +1686,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     // so the user sees the bot is working before the LLM reply lands. After a reply succeeds,
     // the reaction is cleared instead of replaced with DONE because DONE reads as task completion,
     // while a chat reply can be an intermediate progress update.
-    private const string TypingReactionEmojiType = "TYPING";
+    private const string TypingReactionEmojiType = "Typing";
 
     private async Task TrySendImmediateLarkReactionAsync(
         ChatActivity activity,
@@ -1786,7 +1786,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     }
 
     // After a successful reply, remove the bot's "Typing" reaction. Uses list-based discovery (filter by
-    // emoji_type=TYPING AND operator_type=app) instead of caching the immediate reaction's
+    // emoji_type=Typing AND operator_type=app) instead of caching the immediate reaction's
     // reaction_id locally — the runner is a singleton and cross-turn state on it would violate the
     // "中间层进程内缓存作为事实源" rule. Filtering on operator_type=app avoids deleting any user
     // who happened to add the same Typing reaction.
