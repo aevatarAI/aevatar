@@ -204,6 +204,15 @@ describe("TeamsHomePage", () => {
     expect(params.get("intent")).toBe("create-member");
   });
 
+  it("labels team card runtime shortcuts as member-scoped", async () => {
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "更多" }));
+
+    expect(await screen.findByText("查看默认成员运行")).toBeTruthy();
+    expect(screen.queryByText("查看运行")).toBeNull();
+  });
+
   it("routes Create Team to the real create-team page", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 

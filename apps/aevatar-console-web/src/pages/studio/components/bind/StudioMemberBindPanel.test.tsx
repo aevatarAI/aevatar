@@ -341,6 +341,7 @@ describe('StudioMemberBindPanel', () => {
           scopeSource: 'nyxid',
         },
         buildWorkflowYamls,
+        memberId: 'default',
         scopeId: 'scope-1',
         preferredServiceId: 'default',
         onContinueToInvoke: handleContinueToInvoke,
@@ -456,6 +457,64 @@ describe('StudioMemberBindPanel', () => {
     fireEvent.click(continueButton);
 
     expect(handleContinueToInvoke).not.toHaveBeenCalled();
+  });
+
+  it('keeps published Invoke unavailable until a backend member is selected', async () => {
+    const handleContinueToInvoke = jest.fn();
+
+    renderWithQueryClient(
+      React.createElement(StudioMemberBindPanel, {
+        authSession: {
+          enabled: true,
+          authenticated: true,
+          name: 'Abigail Deng',
+          scopeId: 'scope-1',
+          scopeSource: 'nyxid',
+        },
+        scopeId: 'scope-1',
+        preferredServiceId: 'default',
+        onContinueToInvoke: handleContinueToInvoke,
+        services: [
+          {
+            serviceKey: 'scope-1:default:workspace-demo',
+            tenantId: 'scope-1',
+            appId: 'default',
+            namespace: 'default',
+            serviceId: 'default',
+            displayName: 'workspace-demo',
+            defaultServingRevisionId: 'rev-2',
+            activeServingRevisionId: 'rev-2',
+            deploymentId: 'dep-2',
+            primaryActorId: 'actor-default',
+            deploymentStatus: 'Active',
+            endpoints: [
+              {
+                endpointId: 'chat',
+                displayName: 'Chat',
+                kind: 'chat',
+                requestTypeUrl: '',
+                responseTypeUrl: '',
+                description: 'Chat with the published workflow.',
+              },
+            ],
+            policyIds: [],
+            updatedAt: '2026-03-26T08:00:00Z',
+          },
+        ],
+      }),
+    );
+
+    expect(await screen.findByText('Select a Team member before using Invoke.')).toBeTruthy();
+    expect(screen.queryByTestId('studio-bind-contract-card')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Send smoke test' })).toBeDisabled();
+    const continueButton = screen.getByRole('button', { name: 'Continue to Invoke' });
+    expect(continueButton).toBeDisabled();
+
+    fireEvent.click(continueButton);
+
+    expect(handleContinueToInvoke).not.toHaveBeenCalled();
+    expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
+    expect(runtimeRunsApi.invokeEndpoint).not.toHaveBeenCalled();
   });
 
   it('does not block current draft smoke tests on published endpoint auth state', async () => {

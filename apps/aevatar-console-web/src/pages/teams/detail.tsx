@@ -3544,7 +3544,7 @@ const TeamDetailPage: React.FC = () => {
     runtimeServiceId,
     scopeId,
   ]);
-  const conversationActionLabel = lens.playback.currentRunId ? "本次对话" : "运行记录";
+  const conversationActionLabel = lens.playback.currentRunId ? "本次成员对话" : "成员运行记录";
   const serviceMappingActionLabel = "服务映射";
   const teamBuilderActionLabel = "高级编辑";
   const editTeamActionLabel = "Edit Team";
