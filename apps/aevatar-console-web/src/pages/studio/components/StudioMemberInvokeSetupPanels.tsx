@@ -460,6 +460,10 @@ export const StudioMemberInvokeComposerPanel: React.FC<
         )}
         {formError ? (
           <Typography.Text type="danger">{formError}</Typography.Text>
+        ) : !canInvoke ? (
+          <Typography.Text style={helperTextStyle} type="secondary">
+            Invoke requires a selected backend Team member and a published member endpoint.
+          </Typography.Text>
         ) : isChatEndpoint ? (
           <Typography.Text style={helperTextStyle} type="secondary">
             这是当前成员的对话输入区。开始对话后，结果会直接显示在下方工作台。

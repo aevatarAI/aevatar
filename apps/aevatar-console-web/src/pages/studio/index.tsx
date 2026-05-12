@@ -1048,6 +1048,11 @@ function readMemberIdFromMemberKey(memberKey: string): string {
   return trimOptional(normalizedMemberKey.slice('member:'.length));
 }
 
+function buildBackendMemberKey(memberId: string): `member:${string}` | '' {
+  const normalizedMemberId = trimOptional(memberId);
+  return normalizedMemberId ? `member:${normalizedMemberId}` : '';
+}
+
 function readScriptIdFromMemberKey(memberKey: string): string {
   const normalizedMemberKey = trimOptional(memberKey);
   if (!normalizedMemberKey.startsWith('script:')) {
@@ -3922,14 +3927,30 @@ const StudioPage: React.FC = () => {
             ? `member:${resolvedBoundMemberId}`
             : `member:${boundServiceId}`;
         })();
-      setRecentlyBoundMemberKey(boundMemberKey);
-      setRecentlyBoundServiceId(boundServiceId);
       const selectedService = (servicesResult.data ?? []).find(
         (service) => service.serviceId === boundServiceId,
       );
       const defaultEndpointId = resolveStudioServiceDefaultEndpointId(
         selectedService,
       );
+      const routeMemberSummary = resolveStudioMemberSummaryFromMemberKey(
+        trimOptional(routeState.memberKey) ||
+          buildBackendMemberKey(routeState.memberId),
+        publishedScopeMembers,
+        studioScopeMembers,
+      );
+      const resolvedBoundMemberId =
+        resolvedBuildMemberId ||
+        resolvePublishedMemberIdFromServiceId(
+          boundServiceId,
+          publishedScopeMembers,
+          studioScopeMembers,
+        ) ||
+        trimOptional(routeMemberSummary?.memberId);
+      const routedBoundMemberKey =
+        buildBackendMemberKey(resolvedBoundMemberId) || boundMemberKey;
+      setRecentlyBoundMemberKey(routedBoundMemberKey);
+      setRecentlyBoundServiceId(boundServiceId);
 
       bindingSelectionRef.current = {
         serviceId: boundServiceId,
@@ -3944,7 +3965,7 @@ const StudioPage: React.FC = () => {
         buildStudioRoute({
           scopeId: resolvedStudioScopeId || undefined,
           teamId: routeState.teamId || undefined,
-          memberKey: boundMemberKey,
+          memberKey: routedBoundMemberKey,
           step: 'bind',
         }),
       );
@@ -5387,8 +5408,14 @@ const StudioPage: React.FC = () => {
   );
   const handleUseBindingEndpoint = useCallback(
     (serviceId: string, endpointId: string) => {
+      const routeMemberSummary = resolveStudioMemberSummaryFromMemberKey(
+        trimOptional(routeState.memberKey) ||
+          buildBackendMemberKey(routeState.memberId),
+        publishedScopeMembers,
+        studioScopeMembers,
+      );
       const resolvedMemberId =
-        trimOptional(routeState.memberId) ||
+        trimOptional(routeMemberSummary?.memberId) ||
         resolvePublishedMemberIdFromServiceId(
           serviceId,
           publishedScopeMembers,
@@ -5402,17 +5429,18 @@ const StudioPage: React.FC = () => {
         serviceId,
         endpointId,
       };
+      if (!resolvedMemberId) {
+        void message.warning(
+          'Invoke needs a backend Team member identity. Select or create a member before continuing.',
+        );
+        return;
+      }
+
       history.replace(
         buildStudioRoute({
           scopeId: resolvedStudioScopeId || undefined,
           teamId: routeState.teamId || undefined,
-          memberKey:
-            trimOptional(routeState.memberKey) ||
-            (resolvedMemberId
-              ? `member:${resolvedMemberId}`
-              : '') ||
-            activeBuildFocusKey ||
-            (serviceId ? `member:${serviceId}` : undefined),
+          memberKey: buildBackendMemberKey(resolvedMemberId) || undefined,
           step: 'invoke',
           tab: 'invoke',
         }),
@@ -5420,7 +5448,6 @@ const StudioPage: React.FC = () => {
       applyStudioTarget('invoke');
     },
     [
-      activeBuildFocusKey,
       applyStudioTarget,
       history,
       publishedScopeMembers,
@@ -6489,15 +6516,12 @@ const StudioPage: React.FC = () => {
       : bindTargetDefaultEndpointId
     : '';
   const hasInvokeTargetMemberSelection =
-    Boolean(trimOptional(routeState.memberId)) ||
-    Boolean(currentSelectedMemberServiceId) ||
-    Boolean(currentInvokeSelectionServiceId) ||
-    Boolean(currentBindingSelectionServiceId);
+    Boolean(workbenchStudioMemberId);
   const invokeTargetServiceId =
     currentInvokeSelectionServiceId ||
     currentBindingSelectionServiceId ||
-    trimOptional(routeState.memberId) ||
-    currentSelectedMemberServiceId;
+    currentSelectedMemberServiceId ||
+    trimOptional(routeState.memberId);
   const invokeTargetService = useMemo(
     () => {
       if (!invokeTargetServiceId) {
@@ -7299,6 +7323,7 @@ const StudioPage: React.FC = () => {
     );
   const selectedMemberCanInvoke =
     selectedMemberCanBind &&
+    Boolean(workbenchStudioMemberId) &&
     Boolean(invokeTargetServiceId) &&
     Boolean(invokeTargetDefaultEndpointId);
   const lifecycleSteps = useMemo<readonly StudioLifecycleStep[]>(
