@@ -162,6 +162,36 @@ public class AIComponentCoverageTests
     }
 
     [Fact]
+    public async Task MEAILLMProvider_ConvertMessages_ShouldSkipRawReasoningPatchForEmptyAssistantContent()
+    {
+        IReadOnlyList<MeaiChatMessage>? capturedMessages = null;
+        var client = new StubChatClient
+        {
+            OnGetResponse = (messages, _, _) =>
+            {
+                capturedMessages = messages.ToList();
+                return Task.FromResult(new ChatResponse(new MeaiChatMessage(ChatRole.Assistant, "ok")));
+            },
+        };
+
+        var provider = new MEAILLMProvider("meai-reasoning-empty-assistant", client);
+        await provider.ChatAsync(new LLMRequest
+        {
+            Messages =
+            [
+                new AevatarChatMessage { Role = "user", Content = "hi" },
+                new AevatarChatMessage { Role = "assistant", Content = string.Empty, ReasoningContent = "thinking-only" },
+            ],
+        });
+
+        capturedMessages.Should().NotBeNull();
+        var assistantMsg = capturedMessages![1];
+        assistantMsg.Contents.OfType<TextReasoningContent>().Should().ContainSingle()
+            .Which.Text.Should().Be("thinking-only");
+        assistantMsg.RawRepresentation.Should().BeNull();
+    }
+
+    [Fact]
     public void PromptTemplate_Render_ShouldApplyDefaultsAndRuntimeAndExamples()
     {
         var template = new PromptTemplate

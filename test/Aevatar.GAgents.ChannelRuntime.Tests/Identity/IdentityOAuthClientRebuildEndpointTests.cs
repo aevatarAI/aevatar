@@ -188,6 +188,58 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
             "timeout path must still have dispatched the provision command before the wait loop began");
     }
 
+    [Fact]
+    public async Task Returns409_WhenAnotherRebuildIsAlreadyObservingReadmodel()
+    {
+        var provider = Substitute.For<IAevatarOAuthClientProvider>();
+        var firstProviderPoll = new TaskCompletionSource<AevatarOAuthClientSnapshot>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        provider.GetAsync(Arg.Any<CancellationToken>())
+            .Returns(_ => firstProviderPoll.Task);
+        var runtime = new RecordingActorRuntime();
+        var coordinator = new IdentityOAuthEndpoints.AevatarOAuthClientRebuildCoordinator();
+
+        var first = InvokeRebuildCoreAsync(
+            adminTokenConfigured: AdminToken,
+            adminTokenHeader: AdminToken,
+            body: SampleBody(),
+            provider: provider,
+            actorRuntime: runtime,
+            observationTimeout: TimeSpan.FromSeconds(5),
+            observationPollDelay: TimeSpan.FromMilliseconds(20),
+            rebuildCoordinator: coordinator);
+
+        runtime.Captured.Should().HaveCount(1,
+            "the first request should enter the coordinator and dispatch before blocking on observation");
+
+        var second = await InvokeRebuildCoreAsync(
+            adminTokenConfigured: AdminToken,
+            adminTokenHeader: AdminToken,
+            body: new IdentityOAuthEndpoints.RebuildAevatarOAuthClientRequest(
+                client_id: "second-client",
+                client_id_issued_at_unix: 1700000001),
+            provider: provider,
+            actorRuntime: runtime,
+            observationTimeout: TimeSpan.FromSeconds(5),
+            observationPollDelay: TimeSpan.FromMilliseconds(20),
+            rebuildCoordinator: coordinator);
+
+        var ctx = NewHttpContext();
+        await second.ExecuteAsync(ctx);
+        ctx.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+        runtime.Captured.Should().HaveCount(1,
+            "a concurrent rebuild should be rejected before dispatching a competing command");
+
+        var firstCommand = runtime.Captured.Single().Payload.Unpack<ProvisionAevatarOAuthClientCommand>();
+        firstProviderPoll.SetResult(SuccessSnapshotFor(
+            firstCommand.ClientId,
+            firstCommand.RedirectUri,
+            firstCommand.OauthScope));
+        var firstResult = await first;
+        var firstDoc = await ReadJsonAsync(firstResult);
+        firstDoc.RootElement.GetProperty("status").GetString().Should().Be("rebuilt");
+    }
+
     // ─── Test plumbing ───
 
     private static IdentityOAuthEndpoints.RebuildAevatarOAuthClientRequest SampleBody() =>
@@ -309,7 +361,7 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
             // first provider poll; only the 202 test cares about timeout.
             observationTimeout: TimeSpan.FromSeconds(2),
             observationPollDelay: TimeSpan.FromMilliseconds(20),
-            ct);
+            ct: ct);
 
     private static async Task<IResult> InvokeRebuildCoreAsync(
         string adminTokenConfigured,
@@ -319,13 +371,15 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
         RecordingActorRuntime actorRuntime,
         TimeSpan observationTimeout,
         TimeSpan observationPollDelay,
+        IdentityOAuthEndpoints.AevatarOAuthClientRebuildCoordinator? rebuildCoordinator = null,
         CancellationToken ct = default)
     {
         var http = NewHttpContext();
         if (adminTokenHeader is not null)
             http.Request.Headers[AevatarOAuthAdminOptions.RebuildTokenHeader] = adminTokenHeader;
 
-        var options = Options.Create(new AevatarOAuthAdminOptions { RebuildToken = adminTokenConfigured });
+        var options = new StaticOptionsMonitor<AevatarOAuthAdminOptions>(
+            new AevatarOAuthAdminOptions { RebuildToken = adminTokenConfigured });
         var projectionPort = NewProjectionPort();
 
         return await IdentityOAuthEndpoints.HandleAevatarOAuthClientRebuildCoreAsync(
@@ -336,10 +390,21 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
             projectionPort: projectionPort,
             actorRuntime: actorRuntime.Runtime,
             actorDispatchPort: actorRuntime.DispatchPort,
+            rebuildCoordinator: rebuildCoordinator,
             loggerFactory: NullLoggerFactory.Instance,
             observationTimeout: observationTimeout,
             observationPollDelay: observationPollDelay,
             ct: ct);
+    }
+
+    private sealed class StaticOptionsMonitor<T>(T value) : IOptionsMonitor<T>
+        where T : class
+    {
+        public T CurrentValue => value;
+
+        public T Get(string? name) => value;
+
+        public IDisposable? OnChange(Action<T, string?> listener) => null;
     }
 
     private static async Task<JsonDocument> ReadJsonAsync(IResult result)

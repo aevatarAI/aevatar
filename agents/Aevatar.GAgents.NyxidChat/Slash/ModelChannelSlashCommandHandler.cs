@@ -17,7 +17,6 @@ namespace Aevatar.GAgents.NyxidChat.Slash;
 public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandler
 {
     private static readonly char[] WhitespaceSeparators = [' ', '\t', '\r', '\n'];
-    private const string SelfHealPublisherActorId = "nyxid-chat.model.self-heal";
 
     private readonly IUserLlmOptionsService? _optionsService;
     private readonly IUserLlmSelectionService? _selectionService;
@@ -161,7 +160,9 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
                         ExternalSubject = context.Subject.Clone(),
                         Reason = reason,
                     }),
-                    Route = EnvelopeRouteSemantics.CreateDirect(SelfHealPublisherActorId, actorId),
+                    Route = EnvelopeRouteSemantics.CreateDirect(
+                        NyxIdChatServiceDefaults.ModelSelfHealPublisherActorId,
+                        actorId),
                 };
                 await _actorDispatchPort
                     .DispatchAsync(actorId, envelope, ct)

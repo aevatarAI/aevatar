@@ -200,6 +200,9 @@ public sealed class IdentityOAuthCallbackEndpointTests
         IProjectionReadinessPort readiness)
     {
         var actorRuntime = NewActorRuntime();
+        var actorDispatchPort = Substitute.For<IActorDispatchPort>();
+        actorDispatchPort.DispatchAsync(Arg.Any<string>(), Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
         var projectionPort = NewProjectionPort();
         var loggerFactory = NullLoggerFactory.Instance;
 
@@ -211,6 +214,7 @@ public sealed class IdentityOAuthCallbackEndpointTests
             brokerCallback: broker,
             queryPort: queryPort,
             actorRuntime: actorRuntime,
+            actorDispatchPort: actorDispatchPort,
             projectionReadiness: readiness,
             bindingProjectionPort: projectionPort,
             loggerFactory: loggerFactory,

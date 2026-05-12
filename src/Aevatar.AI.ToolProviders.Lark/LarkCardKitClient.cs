@@ -49,7 +49,7 @@ public sealed class LarkCardKitClient : ILarkCardKitClient
             ["data"] = request.Type switch
             {
                 "card_json" or "card_id" => request.DataJson,
-                _ => ParseJsonObject(request.DataJson, nameof(request.DataJson)),
+                _ => ParseJsonObject(request.DataJson, nameof(request.DataJson), request.Type),
             },
         };
 
@@ -163,11 +163,11 @@ public sealed class LarkCardKitClient : ILarkCardKitClient
     /// as a <see cref="JsonNode"/> so System.Text.Json serializes it in line rather than
     /// double-encoding as a string.
     /// </summary>
-    private static JsonNode? ParseJsonObject(string json, string paramName)
+    private static JsonNode? ParseJsonObject(string json, string paramName, string cardType)
     {
         if (string.IsNullOrWhiteSpace(json))
-            throw new ArgumentException($"{paramName} must be non-empty JSON.", paramName);
+            throw new ArgumentException($"{paramName} must be non-empty JSON for card type '{cardType}'.", paramName);
         return JsonNode.Parse(json)
-            ?? throw new ArgumentException($"{paramName} parsed to null.", paramName);
+            ?? throw new ArgumentException($"{paramName} parsed to null for card type '{cardType}'.", paramName);
     }
 }

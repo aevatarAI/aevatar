@@ -289,6 +289,8 @@ public sealed class MEAILLMProvider : ILLMProvider
     {
         if (sourceMessage.Role != "assistant" || string.IsNullOrEmpty(sourceMessage.ReasoningContent))
             return;
+        if (!HasOpenAIAssistantWireContent(sourceMessage))
+            return;
 
         var rawMessage = BuildOpenAIAssistantMessage(sourceMessage);
 
@@ -360,15 +362,27 @@ public sealed class MEAILLMProvider : ILLMProvider
         {
             foreach (var part in sourceMessage.ContentParts)
             {
-                if (part.Kind == ContentPartKind.Text && part.Text != null)
+                if (part.Kind == ContentPartKind.Text && !string.IsNullOrEmpty(part.Text))
                     contentParts.Add(OpenAIChatMessageContentPart.CreateTextPart(part.Text));
             }
         }
 
-        if (contentParts.Count == 0 && sourceMessage.Content != null)
+        if (contentParts.Count == 0 && !string.IsNullOrEmpty(sourceMessage.Content))
             contentParts.Add(OpenAIChatMessageContentPart.CreateTextPart(sourceMessage.Content));
 
         return contentParts;
+    }
+
+    private static bool HasOpenAIAssistantWireContent(
+        Aevatar.AI.Abstractions.LLMProviders.ChatMessage sourceMessage)
+    {
+        if (sourceMessage.ToolCalls is { Count: > 0 })
+            return true;
+        if (!string.IsNullOrEmpty(sourceMessage.Content))
+            return true;
+        return sourceMessage.ContentParts is { Count: > 0 }
+               && sourceMessage.ContentParts.Any(static part =>
+                   part.Kind == ContentPartKind.Text && !string.IsNullOrEmpty(part.Text));
     }
 
     private static List<OpenAIChatToolCall> BuildOpenAIToolCalls(

@@ -3489,6 +3489,17 @@ describe("StudioPage", () => {
     });
   });
 
+  it("returns to canonical Team detail when Studio has Team context", async () => {
+    renderStudioPage("/studio?scopeId=scope-1&teamId=t-alpha&memberId=workspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
+
+    fireEvent.click(await screen.findByRole("button", { name: "返回团队" }));
+
+    expect(window.location.pathname).toBe("/teams/scope-1/t-alpha");
+    const searchParams = new URLSearchParams(window.location.search);
+    expect(searchParams.get("memberId")).toBe("workspace-demo");
+    expect(searchParams.get("tab")).toBe("advanced");
+  });
+
   it("moves focus from a Script draft to the new Workflow member after create", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,
@@ -5739,7 +5750,7 @@ describe("StudioPage", () => {
   });
 
   it("opens the Studio invoke surface from the bind surface endpoint action", async () => {
-    renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
+    renderStudioPage("/studio?scopeId=scope-1&teamId=t-alpha&memberId=workspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
 
     fireEvent.click(await screen.findByRole("button", { name: "Bind" }));
     fireEvent.click(await screen.findByRole("button", { name: "Continue to Invoke" }));
@@ -5749,6 +5760,11 @@ describe("StudioPage", () => {
       expect(screen.getByText("service:default")).toBeTruthy();
       expect(screen.getByText("endpoint:support-chat")).toBeTruthy();
     });
+
+    const searchParams = new URLSearchParams(window.location.search);
+    expect(searchParams.get("teamId")).toBe("t-alpha");
+    expect(searchParams.get("member")).toBe("member:workspace-demo");
+    expect(searchParams.get("step")).toBe("invoke");
   });
 
   it("pins Observe to the selected member service and corrects stale run selection", async () => {

@@ -46,17 +46,23 @@ public static class ServiceCollectionExtensions
         // so resolve via factory and gracefully fall back to the no-op runner when Lark
         // tooling is absent. This keeps CardKit dormant for hosts that opt out of Lark
         // instead of failing DI validation at startup.
-        services.Replace(ServiceDescriptor.Singleton<IConversationCardTurnRunner>(sp =>
+        var existingCardRunner = services.LastOrDefault(static descriptor =>
+            descriptor.ServiceType == typeof(IConversationCardTurnRunner));
+        if (existingCardRunner is null ||
+            existingCardRunner.ImplementationType == typeof(NullConversationCardTurnRunner))
         {
-            var cardKit = sp.GetService<ILarkCardKitClient>();
-            var lark = sp.GetService<ILarkNyxClient>();
-            if (cardKit is null || lark is null)
-                return new NullConversationCardTurnRunner();
-            return new ChannelCardConversationTurnRunner(
-                cardKit,
-                lark,
-                sp.GetRequiredService<ILogger<ChannelCardConversationTurnRunner>>());
-        }));
+            services.Replace(ServiceDescriptor.Singleton<IConversationCardTurnRunner>(sp =>
+            {
+                var cardKit = sp.GetService<ILarkCardKitClient>();
+                var lark = sp.GetService<ILarkNyxClient>();
+                if (cardKit is null || lark is null)
+                    return new NullConversationCardTurnRunner();
+                return new ChannelCardConversationTurnRunner(
+                    cardKit,
+                    lark,
+                    sp.GetRequiredService<ILogger<ChannelCardConversationTurnRunner>>());
+            }));
+        }
         services.TryAddSingleton<IConversationReplyGenerator, NyxIdConversationReplyGenerator>();
 
         // ─── LLM-call middleware that injects channel context into LLM requests ───
@@ -71,8 +77,8 @@ public static class ServiceCollectionExtensions
         // on Studio.Application UserConfig ports; Channel.Identity intentionally
         // does not pull Studio dependencies.
         // Catalog client uses IMemoryCache for the proxy-services TTL cache. AddMemoryCache
-        // is idempotent (no-op when already registered) so hosts that already wire it keep
-        // their configured eviction policy; hosts that didn't register one get the default.
+        // is idempotent: hosts that already registered MemoryCacheOptions keep control of
+        // cache size/compaction behavior; hosts that did not register one get the default.
         services.AddMemoryCache();
         services.TryAddSingleton<INyxIdLlmServiceCatalogClient, NyxIdLlmServiceCatalogClient>();
         // These are consumed by singleton turn-runner/slash handlers. They create

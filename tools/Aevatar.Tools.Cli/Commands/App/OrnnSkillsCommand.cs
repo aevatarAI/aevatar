@@ -108,6 +108,8 @@ internal static class OrnnSkillsCommand
             return null;
         }
 
+        // CLI-only command path: the long-running server registers NyxIdApiClient via DI
+        // and IHttpClientFactory in AddNyxIdTools; this short-lived process owns its client.
         var nyxClient = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = nyxIdUrl }, new HttpClient());
         return new OrnnSkillClient(new OrnnOptions { NyxIdSlug = slug }, nyxClient);
     }

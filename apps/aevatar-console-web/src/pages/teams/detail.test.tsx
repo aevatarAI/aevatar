@@ -1545,6 +1545,9 @@ describe("TeamDetailPage", () => {
       name: "Alpha Support Team",
     });
     await waitFor(() => {
+      expect(studioApi.listTeamMembers).toHaveBeenCalledWith("scope-1", "t-alpha");
+    });
+    await waitFor(() => {
       expect(scopesApi.getWorkflowDetail).toHaveBeenCalledWith("scope-1", "workflow-1");
     });
 
@@ -1558,9 +1561,9 @@ describe("TeamDetailPage", () => {
     const params = pushedUrl.searchParams;
     expect(params.get("scopeId")).toBe("scope-1");
     expect(params.get("teamId")).toBe("t-alpha");
-    expect(params.get("member")).toBe("workflow:workflow-1");
+    expect(params.get("member")).toBe("member:member-team-alpha");
     expect(params.get("memberId")).toBeNull();
-    expect(params.get("focus")).toBeNull();
+    expect(params.get("focus")).toBe("workflow:workflow-1");
     expect(params.get("tab")).toBe("studio");
     pushSpy.mockRestore();
   });
@@ -1571,6 +1574,9 @@ describe("TeamDetailPage", () => {
     await screen.findByRole("button", { name: "服务映射" });
     fireEvent.click(screen.getByRole("button", { name: "Assets" }));
     await screen.findByText("当前 Team 资产");
+    await waitFor(() => {
+      expect(studioApi.listTeamMembers).toHaveBeenCalledWith("scope-1", "t-alpha");
+    });
 
     fireEvent.click(screen.getByRole("button", { name: "打开 workflow Support Escalation Triage" }));
 
@@ -1578,10 +1584,9 @@ describe("TeamDetailPage", () => {
       expect(window.location.pathname).toBe("/studio");
     });
     expect(window.location.search).toContain("scopeId=scope-1");
-    expect(window.location.search).toContain("member=workflow%3Aworkflow-1");
-    expect(window.location.search).not.toContain(
-      "focus=workflow%3Aworkflow-1",
-    );
+    expect(window.location.search).toContain("teamId=t-alpha");
+    expect(window.location.search).toContain("member=member%3Amember-team-alpha");
+    expect(window.location.search).toContain("focus=workflow%3Aworkflow-1");
 
     cleanup();
     window.history.replaceState({}, "", "/teams/scope-1/t-alpha?tab=assets");
@@ -1594,8 +1599,9 @@ describe("TeamDetailPage", () => {
       expect(window.location.pathname).toBe("/studio");
     });
     expect(window.location.search).toContain("scopeId=scope-1");
-    expect(window.location.search).toContain("member=script%3Ascript-1");
-    expect(window.location.search).not.toContain("focus=script%3Ascript-1");
+    expect(window.location.search).toContain("teamId=t-alpha");
+    expect(window.location.search).toContain("member=member%3Amember-team-alpha");
+    expect(window.location.search).toContain("focus=script%3Ascript-1");
     expect(window.location.search).toContain("tab=scripts");
   });
 

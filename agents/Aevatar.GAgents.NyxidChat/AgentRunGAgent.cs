@@ -9,7 +9,7 @@ using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Google.Protobuf;
-using Microsoft.Extensions.DependencyInjection;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -37,6 +37,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
     internal static readonly TimeSpan TerminalCleanupDelay = TimeSpan.FromMinutes(5);
     private const string TerminalCleanupCallbackPrefix = "agent-run-terminal-cleanup";
+    internal static readonly TimeSpan OutputDispatchTimeout = TimeSpan.FromSeconds(10);
     internal static readonly TimeSpan OutputDispatchRetryDelay = TimeSpan.FromSeconds(5);
     private const string OutputDispatchRetryCallbackPrefix = "agent-run-output-dispatch-retry";
 
@@ -47,6 +48,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     private readonly Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? _relayOptions;
     private readonly INyxIdRelayScopeResolver? _scopeResolver;
     private readonly IUserConfigQueryPort? _userConfigQueryPort;
+    private readonly IActorRuntimeCallbackScheduler? _callbackScheduler;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AgentRunGAgent> _logger;
 
@@ -59,6 +61,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         ILogger<AgentRunGAgent> logger,
         INyxIdRelayScopeResolver? scopeResolver = null,
         IUserConfigQueryPort? userConfigQueryPort = null,
+        IActorRuntimeCallbackScheduler? callbackScheduler = null,
         TimeProvider? timeProvider = null)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
@@ -68,6 +71,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         _relayOptions = relayOptions;
         _scopeResolver = scopeResolver;
         _userConfigQueryPort = userConfigQueryPort;
+        _callbackScheduler = callbackScheduler;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -154,8 +158,14 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         }
         catch (AgentRunOutputDispatchException ex)
         {
-            if (!await TryHandleOutputDispatchFailureAsync(request, runId, ex))
-                throw;
+            if (await TryHandleOutputDispatchFailureAsync(request, runId, ex))
+                return;
+
+            await PersistFailedAsync(
+                request,
+                runId,
+                "agent_run_output_dispatch_failed",
+                ex.Message);
         }
         catch (Exception ex)
         {
@@ -257,6 +267,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 terminalState = LlmReplyTerminalState.Failed;
                 errorCode = "llm_reply_metadata_timeout";
                 errorSummary = $"Metadata enrichment exceeded {(int)MetadataBuildBudget.TotalSeconds}s budget.";
+                await FinalizeFailureStreamingSinkAsync(streamingSink, replyText, outboundIntent);
                 await ProduceAndDispatchAsync(request, runId, replyText, outboundIntent, terminalState, errorCode, errorSummary);
                 return;
             }
@@ -329,6 +340,15 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 request.CorrelationId);
         }
 
+        if (terminalState == LlmReplyTerminalState.Failed)
+        {
+            // Streaming-sink failure finalize: when the LLM run terminates with a fallback
+            // text (timeout / classifier / empty reply), surface that text on the live
+            // streaming card/edit message before the LlmReplyReadyEvent lands. Carried over
+            // from feature/lark-bot's dispatch hardening.
+            await FinalizeFailureStreamingSinkAsync(streamingSink, replyText, outboundIntent);
+        }
+
         await ProduceAndDispatchAsync(
             request,
             runId,
@@ -337,6 +357,26 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             terminalState,
             errorCode,
             errorSummary);
+    }
+
+    private async Task FinalizeFailureStreamingSinkAsync(
+        TurnStreamingReplySink? streamingSink,
+        string replyText,
+        MessageContent? outboundIntent)
+    {
+        if (streamingSink is not null &&
+            outboundIntent is null &&
+            !string.IsNullOrWhiteSpace(replyText))
+        {
+            try
+            {
+                await streamingSink.FinalizeAsync(replyText, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to finalize streaming failure text for agent run {ActorId}", Id);
+            }
+        }
     }
 
     /// <summary>
@@ -482,15 +522,29 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         }
 
         // Persist the fallback reply BEFORE dispatching so a dispatch retry replays from
-        // state rather than re-entering ProcessAsync (which would just throw again).
-        await ProduceAndDispatchAsync(
-            request,
-            runId,
-            "Sorry, I couldn't complete this reply. Please try again.",
-            null,
-            LlmReplyTerminalState.Failed,
-            errorCode,
-            errorSummary);
+        // state rather than re-entering ProcessAsync (which would just throw again). If
+        // dispatch itself fails and we cannot schedule a retry, fall through to a Failed
+        // terminal marker with the dispatch error appended to errorSummary (carried over
+        // from feature/lark-bot's dispatch hardening).
+        try
+        {
+            await ProduceAndDispatchAsync(
+                request,
+                runId,
+                "Sorry, I couldn't complete this reply. Please try again.",
+                null,
+                LlmReplyTerminalState.Failed,
+                errorCode,
+                errorSummary);
+        }
+        catch (AgentRunOutputDispatchException dispatchEx)
+        {
+            if (await TryHandleOutputDispatchFailureAsync(request, runId, dispatchEx))
+                return;
+
+            errorSummary = $"{errorSummary}; failed to dispatch failure notification: {dispatchEx.Message}";
+            await PersistFailedAsync(request, runId, errorCode, errorSummary);
+        }
     }
 
     private async Task DispatchReadyEventAsync(
@@ -523,7 +577,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         };
         try
         {
-            await SendToAsync(request.TargetActorId, ready, CancellationToken.None);
+            using var outputCts = new CancellationTokenSource(OutputDispatchTimeout);
+            await SendToAsync(request.TargetActorId, ready, outputCts.Token);
         }
         catch (Exception ex)
         {
@@ -603,6 +658,10 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         {
             scopeId = await _scopeResolver.ResolveScopeIdByApiKeyAsync(apiKeyId, ct);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(
@@ -642,6 +701,10 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 scopeId,
                 string.IsNullOrWhiteSpace(config.DefaultModel) ? "<server-default>" : config.DefaultModel,
                 string.IsNullOrWhiteSpace(config.PreferredLlmRoute) ? "<server-default>" : config.PreferredLlmRoute);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -686,7 +749,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         try
         {
-            await SendToAsync(request.TargetActorId, dropped, CancellationToken.None);
+            using var outputCts = new CancellationTokenSource(OutputDispatchTimeout);
+            await SendToAsync(request.TargetActorId, dropped, outputCts.Token);
         }
         catch (Exception ex)
         {
@@ -712,7 +776,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         _logger.LogWarning(
             ex,
-            "Agent run output retry could not be scheduled; propagating to runtime retry: runId={RunId} correlation={CorrelationId}",
+            "Agent run output retry could not be scheduled; persisting terminal failure: runId={RunId} correlation={CorrelationId}",
             runId,
             request.CorrelationId);
         return false;
@@ -720,18 +784,19 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
     private async Task<bool> TryScheduleStartRetryAsync(NeedsLlmReplyEvent request, string runId)
     {
-        if (Services.GetService<IActorRuntimeCallbackScheduler>() is null)
+        if (_callbackScheduler is null)
             return false;
 
         try
         {
-            await ScheduleSelfDurableTimeoutAsync(
-                BuildOutputDispatchRetryCallbackId(runId),
-                OutputDispatchRetryDelay,
-                new AgentRunStartRequested
-                {
-                    Request = request.Clone(),
-                },
+            await _callbackScheduler.ScheduleTimeoutAsync(
+                BuildTimeoutRequest(
+                    BuildOutputDispatchRetryCallbackId(runId),
+                    OutputDispatchRetryDelay,
+                    new AgentRunStartRequested
+                    {
+                        Request = request.Clone(),
+                    }),
                 ct: CancellationToken.None);
             return true;
         }
@@ -748,19 +813,20 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
     private async Task ScheduleTerminalCleanupAsync(string runId)
     {
-        if (Services.GetService<IActorRuntimeCallbackScheduler>() is null)
+        if (_callbackScheduler is null)
             return;
 
         try
         {
-            await ScheduleSelfDurableTimeoutAsync(
-                BuildCleanupCallbackId(runId),
-                TerminalCleanupDelay,
-                new AgentRunCleanupRequested
-                {
-                    RunId = runId,
-                    RequestedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-                },
+            await _callbackScheduler.ScheduleTimeoutAsync(
+                BuildTimeoutRequest(
+                    BuildCleanupCallbackId(runId),
+                    TerminalCleanupDelay,
+                    new AgentRunCleanupRequested
+                    {
+                        RunId = runId,
+                        RequestedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                    }),
                 ct: CancellationToken.None);
         }
         catch (Exception ex)
@@ -771,6 +837,26 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 runId,
                 Id);
         }
+    }
+
+    private RuntimeCallbackTimeoutRequest BuildTimeoutRequest(
+        string callbackId,
+        TimeSpan dueTime,
+        IMessage evt)
+    {
+        return new RuntimeCallbackTimeoutRequest
+        {
+            ActorId = Id,
+            CallbackId = callbackId,
+            TriggerEnvelope = new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+                Payload = Any.Pack(evt),
+                Route = EnvelopeRouteSemantics.CreateTopologyPublication(Id, TopologyAudience.Self),
+            },
+            DueTime = dueTime,
+        };
     }
 
     private static string BuildCleanupCallbackId(string runId)
