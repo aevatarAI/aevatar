@@ -13,10 +13,9 @@ namespace Aevatar.GAgentService.Infrastructure.Adapters;
 /// <summary>
 /// Host-side adapter for the <see cref="IResponsesAgentToolStateCommandPort"/>.
 /// JSON payloads arriving at the HTTP boundary are parsed into typed proto here
-/// and the raw bytes are kept only as an audit trail; the actor itself never
-/// deserializes JSON. The shared <see cref="ResponsesTodoItemParser"/> drives
-/// both the dispatched command and the preview returned to the caller so there
-/// is only one parser implementation.
+/// before dispatch; the actor state never stores JSON strings. The shared
+/// <see cref="ResponsesTodoItemParser"/> drives both the dispatched command and
+/// the preview returned to the caller so there is only one parser implementation.
 /// </summary>
 public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolStateCommandPort
 {
@@ -52,9 +51,7 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
             ScopeId = scopeId.Trim(),
             OwnerSubject = ownerSubject.Trim(),
             SourceResponseId = NormalizeOptional(sourceResponseId) ?? string.Empty,
-            ArgumentsPayload = string.IsNullOrEmpty(argumentsJson)
-                ? ByteString.Empty
-                : ByteString.CopyFromUtf8(argumentsJson),
+            Arguments = ResponsesJsonValues.ParseBoundaryPayload(argumentsJson),
             ObservedAt = observedAt,
         };
         apply.TodoItems.AddRange(todos.Select(static x => x.Clone()));
@@ -98,11 +95,6 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
             note = "Task dispatch has been recorded in Aevatar task topology state. Full sub-agent execution is owned by the GAgent topology issue.",
         });
 
-        var argumentsBytes = string.IsNullOrEmpty(argumentsJson)
-            ? ByteString.Empty
-            : ByteString.CopyFromUtf8(argumentsJson);
-        var resultBytes = ByteString.CopyFromUtf8(resultJson);
-
         await _dispatchPort.DispatchAsync(
             actor.Id,
             CreateEnvelope(
@@ -113,8 +105,8 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
                     TaskId = taskId,
                     ChildActorId = childActorId,
                     Description = description,
-                    ArgumentsPayload = argumentsBytes,
-                    ResultPayload = resultBytes,
+                    Arguments = ResponsesJsonValues.ParseBoundaryPayload(argumentsJson),
+                    Result = ResponsesJsonValues.ParseBoundaryPayload(resultJson),
                     Status = ResponsesAgentToolTaskStatus.Accepted,
                     ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
                 }),
@@ -137,10 +129,6 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
         var traceId = string.IsNullOrWhiteSpace(trace.TraceId)
             ? ResponseAgentToolStateIds.NewWebTraceId()
             : trace.TraceId.Trim();
-        var resultPayload = string.IsNullOrEmpty(trace.ResultJson)
-            ? ByteString.CopyFromUtf8("{}")
-            : ByteString.CopyFromUtf8(trace.ResultJson);
-
         await _dispatchPort.DispatchAsync(
             actor.Id,
             CreateEnvelope(
@@ -154,7 +142,7 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
                     Url = NormalizeOptional(trace.Url) ?? string.Empty,
                     Query = NormalizeOptional(trace.Query) ?? string.Empty,
                     CacheHit = trace.CacheHit,
-                    ResultPayload = resultPayload,
+                    Result = ResponsesJsonValues.ParseBoundaryPayload(trace.ResultJson),
                     ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
                 }),
                 $"{sourceResponseId}:web:{traceId}"),

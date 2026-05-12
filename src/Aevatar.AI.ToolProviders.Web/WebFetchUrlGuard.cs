@@ -41,6 +41,37 @@ public static class WebFetchUrlGuard
         return WebFetchValidationResult.Accept(uri.ToString());
     }
 
+    public static async Task<WebFetchValidationResult> ValidateResolvedAsync(
+        string? candidate,
+        CancellationToken ct = default)
+    {
+        var validation = Validate(candidate);
+        if (!validation.IsAllowed)
+            return validation;
+
+        var uri = new Uri(validation.NormalizedUrl!);
+        if (IsHostLiteralIp(uri.Host, out _))
+            return validation;
+
+        IPAddress[] addresses;
+        try
+        {
+            addresses = await Dns.GetHostAddressesAsync(uri.Host, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return WebFetchValidationResult.Reject("host_resolution_failed");
+        }
+
+        return addresses.Length == 0 || addresses.Any(IsBlockedAddress)
+            ? WebFetchValidationResult.Reject("blocked_private_address")
+            : validation;
+    }
+
     private static bool IsHostLiteralIp(string host, out IPAddress address)
     {
         var stripped = host.StartsWith('[') && host.EndsWith(']')
@@ -89,8 +120,20 @@ public static class WebFetchUrlGuard
         // 192.168.0.0/16
         if (octets[0] == 192 && octets[1] == 168)
             return true;
+        // 100.64.0.0/10 (carrier-grade NAT)
+        if (octets[0] == 100 && octets[1] >= 64 && octets[1] <= 127)
+            return true;
+        // 192.0.0.0/24 (IETF protocol assignments)
+        if (octets[0] == 192 && octets[1] == 0 && octets[2] == 0)
+            return true;
+        // 198.18.0.0/15 (benchmarking / internal test networks)
+        if (octets[0] == 198 && (octets[1] == 18 || octets[1] == 19))
+            return true;
         // 0.0.0.0/8 (unspecified)
         if (octets[0] == 0)
+            return true;
+        // 224.0.0.0/4 (multicast and reserved high ranges)
+        if (octets[0] >= 224)
             return true;
 
         return false;

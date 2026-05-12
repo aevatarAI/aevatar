@@ -8,6 +8,8 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Responses;
+using Aevatar.GAgentService.Application.Responses;
 using Aevatar.Mainnet.Host.Api.Responses;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -96,7 +98,8 @@ public sealed class MainnetResponsesEndpointsTests
         provider.LastRequest.Messages.Should().ContainSingle();
         provider.LastRequest.Messages[0].Content.Should().Be("ping");
         provider.LastRequest.Metadata.Should().ContainKey(LLMRequestMetadataKeys.RequestId);
-        provider.LastRequest.Metadata.Should().Contain(LLMRequestMetadataKeys.ScopeId, "user-1");
+        provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ScopeId);
+        provider.LastRequest.CallerContext.Should().Be(new LLMRequestCallerContext("user-1", "user-1", responseId));
         // The NyxID bearer token is intentionally NOT placed in LLMRequest.Metadata
         // (which crosses into the LLM provider's request and may be logged downstream).
         // Tool providers read it from AgentToolRequestContext instead.
@@ -221,7 +224,7 @@ public sealed class MainnetResponsesEndpointsTests
         persisted.CallId.Should().Be("call_weather_1");
         persisted.ToolName.Should().Be("get_weather");
         persisted.SchemaHash.Should().Be(ResponsesToolSchemaHashes.Compute(parametersJson));
-        persisted.ArgumentsPayload.ToStringUtf8().Should().Be("""{"city":"Singapore"}""");
+        ResponsesJsonValues.ToBoundaryJson(persisted.Arguments).Should().Be("""{"city":"Singapore"}""");
         persisted.Status.Should().Be(ResponseSessionForwardedToolCallStatus.Pending);
         persisted.Expiry.Should().NotBeNull();
     }
@@ -997,6 +1000,7 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton(responseSessions);
         builder.Services.AddSingleton<IResponseSessionRegistrationPort>(responseSessions);
         builder.Services.AddSingleton<IResponseSessionQueryPort>(responseSessions);
+        builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         builder.Services.AddSingleton(callerScopeResolver ?? new StubResponsesCallerScopeResolver());
         if (responsesToolProvider != null)
             builder.Services.AddSingleton(responsesToolProvider);
@@ -1302,10 +1306,12 @@ public sealed class MainnetResponsesEndpointsTests
                         clone.CallId,
                         clone.ToolName,
                         clone.SchemaHash,
-                        clone.ArgumentsPayload.IsEmpty ? string.Empty : clone.ArgumentsPayload.ToStringUtf8(),
+                        ResponsesJsonValues.ToBoundaryJson(clone.Arguments),
                         clone.Status,
                         clone.Expiry?.ToDateTimeOffset(),
-                        clone.ResultPayload.IsEmpty ? null : clone.ResultPayload.ToStringUtf8(),
+                        string.IsNullOrWhiteSpace(ResponsesJsonValues.ToBoundaryJson(clone.Result))
+                            ? null
+                            : ResponsesJsonValues.ToBoundaryJson(clone.Result),
                         clone.EmittedAt?.ToDateTimeOffset(),
                         clone.ReceivedAt?.ToDateTimeOffset(),
                         clone.ResolvedAt?.ToDateTimeOffset()))

@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Core.GAgents;
 using Aevatar.GAgentService.Infrastructure.Adapters;
 using Aevatar.GAgentService.Tests.TestSupport;
@@ -132,6 +133,8 @@ public sealed class ResponseSessionRegistrationAdapterTests
         {
             CallId = "call-1",
             ToolName = "WebFetch",
+            SchemaHash = "schema-1",
+            Arguments = ResponsesJsonValues.ParseBoundaryPayload("""{"url":"https://example.com"}"""),
         };
 
         await adapter.RecordForwardedToolCallAsync("actor-1", "resp_1", call);
@@ -140,6 +143,8 @@ public sealed class ResponseSessionRegistrationAdapterTests
         var packed = dispatch.Calls[0].envelope.Payload.Unpack<RecordForwardedToolCallRequested>();
         packed.Call.Status.Should().Be(ResponseSessionForwardedToolCallStatus.Pending);
         packed.Call.EmittedAt.Should().NotBeNull();
+        ResponsesJsonValues.ToBoundaryJson(packed.Call.Arguments)
+            .Should().Be("""{"url":"https://example.com"}""");
     }
 
     [Fact]
@@ -191,7 +196,26 @@ public sealed class ResponseSessionRegistrationAdapterTests
         var packed = dispatch.Calls[0].envelope.Payload.Unpack<ReceiveForwardedToolResultRequested>();
         packed.CallId.Should().Be("call-1");
         packed.SchemaHash.Should().Be("hash-1");
-        packed.ResultPayload.IsEmpty.Should().BeTrue();
+        ResponsesJsonValues.ToBoundaryJson(packed.Result).Should().Be("{}");
+    }
+
+    [Fact]
+    public async Task ReceiveForwardedToolResultAsync_ShouldParseBoundaryJsonResult()
+    {
+        var (adapter, _, dispatch, _) = CreateAdapter();
+
+        await adapter.ReceiveForwardedToolResultAsync(
+            " actor-1 ",
+            " resp_1 ",
+            " call-1 ",
+            " hash-1 ",
+            """{ "ok": true }""");
+
+        var packed = dispatch.Calls[0].envelope.Payload.Unpack<ReceiveForwardedToolResultRequested>();
+        packed.ResponseId.Should().Be("resp_1");
+        packed.CallId.Should().Be("call-1");
+        packed.SchemaHash.Should().Be("hash-1");
+        ResponsesJsonValues.ToBoundaryJson(packed.Result).Should().Be("""{"ok":true}""");
     }
 
     [Theory]

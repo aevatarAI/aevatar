@@ -183,7 +183,7 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
             ResponseId = existing.ResponseId,
             CallId = callId,
             SchemaHash = schemaHash,
-            ResultPayload = command.ResultPayload ?? ByteString.Empty,
+            Result = command.Result?.Clone(),
             ReceivedAt = command.ReceivedAt ?? Timestamp.FromDateTime(DateTime.UtcNow),
         });
     }
@@ -288,7 +288,7 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
         if (call != null)
         {
             call.Status = ResponseSessionForwardedToolCallStatus.Received;
-            call.ResultPayload = evt.ResultPayload ?? ByteString.Empty;
+            call.Result = evt.Result?.Clone();
             call.ReceivedAt = evt.ReceivedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
         }
 
@@ -370,8 +370,6 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
         call.CallId = NormalizeRequired(call.CallId);
         call.ToolName = NormalizeRequired(call.ToolName);
         call.SchemaHash = NormalizeRequired(call.SchemaHash);
-        call.ArgumentsPayload ??= ByteString.Empty;
-        call.ResultPayload ??= ByteString.Empty;
         if (call.Status == ResponseSessionForwardedToolCallStatus.Unspecified)
             call.Status = ResponseSessionForwardedToolCallStatus.Pending;
         if (call.EmittedAt == null)
@@ -437,7 +435,7 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
     {
         if (!string.Equals(existing.ToolName, incoming.ToolName, StringComparison.Ordinal) ||
             !string.Equals(existing.SchemaHash, incoming.SchemaHash, StringComparison.Ordinal) ||
-            !Equals(existing.ArgumentsPayload ?? ByteString.Empty, incoming.ArgumentsPayload ?? ByteString.Empty))
+            !Equals(existing.Arguments, incoming.Arguments))
         {
             throw new InvalidOperationException(
                 $"Forwarded tool call '{existing.CallId}' cannot be rebound to different tool call facts.");
@@ -457,7 +455,7 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
                 if (status == ResponseSessionForwardedToolCallStatus.Expired)
                 {
                     // Mark received timestamp so downstream snapshots know when
-                    // expiry happened. The result payload stays empty —
+                    // expiry happened. The result value stays empty —
                     // adapters/readers synthesize the "tool_call_expired" surface
                     // when shaping the response back to the client.
                     call.ReceivedAt ??= state.Record?.UpdatedAt?.Clone()

@@ -5,7 +5,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.ReadModels;
-using Google.Protobuf;
 
 namespace Aevatar.GAgentService.Projection.Projectors;
 
@@ -69,8 +68,8 @@ public sealed class ResponsesAgentToolStateCurrentStateProjector
                 ChildActorId = task.ChildActorId,
                 Description = task.Description,
                 Status = task.Status.ToString(),
-                ArgumentsPayload = task.ArgumentsPayload ?? ByteString.Empty,
-                ResultPayload = task.ResultPayload ?? ByteString.Empty,
+                Arguments = task.Arguments?.Clone(),
+                Result = task.Result?.Clone(),
                 CreatedAt = task.CreatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
                 UpdatedAt = task.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
             }).ToList(),
@@ -83,7 +82,7 @@ public sealed class ResponsesAgentToolStateCurrentStateProjector
                 Url = trace.Url,
                 Query = trace.Query,
                 CacheHit = trace.CacheHit,
-                ResultPayload = trace.ResultPayload ?? ByteString.Empty,
+                Result = trace.Result?.Clone(),
                 ObservedAt = trace.ObservedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
             }).ToList(),
             WebCacheEntries = state.WebCacheEntries.Select(static entry => new ResponsesWebCacheEntryReadModel
@@ -92,7 +91,7 @@ public sealed class ResponsesAgentToolStateCurrentStateProjector
                 ToolName = entry.ToolName,
                 Url = entry.Url,
                 Query = entry.Query,
-                ResultPayload = entry.ResultPayload ?? ByteString.Empty,
+                Result = entry.Result?.Clone(),
                 CachedAt = entry.CachedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
                 LastHitAt = entry.LastHitAt?.ToDateTimeOffset(),
                 HitCount = entry.HitCount,

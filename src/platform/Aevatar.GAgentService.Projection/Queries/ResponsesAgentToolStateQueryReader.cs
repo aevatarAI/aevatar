@@ -2,8 +2,8 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Projection.ReadModels;
-using Google.Protobuf;
 
 namespace Aevatar.GAgentService.Projection.Queries;
 
@@ -67,8 +67,8 @@ public sealed class ResponsesAgentToolStateQueryReader : IResponsesAgentToolStat
                 task.ChildActorId,
                 task.Description,
                 task.Status,
-                PayloadToJsonString(task.ArgumentsPayload),
-                PayloadToJsonString(task.ResultPayload),
+                ResponsesJsonValues.ToBoundaryJson(task.Arguments),
+                ResponsesJsonValues.ToBoundaryJson(task.Result),
                 task.CreatedAt,
                 task.UpdatedAt)).ToArray(),
             document.WebTraces.Select(static trace => new ResponsesWebTraceSnapshot(
@@ -79,18 +79,16 @@ public sealed class ResponsesAgentToolStateQueryReader : IResponsesAgentToolStat
                 trace.Url,
                 trace.Query,
                 trace.CacheHit,
-                PayloadToJsonString(trace.ResultPayload),
+                ResponsesJsonValues.ToBoundaryJson(trace.Result),
                 trace.ObservedAt)).ToArray(),
             document.WebCacheEntries.Select(static entry => new ResponsesWebCacheEntrySnapshot(
                 entry.CacheKey,
                 entry.ToolName,
                 entry.Url,
                 entry.Query,
-                PayloadToJsonString(entry.ResultPayload),
+                ResponsesJsonValues.ToBoundaryJson(entry.Result),
                 entry.CachedAt,
                 entry.LastHitAt,
                 entry.HitCount)).ToArray());
 
-    private static string PayloadToJsonString(ByteString? payload) =>
-        payload == null || payload.IsEmpty ? string.Empty : payload.ToStringUtf8();
 }

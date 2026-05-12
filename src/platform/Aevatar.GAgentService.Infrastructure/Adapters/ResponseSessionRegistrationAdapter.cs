@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Core.GAgents;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -10,8 +11,8 @@ namespace Aevatar.GAgentService.Infrastructure.Adapters;
 /// <summary>
 /// Registers response sessions through their owning actor and lets the current-state
 /// projection materialize the queryable response_id lookup. JSON payloads from the
-/// HTTP boundary are encoded into the proto's opaque bytes fields here so the actor
-/// state never holds JSON strings.
+/// HTTP boundary are parsed into protobuf values here so the actor state never
+/// holds JSON strings.
 /// </summary>
 public sealed class ResponseSessionRegistrationAdapter : IResponseSessionRegistrationPort
 {
@@ -112,9 +113,6 @@ public sealed class ResponseSessionRegistrationAdapter : IResponseSessionRegistr
             prepared.EmittedAt = Timestamp.FromDateTime(DateTime.UtcNow);
         if (prepared.Status == ResponseSessionForwardedToolCallStatus.Unspecified)
             prepared.Status = ResponseSessionForwardedToolCallStatus.Pending;
-        prepared.ArgumentsPayload ??= ByteString.Empty;
-        prepared.ResultPayload ??= ByteString.Empty;
-
         var envelopeId = $"{responseId}:tool:{prepared.CallId}:emitted";
         var envelope = CreateEnvelope(
             sessionActorId,
@@ -153,9 +151,7 @@ public sealed class ResponseSessionRegistrationAdapter : IResponseSessionRegistr
                 ResponseId = responseId.Trim(),
                 CallId = callId.Trim(),
                 SchemaHash = schemaHash.Trim(),
-                ResultPayload = string.IsNullOrEmpty(resultJson)
-                    ? ByteString.Empty
-                    : ByteString.CopyFromUtf8(resultJson),
+                Result = ResponsesJsonValues.ParseBoundaryPayload(resultJson),
                 ReceivedAt = Timestamp.FromDateTime(DateTime.UtcNow),
             }),
             envelopeId);

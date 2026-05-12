@@ -1,9 +1,9 @@
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Core.GAgents;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
-using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Tests.Core;
@@ -99,7 +99,7 @@ public sealed class ResponseSessionGAgentTests
         call.CallId.Should().Be("call_1");
         call.ToolName.Should().Be("get_weather");
         call.SchemaHash.Should().Be("schema-1");
-        call.ArgumentsPayload.ToStringUtf8().Should().Be("""{"city":"Singapore"}""");
+        ResponsesJsonValues.ToBoundaryJson(call.Arguments).Should().Be("""{"city":"Singapore"}""");
         call.Status.Should().Be(ResponseSessionForwardedToolCallStatus.Pending);
         call.Expiry.Should().NotBeNull();
     }
@@ -123,7 +123,7 @@ public sealed class ResponseSessionGAgentTests
             ResponseId = "resp_1",
             CallId = "call_1",
             SchemaHash = "schema-1",
-            ResultPayload = ByteString.CopyFromUtf8("""{"temperature":28}"""),
+            Result = ResponsesJsonValues.ParseBoundaryPayload("""{"temperature":28}"""),
         });
         var versionAfterFirstResult = actor.State.LastAppliedEventVersion;
 
@@ -132,14 +132,40 @@ public sealed class ResponseSessionGAgentTests
             ResponseId = "resp_1",
             CallId = "call_1",
             SchemaHash = "schema-1",
-            ResultPayload = ByteString.CopyFromUtf8("""{"temperature":28}"""),
+            Result = ResponsesJsonValues.ParseBoundaryPayload("""{"temperature":28}"""),
         });
 
         actor.State.LastAppliedEventVersion.Should().Be(versionAfterFirstResult);
         var call = actor.State.ForwardedToolCalls.Should().ContainSingle().Which;
         call.Status.Should().Be(ResponseSessionForwardedToolCallStatus.Received);
-        call.ResultPayload.ToStringUtf8().Should().Be("""{"temperature":28}""");
+        ResponsesJsonValues.ToBoundaryJson(call.Result).Should().Be("""{"temperature":28}""");
         call.ReceivedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task HandleRecordForwardedToolCallAsync_ShouldRejectRebindingToDifferentArguments()
+    {
+        var actor = CreateActor("resp_1");
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+        await actor.HandleRecordForwardedToolCallAsync(new RecordForwardedToolCallRequested
+        {
+            ResponseId = "resp_1",
+            Call = BuildToolCall("call_1"),
+        });
+
+        var rebound = BuildToolCall("call_1");
+        rebound.Arguments = ResponsesJsonValues.ParseBoundaryPayload("""{"city":"Tokyo"}""");
+        var act = () => actor.HandleRecordForwardedToolCallAsync(new RecordForwardedToolCallRequested
+        {
+            ResponseId = "resp_1",
+            Call = rebound,
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*cannot be rebound to different tool call facts*");
     }
 
     [Fact]
@@ -160,7 +186,7 @@ public sealed class ResponseSessionGAgentTests
             ResponseId = "resp_1",
             CallId = "call_1",
             SchemaHash = "schema-1",
-            ResultPayload = ByteString.CopyFromUtf8("""{"temperature":28}"""),
+            Result = ResponsesJsonValues.ParseBoundaryPayload("""{"temperature":28}"""),
         });
 
         await actor.HandleResolveForwardedToolResultAsync(new ResolveForwardedToolResultRequested
@@ -201,7 +227,7 @@ public sealed class ResponseSessionGAgentTests
             ResponseId = "resp_1",
             CallId = "call_1",
             SchemaHash = "schema-2",
-            ResultPayload = ByteString.CopyFromUtf8("{}"),
+            Result = ResponsesJsonValues.ParseBoundaryPayload("{}"),
         });
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -258,9 +284,9 @@ public sealed class ResponseSessionGAgentTests
         actor.State.Record!.Status.Should().Be(ResponseSessionStatus.Expired);
         var call = actor.State.ForwardedToolCalls.Should().ContainSingle().Which;
         call.Status.Should().Be(ResponseSessionForwardedToolCallStatus.Expired);
-        // Actor state stores opaque bytes only; the "tool_call_expired" envelope
-        // is synthesized by the query reader at the read boundary, not by the actor.
-        call.ResultPayload.IsEmpty.Should().BeTrue();
+        // The "tool_call_expired" envelope is synthesized by the query reader at
+        // the read boundary, not by the actor.
+        call.Result.Should().BeNull();
         call.ReceivedAt.Should().NotBeNull();
     }
 
@@ -289,7 +315,7 @@ public sealed class ResponseSessionGAgentTests
             CallId = callId,
             ToolName = "get_weather",
             SchemaHash = "schema-1",
-            ArgumentsPayload = ByteString.CopyFromUtf8("""{"city":"Singapore"}"""),
+            Arguments = ResponsesJsonValues.ParseBoundaryPayload("""{"city":"Singapore"}"""),
             Status = ResponseSessionForwardedToolCallStatus.Pending,
             EmittedAt = Timestamp.FromDateTime(DateTime.UtcNow),
             Expiry = Timestamp.FromDateTime(DateTime.UtcNow.AddHours(1)),

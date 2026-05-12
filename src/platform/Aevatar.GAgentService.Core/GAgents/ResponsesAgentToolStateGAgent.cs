@@ -50,7 +50,7 @@ public sealed class ResponsesAgentToolStateGAgent : GAgentBase<ResponsesAgentToo
         await PersistDomainEventAsync(new ResponsesTodoWriteAppliedEvent
         {
             SourceResponseId = NormalizeOptional(command.SourceResponseId) ?? string.Empty,
-            ArgumentsPayload = command.ArgumentsPayload ?? ByteString.Empty,
+            Arguments = command.Arguments?.Clone(),
             ObservedAt = observedAt,
             TodoItems = { incoming },
         });
@@ -69,8 +69,8 @@ public sealed class ResponsesAgentToolStateGAgent : GAgentBase<ResponsesAgentToo
             SourceResponseId = NormalizeOptional(command.SourceResponseId) ?? string.Empty,
             ChildActorId = NormalizeRequired(command.ChildActorId),
             Description = NormalizeOptional(command.Description) ?? string.Empty,
-            ArgumentsPayload = command.ArgumentsPayload ?? ByteString.Empty,
-            ResultPayload = command.ResultPayload ?? ByteString.Empty,
+            Arguments = command.Arguments?.Clone(),
+            Result = command.Result?.Clone(),
             Status = command.Status == ResponsesAgentToolTaskStatus.Unspecified
                 ? ResponsesAgentToolTaskStatus.Accepted
                 : command.Status,
@@ -104,7 +104,7 @@ public sealed class ResponsesAgentToolStateGAgent : GAgentBase<ResponsesAgentToo
             Url = NormalizeOptional(command.Url) ?? string.Empty,
             Query = NormalizeOptional(command.Query) ?? string.Empty,
             CacheHit = command.CacheHit,
-            ResultPayload = command.ResultPayload ?? ByteString.Empty,
+            Result = command.Result?.Clone(),
             ObservedAt = observedAt,
         };
         ValidateWebTrace(trace);
@@ -190,7 +190,7 @@ public sealed class ResponsesAgentToolStateGAgent : GAgentBase<ResponsesAgentToo
                 CacheKey = trace.CacheKey,
                 Url = trace.Url,
                 Query = trace.Query,
-                ResultPayload = trace.ResultPayload ?? ByteString.Empty,
+                Result = trace.Result?.Clone(),
                 CachedAt = trace.ObservedAt.Clone(),
                 LastHitAt = trace.CacheHit ? trace.ObservedAt.Clone() : null,
                 HitCount = trace.CacheHit ? 1 : 0,
@@ -205,7 +205,7 @@ public sealed class ResponsesAgentToolStateGAgent : GAgentBase<ResponsesAgentToo
             return;
         }
 
-        existing.ResultPayload = trace.ResultPayload ?? ByteString.Empty;
+        existing.Result = trace.Result?.Clone();
         existing.Url = trace.Url;
         existing.Query = trace.Query;
         existing.CachedAt = trace.ObservedAt.Clone();

@@ -5,6 +5,7 @@ package aevatar.gagentservice.projection.readmodels;
 option csharp_namespace = "Aevatar.GAgentService.Projection.ReadModels";
 
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
 
 // --- ServiceCatalogReadModel ---
 
@@ -230,9 +231,9 @@ message ResponseSessionForwardedToolCallReadModel {
   string call_id = 1;
   string tool_name = 2;
   string schema_hash = 3;
-  bytes arguments_payload = 4;
+  google.protobuf.Value arguments = 4;
   int32 status = 5;
-  bytes result_payload = 6;
+  google.protobuf.Value result = 6;
   google.protobuf.Timestamp expiry_utc_value = 7;
   google.protobuf.Timestamp emitted_at_utc_value = 8;
   google.protobuf.Timestamp received_at_utc_value = 9;
@@ -271,8 +272,8 @@ message ResponsesTaskTraceReadModel {
   string child_actor_id = 3;
   string description = 4;
   string status = 5;
-  bytes arguments_payload = 6;
-  bytes result_payload = 7;
+  google.protobuf.Value arguments = 6;
+  google.protobuf.Value result = 7;
   google.protobuf.Timestamp created_at_utc_value = 8;
   google.protobuf.Timestamp updated_at_utc_value = 9;
 }
@@ -285,7 +286,7 @@ message ResponsesWebTraceReadModel {
   string url = 5;
   string query = 6;
   bool cache_hit = 7;
-  bytes result_payload = 8;
+  google.protobuf.Value result = 8;
   google.protobuf.Timestamp observed_at_utc_value = 9;
 }
 
@@ -294,7 +295,7 @@ message ResponsesWebCacheEntryReadModel {
   string tool_name = 2;
   string url = 3;
   string query = 4;
-  bytes result_payload = 5;
+  google.protobuf.Value result = 5;
   google.protobuf.Timestamp cached_at_utc_value = 6;
   google.protobuf.Timestamp last_hit_at_utc_value = 7;
   int64 hit_count = 8;

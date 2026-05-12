@@ -5,6 +5,7 @@ package aevatar.gagentservice;
 option csharp_namespace = "Aevatar.GAgentService.Abstractions";
 
 import "google/protobuf/duration.proto";
+import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 
 enum ResponseSessionOriginKind {
@@ -44,17 +45,16 @@ message ResponseSessionRecord {
   google.protobuf.Timestamp updated_at = 10;
 }
 
-// Forwarded tool call. arguments_payload / result_payload carry the caller's
-// JSON blob as opaque bytes — the actor never deserializes them; the host
-// adapter is responsible for the boundary conversion.
+// Forwarded tool call. External JSON is converted at the host/adapter boundary
+// into protobuf Value before entering actor state/events.
 message ResponseSessionForwardedToolCall {
   string call_id = 1;
   string tool_name = 2;
   string schema_hash = 3;
-  bytes arguments_payload = 4;
+  google.protobuf.Value arguments = 4;
   ResponseSessionForwardedToolCallStatus status = 5;
   google.protobuf.Timestamp expiry = 6;
-  bytes result_payload = 7;
+  google.protobuf.Value result = 7;
   google.protobuf.Timestamp emitted_at = 8;
   google.protobuf.Timestamp received_at = 9;
   google.protobuf.Timestamp resolved_at = 10;
@@ -106,7 +106,7 @@ message ReceiveForwardedToolResultRequested {
   string response_id = 1;
   string call_id = 2;
   string schema_hash = 3;
-  bytes result_payload = 4;
+  google.protobuf.Value result = 4;
   google.protobuf.Timestamp received_at = 5;
 }
 
@@ -114,7 +114,7 @@ message ResponseSessionForwardedToolResultReceivedEvent {
   string response_id = 1;
   string call_id = 2;
   string schema_hash = 3;
-  bytes result_payload = 4;
+  google.protobuf.Value result = 4;
   google.protobuf.Timestamp received_at = 5;
 }
 
@@ -158,8 +158,8 @@ message ResponsesTaskTrace {
   string child_actor_id = 3;
   string description = 4;
   ResponsesAgentToolTaskStatus status = 5;
-  bytes arguments_payload = 6;
-  bytes result_payload = 7;
+  google.protobuf.Value arguments = 6;
+  google.protobuf.Value result = 7;
   google.protobuf.Timestamp created_at = 8;
   google.protobuf.Timestamp updated_at = 9;
 }
@@ -172,7 +172,7 @@ message ResponsesWebTrace {
   string url = 5;
   string query = 6;
   bool cache_hit = 7;
-  bytes result_payload = 8;
+  google.protobuf.Value result = 8;
   google.protobuf.Timestamp observed_at = 9;
 }
 
@@ -181,7 +181,7 @@ message ResponsesWebCacheEntry {
   string tool_name = 2;
   string url = 3;
   string query = 4;
-  bytes result_payload = 5;
+  google.protobuf.Value result = 5;
   google.protobuf.Timestamp cached_at = 6;
   google.protobuf.Timestamp last_hit_at = 7;
   int64 hit_count = 8;
@@ -206,20 +206,20 @@ message ResponsesAgentToolStateRegisteredEvent {
 }
 
 // todo_items is the canonical typed list parsed by the host/adapter. The
-// arguments_payload is kept as an opaque audit trail of the caller's raw
-// JSON — the actor never deserializes it.
+// original boundary arguments are converted to protobuf Value before entering
+// actor state/events.
 message ApplyResponsesTodoWriteRequested {
   string scope_id = 1;
   string owner_subject = 2;
   string source_response_id = 3;
-  bytes arguments_payload = 4;
+  google.protobuf.Value arguments = 4;
   google.protobuf.Timestamp observed_at = 5;
   repeated ResponsesTodoItem todo_items = 6;
 }
 
 message ResponsesTodoWriteAppliedEvent {
   string source_response_id = 1;
-  bytes arguments_payload = 2;
+  google.protobuf.Value arguments = 2;
   repeated ResponsesTodoItem todo_items = 3;
   google.protobuf.Timestamp observed_at = 4;
 }
@@ -229,8 +229,8 @@ message RecordResponsesTaskRequested {
   string task_id = 2;
   string child_actor_id = 3;
   string description = 4;
-  bytes arguments_payload = 5;
-  bytes result_payload = 6;
+  google.protobuf.Value arguments = 5;
+  google.protobuf.Value result = 6;
   ResponsesAgentToolTaskStatus status = 7;
   google.protobuf.Timestamp observed_at = 8;
 }
@@ -247,7 +247,7 @@ message RecordResponsesWebTraceRequested {
   string url = 5;
   string query = 6;
   bool cache_hit = 7;
-  bytes result_payload = 8;
+  google.protobuf.Value result = 8;
   google.protobuf.Timestamp observed_at = 9;
 }
 

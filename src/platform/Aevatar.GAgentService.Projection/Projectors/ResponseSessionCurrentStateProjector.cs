@@ -5,7 +5,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.ReadModels;
-using Google.Protobuf;
 
 namespace Aevatar.GAgentService.Projection.Projectors;
 
@@ -74,9 +73,9 @@ public sealed class ResponseSessionCurrentStateProjector
                 CallId = call.CallId ?? string.Empty,
                 ToolName = call.ToolName ?? string.Empty,
                 SchemaHash = call.SchemaHash ?? string.Empty,
-                ArgumentsPayload = call.ArgumentsPayload ?? ByteString.Empty,
+                Arguments = call.Arguments?.Clone(),
                 Status = (int)call.Status,
-                ResultPayload = call.ResultPayload ?? ByteString.Empty,
+                Result = call.Result?.Clone(),
                 Expiry = call.Expiry?.ToDateTimeOffset(),
                 EmittedAt = call.EmittedAt?.ToDateTimeOffset(),
                 ReceivedAt = call.ReceivedAt?.ToDateTimeOffset(),

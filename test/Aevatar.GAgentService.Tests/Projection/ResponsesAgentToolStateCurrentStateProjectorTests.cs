@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.Projectors;
 using Aevatar.GAgentService.Projection.Queries;
@@ -46,6 +47,10 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
         snapshot.Should().NotBeNull();
         snapshot!.Todos.Should().ContainSingle(x => x.Content == "Ship");
         snapshot.Tasks.Should().ContainSingle(x => x.ChildActorId == "child-1");
+        snapshot.Tasks[0].ArgumentsJson.Should().Be("{}");
+        snapshot.Tasks[0].ResultJson.Should().Be("""{"status":"accepted"}""");
+        snapshot.WebTraces.Should().ContainSingle(x => x.TraceId == "trace-1");
+        snapshot.WebTraces[0].ResultJson.Should().Be("""{"content":"fresh"}""");
 
         var cache = await reader.GetWebCacheEntryAsync(ScopeId, OwnerSubject, "WebFetch", "cache-1");
         cache.Should().NotBeNull();
@@ -82,8 +87,8 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
             ChildActorId = "child-1",
             Description = "summarize",
             Status = ResponsesAgentToolTaskStatus.Accepted,
-            ArgumentsPayload = ByteString.CopyFromUtf8("{}"),
-            ResultPayload = ByteString.CopyFromUtf8("""{"status":"accepted"}"""),
+            Arguments = ResponsesJsonValues.ParseBoundaryPayload("{}"),
+            Result = ResponsesJsonValues.ParseBoundaryPayload("""{"status":"accepted"}"""),
             CreatedAt = Timestamp.FromDateTimeOffset(observedAt),
             UpdatedAt = Timestamp.FromDateTimeOffset(observedAt),
         });
@@ -94,7 +99,7 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
             ToolName = "WebFetch",
             CacheKey = "cache-1",
             Url = "https://example.com",
-            ResultPayload = ByteString.CopyFromUtf8("""{"content":"fresh"}"""),
+            Result = ResponsesJsonValues.ParseBoundaryPayload("""{"content":"fresh"}"""),
             ObservedAt = Timestamp.FromDateTimeOffset(observedAt),
         });
         state.WebCacheEntries.Add(new ResponsesWebCacheEntry
@@ -102,7 +107,7 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
             CacheKey = "cache-1",
             ToolName = "WebFetch",
             Url = "https://example.com",
-            ResultPayload = ByteString.CopyFromUtf8("""{"content":"fresh"}"""),
+            Result = ResponsesJsonValues.ParseBoundaryPayload("""{"content":"fresh"}"""),
             CachedAt = Timestamp.FromDateTimeOffset(observedAt),
         });
 

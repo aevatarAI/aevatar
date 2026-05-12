@@ -2,9 +2,9 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.GAgentService.Projection.ReadModels;
-using Google.Protobuf;
 
 namespace Aevatar.GAgentService.Projection.Queries;
 
@@ -51,7 +51,7 @@ public sealed class ResponseSessionQueryReader : IResponseSessionQueryPort
                     call.CallId,
                     call.ToolName,
                     call.SchemaHash,
-                    PayloadToJsonString(call.ArgumentsPayload),
+                    ResponsesJsonValues.ToBoundaryJson(call.Arguments),
                     (ResponseSessionForwardedToolCallStatus)call.Status,
                     call.Expiry,
                     ResolveResultJson(call),
@@ -59,9 +59,6 @@ public sealed class ResponseSessionQueryReader : IResponseSessionQueryPort
                     call.ReceivedAt,
                     call.ResolvedAt))
                 .ToArray());
-
-    private static string PayloadToJsonString(ByteString? payload) =>
-        payload == null || payload.IsEmpty ? string.Empty : payload.ToStringUtf8();
 
     /// <summary>
     /// For Expired calls without a caller-provided result, the boundary
@@ -71,8 +68,9 @@ public sealed class ResponseSessionQueryReader : IResponseSessionQueryPort
     /// </summary>
     private static string? ResolveResultJson(ResponseSessionForwardedToolCallReadModel call)
     {
-        if (call.ResultPayload != null && !call.ResultPayload.IsEmpty)
-            return call.ResultPayload.ToStringUtf8();
+        var resultJson = ResponsesJsonValues.ToBoundaryJson(call.Result);
+        if (!string.IsNullOrWhiteSpace(resultJson))
+            return resultJson;
 
         return (ResponseSessionForwardedToolCallStatus)call.Status == ResponseSessionForwardedToolCallStatus.Expired
             ? $$"""{"error":"tool_call_expired","call_id":"{{call.CallId}}"}"""

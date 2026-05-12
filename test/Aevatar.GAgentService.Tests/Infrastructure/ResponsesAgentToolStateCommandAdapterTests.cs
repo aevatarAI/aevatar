@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Core.GAgents;
 using Aevatar.GAgentService.Infrastructure.Adapters;
 using Aevatar.GAgentService.Tests.TestSupport;
@@ -48,6 +49,10 @@ public sealed class ResponsesAgentToolStateCommandAdapterTests
         projection.EnsureCalls.Should().ContainSingle();
         dispatch.Calls.Should().HaveCount(2);
         dispatch.Calls[1].envelope.Payload.TypeUrl.Should().Contain("ApplyResponsesTodoWriteRequested");
+        var packed = dispatch.Calls[1].envelope.Payload.Unpack<ApplyResponsesTodoWriteRequested>();
+        ResponsesJsonValues.ToBoundaryJson(packed.Arguments)
+            .Should().Be("""{"todos":[{"id":"todo-1","content":"Ship","status":"in_progress"},{"content":"Review"}]}""");
+        packed.TodoItems.Should().HaveCount(2);
     }
 
     [Fact]
@@ -134,6 +139,8 @@ public sealed class ResponsesAgentToolStateCommandAdapterTests
         result.ChildActorId.Should().Contain("-task-");
         var packed = dispatch.Calls[1].envelope.Payload.Unpack<RecordResponsesTaskRequested>();
         packed.Description.Should().Be(expected);
+        ResponsesJsonValues.ToBoundaryJson(packed.Arguments).Should().Be(args);
+        ResponsesJsonValues.ToBoundaryJson(packed.Result).Should().Contain("\"status\":\"accepted\"");
     }
 
     [Fact]
@@ -197,6 +204,7 @@ public sealed class ResponsesAgentToolStateCommandAdapterTests
         result.CacheHit.Should().BeFalse();
         var packed = dispatch.Calls[1].envelope.Payload.Unpack<RecordResponsesWebTraceRequested>();
         packed.TraceId.Should().Be("web_explicit");
+        ResponsesJsonValues.ToBoundaryJson(packed.Result).Should().Be("""{"content":"x"}""");
     }
 
     [Fact]
@@ -218,7 +226,7 @@ public sealed class ResponsesAgentToolStateCommandAdapterTests
         result.CacheHit.Should().BeTrue();
         var packed = dispatch.Calls[1].envelope.Payload.Unpack<RecordResponsesWebTraceRequested>();
         packed.TraceId.Should().Be(result.TraceId);
-        packed.ResultPayload.ToStringUtf8().Should().Be("{}");
+        ResponsesJsonValues.ToBoundaryJson(packed.Result).Should().Be("{}");
     }
 
     private static (ResponsesAgentToolStateCommandAdapter adapter, RecordingRuntime runtime, RecordingDispatchPort dispatch, RecordingProjectionPort projection) CreateAdapter()

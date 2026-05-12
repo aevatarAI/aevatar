@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.Projectors;
 using Aevatar.GAgentService.Projection.Queries;
@@ -77,6 +78,44 @@ public sealed class ResponseSessionCurrentStateProjectorTests
         (await store.ReadItemsAsync()).Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task QueryReader_ShouldSynthesizeExpiredToolCallResult_WhenReadModelHasNoResult()
+    {
+        var store = new RecordingDocumentStore<ResponseSessionCurrentStateReadModel>(x => x.Id);
+        var reader = new ResponseSessionQueryReader(store);
+        await store.UpsertAsync(new ResponseSessionCurrentStateReadModel
+        {
+            Id = ResponseSessionIds.BuildKey("resp_1"),
+            ResponseId = "resp_1",
+            ScopeId = "user-1",
+            OwnerSubject = "user-1",
+            OriginKind = (int)ResponseSessionOriginKind.ApiKey,
+            Status = (int)ResponseSessionStatus.Expired,
+            ActorId = ActorId,
+            StateVersion = 3,
+            CreatedAt = DateTimeOffset.Parse("2026-04-27T01:00:00+00:00"),
+            TtlSeconds = (long)TimeSpan.FromHours(1).TotalSeconds,
+            ForwardedToolCalls =
+            [
+                new ResponseSessionForwardedToolCallReadModel
+                {
+                    CallId = "call_1",
+                    ToolName = "get_weather",
+                    SchemaHash = "schema-1",
+                    Arguments = ResponsesJsonValues.ParseBoundaryPayload("""{"city":"Singapore"}"""),
+                    Status = (int)ResponseSessionForwardedToolCallStatus.Expired,
+                },
+            ],
+        });
+
+        var snapshot = await reader.GetByResponseIdAsync("resp_1");
+
+        snapshot.Should().NotBeNull();
+        snapshot!.ForwardedToolCalls.Should().ContainSingle();
+        snapshot.ForwardedToolCalls![0].ResultJson
+            .Should().Be("""{"error":"tool_call_expired","call_id":"call_1"}""");
+    }
+
     private static ResponseSessionRecord BuildRecord(
         string responseId,
         string? previousResponseId,
@@ -111,9 +150,9 @@ public sealed class ResponseSessionCurrentStateProjectorTests
             CallId = "call_1",
             ToolName = "get_weather",
             SchemaHash = "schema-1",
-            ArgumentsPayload = ByteString.CopyFromUtf8("""{"city":"Singapore"}"""),
+            Arguments = ResponsesJsonValues.ParseBoundaryPayload("""{"city":"Singapore"}"""),
             Status = ResponseSessionForwardedToolCallStatus.Received,
-            ResultPayload = ByteString.CopyFromUtf8("""{"temperature":28}"""),
+            Result = ResponsesJsonValues.ParseBoundaryPayload("""{"temperature":28}"""),
             EmittedAt = Timestamp.FromDateTimeOffset(observedAt.AddMinutes(-2)),
             ReceivedAt = Timestamp.FromDateTimeOffset(observedAt.AddMinutes(-1)),
             Expiry = Timestamp.FromDateTimeOffset(observedAt.AddHours(1)),
