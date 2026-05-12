@@ -3566,7 +3566,7 @@ describe("StudioPage", () => {
     expect(window.location.pathname).toBe("/teams/scope-1/t-alpha");
     const searchParams = new URLSearchParams(window.location.search);
     expect(searchParams.get("memberId")).toBe("workspace-demo");
-    expect(searchParams.get("tab")).toBe("advanced");
+    expect(searchParams.get("tab")).toBe("overview");
   });
 
   it("moves focus from a Script draft to the new Workflow member after create", async () => {

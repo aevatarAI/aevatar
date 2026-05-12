@@ -84,7 +84,7 @@ describe("teamRoutes", () => {
     });
   });
 
-  it("maps legacy connectors deep links into the bindings tab", () => {
+  it("falls back legacy connectors deep links to the overview tab", () => {
     expect(
       readTeamDetailRouteState(
         "?workflowId=wf-1&tab=connectors",
@@ -95,7 +95,7 @@ describe("teamRoutes", () => {
       runId: "",
       scopeId: "scope-alpha",
       serviceId: "",
-      tab: "bindings",
+      tab: "overview",
       teamId: "",
       workflowId: "wf-1",
     });
