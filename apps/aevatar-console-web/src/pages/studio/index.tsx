@@ -2431,6 +2431,7 @@ const StudioPage: React.FC = () => {
   const [logsPopoutMode] = useState(() => readStudioRouteState().logsMode);
   const [recentlyBoundMemberKey, setRecentlyBoundMemberKey] = useState('');
   const [recentlyBoundServiceId, setRecentlyBoundServiceId] = useState('');
+  const recentlyBoundServiceRef = useRef<ServiceCatalogSnapshot | null>(null);
   const pinnedRouteBackendMemberIdRef = useRef(
     initialSelectedMember.kind === 'member'
       ? trimOptional(initialSelectedMember.memberId)
@@ -4342,6 +4343,9 @@ const StudioPage: React.FC = () => {
       const selectedService = (servicesResult.data ?? []).find(
         (service) => service.serviceId === boundServiceId,
       );
+      if (selectedService) {
+        recentlyBoundServiceRef.current = selectedService;
+      }
       const defaultEndpointId = resolveStudioServiceDefaultEndpointId(
         selectedService,
       );
@@ -7058,12 +7062,24 @@ const StudioPage: React.FC = () => {
     currentSelectedMemberServiceId ||
     (isBindSurface ? recentBindSelectedMemberServiceId : '');
   const bindPublishedService = useMemo(
-    () =>
-      bindSelectedMemberServiceId
-        ? publishedScopeServices.find(
-            (service) => service.serviceId === bindSelectedMemberServiceId,
-          ) ?? null
-        : null,
+    () => {
+      if (!bindSelectedMemberServiceId) {
+        return null;
+      }
+
+      const publishedService =
+        publishedScopeServices.find(
+          (service) => service.serviceId === bindSelectedMemberServiceId,
+        ) ?? null;
+      if (publishedService) {
+        return publishedService;
+      }
+
+      const recentService = recentlyBoundServiceRef.current;
+      return trimOptional(recentService?.serviceId) === bindSelectedMemberServiceId
+        ? recentService
+        : null;
+    },
     [bindSelectedMemberServiceId, publishedScopeServices],
   );
   const workbenchMemberMatchesPendingCandidate = useMemo(() => {
