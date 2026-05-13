@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Authentication.Hosting;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -960,6 +961,65 @@ public sealed class MainnetResponsesEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         (await response.Content.ReadAsStringAsync()).Should().Contain("authentication_required");
         provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostResponses_WhenHostAuthEnabled_ShouldReachEndpointHandlerNotJwtBearerChallenge()
+    {
+        // Regression: PR #625 originally shipped without `.AllowAnonymous()`, so the
+        // host's FallbackPolicy.RequireAuthenticatedUser() (installed by
+        // AddAevatarAuthentication) rejected NyxID API keys — which are opaque
+        // non-JWT tokens — with an empty 401 from JwtBearer's default challenge,
+        // before the endpoint's manual ExtractBearerToken / NyxID `/me` path ran.
+        // The other tests use a bare host (no AddAevatarAuthentication), so they
+        // can't catch this. Here we wire the real auth pipeline and assert the
+        // handler still runs (proved by its structured `authentication_required`
+        // JSON body) rather than producing the empty-body JwtBearer challenge.
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            // Production env keeps Authentication:Enabled forced true.
+            EnvironmentName = Environments.Production,
+        });
+        builder.WebHost.UseTestServer();
+        // Authority is irrelevant — the request has no Authorization header, so
+        // JwtBearer never reaches OIDC discovery. We only need the FallbackPolicy
+        // and JwtBearer scheme to be registered so an un-annotated endpoint would
+        // be rejected. .AllowAnonymous() must short-circuit that.
+        builder.Configuration["Aevatar:Authentication:Authority"] = "https://invalid.example";
+        builder.AddAevatarAuthentication();
+
+        builder.Services.AddSingleton<ILLMProviderFactory>(provider);
+        builder.Services.AddSingleton(sessions);
+        builder.Services.AddSingleton<IResponseSessionRegistrationPort>(sessions);
+        builder.Services.AddSingleton<IResponseSessionQueryPort>(sessions);
+        builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
+        builder.Services.AddSingleton<IResponsesCallerScopeResolver>(new StubResponsesCallerScopeResolver());
+
+        await using var app = builder.Build();
+        app.UseAuthentication();
+        app.UseAuthorization();
+        app.MapResponsesApiEndpoints();
+        await app.StartAsync();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""{"model":"gpt-5.4","input":"ping"}"""),
+        };
+        // Deliberately no Authorization header.
+
+        var response = await app.GetTestClient().SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Contain(
+            "authentication_required",
+            "MapResponsesApiEndpoints must call .AllowAnonymous() so the handler runs and returns its structured 401 JSON, rather than being short-circuited by the host's FallbackPolicy");
+        provider.LastRequest.Should().BeNull();
+
+        await app.StopAsync();
     }
 
     [Fact]

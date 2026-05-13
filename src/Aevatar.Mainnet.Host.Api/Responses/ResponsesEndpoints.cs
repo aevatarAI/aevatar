@@ -26,8 +26,12 @@ internal static class ResponsesApiEndpoints
         ArgumentNullException.ThrowIfNull(app);
 
         var group = app.MapGroup("/v1").WithTags("Responses");
-        group.MapPost("/responses", HandleCreateResponseAsync);
-        group.MapPost("/responses/{id}/cancel", HandleCancelResponseAsync);
+        // Auth is endpoint-internal: each handler manually extracts the inbound
+        // bearer and resolves the caller via NyxID `/me`. Opt out of the host's
+        // FallbackPolicy.RequireAuthenticatedUser() so opaque NyxID API keys
+        // (non-JWT) reach the handler instead of being 401'd by JwtBearer.
+        group.MapPost("/responses", HandleCreateResponseAsync).AllowAnonymous();
+        group.MapPost("/responses/{id}/cancel", HandleCancelResponseAsync).AllowAnonymous();
         return app;
     }
 
