@@ -568,6 +568,29 @@ internal sealed record ResponsesModelEntry
 
     [JsonPropertyName("status")]
     public required string Status { get; init; }
+
+    // Optional upstream-forwarded metadata. Present when the upstream `/v1/models`
+    // response carried richer fields (anthropic gives display_name + max_input_tokens
+    // + max_tokens; OpenAI-spec backends like deepseek / chrono-llm only return the
+    // minimal `{id, object, created, owned_by}` shape so these stay null and are
+    // omitted from JSON output). OpenRouter-style clients (CC Switch, Codex) read
+    // these to size requests; sparse upstreams cause a UI warning but not failure.
+
+    [JsonPropertyName("context_length")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? ContextLength { get; init; }
+
+    [JsonPropertyName("max_output_tokens")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? MaxOutputTokens { get; init; }
+
+    [JsonPropertyName("display_name")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DisplayName { get; init; }
+
+    [JsonPropertyName("description")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Description { get; init; }
 }
 
 /// <summary>Splits an OpenRouter-style `vendor/model` identifier. Vendor is preserved only when it

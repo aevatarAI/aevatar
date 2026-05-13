@@ -187,6 +187,16 @@ internal sealed class NyxIdResponsesModelsAggregator : IResponsesModelsAggregato
                     Group = service.ServiceSlug,
                     RouteValue = service.RouteValue,
                     Status = service.Status,
+                    // Forward upstream metadata when present. Field-name aliases cover the
+                    // common shapes — OpenRouter uses `context_length` / `max_output_tokens`,
+                    // anthropic uses `max_input_tokens` / `max_tokens` (output), some
+                    // OpenAI-derived backends use `max_completion_tokens`. Null when the
+                    // upstream entry was minimal — caller-side clients fall back to safe
+                    // defaults and may emit a UI warning, but the route still works.
+                    ContextLength = ReadInt32(item, "context_length", "max_input_tokens"),
+                    MaxOutputTokens = ReadInt32(item, "max_output_tokens", "max_completion_tokens", "max_tokens"),
+                    DisplayName = ReadString(item, "display_name", "name"),
+                    Description = ReadString(item, "description", "summary"),
                 });
             }
 
@@ -214,6 +224,35 @@ internal sealed class NyxIdResponsesModelsAggregator : IResponsesModelsAggregato
             return dto.ToUnixTimeSeconds();
         }
 
+        return null;
+    }
+
+    private static int? ReadInt32(JsonElement element, params string[] propertyNames)
+    {
+        foreach (var name in propertyNames)
+        {
+            if (element.TryGetProperty(name, out var prop) &&
+                prop.ValueKind == JsonValueKind.Number &&
+                prop.TryGetInt32(out var value))
+            {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static string? ReadString(JsonElement element, params string[] propertyNames)
+    {
+        foreach (var name in propertyNames)
+        {
+            if (element.TryGetProperty(name, out var prop) &&
+                prop.ValueKind == JsonValueKind.String)
+            {
+                var s = prop.GetString();
+                if (!string.IsNullOrWhiteSpace(s))
+                    return s.Trim();
+            }
+        }
         return null;
     }
 
