@@ -2431,6 +2431,14 @@ const StudioPage: React.FC = () => {
   const [logsPopoutMode] = useState(() => readStudioRouteState().logsMode);
   const [recentlyBoundMemberKey, setRecentlyBoundMemberKey] = useState('');
   const [recentlyBoundServiceId, setRecentlyBoundServiceId] = useState('');
+  const pinnedRouteBackendMemberIdRef = useRef(
+    initialSelectedMember.kind === 'member'
+      ? trimOptional(initialSelectedMember.memberId)
+      : '',
+  );
+  const [pinnedRouteBackendMemberId, setPinnedRouteBackendMemberId] = useState(
+    () => pinnedRouteBackendMemberIdRef.current,
+  );
   const [appliedRouteSnapshot, setAppliedRouteSnapshot] = useState(
     locationSnapshot,
   );
@@ -2463,6 +2471,7 @@ const StudioPage: React.FC = () => {
   const handledLocationSnapshotRef = useRef(locationSnapshot);
   const handledCreateMemberIntentSnapshotRef = useRef('');
   const executionLogsWindowRef = useRef<Window | null>(null);
+  const createMemberNameInputRef = useRef<HTMLInputElement | null>(null);
   const [logsDetached, setLogsDetached] = useState(false);
   const [authRecoveryPending, setAuthRecoveryPending] = useState(false);
   const authSessionQuery = useQuery({
@@ -2875,12 +2884,35 @@ const StudioPage: React.FC = () => {
     routeSelectedMemberKey,
     studioScopeMembers,
   ]);
-  const explicitRouteBackendMemberKey = useMemo(
-    () => buildBackendMemberKey(explicitRouteBackendMemberId),
-    [explicitRouteBackendMemberId],
+  const currentExplicitRouteBackendMemberId = trimOptional(
+    explicitRouteBackendMemberId,
+  );
+  if (currentExplicitRouteBackendMemberId) {
+    pinnedRouteBackendMemberIdRef.current = currentExplicitRouteBackendMemberId;
+  }
+  useEffect(() => {
+    const routeMemberId = currentExplicitRouteBackendMemberId;
+    if (!routeMemberId) {
+      return;
+    }
+
+    pinnedRouteBackendMemberIdRef.current = routeMemberId;
+    setPinnedRouteBackendMemberId((currentMemberId) =>
+      currentMemberId === routeMemberId ? currentMemberId : routeMemberId,
+    );
+  }, [currentExplicitRouteBackendMemberId]);
+  const routeSelectedBackendMemberId = useMemo(
+    () =>
+      trimOptional(explicitRouteBackendMemberId) ||
+      trimOptional(pinnedRouteBackendMemberId),
+    [explicitRouteBackendMemberId, pinnedRouteBackendMemberId],
+  );
+  const routeSelectedBackendMemberKey = useMemo(
+    () => buildBackendMemberKey(routeSelectedBackendMemberId),
+    [routeSelectedBackendMemberId],
   );
   useEffect(() => {
-    const routeMemberId = trimOptional(explicitRouteBackendMemberId);
+    const routeMemberId = trimOptional(routeSelectedBackendMemberId);
     if (!routeMemberId || selectedScriptId) {
       return;
     }
@@ -2913,7 +2945,7 @@ const StudioPage: React.FC = () => {
   }, [
     routeBuildFocus.kind,
     routeBuildFocus.value,
-    explicitRouteBackendMemberId,
+    routeSelectedBackendMemberId,
     selectedScriptId,
     studioScopeMembers,
   ]);
@@ -3964,7 +3996,7 @@ const StudioPage: React.FC = () => {
       return null;
     }
 
-    const routeMemberId = trimOptional(explicitRouteBackendMemberId);
+    const routeMemberId = trimOptional(routeSelectedBackendMemberId);
     if (routeMemberId) {
       const routeMember = studioScopeMembers.find(
         (member) => trimOptional(member.memberId) === routeMemberId,
@@ -4077,7 +4109,7 @@ const StudioPage: React.FC = () => {
   }, [
     activeWorkflowFile?.workflowId,
     buildPendingBindCandidate,
-    explicitRouteBackendMemberId,
+    routeSelectedBackendMemberId,
     publishedScopeMembers,
     selectedWorkflowId,
     studioScopeMembers,
@@ -4124,8 +4156,9 @@ const StudioPage: React.FC = () => {
       throw new Error('Resolve the current workspace before binding this member.');
     }
 
+    const requestLocationSnapshot = getLocationSnapshot();
     const resolvedBuildMemberId =
-      trimOptional(explicitRouteBackendMemberId) ||
+      trimOptional(routeSelectedBackendMemberId) ||
       trimOptional(buildPendingMemberSummary?.memberId);
     let result = null;
     let memberBindingRunOutcome: StudioBindingRunOutcome | null = null;
@@ -4241,6 +4274,47 @@ const StudioPage: React.FC = () => {
       optimisticBoundServiceId;
 
     if (boundServiceId) {
+      const routeStillMatchesBindingRequest = () => {
+        if (typeof window === 'undefined') {
+          return true;
+        }
+
+        if (window.location.pathname !== '/studio') {
+          return false;
+        }
+
+        const currentRouteState = readStudioRouteState(window.location.search);
+        const currentRouteMemberKey =
+          trimOptional(currentRouteState.memberKey) ||
+          buildBackendMemberKey(currentRouteState.memberId);
+        const requestMemberKey = buildBackendMemberKey(resolvedBuildMemberId);
+        if (!requestMemberKey) {
+          return getLocationSnapshot() === requestLocationSnapshot;
+        }
+
+        if (currentRouteMemberKey === requestMemberKey) {
+          return true;
+        }
+
+        const currentMemberId = readMemberIdFromMemberKey(currentRouteMemberKey);
+        if (currentMemberId === resolvedBuildMemberId) {
+          return true;
+        }
+
+        const currentRouteMemberSummary = resolveStudioMemberSummaryFromMemberKey(
+          currentRouteMemberKey,
+          publishedScopeMembers,
+          studioScopeMembers,
+        );
+        return (
+          trimOptional(currentRouteMemberSummary?.memberId) ===
+          resolvedBuildMemberId
+        );
+      };
+      if (!routeStillMatchesBindingRequest()) {
+        return;
+      }
+
       const buildCandidateMemberKey =
         buildPendingBindCandidate.kind === 'script'
           ? trimOptional(selectedScriptId)
@@ -4272,7 +4346,7 @@ const StudioPage: React.FC = () => {
         selectedService,
       );
       const routeMemberSummary = resolveStudioMemberSummaryFromMemberKey(
-        explicitRouteBackendMemberKey,
+        routeSelectedBackendMemberKey,
         publishedScopeMembers,
         studioScopeMembers,
       );
@@ -4318,11 +4392,11 @@ const StudioPage: React.FC = () => {
     buildPendingMemberSummary,
     buildWorkflowYamlBundle,
     buildPendingBindCandidate,
-    explicitRouteBackendMemberId,
+    routeSelectedBackendMemberId,
     queryClient,
     publishedScopeMembers,
     resolvedStudioScopeId,
-    explicitRouteBackendMemberKey,
+    routeSelectedBackendMemberKey,
     routeState.memberId,
     routeState.memberKey,
     routeState.teamId,
@@ -4621,6 +4695,16 @@ const StudioPage: React.FC = () => {
     pendingCreateMemberIntentSnapshot,
     studioHostReady,
   ]);
+  useEffect(() => {
+    if (
+      !createMemberModalOpen ||
+      (createMemberKind !== 'workflow' && createMemberKind !== 'script')
+    ) {
+      return;
+    }
+
+    createMemberNameInputRef.current?.focus();
+  }, [createMemberKind, createMemberModalOpen]);
 
   const closeCreateMemberFlow = useCallback(() => {
     if (inventoryBusyKey === 'create') {
@@ -5702,15 +5786,50 @@ const StudioPage: React.FC = () => {
     [applySerializedWorkflowDocument, resolveEditableWorkflowDocument],
   );
   const applyStudioTarget = React.useCallback(
-    (nextStudioSurface: StudioSurface, nextBuildSurface?: BuildSurface) => {
+    (
+      nextStudioSurface: StudioSurface,
+      nextBuildSurface?: BuildSurface,
+      routeMemberKey?: string,
+    ) => {
       const resolvedBuildSurface = nextBuildSurface ?? buildSurface;
       if (nextStudioSurface === 'build' && resolvedBuildSurface === 'editor') {
         ensureActiveWorkflowDraftLoaded();
       }
       setBuildSurface(resolvedBuildSurface);
       setStudioSurface(nextStudioSurface);
+      const normalizedRouteMemberKey = trimOptional(routeMemberKey);
+      const explicitRouteMemberKey =
+        nextStudioSurface === 'build'
+          ? ''
+          : buildBackendMemberKey(pinnedRouteBackendMemberIdRef.current);
+      const nextRouteMemberKey =
+        explicitRouteMemberKey || normalizedRouteMemberKey;
+      if (nextRouteMemberKey && nextStudioSurface !== 'build') {
+        history.replace(buildStudioRoute({
+          scopeId: resolvedStudioScopeId || undefined,
+          teamId: routeState.teamId || undefined,
+          memberKey: nextRouteMemberKey,
+          step:
+            nextStudioSurface === 'bind'
+              ? 'bind'
+              : nextStudioSurface === 'invoke'
+                ? 'invoke'
+                : 'observe',
+          tab:
+            nextStudioSurface === 'bind'
+              ? 'bindings'
+              : nextStudioSurface === 'invoke'
+                ? 'invoke'
+                : 'executions',
+        }));
+      }
     },
-    [buildSurface, ensureActiveWorkflowDraftLoaded],
+    [
+      buildSurface,
+      ensureActiveWorkflowDraftLoaded,
+      resolvedStudioScopeId,
+      routeState.teamId,
+    ],
   );
   const handleBindingSelectionChange = useCallback(
     (selection: { serviceId: string; endpointId: string }) => {
@@ -6076,7 +6195,7 @@ const StudioPage: React.FC = () => {
   ]);
   const lifecycleSurfaceMemberKey =
     studioSurface === 'build'
-      ? explicitRouteBackendMemberKey ||
+      ? routeSelectedBackendMemberKey ||
         (buildSurfaceMemberKeyUsesRouteServiceId
           ? routeSelectedMemberKey
           : buildSurfaceMemberKey) ||
@@ -6084,7 +6203,7 @@ const StudioPage: React.FC = () => {
         (activeBuildPublishedMemberId
           ? `member:${activeBuildPublishedMemberId}`
           : '')
-      : explicitRouteBackendMemberKey ||
+      : routeSelectedBackendMemberKey ||
         routeSelectedMemberKey ||
         buildSurfaceMemberKey ||
         (activeBuildPublishedMemberId
@@ -6148,6 +6267,10 @@ const StudioPage: React.FC = () => {
       return;
     }
 
+    if (getLocationSnapshot() !== locationSnapshot) {
+      return;
+    }
+
     if (appliedRouteSnapshot !== locationSnapshot) {
       return;
     }
@@ -6206,10 +6329,15 @@ const StudioPage: React.FC = () => {
       studioSurface === 'build' &&
       ((persistWorkflowDraftRoute && Boolean(activeBuildFocusKey)) ||
         (persistScriptRoute && Boolean(activeBuildFocusKey)));
+    const pinnedRouteBackendMemberKey = buildBackendMemberKey(
+      pinnedRouteBackendMemberIdRef.current,
+    );
     const persistedMemberKey =
       studioSurface === 'build'
         ? trimOptional(persistableBuildMemberKey) || undefined
-        : trimOptional(lifecycleSurfaceMemberKey) || undefined;
+        : pinnedRouteBackendMemberKey ||
+          trimOptional(lifecycleSurfaceMemberKey) ||
+          undefined;
     const persistedLifecycleFocus =
       studioSurface === 'bind' && routeBuildFocus.kind === 'script'
         ? (`script:${routeBuildFocus.value}` as const)
@@ -6257,7 +6385,7 @@ const StudioPage: React.FC = () => {
     workflowsQuery.isLoading,
   ]);
   const workbenchMemberKey =
-    explicitRouteBackendMemberKey || currentFocusMemberKey;
+    routeSelectedBackendMemberKey || currentFocusMemberKey;
   const buildSurfaceSelectedMemberKey =
     studioSurface === 'build' &&
     (currentFocusMemberKey.startsWith('workflow:') ||
@@ -6286,13 +6414,13 @@ const StudioPage: React.FC = () => {
   );
   const workbenchStudioMemberId = useMemo(
     () =>
-      trimOptional(explicitRouteBackendMemberId) ||
+      trimOptional(routeSelectedBackendMemberId) ||
       trimOptional(workbenchStudioMemberSummary?.memberId) ||
       readMemberIdFromMemberKey(workbenchMemberKey) ||
       readMemberIdFromMemberKey(routeState.memberKey) ||
       trimOptional(routeState.memberId),
     [
-      explicitRouteBackendMemberId,
+      routeSelectedBackendMemberId,
       routeState.memberId,
       routeState.memberKey,
       workbenchMemberKey,
@@ -6461,17 +6589,17 @@ const StudioPage: React.FC = () => {
       }
 
       if (stepKey === 'bind') {
-        applyStudioTarget('bind');
+        applyStudioTarget('bind', undefined, lifecycleSurfaceMemberKey);
         return;
       }
 
       if (stepKey === 'invoke') {
-        applyStudioTarget('invoke');
+        applyStudioTarget('invoke', undefined, lifecycleSurfaceMemberKey);
         return;
       }
 
       if (stepKey === 'observe') {
-        applyStudioTarget('observe');
+        applyStudioTarget('observe', undefined, lifecycleSurfaceMemberKey);
       }
     },
     [
@@ -6800,6 +6928,21 @@ const StudioPage: React.FC = () => {
       studioScopeMembers,
     ],
   );
+  const explicitRouteBackendMemberSummary = useMemo(
+    () =>
+      routeSelectedBackendMemberKey
+        ? resolveStudioMemberSummaryFromMemberKey(
+            routeSelectedBackendMemberKey,
+            publishedScopeMembers,
+            studioScopeMembers,
+          )
+        : null,
+    [
+      routeSelectedBackendMemberKey,
+      publishedScopeMembers,
+      studioScopeMembers,
+    ],
+  );
   const currentMemberLabel = !hasSelectedMemberFocus
     ? 'Select a member'
     : workbenchMemberKey.startsWith('workflow:')
@@ -6808,8 +6951,10 @@ const StudioPage: React.FC = () => {
         ? trimOptional(selectedScriptId) || 'Script member'
     : workbenchMemberKey.startsWith('member:')
             ? trimOptional(recentBindMemberSummary?.displayName) ||
+              trimOptional(explicitRouteBackendMemberSummary?.displayName) ||
               trimOptional(workbenchStudioMemberSummary?.displayName) ||
               trimOptional(workbenchStudioMember?.displayName) ||
+              trimOptional(routeSelectedBackendMemberId) ||
               trimOptional(workbenchPublishedServiceRevision?.workflowName) ||
               trimOptional(workbenchPublishedServiceRevision?.scriptId) ||
               trimOptional(workbenchPublishedServiceRevision?.staticActorTypeName) ||
@@ -7237,6 +7382,8 @@ const StudioPage: React.FC = () => {
         return;
       }
       if (normalizedMemberKey.startsWith('workflow:')) {
+        pinnedRouteBackendMemberIdRef.current = '';
+        setPinnedRouteBackendMemberId('');
         const workflowId = resolveWorkflowIdFromRouteValue(
           readWorkflowMemberRouteValueFromMemberKey(normalizedMemberKey),
           visibleWorkflowSummaries,
@@ -7289,6 +7436,8 @@ const StudioPage: React.FC = () => {
       }
 
       if (normalizedMemberKey.startsWith('script:')) {
+        pinnedRouteBackendMemberIdRef.current = '';
+        setPinnedRouteBackendMemberId('');
         const scriptId = normalizedMemberKey.slice('script:'.length);
         if (studioSurface !== 'build') {
           bindingSelectionRef.current = {
@@ -8426,7 +8575,7 @@ const StudioPage: React.FC = () => {
       onAutoLayout={handleAutoLayoutWorkflow}
       onConnectNodes={handleWorkflowConnectNodes}
       onNodeLayoutChange={handleWorkflowNodeLayoutChange}
-      onContinueToBind={() => applyStudioTarget('bind')}
+      onContinueToBind={() => applyStudioTarget('bind', undefined, lifecycleSurfaceMemberKey)}
     />
   );
 
@@ -8508,7 +8657,7 @@ const StudioPage: React.FC = () => {
       gAgentTypesError={gAgentTypesQuery.isError ? gAgentTypesQuery.error : null}
       selectedGAgentTypeName={selectedGAgentTypeName}
       onSelectGAgentTypeName={setSelectedGAgentTypeName}
-      onContinueToBind={() => applyStudioTarget('bind')}
+      onContinueToBind={() => applyStudioTarget('bind', undefined, lifecycleSurfaceMemberKey)}
     />
   );
 
@@ -8756,13 +8905,13 @@ const StudioPage: React.FC = () => {
                     </span>
                     <input
                       aria-label={createMemberKind === 'workflow' ? 'Member name' : 'Script name'}
-                      autoFocus
                       onChange={(event) => setCreateMemberName(event.target.value)}
                       placeholder={
                         createMemberKind === 'workflow'
                           ? suggestedCreateWorkflowName
                           : suggestedCreateScriptName
                       }
+                      ref={createMemberNameInputRef}
                       style={inventoryCreateInputStyle}
                       type="text"
                       value={createMemberName}
