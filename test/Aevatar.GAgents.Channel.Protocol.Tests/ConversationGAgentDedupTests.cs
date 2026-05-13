@@ -357,6 +357,40 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task HandleInboundActivityAsync_WhenRunDispatcherAcceptsRequest_ShouldNotPersistCompletedReplyUntilReadyArrives()
+    {
+        // Accepted-for-run is weaker than committed/user-visible reply. The actor may persist
+        // NeedsLlmReplyEvent and dispatch it immediately, but must not emit a completed fact
+        // until the run actor sends LlmReplyReadyEvent (or a terminal failure) back.
+        var dispatcher = new RecordingRunDispatcher();
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.Id,
+                    TargetActorId = "conversation:actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                }),
+        };
+        var (agent, store) = CreateAgent(runner, "conv-accepted-not-committed", dispatcher);
+
+        await agent.HandleInboundActivityAsync(CreateActivity("act-accepted-only", "conv:slack:C1"));
+
+        dispatcher.Dispatched.Count.ShouldBe(1);
+        runner.LlmReplyCount.ShouldBe(0);
+        agent.State.PendingLlmReplyRequests.ShouldContain(req => req.CorrelationId == "act-accepted-only");
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Count.ShouldBe(1);
+        events[0].EventType.ShouldContain(nameof(NeedsLlmReplyEvent));
+        events.ShouldNotContain(record =>
+            record.EventType.Contains(nameof(ConversationTurnCompletedEvent), StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task HandleLlmReplyReadyAsync_WhenDuplicateCorrelationId_CollapsesToSingleOutboundCommit()
     {
         var runner = new RecordingTurnRunner();
