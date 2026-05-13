@@ -3333,6 +3333,18 @@ describe("StudioPage", () => {
     mockStudioMembers = [
       ...mockStudioMembers,
       {
+        memberId: "draft1",
+        scopeId: "scope-1",
+        displayName: "draft1",
+        description: "Current draft member",
+        implementationKind: "workflow",
+        lifecycleStage: "created",
+        publishedServiceId: "draft1",
+        lastBoundRevisionId: null,
+        createdAt: "2026-04-27T08:00:00Z",
+        updatedAt: "2026-04-27T08:05:00Z",
+      },
+      {
         memberId: "joker",
         scopeId: "scope-1",
         displayName: "joker",
@@ -4471,18 +4483,20 @@ describe("StudioPage", () => {
           ],
         },
       ]);
-    (studioApi.bindScopeWorkflow as jest.Mock).mockImplementationOnce(
-      async (input: { scopeId: string; displayName?: string; workflowYamls: string[] }) => ({
-        scopeId: input.scopeId,
-        displayName: input.displayName || "draft1",
-        targetKind: "workflow",
-        targetName: input.displayName || "draft1",
-        revisionId: "rev-draft1",
-        workflowName: input.displayName || "draft1",
-        definitionActorIdPrefix: "scope-workflow:scope-1:draft1",
-        expectedActorId: "scope-workflow:scope-1:draft1:dep-1",
-      })
-    );
+    (studioApi.bindMemberWorkflow as jest.Mock).mockResolvedValueOnce({
+      status: "accepted",
+      bindingRunId: "bind-draft1",
+      scopeId: "scope-1",
+      memberId: "draft1",
+    });
+    (studioApi.getMemberBindingRun as jest.Mock).mockResolvedValueOnce({
+      bindingRunId: "bind-draft1",
+      scopeId: "scope-1",
+      memberId: "draft1",
+      status: "succeeded",
+      failure: null,
+      updatedAt: "2026-04-27T08:15:01Z",
+    });
     (studioApi.getScopeBinding as jest.Mock).mockResolvedValue({
       available: true,
       scopeId: "scope-1",
@@ -4507,7 +4521,9 @@ describe("StudioPage", () => {
         })
     );
 
-    renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&step=bind&tab=bindings");
+    renderStudioPage(
+      "/studio?scopeId=scope-1&memberId=draft1&focus=workflow%3Aworkflow-1&step=bind&tab=bindings"
+    );
 
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
     await waitFor(() => {
@@ -4520,13 +4536,15 @@ describe("StudioPage", () => {
     });
 
     await waitFor(() => {
-      expect(studioApi.bindScopeWorkflow).toHaveBeenCalledWith(
+      expect(studioApi.bindMemberWorkflow).toHaveBeenCalledWith(
         expect.objectContaining({
           scopeId: "scope-1",
+          memberId: "draft1",
           displayName: "draft1",
         })
       );
     });
+    expect(studioApi.bindScopeWorkflow).not.toHaveBeenCalled();
     await waitFor(() => {
       expect(screen.getByTestId("studio-context-title")).toHaveTextContent("draft1");
       expect(screen.getByText("service:draft1")).toBeTruthy();
