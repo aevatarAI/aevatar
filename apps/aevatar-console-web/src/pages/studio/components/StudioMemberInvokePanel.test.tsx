@@ -16,7 +16,6 @@ jest.mock('@/shared/api/runtimeRunsApi', () => ({
 jest.mock('@/shared/api/scopeRuntimeApi', () => ({
   scopeRuntimeApi: {
     getMemberEndpointContract: jest.fn(),
-    getServiceEndpointContract: jest.fn(),
   },
 }));
 
@@ -63,38 +62,13 @@ describe('StudioMemberInvokePanel', () => {
       supportsSse: false,
       supportsWebSocket: false,
     });
-    (scopeRuntimeApi.getServiceEndpointContract as jest.Mock).mockImplementation(
-      (_scopeId: string, serviceId: string, endpointId: string) =>
-        Promise.resolve({
-          defaultSmokeInputMode: 'typed-payload',
-          defaultSmokePrompt: null,
-          deploymentStatus: 'Active',
-          endpointId,
-          fetchExample: null,
-          curlExample: null,
-          invokePath: `/api/scopes/scope-1/services/${serviceId}/invoke/${endpointId}`,
-          method: 'POST',
-          requestContentType: 'application/json',
-          requestTypeUrl: 'type.googleapis.com/example.ContractSubmit',
-          responseContentType: 'application/json',
-          responseTypeUrl: 'type.googleapis.com/example.ContractSubmitResult',
-          revisionId: 'contract-rev',
-          sampleRequestJson: '{"message":"hello"}',
-          scopeId: 'scope-1',
-          serviceId,
-          smokeTestSupported: true,
-          streamFrameFormat: null,
-          supportsAguiFrames: false,
-          supportsSse: false,
-          supportsWebSocket: false,
-        }),
-    );
     (parseBackendSSEStream as jest.Mock).mockImplementation(async function* () {});
   });
 
   it('renders the invoke workbench skeleton with a compact contract and a persistent console', async () => {
     render(
       React.createElement(StudioMemberInvokePanel, {
+        memberId: 'default',
         memberRevision: {
           allocationWeight: 100,
           artifactHash: 'hash-2',

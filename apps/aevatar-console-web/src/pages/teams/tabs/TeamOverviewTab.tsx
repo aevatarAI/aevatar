@@ -41,7 +41,14 @@ type OverviewCompareSection = {
   readonly title: string;
 };
 
+type OverviewConfigurationRow = {
+  readonly label: string;
+  readonly note: string;
+  readonly value: string;
+};
+
 type TeamOverviewTabProps = {
+  readonly configurationDetailRows: readonly OverviewConfigurationRow[];
   readonly compareAvailable: boolean;
   readonly compareSections: readonly OverviewCompareSection[];
   readonly compareStatusLabel: string;
@@ -102,6 +109,7 @@ const decisionSurfaceStyle = (
 });
 
 const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
+  configurationDetailRows,
   compareAvailable,
   compareSections,
   compareStatusLabel,
@@ -547,6 +555,38 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
           ))}
         </div>
       </div>
+
+      {configurationDetailRows.length > 0 ? (
+        <section style={surfaceStyle(token)}>
+          <Typography.Title level={3} style={{ margin: 0 }}>
+            配置明细
+          </Typography.Title>
+          <div style={{ display: "grid", gap: 12 }}>
+            {configurationDetailRows.map((row, index) => (
+              <div
+                key={row.label}
+                style={{
+                  alignItems: "start",
+                  borderTop:
+                    index === 0 ? "none" : `1px solid ${token.colorBorderSecondary}`,
+                  display: "grid",
+                  gap: 12,
+                  gridTemplateColumns: "minmax(96px, 128px) minmax(0, 1fr)",
+                  paddingTop: index === 0 ? 0 : 12,
+                }}
+              >
+                <Typography.Text style={{ paddingTop: 2 }} type="secondary">
+                  {row.label}
+                </Typography.Text>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+                  <Typography.Text strong>{row.value}</Typography.Text>
+                  <FactLine rows={2} secondary text={row.note} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 };
