@@ -2288,6 +2288,49 @@ function resolveBoundServiceIdFromCatalog(input: {
   return matchedServiceIds.length === 1 ? matchedServiceIds[0] : '';
 }
 
+function buildRecentlyBoundServiceSnapshot(input: {
+  readonly displayName?: string | null;
+  readonly revisionId?: string | null;
+  readonly scopeId: string;
+  readonly selectedService?: ServiceCatalogSnapshot | null;
+  readonly serviceId: string;
+  readonly updatedAt?: string | null;
+}): ServiceCatalogSnapshot {
+  const normalizedServiceId = trimOptional(input.serviceId);
+  const normalizedDisplayName =
+    trimOptional(input.displayName) ||
+    trimOptional(input.selectedService?.displayName) ||
+    normalizedServiceId;
+  const normalizedRevisionId =
+    trimOptional(input.revisionId) ||
+    trimOptional(input.selectedService?.activeServingRevisionId) ||
+    trimOptional(input.selectedService?.defaultServingRevisionId);
+
+  return {
+    serviceKey:
+      trimOptional(input.selectedService?.serviceKey) ||
+      `${input.scopeId}:${scopeServiceAppId}:${scopeServiceNamespace}:${normalizedServiceId}`,
+    tenantId: trimOptional(input.selectedService?.tenantId),
+    appId: trimOptional(input.selectedService?.appId) || scopeServiceAppId,
+    namespace:
+      trimOptional(input.selectedService?.namespace) || scopeServiceNamespace,
+    serviceId: normalizedServiceId,
+    displayName: normalizedDisplayName,
+    defaultServingRevisionId: normalizedRevisionId,
+    activeServingRevisionId: normalizedRevisionId,
+    deploymentId: trimOptional(input.selectedService?.deploymentId),
+    primaryActorId: trimOptional(input.selectedService?.primaryActorId),
+    deploymentStatus:
+      trimOptional(input.selectedService?.deploymentStatus) || 'Active',
+    endpoints: input.selectedService?.endpoints ?? [],
+    policyIds: input.selectedService?.policyIds ?? [],
+    updatedAt:
+      trimOptional(input.updatedAt) ||
+      trimOptional(input.selectedService?.updatedAt) ||
+      new Date().toISOString(),
+  };
+}
+
 function formatStudioAssetMeta(input: {
   primary?: string | null;
   secondary?: string | null;
@@ -4343,11 +4386,21 @@ const StudioPage: React.FC = () => {
       const selectedService = (servicesResult.data ?? []).find(
         (service) => service.serviceId === boundServiceId,
       );
-      if (selectedService) {
-        recentlyBoundServiceRef.current = selectedService;
-      }
-      const defaultEndpointId = resolveStudioServiceDefaultEndpointId(
+      const recentlyBoundService = buildRecentlyBoundServiceSnapshot({
+        displayName:
+          trimOptional(result?.displayName) ||
+          trimOptional(buildPendingBindCandidate.displayName),
+        revisionId:
+          trimOptional(result?.revisionId) ||
+          trimOptional(buildPendingMemberSummary?.lastBoundRevisionId),
+        scopeId: resolvedStudioScopeId,
         selectedService,
+        serviceId: boundServiceId,
+        updatedAt: memberBindingRunOutcome?.run?.updatedAt,
+      });
+      recentlyBoundServiceRef.current = recentlyBoundService;
+      const defaultEndpointId = resolveStudioServiceDefaultEndpointId(
+        recentlyBoundService,
       );
       const routeMemberSummary = resolveStudioMemberSummaryFromMemberKey(
         routeSelectedBackendMemberKey,
