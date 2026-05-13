@@ -74,6 +74,6 @@ public sealed class ProjectionStudioMemberBindingRunQueryPort : IStudioMemberBin
         StudioMemberBindingRunStatusNames.Succeeded => StudioMemberBindingRunStatusNames.Succeeded,
         StudioMemberBindingRunStatusNames.Failed => StudioMemberBindingRunStatusNames.Failed,
         StudioMemberBindingRunStatusNames.Rejected => StudioMemberBindingRunStatusNames.Rejected,
-        _ => string.Empty,
+        _ => StudioMemberBindingRunStatusNames.Unknown,
     };
 }

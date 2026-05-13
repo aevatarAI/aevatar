@@ -17,6 +17,5 @@ public interface IStudioMemberPlatformBindingCommandPort
     Task ExecuteAsync(
         string replyActorId,
         string platformBindingCommandId,
-        StudioMemberPlatformBindingStartRequested request,
-        CancellationToken ct = default);
+        StudioMemberPlatformBindingStartRequested request);
 }

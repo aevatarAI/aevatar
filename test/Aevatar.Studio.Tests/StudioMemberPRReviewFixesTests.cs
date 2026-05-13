@@ -165,24 +165,6 @@ public sealed class StudioMemberPRReviewFixesTests
     }
 
     [Fact]
-    public async Task HandleBindAsync_ShouldReturn404_WhenMemberNotFoundExceptionThrown()
-    {
-        var service = new ThrowingService(new StudioMemberNotFoundException("scope-1", "m-missing"));
-
-        var result = await InvokeHandle(
-            "HandleBindAsync",
-            CreateAuthenticatedContext("scope-1"),
-            "scope-1",
-            "m-missing",
-            new UpdateStudioMemberBindingRequest(),
-            service,
-            CancellationToken.None);
-
-        var statusCode = result.GetType().GetProperty("StatusCode")?.GetValue(result) as int?;
-        statusCode.Should().Be(StatusCodes.Status404NotFound);
-    }
-
-    [Fact]
     public async Task HandleGetBindingAsync_ShouldReturn404_WhenMemberNotFoundExceptionThrown()
     {
         var service = new ThrowingService(new StudioMemberNotFoundException("scope-1", "m-missing"));

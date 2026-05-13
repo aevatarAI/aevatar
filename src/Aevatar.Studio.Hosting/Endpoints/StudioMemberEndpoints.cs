@@ -157,10 +157,6 @@ internal static class StudioMemberEndpoints
                 $"/api/scopes/{Uri.EscapeDataString(scopeId)}/members/{Uri.EscapeDataString(memberId)}/binding-runs/{Uri.EscapeDataString(receipt.BindingRunId)}",
                 receipt);
         }
-        catch (StudioMemberNotFoundException ex)
-        {
-            return NotFound(ex);
-        }
         catch (InvalidOperationException ex)
         {
             return BadRequest("INVALID_STUDIO_MEMBER_BINDING", ex.Message);
@@ -212,10 +208,6 @@ internal static class StudioMemberEndpoints
         try
         {
             return Results.Ok(await memberService.GetBindingRunAsync(scopeId, memberId, bindingRunId, ct));
-        }
-        catch (StudioMemberNotFoundException ex)
-        {
-            return NotFound(ex);
         }
         catch (StudioMemberBindingRunNotFoundException ex)
         {

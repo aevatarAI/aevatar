@@ -357,7 +357,8 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
     private static StudioMemberGAgentEndpointKind ParseGAgentEndpointKind(string? rawValue) =>
         rawValue?.Trim().ToLowerInvariant() switch
         {
-            "command" or null or "" => StudioMemberGAgentEndpointKind.Command,
+            null or "" => throw new InvalidOperationException("gagent endpoint kind is required."),
+            "command" => StudioMemberGAgentEndpointKind.Command,
             "chat" => StudioMemberGAgentEndpointKind.Chat,
             _ => throw new InvalidOperationException($"Unsupported gagent endpoint kind '{rawValue}'."),
         };

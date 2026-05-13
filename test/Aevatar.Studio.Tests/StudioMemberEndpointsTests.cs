@@ -303,27 +303,6 @@ public sealed class StudioMemberEndpointsTests
     }
 
     [Fact]
-    public async Task HandleGetBindingRunAsync_ShouldReturnTyped404_WhenMemberMissing()
-    {
-        var service = new RecordingMemberService
-        {
-            GetBindingRunException = new StudioMemberNotFoundException(ScopeId, "m-missing"),
-        };
-
-        var result = await InvokeHandle<IResult>(
-            "HandleGetBindingRunAsync",
-            CreateAuthenticatedContext(ScopeId),
-            ScopeId,
-            "m-missing",
-            "bind-1",
-            service,
-            CancellationToken.None);
-
-        var statusCode = result.GetType().GetProperty("StatusCode")?.GetValue(result) as int?;
-        statusCode.Should().Be(StatusCodes.Status404NotFound);
-    }
-
-    [Fact]
     public async Task HandleGetBindingRunAsync_ShouldReturnBadRequest_OnDomainError()
     {
         var service = new RecordingMemberService

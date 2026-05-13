@@ -35,7 +35,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         ArgumentNullException.ThrowIfNull(request);
 
         var commandId = string.IsNullOrWhiteSpace(request.PlatformBindingCommandId)
-            ? $"platform-{request.BindingRunId}-1"
+            ? StudioMemberConventions.BuildPlatformBindingCommandId(request.BindingRunId, 1)
             : request.PlatformBindingCommandId;
 
         return Task.FromResult(new StudioMemberPlatformBindingAccepted
@@ -49,8 +49,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
     public Task ExecuteAsync(
         string replyActorId,
         string platformBindingCommandId,
-        StudioMemberPlatformBindingStartRequested request,
-        CancellationToken ct = default)
+        StudioMemberPlatformBindingStartRequested request)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(replyActorId);
         ArgumentException.ThrowIfNullOrWhiteSpace(platformBindingCommandId);
@@ -59,9 +58,29 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         var executionRequest = request.Clone();
         executionRequest.PlatformBindingCommandId = platformBindingCommandId;
         _ = Task.Run(
-            () => RunBindingAsync(replyActorId, platformBindingCommandId, executionRequest, CancellationToken.None),
+            () => RunBindingFireAndForgetAsync(replyActorId, platformBindingCommandId, executionRequest),
             CancellationToken.None);
         return Task.CompletedTask;
+    }
+
+    private async Task RunBindingFireAndForgetAsync(
+        string replyActorId,
+        string commandId,
+        StudioMemberPlatformBindingStartRequested request)
+    {
+        try
+        {
+            await RunBindingAsync(replyActorId, commandId, request, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "StudioMember platform binding detached execution failed unexpectedly. bindingRunId={BindingRunId} platformBindingCommandId={CommandId}",
+                request.BindingRunId,
+                commandId);
+        }
     }
 
     private async Task RunBindingAsync(

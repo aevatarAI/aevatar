@@ -35,6 +35,7 @@ public static class StudioMemberBindingRunStatusNames
     public const string Succeeded = "succeeded";
     public const string Failed = "failed";
     public const string Rejected = "rejected";
+    public const string Unknown = "unknown";
 }
 
 /// <summary>

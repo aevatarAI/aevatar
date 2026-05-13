@@ -288,6 +288,36 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
     }
 
     [Fact]
+    public async Task StartBindingRunAsync_ShouldRejectMissingGAgentEndpointKind()
+    {
+        var service = new ActorDispatchStudioMemberCommandService(
+            new RecordingBootstrap(),
+            new RecordingDispatchPort());
+
+        var act = () => service.StartBindingRunAsync(
+            new StudioMemberBindingRunStartRequest(
+                BindingRunId: "bind-gagent",
+                ScopeId: ScopeId,
+                MemberId: "m-1",
+                ImplementationKind: MemberImplementationKindNames.GAgent,
+                Binding: new UpdateStudioMemberBindingRequest(
+                    GAgent: new StudioMemberGAgentBindingSpec(
+                        ActorTypeName: "MyCompany.MyGAgent",
+                        Endpoints: [
+                            new StudioMemberGAgentEndpointSpec(
+                                EndpointId: "chat",
+                                DisplayName: "Chat",
+                                Kind: "",
+                                RequestTypeUrl: "type.googleapis.com/a.Request",
+                                ResponseTypeUrl: "type.googleapis.com/a.Response")
+                        ]))),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*gagent endpoint kind is required*");
+    }
+
+    [Fact]
     public void Constructor_ShouldRejectNullDependencies()
     {
         FluentActions.Invoking(() =>

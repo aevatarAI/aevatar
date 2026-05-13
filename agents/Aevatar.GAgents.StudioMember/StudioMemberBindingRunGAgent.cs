@@ -4,7 +4,6 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgents.StudioMember;
 
@@ -16,8 +15,14 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
     private static readonly TimeSpan PlatformBindingExecuteInitialDelay = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan PlatformBindingWatchdogDelay = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan PlatformBindingExecutionStaleAfter = TimeSpan.FromMinutes(2);
+    private readonly IStudioMemberPlatformBindingCommandPort? _platformBindingPort;
 
     public static string ProjectionKind => "studio-member-binding-run";
+
+    public StudioMemberBindingRunGAgent(IStudioMemberPlatformBindingCommandPort? platformBindingPort = null)
+    {
+        _platformBindingPort = platformBindingPort;
+    }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
@@ -97,8 +102,7 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
 
         await PersistDomainEventAsync(evt);
 
-        var platformBindingPort = Services.GetService<IStudioMemberPlatformBindingCommandPort>();
-        if (platformBindingPort == null)
+        if (_platformBindingPort == null)
         {
             await SendToAsync(Id, new StudioMemberPlatformBindingFailed
             {
@@ -114,7 +118,7 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
             return;
         }
 
-        var accepted = await platformBindingPort.StartAsync(Id, evt);
+        var accepted = await _platformBindingPort.StartAsync(Id, evt);
         await SendToAsync(Id, accepted);
     }
 
@@ -144,8 +148,7 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
             StartedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         });
 
-        var platformBindingPort = Services.GetService<IStudioMemberPlatformBindingCommandPort>();
-        if (platformBindingPort == null)
+        if (_platformBindingPort == null)
         {
             await SendToAsync(Id, new StudioMemberPlatformBindingFailed
             {
@@ -161,7 +164,7 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
             return;
         }
 
-        await platformBindingPort.ExecuteAsync(
+        await _platformBindingPort.ExecuteAsync(
             Id,
             evt.PlatformBindingCommandId,
             new StudioMemberPlatformBindingStartRequested
@@ -504,7 +507,9 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
             new StudioMemberPlatformBindingStartRequested
             {
                 BindingRunId = State.BindingRunId,
-                PlatformBindingCommandId = BuildPlatformBindingCommandId(State.BindingRunId, State.AttemptCount + 1),
+                PlatformBindingCommandId = StudioMemberConventions.BuildPlatformBindingCommandId(
+                    State.BindingRunId,
+                    State.AttemptCount + 1),
                 Request = State.Request.Clone(),
                 Admitted = State.Admitted.Clone(),
                 RequestedAtUtc = requestedAtUtc ?? State.UpdatedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
@@ -626,9 +631,6 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         normalizedIncoming.RequestHash = string.Empty;
         return normalizedCurrent.Equals(normalizedIncoming);
     }
-
-    private static string BuildPlatformBindingCommandId(string bindingRunId, int attempt) =>
-        $"platform-{bindingRunId}-{attempt}";
 
     private static string BuildPlatformBindingExecuteCallbackId(
         string bindingRunId,

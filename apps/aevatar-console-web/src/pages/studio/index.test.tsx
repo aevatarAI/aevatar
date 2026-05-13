@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { Modal, message } from "antd";
 import React from "react";
 import { ensureActiveAuthSession } from "@/shared/auth/client";
@@ -9,7 +9,10 @@ import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { studioApi } from "@/shared/studio/api";
 import { scriptsApi } from "@/shared/studio/scriptsApi";
 import { saveStudioObserveSessionSeed } from "@/shared/studio/observeSession";
-import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
+import {
+  cleanupTestQueryClients,
+  renderWithQueryClient,
+} from "../../../tests/reactQueryTestUtils";
 import StudioPage from "./index";
 
 jest.mock("antd", () => {
@@ -2875,6 +2878,11 @@ async function replaceStudioRoute(route: string) {
 }
 
 describe("StudioPage", () => {
+  afterEach(() => {
+    cleanup();
+    cleanupTestQueryClients();
+  });
+
   beforeEach(() => {
     window.history.pushState({}, "", "/studio");
     window.localStorage.clear();
@@ -2914,6 +2922,7 @@ describe("StudioPage", () => {
         actorIds: ["orders-gagent"],
       },
     ]);
+    mockScopeRuntimeApi.listServices.mockReset();
     mockScopeRuntimeApi.listServices.mockResolvedValue([
       {
         serviceId: "default",
@@ -2990,6 +2999,49 @@ describe("StudioPage", () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValue(
       mockCreateDefaultStudioAppContext()
     );
+    (studioApi.listMembers as jest.Mock).mockReset();
+    (studioApi.listMembers as jest.Mock).mockImplementation(async () => ({
+      scopeId: "scope-1",
+      members: mockStudioMembers,
+      nextPageToken: null,
+    }));
+    (studioApi.getMember as jest.Mock).mockReset();
+    (studioApi.getMember as jest.Mock).mockImplementation(
+      async (_scopeId: string, memberId: string) => {
+        const matchedMember =
+          mockStudioMembers.find((member) => member.memberId === memberId) ??
+          mockStudioMembers[0];
+        return {
+          summary: matchedMember,
+          implementationRef:
+            matchedMember?.implementationKind === "workflow"
+              ? {
+                  implementationKind: "workflow",
+                  workflowId: matchedMember.displayName,
+                  workflowRevision: matchedMember.lastBoundRevisionId,
+                }
+              : matchedMember?.implementationKind === "script"
+                ? {
+                    implementationKind: "script",
+                    scriptId:
+                      matchedMember.scriptId || matchedMember.displayName,
+                    scriptRevision: matchedMember.lastBoundRevisionId,
+                  }
+                : {
+                    implementationKind: "gagent",
+                    actorTypeName: matchedMember?.displayName || "",
+                  },
+          lastBinding: matchedMember?.lastBoundRevisionId
+            ? {
+                publishedServiceId: matchedMember.publishedServiceId,
+                revisionId: matchedMember.lastBoundRevisionId,
+                implementationKind: matchedMember.implementationKind,
+                boundAt: matchedMember.updatedAt,
+              }
+            : null,
+        };
+      }
+    );
     (studioApi.listWorkflows as jest.Mock).mockReset();
     (studioApi.listWorkflows as jest.Mock).mockResolvedValue(
       mockCreateDefaultWorkflowSummaries()
@@ -3001,6 +3053,46 @@ describe("StudioPage", () => {
     (studioApi.authorWorkflow as jest.Mock).mockReset();
     (studioApi.authorWorkflow as jest.Mock).mockImplementation(
       mockAuthorWorkflowSuccess
+    );
+    (studioApi.getScopeBinding as jest.Mock).mockReset();
+    (studioApi.getScopeBinding as jest.Mock).mockResolvedValue({
+      available: true,
+      scopeId: "scope-1",
+      serviceId: "default",
+      displayName: "workspace-demo",
+      serviceKey: "scope-1:default:default:default",
+      defaultServingRevisionId: "rev-2",
+      activeServingRevisionId: "rev-2",
+      deploymentId: "dep-2",
+      deploymentStatus: "Active",
+      primaryActorId: "actor-default",
+      updatedAt: "2026-03-26T08:00:00Z",
+      revisions: [
+        {
+          revisionId: "rev-2",
+          implementationKind: "workflow",
+          status: "Published",
+          artifactHash: "hash-2",
+          failureReason: "",
+          isDefaultServing: true,
+          isActiveServing: true,
+          isServingTarget: true,
+          allocationWeight: 100,
+          servingState: "Active",
+          deploymentId: "dep-2",
+        },
+      ],
+    });
+    (studioApi.getMemberBindingRun as jest.Mock).mockReset();
+    (studioApi.getMemberBindingRun as jest.Mock).mockImplementation(
+      async (scopeId: string, memberId: string, bindingRunId: string) => ({
+        bindingRunId,
+        scopeId,
+        memberId,
+        status: "succeeded",
+        failure: null,
+        updatedAt: "2026-04-27T08:15:01Z",
+      })
     );
     (scriptsApi.listScripts as jest.Mock).mockReset();
     (scriptsApi.listScripts as jest.Mock).mockResolvedValue([]);
@@ -4111,6 +4203,65 @@ describe("StudioPage", () => {
     });
   });
 
+  it("keeps pending member binding from promoting the bind selection", async () => {
+    mockScopeRuntimeApi.listServices.mockReset();
+    mockScopeRuntimeApi.listServices
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([
+        {
+          serviceId: "member-workspace-demo",
+          displayName: "workspace-demo",
+          deploymentStatus: "Active",
+          primaryActorId: "actor-default",
+          endpoints: [
+            {
+              endpointId: "chat",
+              displayName: "Chat",
+              kind: "chat",
+              description: "Chat with workspace-demo.",
+              requestTypeUrl: "",
+              responseTypeUrl: "",
+            },
+          ],
+        },
+      ]);
+    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
+    (studioApi.getMemberBindingRun as jest.Mock).mockResolvedValue({
+      bindingRunId: "bind-member-workflow-1",
+      scopeId: "scope-1",
+      memberId: "workspace-demo",
+      status: "platform_binding_pending",
+      failure: null,
+      updatedAt: "2026-04-27T08:15:01Z",
+    });
+
+    renderStudioPage("/studio?scopeId=scope-1&memberId=workspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
+
+    expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Bind" }));
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("service:no-service")).toBeTruthy();
+      expect(screen.getByText("services:none")).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Bind current member" }));
+    });
+
+    await waitFor(() => {
+      expect(studioApi.getMemberBindingRun).toHaveBeenCalled();
+    });
+    expect(screen.getByText("service:no-service")).toBeTruthy();
+    expect(screen.getByText("services:none")).toBeTruthy();
+    expect(screen.queryByText("service:member-workspace-demo")).toBeNull();
+    expect(screen.queryByText("services:member-workspace-demo")).toBeNull();
+
+    const searchParams = new URLSearchParams(window.location.search);
+    expect(searchParams.get("member")).toBe("member:workspace-demo");
+  });
+
   it("normalizes legacy workflow:default links and keeps the bound member contract when switching away and back", async () => {
     mockWorkflowFile = {
       ...mockWorkflowFile,
@@ -4426,7 +4577,7 @@ describe("StudioPage", () => {
         updatedAtUtc: "2026-03-18T00:00:00Z",
       },
     ]);
-    mockScopeRuntimeApi.listServices.mockResolvedValueOnce([
+    mockScopeRuntimeApi.listServices.mockResolvedValue([
       {
         serviceId: "joker",
         displayName: "joker",
@@ -4444,7 +4595,7 @@ describe("StudioPage", () => {
         ],
       },
     ]);
-    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce({
+    (studioApi.getScopeBinding as jest.Mock).mockResolvedValue({
       available: true,
       scopeId: "scope-1",
       serviceId: "joker",
@@ -4458,7 +4609,7 @@ describe("StudioPage", () => {
       updatedAt: "2026-03-26T08:00:00Z",
       revisions: [],
     });
-    mockScopeRuntimeApi.getServiceRevisions.mockImplementationOnce(
+    mockScopeRuntimeApi.getServiceRevisions.mockImplementation(
       async () =>
         mockBuildServiceRevisionCatalog({
           serviceId: "joker",
@@ -4495,6 +4646,21 @@ describe("StudioPage", () => {
   });
 
   it("pins Bind to the selected published member instead of the scope default route target", async () => {
+    mockStudioMembers = [
+      ...mockStudioMembers,
+      {
+        memberId: "joker",
+        scopeId: "scope-1",
+        displayName: "joker",
+        description: "Joker workflow member",
+        implementationKind: "workflow",
+        lifecycleStage: "bind_ready",
+        publishedServiceId: "joker",
+        lastBoundRevisionId: "rev-joker",
+        createdAt: "2026-04-27T08:00:00Z",
+        updatedAt: "2026-04-27T08:05:00Z",
+      },
+    ];
     mockScopeRuntimeApi.listServices.mockResolvedValueOnce([
       {
         serviceId: "default",

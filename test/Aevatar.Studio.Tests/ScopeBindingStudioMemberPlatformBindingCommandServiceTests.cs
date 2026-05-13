@@ -23,8 +23,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
 
         var accepted = await service.StartAsync(
             "studio-member-binding-run:bind-1",
-            NewScriptStartRequest(),
-            CancellationToken.None);
+            NewScriptStartRequest());
 
         accepted.BindingRunId.Should().Be("bind-1");
         accepted.PlatformBindingCommandId.Should().Be("platform-bind-1");
@@ -46,8 +45,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         await service.ExecuteAsync(
             "studio-member-binding-run:bind-1",
             "platform-bind-1",
-            NewScriptStartRequest(),
-            CancellationToken.None);
+            NewScriptStartRequest());
 
         var dispatch = await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
         dispatch.ActorId.Should().Be("studio-member-binding-run:bind-1");
@@ -88,8 +86,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         var executeTask = service.ExecuteAsync(
             "studio-member-binding-run:bind-1",
             "platform-bind-1",
-            NewScriptStartRequest(),
-            CancellationToken.None);
+            NewScriptStartRequest());
 
         var request = await scopeBindingPort.UpsertStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         request.RevisionId.Should().Be("rev-platform-bind-1");
@@ -115,8 +112,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         await service.ExecuteAsync(
             "studio-member-binding-run:bind-1",
             "platform-bind-1",
-            NewScriptStartRequest("rev-explicit"),
-            CancellationToken.None);
+            NewScriptStartRequest("rev-explicit"));
 
         await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var request = scopeBindingPort.Requests.Should().ContainSingle().Subject;
@@ -140,8 +136,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         await service.ExecuteAsync(
             "studio-member-binding-run:bind-1",
             "platform-bind-1",
-            NewScriptStartRequest(),
-            CancellationToken.None);
+            NewScriptStartRequest());
 
         var dispatch = await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var failed = dispatch.Envelope.Payload.Unpack<StudioMemberPlatformBindingFailed>();
@@ -167,8 +162,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         await service.ExecuteAsync(
             "studio-member-binding-run:bind-1",
             "platform-bind-1",
-            NewScriptStartRequest(),
-            CancellationToken.None);
+            NewScriptStartRequest());
 
         await dispatchPort.DispatchAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -196,8 +190,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         await service.ExecuteAsync(
             "studio-member-binding-run:bind-1",
             "platform-bind-1",
-            NewScriptStartRequest(),
-            CancellationToken.None);
+            NewScriptStartRequest());
 
         await dispatchPort.DispatchAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 

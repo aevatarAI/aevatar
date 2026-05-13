@@ -209,6 +209,16 @@ type StudioNotice = {
   readonly message: string;
 };
 
+type StudioBindingRunOutcome =
+  | {
+      readonly kind: 'succeeded';
+      readonly run: StudioMemberBindingRunStatusResponse;
+    }
+  | {
+      readonly kind: 'pending';
+      readonly run: StudioMemberBindingRunStatusResponse | null;
+    };
+
 const MEMBER_BINDING_RUN_POLL_INTERVAL_MS = 900;
 const MEMBER_BINDING_RUN_POLL_ATTEMPTS = 8;
 
@@ -233,6 +243,31 @@ function buildStudioMemberBindingFailureMessage(
       ? 'Binding request was rejected by the member authority.'
       : 'Binding failed while publishing the member contract.')
   );
+}
+
+function resolveStudioMemberBindingRunOutcome(
+  run: StudioMemberBindingRunStatusResponse | null,
+): StudioBindingRunOutcome {
+  if (run?.status === 'failed' || run?.status === 'rejected') {
+    throw new Error(buildStudioMemberBindingFailureMessage(run));
+  }
+
+  if (run?.status === 'succeeded') {
+    return { kind: 'succeeded', run };
+  }
+
+  return { kind: 'pending', run };
+}
+
+function buildStudioMemberBindingPendingNotice(
+  displayName: string,
+  run: StudioMemberBindingRunStatusResponse | null,
+): StudioNotice {
+  const status = run?.status ? ` Current status: ${run.status}.` : '';
+  return {
+    message: `${displayName} binding request was accepted and is still running.${status} Studio will keep refreshing the status before treating it as bound.`,
+    type: 'info',
+  };
 }
 
 type OrderedStudioShellMemberItem = StudioShellMemberItem & {
@@ -4046,7 +4081,7 @@ const StudioPage: React.FC = () => {
       readMemberIdFromMemberKey(routeState.memberKey) ||
       trimOptional(routeState.memberId);
     let result = null;
-    let memberBindingRun: StudioMemberBindingRunStatusResponse | null = null;
+    let memberBindingRunOutcome: StudioBindingRunOutcome | null = null;
     if (buildPendingBindCandidate.kind === 'workflow') {
       if (resolvedBuildMemberId) {
         const receipt = await studioApi.bindMemberWorkflow({
@@ -4063,7 +4098,9 @@ const StudioPage: React.FC = () => {
             resolvedBuildMemberId,
           ],
         });
-        memberBindingRun = await waitForMemberBindingRun(receipt);
+        memberBindingRunOutcome = resolveStudioMemberBindingRunOutcome(
+          await waitForMemberBindingRun(receipt),
+        );
         await queryClient.invalidateQueries({
           queryKey: [
             'studio-bind',
@@ -4072,8 +4109,11 @@ const StudioPage: React.FC = () => {
             resolvedBuildMemberId,
           ],
         });
-        if (memberBindingRun?.status === 'failed' || memberBindingRun?.status === 'rejected') {
-          throw new Error(buildStudioMemberBindingFailureMessage(memberBindingRun));
+        if (memberBindingRunOutcome.kind === 'pending') {
+          return buildStudioMemberBindingPendingNotice(
+            buildPendingBindCandidate.displayName,
+            memberBindingRunOutcome.run,
+          );
         }
       } else {
         result = await studioApi.bindScopeWorkflow({
@@ -4099,7 +4139,9 @@ const StudioPage: React.FC = () => {
             resolvedBuildMemberId,
           ],
         });
-        memberBindingRun = await waitForMemberBindingRun(receipt);
+        memberBindingRunOutcome = resolveStudioMemberBindingRunOutcome(
+          await waitForMemberBindingRun(receipt),
+        );
         await queryClient.invalidateQueries({
           queryKey: [
             'studio-bind',
@@ -4108,8 +4150,11 @@ const StudioPage: React.FC = () => {
             resolvedBuildMemberId,
           ],
         });
-        if (memberBindingRun?.status === 'failed' || memberBindingRun?.status === 'rejected') {
-          throw new Error(buildStudioMemberBindingFailureMessage(memberBindingRun));
+        if (memberBindingRunOutcome.kind === 'pending') {
+          return buildStudioMemberBindingPendingNotice(
+            buildPendingBindCandidate.displayName,
+            memberBindingRunOutcome.run,
+          );
         }
       } else {
         result = await studioApi.bindScopeScript({
@@ -4222,12 +4267,6 @@ const StudioPage: React.FC = () => {
       );
     }
 
-    if (memberBindingRun && memberBindingRun.status !== 'succeeded') {
-      return {
-        message: `${buildPendingBindCandidate.displayName} binding request was accepted and is still running. Studio will keep refreshing the status before treating it as bound.`,
-        type: 'info',
-      };
-    }
   }, [
     activeBuildFocusKey,
     buildPendingMemberSummary,

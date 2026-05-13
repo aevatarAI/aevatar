@@ -140,7 +140,7 @@ public sealed class StudioMemberBindingRunQueryPortTests
         var run = await port.GetAsync("scope-1", "m-1", "bind-1");
 
         run.Should().NotBeNull();
-        run!.Status.Should().BeEmpty();
+        run!.Status.Should().Be(StudioMemberBindingRunStatusNames.Unknown);
         run.Failure.Should().NotBeNull();
         run.Failure!.Code.Should().Be("BIND_FAILED");
         run.Failure.Message.Should().Be("platform refused the revision");

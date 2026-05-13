@@ -43,6 +43,14 @@ public static class StudioMemberConventions
         return $"{BindingRunActorIdPrefix}:{normalizedBindingRunId}";
     }
 
+    public static string BuildPlatformBindingCommandId(string bindingRunId, int attempt)
+    {
+        var normalizedBindingRunId = NormalizeBindingRunId(bindingRunId);
+        if (attempt <= 0)
+            throw new ArgumentOutOfRangeException(nameof(attempt), attempt, "attempt must be positive.");
+        return $"platform-{normalizedBindingRunId}-{attempt}";
+    }
+
     public static string NormalizeScopeId(string? scopeId)
     {
         var trimmed = scopeId?.Trim();
