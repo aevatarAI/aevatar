@@ -2349,6 +2349,14 @@ const StudioPage: React.FC = () => {
     () => parseStudioRouteMember(routeState.memberKey),
     [routeState.memberKey],
   );
+  const routeSelectedMemberKey = useMemo(
+    () =>
+      trimOptional(routeState.memberKey) ||
+      (trimOptional(routeState.memberId)
+        ? `member:${trimOptional(routeState.memberId)}`
+        : ''),
+    [routeState.memberId, routeState.memberKey],
+  );
   const isStudioLocation =
     typeof window !== 'undefined' && window.location.pathname === '/studio';
   const nyxIdConfig = useMemo(() => getNyxIDRuntimeConfig(), []);
@@ -2715,44 +2723,6 @@ const StudioPage: React.FC = () => {
     () => studioMembersQuery.data?.members ?? [],
     [studioMembersQuery.data?.members],
   );
-  useEffect(() => {
-    const routeMemberId = trimOptional(routeState.memberId);
-    if (!routeMemberId || selectedScriptId) {
-      return;
-    }
-
-    const routeMember = studioScopeMembers.find(
-      (member) => trimOptional(member.memberId) === routeMemberId,
-    );
-    if (
-      normalizeStudioMemberBindingImplementationKind(
-        routeMember?.implementationKind,
-      ) !== 'script'
-    ) {
-      return;
-    }
-
-    const scriptId =
-      routeBuildFocus.kind === 'script'
-        ? routeBuildFocus.value
-        : trimOptional(routeMember?.displayName);
-    if (!scriptId) {
-      return;
-    }
-    if (selectedScriptId === scriptId) {
-      return;
-    }
-
-    setSelectedWorkflowId('');
-    setSelectedScriptId(scriptId);
-    setTemplateWorkflow('');
-  }, [
-    routeBuildFocus.kind,
-    routeBuildFocus.value,
-    routeState.memberId,
-    selectedScriptId,
-    studioScopeMembers,
-  ]);
   const studioMemberByPublishedServiceId = useMemo(() => {
     const members = new Map<string, (typeof studioScopeMembers)[number]>();
     for (const member of studioScopeMembers) {
@@ -2868,6 +2838,84 @@ const StudioPage: React.FC = () => {
     publishedScopeServices,
     studioMemberByPublishedServiceId,
     visibleWorkflowSummaries,
+  ]);
+  const explicitRouteBackendMemberId = useMemo(() => {
+    if (routeSelectedMember.kind !== 'member') {
+      return '';
+    }
+
+    const routeMemberToken = readMemberIdFromMemberKey(routeSelectedMemberKey);
+    const directRouteMember = studioScopeMembers.find(
+      (member) => trimOptional(member.memberId) === routeMemberToken,
+    );
+    if (directRouteMember) {
+      return trimOptional(directRouteMember.memberId);
+    }
+
+    const serviceBackedRouteMember = studioScopeMembers.find(
+      (member) => trimOptional(member.publishedServiceId) === routeMemberToken,
+    );
+    if (serviceBackedRouteMember) {
+      return trimOptional(serviceBackedRouteMember.memberId);
+    }
+
+    const routeMemberSummary = resolveStudioMemberSummaryFromMemberKey(
+      routeSelectedMemberKey,
+      publishedScopeMembers,
+      studioScopeMembers,
+    );
+
+    return (
+      trimOptional(routeMemberSummary?.memberId) ||
+      routeMemberToken
+    );
+  }, [
+    publishedScopeMembers,
+    routeSelectedMember.kind,
+    routeSelectedMemberKey,
+    studioScopeMembers,
+  ]);
+  const explicitRouteBackendMemberKey = useMemo(
+    () => buildBackendMemberKey(explicitRouteBackendMemberId),
+    [explicitRouteBackendMemberId],
+  );
+  useEffect(() => {
+    const routeMemberId = trimOptional(explicitRouteBackendMemberId);
+    if (!routeMemberId || selectedScriptId) {
+      return;
+    }
+
+    const routeMember = studioScopeMembers.find(
+      (member) => trimOptional(member.memberId) === routeMemberId,
+    );
+    if (
+      normalizeStudioMemberBindingImplementationKind(
+        routeMember?.implementationKind,
+      ) !== 'script'
+    ) {
+      return;
+    }
+
+    const scriptId =
+      routeBuildFocus.kind === 'script'
+        ? routeBuildFocus.value
+        : trimOptional(routeMember?.displayName);
+    if (!scriptId) {
+      return;
+    }
+    if (selectedScriptId === scriptId) {
+      return;
+    }
+
+    setSelectedWorkflowId('');
+    setSelectedScriptId(scriptId);
+    setTemplateWorkflow('');
+  }, [
+    routeBuildFocus.kind,
+    routeBuildFocus.value,
+    explicitRouteBackendMemberId,
+    selectedScriptId,
+    studioScopeMembers,
   ]);
   const serviceBackedWorkflowIds = useMemo(
     () =>
@@ -3916,7 +3964,7 @@ const StudioPage: React.FC = () => {
       return null;
     }
 
-    const routeMemberId = trimOptional(routeState.memberId);
+    const routeMemberId = trimOptional(explicitRouteBackendMemberId);
     if (routeMemberId) {
       const routeMember = studioScopeMembers.find(
         (member) => trimOptional(member.memberId) === routeMemberId,
@@ -4029,8 +4077,8 @@ const StudioPage: React.FC = () => {
   }, [
     activeWorkflowFile?.workflowId,
     buildPendingBindCandidate,
+    explicitRouteBackendMemberId,
     publishedScopeMembers,
-    routeState.memberId,
     selectedWorkflowId,
     studioScopeMembers,
   ]);
@@ -4077,9 +4125,8 @@ const StudioPage: React.FC = () => {
     }
 
     const resolvedBuildMemberId =
-      trimOptional(buildPendingMemberSummary?.memberId) ||
-      readMemberIdFromMemberKey(routeState.memberKey) ||
-      trimOptional(routeState.memberId);
+      trimOptional(explicitRouteBackendMemberId) ||
+      trimOptional(buildPendingMemberSummary?.memberId);
     let result = null;
     let memberBindingRunOutcome: StudioBindingRunOutcome | null = null;
     if (buildPendingBindCandidate.kind === 'workflow') {
@@ -4225,8 +4272,7 @@ const StudioPage: React.FC = () => {
         selectedService,
       );
       const routeMemberSummary = resolveStudioMemberSummaryFromMemberKey(
-        trimOptional(routeState.memberKey) ||
-          buildBackendMemberKey(routeState.memberId),
+        explicitRouteBackendMemberKey,
         publishedScopeMembers,
         studioScopeMembers,
       );
@@ -4272,9 +4318,11 @@ const StudioPage: React.FC = () => {
     buildPendingMemberSummary,
     buildWorkflowYamlBundle,
     buildPendingBindCandidate,
+    explicitRouteBackendMemberId,
     queryClient,
     publishedScopeMembers,
     resolvedStudioScopeId,
+    explicitRouteBackendMemberKey,
     routeState.memberId,
     routeState.memberKey,
     routeState.teamId,
@@ -5833,14 +5881,6 @@ const StudioPage: React.FC = () => {
         : isObserveSurface
           ? 'observe'
           : 'build';
-  const routeSelectedMemberKey = useMemo(
-    () =>
-      trimOptional(routeState.memberKey) ||
-      (trimOptional(routeState.memberId)
-        ? `member:${trimOptional(routeState.memberId)}`
-        : ''),
-    [routeState.memberId, routeState.memberKey],
-  );
   const buildSurfaceMemberKey = useMemo(
     () =>
       buildStudioFocusKey({
@@ -6036,14 +6076,16 @@ const StudioPage: React.FC = () => {
   ]);
   const lifecycleSurfaceMemberKey =
     studioSurface === 'build'
-      ? (buildSurfaceMemberKeyUsesRouteServiceId
+      ? explicitRouteBackendMemberKey ||
+        (buildSurfaceMemberKeyUsesRouteServiceId
           ? routeSelectedMemberKey
           : buildSurfaceMemberKey) ||
         routeSelectedMemberKey ||
         (activeBuildPublishedMemberId
           ? `member:${activeBuildPublishedMemberId}`
           : '')
-      : routeSelectedMemberKey ||
+      : explicitRouteBackendMemberKey ||
+        routeSelectedMemberKey ||
         buildSurfaceMemberKey ||
         (activeBuildPublishedMemberId
           ? `member:${activeBuildPublishedMemberId}`
@@ -6214,7 +6256,8 @@ const StudioPage: React.FC = () => {
     visibleWorkflowSummaries,
     workflowsQuery.isLoading,
   ]);
-  const workbenchMemberKey = currentFocusMemberKey;
+  const workbenchMemberKey =
+    explicitRouteBackendMemberKey || currentFocusMemberKey;
   const buildSurfaceSelectedMemberKey =
     studioSurface === 'build' &&
     (currentFocusMemberKey.startsWith('workflow:') ||
@@ -6243,11 +6286,13 @@ const StudioPage: React.FC = () => {
   );
   const workbenchStudioMemberId = useMemo(
     () =>
+      trimOptional(explicitRouteBackendMemberId) ||
       trimOptional(workbenchStudioMemberSummary?.memberId) ||
       readMemberIdFromMemberKey(workbenchMemberKey) ||
       readMemberIdFromMemberKey(routeState.memberKey) ||
       trimOptional(routeState.memberId),
     [
+      explicitRouteBackendMemberId,
       routeState.memberId,
       routeState.memberKey,
       workbenchMemberKey,
@@ -6263,13 +6308,30 @@ const StudioPage: React.FC = () => {
     retry: false,
     queryFn: () => studioApi.getMember(resolvedStudioScopeId, workbenchStudioMemberId),
   });
+  const workbenchStudioMemberDetailMatchesSelection =
+    Boolean(workbenchStudioMemberId) &&
+    trimOptional(workbenchStudioMemberDetailQuery.data?.summary?.memberId) ===
+      trimOptional(workbenchStudioMemberId);
   const workbenchStudioMember = useMemo(
-    () => workbenchStudioMemberDetailQuery.data?.summary ?? workbenchStudioMemberSummary,
-    [workbenchStudioMemberDetailQuery.data?.summary, workbenchStudioMemberSummary],
+    () =>
+      workbenchStudioMemberDetailMatchesSelection
+        ? workbenchStudioMemberDetailQuery.data?.summary ?? workbenchStudioMemberSummary
+        : workbenchStudioMemberSummary,
+    [
+      workbenchStudioMemberDetailMatchesSelection,
+      workbenchStudioMemberDetailQuery.data?.summary,
+      workbenchStudioMemberSummary,
+    ],
   );
   const workbenchStudioMemberBinding = useMemo(
-    () => workbenchStudioMemberDetailQuery.data?.lastBinding ?? null,
-    [workbenchStudioMemberDetailQuery.data?.lastBinding],
+    () =>
+      workbenchStudioMemberDetailMatchesSelection
+        ? workbenchStudioMemberDetailQuery.data?.lastBinding ?? null
+        : null,
+    [
+      workbenchStudioMemberDetailMatchesSelection,
+      workbenchStudioMemberDetailQuery.data?.lastBinding,
+    ],
   );
   const workbenchPublishedService = useMemo(
     () =>
@@ -6696,18 +6758,62 @@ const StudioPage: React.FC = () => {
     selectedRailMemberKey || currentFocusMemberKey,
   );
   const hasSelectedMemberFocus = Boolean(workbenchMemberKey);
+  const currentSelectedMemberServiceId =
+    workbenchPublishedServiceId;
+  const comparableWorkbenchMemberKey = useMemo(
+    () =>
+      resolveStudioMemberOwnerKey(
+        workbenchMemberKey,
+        publishedScopeMembers,
+        studioScopeMembers,
+      ),
+    [publishedScopeMembers, studioScopeMembers, workbenchMemberKey],
+  );
+  const comparableRecentlyBoundMemberKey = useMemo(
+    () =>
+      resolveStudioMemberOwnerKey(
+        recentlyBoundMemberKey,
+        publishedScopeMembers,
+        studioScopeMembers,
+      ),
+    [publishedScopeMembers, recentlyBoundMemberKey, studioScopeMembers],
+  );
+  const recentBindSelectedMemberServiceId =
+    trimOptional(comparableRecentlyBoundMemberKey) ===
+    trimOptional(comparableWorkbenchMemberKey)
+      ? trimOptional(recentlyBoundServiceId)
+      : '';
+  const recentBindMemberSummary = useMemo(
+    () =>
+      isBindSurface && recentBindSelectedMemberServiceId
+        ? resolveStudioMemberSummaryFromMemberKey(
+            recentlyBoundMemberKey,
+            publishedScopeMembers,
+            studioScopeMembers,
+          )
+        : null,
+    [
+      isBindSurface,
+      publishedScopeMembers,
+      recentBindSelectedMemberServiceId,
+      recentlyBoundMemberKey,
+      studioScopeMembers,
+    ],
+  );
   const currentMemberLabel = !hasSelectedMemberFocus
     ? 'Select a member'
     : workbenchMemberKey.startsWith('workflow:')
         ? trimOptional(activeWorkflowName) || 'Workflow member'
     : workbenchMemberKey.startsWith('script:')
         ? trimOptional(selectedScriptId) || 'Script member'
-        : workbenchMemberKey.startsWith('member:')
-            ? trimOptional(workbenchPublishedServiceRevision?.workflowName) ||
+    : workbenchMemberKey.startsWith('member:')
+            ? trimOptional(recentBindMemberSummary?.displayName) ||
+              trimOptional(workbenchStudioMemberSummary?.displayName) ||
+              trimOptional(workbenchStudioMember?.displayName) ||
+              trimOptional(workbenchPublishedServiceRevision?.workflowName) ||
               trimOptional(workbenchPublishedServiceRevision?.scriptId) ||
               trimOptional(workbenchPublishedServiceRevision?.staticActorTypeName) ||
               trimOptional(workbenchPublishedService?.displayName) ||
-              trimOptional(workbenchStudioMember?.displayName) ||
               trimOptional(workbenchPublishedService?.serviceId) ||
               trimOptional(routeState.memberId) ||
               'Current member'
@@ -6803,31 +6909,6 @@ const StudioPage: React.FC = () => {
   const currentInvokeSelectionEndpointId = trimOptional(
     invokeSelectionRef.current.endpointId,
   );
-  const currentSelectedMemberServiceId =
-    workbenchPublishedServiceId;
-  const comparableWorkbenchMemberKey = useMemo(
-    () =>
-      resolveStudioMemberOwnerKey(
-        workbenchMemberKey,
-        publishedScopeMembers,
-        studioScopeMembers,
-      ),
-    [publishedScopeMembers, studioScopeMembers, workbenchMemberKey],
-  );
-  const comparableRecentlyBoundMemberKey = useMemo(
-    () =>
-      resolveStudioMemberOwnerKey(
-        recentlyBoundMemberKey,
-        publishedScopeMembers,
-        studioScopeMembers,
-      ),
-    [publishedScopeMembers, recentlyBoundMemberKey, studioScopeMembers],
-  );
-  const recentBindSelectedMemberServiceId =
-    trimOptional(comparableRecentlyBoundMemberKey) ===
-    trimOptional(comparableWorkbenchMemberKey)
-      ? trimOptional(recentlyBoundServiceId)
-      : '';
   const bindSelectedMemberServiceId =
     currentSelectedMemberServiceId ||
     (isBindSurface ? recentBindSelectedMemberServiceId : '');
