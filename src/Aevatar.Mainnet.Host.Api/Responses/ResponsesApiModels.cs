@@ -239,13 +239,41 @@ internal static class ResponsesRequestNormalizer
         }
 
         var result = new List<ResponsesToolDeclaration>();
+        var toolIndex = -1;
         foreach (var tool in tools.EnumerateArray())
         {
+            toolIndex++;
             if (tool.ValueKind != JsonValueKind.Object)
             {
-                error = "Each tool must be an object.";
+                error = $"tool at index {toolIndex} must be an object.";
                 return false;
             }
+
+            // OpenAI Responses API allows built-in tool declarations like
+            // `{type: "web_search_preview"}` / `{type: "file_search", ...}` /
+            // `{type: "code_interpreter", ...}` / `{type: "computer_use_preview", ...}`
+            // that don't carry a `function` block or `name`. They're routing hints to
+            // the model provider, not custom function definitions. aevatar's classifier
+            // only owns function-typed tools (forward / substitute / additive); silently
+            // pass over the rest so an OpenAI-compatible client (CC Switch, Codex,
+            // Cursor) can advertise built-ins without breaking the request — even
+            // though aevatar won't map them to a local handler and the model provider
+            // gets to decide what to do with them.
+            // OpenAI Responses API allows built-in tool declarations like
+            // `{type: "web_search_preview"}` / `{type: "file_search", ...}` /
+            // `{type: "code_interpreter", ...}` / `{type: "computer_use_preview", ...}`
+            // that don't carry a `function` block or `name`. They're routing hints to
+            // the model provider, not custom function definitions. aevatar's classifier
+            // only owns function-typed tools (forward / substitute / additive); silently
+            // pass over the rest so an OpenAI-compatible client (CC Switch, Codex,
+            // Cursor) can advertise built-ins without breaking the request — even
+            // though aevatar won't map them to a local handler and the model provider
+            // gets to decide what to do with them.
+            var toolType = GetStringProperty(tool, "type");
+            var isFunctionType = string.IsNullOrWhiteSpace(toolType) ||
+                                 string.Equals(toolType, "function", StringComparison.OrdinalIgnoreCase);
+            if (!isFunctionType)
+                continue;
 
             var function = tool.TryGetProperty("function", out var functionElement) &&
                            functionElement.ValueKind == JsonValueKind.Object
@@ -254,7 +282,7 @@ internal static class ResponsesRequestNormalizer
             var name = GetStringProperty(function, "name");
             if (string.IsNullOrWhiteSpace(name))
             {
-                error = "Each tool requires a non-empty name.";
+                error = $"function tool at index {toolIndex} requires a non-empty name.";
                 return false;
             }
 

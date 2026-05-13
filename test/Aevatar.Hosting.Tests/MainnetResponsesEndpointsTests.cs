@@ -1196,6 +1196,82 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
+    public async Task PostResponses_WithBuiltInToolDeclarations_ShouldSkipNonFunctionTypesAndAcceptFunctionTypes()
+    {
+        // OpenAI Responses API permits built-in tool declarations alongside function
+        // tools. CC Switch / Codex / Cursor will pass these through when proxying
+        // Claude Code's tool list onto an OpenAI-compatible endpoint. The normalizer
+        // must:
+        //   - silently skip built-in tool entries (no name, type ≠ "function")
+        //   - still validate name for function-type entries
+        //   - admit the request (no `invalid_tools` 400) so the LLM gets to see the
+        //     remaining function tools.
+        var provider = new RecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk { DeltaContent = "ok", IsLast = true, Usage = new TokenUsage(1, 1, 2) },
+            ],
+        };
+        await using var app = await CreateAppAsync(provider);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""
+            {
+              "model": "chrono-llm/gpt-5.5",
+              "input": "ping",
+              "stream": false,
+              "tools": [
+                {"type": "web_search_preview"},
+                {"type": "file_search", "vector_store_ids": ["vs_abc"]},
+                {"type": "function", "name": "Bash", "description": "Run shell", "parameters": {"type":"object","properties":{}}}
+              ]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "tools-secret");
+        var response = await app.GetTestClient().SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        // Only the function-typed tool reaches the LLM provider; built-ins are dropped.
+        provider.LastRequest!.Tools.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task PostResponses_WithFunctionToolMissingName_ShouldStillReturnIndexedInvalidTools()
+    {
+        // Built-ins are accepted because they have a non-function type. A function-typed
+        // tool WITHOUT a name is still malformed and must 400 with an actionable error
+        // that names the offending index.
+        var provider = new RecordingLLMProvider();
+        await using var app = await CreateAppAsync(provider);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""
+            {
+              "model": "gpt-5.4",
+              "input": "ping",
+              "tools": [
+                {"type": "web_search_preview"},
+                {"type": "function", "description": "missing name field"}
+              ]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "bad-tools-secret");
+        var response = await app.GetTestClient().SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        body.Should().Contain("invalid_tools");
+        body.Should().Contain("function tool at index 1");
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task PostResponses_WithUnknownVendorPrefix_ShouldFallThroughToGatewayWithModelIntact()
     {
         // Catalog miss: slug looks like a slug but isn't in the user's catalog.
