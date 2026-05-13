@@ -148,6 +148,36 @@ public sealed class StudioMemberBindingRunQueryPortTests
         run.PlatformBindingCommandId.Should().BeNull();
     }
 
+    [Theory]
+    [InlineData(StudioMemberBindingRunStatusNames.Accepted)]
+    [InlineData(StudioMemberBindingRunStatusNames.AdmissionPending)]
+    [InlineData(StudioMemberBindingRunStatusNames.Admitted)]
+    [InlineData(StudioMemberBindingRunStatusNames.PlatformBindingPending)]
+    [InlineData(StudioMemberBindingRunStatusNames.MemberNotificationPending)]
+    [InlineData(StudioMemberBindingRunStatusNames.Succeeded)]
+    [InlineData(StudioMemberBindingRunStatusNames.Failed)]
+    [InlineData(StudioMemberBindingRunStatusNames.Rejected)]
+    public async Task GetAsync_ShouldPreserveKnownStatusWireValues(string status)
+    {
+        var actorId = StudioMemberConventions.BuildBindingRunActorId("bind-1");
+        var reader = new StubDocumentReader([
+            new StudioMemberBindingRunCurrentStateDocument
+            {
+                Id = actorId,
+                ActorId = actorId,
+                BindingRunId = "bind-1",
+                ScopeId = "scope-1",
+                MemberId = "m-1",
+                Status = status,
+            },
+        ]);
+        var port = new ProjectionStudioMemberBindingRunQueryPort(reader);
+
+        var run = await port.GetAsync("scope-1", "m-1", "bind-1");
+
+        run!.Status.Should().Be(status);
+    }
+
     private sealed class StubDocumentReader
         : IProjectionDocumentReader<StudioMemberBindingRunCurrentStateDocument, string>
     {

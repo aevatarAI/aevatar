@@ -55,6 +55,72 @@ public sealed class StudioMemberBindingRunCurrentStateProjectorTests
         written.UpdatedAt.Should().Be(updatedAt);
     }
 
+    [Fact]
+    public async Task ProjectAsync_ShouldMaterializeFailureAndPlatformResult()
+    {
+        var dispatcher = new RecordingWriteDispatcher<StudioMemberBindingRunCurrentStateDocument>();
+        var projector = new StudioMemberBindingRunCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-04-30T00:00:00Z")));
+        var failedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-04-30T08:10:00Z"));
+        var state = new StudioMemberBindingRunState
+        {
+            BindingRunId = "bind-1",
+            ScopeId = "scope-1",
+            MemberId = "m-1",
+            RequestHash = "hash-1",
+            Status = StudioMemberBindingRunStatus.Succeeded,
+            PlatformBindingCommandId = "platform-bind-1",
+            AttemptCount = 2,
+            Failure = new StudioMemberBindingFailure
+            {
+                Code = "PREVIOUS_FAILURE",
+                Message = "Recovered on retry",
+                FailedAtUtc = failedAt,
+            },
+            PlatformResult = new StudioMemberPlatformBindingResult
+            {
+                PublishedServiceId = "member-m-1",
+                RevisionId = "rev-2",
+                ImplementationKind = StudioMemberImplementationKind.Gagent,
+                ExpectedActorId = "scope-gagent:scope-1:m-1",
+            },
+        };
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(new StudioMemberBindingTerminalAcknowledged(), state, 7, "evt-7"));
+
+        var written = dispatcher.Upserts.Should().ContainSingle().Which;
+        written.Status.Should().Be(StudioMemberBindingRunStatusNames.Succeeded);
+        written.FailureCode.Should().Be("PREVIOUS_FAILURE");
+        written.FailureMessage.Should().Be("Recovered on retry");
+        written.FailureAt.Should().Be(failedAt);
+        written.ResultPublishedServiceId.Should().Be("member-m-1");
+        written.ResultRevisionId.Should().Be("rev-2");
+        written.ResultImplementationKind.Should().Be(MemberImplementationKindNames.GAgent);
+        written.ResultExpectedActorId.Should().Be("scope-gagent:scope-1:m-1");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldIgnoreNonCommittedStateEnvelope()
+    {
+        var dispatcher = new RecordingWriteDispatcher<StudioMemberBindingRunCurrentStateDocument>();
+        var projector = new StudioMemberBindingRunCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-04-30T00:00:00Z")));
+
+        await projector.ProjectAsync(
+            NewContext(),
+            new EventEnvelope
+            {
+                Id = "evt-raw",
+                Payload = Any.Pack(new StudioMemberPlatformBindingAccepted()),
+            });
+
+        dispatcher.Upserts.Should().BeEmpty();
+    }
+
     private static StudioMaterializationContext NewContext() => new()
     {
         RootActorId = RootActorId,

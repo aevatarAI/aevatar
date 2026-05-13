@@ -33,6 +33,27 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
     }
 
     [Fact]
+    public async Task StartAsync_WhenCommandIdMissing_ShouldUseSharedFallbackConvention()
+    {
+        var scopeBindingPort = new RecordingScopeBindingCommandPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var service = new ScopeBindingStudioMemberPlatformBindingCommandService(
+            scopeBindingPort,
+            dispatchPort,
+            NullLogger<ScopeBindingStudioMemberPlatformBindingCommandService>.Instance);
+        var request = NewScriptStartRequest();
+        request.PlatformBindingCommandId = "";
+
+        var accepted = await service.StartAsync(
+            "studio-member-binding-run:bind-1",
+            request);
+
+        accepted.PlatformBindingCommandId.Should().Be("platform-bind-1-1");
+        scopeBindingPort.Requests.Should().BeEmpty();
+        dispatchPort.Dispatches.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ShouldRunPlatformBindingAndDispatchSucceededContinuation()
     {
         var scopeBindingPort = new RecordingScopeBindingCommandPort();
@@ -67,6 +88,61 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         scopeBindingPort.Requests[0].RevisionId.Should().Be("rev-platform-bind-1");
         scopeBindingPort.Requests[0].AllowExistingRevisionReplay.Should().BeTrue();
         scopeBindingPort.Requests[0].ReplayRevisionId.Should().Be("rev-platform-bind-1");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldBuildWorkflowBindingRequestAndDispatchWorkflowResult()
+    {
+        var scopeBindingPort = new RecordingScopeBindingCommandPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var service = new ScopeBindingStudioMemberPlatformBindingCommandService(
+            scopeBindingPort,
+            dispatchPort,
+            NullLogger<ScopeBindingStudioMemberPlatformBindingCommandService>.Instance);
+
+        await service.ExecuteAsync(
+            "studio-member-binding-run:bind-1",
+            "platform-bind-1",
+            NewWorkflowStartRequest());
+
+        var dispatch = await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var succeeded = dispatch.Envelope.Payload.Unpack<StudioMemberPlatformBindingSucceeded>();
+        succeeded.Result.ImplementationKind.Should().Be(StudioMemberImplementationKind.Workflow);
+        succeeded.Result.ImplementationRef.Workflow.WorkflowId.Should().Be("workflow-main");
+        succeeded.Result.ImplementationRef.Workflow.WorkflowRevision.Should().Be("rev-platform-bind-1");
+
+        var request = scopeBindingPort.Requests.Should().ContainSingle().Subject;
+        request.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Workflow);
+        request.Workflow!.WorkflowYamls.Should().ContainSingle().Which.Should().Contain("name: workflow-main");
+        request.AllowExistingRevisionReplay.Should().BeTrue();
+        request.ReplayRevisionId.Should().Be("rev-platform-bind-1");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldBuildGAgentBindingRequestAndDispatchGAgentResult()
+    {
+        var scopeBindingPort = new RecordingScopeBindingCommandPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var service = new ScopeBindingStudioMemberPlatformBindingCommandService(
+            scopeBindingPort,
+            dispatchPort,
+            NullLogger<ScopeBindingStudioMemberPlatformBindingCommandService>.Instance);
+
+        await service.ExecuteAsync(
+            "studio-member-binding-run:bind-1",
+            "platform-bind-1",
+            NewGAgentStartRequest());
+
+        var dispatch = await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var succeeded = dispatch.Envelope.Payload.Unpack<StudioMemberPlatformBindingSucceeded>();
+        succeeded.Result.ImplementationKind.Should().Be(StudioMemberImplementationKind.Gagent);
+        succeeded.Result.ImplementationRef.Gagent.ActorTypeName.Should().Be("Tests.JokerGAgent");
+
+        var request = scopeBindingPort.Requests.Should().ContainSingle().Subject;
+        request.ImplementationKind.Should().Be(ScopeBindingImplementationKind.GAgent);
+        request.GAgent!.ActorTypeName.Should().Be("Tests.JokerGAgent");
+        request.GAgent.Endpoints.Should().ContainSingle().Which.Kind.Should().Be(ServiceEndpointKind.Chat);
+        request.GAgent.Endpoints[0].EndpointId.Should().Be("chat");
     }
 
     [Fact]
@@ -144,6 +220,53 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         failed.PlatformBindingCommandId.Should().Be("platform-bind-1");
         failed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_FAILED");
         failed.Failure.Message.Should().Be("platform rejected");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenImplementationPayloadMissing_ShouldDispatchFailedContinuation()
+    {
+        var scopeBindingPort = new RecordingScopeBindingCommandPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var service = new ScopeBindingStudioMemberPlatformBindingCommandService(
+            scopeBindingPort,
+            dispatchPort,
+            NullLogger<ScopeBindingStudioMemberPlatformBindingCommandService>.Instance);
+        var request = NewScriptStartRequest();
+        request.Request.Script = null;
+
+        await service.ExecuteAsync(
+            "studio-member-binding-run:bind-1",
+            "platform-bind-1",
+            request);
+
+        var dispatch = await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var failed = dispatch.Envelope.Payload.Unpack<StudioMemberPlatformBindingFailed>();
+        failed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_FAILED");
+        failed.Failure.Message.Should().Contain("binding request must carry exactly one implementation payload");
+        scopeBindingPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenGAgentEndpointKindUnsupported_ShouldDispatchFailedContinuation()
+    {
+        var scopeBindingPort = new RecordingScopeBindingCommandPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var service = new ScopeBindingStudioMemberPlatformBindingCommandService(
+            scopeBindingPort,
+            dispatchPort,
+            NullLogger<ScopeBindingStudioMemberPlatformBindingCommandService>.Instance);
+        var request = NewGAgentStartRequest();
+        request.Request.Gagent.Endpoints[0].Kind = StudioMemberGAgentEndpointKind.Unspecified;
+
+        await service.ExecuteAsync(
+            "studio-member-binding-run:bind-1",
+            "platform-bind-1",
+            request);
+
+        var dispatch = await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var failed = dispatch.Envelope.Payload.Unpack<StudioMemberPlatformBindingFailed>();
+        failed.Failure.Message.Should().Contain("Unsupported gagent endpoint kind");
+        scopeBindingPort.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -233,6 +356,44 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         };
     }
 
+    private static StudioMemberPlatformBindingStartRequested NewWorkflowStartRequest()
+    {
+        var request = NewScriptStartRequest();
+        request.Admitted.ImplementationKind = StudioMemberImplementationKind.Workflow;
+        request.Admitted.DisplayName = "Workflow member";
+        request.Request.Script = null;
+        request.Request.Workflow = new StudioMemberWorkflowBindingRequest
+        {
+            WorkflowYamls = { "name: workflow-main\nsteps: []\n" },
+        };
+        return request;
+    }
+
+    private static StudioMemberPlatformBindingStartRequested NewGAgentStartRequest()
+    {
+        var request = NewScriptStartRequest();
+        request.Admitted.ImplementationKind = StudioMemberImplementationKind.Gagent;
+        request.Admitted.DisplayName = "GAgent member";
+        request.Request.Script = null;
+        request.Request.Gagent = new StudioMemberGAgentBindingRequest
+        {
+            ActorTypeName = "Tests.JokerGAgent",
+            Endpoints =
+            {
+                new StudioMemberGAgentEndpointBindingRequest
+                {
+                    EndpointId = "chat",
+                    DisplayName = "Chat",
+                    Kind = StudioMemberGAgentEndpointKind.Chat,
+                    RequestTypeUrl = "type.googleapis.com/a.Request",
+                    ResponseTypeUrl = "type.googleapis.com/a.Response",
+                    Description = "Chat endpoint",
+                },
+            },
+        };
+        return request;
+    }
+
     private sealed class RecordingScopeBindingCommandPort : IScopeBindingCommandPort
     {
         public List<ScopeBindingUpsertRequest> Requests { get; } = [];
@@ -252,6 +413,33 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             if (Failure != null)
                 throw Failure;
 
+            return request.ImplementationKind switch
+            {
+                ScopeBindingImplementationKind.Workflow => BuildWorkflowResult(request),
+                ScopeBindingImplementationKind.GAgent => BuildGAgentResult(request),
+                _ => BuildScriptResult(request),
+            };
+        }
+
+        private static ScopeBindingUpsertResult BuildWorkflowResult(ScopeBindingUpsertRequest request)
+        {
+            var revisionId = request.RevisionId ?? "rev-1";
+            return new ScopeBindingUpsertResult(
+                ScopeId: request.ScopeId,
+                ServiceId: request.ServiceId ?? string.Empty,
+                DisplayName: request.DisplayName ?? string.Empty,
+                RevisionId: revisionId,
+                ImplementationKind: request.ImplementationKind,
+                ExpectedActorId: "scope-workflow:scope-1:workflow-main",
+                WorkflowName: "workflow-main",
+                DefinitionActorIdPrefix: "scope-workflow:scope-1:workflow-main",
+                Workflow: new ScopeBindingWorkflowResult(
+                    "workflow-main",
+                    "scope-workflow:scope-1:workflow-main"));
+        }
+
+        private static ScopeBindingUpsertResult BuildScriptResult(ScopeBindingUpsertRequest request)
+        {
             var revisionId = request.RevisionId ?? "rev-1";
             return new ScopeBindingUpsertResult(
                 ScopeId: request.ScopeId,
@@ -261,6 +449,19 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
                 ImplementationKind: request.ImplementationKind,
                 ExpectedActorId: "scope-script:scope-1:script-1",
                 Script: new ScopeBindingScriptResult("script-1", revisionId, "scope-script:scope-1:script-1"));
+        }
+
+        private static ScopeBindingUpsertResult BuildGAgentResult(ScopeBindingUpsertRequest request)
+        {
+            var revisionId = request.RevisionId ?? "rev-1";
+            return new ScopeBindingUpsertResult(
+                ScopeId: request.ScopeId,
+                ServiceId: request.ServiceId ?? string.Empty,
+                DisplayName: request.DisplayName ?? string.Empty,
+                RevisionId: revisionId,
+                ImplementationKind: request.ImplementationKind,
+                ExpectedActorId: "scope-gagent:scope-1:joker",
+                GAgent: new ScopeBindingGAgentResult(request.GAgent?.ActorTypeName ?? string.Empty));
         }
     }
 
