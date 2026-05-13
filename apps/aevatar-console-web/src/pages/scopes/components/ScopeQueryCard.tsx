@@ -24,7 +24,7 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
   onLoad,
   onReset,
   resetDisabled,
-  loadLabel = 'Load scope',
+  loadLabel = 'Load workspace',
   resolvedScopeId,
   resolvedScopeSource,
   onUseResolvedScope,
@@ -81,7 +81,7 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
       >
         <Input
           allowClear
-          placeholder="输入团队 scopeId"
+          placeholder="输入工作空间 ID"
           style={{ flex: '1 1 240px', minWidth: 0, width: '100%' }}
           value={draft.scopeId}
           onChange={(event) =>
@@ -111,7 +111,7 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
         {normalizedResolvedScopeId ? (
           <>
             <Typography.Text style={helperLabelStyle}>
-              已解析团队
+              已解析工作空间
             </Typography.Text>
             <Typography.Paragraph
               copyable={{ text: normalizedResolvedScopeId }}
@@ -130,23 +130,23 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
                   wordBreak: 'break-word',
                 }}
               >
-                当前会话已通过 {normalizedResolvedScopeSource} 解析出这个团队
+                当前会话已通过 {normalizedResolvedScopeSource} 解析出这个工作空间
               </Typography.Text>
             ) : null}
             {loadIsNoOp ? (
               <Typography.Text style={helperCopyStyle}>
-                当前已加载这个团队，所以“{loadLabel}”不会再触发变化。
+                当前已加载这个工作空间，所以“{loadLabel}”不会再触发变化。
               </Typography.Text>
             ) : null}
             {resetIsNoOp ? (
               <Typography.Text style={helperCopyStyle}>
-                当前已经回到会话解析出的团队，所以“重置”不会再触发变化。
+                当前已经回到会话解析出的工作空间，所以“重置”不会再触发变化。
               </Typography.Text>
             ) : null}
             {canUseResolvedScope ? (
               <div>
                 <Button size="small" onClick={onUseResolvedScope}>
-                  使用会话团队
+                  使用会话工作空间
                 </Button>
               </div>
             ) : null}
@@ -162,7 +162,7 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
               wordBreak: 'break-word',
             }}
           >
-            当前会话里没有自动解析出团队。请手动输入一个 scopeId。
+            当前会话里没有自动解析出工作空间。请手动输入一个工作空间 ID。
           </Typography.Text>
         )}
       </div>

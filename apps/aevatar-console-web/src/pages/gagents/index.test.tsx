@@ -491,7 +491,7 @@ describe("GAgentsPage", () => {
 
     fireEvent.click(
       screen.getByRole("checkbox", {
-        name: "I understand this changes the scope's published default service.",
+        name: "I understand this changes the workspace's published default service.",
       })
     );
     fireEvent.click(screen.getByRole("button", { name: "Publish binding" }));
@@ -602,7 +602,7 @@ describe("GAgentsPage", () => {
       ).toHaveBeenCalledWith("scope-a", "rev-2");
     });
     expect(
-      await screen.findByText("Scope scope-a is now serving revision rev-2.")
+      await screen.findByText("Workspace scope-a is now serving revision rev-2.")
     ).toBeTruthy();
 
     const retireButton = screen

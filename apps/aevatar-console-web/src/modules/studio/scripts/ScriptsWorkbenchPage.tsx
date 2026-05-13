@@ -1279,7 +1279,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       onSelectScriptId?.(detail.script?.scriptId || '');
       setNotice({
         type: 'info',
-        message: `Loaded ${detail.script?.scriptId || 'scope script'} into the active draft list.`,
+        message: `Loaded ${detail.script?.scriptId || 'workspace script'} into the active draft list.`,
       });
     },
     [drafts, onSelectScriptId],
@@ -1594,7 +1594,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     }
 
     if (!scopeBacked) {
-      throw new Error('Save is only available after Studio resolves the current scope.');
+      throw new Error('Save is only available after Studio resolves the current workspace.');
     }
 
     const persistedSource = serializePersistedSource(selectedDraft.package);
@@ -1655,7 +1655,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       scopeId: accepted.acceptedScript.scopeId,
       scriptId: accepted.acceptedScript.scriptId,
       status: 'pending',
-      message: `Save request for ${accepted.acceptedScript.scriptId} is still waiting to appear in the scope catalog.`,
+      message: `Save request for ${accepted.acceptedScript.scriptId} is still waiting to appear in the workspace catalog.`,
       currentScript: null,
       isTerminal: false,
     };
@@ -1694,7 +1694,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       const accepted = await saveCurrentDraftToScope();
       setNotice({
         type: 'info',
-        message: `Save accepted for ${accepted.acceptedScript.scriptId}. Waiting for the scope catalog to catch up.`,
+        message: `Save accepted for ${accepted.acceptedScript.scriptId}. Waiting for the workspace catalog to catch up.`,
       });
       const observation = await observeAcceptedSave(accepted);
       await refreshScopeScripts();
@@ -1731,7 +1731,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       setNotice({
         type: observation.status === 'applied' ? 'success' : 'warning',
         message: observation.status === 'applied'
-          ? `Saved ${accepted.acceptedScript.scriptId} into current scope ${accepted.acceptedScript.scopeId}.`
+          ? `Saved ${accepted.acceptedScript.scriptId} into workspace ${accepted.acceptedScript.scopeId}.`
           : observation.message,
       });
     } catch (error) {
@@ -1767,7 +1767,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     if (!scriptRevision) {
       setNotice({
         type: 'warning',
-        message: 'Save the current script into the scope before binding it.',
+        message: 'Save the current script into the workspace before binding it.',
       });
       return;
     }
@@ -1789,7 +1789,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       openWorkspaceSection('activity');
       setNotice({
         type: 'success',
-        message: `Updated scope ${result.scopeId} to serve script ${result.targetName} on revision ${result.revisionId}.`,
+        message: `Updated workspace ${result.scopeId} to serve script ${result.targetName} on revision ${result.revisionId}.`,
         description:
           'Review the active binding, revision rollout, and saved script assets from the team views.',
         actions: [
@@ -1845,7 +1845,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     if (!resolvedScopeId) {
       setNotice({
         type: 'warning',
-        message: 'Test Run requires the current scope.',
+        message: 'Test Run requires the current workspace.',
       });
       return;
     }
@@ -1919,7 +1919,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     if (!scopeBacked) {
       setNotice({
         type: 'warning',
-        message: 'Promotion is only available after Studio resolves the current scope.',
+        message: 'Promotion is only available after Studio resolves the current workspace.',
       });
       return;
     }
@@ -1929,7 +1929,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     if (!baseRevision) {
       setNotice({
         type: 'warning',
-        message: 'Save the script into the current scope before proposing a promotion.',
+        message: 'Save the script into the workspace before proposing a promotion.',
       });
       return;
     }
@@ -2423,10 +2423,10 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       'Clean';
   const headerRevisionLabel = selectedDraft?.revision || 'not saved';
   const headerScopeLabel = scopeBacked
-    ? `Scope ${compactHeaderValue(resolvedScopeId)}`
+    ? `Workspace ${compactHeaderValue(resolvedScopeId)}`
     : 'Local draft';
   const headerScopeTooltip = scopeBacked
-    ? `Scope ${resolvedScopeId || '-'}`
+    ? `Workspace ID ${resolvedScopeId || '-'}`
     : 'Local draft';
   const moreActions: NonNullable<MenuProps['items']> = [
     {
@@ -2627,7 +2627,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 </span>
               ) : null}
               <Tooltip
-                title="Create a fresh local draft without changing the current scope catalog"
+                title="Create a fresh local draft without changing the workspace catalog"
                 placement="bottom"
               >
                 <span className="console-scripts-tooltip-anchor">
@@ -2643,7 +2643,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 </span>
               </Tooltip>
               <Tooltip
-                title={scopeBacked ? 'Save the active draft into the current scope catalog' : 'Requires the current scope'}
+                title={scopeBacked ? 'Save the active draft into the workspace catalog' : 'Requires the current workspace'}
                 placement="bottom"
               >
                 <span className="console-scripts-tooltip-anchor">
@@ -2662,8 +2662,8 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
               <Tooltip
                 title={
                   canBindScope
-                    ? 'Bind the saved script to the default service for this scope.'
-                    : 'Save the current script into the scope before binding it.'
+                    ? 'Bind the saved script to the default service for this workspace.'
+                    : 'Save the current script into the workspace before binding it.'
                 }
                 placement="bottom"
               >
@@ -3187,7 +3187,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
           <div className="console-scripts-detail-copy">
             Test Run executes the current draft directly through
             <code style={{ marginInline: 4 }}>/api/scopes/{'{scopeId}'}/scripts/draft-run</code>
-            without rebinding the scope default service.
+            without rebinding the workspace default service.
           </div>
           <textarea
             aria-label="Script test run input"
@@ -3239,7 +3239,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
 
         <ScriptsStudioModal
           open={bindModalOpen}
-          eyebrow="Scope"
+          eyebrow="Workspace"
           title="Bind saved script"
           onClose={() => setBindModalOpen(false)}
           actions={
@@ -3263,7 +3263,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
           }
         >
           <div className="console-scripts-detail-copy">
-            Bind the saved scope script to the default service for this scope.
+            Bind the saved workspace script to the default service for this workspace.
             Existing workflow authoring stays available alongside this flow.
           </div>
           <div style={{ marginTop: 16 }}>
@@ -3310,9 +3310,9 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
           width={560}
         >
           <div className="console-scripts-detail-copy" style={{ marginTop: 0 }}>
-            The current script changes have not been saved to Scope yet. Your
+            The current script changes have not been saved to the workspace yet. Your
             local draft will still be kept in this browser, but these changes
-            will not be visible in Scope until you save them.
+            will not be visible in the workspace until you save them.
           </div>
         </ScriptsStudioModal>
 

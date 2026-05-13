@@ -70,7 +70,7 @@ const TeamAssetsTab: React.FC<TeamAssetsTabProps> = ({
         title="当前 Team 资产"
         extra={
           <Typography.Text style={{ fontSize: 12 }} type="secondary">
-            scope workflows · scope scripts · Studio deep-link
+            workspace workflows · workspace scripts · Studio deep-link
           </Typography.Text>
         }
       >

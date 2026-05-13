@@ -158,7 +158,7 @@ describe("TeamsHomePage", () => {
     expect(await screen.findByRole("button", { name: "查看团队" })).toBeTruthy();
     expect(screen.getByText("Aevatar / Teams")).toBeTruthy();
     expect(screen.getByText("我的 AI 团队")).toBeTruthy();
-    expect(screen.getByText("当前 Scope")).toBeTruthy();
+    expect(screen.getByText("当前工作空间")).toBeTruthy();
     expect(screen.getByText("真实 Team")).toBeTruthy();
     expect(screen.getByText("Team roster")).toBeTruthy();
     expect(screen.getByText("运行正常")).toBeTruthy();
@@ -280,10 +280,10 @@ describe("TeamsHomePage", () => {
 
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    expect(await screen.findByText("当前登录态校验失败，已回退到本地 Scope")).toBeTruthy();
+    expect(await screen.findByText("当前登录态校验失败，已回退到本地工作空间")).toBeTruthy();
     expect(
       screen.getByText(
-        "登录状态暂时不可用，请刷新后重试。 当前已回退到本地会话里的 Scope scope-a。",
+        "登录状态暂时不可用，请刷新后重试。 当前已回退到本地会话里的工作空间 ID scope-a。",
       ),
     ).toBeTruthy();
 
@@ -402,7 +402,7 @@ describe("TeamsHomePage", () => {
 
     expect(
       await screen.findByText(
-        "当前 Scope 下还没有创建任何 Team。创建 Team 后，这里会按后端 roster 展示真实团队。",
+        "当前工作空间还没有创建任何 Team。创建 Team 后，这里会按后端 roster 展示真实团队。",
       ),
     ).toBeTruthy();
     expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
