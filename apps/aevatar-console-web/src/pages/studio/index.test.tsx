@@ -4522,7 +4522,7 @@ describe("StudioPage", () => {
     );
 
     renderStudioPage(
-      "/studio?scopeId=scope-1&memberId=draft1&focus=workflow%3Aworkflow-1&step=bind&tab=bindings"
+      "/studio?scopeId=scope-1&member=member%3Adraft1&focus=workflow%3Aworkflow-1&step=bind&tab=bindings"
     );
 
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
@@ -4637,7 +4637,7 @@ describe("StudioPage", () => {
     );
 
     renderStudioPage(
-      "/studio?scopeId=scope-1&memberId=joker&focus=workflow%3Aworkflow-1&tab=studio"
+      "/studio?scopeId=scope-1&member=member%3Ajoker&focus=workflow%3Aworkflow-1&tab=studio"
     );
 
     expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
@@ -4736,7 +4736,7 @@ describe("StudioPage", () => {
         })
     );
 
-    renderStudioPage("/studio?scopeId=scope-1&memberId=joker&step=bind&tab=bindings");
+    renderStudioPage("/studio?scopeId=scope-1&member=member%3Ajoker&step=bind&tab=bindings");
 
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
     await waitFor(() => {
@@ -4907,7 +4907,7 @@ describe("StudioPage", () => {
         })
     );
 
-    renderStudioPage("/studio?scopeId=scope-1&memberId=default&step=bind&tab=bindings");
+    renderStudioPage("/studio?scopeId=scope-1&member=member%3Adefault&step=bind&tab=bindings");
 
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
     await waitFor(() => {
@@ -4996,7 +4996,7 @@ describe("StudioPage", () => {
         })
     );
 
-    renderStudioPage("/studio?scopeId=scope-1&memberId=joker&step=bind&tab=bindings");
+    renderStudioPage("/studio?scopeId=scope-1&member=member%3Ajoker&step=bind&tab=bindings");
 
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
     await waitFor(() => {
@@ -5854,7 +5854,7 @@ describe("StudioPage", () => {
     );
 
     renderStudioPage(
-      "/studio?scopeId=scope-1&memberId=script-member&step=bind&tab=bindings"
+      "/studio?scopeId=scope-1&member=member%3Ascript-member&step=bind&tab=bindings"
     );
 
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
@@ -6070,7 +6070,7 @@ describe("StudioPage", () => {
 
   it("stops the selected member run from the observe view", async () => {
     renderStudioPage(
-      "/studio?scopeId=scope-1&memberId=default&step=observe&tab=executions&execution=execution-1"
+      "/studio?scopeId=scope-1&member=member%3Adefault&step=observe&tab=executions&execution=execution-1"
     );
 
     expect(await screen.findByText("Logs")).toBeTruthy();
@@ -6139,7 +6139,7 @@ describe("StudioPage", () => {
 
   it("keeps Invoke available once the selected member already has a published endpoint", async () => {
     renderStudioPage(
-      "/studio?scopeId=scope-1&memberId=default&focus=workflow%3Aworkflow-1&tab=studio"
+      "/studio?scopeId=scope-1&member=member%3Adefault&focus=workflow%3Aworkflow-1&tab=studio"
     );
 
     const invokeButton = await screen.findByRole("button", { name: "Invoke" });
@@ -6165,7 +6165,7 @@ describe("StudioPage", () => {
   });
 
   it("opens the Studio invoke surface from the bind surface endpoint action", async () => {
-    renderStudioPage("/studio?scopeId=scope-1&teamId=t-alpha&memberId=workspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
+    renderStudioPage("/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
 
     fireEvent.click(await screen.findByRole("button", { name: "Bind" }));
     await waitFor(() => {
@@ -6201,7 +6201,7 @@ describe("StudioPage", () => {
     });
 
     renderStudioPage(
-      "/studio?scopeId=scope-1&memberId=default&step=observe&tab=executions&execution=execution-2"
+      "/studio?scopeId=scope-1&member=member%3Adefault&step=observe&tab=executions&execution=execution-2"
     );
 
     expect(await screen.findByText("Logs")).toBeTruthy();
@@ -6232,7 +6232,7 @@ describe("StudioPage", () => {
       runs: [],
     });
 
-    renderStudioPage("/studio?scopeId=scope-1&memberId=default&step=invoke&tab=invoke");
+    renderStudioPage("/studio?scopeId=scope-1&member=member%3Adefault&step=invoke&tab=invoke");
 
     expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
 
@@ -6300,7 +6300,7 @@ describe("StudioPage", () => {
       },
     });
 
-    renderStudioPage("/studio?scopeId=scope-1&memberId=default&step=observe&tab=executions");
+    renderStudioPage("/studio?scopeId=scope-1&member=member%3Adefault&step=observe&tab=executions");
 
     expect(await screen.findByText("Logs")).toBeTruthy();
 
@@ -6322,7 +6322,7 @@ describe("StudioPage", () => {
   });
 
   it("walks the lifecycle flow from build to bind to invoke to observe", async () => {
-    renderStudioPage("/studio?scopeId=scope-1&memberId=workspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
+    renderStudioPage("/studio?scopeId=scope-1&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
 
     expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
 
