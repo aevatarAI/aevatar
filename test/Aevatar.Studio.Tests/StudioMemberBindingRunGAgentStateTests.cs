@@ -1,16 +1,19 @@
 using System.Reflection;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.StudioMember;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Studio.Tests;
 
 public sealed class StudioMemberBindingRunGAgentStateTests
 {
+    private const string RootActorId = "studio-member-binding-run:bind-1";
     private readonly StudioMemberBindingRunStateApplier _agent = new();
 
     [Theory]
@@ -111,6 +114,27 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         pending.Status.Should().Be(StudioMemberBindingRunStatus.PlatformBindingPending);
         pending.PlatformBindingCommandId.Should().Be("platform-bind-1");
         pending.AttemptCount.Should().Be(1);
+    }
+
+    [Fact]
+    public void DuplicateAdmission_AfterPlatformBindingPending_ShouldNotRegressOrRotateCommandId()
+    {
+        var pending = NewPlatformPendingState();
+
+        var afterDuplicateAdmission = _agent.Apply(pending, new StudioMemberBindingAdmittedEvent
+        {
+            BindingRunId = "bind-1",
+            ScopeId = "scope-1",
+            MemberId = "m-1",
+            PublishedServiceId = "member-m-1",
+            ImplementationKind = StudioMemberImplementationKind.Script,
+            DisplayName = "Script member",
+            AdmittedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(10)),
+        });
+
+        afterDuplicateAdmission.Status.Should().Be(StudioMemberBindingRunStatus.PlatformBindingPending);
+        afterDuplicateAdmission.PlatformBindingCommandId.Should().Be("platform-1");
+        afterDuplicateAdmission.AttemptCount.Should().Be(1);
     }
 
     [Fact]
@@ -235,7 +259,8 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     {
         var state = NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10));
         var publisher = new RecordingEventPublisher();
-        var agent = NewHandlerAgent(state, publisher);
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = NewHandlerAgent(state, publisher, scheduler);
 
         await agent.HandlePlatformBindingWatchdogFired(new StudioMemberPlatformBindingWatchdogFired
         {
@@ -244,6 +269,8 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         });
 
         publisher.SentMessages.Should().BeEmpty();
+        var callback = scheduler.Timeouts.Should().ContainSingle().Subject;
+        callback.CallbackId.Should().Be("studio-member-binding-watchdog:bind-1:platform-1");
     }
 
     [Fact]
@@ -264,6 +291,44 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         retry.BindingRunId.Should().Be("bind-1");
         retry.PlatformBindingCommandId.Should().Be("platform-1");
         retry.RecoveryExecution.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ActivateAsync_WhenInFlightIsFresh_ShouldOnlyRestoreWatchdog()
+    {
+        var state = NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10));
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = NewHandlerAgent(state, publisher, scheduler);
+
+        await agent.ActivateAsync();
+
+        publisher.SentMessages.Should().BeEmpty();
+        var callback = scheduler.Timeouts.Should().ContainSingle().Subject;
+        callback.CallbackId.Should().Be("studio-member-binding-watchdog:bind-1:platform-1");
+        callback.TriggerEnvelope.Payload
+            .Unpack<StudioMemberPlatformBindingWatchdogFired>()
+            .PlatformBindingCommandId.Should().Be("platform-1");
+    }
+
+    [Fact]
+    public async Task ActivateAsync_WhenInFlightIsStale_ShouldScheduleRecoveryExecute()
+    {
+        var state = NewInFlightState(DateTimeOffset.UtcNow.AddMinutes(-3));
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = NewHandlerAgent(state, publisher, scheduler);
+
+        await agent.ActivateAsync();
+
+        var callback = scheduler.Timeouts.Should()
+            .ContainSingle(request => request.CallbackId == "studio-member-binding-execute:bind-1:platform-1")
+            .Subject;
+        var execute = callback.TriggerEnvelope.Payload.Unpack<StudioMemberPlatformBindingExecuteRequested>();
+        execute.PlatformBindingCommandId.Should().Be("platform-1");
+        execute.RecoveryExecution.Should().BeTrue();
+        publisher.SentMessages.Should().ContainSingle(message =>
+            message.Event is StudioMemberBindingPlatformPendingEvent);
     }
 
     [Fact]
@@ -348,7 +413,17 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     private StudioMemberBindingRunState NewPlatformPendingState()
     {
         var requested = _agent.Apply(new StudioMemberBindingRunState(), NewRequested());
-        return _agent.Apply(requested, new StudioMemberPlatformBindingStartRequested
+        var admitted = _agent.Apply(requested, new StudioMemberBindingAdmittedEvent
+        {
+            BindingRunId = "bind-1",
+            ScopeId = "scope-1",
+            MemberId = "m-1",
+            PublishedServiceId = "member-m-1",
+            ImplementationKind = StudioMemberImplementationKind.Script,
+            DisplayName = "Script member",
+            AdmittedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        return _agent.Apply(admitted, new StudioMemberPlatformBindingStartRequested
         {
             BindingRunId = "bind-1",
             PlatformBindingCommandId = "platform-1",
@@ -369,14 +444,20 @@ public sealed class StudioMemberBindingRunGAgentStateTests
 
     private static StudioMemberBindingRunGAgent NewHandlerAgent(
         StudioMemberBindingRunState state,
-        RecordingEventPublisher publisher)
+        RecordingEventPublisher publisher,
+        RecordingRuntimeCallbackScheduler? scheduler = null)
     {
         var agent = new StudioMemberBindingRunGAgent
         {
             EventSourcing = new RecordingEventSourcing(state),
             EventPublisher = publisher,
+            Services = new ServiceCollection()
+                .AddSingleton<IActorRuntimeCallbackScheduler>(
+                    scheduler ?? new RecordingRuntimeCallbackScheduler())
+                .BuildServiceProvider(),
         };
         StudioMemberBindingRunStateSetter.Set(agent, state);
+        GAgentIdSetter.Set(agent, RootActorId);
         return agent;
     }
 
@@ -423,6 +504,17 @@ public sealed class StudioMemberBindingRunGAgentStateTests
 
         public static void Set(StudioMemberBindingRunGAgent agent, StudioMemberBindingRunState state) =>
             StateField.SetValue(agent, state.Clone());
+    }
+
+    private static class GAgentIdSetter
+    {
+        private static readonly FieldInfo IdField =
+            typeof(StudioMemberBindingRunGAgent).BaseType!.BaseType!
+                .GetField("<Id>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("GAgent id field not found.");
+
+        public static void Set(StudioMemberBindingRunGAgent agent, string id) =>
+            IdField.SetValue(agent, id);
     }
 
     private sealed class RecordingEventSourcing(StudioMemberBindingRunState replayState)
@@ -478,4 +570,32 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     }
 
     private sealed record SentMessage(string TargetActorId, IMessage Event);
+
+    private sealed class RecordingRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        public List<RuntimeCallbackTimeoutRequest> Timeouts { get; } = [];
+
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default)
+        {
+            Timeouts.Add(request);
+            return Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                Timeouts.Count,
+                RuntimeCallbackBackend.InMemory));
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default) =>
+            throw new NotImplementedException("Timers are not used by this test.");
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default) =>
+            Task.CompletedTask;
+    }
 }

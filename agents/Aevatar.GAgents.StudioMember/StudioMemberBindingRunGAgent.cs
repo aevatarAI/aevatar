@@ -40,9 +40,8 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
                 await SendPlatformBindingStartRequestedAsync(State.UpdatedAtUtc, ct);
                 break;
             case StudioMemberBindingRunStatus.PlatformBindingPending:
-                await SendPlatformBindingPendingAndExecuteAsync(
+                await RecoverPlatformBindingPendingAsync(
                     State.UpdatedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                    recoveryExecution: true,
                     ct);
                 break;
             case StudioMemberBindingRunStatus.MemberNotificationPending:
@@ -78,7 +77,7 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
     [EventHandler(EndpointName = "admitBindingRun")]
     public async Task HandleAdmitted(StudioMemberBindingAdmittedEvent evt)
     {
-        if (!CanAcceptRunEvent(evt.BindingRunId))
+        if (!CanAcceptAdmission(evt.BindingRunId))
             return;
 
         await PersistDomainEventAsync(evt);
@@ -281,8 +280,11 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         StudioMemberBindingRunState state,
         StudioMemberBindingAdmittedEvent evt)
     {
-        if (IsStale(state, evt.BindingRunId) || IsTerminal(state.Status))
+        if (IsStale(state, evt.BindingRunId)
+            || state.Status != StudioMemberBindingRunStatus.AdmissionPending)
+        {
             return state;
+        }
 
         var next = state.Clone();
         next.Status = StudioMemberBindingRunStatus.Admitted;
@@ -432,6 +434,11 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         && string.Equals(State.BindingRunId, bindingRunId, StringComparison.Ordinal)
         && !IsTerminal(State.Status);
 
+    private bool CanAcceptAdmission(string bindingRunId) =>
+        !string.IsNullOrEmpty(State.BindingRunId)
+        && string.Equals(State.BindingRunId, bindingRunId, StringComparison.Ordinal)
+        && State.Status == StudioMemberBindingRunStatus.AdmissionPending;
+
     private bool CanAcceptPlatformBindingResult(string bindingRunId, string platformBindingCommandId) =>
         CanAcceptPlatformBindingCommand(bindingRunId, platformBindingCommandId);
 
@@ -538,6 +545,22 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
                 PlatformBindingCommandId = State.PlatformBindingCommandId,
                 PendingAtUtc = pendingAtUtc,
             },
+            ct);
+    }
+
+    private async Task RecoverPlatformBindingPendingAsync(
+        Timestamp pendingAtUtc,
+        CancellationToken ct)
+    {
+        if (State.PlatformExecutionInFlight && !IsPlatformExecutionStale())
+        {
+            await SchedulePlatformBindingWatchdogAsync(ct);
+            return;
+        }
+
+        await SendPlatformBindingPendingAndExecuteAsync(
+            pendingAtUtc,
+            recoveryExecution: true,
             ct);
     }
 
