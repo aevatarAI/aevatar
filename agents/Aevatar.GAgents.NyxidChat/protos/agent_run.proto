@@ -4,11 +4,18 @@ package aevatar.gagents.nyxid_chat;
 
 option csharp_namespace = "Aevatar.GAgents.NyxidChat";
 
+import "chat_activity.proto";
 import "conversation_events.proto";
 
 enum AgentRunStatus {
   AGENT_RUN_STATUS_UNSPECIFIED = 0;
   AGENT_RUN_STATUS_STARTED = 1;
+  // The LLM run has produced an immutable reply payload (success or failure
+  // terminal state) and persisted it. Whether the LlmReplyReadyEvent has been
+  // successfully delivered to the conversation actor is tracked separately by
+  // `reply_dispatched` on AgentRunGAgentState. Output dispatch retries that
+  // happen while `reply_dispatched=false` must re-deliver the persisted payload
+  // rather than re-run the LLM / tool chain.
   AGENT_RUN_STATUS_REPLY_PRODUCED = 2;
   AGENT_RUN_STATUS_DROPPED = 3;
   AGENT_RUN_STATUS_FAILED = 4;
@@ -23,6 +30,15 @@ message AgentRunGAgentState {
   int64 completed_at_unix_ms = 6;
   string error_code = 7;
   string error_summary = 8;
+  // Produced LLM reply payload, persisted before dispatch so output-dispatch
+  // retries never re-invoke the LLM/tool chain.
+  string produced_reply_text = 9;
+  aevatar.gagents.channel.abstractions.MessageContent produced_outbound = 10;
+  aevatar.gagents.channel.runtime.LlmReplyTerminalState produced_terminal_state = 11;
+  // True once the LlmReplyReadyEvent has been accepted by the target
+  // conversation actor. Until then, the run actor must retry only the
+  // dispatch — never the LLM call.
+  bool reply_dispatched = 12;
 }
 
 // Transient command for the run actor. The nested NeedsLlmReplyEvent may carry
@@ -52,6 +68,23 @@ message AgentRunReplyProducedEvent {
   string error_code = 5;
   string error_summary = 6;
   int64 produced_at_unix_ms = 7;
+  // Immutable reply payload produced by the LLM run. Persisting these lets the
+  // dispatch retry path re-deliver the same reply without re-running the LLM
+  // chain (which would otherwise repeat tool side-effects like SSH exec or
+  // external API calls and incur duplicate billing).
+  string reply_text = 8;
+  aevatar.gagents.channel.abstractions.MessageContent outbound = 9;
+}
+
+// Persisted after the LlmReplyReadyEvent has been successfully delivered to
+// the target conversation actor. Until this event lands, output-dispatch
+// retries must re-deliver the persisted produced payload from
+// AgentRunGAgentState rather than re-run the LLM / tool chain.
+message AgentRunReplyDispatchedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int64 dispatched_at_unix_ms = 4;
 }
 
 message AgentRunDroppedEvent {

@@ -160,6 +160,24 @@ public sealed class NyxRelayAgentBuilderFlowTests
         decision.ReplyPayload.Should().Contain("/agents");
     }
 
+    [Theory]
+    [InlineData("/daily")]
+    [InlineData("/daily alice")]
+    [InlineData("/DAILY alice schedule_time=09:00")]
+    public void TryResolve_ShouldFallThrough_ForDailyOrnnSkillShortcut(string text)
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            Text = text,
+        };
+
+        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
+
+        matched.Should().BeFalse();
+        decision.Should().BeNull();
+    }
+
     [Fact]
     public void TryResolve_ShouldMergeSlashRegistryDescriptors_ForUnknownSlash()
     {

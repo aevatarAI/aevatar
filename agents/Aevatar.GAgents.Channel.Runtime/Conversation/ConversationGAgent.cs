@@ -122,14 +122,16 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         if (result.LlmReplyRequest is not null)
         {
-            // The transient run command copy keeps reply_token + expiry so the run actor can
-            // echo them back inside LlmReplyReadyEvent; the persisted state copy must
-            // not carry the credential into the event store / projection / read model.
+            // The transient run command copy keeps reply_token + expiry + per-call credentials
+            // in Metadata so the run actor can echo them back inside LlmReplyReadyEvent and
+            // forward them to the LLM call; the persisted state copy must not carry any of
+            // those credentials into the event store / projection / read model.
             var runCopy = result.LlmReplyRequest.Clone();
             runCopy.TargetActorId = Id;
             var persistedCopy = runCopy.Clone();
             persistedCopy.ReplyToken = string.Empty;
             persistedCopy.ReplyTokenExpiresAtUnixMs = 0;
+            LlmReplyCredentialMetadataKeys.StripFrom(persistedCopy.Metadata);
             await PersistDomainEventAsync(persistedCopy);
             await DispatchPendingLlmReplyAsync(runCopy, CancellationToken.None);
             Logger.LogInformation(

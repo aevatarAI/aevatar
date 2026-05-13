@@ -1040,7 +1040,7 @@ const RunsPage: React.FC = () => {
 
     return buildTeamDetailHref({
       scopeId,
-      tab: "advanced",
+      tab: "overview",
       runId: session.runId || undefined,
     });
   }, [requestedReturnTo, resolveRunScopeId, session.runId]);

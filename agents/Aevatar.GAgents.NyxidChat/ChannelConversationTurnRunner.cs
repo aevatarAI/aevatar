@@ -26,6 +26,8 @@ namespace Aevatar.GAgents.NyxidChat;
 
 public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 {
+    private const string DailySkillName = "chrono-ai-daily";
+
     private sealed record ResolvedSenderBinding(string BindingId, ExternalSubjectRef Subject);
 
     private readonly IServiceProvider _toolServiceProvider;
@@ -1500,12 +1502,13 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ResolvedSenderBinding? senderBinding,
         CancellationToken ct)
     {
+        var requestActivity = BuildLlmRequestActivity(activity, inboundEvent.Text);
         var request = new NeedsLlmReplyEvent
         {
             CorrelationId = activity.Id,
             TargetActorId = ConversationGAgent.BuildActorId(activity.Conversation!.CanonicalKey),
             RegistrationId = registration.Id,
-            Activity = activity.Clone(),
+            Activity = requestActivity,
             RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
 
@@ -1537,6 +1540,38 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
 
         return request;
+    }
+
+    private static ChatActivity BuildLlmRequestActivity(ChatActivity activity, string? inboundText)
+    {
+        var requestActivity = activity.Clone();
+        if (requestActivity.Content is null)
+            return requestActivity;
+
+        if (TryBuildDailySkillInvocationPrompt(inboundText, out var prompt))
+            requestActivity.Content.Text = prompt;
+
+        return requestActivity;
+    }
+
+    private static bool TryBuildDailySkillInvocationPrompt(string? text, out string prompt)
+    {
+        prompt = string.Empty;
+        if (!TryParseSlashCommand(text, out var commandName, out var argumentText) ||
+            !string.Equals(commandName, "daily", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var argsJson = JsonSerializer.Serialize(argumentText);
+        var originalJson = JsonSerializer.Serialize((text ?? string.Empty).Trim());
+        prompt =
+            "The user invoked the Lark `/daily` shortcut.\n" +
+            $"Route this turn through the Ornn skill `{DailySkillName}`.\n" +
+            $"First call `use_skill` with `skill` = `{DailySkillName}` and `args` = {argsJson}, " +
+            "then follow the loaded skill instructions to complete the request.\n" +
+            $"Original command: {originalJson}";
+        return true;
     }
 
     private async Task<string?> TryIssueSenderLlmAccessTokenAsync(

@@ -4,7 +4,6 @@ import {
   CustomEventName,
 } from "@aevatar-react-sdk/types";
 import {
-  BranchesOutlined,
   DeploymentUnitOutlined,
 } from "@ant-design/icons";
 import type { Edge, Node } from "@xyflow/react";
@@ -42,7 +41,6 @@ import { saveObservedRunSessionPayload } from "@/shared/runs/draftRunSession";
 import { isStudioApiStatus, studioApi } from "@/shared/studio/api";
 import {
   buildStudioWorkflowMemberKey,
-  buildStudioScriptsWorkspaceRoute,
   buildStudioWorkflowEditorRoute,
   buildStudioWorkflowWorkspaceRoute,
   resolveStudioMemberRouteKey,
@@ -65,9 +63,6 @@ import {
   DetailPill,
   factValueFontFamily,
 } from "./components/TeamDetailPrimitives";
-import TeamAdvancedTab from "./tabs/TeamAdvancedTab";
-import TeamAssetsTab, { teamAssetIcons } from "./tabs/TeamAssetsTab";
-import TeamBindingsTab from "./tabs/TeamBindingsTab";
 import TeamEventsTab from "./tabs/TeamEventsTab";
 import TeamMembersTab from "./tabs/TeamMembersTab";
 import TeamOverviewTab from "./tabs/TeamOverviewTab";
@@ -225,12 +220,6 @@ function formatTeamTabLabel(tab: TeamDetailTab): string {
       return "事件流";
     case "members":
       return "团队成员";
-    case "bindings":
-      return "Bindings";
-    case "assets":
-      return "Assets";
-    case "advanced":
-      return "配置";
     default:
       return "概览";
   }
@@ -1142,7 +1131,6 @@ const TeamDetailPage: React.FC = () => {
   const [preferredRunId, setPreferredRunId] = React.useState(routeState.runId);
   const [activeTab, setActiveTab] = React.useState<TeamDetailTab>(routeState.tab);
   const [selectedActorId, setSelectedActorId] = React.useState("");
-  const [selectedConnectorKey, setSelectedConnectorKey] = React.useState("");
   const [selectedTopologyNodeId, setSelectedTopologyNodeId] = React.useState("");
   const [teamEditorOpen, setTeamEditorOpen] = React.useState(false);
   const [teamArchiveOpen, setTeamArchiveOpen] = React.useState(false);
@@ -1443,35 +1431,6 @@ const TeamDetailPage: React.FC = () => {
     ],
   );
 
-  const defaultSelectedConnectorKey =
-    integrations.items.find((item) => item.usedByRoles.length > 0)?.key ||
-    integrations.items[0]?.key ||
-    "";
-
-  React.useEffect(() => {
-    if (!hasTeamIdentity) {
-      setSelectedConnectorKey("");
-      return;
-    }
-
-    if (integrations.items.length === 0) {
-      setSelectedConnectorKey("");
-      return;
-    }
-
-    if (
-      !selectedConnectorKey ||
-      !integrations.items.some((item) => item.key === selectedConnectorKey)
-    ) {
-      setSelectedConnectorKey(defaultSelectedConnectorKey);
-    }
-  }, [
-    defaultSelectedConnectorKey,
-    hasTeamIdentity,
-    integrations.items,
-    selectedConnectorKey,
-  ]);
-
   const runtimeServiceId =
     focusedOperationalUnit?.matchedService?.serviceId ||
     lens.currentService?.serviceId ||
@@ -1612,12 +1571,6 @@ const TeamDetailPage: React.FC = () => {
     : lens.playback.available
       ? { label: formatObservationLabel("delayed"), status: "delayed" }
       : { label: formatObservationLabel("partial"), status: "partial" };
-  const integrationsProvenance: ObservationBadge =
-    workspaceSettingsQuery.isError && connectorCatalogQuery.isError
-      ? { label: formatObservationLabel("unavailable"), status: "unavailable" }
-      : integrations.available
-        ? { label: formatObservationLabel("delayed"), status: "delayed" }
-        : { label: formatObservationLabel("partial"), status: "partial" };
 
   const handleOpenPlaybackRun = React.useCallback(
     (preferredActorId?: string | null) => {
@@ -1900,7 +1853,6 @@ const TeamDetailPage: React.FC = () => {
     lens.currentRun?.stateVersion != null ? String(lens.currentRun.stateVersion) : "--";
   const currentEndpointCount = lens.currentService?.endpoints.length ?? 0;
   const currentPolicyCount = lens.currentService?.policyIds.length ?? 0;
-  const enabledConnectorCount = integrations.items.filter((item) => item.enabled).length;
   const connectorHighlights = React.useMemo(
     () =>
       integrations.items
@@ -1909,165 +1861,6 @@ const TeamDetailPage: React.FC = () => {
         .map((item) => item.name),
     [integrations.items],
   );
-  const selectedConnector =
-    integrations.items.find((item) => item.key === selectedConnectorKey) ??
-    integrations.items[0] ??
-    null;
-  const selectedConnectorRows = React.useMemo(() => {
-    if (!selectedConnector) {
-      return [];
-    }
-
-    return [
-      {
-        badgeText: formatConnectorTypeLabel(selectedConnector.type),
-        badgeTone: "info" as const,
-        label: "连接器类型",
-        note: selectedConnector.summary,
-        value: selectedConnector.name,
-      },
-      {
-        badgeText: formatConnectorEnabledLabel(selectedConnector.enabled),
-        badgeTone: selectedConnector.enabled ? ("success" as const) : ("neutral" as const),
-        label: "团队使用",
-        note:
-          selectedConnector.usedByRoles.length > 0
-            ? `${selectedConnector.usedByRoles.length} 个角色正在引用`
-            : "当前团队还没有显式引用它",
-        value:
-          selectedConnector.usedByRoles.length > 0
-            ? selectedConnector.usedByRoles.join("、")
-            : "尚未显式引用",
-      },
-      {
-        badgeText: integrations.runtimeHostLabel || "--",
-        badgeTone: integrations.runtimeBaseUrl ? ("info" as const) : ("neutral" as const),
-        label: "工作区环境",
-        note: integrations.workspaceSummary,
-        value:
-          integrations.connectorCount > 0
-            ? `已加载 ${integrations.connectorCount} 个连接器定义`
-            : "当前还没有加载连接器定义",
-      },
-      {
-        badgeText: currentServiceFriendly !== "--" ? "服务入口" : "待配置",
-        badgeTone: currentServiceFriendly !== "--" ? ("success" as const) : ("neutral" as const),
-        label: "默认绑定",
-        note: runtimeServiceId || currentServiceKey || "--",
-        value: currentServiceFriendly !== "--" ? currentServiceFriendly : "当前还没有主服务入口",
-      },
-      {
-        badgeText: `${currentEndpointCount} 个入口`,
-        badgeTone: currentEndpointCount > 0 ? ("info" as const) : ("neutral" as const),
-        label: "Endpoint 暴露",
-        note: `${currentPolicyCount} 条策略`,
-        value:
-          currentEndpointCount > 0
-            ? `${currentEndpointCount} 个 endpoint 已暴露`
-            : "当前还没有可见 endpoint 暴露",
-      },
-    ];
-  }, [
-    currentEndpointCount,
-    currentPolicyCount,
-    currentServiceFriendly,
-    currentServiceKey,
-    integrations.connectorCount,
-    integrations.runtimeBaseUrl,
-    integrations.runtimeHostLabel,
-    integrations.workspaceSummary,
-    runtimeServiceId,
-    selectedConnector,
-  ]);
-  const connectorSummaryCards = React.useMemo(
-    () => [
-      {
-        caption: runtimeServiceId || currentServiceKey || "--",
-        icon: <DeploymentUnitOutlined />,
-        label: "默认绑定",
-        value: currentServiceFriendly,
-      },
-      {
-        caption: `已绑定 ${integrations.linkedConnectorCount} 个 · 工作区可见 ${integrations.items.length} 个`,
-        icon: <BranchesOutlined />,
-        label: "连接能力",
-        value: enabledConnectorCount,
-      },
-      {
-        caption:
-          connectorHighlights.length > 0
-            ? connectorHighlights.join("、")
-            : "当前 workflow 还没有显式引用连接器",
-        label: "团队会用到",
-        value:
-          integrations.linkedConnectorCount > 0
-            ? `${integrations.linkedConnectorCount} 个连接器`
-            : "尚未显式引用",
-      },
-      {
-        caption: currentServiceFriendly !== "--" ? currentServiceFriendly : "等待服务入口",
-        icon: <DeploymentUnitOutlined />,
-        label: "治理摘要",
-        value: `${currentEndpointCount} / ${currentPolicyCount}`,
-      },
-    ],
-    [
-      connectorHighlights,
-      currentEndpointCount,
-      currentPolicyCount,
-      currentServiceFriendly,
-      currentServiceKey,
-      enabledConnectorCount,
-      integrations.items.length,
-      integrations.linkedConnectorCount,
-      runtimeServiceId,
-    ],
-  );
-  const connectorCatalogCards = React.useMemo(
-    () =>
-      integrations.items.map((connector) => ({
-        availabilityLabel: formatConnectorEnabledLabel(connector.enabled),
-        availabilityStyle: resolveTonePillStyle(
-          token,
-          connector.enabled ? "success" : "neutral",
-        ),
-        buttonStyle: resolveSelectionCardButtonStyle(
-          token,
-          connector.key === selectedConnector?.key,
-        ),
-        key: connector.key,
-        name: connector.name,
-        summary: connector.summary,
-        typeLabel: formatConnectorTypeLabel(connector.type),
-        typeStyle: resolveTonePillStyle(token, "info"),
-        usageLabel:
-          connector.usedByRoles.length > 0
-            ? `${connector.usedByRoles.length} 个角色在用`
-            : "团队未显式引用",
-        usageStyle: resolveTonePillStyle(
-          token,
-          connector.usedByRoles.length > 0 ? "info" : "neutral",
-        ),
-        usageSummary:
-          connector.usedByRoles.length > 0
-            ? `当前团队会用到：${connector.usedByRoles.join("、")}`
-            : "当前团队还没有显式引用这个连接器。",
-      })),
-    [integrations.items, selectedConnector?.key, token],
-  );
-  const connectorDetailRows = React.useMemo(
-    () =>
-      selectedConnectorRows.map((row) => ({
-        badgeStyle: resolveTonePillStyle(token, row.badgeTone),
-        badgeText: row.badgeText,
-        label: row.label,
-        note: row.note,
-        value: row.value,
-      })),
-    [selectedConnectorRows, token],
-  );
-  const connectorsEmptyDescription =
-    "一旦当前成员服务、连接器目录或治理策略可见，这里会自动展开成 Bindings 视图。";
   const configurationDetailRows = React.useMemo(
     () => [
       {
@@ -2134,191 +1927,6 @@ const TeamDetailPage: React.FC = () => {
       runtimeServiceId,
       teamTitle,
       workflowNameValue,
-    ],
-  );
-  const configurationAdjustmentRows = React.useMemo(
-    () => [
-      {
-        badge: formatCompositionKind(lens.activeRevision?.implementationKind || "runtime"),
-        label: "流程定义",
-        note: activeWorkflowId ? `workflowId: ${activeWorkflowId}` : "当前还没有 workflowId",
-        value: workflowNameValue !== "--" ? workflowNameValue : teamTitle,
-      },
-      {
-        badge: currentDeploymentFriendly,
-        label: "服务映射",
-        note:
-          currentVersionFriendly !== "--"
-            ? `${currentVersionFriendly} · ${currentServiceFriendly}`
-            : currentServiceFriendly,
-        value: currentServiceFriendly,
-      },
-      {
-        badge:
-          integrations.linkedConnectorCount > 0
-            ? `${integrations.linkedConnectorCount} 个已引用`
-            : "未显式引用",
-        label: "连接器引用",
-        note:
-          connectorHighlights.length > 0
-            ? connectorHighlights.join("、")
-            : "当前 workflow 还没有显式引用连接器",
-        value:
-          integrations.linkedConnectorCount > 0
-            ? `${integrations.linkedConnectorCount} 个连接器`
-            : "当前没有显式连接器引用",
-      },
-    ],
-    [
-      activeWorkflowId,
-      connectorHighlights,
-      currentDeploymentFriendly,
-      currentServiceFriendly,
-      currentVersionFriendly,
-      integrations.linkedConnectorCount,
-      lens.activeRevision?.implementationKind,
-      teamTitle,
-      workflowNameValue,
-    ],
-  );
-  const advancedSummaryCards = React.useMemo(
-    () => [
-      {
-        caption: activeWorkflowId || "--",
-        captionMonospace: true,
-        label: "团队流程",
-        value: workflowNameValue !== "--" ? workflowNameValue : teamTitle,
-      },
-      {
-        caption:
-          currentServiceFriendly !== "--"
-            ? `当前会落到 ${currentServiceFriendly}`
-            : "当前还没有匹配到主服务入口",
-        label: "绑定方式",
-        value: formatCompositionKind(lens.activeRevision?.implementationKind || "runtime"),
-      },
-      {
-        caption: currentDeploymentId,
-        captionMonospace: true,
-        label: "部署记录",
-        value: currentDeploymentFriendly,
-      },
-      {
-        caption:
-          connectorHighlights.length > 0
-            ? connectorHighlights.join("、")
-            : "当前 workflow 还没有显式引用连接器",
-        label: "连接器引用",
-        value:
-          integrations.linkedConnectorCount > 0
-            ? `${integrations.linkedConnectorCount} 个已引用`
-            : "未显式引用",
-      },
-    ],
-    [
-      activeWorkflowId,
-      connectorHighlights,
-      currentDeploymentFriendly,
-      currentDeploymentId,
-      currentServiceFriendly,
-      integrations.linkedConnectorCount,
-      lens.activeRevision?.implementationKind,
-      teamTitle,
-      workflowNameValue,
-    ],
-  );
-  const advancedTeamImpactSummary =
-    integrations.linkedConnectorCount > 0
-      ? ` ${integrations.linkedConnectorCount} 个已绑定连接器`
-      : " 当前还没有显式绑定的连接器";
-  const workflowAssetRows = React.useMemo(
-    () =>
-      (workflowsQuery.data ?? []).map((workflow) => {
-        const isCurrent =
-          trimText(workflow.workflowId) === trimText(activeWorkflowId) ||
-          trimText(workflow.workflowId) === trimText(activeWorkflowSummary?.workflowId);
-        const statusLabel = formatFriendlyStatus(workflow.deploymentStatus || "draft");
-        return {
-          actionLabel: "进入 Workflow Studio",
-          badgeLabel: isCurrent ? "当前团队流程" : statusLabel,
-          badgeStyle: resolveTonePillStyle(token, isCurrent ? "success" : "neutral"),
-          buttonStyle: resolveSelectionCardButtonStyle(token, isCurrent),
-          key: workflow.workflowId,
-          primaryMetaLabel: "Revision",
-          primaryMetaValue: workflow.activeRevisionId || "n/a",
-          secondaryMetaLabel: "Entrypoint",
-          secondaryMetaValue: workflow.serviceKey || "未绑定",
-          summary: workflow.displayName
-            ? `${workflow.displayName} 已绑定到 ${workflow.serviceKey || "待发布入口"}`
-            : "当前 workflow 已准备好进入 Studio。",
-          subtitle: workflow.workflowName || "Workflow capability",
-          title: workflow.displayName || workflow.workflowId,
-        };
-      }),
-    [activeWorkflowId, activeWorkflowSummary?.workflowId, token, workflowsQuery.data],
-  );
-  const scriptAssetRows = React.useMemo(
-    () =>
-      (scriptsQuery.data ?? []).map((script) => {
-        const isCurrent =
-          trimText(script.scriptId) === trimText(lens.activeRevision?.scriptId);
-        return {
-          actionLabel: "进入 Script Studio",
-          badgeLabel: isCurrent ? "当前绑定脚本" : script.activeRevision ? "已激活" : "草稿",
-          badgeStyle: resolveTonePillStyle(token, isCurrent ? "success" : "neutral"),
-          buttonStyle: resolveSelectionCardButtonStyle(token, isCurrent),
-          key: script.scriptId,
-          primaryMetaLabel: "Revision",
-          primaryMetaValue: trimText(script.activeRevision) || "n/a",
-          secondaryMetaLabel: "Catalog actor",
-          secondaryMetaValue: trimText(script.catalogActorId) || "n/a",
-          summary:
-            trimText(script.activeSourceHash).length > 0
-              ? `当前脚本 revision 已落在 ${trimText(script.activeSourceHash)}`
-              : "当前脚本已经进入 Team 资产目录。",
-          subtitle: "Script capability",
-          title: script.scriptId || "未命名 Script",
-        };
-      }),
-    [lens.activeRevision?.scriptId, scriptsQuery.data, token],
-  );
-  const assetSummaryCards = React.useMemo(
-    () => [
-      {
-        caption: activeWorkflowId || "--",
-        icon: teamAssetIcons.workflows,
-        label: "Workflow 资产",
-        value: workflowsQuery.data?.length ?? 0,
-      },
-      {
-        caption: trimText(lens.activeRevision?.scriptId) || "--",
-        icon: teamAssetIcons.scripts,
-        label: "Script 资产",
-        value: scriptsQuery.data?.length ?? 0,
-      },
-      {
-        caption: workflowNameValue !== "--" ? workflowNameValue : teamTitle,
-        icon: teamAssetIcons.deployment,
-        label: "当前主流程",
-        value: activeWorkflowSummary?.displayName || workflowNameValue,
-      },
-      {
-        caption: currentServiceFriendly !== "--" ? currentServiceFriendly : "待绑定",
-        icon: <DeploymentUnitOutlined />,
-        label: "服务入口",
-        value: runtimeServiceId || "--",
-      },
-    ],
-    [
-      activeWorkflowId,
-      activeWorkflowSummary?.displayName,
-      currentServiceFriendly,
-      lens.activeRevision?.scriptId,
-      runtimeServiceId,
-      scriptsQuery.data?.length,
-      teamTitle,
-      workflowNameValue,
-      workflowsQuery.data?.length,
     ],
   );
   const topologyConnectors = React.useMemo(
@@ -3454,9 +3062,6 @@ const TeamDetailPage: React.FC = () => {
     { label: "事件拓扑", value: "topology" },
     { label: "事件流", value: "events" },
     { label: "团队成员", value: "members" },
-    { label: "Bindings", value: "bindings" },
-    { label: "Assets", value: "assets" },
-    { label: "配置", value: "advanced" },
   ];
 
   const initialLoading =
@@ -3544,7 +3149,7 @@ const TeamDetailPage: React.FC = () => {
     runtimeServiceId,
     scopeId,
   ]);
-  const conversationActionLabel = lens.playback.currentRunId ? "本次对话" : "运行记录";
+  const conversationActionLabel = lens.playback.currentRunId ? "本次成员对话" : "成员运行记录";
   const serviceMappingActionLabel = "服务映射";
   const teamBuilderActionLabel = "高级编辑";
   const editTeamActionLabel = "Edit Team";
@@ -3701,44 +3306,11 @@ const TeamDetailPage: React.FC = () => {
       }),
     );
   }, [currentDeploymentId, platformRouteIdentity]);
-  const handleOpenWorkflowAsset = React.useCallback(
-    (workflowId: string) => {
-      history.push(
-        buildStudioWorkflowEditorRoute({
-          scopeId,
-          teamId: selectedTeamId || undefined,
-          memberKey: resolveStudioMemberRouteKey({
-            memberId: selectedStudioBackendMemberId,
-            memberKey: selectedStudioMemberKey,
-            workflowId,
-          }),
-          workflowId,
-        }),
-      );
-    },
-    [scopeId, selectedStudioBackendMemberId, selectedStudioMemberKey, selectedTeamId],
-  );
-  const handleOpenScriptAsset = React.useCallback(
-    (scriptId: string) => {
-      history.push(
-        buildStudioScriptsWorkspaceRoute({
-          scopeId,
-          teamId: selectedTeamId || undefined,
-          memberKey: resolveStudioMemberRouteKey({
-            memberId: selectedStudioBackendMemberId,
-            memberKey: selectedStudioMemberKey,
-            scriptId,
-          }),
-          scriptId,
-        }),
-      );
-    },
-    [scopeId, selectedStudioBackendMemberId, selectedStudioMemberKey, selectedTeamId],
-  );
 
   const renderOverviewTab = () => {
     return (
       <TeamOverviewTab
+        configurationDetailRows={configurationDetailRows}
         compareAvailable={lens.compare.available}
         compareSections={lens.compare.sections}
         compareStatusLabel={overviewCompareStatusLabel}
@@ -3903,128 +3475,6 @@ const TeamDetailPage: React.FC = () => {
     );
   };
 
-  const renderBindingsTab = () => {
-    return (
-      <TeamBindingsTab
-        catalogCards={connectorCatalogCards}
-        emptyDescription={connectorsEmptyDescription}
-        onOpenDeployments={handleOpenDeployments}
-        onOpenGovernance={handleOpenGovernance}
-        onOpenServices={handleOpenServices}
-        onSelectBinding={setSelectedConnectorKey}
-        provenanceLabel={integrationsProvenance.label}
-        provenanceStyle={resolveObservationPillStyle(token, integrationsProvenance.status)}
-        selectedBindingDetailRows={connectorDetailRows}
-        selectedBindingEmpty={!selectedConnector}
-        selectedBindingStatusLabel={
-          selectedConnector
-            ? formatConnectorEnabledLabel(selectedConnector.enabled)
-            : ""
-        }
-        selectedBindingStatusStyle={resolveTonePillStyle(
-          token,
-          selectedConnector?.enabled ? "success" : "neutral",
-        )}
-        selectedBindingName={selectedConnector?.name || ""}
-        selectedBindingSummary={selectedConnector?.summary || ""}
-        summaryCards={connectorSummaryCards}
-      />
-    );
-  };
-
-  const renderAssetsTab = () => {
-    return (
-      <TeamAssetsTab
-        onOpenScriptAsset={handleOpenScriptAsset}
-        onOpenScriptsWorkspace={() =>
-          history.push(
-            buildStudioScriptsWorkspaceRoute({
-              scopeId,
-              teamId: selectedTeamId || undefined,
-              memberKey: selectedStudioMemberKey,
-            }),
-          )
-        }
-        onOpenWorkflowAsset={handleOpenWorkflowAsset}
-        onOpenWorkflowWorkspace={() =>
-          history.push(
-            buildStudioWorkflowWorkspaceRoute({
-              scopeId,
-              teamId: selectedTeamId || undefined,
-              memberKey: selectedStudioMemberKey,
-            }),
-          )
-        }
-        scriptRows={scriptAssetRows}
-        summaryCards={assetSummaryCards}
-        workflowRows={workflowAssetRows}
-      />
-    );
-  };
-
-  const renderAdvancedTab = () => {
-    const lifecycleLabel = teamSummaryQuery.data
-      ? teamLifecycleLabel
-      : selectedTeamId
-        ? "加载中"
-        : "未绑定 Team";
-    const lifecycleDescription = teamSummaryQuery.data
-      ? isTeamArchived
-        ? "This Team is archived and de-emphasized in the active roster. You can still edit its identity, configuration, members, and history."
-        : "This Team is active in the roster. Archive only de-emphasizes it; it does not lock future maintenance."
-      : selectedTeamId
-        ? "Team summary 读取完成后才能修改 lifecycle。"
-        : "当前路由还没有选中真实 Team。";
-    const adjustmentTitle = isTeamArchived ? "维护这支团队配置" : "继续调整这支团队";
-    const adjustmentLead = isTeamArchived
-      ? "这支 Team 已归档，但配置仍可维护；先确认这次要调整的是流程、服务映射，还是连接器引用。"
-      : "先确认这次要调整的是流程、服务映射，还是连接器引用。";
-
-    return (
-      <TeamAdvancedTab
-        adjustmentBadgeStyle={resolveTonePillStyle(token, "neutral")}
-        archiveTeamActionLabel={archiveTeamActionLabel}
-        archiveTeamDisabled={!teamSummaryQuery.data || teamArchiving}
-        archiveTeamHint={archiveTeamHint}
-        configurationAdjustmentRows={configurationAdjustmentRows}
-        configurationDetailRows={configurationDetailRows}
-        conversationActionLabel={conversationActionLabel}
-        currentDeploymentBadgeStyle={resolveStatusPillStyle(token, currentDeploymentStatus)}
-        currentDeploymentFriendly={currentDeploymentFriendly}
-        currentServiceFriendly={currentServiceFriendly}
-        currentVersionFriendly={currentVersionFriendly}
-        onArchiveTeam={openTeamArchive}
-        onOpenConversation={handleOpenConversation}
-        onOpenServiceMapping={handleOpenServiceMapping}
-        onOpenTeamBuilder={() => history.push(teamBuilderRoute)}
-        serviceMappingDisabled={!canOpenPlatformTopology}
-        serviceMappingHint={platformTopologyHint || undefined}
-        primaryActionButtonStyle={resolveActionButtonStyle(token, "primary")}
-        secondaryActionButtonStyle={resolveActionButtonStyle(token)}
-        serviceMappingActionLabel={serviceMappingActionLabel}
-        summaryCards={advancedSummaryCards}
-        teamAdjustmentLead={adjustmentLead}
-        teamAdjustmentTitle={adjustmentTitle}
-        teamBuilderActionLabel={teamBuilderActionLabel}
-        teamLifecycleBadgeStyle={
-          teamSummaryQuery.data
-            ? resolveStatusPillStyle(token, teamLifecycleStatus)
-            : resolveTonePillStyle(token, "neutral")
-        }
-        teamLifecycleDescription={lifecycleDescription}
-        teamLifecycleLabel={lifecycleLabel}
-        teamLifecycleTitle={
-          teamSummaryQuery.data
-            ? isTeamArchived
-              ? "Archived but still maintainable"
-              : "Active roster entry"
-            : "Team authority lifecycle"
-        }
-        teamImpactSummary={advancedTeamImpactSummary}
-      />
-    );
-  };
-
   let tabContent: React.ReactNode = renderOverviewTab();
   switch (activeTab) {
     case "topology":
@@ -4035,15 +3485,6 @@ const TeamDetailPage: React.FC = () => {
       break;
     case "members":
       tabContent = renderMembersTab();
-      break;
-    case "bindings":
-      tabContent = renderBindingsTab();
-      break;
-    case "assets":
-      tabContent = renderAssetsTab();
-      break;
-    case "advanced":
-      tabContent = renderAdvancedTab();
       break;
     default:
       tabContent = renderOverviewTab();
@@ -4058,10 +3499,14 @@ const TeamDetailPage: React.FC = () => {
     <TeamDetailShell
       actionRail={
         <TeamActionRail
+          archiveTeamActionLabel={archiveTeamActionLabel || undefined}
+          archiveTeamDisabled={!teamSummaryQuery.data || teamArchiving}
+          archiveTeamHint={archiveTeamHint}
           conversationActionLabel={conversationActionLabel}
           editTeamDisabled={!canEditSelectedTeam}
           editTeamHint={editTeamHint}
           editTeamLabel={editTeamActionLabel}
+          onArchiveTeam={openTeamArchive}
           onOpenConversation={handleOpenConversation}
           onOpenServiceMapping={handleOpenServiceMapping}
           onOpenTeamEditor={openTeamEditor}

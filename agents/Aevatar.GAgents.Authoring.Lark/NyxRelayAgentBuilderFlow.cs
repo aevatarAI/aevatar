@@ -16,6 +16,7 @@ public static class NyxRelayAgentBuilderFlow
     private const string DisableAgentCommand = "/disable-agent";
     private const string EnableAgentCommand = "/enable-agent";
     private const string DeleteAgentCommand = "/delete-agent";
+    private const string DailySkillCommand = "/daily";
 
     public static bool TryResolve(
         ChannelInboundEvent evt,
@@ -37,6 +38,9 @@ public static class NyxRelayAgentBuilderFlow
             return false;
 
         var command = tokens[0];
+        if (IsOrnnSkillShortcut(command))
+            return false;
+
         if (!IsKnownCommand(command))
         {
             decision = AgentBuilderFlowDecision.DirectReply(BuildUnknownCommandReply(command, slashCommandRegistry));
@@ -85,6 +89,9 @@ public static class NyxRelayAgentBuilderFlow
             or DisableAgentCommand
             or EnableAgentCommand
             or DeleteAgentCommand;
+
+    private static bool IsOrnnSkillShortcut(string command) =>
+        string.Equals(command, DailySkillCommand, StringComparison.OrdinalIgnoreCase);
 
     private static bool IsPrivateChat(string? chatType) =>
         string.Equals(chatType, PrivateChatType, StringComparison.OrdinalIgnoreCase);

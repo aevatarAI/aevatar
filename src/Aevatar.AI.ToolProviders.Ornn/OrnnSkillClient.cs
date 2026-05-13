@@ -25,10 +25,40 @@ public sealed class OrnnSkillClient
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
+    /// <summary>
+    /// Default per-call timeout for Ornn HTTP fetches through the NyxID proxy. Without this, a
+    /// stuck upstream call can hold an Orleans grain turn captive for the full outer 120s LLM
+    /// reply budget — observed in production on 2026-05-13 as a 113s hang on
+    /// `chrono-ai-daily/json` that caused the lark bot's /daily to reply after ~2 minutes with a
+    /// fallback error card (see feature/lark-bot incident notes). Successful calls complete in
+    /// ~1s, so 30s leaves generous headroom while surfacing the failure quickly enough that the
+    /// LLM can fall back to a plain reply path instead of blocking the grain.
+    /// </summary>
+    public static readonly TimeSpan DefaultPerCallTimeout = TimeSpan.FromSeconds(30);
+
+    private readonly TimeSpan _perCallTimeout;
+
     public OrnnSkillClient(OrnnOptions options, NyxIdApiClient nyxApi, ILogger<OrnnSkillClient>? logger = null)
+        : this(options, nyxApi, DefaultPerCallTimeout, logger)
+    {
+    }
+
+    /// <summary>
+    /// Test-friendly overload: allows injecting a shorter per-call timeout so timeout behavior
+    /// can be verified deterministically without sleeping 30s. Production code should use the
+    /// primary constructor and accept <see cref="DefaultPerCallTimeout"/>.
+    /// </summary>
+    public OrnnSkillClient(
+        OrnnOptions options,
+        NyxIdApiClient nyxApi,
+        TimeSpan perCallTimeout,
+        ILogger<OrnnSkillClient>? logger = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _nyxApi = nyxApi ?? throw new ArgumentNullException(nameof(nyxApi));
+        if (perCallTimeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(perCallTimeout), "Per-call timeout must be positive.");
+        _perCallTimeout = perCallTimeout;
         _logger = logger ?? NullLogger<OrnnSkillClient>.Instance;
     }
 
@@ -53,6 +83,9 @@ public sealed class OrnnSkillClient
 
         var path = $"/api/v1/skill-search?query={Uri.EscapeDataString(query)}&mode={normalizedMode}&scope={Uri.EscapeDataString(normalizedScope)}&page={page}&pageSize={pageSize}";
 
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
         try
         {
             var response = await _nyxApi.ProxyRequestAsync(
@@ -62,13 +95,33 @@ public sealed class OrnnSkillClient
                 method: "GET",
                 body: null,
                 extraHeaders: null,
-                ct: ct);
+                ct: linkedCts.Token);
 
             if (TryUnwrapNyxIdProxyError(response, out var proxyError))
                 return new OrnnSearchResult { Items = [], Error = proxyError };
 
             var envelope = JsonSerializer.Deserialize<OrnnApiResponse<OrnnSearchResult>>(response, JsonOptions);
             return envelope?.Data ?? new OrnnSearchResult { Items = [] };
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Caller cancellation is a control-flow signal — let it propagate so the outer LLM
+            // run can react instead of seeing a synthetic "no skills" result.
+            throw;
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+        {
+            // Our per-call budget fired (caller didn't cancel). Distinguish from generic failure
+            // so log dashboards surface upstream slowness as its own signal.
+            _logger.LogWarning(
+                "Ornn skill search exceeded {TimeoutSeconds}s per-call budget for query '{Query}'",
+                (int)_perCallTimeout.TotalSeconds,
+                query);
+            return new OrnnSearchResult
+            {
+                Items = [],
+                Error = $"Ornn skill search exceeded {(int)_perCallTimeout.TotalSeconds}s budget.",
+            };
         }
         catch (Exception ex)
         {
@@ -85,6 +138,9 @@ public sealed class OrnnSkillClient
     {
         var path = $"/api/v1/skills/{Uri.EscapeDataString(idOrName)}/json";
 
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
         try
         {
             var response = await _nyxApi.ProxyRequestAsync(
@@ -94,13 +150,29 @@ public sealed class OrnnSkillClient
                 method: "GET",
                 body: null,
                 extraHeaders: null,
-                ct: ct);
+                ct: linkedCts.Token);
 
             if (TryUnwrapNyxIdProxyError(response, out _))
                 return null;
 
             var envelope = JsonSerializer.Deserialize<OrnnApiResponse<OrnnSkillJson>>(response, JsonOptions);
             return envelope?.Data;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Caller cancellation is a control-flow signal — let it propagate so the outer LLM
+            // run can react instead of seeing a synthetic "skill not found" result.
+            throw;
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+        {
+            // Our per-call budget fired (caller didn't cancel). Distinguish from generic failure
+            // so log dashboards surface upstream slowness as its own signal.
+            _logger.LogWarning(
+                "Ornn get skill exceeded {TimeoutSeconds}s per-call budget for '{IdOrName}'",
+                (int)_perCallTimeout.TotalSeconds,
+                idOrName);
+            return null;
         }
         catch (Exception ex)
         {

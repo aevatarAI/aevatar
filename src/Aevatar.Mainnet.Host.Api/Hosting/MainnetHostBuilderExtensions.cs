@@ -6,9 +6,11 @@ using Aevatar.AI.ToolProviders.ChronoStorage;
 using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Telegram;
+using Aevatar.AI.ToolProviders.Web;
 using Aevatar.Authentication.Hosting;
 using Aevatar.Authentication.Providers.NyxId;
 using Aevatar.Bootstrap.Hosting;
+using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Identity.DependencyInjection;
@@ -23,6 +25,7 @@ using Aevatar.GAgents.Platform.Telegram;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
+using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
 using Microsoft.AspNetCore.Builder;
@@ -86,6 +89,11 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddChannelIdentityProjectionStores(builder.Configuration);
         builder.Services.AddDeviceRegistration(builder.Configuration);
         builder.Services.AddScheduledAgents(builder.Configuration);
+        builder.Services.TryAddSingleton<IResponsesCallerScopeResolver, NyxIdResponsesCallerScopeResolver>();
+        builder.Services.TryAddSingleton<IResponsesModelsAggregator, NyxIdResponsesModelsAggregator>();
+        builder.Services.TryAddSingleton<IResponsesRouteResolver, CachingResponsesRouteResolver>();
+        builder.Services.AddHttpClient();
+        builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IResponsesToolProvider, ResponsesAevatarToolProvider>());
         // Bridge Studio's IUserConfigQueryPort onto the AI-layer IOwnerLlmConfigSource port so
         // SkillRunner / WorkflowAgent / NyxidChat honor the bot owner's pre-configured LLM model
         // + route (issue #509). The bridge lives here, not in any agent or AI package, so
@@ -132,6 +140,15 @@ public static class MainnetHostBuilderExtensions
             var urls = builder.Configuration[WebHostDefaults.ServerUrlsKey] ?? "http://127.0.0.1:5080";
             o.ApiBaseUrl = urls.Split(';').FirstOrDefault()?.Trim();
         });
+        builder.Services.AddWebTools(o =>
+        {
+            o.NyxIdBaseUrl = builder.Configuration["Aevatar:NyxId:Authority"]
+                             ?? builder.Configuration["Cli:App:NyxId:Authority"]
+                             ?? builder.Configuration["Aevatar:Authentication:Authority"];
+            o.NyxIdSearchSlug = builder.Configuration["Aevatar:Web:NyxIdSearchSlug"]
+                                ?? builder.Configuration["Aevatar:Web:SearchSlug"];
+            o.SearchApiBaseUrl = builder.Configuration["Aevatar:Web:SearchApiBaseUrl"];
+        });
 
         return builder;
     }
@@ -143,6 +160,7 @@ public static class MainnetHostBuilderExtensions
         app.UseAevatarDefaultHost();
         app.MapNyxIdChatEndpoints();
         app.MapStreamingProxyEndpoints();
+        app.MapResponsesApiEndpoints();
         app.MapChannelCallbackEndpoints();
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();

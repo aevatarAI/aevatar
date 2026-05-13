@@ -14,10 +14,14 @@ export type TeamTabOption = {
 };
 
 type TeamActionRailProps = {
+  readonly archiveTeamActionLabel?: string;
+  readonly archiveTeamDisabled?: boolean;
+  readonly archiveTeamHint?: string;
   readonly conversationActionLabel: string;
   readonly editTeamDisabled?: boolean;
   readonly editTeamLabel: string;
   readonly editTeamHint?: string;
+  readonly onArchiveTeam?: () => void;
   readonly onOpenConversation: () => void;
   readonly onOpenServiceMapping: () => void;
   readonly onOpenTeamEditor: () => void;
@@ -64,10 +68,14 @@ export const TeamDetailEmptyState: React.FC = () => (
 );
 
 export const TeamActionRail: React.FC<TeamActionRailProps> = ({
+  archiveTeamActionLabel,
+  archiveTeamDisabled = false,
+  archiveTeamHint,
   conversationActionLabel,
   editTeamDisabled = false,
   editTeamLabel,
   editTeamHint,
+  onArchiveTeam,
   onOpenConversation,
   onOpenServiceMapping,
   onOpenTeamEditor,
@@ -101,6 +109,17 @@ export const TeamActionRail: React.FC<TeamActionRailProps> = ({
     <Button onClick={onOpenTeamBuilder} style={topActionButtonStyle}>
       {teamBuilderActionLabel}
     </Button>
+    {archiveTeamActionLabel && onArchiveTeam ? (
+      <Button
+        danger
+        disabled={archiveTeamDisabled}
+        onClick={onArchiveTeam}
+        style={topActionButtonStyle}
+        title={archiveTeamDisabled ? archiveTeamHint : undefined}
+      >
+        {archiveTeamActionLabel}
+      </Button>
+    ) : null}
   </Space>
 );
 

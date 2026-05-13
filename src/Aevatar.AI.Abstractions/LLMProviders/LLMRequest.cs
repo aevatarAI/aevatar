@@ -19,6 +19,9 @@ public sealed class LLMRequest
     /// <summary>Additional metadata passed through to the provider/middleware.</summary>
     public IReadOnlyDictionary<string, string>? Metadata { get; init; }
 
+    /// <summary>Typed caller/session semantics used by Aevatar-owned orchestration paths.</summary>
+    public LLMRequestCallerContext? CallerContext { get; init; }
+
     /// <summary>Optional list of tools available for the LLM to invoke.</summary>
     public IReadOnlyList<IAgentTool>? Tools { get; init; }
 
@@ -57,6 +60,25 @@ public sealed class LLMRequest
         return modalities;
     }
 }
+
+/// <summary>
+/// Stable Aevatar caller/session identity for an LLM request.
+/// Keep business-control semantics here instead of in <see cref="LLMRequest.Metadata"/>.
+/// </summary>
+public sealed record LLMRequestCallerContext(
+    string ScopeId,
+    string OwnerSubject,
+    string? ResponseId,
+    LLMRequestCallerCredentials? Credentials = null);
+
+/// <summary>
+/// Per-request caller credentials. Carried out-of-band from <see cref="LLMRequest.Metadata"/>
+/// so providers can authenticate without forcing the caller to put secret material into a
+/// log-shaped string-keyed bag that telemetry sinks may serialize. New credential surfaces
+/// (delegation token, identity JWT) extend this record rather than adding more
+/// <see cref="LLMRequest.Metadata"/> keys.
+/// </summary>
+public sealed record LLMRequestCallerCredentials(string? NyxIdBearer);
 
 /// <summary>A single Chat message. Supports the system / user / assistant / tool roles.</summary>
 public sealed class ChatMessage

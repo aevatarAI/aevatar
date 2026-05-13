@@ -5,6 +5,7 @@ package aevatar.gagentservice.projection.readmodels;
 option csharp_namespace = "Aevatar.GAgentService.Projection.ReadModels";
 
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
 
 // --- ServiceCatalogReadModel ---
 
@@ -202,4 +203,100 @@ message ServiceRunCurrentStateReadModel {
 
   google.protobuf.Timestamp created_at_utc_value = 20;
   google.protobuf.Timestamp updated_at_utc_value = 21;
+}
+
+// --- ResponseSessionCurrentStateReadModel ---
+
+message ResponseSessionCurrentStateReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+
+  string response_id = 5;
+  string scope_id = 6;
+  string owner_subject = 7;
+  int32 origin_kind = 8;
+  string previous_response_id = 9;
+  int32 status = 10;
+
+  google.protobuf.Timestamp created_at_utc_value = 11;
+  google.protobuf.Timestamp updated_at_utc_value = 12;
+  google.protobuf.Timestamp cancelled_at_utc_value = 13;
+  int64 ttl_seconds = 14;
+  repeated ResponseSessionForwardedToolCallReadModel forwarded_tool_call_entries = 15;
+}
+
+message ResponseSessionForwardedToolCallReadModel {
+  string call_id = 1;
+  string tool_name = 2;
+  string schema_hash = 3;
+  google.protobuf.Value arguments = 4;
+  int32 status = 5;
+  google.protobuf.Value result = 6;
+  google.protobuf.Timestamp expiry_utc_value = 7;
+  google.protobuf.Timestamp emitted_at_utc_value = 8;
+  google.protobuf.Timestamp received_at_utc_value = 9;
+  google.protobuf.Timestamp resolved_at_utc_value = 10;
+}
+
+// --- ResponsesAgentToolStateCurrentStateReadModel ---
+
+message ResponsesAgentToolStateCurrentStateReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  string scope_id = 5;
+  string owner_subject = 6;
+  google.protobuf.Timestamp created_at_utc_value = 7;
+  google.protobuf.Timestamp updated_at_utc_value = 8;
+  repeated ResponsesTodoItemReadModel todo_item_entries = 9;
+  repeated ResponsesTaskTraceReadModel task_trace_entries = 10;
+  repeated ResponsesWebTraceReadModel web_trace_entries = 11;
+  repeated ResponsesWebCacheEntryReadModel web_cache_entry_entries = 12;
+}
+
+message ResponsesTodoItemReadModel {
+  string id = 1;
+  string content = 2;
+  string status = 3;
+  string source_response_id = 4;
+  google.protobuf.Timestamp created_at_utc_value = 5;
+  google.protobuf.Timestamp updated_at_utc_value = 6;
+}
+
+message ResponsesTaskTraceReadModel {
+  string task_id = 1;
+  string source_response_id = 2;
+  string child_actor_id = 3;
+  string description = 4;
+  string status = 5;
+  google.protobuf.Value arguments = 6;
+  google.protobuf.Value result = 7;
+  google.protobuf.Timestamp created_at_utc_value = 8;
+  google.protobuf.Timestamp updated_at_utc_value = 9;
+}
+
+message ResponsesWebTraceReadModel {
+  string trace_id = 1;
+  string source_response_id = 2;
+  string tool_name = 3;
+  string cache_key = 4;
+  string url = 5;
+  string query = 6;
+  bool cache_hit = 7;
+  google.protobuf.Value result = 8;
+  google.protobuf.Timestamp observed_at_utc_value = 9;
+}
+
+message ResponsesWebCacheEntryReadModel {
+  string cache_key = 1;
+  string tool_name = 2;
+  string url = 3;
+  string query = 4;
+  google.protobuf.Value result = 5;
+  google.protobuf.Timestamp cached_at_utc_value = 6;
+  google.protobuf.Timestamp last_hit_at_utc_value = 7;
+  int64 hit_count = 8;
 }
