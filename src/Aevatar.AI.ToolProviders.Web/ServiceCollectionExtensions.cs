@@ -18,6 +18,7 @@ public static class ServiceCollectionExtensions
         configure?.Invoke(options);
         services.TryAddSingleton(options);
         services.TryAddSingleton<WebApiClient>();
+        services.TryAddSingleton<IWebApiClient>(sp => sp.GetRequiredService<WebApiClient>());
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IAgentToolSource, WebAgentToolSource>());
         return services;

@@ -46,6 +46,7 @@ public sealed class ConversationReplyGeneratorTests
         var systemPrompt = providerFactory.Requests[0].Messages.First(message => message.Role == "system").Content;
         systemPrompt.Should().Contain("https://dev.aevatar.local/api/webhooks/nyxid-relay");
         systemPrompt.Should().NotContain("https://aevatar-console-backend-api.aevatar.ai/api/webhooks/nyxid-relay");
+        systemPrompt.Should().Contain("chrono-ai-daily");
     }
 
     [Fact]

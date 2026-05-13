@@ -74,6 +74,7 @@ public sealed class MainnetHostCompositionTests
         routePatterns.Should().Contain("/api/webhooks/nyxid-relay/health");
         routePatterns.Should().Contain("/api/channels/registrations");
         routePatterns.Should().Contain("/api/services/");
+        routePatterns.Should().Contain("/v1/responses");
 
         // Both Lark and Telegram tool providers must register with IAgentToolSource so the
         // declared agent tools (lark_messages_send / telegram_messages_send / telegram_chats_lookup
