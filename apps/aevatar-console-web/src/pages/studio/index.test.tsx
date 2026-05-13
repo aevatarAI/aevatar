@@ -4546,7 +4546,7 @@ describe("StudioPage", () => {
     });
     expect(studioApi.bindScopeWorkflow).not.toHaveBeenCalled();
     await waitFor(() => {
-      expect(screen.getByTestId("studio-context-title")).toHaveTextContent("draft1");
+      expect(screen.getByText("member:draft1")).toBeTruthy();
       expect(screen.getByText("service:draft1")).toBeTruthy();
       expect(screen.getByText("services:draft1")).toBeTruthy();
       expect(screen.getByText("candidate:none")).toBeTruthy();
