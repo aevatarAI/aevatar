@@ -93,16 +93,7 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     public void PlatformBindingStartRequested_ShouldPersistCommandIdForRecovery()
     {
         var requested = _agent.Apply(new StudioMemberBindingRunState(), NewRequested());
-        var admitted = _agent.Apply(requested, new StudioMemberBindingAdmittedEvent
-        {
-            BindingRunId = "bind-1",
-            ScopeId = "scope-1",
-            MemberId = "m-1",
-            PublishedServiceId = "member-m-1",
-            ImplementationKind = StudioMemberImplementationKind.Script,
-            DisplayName = "Script member",
-            AdmittedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-        });
+        var admitted = ApplyAdmitted(requested);
 
         var pending = _agent.Apply(admitted, new StudioMemberPlatformBindingStartRequested
         {
@@ -114,6 +105,42 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         pending.Status.Should().Be(StudioMemberBindingRunStatus.PlatformBindingPending);
         pending.PlatformBindingCommandId.Should().Be("platform-bind-1");
         pending.AttemptCount.Should().Be(1);
+    }
+
+    [Fact]
+    public void DuplicatePlatformBindingStart_AfterPlatformBindingPending_ShouldNotRegressOrIncrementAttempt()
+    {
+        var pending = NewPlatformPendingState();
+
+        var afterDuplicateStart = _agent.Apply(pending, new StudioMemberPlatformBindingStartRequested
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-2",
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(10)),
+        });
+
+        afterDuplicateStart.Status.Should().Be(StudioMemberBindingRunStatus.PlatformBindingPending);
+        afterDuplicateStart.PlatformBindingCommandId.Should().Be("platform-1");
+        afterDuplicateStart.AttemptCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task HandlePlatformBindingStartRequested_AfterPlatformBindingPending_ShouldNotRestartPlatformBinding()
+    {
+        var pending = NewPlatformPendingState();
+        var publisher = new RecordingEventPublisher();
+        var platformPort = new RecordingPlatformBindingCommandPort();
+        var agent = NewHandlerAgent(pending, publisher, platformPort: platformPort);
+
+        await agent.HandlePlatformBindingStartRequested(new StudioMemberPlatformBindingStartRequested
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-2",
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(10)),
+        });
+
+        platformPort.StartRequests.Should().BeEmpty();
+        publisher.SentMessages.Should().BeEmpty();
     }
 
     [Fact]
@@ -252,6 +279,44 @@ public sealed class StudioMemberBindingRunGAgentStateTests
         started.PlatformExecutionInFlight.Should().BeTrue();
         started.PlatformExecutionStartedAtUtc.Should().Be(startedAt);
         started.UpdatedAtUtc.Should().Be(startedAt);
+    }
+
+    [Fact]
+    public void DuplicatePlatformBindingAccepted_AfterExecutionStarted_ShouldNotClearInFlight()
+    {
+        var startedAt = DateTimeOffset.UtcNow.AddSeconds(-10);
+        var inFlight = NewInFlightState(startedAt);
+
+        var afterDuplicateAccepted = _agent.Apply(inFlight, new StudioMemberPlatformBindingAccepted
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            AcceptedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+
+        afterDuplicateAccepted.PlatformExecutionInFlight.Should().BeTrue();
+        afterDuplicateAccepted.PlatformExecutionStartedAtUtc.Should()
+            .Be(Timestamp.FromDateTimeOffset(startedAt));
+        afterDuplicateAccepted.PlatformBindingCommandId.Should().Be("platform-1");
+    }
+
+    [Fact]
+    public async Task HandlePlatformBindingAccepted_AfterExecutionStarted_ShouldNotRescheduleExecute()
+    {
+        var inFlight = NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10));
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = NewHandlerAgent(inFlight, publisher, scheduler);
+
+        await agent.HandlePlatformBindingAccepted(new StudioMemberPlatformBindingAccepted
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            AcceptedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+
+        scheduler.Timeouts.Should().BeEmpty();
+        publisher.SentMessages.Should().BeEmpty();
     }
 
     [Fact]
@@ -413,7 +478,18 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     private StudioMemberBindingRunState NewPlatformPendingState()
     {
         var requested = _agent.Apply(new StudioMemberBindingRunState(), NewRequested());
-        var admitted = _agent.Apply(requested, new StudioMemberBindingAdmittedEvent
+        var admitted = ApplyAdmitted(requested);
+        return _agent.Apply(admitted, new StudioMemberPlatformBindingStartRequested
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+        });
+    }
+
+    private StudioMemberBindingRunState ApplyAdmitted(StudioMemberBindingRunState requested)
+    {
+        return _agent.Apply(requested, new StudioMemberBindingAdmittedEvent
         {
             BindingRunId = "bind-1",
             ScopeId = "scope-1",
@@ -422,12 +498,6 @@ public sealed class StudioMemberBindingRunGAgentStateTests
             ImplementationKind = StudioMemberImplementationKind.Script,
             DisplayName = "Script member",
             AdmittedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-        });
-        return _agent.Apply(admitted, new StudioMemberPlatformBindingStartRequested
-        {
-            BindingRunId = "bind-1",
-            PlatformBindingCommandId = "platform-1",
-            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
         });
     }
 
@@ -445,9 +515,10 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     private static StudioMemberBindingRunGAgent NewHandlerAgent(
         StudioMemberBindingRunState state,
         RecordingEventPublisher publisher,
-        RecordingRuntimeCallbackScheduler? scheduler = null)
+        RecordingRuntimeCallbackScheduler? scheduler = null,
+        RecordingPlatformBindingCommandPort? platformPort = null)
     {
-        var agent = new StudioMemberBindingRunGAgent
+        var agent = new StudioMemberBindingRunGAgent(platformPort)
         {
             EventSourcing = new RecordingEventSourcing(state),
             EventPublisher = publisher,
@@ -570,6 +641,36 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     }
 
     private sealed record SentMessage(string TargetActorId, IMessage Event);
+
+    private sealed class RecordingPlatformBindingCommandPort : IStudioMemberPlatformBindingCommandPort
+    {
+        public List<StudioMemberPlatformBindingStartRequested> StartRequests { get; } = [];
+
+        public List<StudioMemberPlatformBindingStartRequested> ExecuteRequests { get; } = [];
+
+        public Task<StudioMemberPlatformBindingAccepted> StartAsync(
+            string replyActorId,
+            StudioMemberPlatformBindingStartRequested request,
+            CancellationToken ct = default)
+        {
+            StartRequests.Add(request.Clone());
+            return Task.FromResult(new StudioMemberPlatformBindingAccepted
+            {
+                BindingRunId = request.BindingRunId,
+                PlatformBindingCommandId = request.PlatformBindingCommandId,
+                AcceptedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            });
+        }
+
+        public Task ExecuteAsync(
+            string replyActorId,
+            string platformBindingCommandId,
+            StudioMemberPlatformBindingStartRequested request)
+        {
+            ExecuteRequests.Add(request.Clone());
+            return Task.CompletedTask;
+        }
+    }
 
     private sealed class RecordingRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
     {

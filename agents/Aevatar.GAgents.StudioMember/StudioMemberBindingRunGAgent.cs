@@ -96,7 +96,7 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
     [EventHandler(EndpointName = "startPlatformBinding", AllowSelfHandling = true)]
     public async Task HandlePlatformBindingStartRequested(StudioMemberPlatformBindingStartRequested evt)
     {
-        if (!CanAcceptRunEvent(evt.BindingRunId))
+        if (!CanAcceptPlatformBindingStart(evt.BindingRunId))
             return;
 
         await PersistDomainEventAsync(evt);
@@ -124,7 +124,7 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
     [EventHandler(EndpointName = "acceptPlatformBinding", AllowSelfHandling = true)]
     public async Task HandlePlatformBindingAccepted(StudioMemberPlatformBindingAccepted evt)
     {
-        if (!CanAcceptRunEvent(evt.BindingRunId))
+        if (!CanAcceptPlatformBindingAccepted(evt.BindingRunId, evt.PlatformBindingCommandId))
             return;
 
         await PersistDomainEventAsync(evt);
@@ -319,8 +319,11 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         StudioMemberBindingRunState state,
         StudioMemberPlatformBindingStartRequested evt)
     {
-        if (IsStale(state, evt.BindingRunId) || IsTerminal(state.Status))
+        if (IsStale(state, evt.BindingRunId)
+            || state.Status != StudioMemberBindingRunStatus.Admitted)
+        {
             return state;
+        }
 
         var next = state.Clone();
         next.Status = StudioMemberBindingRunStatus.PlatformBindingPending;
@@ -336,8 +339,13 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         StudioMemberBindingRunState state,
         StudioMemberPlatformBindingAccepted evt)
     {
-        if (IsStale(state, evt.BindingRunId) || IsTerminal(state.Status))
+        if (IsStale(state, evt.BindingRunId)
+            || state.Status != StudioMemberBindingRunStatus.PlatformBindingPending
+            || state.PlatformExecutionInFlight
+            || !string.Equals(state.PlatformBindingCommandId, evt.PlatformBindingCommandId, StringComparison.Ordinal))
+        {
             return state;
+        }
 
         var next = state.Clone();
         next.Status = StudioMemberBindingRunStatus.PlatformBindingPending;
@@ -438,6 +446,18 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
         !string.IsNullOrEmpty(State.BindingRunId)
         && string.Equals(State.BindingRunId, bindingRunId, StringComparison.Ordinal)
         && State.Status == StudioMemberBindingRunStatus.AdmissionPending;
+
+    private bool CanAcceptPlatformBindingStart(string bindingRunId) =>
+        !string.IsNullOrEmpty(State.BindingRunId)
+        && string.Equals(State.BindingRunId, bindingRunId, StringComparison.Ordinal)
+        && State.Status == StudioMemberBindingRunStatus.Admitted;
+
+    private bool CanAcceptPlatformBindingAccepted(string bindingRunId, string platformBindingCommandId) =>
+        !string.IsNullOrEmpty(State.BindingRunId)
+        && string.Equals(State.BindingRunId, bindingRunId, StringComparison.Ordinal)
+        && State.Status == StudioMemberBindingRunStatus.PlatformBindingPending
+        && !State.PlatformExecutionInFlight
+        && string.Equals(State.PlatformBindingCommandId, platformBindingCommandId, StringComparison.Ordinal);
 
     private bool CanAcceptPlatformBindingResult(string bindingRunId, string platformBindingCommandId) =>
         CanAcceptPlatformBindingCommand(bindingRunId, platformBindingCommandId);
