@@ -122,18 +122,16 @@ internal sealed class NyxIdResponsesModelsAggregator : IResponsesModelsAggregato
         !string.IsNullOrWhiteSpace(service.RouteValue) &&
         string.Equals(service.Status, "ready", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>NyxID route-plane paths are asymmetric in how they include the OpenAI `v1` segment:
-    /// GatewayProvider services advertise `RouteValue` like `/api/v1/llm/anthropic/v1` (already
-    /// versioned), while UserService / ProxyService services advertise `/api/v1/proxy/s/{slug}` and
-    /// expect the OpenAI client to ask for `/v1/models`. Bridge both.</summary>
-    internal static string BuildModelsUrl(string authority, string routeValue)
-    {
-        var trimmedAuthority = authority.TrimEnd('/');
-        var trimmedRoute = routeValue.TrimEnd('/');
-        if (trimmedRoute.EndsWith("/v1", StringComparison.Ordinal))
-            return $"{trimmedAuthority}{trimmedRoute}/models";
-        return $"{trimmedAuthority}{trimmedRoute}/v1/models";
-    }
+    /// <summary>Both NyxID route planes already terminate at an OpenAI-compatible API root: the
+    /// GatewayProvider plane (`/api/v1/llm/&lt;slug&gt;/v1`) is the API root verbatim, and the
+    /// ProxyService / UserService plane (`/api/v1/proxy/s/&lt;slug&gt;`) routes to the
+    /// DownstreamService's stored <c>base_url</c> which itself already includes the upstream's
+    /// `/v1` segment (e.g. chrono-llm.base_url = <c>https://llm.aelf.dev/v1</c>, so
+    /// `/proxy/s/chrono-llm/models` lands at <c>https://llm.aelf.dev/v1/models</c>). Append
+    /// `/models` for every route — appending `/v1/models` would double the segment on the proxy
+    /// plane and 404.</summary>
+    internal static string BuildModelsUrl(string authority, string routeValue) =>
+        $"{authority.TrimEnd('/')}{routeValue.TrimEnd('/')}/models";
 
     private static IReadOnlyList<ResponsesModelEntry> NormalizeModelsBody(
         string body,
