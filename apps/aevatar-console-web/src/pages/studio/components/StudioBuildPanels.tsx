@@ -1061,7 +1061,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
     }
 
     if (!scopeId) {
-      const visibleMessage = 'Resolve the current scope before running the workflow draft.';
+      const visibleMessage = 'Resolve the current workspace before running the workflow draft.';
       setWorkflowRunError(visibleMessage);
       void message.error(visibleMessage);
       return;
@@ -2409,7 +2409,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
 
   const handleSave = React.useCallback(async () => {
     if (!scopeId || !activeScript?.script?.scriptId) {
-      setSaveNotice('Resolve the current scope and select a script before saving.');
+      setSaveNotice('Resolve the current workspace and select a script before saving.');
       return;
     }
 
@@ -2512,7 +2512,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
 
   const handlePromoteEvolution = React.useCallback(async () => {
     if (!scopeId || !activeScript?.script?.scriptId) {
-      setPromotionNotice('Resolve the current scope and script before proposing evolution.');
+      setPromotionNotice('Resolve the current workspace and script before proposing evolution.');
       return;
     }
 
@@ -2551,7 +2551,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
 
   const handleRun = React.useCallback(async () => {
     if (!scopeId || !activeScript?.script?.scriptId) {
-      setRunOutput('Resolve the current scope and select a script before running.');
+      setRunOutput('Resolve the current workspace and select a script before running.');
       return;
     }
 
@@ -2591,7 +2591,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
     return (
       <div data-testid="studio-script-build-panel" style={buildSurfaceCardStyle}>
         <Typography.Text type="secondary">
-          Loading scope scripts...
+          Loading workspace scripts...
         </Typography.Text>
       </div>
     );
@@ -2967,7 +2967,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
             </div>
           ) : (
             <Empty
-              description="Create a Script draft or select a saved scope script to start editing."
+              description="Create a Script draft or select a saved workspace script to start editing."
             >
               <Button
                 className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
@@ -3240,7 +3240,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
     if (!scopeId || !selectedTypeName.trim() || !runPrompt.trim()) {
       setRunState({
         ...IDLE_DRAFT_RUN_STATE,
-        error: 'Scope, GAgent type, and prompt are required before running.',
+        error: 'Workspace, GAgent type, and prompt are required before running.',
         status: 'error',
       });
       return;

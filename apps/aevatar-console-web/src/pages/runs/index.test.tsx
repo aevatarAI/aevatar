@@ -246,7 +246,7 @@ jest.mock("./components/RunsLaunchRail", () => {
           })
         : null,
       React.createElement("input", {
-        "aria-label": "Scope ID",
+        "aria-label": "Workspace ID",
         onChange: (event: any) =>
           setValues((current: Record<string, unknown>) => ({
             ...current,

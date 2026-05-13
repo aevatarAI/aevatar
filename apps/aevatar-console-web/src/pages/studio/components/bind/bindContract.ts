@@ -86,7 +86,7 @@ function buildAuthDescriptor(authSession?: StudioAuthSession | null): Pick<
     return {
       authAuthenticated: false,
       authEnabled: true,
-      authHint: 'Studio is not authenticated for this scope yet.',
+      authHint: 'Studio is not authenticated for this workspace yet.',
       authLabel: 'Sign-in required',
     };
   }

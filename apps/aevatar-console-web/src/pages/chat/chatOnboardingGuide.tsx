@@ -89,7 +89,7 @@ function getStepDescription(
       return "NyxID Chat can use this provider immediately. You can switch back to the assistant or start over.";
     case "select_provider":
     default:
-      return "Pick the provider you want NyxID Chat to use by default for this scope.";
+      return "Pick the provider you want NyxID Chat to use by default for this workspace.";
   }
 }
 

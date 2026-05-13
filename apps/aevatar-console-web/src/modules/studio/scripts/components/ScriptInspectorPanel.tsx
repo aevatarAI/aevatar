@@ -60,7 +60,7 @@ const ScriptInspectorPanel: React.FC<ScriptInspectorPanelProps> = ({
   ];
   const unavailableActions = [
     ...(!scopeBacked
-      ? ['保存（需要当前团队）', '发布（需要当前团队）']
+      ? ['保存（需要当前工作空间）', '发布（需要当前工作空间）']
       : []),
     ...(!isEmbeddedMode
       ? ['测试运行（需要嵌入式 Host）', 'AI 辅助（需要嵌入式 Host）']
@@ -115,7 +115,7 @@ const ScriptInspectorPanel: React.FC<ScriptInspectorPanelProps> = ({
               <div className="console-scripts-field-label">存储位置</div>
               <div className="console-scripts-field-value">
                 {scopeBacked
-                  ? `当前团队 · ${appContext.scopeId}`
+                  ? `工作空间 ID · ${appContext.scopeId}`
                   : '仅本地草稿'}
               </div>
             </div>

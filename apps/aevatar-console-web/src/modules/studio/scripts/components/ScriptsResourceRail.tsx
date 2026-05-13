@@ -73,7 +73,7 @@ const ScriptsResourceRail: React.FC<ScriptsResourceRailProps> = ({
         <input
           type="search"
           className="console-scripts-search-input"
-          placeholder="Search drafts or the current scope catalog"
+          placeholder="Search drafts or the workspace catalog"
           value={search}
           onChange={(event) => onSearchChange(event.target.value)}
         />
@@ -122,16 +122,16 @@ const ScriptsResourceRail: React.FC<ScriptsResourceRailProps> = ({
       </ScriptsStudioSection>
 
       <ScriptsStudioSection
-        eyebrow="Scope Catalog"
-        title={`Current Scope Catalog (${scopeScripts.length})`}
+        eyebrow="Workspace Catalog"
+        title={`Workspace Catalog (${scopeScripts.length})`}
         actions={
           scopeBacked ? (
             <button
               type="button"
               onClick={onRefreshScopeScripts}
               className="console-scripts-icon-button"
-              title="Refresh scope catalog"
-              aria-label="Refresh scope catalog"
+              title="Refresh workspace catalog"
+              aria-label="Refresh workspace catalog"
               disabled={scopeScriptsLoading}
             >
               <SyncOutlined spin={scopeScriptsLoading} />
@@ -142,20 +142,20 @@ const ScriptsResourceRail: React.FC<ScriptsResourceRailProps> = ({
         <div className="console-scripts-run-list">
           {!scopeBacked ? (
             <ScriptsStudioEmptyState
-              title="Scope save unavailable"
-              copy="Studio has not resolved a current scope yet, so only local drafts are available."
+              title="Workspace save unavailable"
+              copy="Studio has not resolved a current workspace yet, so only local drafts are available."
             />
           ) : scopeScripts.length === 0 ? (
             <ScriptsStudioEmptyState
               title={
                 scopeScriptsLoading
-                  ? 'Loading scope catalog'
-                  : 'No scope catalog entries matched'
+                  ? 'Loading workspace catalog'
+                  : 'No workspace catalog entries matched'
               }
               copy={
                 scopeScriptsLoading
-                  ? 'Pulling the current scope catalog now.'
-                  : 'Try a different search or save the active draft to the current scope.'
+                  ? 'Pulling the current workspace catalog now.'
+                  : 'Try a different search or save the active draft to the workspace.'
               }
             />
           ) : (
@@ -237,7 +237,7 @@ const ScriptsResourceRail: React.FC<ScriptsResourceRailProps> = ({
           {proposalDecisions.length === 0 ? (
             <ScriptsStudioEmptyState
               title="No proposal decisions yet"
-              copy="Promotion decisions will appear here after the scope catalog points at them."
+              copy="Promotion decisions will appear here after the workspace catalog points at them."
             />
           ) : (
             proposalDecisions.map((decision) => (

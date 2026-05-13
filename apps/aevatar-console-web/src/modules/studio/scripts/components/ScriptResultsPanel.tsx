@@ -151,8 +151,8 @@ function renderResultDetail(props: ScriptResultsPanelProps): React.JSX.Element {
     if (!scopeDetail?.script) {
       return (
         <ScriptsStudioEmptyState
-          title="还没有保存到当前团队"
-          copy="先把当前草稿保存到团队里，这里才会显示已保存版本的目录状态。"
+          title="还没有保存到当前工作空间"
+          copy="先把当前草稿保存到工作空间里，这里才会显示已保存版本的目录状态。"
         />
       );
     }
@@ -163,7 +163,7 @@ function renderResultDetail(props: ScriptResultsPanelProps): React.JSX.Element {
           <div className="console-scripts-detail-card">
             <div className="console-scripts-section-label">Catalog</div>
             <div className="console-scripts-detail-copy">
-              <div>Scope: {scopeDetail.scopeId}</div>
+              <div>Workspace ID: {scopeDetail.scopeId}</div>
               <div>Revision: {scopeDetail.script.activeRevision}</div>
               <div>Updated: {formatScriptDateTime(scopeDetail.script.updatedAt)}</div>
             </div>
@@ -374,8 +374,8 @@ const ScriptResultsPanel: React.FC<ScriptResultsPanelProps> = (props) => {
     ? props.selectedSnapshotView.output || props.selectedSnapshotView.status || '运行结果已就绪'
     : '开始一次测试运行后，这里会显示运行时快照。';
   const saveSummary = props.scopeDetail?.script
-    ? `当前团队 ${props.scopeDetail.scopeId} 正在指向 ${props.scopeDetail.script.activeRevision}。`
-    : '当前草稿还没有保存到团队目录。';
+    ? `当前工作空间 ${props.scopeDetail.scopeId} 正在指向 ${props.scopeDetail.script.activeRevision}。`
+    : '当前草稿还没有保存到工作空间目录。';
   const promotionSummary = props.selectedDecision
     ? props.selectedDecision.failureReason ||
       `Candidate ${props.selectedDecision.candidateRevision || '-'}`
