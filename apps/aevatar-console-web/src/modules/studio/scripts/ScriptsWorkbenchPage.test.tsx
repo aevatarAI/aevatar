@@ -338,7 +338,7 @@ describe('ScriptsWorkbenchPage', () => {
       expect(mockedScriptsApi.observeSaveScript).toHaveBeenCalledTimes(2);
     });
     expect(
-      await screen.findByText('Saved script-1 into current scope scope-1.'),
+      await screen.findByText('Saved script-1 into workspace scope-1.'),
     ).toBeTruthy();
   });
 
@@ -622,7 +622,7 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
     const headerScope = within(header as HTMLElement);
     expect(headerScope.getByText('not saved')).toBeTruthy();
     expect(headerScope.getByText('嵌入式 Host')).toBeTruthy();
-    expect(headerScope.getByText('Scope 1626c177…b0d6')).toBeTruthy();
+    expect(headerScope.getByText('Workspace 1626c177…b0d6')).toBeTruthy();
     expect(headerScope.getByRole('button', { name: 'New draft' })).toBeTruthy();
     expect(headerScope.getByRole('button', { name: 'Save' })).toBeTruthy();
     expect(
@@ -760,7 +760,7 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
     ).toBeTruthy();
     expect(
       screen.getByText(
-        /Updated scope scope-1 to serve script script-1 on revision rev-1\./,
+        /Updated workspace scope-1 to serve script script-1 on revision rev-1\./,
       ),
     ).toBeTruthy();
 

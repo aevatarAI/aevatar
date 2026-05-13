@@ -56,7 +56,7 @@ describe('TeamCreatePage', () => {
     expect(screen.getByRole('heading', { level: 2, name: 'Create Team' })).toBeTruthy();
     expect(screen.getByText('数据源')).toBeTruthy();
     expect(screen.getByText('StudioTeam')).toBeTruthy();
-    expect(screen.getByText('Scope context')).toBeTruthy();
+    expect(screen.getByText('工作空间上下文')).toBeTruthy();
     expect(screen.getByText('Team authority')).toBeTruthy();
     expect(screen.getByRole('heading', { level: 3, name: 'Create real Team roster entry' })).toBeTruthy();
     expect(screen.getByLabelText('Team name')).toBeTruthy();

@@ -736,7 +736,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
     return (
       <Alert
         showIcon
-        message="Resolve a team scope before binding this member."
+        message="Resolve a workspace before binding this member."
         type="info"
       />
     );
@@ -749,7 +749,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
           <Alert
             showIcon
             message="Loading current member contracts..."
-            description="Studio is checking whether this member already has a callable published contract in the current scope."
+            description="Studio is checking whether this member already has a callable published contract in the current workspace."
             type="info"
           />
         </div>
@@ -788,7 +788,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   </Typography.Text>
                 </div>
                 <div style={valueCardStyle}>
-                  <Typography.Text type="secondary">Scope</Typography.Text>
+                  <Typography.Text type="secondary">Workspace ID</Typography.Text>
                   <Typography.Text strong style={{ wordBreak: 'break-word' }}>
                     {scopeId}
                   </Typography.Text>
@@ -823,7 +823,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
       <div data-testid="studio-bind-surface" style={rootStyle}>
         <Alert
           showIcon
-          message="No published contract is available for this member in the current scope yet."
+          message="No published contract is available for this member in the current workspace yet."
           description="Bind a workflow, script, or gagent revision first so Studio can reveal the invoke contract."
           type="warning"
         />
@@ -1224,14 +1224,14 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 children: bindContract ? (
                   <div style={parameterGridStyle}>
                     <div style={valueCardStyle}>
-                      <Typography.Text type="secondary">Scope</Typography.Text>
+                      <Typography.Text type="secondary">Workspace ID</Typography.Text>
                       <Typography.Text strong style={{ wordBreak: 'break-word' }}>
                         {bindContract.scopeLabel}
                       </Typography.Text>
                       <Typography.Text type="secondary">
                         {bindContract.scopeSource
                           ? `Resolved from ${bindContract.scopeSource}.`
-                          : 'Bound to the current Studio scope.'}
+                          : 'Bound to the current Studio workspace.'}
                       </Typography.Text>
                     </div>
                     <div style={valueCardStyle}>
@@ -1319,7 +1319,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   </div>
                 ) : (
                   <Empty
-                    description="This service does not depend on any extra connectors, secrets, or service bindings in the current scope."
+                    description="This service does not depend on any extra connectors, secrets, or service bindings in the current workspace."
                     image={Empty.PRESENTED_IMAGE_SIMPLE}
                   />
                 ),

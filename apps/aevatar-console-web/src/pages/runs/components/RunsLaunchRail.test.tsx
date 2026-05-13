@@ -117,7 +117,7 @@ describe("RunsLaunchRail", () => {
     );
 
     expect(screen.getByLabelText("Chat route (optional)")).toBeInTheDocument();
-    expect(screen.getByLabelText("Scope ID")).toBeInTheDocument();
+    expect(screen.getByLabelText("Workspace ID")).toBeInTheDocument();
     expect(screen.queryByLabelText("Endpoint")).toBeNull();
     expect(screen.queryByText("Requests go through /api/scopes/{scopeId}/invoke/chat:stream")).toBeNull();
 

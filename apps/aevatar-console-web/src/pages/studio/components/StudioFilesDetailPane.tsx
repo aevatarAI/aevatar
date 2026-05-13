@@ -766,7 +766,7 @@ async function syncWorkspaceDirectories(
       )
     ) {
       throw new Error(
-        'Workflow directories are managed by the current scope and cannot be edited here.',
+        'Workflow directories are managed by the current workspace and cannot be edited here.',
       );
     }
 
@@ -2392,8 +2392,8 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             <Alert
               type="info"
               showIcon
-              message="Resolve a project scope to browse chat histories."
-              description="Chat histories are loaded from the active scope once the Studio host resolves a scope context."
+              message="Resolve a workspace to browse chat histories."
+              description="Chat histories are loaded from the active workspace once the Studio host resolves a workspace context."
             />
           </div>
         </div>
@@ -2585,8 +2585,8 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             <Alert
               type="info"
               showIcon
-              message="Resolve a project scope to browse scripts."
-              description="Script files are loaded from the active scope once Studio resolves a scope context."
+              message="Resolve a workspace to browse scripts."
+              description="Script files are loaded from the active workspace once Studio resolves a workspace context."
             />
           </div>
         </div>
