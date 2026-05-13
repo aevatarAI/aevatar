@@ -68,7 +68,17 @@ public sealed class LLMRequest
 public sealed record LLMRequestCallerContext(
     string ScopeId,
     string OwnerSubject,
-    string? ResponseId);
+    string? ResponseId,
+    LLMRequestCallerCredentials? Credentials = null);
+
+/// <summary>
+/// Per-request caller credentials. Carried out-of-band from <see cref="LLMRequest.Metadata"/>
+/// so providers can authenticate without forcing the caller to put secret material into a
+/// log-shaped string-keyed bag that telemetry sinks may serialize. New credential surfaces
+/// (delegation token, identity JWT) extend this record rather than adding more
+/// <see cref="LLMRequest.Metadata"/> keys.
+/// </summary>
+public sealed record LLMRequestCallerCredentials(string? NyxIdBearer);
 
 /// <summary>A single Chat message. Supports the system / user / assistant / tool roles.</summary>
 public sealed class ChatMessage

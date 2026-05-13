@@ -151,9 +151,9 @@ internal static class ResponsesApiEndpoints
             logger);
         // LLMRequest.Metadata flows into the LLM provider, where its values may be
         // serialized into logs, traces, or third-party SDKs. Keep only safe-to-log
-        // tracing/config values here. Business-control identity lives in the
-        // typed CallerContext below, and the NyxID bearer token is scoped only to
-        // AgentToolRequestContext for tool execution.
+        // tracing/config values here. Business-control identity and per-request
+        // credentials live on the typed CallerContext below; the LLM provider
+        // (e.g. NyxIdLLMProvider) reads the bearer from Credentials, not Metadata.
         var llmMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             [LLMRequestMetadataKeys.RequestId] = normalized.ResponseId,
@@ -177,7 +177,8 @@ internal static class ResponsesApiEndpoints
             CallerContext = new LLMRequestCallerContext(
                 callerScope.ScopeId,
                 callerScope.OwnerSubject,
-                normalized.ResponseId),
+                normalized.ResponseId,
+                new LLMRequestCallerCredentials(bearerToken)),
             Tools = toolClassification.EffectiveTools,
             Model = normalized.Model,
             Temperature = normalized.Temperature,

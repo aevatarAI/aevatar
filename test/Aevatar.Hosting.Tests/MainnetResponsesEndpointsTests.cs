@@ -100,11 +100,17 @@ public sealed class MainnetResponsesEndpointsTests
         provider.LastRequest.Messages[0].Content.Should().Be("ping");
         provider.LastRequest.Metadata.Should().ContainKey(LLMRequestMetadataKeys.RequestId);
         provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ScopeId);
-        provider.LastRequest.CallerContext.Should().Be(new LLMRequestCallerContext("user-1", "user-1", responseId));
-        // The NyxID bearer token is intentionally NOT placed in LLMRequest.Metadata
-        // (which crosses into the LLM provider's request and may be logged downstream).
-        // Tool providers read it from AgentToolRequestContext instead.
+        provider.LastRequest.CallerContext.Should().Be(new LLMRequestCallerContext(
+            "user-1",
+            "user-1",
+            responseId,
+            new LLMRequestCallerCredentials("secret-token")));
+        // The NyxID bearer is carried on the typed CallerContext.Credentials channel,
+        // NOT through LLMRequest.Metadata. Metadata is the log-shaped string-keyed bag
+        // that telemetry sinks may serialize; secret material belongs out-of-band.
+        // Tool providers read the bearer from AgentToolRequestContext (separate path).
         provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        provider.LastRequest.CallerContext!.Credentials!.NyxIdBearer.Should().Be("secret-token");
 
         sessions.Registered.Should().ContainSingle();
         sessions.Registered[0].ScopeId.Should().Be("user-1");
@@ -160,6 +166,7 @@ public sealed class MainnetResponsesEndpointsTests
         provider.StreamCallCount.Should().Be(1);
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        provider.LastRequest.CallerContext!.Credentials!.NyxIdBearer.Should().Be("stream-secret");
         sessions.StatusUpdates.Should().ContainSingle(x => x.Status == ResponseSessionStatus.Completed);
     }
 
