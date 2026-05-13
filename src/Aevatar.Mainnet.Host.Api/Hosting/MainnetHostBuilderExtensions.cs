@@ -90,6 +90,8 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddDeviceRegistration(builder.Configuration);
         builder.Services.AddScheduledAgents(builder.Configuration);
         builder.Services.TryAddSingleton<IResponsesCallerScopeResolver, NyxIdResponsesCallerScopeResolver>();
+        builder.Services.TryAddSingleton<IResponsesModelsAggregator, NyxIdResponsesModelsAggregator>();
+        builder.Services.AddHttpClient();
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IResponsesToolProvider, ResponsesAevatarToolProvider>());
         // Bridge Studio's IUserConfigQueryPort onto the AI-layer IOwnerLlmConfigSource port so
         // SkillRunner / WorkflowAgent / NyxidChat honor the bot owner's pre-configured LLM model

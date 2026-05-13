@@ -1051,11 +1051,175 @@ public sealed class MainnetResponsesEndpointsTests
         provider.LastRequest.Should().BeNull();
     }
 
+    [Fact]
+    public async Task GetModels_WithBearer_ShouldReturnAggregatorEntriesInOpenAiSpec()
+    {
+        var aggregator = new RecordingResponsesModelsAggregator
+        {
+            Entries =
+            [
+                new ResponsesModelEntry
+                {
+                    Id = "claude-opus-4-7",
+                    Created = 1700000000,
+                    OwnedBy = "anthropic",
+                    Group = "anthropic",
+                    RouteValue = "/api/v1/llm/anthropic/v1",
+                    Status = "ready",
+                },
+                new ResponsesModelEntry
+                {
+                    Id = "chrono-llm/qwen-3",
+                    Created = 1700000001,
+                    OwnedBy = "chrono-llm",
+                    Group = "chrono-llm",
+                    RouteValue = "/api/v1/proxy/s/chrono-llm",
+                    Status = "ready",
+                },
+            ],
+        };
+        var provider = new RecordingLLMProvider();
+        await using var app = await CreateAppAsync(provider, modelsAggregator: aggregator);
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/v1/models");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "models-token");
+        var response = await app.GetTestClient().SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(body);
+        doc.RootElement.GetProperty("object").GetString().Should().Be("list");
+        var data = doc.RootElement.GetProperty("data");
+        data.GetArrayLength().Should().Be(2);
+        data[0].GetProperty("id").GetString().Should().Be("claude-opus-4-7");
+        data[0].GetProperty("object").GetString().Should().Be("model");
+        data[0].GetProperty("owned_by").GetString().Should().Be("anthropic");
+        data[0].GetProperty("group").GetString().Should().Be("anthropic");
+        data[0].GetProperty("route_value").GetString().Should().Be("/api/v1/llm/anthropic/v1");
+        data[1].GetProperty("id").GetString().Should().Be("chrono-llm/qwen-3");
+        data[1].GetProperty("group").GetString().Should().Be("chrono-llm");
+        aggregator.LastBearer.Should().Be("models-token");
+        aggregator.CallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GetModels_WithoutBearer_ShouldReturnStructured401()
+    {
+        var aggregator = new RecordingResponsesModelsAggregator();
+        var provider = new RecordingLLMProvider();
+        await using var app = await CreateAppAsync(provider, modelsAggregator: aggregator);
+
+        var response = await app.GetTestClient().GetAsync("/v1/models");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("authentication_required");
+        aggregator.CallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PostResponses_WithVendorPrefixModel_ShouldStripPrefixAndPinRoutePreference()
+    {
+        // Stage 2: client picks `chrono-llm/qwen-3` from the catalog. The create handler must
+        // recover the route slug (so NyxIdLLMProvider routes via /api/v1/proxy/s/chrono-llm)
+        // AND pass the bare model name `qwen-3` to the provider. Response-snapshot echo
+        // preserves the original prefixed model so the client sees back what it sent.
+        var provider = new RecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "ok",
+                    IsLast = true,
+                    Usage = new TokenUsage(1, 1, 2),
+                },
+            ],
+        };
+        await using var app = await CreateAppAsync(provider);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""
+            {
+              "model": "chrono-llm/qwen-3",
+              "input": "ping",
+              "stream": false
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "vendor-secret");
+        var response = await app.GetTestClient().SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.Model.Should().Be("qwen-3");
+        provider.LastRequest.Metadata!
+            .Should().ContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference)
+            .WhoseValue.Should().Be("chrono-llm");
+
+        using var doc = JsonDocument.Parse(body);
+        doc.RootElement.GetProperty("model").GetString().Should().Be("chrono-llm/qwen-3");
+    }
+
+    [Fact]
+    public async Task PostResponses_WithBareModel_ShouldNotSetRoutePreference()
+    {
+        // Back-compat: gateway-routed models stay bare. No prefix → no route preference.
+        var provider = new RecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk { DeltaContent = "ok", IsLast = true, Usage = new TokenUsage(1, 1, 2) },
+            ],
+        };
+        await using var app = await CreateAppAsync(provider);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""{"model":"gpt-5.4","input":"ping","stream":false}"""),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "bare-secret");
+        var response = await app.GetTestClient().SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        provider.LastRequest!.Model.Should().Be("gpt-5.4");
+        provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
+    }
+
+    [Fact]
+    public async Task PostResponses_WithNonSlugLookingPrefix_ShouldPassModelVerbatim()
+    {
+        // Edge case: `BadSlug/x` has an uppercase prefix that doesn't match the slug pattern
+        // (lowercase + digits + hyphens, length 2-64). The parser must NOT consume it as a
+        // route — pass through unchanged so the LLM provider gets the original model string.
+        var provider = new RecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk { DeltaContent = "ok", IsLast = true, Usage = new TokenUsage(1, 1, 2) },
+            ],
+        };
+        await using var app = await CreateAppAsync(provider);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""{"model":"BadSlug/gpt-x","input":"ping","stream":false}"""),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "edge-secret");
+        var response = await app.GetTestClient().SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        provider.LastRequest!.Model.Should().Be("BadSlug/gpt-x");
+        provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
+    }
+
     private static async Task<WebApplication> CreateAppAsync(
         RecordingLLMProvider provider,
         RecordingResponseSessionStore? responseSessions = null,
         IResponsesCallerScopeResolver? callerScopeResolver = null,
-        IResponsesToolProvider? responsesToolProvider = null)
+        IResponsesToolProvider? responsesToolProvider = null,
+        IResponsesModelsAggregator? modelsAggregator = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -1069,6 +1233,7 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton<IResponseSessionQueryPort>(responseSessions);
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         builder.Services.AddSingleton(callerScopeResolver ?? new StubResponsesCallerScopeResolver());
+        builder.Services.AddSingleton(modelsAggregator ?? new RecordingResponsesModelsAggregator());
         if (responsesToolProvider != null)
             builder.Services.AddSingleton(responsesToolProvider);
 
@@ -1125,6 +1290,22 @@ public sealed class MainnetResponsesEndpointsTests
                 yield return chunk;
                 await Task.Yield();
             }
+        }
+    }
+
+    private sealed class RecordingResponsesModelsAggregator : IResponsesModelsAggregator
+    {
+        public string? LastBearer { get; private set; }
+        public int CallCount { get; private set; }
+        public IReadOnlyList<ResponsesModelEntry> Entries { get; init; } = [];
+
+        public Task<IReadOnlyList<ResponsesModelEntry>> AggregateAsync(
+            string bearerToken,
+            CancellationToken ct)
+        {
+            LastBearer = bearerToken;
+            CallCount++;
+            return Task.FromResult(Entries);
         }
     }
 

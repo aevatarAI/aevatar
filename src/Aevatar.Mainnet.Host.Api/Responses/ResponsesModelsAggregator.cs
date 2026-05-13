@@ -1,0 +1,237 @@
+using System.Net.Http.Headers;
+using System.Text.Json;
+using Aevatar.Studio.Application.Studio.Abstractions;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+
+namespace Aevatar.Mainnet.Host.Api.Responses;
+
+/// <summary>Aggregates concrete model strings across every NyxID-routed service the caller can reach.
+/// NyxID itself does not expose a global concrete-model catalog (`/llm/status` only carries
+/// wildcard patterns like `gpt-*`); per-provider models are obtained by fan-out to each ready
+/// service's `/v1/models` plane. See reference_nyxid_model_surface_matrix and
+/// reference_aevatar_llm_route_aggregation for the data sources.</summary>
+internal interface IResponsesModelsAggregator
+{
+    Task<IReadOnlyList<ResponsesModelEntry>> AggregateAsync(string bearerToken, CancellationToken ct);
+}
+
+internal sealed class NyxIdResponsesModelsAggregator : IResponsesModelsAggregator
+{
+    private readonly IUserLlmCatalogPort _catalog;
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IConfiguration _configuration;
+    private readonly ILogger<NyxIdResponsesModelsAggregator> _logger;
+
+    public NyxIdResponsesModelsAggregator(
+        IUserLlmCatalogPort catalog,
+        IHttpClientFactory httpClientFactory,
+        IConfiguration configuration,
+        ILogger<NyxIdResponsesModelsAggregator> logger)
+    {
+        _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
+        _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
+        _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    }
+
+    public async Task<IReadOnlyList<ResponsesModelEntry>> AggregateAsync(
+        string bearerToken,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(bearerToken);
+
+        var authority = ResolveAuthorityBase();
+        if (string.IsNullOrWhiteSpace(authority))
+        {
+            _logger.LogWarning("NyxID authority is not configured; returning empty models list.");
+            return Array.Empty<ResponsesModelEntry>();
+        }
+
+        NyxIdLlmServicesResult catalog;
+        try
+        {
+            catalog = await _catalog.GetServicesAsync(bearerToken, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to load NyxID LLM services catalog; returning empty models list.");
+            return Array.Empty<ResponsesModelEntry>();
+        }
+
+        var readyServices = catalog.Services
+            .Where(IsReadyForFanOut)
+            .ToList();
+        if (readyServices.Count == 0)
+            return Array.Empty<ResponsesModelEntry>();
+
+        var fetchTasks = readyServices
+            .Select(service => FetchAndNormalizeAsync(authority, service, bearerToken, ct))
+            .ToList();
+        var groups = await Task.WhenAll(fetchTasks).ConfigureAwait(false);
+        return groups.SelectMany(static g => g).ToList();
+    }
+
+    private async Task<IReadOnlyList<ResponsesModelEntry>> FetchAndNormalizeAsync(
+        string authority,
+        NyxIdLlmService service,
+        string bearerToken,
+        CancellationToken ct)
+    {
+        var url = BuildModelsUrl(authority, service.RouteValue);
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+            var client = _httpClientFactory.CreateClient();
+            using var response = await client.SendAsync(request, ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogDebug(
+                    "Skipping models for service {Slug}: HTTP {Status} from {Url}",
+                    service.ServiceSlug,
+                    (int)response.StatusCode,
+                    url);
+                return Array.Empty<ResponsesModelEntry>();
+            }
+
+            var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            return NormalizeModelsBody(body, service);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Models fetch failed for service {Slug} at {Url}; continuing without it.",
+                service.ServiceSlug,
+                url);
+            return Array.Empty<ResponsesModelEntry>();
+        }
+    }
+
+    private static bool IsReadyForFanOut(NyxIdLlmService service) =>
+        service.Allowed &&
+        !string.IsNullOrWhiteSpace(service.RouteValue) &&
+        string.Equals(service.Status, "ready", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>NyxID route-plane paths are asymmetric in how they include the OpenAI `v1` segment:
+    /// GatewayProvider services advertise `RouteValue` like `/api/v1/llm/anthropic/v1` (already
+    /// versioned), while UserService / ProxyService services advertise `/api/v1/proxy/s/{slug}` and
+    /// expect the OpenAI client to ask for `/v1/models`. Bridge both.</summary>
+    internal static string BuildModelsUrl(string authority, string routeValue)
+    {
+        var trimmedAuthority = authority.TrimEnd('/');
+        var trimmedRoute = routeValue.TrimEnd('/');
+        if (trimmedRoute.EndsWith("/v1", StringComparison.Ordinal))
+            return $"{trimmedAuthority}{trimmedRoute}/models";
+        return $"{trimmedAuthority}{trimmedRoute}/v1/models";
+    }
+
+    private static IReadOnlyList<ResponsesModelEntry> NormalizeModelsBody(
+        string body,
+        NyxIdLlmService service)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+            return Array.Empty<ResponsesModelEntry>();
+
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return Array.Empty<ResponsesModelEntry>();
+            if (!document.RootElement.TryGetProperty("data", out var data) ||
+                data.ValueKind != JsonValueKind.Array)
+            {
+                return Array.Empty<ResponsesModelEntry>();
+            }
+
+            var routedThroughGateway = string.Equals(
+                service.Source,
+                NyxIdLlmProviderSource.GatewayProvider,
+                StringComparison.OrdinalIgnoreCase);
+            var createdFallback = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var entries = new List<ResponsesModelEntry>();
+            foreach (var item in data.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object) continue;
+                if (!item.TryGetProperty("id", out var idProp) ||
+                    idProp.ValueKind != JsonValueKind.String)
+                {
+                    continue;
+                }
+
+                var modelId = idProp.GetString()?.Trim();
+                if (string.IsNullOrWhiteSpace(modelId))
+                    continue;
+
+                var qualifiedId = routedThroughGateway
+                    ? modelId
+                    : $"{service.ServiceSlug}/{modelId}";
+                entries.Add(new ResponsesModelEntry
+                {
+                    Id = qualifiedId,
+                    Created = ReadCreated(item) ?? createdFallback,
+                    OwnedBy = service.ServiceSlug,
+                    Group = service.ServiceSlug,
+                    RouteValue = service.RouteValue,
+                    Status = service.Status,
+                });
+            }
+
+            return entries;
+        }
+        catch (JsonException)
+        {
+            return Array.Empty<ResponsesModelEntry>();
+        }
+    }
+
+    private static long? ReadCreated(JsonElement element)
+    {
+        if (element.TryGetProperty("created", out var createdProp) &&
+            createdProp.ValueKind == JsonValueKind.Number &&
+            createdProp.TryGetInt64(out var unix))
+        {
+            return unix;
+        }
+
+        if (element.TryGetProperty("created_at", out var createdAt) &&
+            createdAt.ValueKind == JsonValueKind.String &&
+            DateTimeOffset.TryParse(createdAt.GetString(), out var dto))
+        {
+            return dto.ToUnixTimeSeconds();
+        }
+
+        return null;
+    }
+
+    /// <summary>Mirrors the authority-resolution chain in
+    /// <c>NyxIdLlmCatalogHttpClient.ResolveNyxIdAuthorityBase</c> so both clients agree on which
+    /// NyxID instance to fan out against.</summary>
+    private string? ResolveAuthorityBase()
+    {
+        var authority = _configuration["Cli:App:NyxId:Authority"]
+            ?? _configuration["Aevatar:NyxId:Authority"]
+            ?? _configuration["Aevatar:Authentication:Authority"];
+
+        if (string.IsNullOrWhiteSpace(authority))
+            return null;
+
+        var trimmed = authority.Trim().TrimEnd('/');
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out _))
+            return null;
+
+        const string gatewaySuffix = "/api/v1/llm/gateway/v1";
+        return trimmed.EndsWith(gatewaySuffix, StringComparison.OrdinalIgnoreCase)
+            ? trimmed[..^gatewaySuffix.Length]
+            : trimmed;
+    }
+}

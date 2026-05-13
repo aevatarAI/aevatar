@@ -32,6 +32,7 @@ internal static class ResponsesApiEndpoints
         // (non-JWT) reach the handler instead of being 401'd by JwtBearer.
         group.MapPost("/responses", HandleCreateResponseAsync).AllowAnonymous();
         group.MapPost("/responses/{id}/cancel", HandleCancelResponseAsync).AllowAnonymous();
+        group.MapGet("/models", HandleListModelsAsync).AllowAnonymous();
         return app;
     }
 
@@ -149,6 +150,17 @@ internal static class ResponsesApiEndpoints
             normalized.DeclaredTools.Select(ToApplicationToolDeclaration).ToArray(),
             toolProviders,
             logger);
+        // OpenRouter-style vendor prefix: when the catalog advertised a model as
+        // `{slug}/{model}` (non-gateway services — UserService / ProxyService), the
+        // create handler must recover the route slug, pin it as the per-request
+        // route preference (so NyxIdLLMProvider routes via /api/v1/proxy/s/{slug}),
+        // and pass the bare model string to the LLM provider. Gateway-routed models
+        // come in bare and stay bare here. Catalog parity is enforced by
+        // HandleListModelsAsync emitting prefixes only for non-gateway sources, so
+        // this parser does not need to consult the catalog on the hot path.
+        var modelRoute = ResponsesModelRouteParser.Parse(normalized.Model);
+        var effectiveModel = modelRoute.Model;
+
         // LLMRequest.Metadata flows into the LLM provider, where its values may be
         // serialized into logs, traces, or third-party SDKs. Keep only safe-to-log
         // tracing/config values here. Business-control identity and per-request
@@ -159,6 +171,8 @@ internal static class ResponsesApiEndpoints
             [LLMRequestMetadataKeys.RequestId] = normalized.ResponseId,
             [ChannelMetadataKeys.RegistrationScopeId] = callerScope.ScopeId,
         };
+        if (modelRoute.RouteSlug is not null)
+            llmMetadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = modelRoute.RouteSlug;
         var toolContextMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             [LLMRequestMetadataKeys.RequestId] = normalized.ResponseId,
@@ -180,7 +194,10 @@ internal static class ResponsesApiEndpoints
                 normalized.ResponseId,
                 new LLMRequestCallerCredentials(bearerToken)),
             Tools = toolClassification.EffectiveTools,
-            Model = normalized.Model,
+            // LLM provider receives the bare model name (vendor prefix already
+            // consumed into NyxIdRoutePreference above). Response-snapshot
+            // echoes still use normalized.Model so the client sees back what it sent.
+            Model = effectiveModel,
             Temperature = normalized.Temperature,
             MaxTokens = normalized.MaxOutputTokens,
         };
@@ -1292,5 +1309,31 @@ internal static class ResponsesApiEndpoints
         return authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
             ? authHeader["Bearer ".Length..].Trim()
             : null;
+    }
+
+    /// <summary>OpenAI-spec `GET /v1/models`. Fans out across every NyxID-routed service the caller
+    /// can reach (gateway providers + proxy-plane LLM services) and returns the union, with
+    /// `vendor/model`-prefixed ids for non-gateway routes so the create handler can recover the
+    /// route via <see cref="ResponsesModelRouteParser"/>. Gateway models stay bare for back-compat
+    /// with existing callers that send plain `gpt-5.4` / `claude-3-5-sonnet-...`.</summary>
+    internal static async Task<IResult> HandleListModelsAsync(
+        HttpContext http,
+        [FromServices] IResponsesModelsAggregator aggregator,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(http);
+        ArgumentNullException.ThrowIfNull(aggregator);
+
+        var bearerToken = ExtractBearerToken(http);
+        if (string.IsNullOrWhiteSpace(bearerToken))
+        {
+            return ToErrorResult(
+                StatusCodes.Status401Unauthorized,
+                "authentication_required",
+                "Authorization bearer token is required.");
+        }
+
+        var entries = await aggregator.AggregateAsync(bearerToken, ct).ConfigureAwait(false);
+        return Results.Json(new ResponsesModelsListResponse { Data = entries });
     }
 }

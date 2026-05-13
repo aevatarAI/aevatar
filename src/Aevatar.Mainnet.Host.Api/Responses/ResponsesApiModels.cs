@@ -534,6 +534,82 @@ internal sealed record ResponsesOutputTokensDetails
     public int ReasoningTokens { get; init; }
 }
 
+/// <summary>OpenAI-spec `/v1/models` list response. Extension fields (route_value, group, status)
+/// surface aevatar's multi-route topology to aevatar-aware clients without breaking OpenAI-spec
+/// consumers (Codex / Cursor read only `id` / `object` / `created` / `owned_by`).</summary>
+internal sealed record ResponsesModelsListResponse
+{
+    [JsonPropertyName("object")]
+    public string Object { get; init; } = "list";
+
+    [JsonPropertyName("data")]
+    public required IReadOnlyList<ResponsesModelEntry> Data { get; init; }
+}
+
+internal sealed record ResponsesModelEntry
+{
+    [JsonPropertyName("id")]
+    public required string Id { get; init; }
+
+    [JsonPropertyName("object")]
+    public string Object { get; init; } = "model";
+
+    [JsonPropertyName("created")]
+    public required long Created { get; init; }
+
+    [JsonPropertyName("owned_by")]
+    public required string OwnedBy { get; init; }
+
+    [JsonPropertyName("group")]
+    public required string Group { get; init; }
+
+    [JsonPropertyName("route_value")]
+    public required string RouteValue { get; init; }
+
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }
+}
+
+/// <summary>Splits an OpenRouter-style `vendor/model` identifier. Vendor is preserved only when it
+/// looks like a NyxID service slug (lowercase + digits + hyphens, length 2-64); otherwise the whole
+/// string is treated as a bare model name (e.g. for Anthropic-style namespacing the LLM provider
+/// may want intact).
+/// Gateway-routed models are emitted bare by the catalog, so a prefix is only ever produced for
+/// UserService / ProxyService routes that resolve to `/api/v1/proxy/s/{slug}`. A client that
+/// invents an unknown slug gets a clean NyxID 404 — fail-closed; we don't validate against the
+/// catalog here to keep `/v1/responses` off the catalog HTTP critical path.</summary>
+internal static class ResponsesModelRouteParser
+{
+    public static ResponsesModelRoute Parse(string model)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(model);
+        var trimmed = model.Trim();
+        var slashIndex = trimmed.IndexOf('/');
+        if (slashIndex <= 0 || slashIndex >= trimmed.Length - 1)
+            return new ResponsesModelRoute(null, trimmed);
+
+        var prefix = trimmed[..slashIndex];
+        var rest = trimmed[(slashIndex + 1)..];
+        return LooksLikeSlug(prefix)
+            ? new ResponsesModelRoute(prefix, rest)
+            : new ResponsesModelRoute(null, trimmed);
+    }
+
+    private static bool LooksLikeSlug(string value)
+    {
+        if (value.Length is < 2 or > 64) return false;
+        if (!char.IsAsciiLetterLower(value[0])) return false;
+        foreach (var c in value)
+        {
+            if (!(char.IsAsciiLetterLower(c) || char.IsAsciiDigit(c) || c == '-'))
+                return false;
+        }
+        return true;
+    }
+}
+
+internal readonly record struct ResponsesModelRoute(string? RouteSlug, string Model);
+
 internal static class ResponsesIds
 {
     public static string NewResponseId() => "resp_" + NewOpaqueId();
