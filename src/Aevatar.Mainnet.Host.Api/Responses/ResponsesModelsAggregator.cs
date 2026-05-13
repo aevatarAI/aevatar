@@ -117,10 +117,16 @@ internal sealed class NyxIdResponsesModelsAggregator : IResponsesModelsAggregato
         }
     }
 
+    /// <summary>Fan-out gate: we want every catalog entry with a route to be tried, because
+    /// `Allowed` / `Status` from <c>NyxIdLlmServiceCatalogParser</c> mostly reflect "user has bound
+    /// their credential" — but several catalog entries (e.g. chrono-llm, which has
+    /// <c>requires_connection=true</c> + <c>connected=false</c> in /proxy/services) are still
+    /// functional for proxy traffic because the backing LLM is shared at the deployment level. The
+    /// honest behavior is to ATTEMPT the fan-out and let the downstream's HTTP response (200, 403,
+    /// 404) decide whether the service surfaces models; a UI-level "you haven't connected this"
+    /// hint should not be conflated with "this route can't serve `/v1/models`".</summary>
     private static bool IsReadyForFanOut(NyxIdLlmService service) =>
-        service.Allowed &&
-        !string.IsNullOrWhiteSpace(service.RouteValue) &&
-        string.Equals(service.Status, "ready", StringComparison.OrdinalIgnoreCase);
+        !string.IsNullOrWhiteSpace(service.RouteValue);
 
     /// <summary>Both NyxID route planes already terminate at an OpenAI-compatible API root: the
     /// GatewayProvider plane (`/api/v1/llm/&lt;slug&gt;/v1`) is the API root verbatim, and the

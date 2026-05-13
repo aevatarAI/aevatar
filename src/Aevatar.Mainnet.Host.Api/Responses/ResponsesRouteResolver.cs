@@ -90,7 +90,12 @@ internal sealed class CachingResponsesRouteResolver : IResponsesRouteResolver
         var routes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var service in result.Services)
         {
-            if (!service.Allowed) continue;
+            // Note: we do NOT gate on `service.Allowed`. Catalog `Allowed=false` flags
+            // "user hasn't bound a credential" (a UI hint), not "this route can't serve
+            // requests" — several services with `requires_connection=true` are still
+            // routable for the caller's bearer if the backing LLM is shared. Map every
+            // service with a slug+route; downstream HTTP error tells the truth if the
+            // caller actually can't reach the upstream.
             if (string.IsNullOrWhiteSpace(service.ServiceSlug)) continue;
             if (string.IsNullOrWhiteSpace(service.RouteValue)) continue;
             // First-write-wins. Different service shapes (GatewayProvider via /llm/<slug>/v1
