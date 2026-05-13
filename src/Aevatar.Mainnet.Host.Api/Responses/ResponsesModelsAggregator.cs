@@ -3,8 +3,32 @@ using System.Text.Json;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Mainnet.Host.Api.Responses;
+
+/// <summary>Optional deployment-owned metadata fallbacks for /v1/models entries whose upstream
+/// `/v1/models` response was sparse (no context_length / max_output_tokens / display_name).
+/// Lookup precedence per entry: upstream-forwarded fields → `Aevatar:Responses:ModelMetadataFallbacks["slug/model"]`
+/// (exact match) → `…["slug"]` (group-wide). The fallback only fills NULL fields; never overwrites
+/// upstream-provided values. Empty config = no fallback (default for new deployments).
+/// Lives in config rather than code because the values are deployment-specific
+/// (different NyxID instances expose different backing LLMs) and `feedback_no_hardcoded_metadata`
+/// explicitly forbids slug→metadata tables inside aevatar source.</summary>
+internal sealed class ResponsesModelMetadataFallbackOptions
+{
+    public const string SectionName = "Aevatar:Responses:ModelMetadataFallbacks";
+
+    public Dictionary<string, ResponsesModelMetadataFallback> Entries { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+internal sealed class ResponsesModelMetadataFallback
+{
+    public int? ContextLength { get; init; }
+    public int? MaxOutputTokens { get; init; }
+    public string? DisplayName { get; init; }
+    public string? Description { get; init; }
+}
 
 /// <summary>Aggregates concrete model strings across every NyxID-routed service the caller can reach.
 /// NyxID itself does not expose a global concrete-model catalog (`/llm/status` only carries
@@ -22,17 +46,20 @@ internal sealed class NyxIdResponsesModelsAggregator : IResponsesModelsAggregato
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConfiguration _configuration;
     private readonly ILogger<NyxIdResponsesModelsAggregator> _logger;
+    private readonly ResponsesModelMetadataFallbackOptions _fallbacks;
 
     public NyxIdResponsesModelsAggregator(
         IUserLlmCatalogPort catalog,
         IHttpClientFactory httpClientFactory,
         IConfiguration configuration,
-        ILogger<NyxIdResponsesModelsAggregator> logger)
+        ILogger<NyxIdResponsesModelsAggregator> logger,
+        IOptions<ResponsesModelMetadataFallbackOptions>? fallbackOptions = null)
     {
         _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _fallbacks = fallbackOptions?.Value ?? new ResponsesModelMetadataFallbackOptions();
     }
 
     public async Task<IReadOnlyList<ResponsesModelEntry>> AggregateAsync(
@@ -73,7 +100,50 @@ internal sealed class NyxIdResponsesModelsAggregator : IResponsesModelsAggregato
             .Select(service => FetchAndNormalizeAsync(authority, service, bearerToken, ct))
             .ToList();
         var groups = await Task.WhenAll(fetchTasks).ConfigureAwait(false);
-        return groups.SelectMany(static g => g).ToList();
+        var entries = groups.SelectMany(static g => g).ToList();
+        return ApplyMetadataFallbacks(entries, _fallbacks.Entries);
+    }
+
+    /// <summary>Post-fan-out merge: for each entry, if the upstream-forwarded metadata fields are
+    /// null, look up a fallback first by `{slug}/{model}` (exact) then by `{slug}` (group-wide).
+    /// Fallback only fills nulls — never overwrites upstream values. Empty fallback dict is a no-op.</summary>
+    internal static IReadOnlyList<ResponsesModelEntry> ApplyMetadataFallbacks(
+        IReadOnlyList<ResponsesModelEntry> entries,
+        IReadOnlyDictionary<string, ResponsesModelMetadataFallback> fallbacks)
+    {
+        if (fallbacks.Count == 0)
+            return entries;
+
+        var result = new List<ResponsesModelEntry>(entries.Count);
+        foreach (var entry in entries)
+        {
+            var fb = ResolveFallback(entry, fallbacks);
+            if (fb is null)
+            {
+                result.Add(entry);
+                continue;
+            }
+
+            result.Add(entry with
+            {
+                ContextLength = entry.ContextLength ?? fb.ContextLength,
+                MaxOutputTokens = entry.MaxOutputTokens ?? fb.MaxOutputTokens,
+                DisplayName = entry.DisplayName ?? fb.DisplayName,
+                Description = entry.Description ?? fb.Description,
+            });
+        }
+        return result;
+    }
+
+    private static ResponsesModelMetadataFallback? ResolveFallback(
+        ResponsesModelEntry entry,
+        IReadOnlyDictionary<string, ResponsesModelMetadataFallback> fallbacks)
+    {
+        if (fallbacks.TryGetValue(entry.Id, out var specific))
+            return specific;
+        if (!string.IsNullOrWhiteSpace(entry.Group) && fallbacks.TryGetValue(entry.Group, out var groupLevel))
+            return groupLevel;
+        return null;
     }
 
     private async Task<IReadOnlyList<ResponsesModelEntry>> FetchAndNormalizeAsync(

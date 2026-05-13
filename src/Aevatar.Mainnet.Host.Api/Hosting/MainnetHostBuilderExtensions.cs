@@ -92,6 +92,21 @@ public static class MainnetHostBuilderExtensions
         builder.Services.TryAddSingleton<IResponsesCallerScopeResolver, NyxIdResponsesCallerScopeResolver>();
         builder.Services.TryAddSingleton<IResponsesModelsAggregator, NyxIdResponsesModelsAggregator>();
         builder.Services.TryAddSingleton<IResponsesRouteResolver, CachingResponsesRouteResolver>();
+        builder.Services.Configure<ResponsesModelMetadataFallbackOptions>(options =>
+        {
+            // Bind a flat slug-or-slug/model → fallback dictionary from
+            // `Aevatar:Responses:ModelMetadataFallbacks` directly so deployments can
+            // express it with the natural shape `{slug: {context_length, ...}}` instead
+            // of the wrapped `{Entries: {…}}` shape that automatic-binding would force.
+            var section = builder.Configuration.GetSection(ResponsesModelMetadataFallbackOptions.SectionName);
+            foreach (var entry in section.GetChildren())
+            {
+                if (string.IsNullOrWhiteSpace(entry.Key)) continue;
+                var fallback = entry.Get<ResponsesModelMetadataFallback>();
+                if (fallback is null) continue;
+                options.Entries[entry.Key] = fallback;
+            }
+        });
         builder.Services.AddHttpClient();
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IResponsesToolProvider, ResponsesAevatarToolProvider>());
         // Bridge Studio's IUserConfigQueryPort onto the AI-layer IOwnerLlmConfigSource port so

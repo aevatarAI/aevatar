@@ -133,6 +133,60 @@ public sealed class NyxIdResponsesModelsAggregatorTests
         entry.Description.Should().BeNull();
     }
 
+    [Fact]
+    public void ApplyMetadataFallbacks_ShouldFillOnlyNullFields_PreferringSpecificOverGroup()
+    {
+        // Lookup precedence: `slug/model` (exact) > `slug` (group). Fallback NEVER
+        // overwrites a field that came from upstream — only fills nulls.
+        var entries = new List<ResponsesModelEntry>
+        {
+            new() { Id = "deepseek/deepseek-v4-pro", Created = 0, OwnedBy = "deepseek", Group = "deepseek",
+                    RouteValue = "/r", Status = "ready" }, // fully sparse
+            new() { Id = "deepseek/deepseek-v4-flash", Created = 0, OwnedBy = "deepseek", Group = "deepseek",
+                    RouteValue = "/r", Status = "ready",
+                    ContextLength = 32000 }, // partial upstream
+            new() { Id = "anthropic/claude-opus-4-7", Created = 0, OwnedBy = "anthropic", Group = "anthropic",
+                    RouteValue = "/r", Status = "ready",
+                    ContextLength = 1000000, MaxOutputTokens = 128000 }, // fully rich
+        };
+        var fallbacks = new Dictionary<string, ResponsesModelMetadataFallback>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["deepseek"] = new() { ContextLength = 64000, MaxOutputTokens = 8192, DisplayName = "DeepSeek default" },
+            ["deepseek/deepseek-v4-pro"] = new() { ContextLength = 128000, MaxOutputTokens = 16384 },
+        };
+
+        var merged = NyxIdResponsesModelsAggregator.ApplyMetadataFallbacks(entries, fallbacks);
+
+        // Specific override (deepseek/deepseek-v4-pro) wins for both fields it sets;
+        // DisplayName not set in specific → group-level NOT consulted because specific matched first.
+        merged[0].ContextLength.Should().Be(128000);
+        merged[0].MaxOutputTokens.Should().Be(16384);
+        merged[0].DisplayName.Should().BeNull();
+        // Partial upstream entry: upstream ContextLength=32000 wins (no overwrite); group fills MaxOutputTokens + DisplayName.
+        merged[1].ContextLength.Should().Be(32000);
+        merged[1].MaxOutputTokens.Should().Be(8192);
+        merged[1].DisplayName.Should().Be("DeepSeek default");
+        // Anthropic entry: no fallback configured → untouched.
+        merged[2].ContextLength.Should().Be(1000000);
+        merged[2].MaxOutputTokens.Should().Be(128000);
+    }
+
+    [Fact]
+    public void ApplyMetadataFallbacks_ShouldNoOp_WhenFallbackDictIsEmpty()
+    {
+        var entries = new List<ResponsesModelEntry>
+        {
+            new() { Id = "deepseek/x", Created = 0, OwnedBy = "deepseek", Group = "deepseek",
+                    RouteValue = "/r", Status = "ready" },
+        };
+
+        var merged = NyxIdResponsesModelsAggregator.ApplyMetadataFallbacks(
+            entries,
+            new Dictionary<string, ResponsesModelMetadataFallback>());
+
+        merged.Should().BeSameAs(entries);
+    }
+
     private static NyxIdLlmService MakeService(string slug, string routeValue, string source) =>
         new(
             UserServiceId: slug,

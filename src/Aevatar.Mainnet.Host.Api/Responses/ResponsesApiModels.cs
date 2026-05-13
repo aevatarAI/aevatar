@@ -90,13 +90,42 @@ internal static class ResponsesRequestNormalizer
                 "max_output_tokens must be greater than zero when provided.");
         }
 
+        var previousResponseId = NormalizeOptional(request.PreviousResponseId);
+
+        // OpenAI Responses spec pairs `function_call_output` items in `input` with
+        // `previous_response_id` so the server can match them to a pending tool call
+        // (#629 §13 continuation contract). But Anthropic→OpenAI translators (CC Switch,
+        // Codex when wrapping Claude Code) often forward Claude Code's prior tool-result
+        // turns in the `input` array WITHOUT propagating previous_response_id — they
+        // don't model OpenAI's server-side session. Treating that strictly returns
+        // `function_call_output requires previous_response_id` and the agent can't
+        // ever continue a multi-turn tool conversation.
+        //
+        // Resolution: when previous_response_id is absent, fold any function_call_output
+        // entries into the user prompt as historical context (with a synthetic
+        // `[tool_result …]` marker) and clear ToolResults. The continuation contract
+        // only kicks in when previous_response_id IS provided — that path is unchanged.
+        if (previousResponseId is null && toolResults.Count > 0)
+        {
+            var foldedSections = new List<string>();
+            if (!string.IsNullOrWhiteSpace(prompt))
+                foldedSections.Add(prompt);
+            foreach (var tr in toolResults)
+            {
+                var marker = $"[tool_result call_id={tr.CallId}]";
+                foldedSections.Add(string.IsNullOrWhiteSpace(tr.Output) ? marker : $"{marker} {tr.Output}");
+            }
+            prompt = string.Join("\n", foldedSections);
+            toolResults = [];
+        }
+
         return ResponsesRequestNormalizationResult.Success(new NormalizedResponsesRequest(
             ResponseId: ResponsesIds.NewResponseId(),
             MessageItemId: ResponsesIds.NewMessageId(),
             Model: model,
             Prompt: prompt,
             Stream: request.Stream == true,
-            PreviousResponseId: NormalizeOptional(request.PreviousResponseId),
+            PreviousResponseId: previousResponseId,
             Temperature: request.Temperature,
             MaxOutputTokens: request.MaxOutputTokens,
             DeclaredTools: declaredTools,

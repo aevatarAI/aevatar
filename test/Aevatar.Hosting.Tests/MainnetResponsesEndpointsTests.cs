@@ -1196,6 +1196,50 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
+    public async Task PostResponses_WithFunctionCallOutputAndNoPreviousResponseId_ShouldFoldIntoPromptAsContext()
+    {
+        // CC Switch / Codex translating Claude Code's prior tool-result turn into a fresh
+        // `/v1/responses` call carries `function_call_output` items in `input` but does NOT
+        // propagate `previous_response_id` (they don't model OpenAI's server-side session).
+        // Strict normalization would 400 with `function_call_output requires previous_response_id`;
+        // instead the normalizer folds the tool result into the user prompt as historical
+        // context so multi-turn tool conversations work without the continuation contract.
+        var provider = new RecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk { DeltaContent = "ok", IsLast = true, Usage = new TokenUsage(1, 1, 2) },
+            ],
+        };
+        await using var app = await CreateAppAsync(provider);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""
+            {
+              "model": "gpt-5.4",
+              "input": [
+                {"type": "input_text", "text": "what services do I have on nyxid?"},
+                {"type": "function_call_output", "call_id": "call_1", "output": "{\"services\":[\"chrono-llm\",\"llm-anthropic\"]}"}
+              ],
+              "stream": false
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "fold-secret");
+        var response = await app.GetTestClient().SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        provider.LastRequest.Should().NotBeNull();
+        // Tool result is folded into the prompt as a `[tool_result call_id=…]` marker.
+        var userMessage = provider.LastRequest!.Messages.Single(m => m.Role == "user");
+        userMessage.Content.Should().Contain("what services do I have on nyxid?");
+        userMessage.Content.Should().Contain("[tool_result call_id=call_1]");
+        userMessage.Content.Should().Contain("chrono-llm");
+    }
+
+    [Fact]
     public async Task PostResponses_WithBuiltInToolDeclarations_ShouldSkipNonFunctionTypesAndAcceptFunctionTypes()
     {
         // OpenAI Responses API permits built-in tool declarations alongside function
