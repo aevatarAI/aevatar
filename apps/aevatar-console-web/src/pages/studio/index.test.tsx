@@ -679,6 +679,11 @@ const mockRuntimeRunsApi = runtimeRunsApi as unknown as {
 };
 
 jest.mock("@/shared/studio/api", () => ({
+  isStudioApiStatus: (error: unknown, status: number) =>
+    error instanceof Error &&
+    error.name === "StudioApiError" &&
+    "status" in error &&
+    error.status === status,
   studioApi: {
     getAppContext: jest.fn(async () => mockCreateDefaultStudioAppContext()),
     getAuthSession: jest.fn(async () => mockCreateDefaultStudioAuthSession()),
@@ -5765,7 +5770,8 @@ describe("StudioPage", () => {
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
     await waitFor(() => {
       expect(screen.getByText("candidate:script-alpha")).toBeTruthy();
-      expect(screen.getByText("service:member-script-member")).toBeTruthy();
+      expect(screen.getByText("service:no-service")).toBeTruthy();
+      expect(screen.getByText("services:none")).toBeTruthy();
       expect(screen.getByText("member:script-member")).toBeTruthy();
     });
 
@@ -5792,6 +5798,71 @@ describe("StudioPage", () => {
     expect(searchParams.get("focus")).toBe("script:script-alpha");
     expect(searchParams.get("step")).toBe("bind");
     expect(searchParams.get("tab")).toBe("bindings");
+  });
+
+  it("keeps a saved Script member on the pending bind panel until a published contract exists", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      features: {
+        ...defaultStudioAppContext.features,
+        scripts: true,
+      },
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    mockStudioMembers = [
+      ...mockStudioMembers,
+      {
+        memberId: "m-script-alpha",
+        scopeId: "scope-1",
+        displayName: "script-alpha",
+        description: "Saved Script member without a published contract yet.",
+        implementationKind: "script",
+        lifecycleStage: "created",
+        publishedServiceId: "member-m-script-alpha",
+        lastBoundRevisionId: null,
+        createdAt: "2026-04-27T08:00:00Z",
+        updatedAt: "2026-04-27T08:05:00Z",
+      },
+    ];
+    (scriptsApi.listScripts as jest.Mock).mockResolvedValue([
+      {
+        available: true,
+        scopeId: "scope-1",
+        script: {
+          scopeId: "scope-1",
+          scriptId: "script-alpha",
+          catalogActorId: "catalog-1",
+          definitionActorId: "definition-1",
+          activeRevision: "rev-1",
+          activeSourceHash: "hash-1",
+          updatedAt: "2026-03-18T00:00:00Z",
+        },
+        source: {
+          sourceText: "using System;",
+          definitionActorId: "definition-1",
+          revision: "rev-1",
+          sourceHash: "hash-1",
+        },
+      },
+    ]);
+    mockScopeRuntimeApi.listServices.mockResolvedValue([]);
+
+    renderStudioPage(
+      "/studio?scopeId=scope-1&member=member%3Am-script-alpha&focus=script%3Ascript-alpha&tab=scripts"
+    );
+
+    expect(await screen.findByTestId("studio-script-build-panel")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Bind" }));
+
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("candidate:script-alpha")).toBeTruthy();
+      expect(screen.getByText("services:none")).toBeTruthy();
+      expect(screen.getByText("service:no-service")).toBeTruthy();
+      expect(screen.getByText("member:m-script-alpha")).toBeTruthy();
+    });
+    expect(screen.queryByText("services:member-m-script-alpha")).toBeNull();
   });
 
   it("loads discovered GAgent types and the published service revision catalog", async () => {

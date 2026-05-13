@@ -119,20 +119,23 @@ function describeStudioMemberBindingRunStatus(
 
   if (run.status === 'platform_binding_pending') {
     return {
-      message: 'Binding accepted. Studio is publishing the platform contract.',
+      message:
+        'Binding request accepted. Platform publication is still running; Invoke is not ready until the run completes.',
       type: 'info',
     };
   }
 
   if (run.status === 'admitted') {
     return {
-      message: 'Binding admitted. Studio is starting platform publication.',
+      message:
+        'Binding request admitted. Studio is starting platform publication; the member is not callable yet.',
       type: 'info',
     };
   }
 
   return {
-    message: 'Binding accepted. Studio is waiting for the member authority to advance the run.',
+    message:
+      'Binding request accepted. Studio is waiting for the member authority; this does not mean the member is bound yet.',
     type: 'info',
   };
 }
@@ -815,8 +818,8 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
       setPendingBindNotice({
         message:
           resultNotice?.message ||
-          `${pendingBindingCandidate.displayName} is now bound. Review the invoke contract below.`,
-        type: resultNotice?.type || 'success',
+          `${pendingBindingCandidate.displayName} binding request was accepted. Studio will show the published contract after the run completes.`,
+        type: resultNotice?.type || 'info',
       });
     } catch (error) {
       if (bindSurfaceIdentityRef.current !== requestBindIdentity) {
