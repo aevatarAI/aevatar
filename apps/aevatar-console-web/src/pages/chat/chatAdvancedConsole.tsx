@@ -97,17 +97,17 @@ const monoFontFamily =
 
 const queryTargets: { description: string; id: QueryTarget; label: string }[] = [
   {
-    description: "Current default binding for this scope.",
+    description: "Current default binding for this workspace.",
     id: "binding",
-    label: "Scope Binding",
+    label: "Workspace Binding",
   },
   {
-    description: "All published services currently visible to this scope.",
+    description: "All published services currently visible to this workspace.",
     id: "services",
     label: "Services",
   },
   {
-    description: "Workflow assets currently deployed into this scope.",
+    description: "Workflow assets currently deployed into this workspace.",
     id: "workflows",
     label: "Workflows",
   },
@@ -489,7 +489,7 @@ export function ChatAdvancedConsole({
   const consoleFlowGroups = useMemo(
     () => [
       {
-        description: "Inspect the current scope and understand runtime state.",
+        description: "Inspect the current workspace and understand runtime state.",
         flows: consoleFlows.filter((flow) => flow.group === "understand"),
         id: "understand",
         label: "Understand",
@@ -1153,15 +1153,15 @@ export function ChatAdvancedConsole({
     <AevatarContextDrawer
       onClose={onClose}
       open={open}
-      subtitle="Inspect scope state, invoke endpoints, or hit raw API paths without leaving chat."
+      subtitle="Inspect workspace state, invoke endpoints, or hit raw API paths without leaving chat."
       title="Advanced Console"
       width={960}
     >
       {!scopeId ? (
         <Alert
-          description="Open a scoped chat first so the console has a project context."
+          description="Open a workspace chat first so the console has a project context."
           showIcon
-          title="No scope is currently active."
+          title="No workspace is currently active."
           type="warning"
         />
       ) : (
@@ -1185,7 +1185,7 @@ export function ChatAdvancedConsole({
               }}
             >
               Suggested path: start with <strong>Query</strong> to orient the
-              scope, move to <strong>Execute</strong> when you are ready to act,
+              workspace, move to <strong>Execute</strong> when you are ready to act,
               then use <strong>Timeline</strong> if the run needs evidence or
               operator input. Keep <strong>Raw API</strong> for protocol-level
               debugging.
@@ -1337,7 +1337,7 @@ export function ChatAdvancedConsole({
           {activeTab === "query" ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
               <div style={drawerSectionStyle}>
-                <Typography.Text strong>Query Scope State</Typography.Text>
+                <Typography.Text strong>Query Workspace State</Typography.Text>
                 <div
                   style={{
                     display: "grid",
@@ -1423,7 +1423,7 @@ export function ChatAdvancedConsole({
                       ? "Loading..."
                       : `Query ${
                           queryTargets.find((target) => target.id === queryTarget)
-                            ?.label || "Scope"
+                            ?.label || "Workspace"
                         }`}
                   </button>
                 </div>

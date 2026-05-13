@@ -4073,7 +4073,7 @@ const StudioPage: React.FC = () => {
 
   const handleBindPendingCandidate = useCallback(async (): Promise<StudioNotice | void> => {
     if (!buildPendingBindCandidate || !resolvedStudioScopeId) {
-      throw new Error('Resolve the current scope before binding this member.');
+      throw new Error('Resolve the current workspace before binding this member.');
     }
 
     const resolvedBuildMemberId =
@@ -4603,7 +4603,7 @@ const StudioPage: React.FC = () => {
         }
 
         if (availableScopeScriptIds.has(scriptId)) {
-          void message.warning('A scope script with the same id already exists.');
+          void message.warning('A workspace script with the same id already exists.');
           return;
         }
 
@@ -4746,7 +4746,7 @@ const StudioPage: React.FC = () => {
       if (!resolvedStudioScopeId) {
         setCreateMemberTeamId('');
         void message.success(
-          `Created workflow draft for member ${workflowName}. Connect a scope to register the backend member authority.`,
+          `Created workflow draft for member ${workflowName}. Connect a workspace to register the backend member authority.`,
         );
         return;
       }
@@ -5165,7 +5165,7 @@ const StudioPage: React.FC = () => {
     if (!scopeId) {
       setRunNotice({
         type: 'error',
-        message: 'Resolve the current scope before starting a draft run.',
+        message: 'Resolve the current workspace before starting a draft run.',
       });
       return;
     }
@@ -7332,7 +7332,7 @@ const StudioPage: React.FC = () => {
               openScopeScript(scriptId);
             } else {
               void message.warning(
-                `Could not find a scope script for ${memberImplementationName || 'this member'}.`,
+                `Could not find a workspace script for ${memberImplementationName || 'this member'}.`,
               );
             }
             return;
@@ -7653,12 +7653,12 @@ const StudioPage: React.FC = () => {
           primary: 'Script implementation',
           secondary:
             trimOptional(scriptDetail.script?.definitionActorId) ||
-            'Scope-backed script behavior',
-        }) || 'Scope-backed script behavior',
+            'Workspace script behavior',
+        }) || 'Workspace script behavior',
         kind: 'member',
         meta: formatStudioAssetMeta({
           primary: scriptDetail.script?.activeRevision || '',
-          secondary: 'Scope script',
+          secondary: 'Workspace script',
         }),
         tone:
           currentFocusMemberKey === `script:${scriptId}` ? 'live' : 'idle',
@@ -8690,7 +8690,7 @@ const StudioPage: React.FC = () => {
                       <div style={inventoryCreateHintStyle}>
                         Script id: {createScriptId || 'enter-a-script-name'}
                         {createScriptIdAlreadyExists
-                          ? ' · already exists in this scope'
+                          ? ' · already exists in this workspace'
                           : ' · saved after Validate and Save script'}
                       </div>
                     ) : null}
