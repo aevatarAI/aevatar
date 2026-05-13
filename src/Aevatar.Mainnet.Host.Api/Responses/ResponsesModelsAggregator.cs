@@ -133,7 +133,7 @@ internal sealed class NyxIdResponsesModelsAggregator : IResponsesModelsAggregato
     internal static string BuildModelsUrl(string authority, string routeValue) =>
         $"{authority.TrimEnd('/')}{routeValue.TrimEnd('/')}/models";
 
-    private static IReadOnlyList<ResponsesModelEntry> NormalizeModelsBody(
+    internal static IReadOnlyList<ResponsesModelEntry> NormalizeModelsBody(
         string body,
         NyxIdLlmService service)
     {
@@ -151,10 +151,13 @@ internal sealed class NyxIdResponsesModelsAggregator : IResponsesModelsAggregato
                 return Array.Empty<ResponsesModelEntry>();
             }
 
-            var routedThroughGateway = string.Equals(
-                service.Source,
-                NyxIdLlmProviderSource.GatewayProvider,
-                StringComparison.OrdinalIgnoreCase);
+            // OpenRouter-style: prefix EVERY model id with the service slug
+            // (e.g. `anthropic/claude-opus-4-7`, `chrono-llm/gpt-5.5`). Stage 2's
+            // ResponsesRouteResolver consults the catalog to map a recovered
+            // slug back to its RouteValue, so prefixed gateway entries route
+            // through `/api/v1/llm/<slug>/v1` rather than the unrelated
+            // `/proxy/s/<slug>`. Bare model strings (no slash) keep working as
+            // a back-compat path through the default gateway.
             var createdFallback = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             var entries = new List<ResponsesModelEntry>();
             foreach (var item in data.EnumerateArray())
@@ -170,12 +173,9 @@ internal sealed class NyxIdResponsesModelsAggregator : IResponsesModelsAggregato
                 if (string.IsNullOrWhiteSpace(modelId))
                     continue;
 
-                var qualifiedId = routedThroughGateway
-                    ? modelId
-                    : $"{service.ServiceSlug}/{modelId}";
                 entries.Add(new ResponsesModelEntry
                 {
-                    Id = qualifiedId,
+                    Id = $"{service.ServiceSlug}/{modelId}",
                     Created = ReadCreated(item) ?? createdFallback,
                     OwnedBy = service.ServiceSlug,
                     Group = service.ServiceSlug,

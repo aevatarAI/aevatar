@@ -46,6 +46,7 @@ internal static class ResponsesApiEndpoints
         ResponsesCreateRequest request,
         [FromServices] ILLMProviderFactory providerFactory,
         [FromServices] IResponsesCallerScopeResolver callerScopeResolver,
+        [FromServices] IResponsesRouteResolver routeResolver,
         [FromServices] IResponseSessionRegistrationPort responseSessionRegistrationPort,
         [FromServices] IResponseSessionQueryPort responseSessionQueryPort,
         [FromServices] IResponsesCompletionApplicationService completionService,
@@ -56,6 +57,7 @@ internal static class ResponsesApiEndpoints
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(providerFactory);
         ArgumentNullException.ThrowIfNull(callerScopeResolver);
+        ArgumentNullException.ThrowIfNull(routeResolver);
         ArgumentNullException.ThrowIfNull(responseSessionRegistrationPort);
         ArgumentNullException.ThrowIfNull(responseSessionQueryPort);
         ArgumentNullException.ThrowIfNull(completionService);
@@ -150,16 +152,27 @@ internal static class ResponsesApiEndpoints
             normalized.DeclaredTools.Select(ToApplicationToolDeclaration).ToArray(),
             toolProviders,
             logger);
-        // OpenRouter-style vendor prefix: when the catalog advertised a model as
-        // `{slug}/{model}` (non-gateway services — UserService / ProxyService), the
-        // create handler must recover the route slug, pin it as the per-request
-        // route preference (so NyxIdLLMProvider routes via /api/v1/proxy/s/{slug}),
-        // and pass the bare model string to the LLM provider. Gateway-routed models
-        // come in bare and stay bare here. Catalog parity is enforced by
-        // HandleListModelsAsync emitting prefixes only for non-gateway sources, so
-        // this parser does not need to consult the catalog on the hot path.
+        // OpenRouter-style vendor prefix: the catalog advertises every model as
+        // `{slug}/{model}` regardless of route shape (gateway provider, user
+        // service, proxy service). When the slug resolves to a known catalog
+        // entry, pin its RouteValue (full path — e.g. `/api/v1/llm/anthropic/v1`
+        // for gateway providers, `/api/v1/proxy/s/<slug>` for proxy services)
+        // as the per-request route preference so NyxIdLLMProvider routes to
+        // the right plane. An unknown slug (catalog miss, or a model name that
+        // just happens to contain `/`) falls through to default gateway routing
+        // with the model string preserved verbatim — NyxID's gateway picks the
+        // backend by model name.
         var modelRoute = ResponsesModelRouteParser.Parse(normalized.Model);
-        var effectiveModel = modelRoute.Model;
+        var effectiveModel = normalized.Model;
+        string? resolvedRouteValue = null;
+        if (modelRoute.RouteSlug is not null)
+        {
+            resolvedRouteValue = await routeResolver
+                .ResolveRouteValueAsync(modelRoute.RouteSlug, bearerToken, ct)
+                .ConfigureAwait(false);
+            if (resolvedRouteValue is not null)
+                effectiveModel = modelRoute.Model;
+        }
 
         // LLMRequest.Metadata flows into the LLM provider, where its values may be
         // serialized into logs, traces, or third-party SDKs. Keep only safe-to-log
@@ -171,8 +184,8 @@ internal static class ResponsesApiEndpoints
             [LLMRequestMetadataKeys.RequestId] = normalized.ResponseId,
             [ChannelMetadataKeys.RegistrationScopeId] = callerScope.ScopeId,
         };
-        if (modelRoute.RouteSlug is not null)
-            llmMetadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = modelRoute.RouteSlug;
+        if (resolvedRouteValue is not null)
+            llmMetadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = resolvedRouteValue;
         var toolContextMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             [LLMRequestMetadataKeys.RequestId] = normalized.ResponseId,

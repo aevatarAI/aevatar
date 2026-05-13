@@ -91,6 +91,7 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddScheduledAgents(builder.Configuration);
         builder.Services.TryAddSingleton<IResponsesCallerScopeResolver, NyxIdResponsesCallerScopeResolver>();
         builder.Services.TryAddSingleton<IResponsesModelsAggregator, NyxIdResponsesModelsAggregator>();
+        builder.Services.TryAddSingleton<IResponsesRouteResolver, CachingResponsesRouteResolver>();
         builder.Services.AddHttpClient();
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IResponsesToolProvider, ResponsesAevatarToolProvider>());
         // Bridge Studio's IUserConfigQueryPort onto the AI-layer IOwnerLlmConfigSource port so

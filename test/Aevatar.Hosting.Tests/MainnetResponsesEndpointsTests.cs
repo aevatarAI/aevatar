@@ -1004,6 +1004,7 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton<IResponseSessionQueryPort>(sessions);
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         builder.Services.AddSingleton<IResponsesCallerScopeResolver>(new StubResponsesCallerScopeResolver());
+        builder.Services.AddSingleton<IResponsesRouteResolver>(new RecordingResponsesRouteResolver());
 
         await using var app = builder.Build();
         app.UseAuthentication();
@@ -1117,12 +1118,13 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task PostResponses_WithVendorPrefixModel_ShouldStripPrefixAndPinRoutePreference()
+    public async Task PostResponses_WithProxyServicePrefix_ShouldStripAndResolveToProxyPlaneRoute()
     {
         // Stage 2: client picks `chrono-llm/qwen-3` from the catalog. The create handler must
-        // recover the route slug (so NyxIdLLMProvider routes via /api/v1/proxy/s/chrono-llm)
-        // AND pass the bare model name `qwen-3` to the provider. Response-snapshot echo
-        // preserves the original prefixed model so the client sees back what it sent.
+        // call the route resolver to recover chrono-llm's full RouteValue
+        // (/api/v1/proxy/s/chrono-llm) and pass the bare model name `qwen-3` to the provider.
+        // Response-snapshot echo preserves the original prefixed model so the client sees
+        // back what it sent.
         var provider = new RecordingLLMProvider
         {
             StreamChunks =
@@ -1156,10 +1158,75 @@ public sealed class MainnetResponsesEndpointsTests
         provider.LastRequest!.Model.Should().Be("qwen-3");
         provider.LastRequest.Metadata!
             .Should().ContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference)
-            .WhoseValue.Should().Be("chrono-llm");
+            .WhoseValue.Should().Be("/api/v1/proxy/s/chrono-llm");
 
         using var doc = JsonDocument.Parse(body);
         doc.RootElement.GetProperty("model").GetString().Should().Be("chrono-llm/qwen-3");
+    }
+
+    [Fact]
+    public async Task PostResponses_WithGatewayProviderPrefix_ShouldResolveToGatewayPlaneRoute()
+    {
+        // Stage 2 (OpenRouter-style consistent prefix): client picks
+        // `anthropic/claude-opus-4-7`. The resolver returns /api/v1/llm/anthropic/v1
+        // (NOT /api/v1/proxy/s/anthropic — anthropic isn't a proxy slug; it's a gateway
+        // provider whose per-provider plane is reached via /api/v1/llm/<slug>/v1).
+        // Without catalog lookup, naive slug-direct routing would 404 here.
+        var provider = new RecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk { DeltaContent = "ok", IsLast = true, Usage = new TokenUsage(1, 1, 2) },
+            ],
+        };
+        await using var app = await CreateAppAsync(provider);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""{"model":"anthropic/claude-opus-4-7","input":"ping","stream":false}"""),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "gateway-prefix-secret");
+        var response = await app.GetTestClient().SendAsync(request);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        provider.LastRequest!.Model.Should().Be("claude-opus-4-7");
+        provider.LastRequest.Metadata!
+            .Should().ContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference)
+            .WhoseValue.Should().Be("/api/v1/llm/anthropic/v1");
+    }
+
+    [Fact]
+    public async Task PostResponses_WithUnknownVendorPrefix_ShouldFallThroughToGatewayWithModelIntact()
+    {
+        // Catalog miss: slug looks like a slug but isn't in the user's catalog.
+        // Behavior: don't set route preference, pass model string verbatim. Gateway
+        // picks backend by model name OR returns a clear downstream error if it doesn't
+        // recognize the model. Either way, aevatar doesn't silently misroute.
+        var provider = new RecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk { DeltaContent = "ok", IsLast = true, Usage = new TokenUsage(1, 1, 2) },
+            ],
+        };
+        // Empty route table → every slug is a catalog miss.
+        var emptyResolver = new RecordingResponsesRouteResolver();
+        await using var app = await CreateAppAsync(provider, routeResolver: emptyResolver);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""{"model":"mistralai/mistral-7b","input":"ping","stream":false}"""),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unknown-vendor-secret");
+        var response = await app.GetTestClient().SendAsync(request);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Resolver consulted (slug looks shaped), but returned null → no route preference,
+        // model passed through verbatim to LLM provider.
+        emptyResolver.CallCount.Should().Be(1);
+        emptyResolver.LastSlug.Should().Be("mistralai");
+        provider.LastRequest!.Model.Should().Be("mistralai/mistral-7b");
+        provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
     }
 
     [Fact]
@@ -1219,7 +1286,8 @@ public sealed class MainnetResponsesEndpointsTests
         RecordingResponseSessionStore? responseSessions = null,
         IResponsesCallerScopeResolver? callerScopeResolver = null,
         IResponsesToolProvider? responsesToolProvider = null,
-        IResponsesModelsAggregator? modelsAggregator = null)
+        IResponsesModelsAggregator? modelsAggregator = null,
+        IResponsesRouteResolver? routeResolver = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -1234,6 +1302,17 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         builder.Services.AddSingleton(callerScopeResolver ?? new StubResponsesCallerScopeResolver());
         builder.Services.AddSingleton(modelsAggregator ?? new RecordingResponsesModelsAggregator());
+        builder.Services.AddSingleton(routeResolver ?? new RecordingResponsesRouteResolver
+        {
+            Routes =
+            {
+                // Default test catalog: chrono-llm is a proxy-plane service,
+                // anthropic is a gateway-plane service. Other tests use this
+                // unless they pass their own RecordingResponsesRouteResolver.
+                ["chrono-llm"] = "/api/v1/proxy/s/chrono-llm",
+                ["anthropic"] = "/api/v1/llm/anthropic/v1",
+            },
+        });
         if (responsesToolProvider != null)
             builder.Services.AddSingleton(responsesToolProvider);
 
@@ -1306,6 +1385,25 @@ public sealed class MainnetResponsesEndpointsTests
             LastBearer = bearerToken;
             CallCount++;
             return Task.FromResult(Entries);
+        }
+    }
+
+    private sealed class RecordingResponsesRouteResolver : IResponsesRouteResolver
+    {
+        public Dictionary<string, string> Routes { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+        public int CallCount { get; private set; }
+        public string? LastSlug { get; private set; }
+        public string? LastBearer { get; private set; }
+
+        public Task<string?> ResolveRouteValueAsync(
+            string slug,
+            string bearerToken,
+            CancellationToken ct)
+        {
+            CallCount++;
+            LastSlug = slug;
+            LastBearer = bearerToken;
+            return Task.FromResult(Routes.TryGetValue(slug, out var route) ? route : null);
         }
     }
 
