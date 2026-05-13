@@ -142,11 +142,74 @@ public sealed class OrnnSkillClientTests
         skill.Should().BeNull();
     }
 
-    private static OrnnSkillClient CreateClient(OrnnTestHttpMessageHandler handler, string slug = "ornn")
+    [Fact]
+    public async Task GetSkillJsonAsync_ReturnsNullWhenPerCallTimeoutFiresOnSlowUpstream()
+    {
+        // Regression for the 2026-05-13 lark-bot incident: a NyxID-proxied call to
+        // `/api/v1/skills/chrono-ai-daily/json` hung for 113 s, holding the Orleans grain turn
+        // captive until the outer 120 s LLM reply budget tripped. Once OrnnSkillClient enforces
+        // its own per-call timeout, the call must surface a fast null instead of letting the
+        // upstream slowness propagate to the caller.
+        var handler = OrnnTestHttpMessageHandler.HangingUntilCanceled();
+        var client = CreateClient(handler, perCallTimeout: TimeSpan.FromMilliseconds(150));
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var skill = await client.GetSkillJsonAsync("token", "chrono-ai-daily");
+        sw.Stop();
+
+        skill.Should().BeNull();
+        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2),
+            "per-call timeout (150ms) must abort the stuck request");
+        handler.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task SearchSkillsAsync_SurfacesTimeoutErrorWhenPerCallTimeoutFires()
+    {
+        // Same incident class as GetSkillJsonAsync: a stuck NyxID proxy must not hold the grain
+        // turn. SearchSkillsAsync is exercised by `ornn_search_skills` when the LLM discovers
+        // skills before invoking `use_skill`, so it has the same blast radius.
+        var handler = OrnnTestHttpMessageHandler.HangingUntilCanceled();
+        var client = CreateClient(handler, perCallTimeout: TimeSpan.FromMilliseconds(150));
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var result = await client.SearchSkillsAsync("token", "query");
+        sw.Stop();
+
+        result.Items.Should().BeEmpty();
+        result.Error.Should().Contain("budget");
+        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2),
+            "per-call timeout (150ms) must abort the stuck request");
+    }
+
+    [Fact]
+    public async Task GetSkillJsonAsync_DoesNotMaskCallerCancellationAsTimeoutError()
+    {
+        // If the caller cancels (e.g. the outer LLM reply budget tripped), we must NOT log the
+        // failure as "exceeded per-call budget" — that misroutes the diagnosis. Letting the
+        // OperationCanceledException propagate keeps caller cancellation semantically distinct
+        // from our own per-call timeout fallback.
+        var handler = OrnnTestHttpMessageHandler.HangingUntilCanceled();
+        var client = CreateClient(handler, perCallTimeout: TimeSpan.FromSeconds(10));
+
+        using var callerCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        var act = async () => await client.GetSkillJsonAsync("token", "chrono-ai-daily", callerCts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    private static OrnnSkillClient CreateClient(
+        OrnnTestHttpMessageHandler handler,
+        string slug = "ornn",
+        TimeSpan? perCallTimeout = null)
     {
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
             new HttpClient(handler));
-        return new OrnnSkillClient(new OrnnOptions { NyxIdSlug = slug }, nyxClient);
+        var options = new OrnnOptions { NyxIdSlug = slug };
+        return perCallTimeout is { } timeout
+            ? new OrnnSkillClient(options, nyxClient, timeout)
+            : new OrnnSkillClient(options, nyxClient);
     }
 }
