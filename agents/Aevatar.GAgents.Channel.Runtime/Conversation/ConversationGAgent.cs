@@ -73,6 +73,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             .On<ConversationContinueRejectedEvent>(ApplyContinueRejected)
             .On<ConversationContinueFailedEvent>(ApplyContinueFailed)
             .On<InboundTurnRetryScheduledEvent>(ApplyInboundTurnRetryScheduled)
+            .On<LlmReplyDeliveredEvent>(ApplyLastReplyDelivered)
+            .On<LlmReplyDeliveryFailedEvent>(ApplyLastReplyDeliveryFailed)
             .OrCurrent();
 
     /// <summary>
@@ -480,6 +482,18 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 CompletedAtUnixMs = nowMs,
                 OutboundDelivery = ToOutboundDeliveryReceipt(result.OutboundDelivery),
             };
+            // ADR-0021 chain.delivered observable: persist the user-visible delivery ack
+            // before the turn-completed summary event so readers do not need to infer
+            // delivery status from the channel sink return code, and so existing
+            // "events.Last() is turn-completed" consumers stay correct.
+            var delivered = new LlmReplyDeliveredEvent
+            {
+                CorrelationId = evt.CorrelationId ?? string.Empty,
+                RunId = evt.CorrelationId ?? string.Empty,
+                AckedAtUnixMs = nowMs,
+                ChannelMessageId = result.OutboundDelivery?.ReplyMessageId ?? string.Empty,
+            };
+            await PersistDomainEventAsync(delivered);
             await PersistDomainEventAsync(completed);
             RemoveNyxRelayReplyToken(evt.CorrelationId, pendingRequest?.Activity ?? evt.Activity);
             Logger.LogInformation(
@@ -501,6 +515,18 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             FailedAtUnixMs = nowMs,
         };
         AssignRetryPolicy(failed, result);
+        // ADR-0021 chain.delivered failure observable: structured delivery failure persists
+        // before the chain-finalizing failure event so existing "events.Last() is
+        // ConversationContinueFailedEvent" consumers stay correct.
+        var deliveryFailed = new LlmReplyDeliveryFailedEvent
+        {
+            CorrelationId = evt.CorrelationId ?? string.Empty,
+            RunId = evt.CorrelationId ?? string.Empty,
+            FailedAtUnixMs = nowMs,
+            ErrorCode = result.ErrorCode ?? string.Empty,
+            ErrorMessage = result.ErrorSummary ?? string.Empty,
+        };
+        await PersistDomainEventAsync(deliveryFailed);
         await PersistDomainEventAsync(failed);
         SweepExpiredNyxRelayReplyTokens();
         if (failed.RetryPolicyCase == ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable)
@@ -864,6 +890,19 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             CompletedAtUnixMs = nowMs,
             OutboundDelivery = ToOutboundDeliveryReceipt(evt.Activity?.OutboundDelivery),
         };
+        // ADR-0021 chain.delivered observable: the streaming path always reaches this
+        // function with a user-visible placeholder message id (any partial / full /
+        // failure-self-heal text the user actually saw). Persist a Delivered event
+        // BEFORE the turn-completed summary so "events.Last() is turn-completed"
+        // consumers keep working.
+        var delivered = new LlmReplyDeliveredEvent
+        {
+            CorrelationId = evt.CorrelationId ?? string.Empty,
+            RunId = evt.CorrelationId ?? string.Empty,
+            AckedAtUnixMs = nowMs,
+            ChannelMessageId = $"nyx-relay-stream:{platformMessageId}",
+        };
+        await PersistDomainEventAsync(delivered);
         await PersistDomainEventAsync(completed);
         RemoveNyxRelayReplyToken(evt.CorrelationId, referenceActivity);
         Logger.LogInformation(
@@ -1359,6 +1398,47 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             RemovePendingInboundTurn(next.PendingInboundTurns, evt.CorrelationId);
         }
         next.LastUpdatedUnixMs = evt.FailedAtUnixMs;
+        return next;
+    }
+
+    // ADR-0021 chain.delivered observable: user-visible delivery succeeded via the channel sink.
+    private static ConversationGAgentState ApplyLastReplyDelivered(
+        ConversationGAgentState current,
+        LlmReplyDeliveredEvent evt)
+    {
+        var next = current.Clone();
+        next.LastReplyDelivery = new ReplyDeliveryStatus
+        {
+            RunId = evt.RunId ?? string.Empty,
+            Delivered = new ReplyDeliveryStatus.Types.Delivered
+            {
+                AckedAtUnixMs = evt.AckedAtUnixMs,
+                ChannelMessageId = evt.ChannelMessageId ?? string.Empty,
+            },
+        };
+        if (evt.AckedAtUnixMs > 0)
+            next.LastUpdatedUnixMs = evt.AckedAtUnixMs;
+        return next;
+    }
+
+    // ADR-0021 chain.delivered failure observable: channel sink rejected the reply (4xx/5xx/timeout).
+    private static ConversationGAgentState ApplyLastReplyDeliveryFailed(
+        ConversationGAgentState current,
+        LlmReplyDeliveryFailedEvent evt)
+    {
+        var next = current.Clone();
+        next.LastReplyDelivery = new ReplyDeliveryStatus
+        {
+            RunId = evt.RunId ?? string.Empty,
+            Failed = new ReplyDeliveryStatus.Types.DeliveryFailed
+            {
+                FailedAtUnixMs = evt.FailedAtUnixMs,
+                ErrorCode = evt.ErrorCode ?? string.Empty,
+                ErrorMessage = evt.ErrorMessage ?? string.Empty,
+            },
+        };
+        if (evt.FailedAtUnixMs > 0)
+            next.LastUpdatedUnixMs = evt.FailedAtUnixMs;
         return next;
     }
 
