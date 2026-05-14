@@ -3765,13 +3765,11 @@ describe("StudioPage", () => {
     });
     expect(
       screen.getByText(
-        "Script starts as a named draft. It becomes a callable member only after Save script is catalog-applied and Bind succeeds.",
+        "Script creates a backend member and opens a stable script draft identity in Build. It becomes callable after Save script is catalog-applied and Bind succeeds.",
       ),
     ).toBeTruthy();
     expect(screen.getByText(/Script id: refund-handler/)).toBeTruthy();
-    fireEvent.click(
-      within(createDialog).getByRole("button", { name: "Create Script draft" }),
-    );
+    fireEvent.click(within(createDialog).getByRole("button", { name: "Create member" }));
 
     expect(await screen.findByTestId("studio-script-build-panel")).toBeTruthy();
     expect(screen.getByLabelText("Script ID")).toHaveValue("refund-handler");
@@ -3805,7 +3803,7 @@ describe("StudioPage", () => {
     );
 
     expect(
-      within(createDialog).getByRole("button", { name: "Create Script draft" })
+      within(createDialog).getByRole("button", { name: "Create member" })
     ).toBeDisabled();
     expect(screen.getByRole("dialog", { name: "Create member" })).toBeTruthy();
   });
@@ -3832,12 +3830,12 @@ describe("StudioPage", () => {
     ).toHaveAttribute("aria-pressed", "true");
     expect(within(createDialog).getByLabelText("Script name")).toHaveValue("script-1");
     expect(
-      within(createDialog).getByRole("button", { name: "Create Script draft" }),
+      within(createDialog).getByRole("button", { name: "Create member" }),
     ).toBeEnabled();
   });
 
-  it("shows GAgent as a builder member kind before its create API lands", async () => {
-    renderStudioPage("/studio?focus=workflow%3Aworkflow-1&tab=studio");
+  it("creates a GAgent member authority and opens GAgent Build", async () => {
+    renderStudioPage("/studio?scopeId=scope-1&focus=workflow%3Aworkflow-1&tab=studio");
 
     fireEvent.click(await screen.findByRole("button", { name: "Create member" }));
     const createDialog = await screen.findByRole("dialog", { name: "Create member" });
@@ -3847,22 +3845,42 @@ describe("StudioPage", () => {
     });
     fireEvent.click(gagentChip);
 
-    expect(gagentChip).toHaveAttribute("aria-pressed", "true");
+    await waitFor(() => {
+      expect(gagentChip).toHaveAttribute("aria-pressed", "true");
+    });
     expect(within(createDialog).queryByLabelText("Member name")).toBeNull();
+    const gagentNameInput = await within(createDialog).findByLabelText("GAgent name");
+    expect(gagentNameInput).toHaveValue("gagent-1");
+    fireEvent.change(gagentNameInput, {
+      target: {
+        value: "Orders GAgent",
+      },
+    });
     expect(
-      screen.getByText(
-        "GAgent member authority exists on backend, but this modal still hands off through Build > GAgent for implementation editing and binding prep.",
+      await screen.findByText(
+        "GAgent creates a backend member and opens Build > GAgent for actor type, role, prompt, tools, and persistence authoring.",
       ),
     ).toBeTruthy();
-    fireEvent.click(
-      within(createDialog).getByRole("button", { name: "Open GAgent builder" }),
-    );
+    fireEvent.click(within(createDialog).getByRole("button", { name: "Create member" }));
 
     expect(await screen.findByTestId("studio-gagent-build-panel")).toBeTruthy();
+    expect(studioApi.createMember).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scopeId: "scope-1",
+        displayName: "Orders GAgent",
+        implementationKind: "gagent",
+      }),
+    );
+    await waitFor(() => {
+      expect(message.success).toHaveBeenCalledWith(
+        "Created GAgent member Orders GAgent and opened Build.",
+      );
+    });
     await waitFor(() => {
       const searchParams = new URLSearchParams(window.location.search);
       expect(searchParams.get("tab")).toBe("gagents");
       expect(searchParams.get("step")).toBe("build");
+      expect(searchParams.get("member")).toBe("member:orders-gagent");
     });
   });
 

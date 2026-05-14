@@ -1030,6 +1030,25 @@ function buildInventoryScriptName(
   return `script-${Date.now()}`;
 }
 
+function buildInventoryGAgentName(
+  members: ReadonlyArray<StudioMemberSummary>,
+): string {
+  const usedNames = new Set(
+    members
+      .map((member) => normalizeComparableText(member.displayName))
+      .filter(Boolean),
+  );
+
+  for (let index = 1; index < 1000; index += 1) {
+    const candidate = `gagent-${index}`;
+    if (!usedNames.has(candidate)) {
+      return candidate;
+    }
+  }
+
+  return `gagent-${Date.now()}`;
+}
+
 function upsertStudioMemberRosterMember(
   roster: StudioMemberRoster | undefined,
   scopeId: string,
@@ -2809,6 +2828,10 @@ const StudioPage: React.FC = () => {
   const suggestedCreateScriptName = useMemo(
     () => buildInventoryScriptName(availableScopeScripts, studioScopeMembers),
     [availableScopeScripts, studioScopeMembers],
+  );
+  const suggestedCreateGAgentName = useMemo(
+    () => buildInventoryGAgentName(studioScopeMembers),
+    [studioScopeMembers],
   );
   const publishedScopeServiceRevisionQueries = useQueries({
     queries: publishedScopeServices.map((service) => {
@@ -4755,7 +4778,9 @@ const StudioPage: React.FC = () => {
   useEffect(() => {
     if (
       !createMemberModalOpen ||
-      (createMemberKind !== 'workflow' && createMemberKind !== 'script')
+      (createMemberKind !== 'workflow' &&
+        createMemberKind !== 'script' &&
+        createMemberKind !== 'gagent')
     ) {
       return;
     }
@@ -4867,19 +4892,80 @@ const StudioPage: React.FC = () => {
         return;
       }
 
-      setCreateMemberModalOpen(false);
-      setCreateMemberTeamId('');
-      history.push(
-        buildStudioRoute({
-          scopeId: resolvedStudioScopeId || undefined,
-          teamId: createMemberTeamId || undefined,
-          step: 'build',
-          tab: 'gagents',
-        }),
-      );
-      setBuildSurface('gagent');
-      setStudioSurface('build');
-      void message.info('Opened GAgent builder.');
+      const gAgentDisplayName = trimOptional(createMemberName);
+      if (!gAgentDisplayName) {
+        void message.warning('GAgent member name is required.');
+        return;
+      }
+
+      if (
+        studioScopeMembers.some(
+          (member) =>
+            normalizeComparableText(member.displayName) ===
+              normalizeComparableText(gAgentDisplayName) &&
+            normalizeStudioMemberBindingImplementationKind(member.implementationKind) ===
+              'gagent',
+        )
+      ) {
+        void message.warning('A GAgent member with the same name already exists.');
+        return;
+      }
+
+      if (!resolvedStudioScopeId) {
+        void message.warning('Connect a workspace before creating a GAgent member.');
+        return;
+      }
+
+      setInventoryBusyKey('create');
+      setInventoryBusyAction('create');
+      try {
+        const createdGAgentMember = await studioApi.createMember({
+          scopeId: resolvedStudioScopeId,
+          displayName: gAgentDisplayName,
+          implementationKind: 'gagent',
+          ...(createMemberTeamId ? { teamId: createMemberTeamId } : {}),
+        });
+        queryClient.setQueryData<StudioMemberRoster>(
+          ['studio-scope-members', resolvedStudioScopeId],
+          (current) =>
+            upsertStudioMemberRosterMember(
+              current,
+              resolvedStudioScopeId,
+              createdGAgentMember,
+            ),
+        );
+        void queryClient.invalidateQueries({
+          queryKey: ['studio-scope-members', resolvedStudioScopeId],
+        });
+        setSelectedWorkflowId('');
+        setSelectedScriptId('');
+        setTemplateWorkflow('');
+        setCreateMemberModalOpen(false);
+        setCreateMemberTeamId('');
+        history.push(
+          buildStudioRoute({
+            scopeId: resolvedStudioScopeId,
+            teamId: createMemberTeamId || undefined,
+            memberKey: `member:${createdGAgentMember.memberId}`,
+            step: 'build',
+            tab: 'gagents',
+          }),
+        );
+        setBuildSurface('gagent');
+        setStudioSurface('build');
+        void message.success(
+          `Created GAgent member ${createdGAgentMember.displayName} and opened Build.`,
+        );
+      } catch (memberError) {
+        void message.error(
+          memberError instanceof Error
+            ? `Studio could not register the GAgent member authority: ${memberError.message}`
+            : 'Studio could not register the GAgent member authority.',
+        );
+      } finally {
+        setInventoryBusyKey('');
+        setInventoryBusyAction('');
+      }
       return;
     }
 
@@ -8894,13 +8980,7 @@ const StudioPage: React.FC = () => {
               title="Create member"
               onCancel={closeCreateMemberFlow}
               onOk={() => void handleCreateMember(createMemberKind)}
-              okText={
-                createMemberKind === 'workflow'
-                  ? 'Create member'
-                  : createMemberKind === 'script'
-                    ? 'Create Script draft'
-                    : 'Open GAgent builder'
-              }
+              okText="Create member"
               okButtonProps={{
                 disabled:
                   inventoryBusyAction === 'create' ||
@@ -8912,7 +8992,9 @@ const StudioPage: React.FC = () => {
                   (createMemberKind === 'script' &&
                     (!appContextQuery.data?.features.scripts ||
                       !createScriptId ||
-                      createScriptIdAlreadyExists)),
+                      createScriptIdAlreadyExists)) ||
+                  (createMemberKind === 'gagent' &&
+                    (!resolvedStudioScopeId || !trimOptional(createMemberName))),
                 loading: inventoryBusyAction === 'create',
               }}
               cancelButtonProps={{
@@ -8953,6 +9035,8 @@ const StudioPage: React.FC = () => {
                             setCreateMemberName(suggestedCreateWorkflowName);
                           } else if (kind === 'script') {
                             setCreateMemberName(suggestedCreateScriptName);
+                          } else {
+                            setCreateMemberName(suggestedCreateGAgentName);
                           }
                         }}
                       >
@@ -8961,24 +9045,37 @@ const StudioPage: React.FC = () => {
                     ))}
                   </div>
                   <div style={inventoryCreateHintStyle}>
-                    Choose the implementation kind first. Workflow entry now
-                    registers a backend member authority; Script creates a named
-                    draft identity before Build; GAgent opens its Build workspace
-                    for implementation editing and binding prep.
+                    Choose the implementation kind first. Studio creates the
+                    backend member authority, then opens the matching Build
+                    surface for Workflow, Script, or GAgent authoring.
                   </div>
                 </div>
-                {createMemberKind === 'workflow' || createMemberKind === 'script' ? (
+                {createMemberKind === 'workflow' ||
+                createMemberKind === 'script' ||
+                createMemberKind === 'gagent' ? (
                   <label style={inventoryCreateFieldStackStyle}>
                     <span style={inventoryCreateFieldLabelStyle}>
-                      {createMemberKind === 'workflow' ? 'Member name' : 'Script name'}
+                      {createMemberKind === 'script'
+                        ? 'Script name'
+                        : createMemberKind === 'gagent'
+                          ? 'GAgent name'
+                          : 'Member name'}
                     </span>
                     <input
-                      aria-label={createMemberKind === 'workflow' ? 'Member name' : 'Script name'}
+                      aria-label={
+                        createMemberKind === 'script'
+                          ? 'Script name'
+                          : createMemberKind === 'gagent'
+                            ? 'GAgent name'
+                            : 'Member name'
+                      }
                       onChange={(event) => setCreateMemberName(event.target.value)}
                       placeholder={
                         createMemberKind === 'workflow'
                           ? suggestedCreateWorkflowName
-                          : suggestedCreateScriptName
+                          : createMemberKind === 'script'
+                            ? suggestedCreateScriptName
+                            : suggestedCreateGAgentName
                       }
                       ref={createMemberNameInputRef}
                       style={inventoryCreateInputStyle}
@@ -8999,8 +9096,10 @@ const StudioPage: React.FC = () => {
                   {createMemberKind === 'workflow'
                     ? 'Workflow members currently start from a blank workflow draft with an empty canvas, and Studio also registers the member authority in backend once the draft is created.'
                     : createMemberKind === 'script'
-                      ? 'Script starts as a named draft. It becomes a callable member only after Save script is catalog-applied and Bind succeeds.'
-                      : 'GAgent member authority exists on backend, but this modal still hands off through Build > GAgent for implementation editing and binding prep.'}
+                      ? 'Script creates a backend member and opens a stable script draft identity in Build. It becomes callable after Save script is catalog-applied and Bind succeeds.'
+                      : resolvedStudioScopeId
+                        ? 'GAgent creates a backend member and opens Build > GAgent for actor type, role, prompt, tools, and persistence authoring.'
+                        : 'Connect a workspace before creating a GAgent member.'}
                 </div>
                 {createMemberKind === 'workflow' ? (
                   <label style={inventoryCreateFieldStackStyle}>
