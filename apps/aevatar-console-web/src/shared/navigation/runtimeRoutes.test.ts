@@ -26,13 +26,14 @@ describe('runtimeRoutes', () => {
     expect(
       buildRuntimeRunsHref({
         actorId: 'actor://selected',
+        runId: 'run-1',
         returnTo: buildRuntimeExplorerHref({
           actorId: 'actor://selected',
           runId: 'run-1',
         }),
       }),
     ).toContain(
-      'returnTo=%2Fruntime%2Fexplorer%2Fdetail%3FactorId%3Dactor%253A%252F%252Fselected%26runId%3Drun-1',
+      'actorId=actor%3A%2F%2Fselected&runId=run-1&returnTo=%2Fruntime%2Fexplorer%2Fdetail%3FactorId%3Dactor%253A%252F%252Fselected%26runId%3Drun-1',
     );
   });
 
