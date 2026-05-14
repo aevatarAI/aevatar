@@ -703,7 +703,9 @@ public sealed class ScopeServiceEndpointsStreamTests
                 runtime,
                 projectionPort),
             new DefaultCommandContextPolicy(),
-            new GAgentDraftRunCommandTargetBinder(projectionPort),
+            new GAgentDraftRunCommandTargetBinder(
+                projectionPort,
+                new StubGAgentRunTerminalProjectionPort()),
             new GAgentDraftRunCommandEnvelopeFactory(),
             new ActorCommandTargetDispatcher<GAgentDraftRunCommandTarget>(new InlineActorDispatchPort(runtime)),
             new GAgentDraftRunAcceptedReceiptFactory());
@@ -713,7 +715,7 @@ public sealed class ScopeServiceEndpointsStreamTests
             new DefaultEventOutputStream<AGUIEvent, AGUIEvent>(new IdentityEventFrameMapper<AGUIEvent>()),
             new GAgentDraftRunCompletionPolicy(),
             new GAgentDraftRunFinalizeEmitter(),
-            new GAgentDraftRunDurableCompletionResolver(),
+            new GAgentDraftRunDurableCompletionResolver(new StubGAgentRunTerminalQueryPort()),
             NullLogger<DefaultCommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, AGUIEvent, GAgentDraftRunCompletionStatus>>.Instance);
     }
 
@@ -834,6 +836,45 @@ public sealed class ScopeServiceEndpointsStreamTests
     }
 
     private sealed record StubDraftRunProjectionLease(string ActorId, string CommandId) : IGAgentDraftRunProjectionLease;
+
+    private sealed class StubGAgentRunTerminalProjectionPort : IGAgentRunTerminalProjectionPort
+    {
+        public Task EnsureProjectionAsync(
+            string actorId,
+            string correlationId,
+            CancellationToken ct = default)
+        {
+            _ = actorId;
+            _ = correlationId;
+            _ = ct;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class StubGAgentRunTerminalQueryPort : IGAgentRunTerminalQueryPort
+    {
+        public Task<GAgentRunTerminalSnapshot?> GetByCorrelationIdAsync(
+            string actorId,
+            string correlationId,
+            CancellationToken ct = default)
+        {
+            _ = actorId;
+            _ = correlationId;
+            _ = ct;
+            return Task.FromResult<GAgentRunTerminalSnapshot?>(null);
+        }
+
+        public Task<GAgentRunTerminalSnapshot?> GetBySessionIdAsync(
+            string actorId,
+            string sessionId,
+            CancellationToken ct = default)
+        {
+            _ = actorId;
+            _ = sessionId;
+            _ = ct;
+            return Task.FromResult<GAgentRunTerminalSnapshot?>(null);
+        }
+    }
 
     private sealed class StubScriptExecutionProjectionPort : IScriptExecutionProjectionPort
     {

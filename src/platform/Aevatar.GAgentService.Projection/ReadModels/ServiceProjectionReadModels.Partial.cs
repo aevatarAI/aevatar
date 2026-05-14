@@ -217,6 +217,21 @@ public sealed partial class ServiceRunCurrentStateReadModel : IProjectionReadMod
     }
 }
 
+public sealed partial class GAgentRunTerminalReadModel : IProjectionReadModel<GAgentRunTerminalReadModel>
+{
+    public DateTimeOffset UpdatedAt
+    {
+        get => ObservedAt;
+        set => ObservedAt = value;
+    }
+
+    public DateTimeOffset ObservedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(ObservedAtUtcValue);
+        set => ObservedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+}
+
 internal static class ServiceProjectionReadModelSupport
 {
     public static Timestamp ToTimestamp(DateTimeOffset value) =>

@@ -64,7 +64,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
             projectionPort);
         var lease = new DraftRunProjectionLease("actor-1", "cmd-1");
         var sink = new DraftRunRecordingSink();
-        target.BindLiveObservation(lease, sink);
+        target.BindLiveObservation(lease, sink, "session-1");
 
         await target.CleanupAfterDispatchFailureAsync(CancellationToken.None);
 
@@ -80,7 +80,8 @@ public sealed class GAgentDraftRunInteractionCoverageTests
     public async Task Binder_ShouldThrow_WhenProjectionPipelineIsUnavailable()
     {
         var projectionPort = new DraftRunProjectionPort { LeaseToReturn = null };
-        var binder = new GAgentDraftRunCommandTargetBinder(projectionPort);
+        var terminalPort = new RecordingGAgentRunTerminalProjectionPort();
+        var binder = new GAgentDraftRunCommandTargetBinder(projectionPort, terminalPort);
         var target = new GAgentDraftRunCommandTarget(
             new DraftRunStubActor("actor-1", new DraftRunExpectedAgent()),
             typeof(DraftRunExpectedAgent).AssemblyQualifiedName!,
@@ -94,6 +95,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("GAgent draft-run projection pipeline is unavailable.");
+        terminalPort.Calls.Should().ContainSingle(x => x.actorId == "actor-1" && x.correlationId == "corr-1");
     }
 
     [Fact]
@@ -182,7 +184,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
             target,
             new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>()));
 
-        receipt.Should().Be(new GAgentDraftRunAcceptedReceipt("actor-1", "actor-type", "cmd-1", "corr-1"));
+        receipt.Should().Be(new GAgentDraftRunAcceptedReceipt("actor-1", "actor-type", "cmd-1", "corr-1", string.Empty));
 
         var completionPolicy = new GAgentDraftRunCompletionPolicy();
         completionPolicy.TryResolve(new AGUIEvent { TextMessageEnd = new Aevatar.Presentation.AGUI.TextMessageEndEvent() }, out var textCompletion)
@@ -214,9 +216,49 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         emitted[0].RunFinished.ThreadId.Should().Be("actor-1");
         emitted[0].RunFinished.RunId.Should().Be("cmd-1");
 
-        var durableResolver = new GAgentDraftRunDurableCompletionResolver();
+        var terminalQuery = new RecordingGAgentRunTerminalQueryPort
+        {
+            CorrelationSnapshot = new GAgentRunTerminalSnapshot(
+                "actor-1",
+                "session-1",
+                "corr-1",
+                GAgentRunTerminalInteractionKind.DraftRun,
+                GAgentRunTerminalStatus.TextMessageCompleted,
+                string.Empty,
+                string.Empty,
+                3,
+                "evt-1",
+                DateTimeOffset.UtcNow),
+        };
+        var durableResolver = new GAgentDraftRunDurableCompletionResolver(terminalQuery);
         (await durableResolver.ResolveAsync(receipt, CancellationToken.None))
-            .Should().Be(CommandDurableCompletionObservation<GAgentDraftRunCompletionStatus>.Incomplete);
+            .Should().Be(new CommandDurableCompletionObservation<GAgentDraftRunCompletionStatus>(
+                true,
+                GAgentDraftRunCompletionStatus.TextMessageCompleted));
+        terminalQuery.CorrelationCalls.Should().ContainSingle(x => x.actorId == "actor-1" && x.correlationId == "corr-1");
+    }
+
+    [Fact]
+    public async Task Binder_ShouldActivateTerminalMaterialization_BeforeLiveObservation()
+    {
+        var projectionPort = new DraftRunProjectionPort();
+        var terminalPort = new RecordingGAgentRunTerminalProjectionPort();
+        var binder = new GAgentDraftRunCommandTargetBinder(projectionPort, terminalPort);
+        var target = new GAgentDraftRunCommandTarget(
+            new DraftRunStubActor("actor-1", new DraftRunExpectedAgent()),
+            typeof(DraftRunExpectedAgent).AssemblyQualifiedName!,
+            projectionPort);
+
+        var result = await binder.BindAsync(
+            new GAgentDraftRunCommand("scope-a", typeof(DraftRunExpectedAgent).AssemblyQualifiedName!, "hello"),
+            target,
+            new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>()),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        terminalPort.Calls.Should().ContainSingle(x => x.actorId == "actor-1" && x.correlationId == "corr-1");
+        projectionPort.EnsureCalls.Should().ContainSingle(x => x.actorId == "actor-1" && x.commandId == "cmd-1");
+        projectionPort.AttachCalls.Should().ContainSingle();
     }
 
     private sealed class DraftRunProjectionPort : IGAgentDraftRunProjectionPort
@@ -265,6 +307,46 @@ public sealed class GAgentDraftRunInteractionCoverageTests
     }
 
     private sealed record DraftRunProjectionLease(string ActorId, string CommandId) : IGAgentDraftRunProjectionLease;
+
+    private sealed class RecordingGAgentRunTerminalProjectionPort : IGAgentRunTerminalProjectionPort
+    {
+        public List<(string actorId, string correlationId)> Calls { get; } = [];
+
+        public Task EnsureProjectionAsync(
+            string actorId,
+            string correlationId,
+            CancellationToken ct = default)
+        {
+            Calls.Add((actorId, correlationId));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingGAgentRunTerminalQueryPort : IGAgentRunTerminalQueryPort
+    {
+        public GAgentRunTerminalSnapshot? CorrelationSnapshot { get; init; }
+        public GAgentRunTerminalSnapshot? SessionSnapshot { get; init; }
+        public List<(string actorId, string correlationId)> CorrelationCalls { get; } = [];
+        public List<(string actorId, string sessionId)> SessionCalls { get; } = [];
+
+        public Task<GAgentRunTerminalSnapshot?> GetByCorrelationIdAsync(
+            string actorId,
+            string correlationId,
+            CancellationToken ct = default)
+        {
+            CorrelationCalls.Add((actorId, correlationId));
+            return Task.FromResult(CorrelationSnapshot);
+        }
+
+        public Task<GAgentRunTerminalSnapshot?> GetBySessionIdAsync(
+            string actorId,
+            string sessionId,
+            CancellationToken ct = default)
+        {
+            SessionCalls.Add((actorId, sessionId));
+            return Task.FromResult(SessionSnapshot);
+        }
+    }
 
     private sealed class DraftRunStubActorRuntime(params IActor[] actors) : IActorRuntime
     {

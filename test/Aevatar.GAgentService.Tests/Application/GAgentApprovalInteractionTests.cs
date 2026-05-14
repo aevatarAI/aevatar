@@ -54,7 +54,8 @@ public sealed class GAgentApprovalInteractionTests
         {
             LeaseToReturn = new ApprovalProjectionLease("actor-1", "cmd-1"),
         };
-        var binder = new GAgentApprovalCommandTargetBinder(projectionPort);
+        var terminalPort = new ApprovalTerminalProjectionPort();
+        var binder = new GAgentApprovalCommandTargetBinder(projectionPort, terminalPort);
         var target = new GAgentApprovalCommandTarget(
             new ApprovalStubActor("actor-1", new ApprovalStubAgent()),
             projectionPort);
@@ -68,8 +69,9 @@ public sealed class GAgentApprovalInteractionTests
         result.Succeeded.Should().BeTrue();
         target.ProjectionLease.Should().BeSameAs(projectionPort.LeaseToReturn);
         target.LiveSink.Should().NotBeNull();
-        projectionPort.EnsureCalls.Should().ContainSingle(x => x.actorId == "actor-1" && x.commandId == "cmd-1");
+        projectionPort.EnsureCalls.Should().ContainSingle(x => x.actorId == "actor-1" && x.commandId == "corr-1");
         projectionPort.AttachCalls.Should().ContainSingle();
+        terminalPort.Calls.Should().ContainSingle(x => x.actorId == "actor-1" && x.correlationId == "corr-1");
     }
 
     [Fact]
@@ -79,7 +81,8 @@ public sealed class GAgentApprovalInteractionTests
         {
             LeaseToReturn = null,
         };
-        var binder = new GAgentApprovalCommandTargetBinder(projectionPort);
+        var terminalPort = new ApprovalTerminalProjectionPort();
+        var binder = new GAgentApprovalCommandTargetBinder(projectionPort, terminalPort);
         var target = new GAgentApprovalCommandTarget(
             new ApprovalStubActor("actor-1", new ApprovalStubAgent()),
             projectionPort);
@@ -93,6 +96,7 @@ public sealed class GAgentApprovalInteractionTests
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("GAgent approval projection pipeline is unavailable.");
         projectionPort.AttachCalls.Should().BeEmpty();
+        terminalPort.Calls.Should().ContainSingle(x => x.actorId == "actor-1" && x.correlationId == "corr-1");
     }
 
     [Fact]
@@ -104,7 +108,7 @@ public sealed class GAgentApprovalInteractionTests
             projectionPort);
         var sink = new RecordingAguiEventSink();
         var lease = new ApprovalProjectionLease("actor-1", "cmd-1");
-        target.BindLiveObservation(lease, sink);
+        target.BindLiveObservation(lease, sink, "session-1");
 
         await target.CleanupAfterDispatchFailureAsync(CancellationToken.None);
 
@@ -159,7 +163,7 @@ public sealed class GAgentApprovalInteractionTests
             target,
             new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>()));
 
-        receipt.Should().Be(new GAgentApprovalAcceptedReceipt("actor-1", "cmd-1", "corr-1"));
+        receipt.Should().Be(new GAgentApprovalAcceptedReceipt("actor-1", "cmd-1", "corr-1", string.Empty));
     }
 
     [Fact]
@@ -188,7 +192,7 @@ public sealed class GAgentApprovalInteractionTests
     public async Task FinalizeEmitter_ShouldEmitRunFinished_OnlyForCompletedTextMessages()
     {
         var emitter = new GAgentApprovalFinalizeEmitter();
-        var receipt = new GAgentApprovalAcceptedReceipt("actor-1", "cmd-1", "corr-1");
+        var receipt = new GAgentApprovalAcceptedReceipt("actor-1", "cmd-1", "corr-1", "session-1");
         var emitted = new List<AGUIEvent>();
 
         await emitter.EmitAsync(
@@ -221,15 +225,32 @@ public sealed class GAgentApprovalInteractionTests
     }
 
     [Fact]
-    public async Task DurableCompletionResolver_ShouldAlwaysReturnIncomplete()
+    public async Task DurableCompletionResolver_ShouldResolveTerminalSnapshot()
     {
-        var resolver = new GAgentApprovalDurableCompletionResolver();
+        var queryPort = new ApprovalTerminalQueryPort
+        {
+            CorrelationSnapshot = new GAgentRunTerminalSnapshot(
+                "actor-1",
+                "session-1",
+                "corr-1",
+                GAgentRunTerminalInteractionKind.Approval,
+                GAgentRunTerminalStatus.Failed,
+                "approval_denied",
+                "denied",
+                2,
+                "evt-1",
+                DateTimeOffset.UtcNow),
+        };
+        var resolver = new GAgentApprovalDurableCompletionResolver(queryPort);
 
         var result = await resolver.ResolveAsync(
-            new GAgentApprovalAcceptedReceipt("actor-1", "cmd-1", "corr-1"),
+            new GAgentApprovalAcceptedReceipt("actor-1", "cmd-1", "corr-1", "session-1"),
             CancellationToken.None);
 
-        result.Should().Be(CommandDurableCompletionObservation<GAgentApprovalCompletionStatus>.Incomplete);
+        result.Should().Be(new CommandDurableCompletionObservation<GAgentApprovalCompletionStatus>(
+            true,
+            GAgentApprovalCompletionStatus.Failed));
+        queryPort.CorrelationCalls.Should().ContainSingle(x => x.actorId == "actor-1" && x.correlationId == "corr-1");
     }
 
     private sealed class ApprovalProjectionPort : IGAgentDraftRunProjectionPort
@@ -278,6 +299,46 @@ public sealed class GAgentApprovalInteractionTests
     }
 
     private sealed record ApprovalProjectionLease(string ActorId, string CommandId) : IGAgentDraftRunProjectionLease;
+
+    private sealed class ApprovalTerminalProjectionPort : IGAgentRunTerminalProjectionPort
+    {
+        public List<(string actorId, string correlationId)> Calls { get; } = [];
+
+        public Task EnsureProjectionAsync(
+            string actorId,
+            string correlationId,
+            CancellationToken ct = default)
+        {
+            Calls.Add((actorId, correlationId));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ApprovalTerminalQueryPort : IGAgentRunTerminalQueryPort
+    {
+        public GAgentRunTerminalSnapshot? CorrelationSnapshot { get; init; }
+        public GAgentRunTerminalSnapshot? SessionSnapshot { get; init; }
+        public List<(string actorId, string correlationId)> CorrelationCalls { get; } = [];
+        public List<(string actorId, string sessionId)> SessionCalls { get; } = [];
+
+        public Task<GAgentRunTerminalSnapshot?> GetByCorrelationIdAsync(
+            string actorId,
+            string correlationId,
+            CancellationToken ct = default)
+        {
+            CorrelationCalls.Add((actorId, correlationId));
+            return Task.FromResult(CorrelationSnapshot);
+        }
+
+        public Task<GAgentRunTerminalSnapshot?> GetBySessionIdAsync(
+            string actorId,
+            string sessionId,
+            CancellationToken ct = default)
+        {
+            SessionCalls.Add((actorId, sessionId));
+            return Task.FromResult(SessionSnapshot);
+        }
+    }
 
     private sealed class ApprovalStubActorRuntime(params IActor[] actors) : IActorRuntime
     {

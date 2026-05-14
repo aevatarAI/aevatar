@@ -203,3 +203,19 @@ message ServiceRunCurrentStateReadModel {
   google.protobuf.Timestamp created_at_utc_value = 20;
   google.protobuf.Timestamp updated_at_utc_value = 21;
 }
+
+// --- GAgentRunTerminalReadModel ---
+
+message GAgentRunTerminalReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  string session_id = 5;
+  string correlation_id = 6;
+  int32 interaction_kind = 7;
+  int32 status = 8;
+  string reason_code = 9;
+  string reason_message = 10;
+  google.protobuf.Timestamp observed_at_utc_value = 11;
+}

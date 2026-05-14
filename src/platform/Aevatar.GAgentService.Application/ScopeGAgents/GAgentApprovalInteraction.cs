@@ -30,15 +30,18 @@ internal sealed class GAgentApprovalCommandTarget
     public IActor Actor { get; }
     public string TargetId => Actor.Id;
     public string ActorId => Actor.Id;
+    public string SessionId { get; private set; } = string.Empty;
     public IGAgentDraftRunProjectionLease? ProjectionLease { get; private set; }
     public IEventSink<AGUIEvent>? LiveSink { get; private set; }
 
     public void BindLiveObservation(
         IGAgentDraftRunProjectionLease lease,
-        IEventSink<AGUIEvent> sink)
+        IEventSink<AGUIEvent> sink,
+        string sessionId)
     {
         ProjectionLease = lease ?? throw new ArgumentNullException(nameof(lease));
         LiveSink = sink ?? throw new ArgumentNullException(nameof(sink));
+        SessionId = sessionId;
     }
 
     public IEventSink<AGUIEvent> RequireLiveSink() =>
@@ -151,11 +154,14 @@ internal sealed class GAgentApprovalCommandTargetBinder
     : ICommandTargetBinder<GAgentApprovalCommand, GAgentApprovalCommandTarget, GAgentApprovalStartError>
 {
     private readonly IGAgentDraftRunProjectionPort _projectionPort;
+    private readonly IGAgentRunTerminalProjectionPort _terminalProjectionPort;
 
     public GAgentApprovalCommandTargetBinder(
-        IGAgentDraftRunProjectionPort projectionPort)
+        IGAgentDraftRunProjectionPort projectionPort,
+        IGAgentRunTerminalProjectionPort terminalProjectionPort)
     {
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
+        _terminalProjectionPort = terminalProjectionPort ?? throw new ArgumentNullException(nameof(terminalProjectionPort));
     }
 
     public async Task<CommandTargetBindingResult<GAgentApprovalStartError>> BindAsync(
@@ -172,10 +178,12 @@ internal sealed class GAgentApprovalCommandTargetBinder
 
         try
         {
+            await _terminalProjectionPort.EnsureProjectionAsync(target.ActorId, context.CorrelationId, ct);
+
             var projectionLease = await _projectionPort.EnsureAndAttachAsync(
                 token => _projectionPort.EnsureActorProjectionAsync(
                     target.ActorId,
-                    context.CommandId,
+                    context.CorrelationId,
                     token),
                 sink,
                 ct);
@@ -187,7 +195,10 @@ internal sealed class GAgentApprovalCommandTargetBinder
                 throw new InvalidOperationException("GAgent approval projection pipeline is unavailable.");
             }
 
-            target.BindLiveObservation(projectionLease, sink);
+            target.BindLiveObservation(
+                projectionLease,
+                sink,
+                command.SessionId?.Trim() ?? string.Empty);
             return CommandTargetBindingResult<GAgentApprovalStartError>.Success();
         }
         catch
@@ -242,7 +253,8 @@ internal sealed class GAgentApprovalAcceptedReceiptFactory
         return new GAgentApprovalAcceptedReceipt(
             target.ActorId,
             context.CommandId,
-            context.CorrelationId);
+            context.CorrelationId,
+            target.SessionId);
     }
 }
 
@@ -307,12 +319,44 @@ internal sealed class GAgentApprovalFinalizeEmitter
 internal sealed class GAgentApprovalDurableCompletionResolver
     : ICommandDurableCompletionResolver<GAgentApprovalAcceptedReceipt, GAgentApprovalCompletionStatus>
 {
-    public Task<CommandDurableCompletionObservation<GAgentApprovalCompletionStatus>> ResolveAsync(
+    private readonly IGAgentRunTerminalQueryPort _queryPort;
+
+    public GAgentApprovalDurableCompletionResolver(
+        IGAgentRunTerminalQueryPort queryPort)
+    {
+        _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
+    }
+
+    public async Task<CommandDurableCompletionObservation<GAgentApprovalCompletionStatus>> ResolveAsync(
         GAgentApprovalAcceptedReceipt receipt,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(receipt);
-        _ = ct;
-        return Task.FromResult(CommandDurableCompletionObservation<GAgentApprovalCompletionStatus>.Incomplete);
+
+        try
+        {
+            var snapshot = await _queryPort.GetByCorrelationIdAsync(receipt.ActorId, receipt.CorrelationId, ct);
+            if (snapshot == null && !string.IsNullOrWhiteSpace(receipt.SessionId))
+                snapshot = await _queryPort.GetBySessionIdAsync(receipt.ActorId, receipt.SessionId, ct);
+            return Map(snapshot);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return CommandDurableCompletionObservation<GAgentApprovalCompletionStatus>.Incomplete;
+        }
     }
+
+    private static CommandDurableCompletionObservation<GAgentApprovalCompletionStatus> Map(
+        GAgentRunTerminalSnapshot? snapshot) =>
+        snapshot?.Status switch
+        {
+            GAgentRunTerminalStatus.TextMessageCompleted => new(true, GAgentApprovalCompletionStatus.TextMessageCompleted),
+            GAgentRunTerminalStatus.RunFinished => new(true, GAgentApprovalCompletionStatus.RunFinished),
+            GAgentRunTerminalStatus.Failed => new(true, GAgentApprovalCompletionStatus.Failed),
+            _ => CommandDurableCompletionObservation<GAgentApprovalCompletionStatus>.Incomplete,
+        };
 }

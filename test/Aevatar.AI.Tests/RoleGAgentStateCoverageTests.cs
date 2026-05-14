@@ -344,6 +344,8 @@ public sealed class RoleGAgentStateCoverageTests
         });
 
         agent.State.PendingApproval.Should().BeNull();
+        agent.State.Sessions["session-a"].Completed.Should().BeTrue();
+        agent.State.Sessions["session-a"].FinalContent.Should().Contain("approval_denied: not approved");
         AgentToolRequestContext.CurrentMetadata.Should().BeNull();
     }
 
