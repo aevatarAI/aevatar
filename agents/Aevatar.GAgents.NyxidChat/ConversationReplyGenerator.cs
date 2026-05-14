@@ -75,7 +75,7 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         }
     }
 
-    public async Task<string?> GenerateReplyAsync(
+    public async Task<ConversationReplyResult> GenerateReplyAsync(
         ChatActivity activity,
         IReadOnlyDictionary<string, string> metadata,
         IStreamingReplySink? streamingSink,
@@ -201,7 +201,7 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
             "SkillRegistry registered without IRemoteSkillFetcher; local skills remain available and no remote skills are currently advertised.");
     }
 
-    private async Task<string?> GenerateWithMetadataAsync(
+    private async Task<ConversationReplyResult> GenerateWithMetadataAsync(
         ChatActivity activity,
         IReadOnlyDictionary<string, string> effectiveMetadata,
         ToolManager tools,
@@ -237,6 +237,12 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
             streamBufferCapacity: StreamBufferCapacity);
 
         var output = new StringBuilder();
+        // ADR-0021 §6 / canon §8 actor-edge closeout: aggregate Usage and track the last
+        // FinishReason across all internal LLM rounds (tool-call loop) so the caller sees
+        // exactly one closeout — the returned record — instead of relying on round-internal
+        // markers that ChatRuntime currently passes through.
+        ReplyTokenUsage? aggregatedUsage = null;
+        string? lastFinishReason = null;
         await foreach (var chunk in runtime.ChatStreamAsync(
                            activity.Content.Text,
                            MaxToolRounds,
@@ -244,6 +250,11 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
                            effectiveMetadata,
                            ct))
         {
+            if (chunk.Usage is { } usage)
+                aggregatedUsage = SumUsage(aggregatedUsage, MapUsage(usage));
+            if (!string.IsNullOrEmpty(chunk.FinishReason))
+                lastFinishReason = chunk.FinishReason;
+
             if (string.IsNullOrEmpty(chunk.DeltaContent))
                 continue;
 
@@ -252,8 +263,26 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
                 await streamingSink.OnDeltaAsync(output.ToString(), ct);
         }
 
-        return output.ToString();
+        return new ConversationReplyResult(
+            Text: output.ToString(),
+            Usage: aggregatedUsage,
+            FinishReason: lastFinishReason);
     }
+
+    // ADR-0021 §6 / canon §8 cross-round usage aggregation — each provider round
+    // reports its own Usage; the actor-edge closeout carries the sum.
+    private static ReplyTokenUsage? SumUsage(ReplyTokenUsage? acc, ReplyTokenUsage? add)
+    {
+        if (add is null) return acc;
+        if (acc is null) return add;
+        return new ReplyTokenUsage(
+            acc.PromptTokens + add.PromptTokens,
+            acc.CompletionTokens + add.CompletionTokens,
+            acc.TotalTokens + add.TotalTokens);
+    }
+
+    private static ReplyTokenUsage MapUsage(TokenUsage usage) =>
+        new(usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens);
 
     private IReadOnlyList<IToolCallMiddleware> BuildToolMiddlewaresForTurn()
     {

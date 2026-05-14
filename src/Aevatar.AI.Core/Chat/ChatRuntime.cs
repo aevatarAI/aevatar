@@ -842,6 +842,12 @@ public sealed class ChatRuntime
             DeltaToolCall = normalizedToolCall,
             Usage = chunk.Usage,
             IsLast = chunk.IsLast,
+            // Field-level patch (ADR-0021 §6 / canon §8): forward FinishReason so
+            // the actor-edge closeout in ConversationReplyGenerator can observe
+            // it. ChatRuntime itself remains transitional per aevatar#596 Phase A;
+            // the cross-round aggregation and stream-local terminal contract live
+            // at the actor edge, not here.
+            FinishReason = chunk.FinishReason,
         };
     }
 

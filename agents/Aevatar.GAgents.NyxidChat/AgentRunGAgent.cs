@@ -288,11 +288,27 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 if (ShouldCaptureInteractiveReply(request.Activity))
                     interactiveReplyScope = _interactiveReplyCollector?.BeginScope();
 
-                replyText = await _replyGenerator.GenerateReplyAsync(
+                // ADR-0021 §6 / canon §8 actor-edge closeout: the generator returns a
+                // single ConversationReplyResult per run carrying aggregated Usage and the
+                // last FinishReason. Round-internal terminal markers no longer leak past
+                // ChatRuntime, so this is the lone closeout observation point.
+                var replyResult = await _replyGenerator.GenerateReplyAsync(
                     request.Activity,
                     effectiveMetadata,
                     streamingSink,
-                    timeoutCts.Token) ?? string.Empty;
+                    timeoutCts.Token);
+                replyText = replyResult.Text ?? string.Empty;
+                if (replyResult.Usage is not null || !string.IsNullOrEmpty(replyResult.FinishReason))
+                {
+                    _logger.LogInformation(
+                        "LLM reply closeout: runId={RunId} correlation={CorrelationId} promptTokens={Prompt} completionTokens={Completion} totalTokens={Total} finishReason={FinishReason}",
+                        runId,
+                        request.CorrelationId,
+                        replyResult.Usage?.PromptTokens,
+                        replyResult.Usage?.CompletionTokens,
+                        replyResult.Usage?.TotalTokens,
+                        replyResult.FinishReason ?? "(none)");
+                }
                 outboundIntent = _interactiveReplyCollector?.TryTake();
             }
             finally

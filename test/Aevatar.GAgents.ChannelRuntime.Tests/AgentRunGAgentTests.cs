@@ -1528,7 +1528,7 @@ public sealed class AgentRunGAgentTests
 
         public Action<IReadOnlyDictionary<string, string>>? MetadataObserver { get; init; }
 
-        public async Task<string?> GenerateReplyAsync(
+        public async Task<ConversationReplyResult> GenerateReplyAsync(
             ChatActivity activity,
             IReadOnlyDictionary<string, string> metadata,
             IStreamingReplySink? streamingSink,
@@ -1539,17 +1539,17 @@ public sealed class AgentRunGAgentTests
             MetadataObserver?.Invoke(metadata);
             if (streamingSink is not null && !string.IsNullOrEmpty(ReplyText))
                 await streamingSink.OnDeltaAsync(ReplyText, ct);
-            return ReplyText;
+            return new ConversationReplyResult(ReplyText, Usage: null, FinishReason: null);
         }
     }
 
     private sealed class ThrowingReplyGenerator(Exception exception) : IConversationReplyGenerator
     {
-        public Task<string?> GenerateReplyAsync(
+        public Task<ConversationReplyResult> GenerateReplyAsync(
             ChatActivity activity,
             IReadOnlyDictionary<string, string> metadata,
             IStreamingReplySink? streamingSink,
-            CancellationToken ct) => Task.FromException<string?>(exception);
+            CancellationToken ct) => Task.FromException<ConversationReplyResult>(exception);
     }
 
     /// <summary>Generator that never completes on its own; only ends when the runtime cancels it.</summary>
@@ -1557,13 +1557,13 @@ public sealed class AgentRunGAgentTests
     {
         public bool WasCancelled { get; private set; }
 
-        public async Task<string?> GenerateReplyAsync(
+        public async Task<ConversationReplyResult> GenerateReplyAsync(
             ChatActivity activity,
             IReadOnlyDictionary<string, string> metadata,
             IStreamingReplySink? streamingSink,
             CancellationToken ct)
         {
-            var pendingReply = new TaskCompletionSource<string?>(
+            var pendingReply = new TaskCompletionSource<ConversationReplyResult>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             using var cancellationRegistration = ct.Register(() =>
             {
