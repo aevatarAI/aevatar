@@ -670,16 +670,24 @@ describe('StudioMemberBindPanel', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Bind current revision' }));
     });
 
-    expect(await screen.findByText('draft1 is now bound. Review the invoke contract below.')).toBeTruthy();
+    expect(
+      await screen.findByText(
+        'draft1 binding request was accepted. Studio will show the published contract after the run completes.',
+      ),
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Switch candidate' }));
 
     expect(await screen.findByText('No published contract exists for joker yet.')).toBeTruthy();
     expect(
-      screen.queryByText('draft1 is now bound. Review the invoke contract below.'),
+      screen.queryByText(
+        'draft1 binding request was accepted. Studio will show the published contract after the run completes.',
+      ),
     ).toBeNull();
     expect(
-      screen.queryByText('joker is now bound. Review the invoke contract below.'),
+      screen.queryByText(
+        'joker binding request was accepted. Studio will show the published contract after the run completes.',
+      ),
     ).toBeNull();
   });
 });

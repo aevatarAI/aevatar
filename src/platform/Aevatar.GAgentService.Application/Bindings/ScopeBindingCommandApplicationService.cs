@@ -200,9 +200,6 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         ServiceRevisionSpec revisionSpec,
         CancellationToken ct)
     {
-        if (request.ImplementationKind != ScopeBindingImplementationKind.Scripting)
-            return true;
-
         var requestedRevisionId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.RevisionId);
         if (string.IsNullOrWhiteSpace(requestedRevisionId))
             return true;
@@ -216,7 +213,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         if (existingRevision == null)
             return true;
 
-        if (!string.Equals(existingRevision.ImplementationKind, ServiceImplementationKind.Scripting.ToString(), StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(existingRevision.ImplementationKind, revisionSpec.ImplementationKind.ToString(), StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
                 $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' with implementation '{existingRevision.ImplementationKind}'.");
@@ -226,6 +223,18 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         {
             throw new InvalidOperationException(
                 $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but has been retired.");
+        }
+
+        if (request.ImplementationKind != ScopeBindingImplementationKind.Scripting)
+        {
+            if (!request.AllowExistingRevisionReplay ||
+                !string.Equals(request.ReplayRevisionId, revisionId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}'.");
+            }
+
+            return false;
         }
 
         var expectedArtifactHash = await ComputeScriptingArtifactHashAsync(revisionSpec, ct);

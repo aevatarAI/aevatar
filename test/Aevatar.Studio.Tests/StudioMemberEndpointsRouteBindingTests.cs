@@ -46,9 +46,9 @@ public sealed class StudioMemberEndpointsRouteBindingTests
             .SelectMany(d => d.Endpoints)
             .ToList();
 
-        // Nine routes mapped: create, list, get, bind, get-binding,
-        // contract, activate, retire, patch (ADR-0017).
-        endpoints.Should().HaveCount(9);
+        // Ten routes mapped: create, list, get, bind, get-binding,
+        // get-binding-run, contract, activate, retire, patch (ADR-0017).
+        endpoints.Should().HaveCount(10);
     }
 
     private sealed class NoOpMemberService : IStudioMemberService
@@ -69,13 +69,17 @@ public sealed class StudioMemberEndpointsRouteBindingTests
             string scopeId, string memberId, CancellationToken ct = default) =>
             Task.FromException<StudioMemberDetailResponse>(new NotImplementedException());
 
-        public Task<StudioMemberBindingResponse> BindAsync(
+        public Task<StudioMemberBindingAcceptedResponse> BindAsync(
             string scopeId, string memberId, UpdateStudioMemberBindingRequest request, CancellationToken ct = default) =>
-            Task.FromException<StudioMemberBindingResponse>(new NotImplementedException());
+            Task.FromException<StudioMemberBindingAcceptedResponse>(new NotImplementedException());
 
-        public Task<StudioMemberBindingContractResponse?> GetBindingAsync(
+        public Task<StudioMemberBindingViewResponse> GetBindingAsync(
             string scopeId, string memberId, CancellationToken ct = default) =>
-            Task.FromResult<StudioMemberBindingContractResponse?>(null);
+            Task.FromResult(new StudioMemberBindingViewResponse(null));
+
+        public Task<StudioMemberBindingRunStatusResponse> GetBindingRunAsync(
+            string scopeId, string memberId, string bindingRunId, CancellationToken ct = default) =>
+            Task.FromException<StudioMemberBindingRunStatusResponse>(new NotImplementedException());
 
         public Task<StudioMemberEndpointContractResponse?> GetEndpointContractAsync(
             string scopeId, string memberId, string endpointId, CancellationToken ct = default) =>
