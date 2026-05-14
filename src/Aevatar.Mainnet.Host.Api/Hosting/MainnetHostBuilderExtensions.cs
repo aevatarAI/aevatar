@@ -25,6 +25,7 @@ using Aevatar.GAgents.Platform.Telegram;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
+using Aevatar.Mainnet.Host.Api.Messages;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
@@ -176,6 +177,7 @@ public static class MainnetHostBuilderExtensions
         app.MapNyxIdChatEndpoints();
         app.MapStreamingProxyEndpoints();
         app.MapResponsesApiEndpoints();
+        app.MapMessagesApiEndpoints();
         app.MapChannelCallbackEndpoints();
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();
