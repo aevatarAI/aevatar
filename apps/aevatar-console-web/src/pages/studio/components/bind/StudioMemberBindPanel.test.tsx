@@ -284,9 +284,17 @@ describe('StudioMemberBindPanel', () => {
     expect(screen.getByTestId('studio-bind-smoke-test-section')).toBeTruthy();
     expect(screen.getByTestId('studio-bind-snippet-section')).toBeTruthy();
     expect(screen.getByTestId('studio-bind-supporting-section')).toBeTruthy();
-    fireEvent.click(screen.getByText('Published contract source'));
-    expect(await screen.findByText('Published service')).toBeTruthy();
-    expect(primaryGrid.contains(screen.getByText('Published service'))).toBe(false);
+    expect(screen.getByText('Current member publication')).toBeTruthy();
+    expect(screen.getByText('member:default')).toBeTruthy();
+    expect(screen.queryByRole('combobox')).toBeNull();
+    expect(
+      screen.queryByText('Select a published service'),
+    ).toBeNull();
+    expect(screen.getByRole('button', { name: 'Chat' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(screen.queryByText('Published service')).toBeNull();
     expect(screen.queryByText('Binding Contract')).toBeNull();
     expect(screen.queryByText('Current contract')).toBeNull();
     expect(screen.queryByText('Published contract context')).toBeNull();

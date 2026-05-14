@@ -7226,10 +7226,11 @@ const StudioPage: React.FC = () => {
   const hasInvokeTargetMemberSelection =
     Boolean(workbenchStudioMemberId);
   const invokeTargetServiceId =
-    currentInvokeSelectionServiceId ||
-    currentBindingSelectionServiceId ||
-    currentSelectedMemberServiceId ||
-    trimOptional(routeState.memberId);
+    hasInvokeTargetMemberSelection
+      ? currentSelectedMemberServiceId
+      : currentInvokeSelectionServiceId ||
+        currentBindingSelectionServiceId ||
+        trimOptional(routeState.memberId);
   const invokeTargetService = useMemo(
     () => {
       if (!invokeTargetServiceId) {
