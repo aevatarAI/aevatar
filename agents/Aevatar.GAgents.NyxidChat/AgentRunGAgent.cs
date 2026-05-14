@@ -90,7 +90,21 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             .On<AgentRunReplyDispatchedEvent>(ApplyReplyDispatched)
             .On<AgentRunDroppedEvent>(ApplyDropped)
             .On<AgentRunFailedEvent>(ApplyFailed)
+            .On<AgentRunCleanupCompletedEvent>(ApplyCleanupCompleted)
             .OrCurrent();
+
+    // ADR-0021 §6 / canon §9 absorbing-terminal check. Combined with
+    // `cleanup_completed_at_unix_ms != 0` this defines chain.finalized.
+    // Every reply-ready / dropped / failed / cleanup handler MUST short-circuit
+    // on a terminal status; late / stale signals must no-op.
+    internal static bool IsTerminal(AgentRunStatus status) =>
+        status is AgentRunStatus.Dropped
+               or AgentRunStatus.Failed
+               or AgentRunStatus.ReplyHandedOff;
+
+    private bool IsTerminal() => IsTerminal(State.Status);
+
+    private bool IsCleanupAlreadyCompleted() => State.CleanupCompletedAtUnixMs != 0;
 
     [EventHandler]
     public async Task HandleStartAsync(AgentRunStartRequested command)
@@ -106,18 +120,19 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var runId = NormalizeOptional(request.CorrelationId) ?? Id;
         var startedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
 
-        // Reply already produced AND dispatched: terminal, only schedule cleanup.
-        // Terminal status (ADR-0021 chain.finalized precondition): the run has
-        // either dropped, failed, or already handed the reply off to the
-        // conversation actor. Late starts in any of these cases must no-op
-        // beyond scheduling cleanup — never re-run the LLM / tool chain.
-        if (State.Status is AgentRunStatus.Dropped or AgentRunStatus.Failed or AgentRunStatus.ReplyHandedOff)
+        // ADR-0021 chain.finalized precondition: terminal status means the run has
+        // already dropped, failed, or handed the reply off. Late starts must no-op
+        // beyond (re-)scheduling cleanup — never re-run the LLM / tool chain.
+        // Cleanup is itself idempotent on `cleanup_completed_at != 0`.
+        if (IsTerminal())
         {
             _logger.LogInformation(
-                "Ignoring duplicate terminal agent run start: runId={RunId} status={Status}",
+                "Ignoring duplicate terminal agent run start: runId={RunId} status={Status} cleanupCompleted={CleanupCompleted}",
                 runId,
-                State.Status);
-            await ScheduleTerminalCleanupAsync(NormalizeOptional(State.RunId) ?? runId);
+                State.Status,
+                IsCleanupAlreadyCompleted());
+            if (!IsCleanupAlreadyCompleted())
+                await ScheduleTerminalCleanupAsync(NormalizeOptional(State.RunId) ?? runId);
             return;
         }
 
@@ -179,17 +194,36 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     public async Task HandleCleanupAsync(AgentRunCleanupRequested command)
     {
         ArgumentNullException.ThrowIfNull(command);
-        var terminal = State.Status is AgentRunStatus.Dropped
-                                    or AgentRunStatus.Failed
-                                    or AgentRunStatus.ReplyHandedOff;
-        if (!terminal)
+
+        // ADR-0021 §6 / canon §9 — cleanup is an absorbing operation. It is only
+        // valid for runs that have reached terminal status; stale runId references
+        // (the actor identity changed under us) and late callbacks (cleanup already
+        // completed) must both no-op so duplicates do not destroy a fresh run.
+        if (!IsTerminal())
             return;
+
         if (!string.IsNullOrWhiteSpace(command.RunId) &&
             !string.IsNullOrWhiteSpace(State.RunId) &&
             !string.Equals(command.RunId, State.RunId, StringComparison.Ordinal))
         {
             return;
         }
+
+        if (IsCleanupAlreadyCompleted())
+        {
+            _logger.LogDebug(
+                "Ignoring duplicate terminal cleanup: runId={RunId} cleanupCompletedAtUnixMs={CleanupAt}",
+                NormalizeOptional(State.RunId) ?? command.RunId,
+                State.CleanupCompletedAtUnixMs);
+            return;
+        }
+
+        await PersistDomainEventAsync(new AgentRunCleanupCompletedEvent
+        {
+            RunId = NormalizeOptional(State.RunId) ?? command.RunId ?? string.Empty,
+            CorrelationId = State.CorrelationId ?? string.Empty,
+            CompletedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+        });
 
         await _actorRuntime.DestroyAsync(Id, CancellationToken.None);
     }
@@ -1055,6 +1089,20 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.CompletedAtUnixMs = evt.FailedAtUnixMs;
         next.ErrorCode = evt.ErrorCode;
         next.ErrorSummary = evt.ErrorSummary;
+        return next;
+    }
+
+    // ADR-0021 §6 / canon §9 — combined with a terminal AgentRunStatus, a non-zero
+    // cleanup_completed_at_unix_ms is the chain.finalized observable. Late cleanup
+    // callbacks short-circuit on this field so duplicates do not re-destroy the actor.
+    private static AgentRunGAgentState ApplyCleanupCompleted(
+        AgentRunGAgentState current,
+        AgentRunCleanupCompletedEvent evt)
+    {
+        var next = current.Clone();
+        next.RunId = string.IsNullOrWhiteSpace(next.RunId) ? evt.RunId : next.RunId;
+        next.CorrelationId = string.IsNullOrWhiteSpace(next.CorrelationId) ? evt.CorrelationId : next.CorrelationId;
+        next.CleanupCompletedAtUnixMs = evt.CompletedAtUnixMs;
         return next;
     }
 

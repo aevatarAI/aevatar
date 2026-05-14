@@ -316,6 +316,205 @@ public sealed class AgentRunGAgentTests
         actorRuntime.DestroyedIds.Should().Contain(runtime.Id);
     }
 
+    // ───────────────────────────────────────────────────────────────
+    // ADR-0021 §6 / canon §9 #649 — absorbing-terminal regressions
+    // ───────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task HandleCleanupAsync_TwiceAfterTerminal_ShouldDestroyOnceAndPersistCompletion()
+    {
+        // #649 regression: cleanup is an absorbing operation. A duplicate
+        // cleanup callback (e.g. retry from a scheduler outage) must short-circuit
+        // on cleanup_completed_at_unix_ms != 0 instead of re-destroying the actor.
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            new RecordingReplyGenerator(() => false) { ReplyText = "ok" },
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            });
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-cleanup-dup",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-cleanup-dup",
+        });
+        var cleanup = new AgentRunCleanupRequested { RunId = "corr-cleanup-dup" };
+        await runtime.HandleCleanupAsync(cleanup);
+        await runtime.HandleCleanupAsync(cleanup);
+
+        actorRuntime.DestroyedIds.Should().ContainSingle(id => id == runtime.Id);
+        runtime.State.CleanupCompletedAtUnixMs.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task HandleCleanupAsync_StaleRunId_ShouldNoOp()
+    {
+        // #649 regression: a cleanup callback that references a different RunId
+        // (e.g. an older grain run after grain identity churn) must NOT destroy
+        // the current actor, even if the current actor is terminal.
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            new RecordingReplyGenerator(() => false) { ReplyText = "ok" },
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            });
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-stale-cleanup",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-stale",
+        });
+        await runtime.HandleCleanupAsync(new AgentRunCleanupRequested
+        {
+            RunId = "corr-different-run",
+        });
+
+        actorRuntime.DestroyedIds.Should().BeEmpty();
+        runtime.State.CleanupCompletedAtUnixMs.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleCleanupAsync_BeforeTerminal_ShouldNoOp()
+    {
+        // #649 regression: a cleanup callback that fires while the run is still
+        // STARTED (e.g. scheduler clock skew) must NOT destroy the actor mid-run.
+        // IsTerminal short-circuit blocks the path.
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var hangingGenerator = new HangingReplyGenerator();
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            hangingGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            });
+
+        // Fire a cleanup before any HandleStartAsync has even run — state is
+        // STATUS_UNSPECIFIED (treated as non-terminal), so cleanup must no-op.
+        await runtime.HandleCleanupAsync(new AgentRunCleanupRequested
+        {
+            RunId = "corr-pre-terminal",
+        });
+
+        actorRuntime.DestroyedIds.Should().BeEmpty();
+        runtime.State.CleanupCompletedAtUnixMs.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_AfterCleanupCompleted_ShouldNotReScheduleCleanup()
+    {
+        // #649 regression: once chain.finalized is established (terminal status +
+        // cleanup_completed_at != 0), a late duplicate start must NOT re-schedule
+        // a fresh cleanup callback. Otherwise a flaky retry could pile up
+        // callbacks indefinitely on a dead actor.
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var scheduler = new RecordingCallbackScheduler();
+        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "ok" };
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            },
+            callbackScheduler: scheduler);
+        var request = new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-no-resched",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-no-resched",
+        };
+
+        await runtime.HandleStartAsync(request);
+        await runtime.HandleCleanupAsync(new AgentRunCleanupRequested
+        {
+            RunId = "corr-no-resched",
+        });
+        var cleanupCountAfterFirst = scheduler.Timeouts
+            .Count(t => t.TriggerEnvelope.Payload.Is(AgentRunCleanupRequested.Descriptor));
+
+        // Late duplicate start after chain.finalized.
+        await runtime.HandleStartAsync(request.Clone());
+
+        replyGenerator.CallCount.Should().Be(1);
+        scheduler.Timeouts
+            .Count(t => t.TriggerEnvelope.Payload.Is(AgentRunCleanupRequested.Descriptor))
+            .Should().Be(cleanupCountAfterFirst, "cleanup_completed_at gates duplicate scheduling");
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_AfterDropped_ShouldNotReRunLlmOrPersistAdditionalEvents()
+    {
+        // #649 regression: stale-gate drop is itself an absorbing terminal state.
+        // A second start with the same (still stale) request must short-circuit on
+        // IsTerminal — neither replay the LLM nor persist additional drop events.
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "should-not-be-invoked" };
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            });
+
+        // First start: ages out via the stale gate (>5min request age) -> DROPPED.
+        var staleRequest = new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-stale-drop",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-stale-drop",
+            RequestedAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(-30).ToUnixTimeMilliseconds(),
+        };
+        await runtime.HandleStartAsync(staleRequest);
+        runtime.State.Status.Should().Be(AgentRunStatus.Dropped);
+        var droppedDispatchCount = handled.Count;
+
+        // Duplicate stale start: IsTerminal short-circuit blocks LLM/dispatch.
+        await runtime.HandleStartAsync(staleRequest.Clone());
+
+        runtime.State.Status.Should().Be(AgentRunStatus.Dropped);
+        replyGenerator.CallCount.Should().Be(0);
+        handled.Count.Should().Be(droppedDispatchCount, "no additional drop events on duplicate start");
+    }
+
     [Fact]
     public async Task HandleStartAsync_OnOutputDispatchFailure_PersistsProducedReply_AndRetryReDispatchesWithoutRerunningLlm()
     {

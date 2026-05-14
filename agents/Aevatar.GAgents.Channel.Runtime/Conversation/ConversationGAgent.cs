@@ -284,6 +284,19 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     {
         ArgumentNullException.ThrowIfNull(evt);
 
+        // ADR-0021 §6 / canon §9 absorbing-finalized: a late drop notification for an
+        // already-finalized turn (e.g. the run actor's terminal-cleanup callback fires
+        // after a successful reply already landed) must no-op rather than overwrite the
+        // turn outcome with a synthetic ConversationContinueFailedEvent.
+        if (IsLlmReplyTurnFinalized(evt.CorrelationId))
+        {
+            Logger.LogDebug(
+                "Ignoring deferred LLM reply drop for already-finalized turn: correlation={CorrelationId} reason={Reason}",
+                evt.CorrelationId,
+                evt.Reason);
+            return;
+        }
+
         var pending = FindPendingLlmReplyRequest(evt.CorrelationId);
         if (pending is null)
         {
@@ -433,7 +446,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
 
         var commandId = BuildLlmReplyCommandId(evt.CorrelationId);
         var pendingRequest = FindPendingLlmReplyRequest(evt.CorrelationId);
-        if (State.ProcessedCommandIds.Contains(commandId))
+        if (IsLlmReplyTurnFinalized(evt.CorrelationId))
         {
             Logger.LogInformation(
                 "Duplicate LLM reply ready event {CorrelationId} (conversation={Key}); skipping outbound",
@@ -588,7 +601,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             return;
         }
 
-        if (State.ProcessedCommandIds.Contains(BuildLlmReplyCommandId(evt.CorrelationId)))
+        if (IsLlmReplyTurnFinalized(evt.CorrelationId))
         {
             // Turn already finalized; drop any late chunk that sneaks in via the actor inbox.
             return;
@@ -625,7 +638,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             return;
         }
 
-        if (State.ProcessedCommandIds.Contains(BuildLlmReplyCommandId(evt.CorrelationId)))
+        if (IsLlmReplyTurnFinalized(evt.CorrelationId))
         {
             // Turn already finalized; drop any late chunk that sneaks in via the actor inbox.
             return;
@@ -1020,6 +1033,14 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
 
     private static string BuildLlmReplyCommandId(string? correlationId) =>
         $"llm:{correlationId?.Trim() ?? string.Empty}";
+
+    // ADR-0021 §6 / canon §9 — single source of truth for "this LLM reply turn is
+    // already finalized". Every reply-ready / dropped / streaming-chunk handler entry
+    // uses this so late or duplicate signals uniformly no-op. The dedup key is the
+    // `llm:<correlationId>` form appended to ProcessedCommandIds by
+    // ApplyTurnCompleted / ApplyContinueFailed when the turn reaches chain.finalized.
+    private bool IsLlmReplyTurnFinalized(string? correlationId) =>
+        State.ProcessedCommandIds.Contains(BuildLlmReplyCommandId(correlationId));
 
     private static string BuildDeferredLlmReplyCallbackId(string? correlationId) =>
         $"conversation-llm-dispatch:{correlationId?.Trim() ?? string.Empty}";
