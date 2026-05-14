@@ -2,27 +2,27 @@ using Aevatar.GAgentService.Abstractions;
 
 namespace Aevatar.GAgentService.Abstractions.Queries;
 
-public sealed record ResponseSessionSnapshot(
+public sealed record LlmSessionSnapshot(
     string ResponseId,
     string ScopeId,
     string OwnerSubject,
-    ResponseSessionOriginKind OriginKind,
+    LlmSessionOriginKind OriginKind,
     string? PreviousResponseId,
-    ResponseSessionStatus Status,
+    LlmSessionStatus Status,
     DateTimeOffset CreatedAt,
     TimeSpan Ttl,
     DateTimeOffset? CancelledAt,
     string ActorId,
     long StateVersion,
     string LastEventId,
-    IReadOnlyList<ResponseSessionForwardedToolCallSnapshot>? ForwardedToolCalls = null);
+    IReadOnlyList<LlmSessionForwardedToolCallSnapshot>? ForwardedToolCalls = null);
 
-public sealed record ResponseSessionForwardedToolCallSnapshot(
+public sealed record LlmSessionForwardedToolCallSnapshot(
     string CallId,
     string ToolName,
     string SchemaHash,
     string ArgumentsJson,
-    ResponseSessionForwardedToolCallStatus Status,
+    LlmSessionForwardedToolCallStatus Status,
     DateTimeOffset? Expiry,
     string? ResultJson,
     DateTimeOffset? EmittedAt,

@@ -14,26 +14,26 @@ namespace Aevatar.GAgentService.Infrastructure.Adapters;
 /// HTTP boundary are parsed into protobuf values here so the actor state never
 /// holds JSON strings.
 /// </summary>
-public sealed class ResponseSessionRegistrationAdapter : IResponseSessionRegistrationPort
+public sealed class LlmSessionRegistrationAdapter : ILlmSessionRegistrationPort
 {
     private const string PublisherId = "gagent-service.response-sessions";
 
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
-    private readonly IResponseSessionCurrentStateProjectionPort _projectionPort;
+    private readonly ILlmSessionCurrentStateProjectionPort _projectionPort;
 
-    public ResponseSessionRegistrationAdapter(
+    public LlmSessionRegistrationAdapter(
         IActorRuntime runtime,
         IActorDispatchPort dispatchPort,
-        IResponseSessionCurrentStateProjectionPort projectionPort)
+        ILlmSessionCurrentStateProjectionPort projectionPort)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
     }
 
-    public async Task<ResponseSessionRegistrationResult> RegisterAsync(
-        ResponseSessionRecord record,
+    public async Task<LlmSessionRegistrationResult> RegisterAsync(
+        LlmSessionRecord record,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(record);
@@ -44,16 +44,16 @@ public sealed class ResponseSessionRegistrationAdapter : IResponseSessionRegistr
         if (string.IsNullOrWhiteSpace(record.OwnerSubject))
             throw new InvalidOperationException("owner_subject is required.");
 
-        var actorId = ResponseSessionIds.NewActorId();
-        var actor = await _runtime.CreateAsync<ResponseSessionGAgent>(actorId, ct: ct);
+        var actorId = LlmSessionIds.NewActorId();
+        var actor = await _runtime.CreateAsync<LlmSessionGAgent>(actorId, ct: ct);
         await _projectionPort.EnsureProjectionAsync(actor.Id, ct);
 
         var prepared = record.Clone();
         if (prepared.CreatedAt == null)
             prepared.CreatedAt = Timestamp.FromDateTime(DateTime.UtcNow);
         prepared.UpdatedAt = prepared.CreatedAt.Clone();
-        if (prepared.Status == ResponseSessionStatus.Unspecified)
-            prepared.Status = ResponseSessionStatus.Accepted;
+        if (prepared.Status == LlmSessionStatus.Unspecified)
+            prepared.Status = LlmSessionStatus.Accepted;
 
         var envelope = CreateEnvelope(
             actor.Id,
@@ -64,20 +64,20 @@ public sealed class ResponseSessionRegistrationAdapter : IResponseSessionRegistr
             prepared.ResponseId);
 
         await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
-        return new ResponseSessionRegistrationResult(actor.Id, prepared.ResponseId);
+        return new LlmSessionRegistrationResult(actor.Id, prepared.ResponseId);
     }
 
     public async Task UpdateStatusAsync(
         string sessionActorId,
         string responseId,
-        ResponseSessionStatus status,
+        LlmSessionStatus status,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(sessionActorId))
             throw new ArgumentException("sessionActorId is required.", nameof(sessionActorId));
         if (string.IsNullOrWhiteSpace(responseId))
             throw new ArgumentException("responseId is required.", nameof(responseId));
-        if (status == ResponseSessionStatus.Unspecified)
+        if (status == LlmSessionStatus.Unspecified)
             return;
 
         var envelopeId = $"{responseId}:{(int)status}:{Guid.NewGuid():N}";
@@ -97,7 +97,7 @@ public sealed class ResponseSessionRegistrationAdapter : IResponseSessionRegistr
     public async Task RecordForwardedToolCallAsync(
         string sessionActorId,
         string responseId,
-        ResponseSessionForwardedToolCall call,
+        LlmSessionForwardedToolCall call,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(sessionActorId))
@@ -111,8 +111,8 @@ public sealed class ResponseSessionRegistrationAdapter : IResponseSessionRegistr
         var prepared = call.Clone();
         if (prepared.EmittedAt == null)
             prepared.EmittedAt = Timestamp.FromDateTime(DateTime.UtcNow);
-        if (prepared.Status == ResponseSessionForwardedToolCallStatus.Unspecified)
-            prepared.Status = ResponseSessionForwardedToolCallStatus.Pending;
+        if (prepared.Status == LlmSessionForwardedToolCallStatus.Unspecified)
+            prepared.Status = LlmSessionForwardedToolCallStatus.Pending;
         var envelopeId = $"{responseId}:tool:{prepared.CallId}:emitted";
         var envelope = CreateEnvelope(
             sessionActorId,

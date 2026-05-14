@@ -3,8 +3,8 @@ using Aevatar.GAgentService.Projection.ReadModels;
 
 namespace Aevatar.GAgentService.Projection.Metadata;
 
-public sealed class ResponseSessionCurrentStateReadModelMetadataProvider
-    : IProjectionDocumentMetadataProvider<ResponseSessionCurrentStateReadModel>
+public sealed class LlmSessionCurrentStateReadModelMetadataProvider
+    : IProjectionDocumentMetadataProvider<LlmSessionCurrentStateReadModel>
 {
     public DocumentIndexMetadata Metadata { get; } = new(
         "gagent-service-response-sessions",

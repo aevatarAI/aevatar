@@ -2,22 +2,22 @@ using Aevatar.GAgentService.Abstractions.Queries;
 
 namespace Aevatar.GAgentService.Abstractions.Ports;
 
-public interface IResponseSessionRegistrationPort
+public interface ILlmSessionRegistrationPort
 {
-    Task<ResponseSessionRegistrationResult> RegisterAsync(
-        ResponseSessionRecord record,
+    Task<LlmSessionRegistrationResult> RegisterAsync(
+        LlmSessionRecord record,
         CancellationToken ct = default);
 
     Task UpdateStatusAsync(
         string sessionActorId,
         string responseId,
-        ResponseSessionStatus status,
+        LlmSessionStatus status,
         CancellationToken ct = default);
 
     Task RecordForwardedToolCallAsync(
         string sessionActorId,
         string responseId,
-        ResponseSessionForwardedToolCall call,
+        LlmSessionForwardedToolCall call,
         CancellationToken ct = default);
 
     Task ReceiveForwardedToolResultAsync(
@@ -35,4 +35,4 @@ public interface IResponseSessionRegistrationPort
         CancellationToken ct = default);
 }
 
-public sealed record ResponseSessionRegistrationResult(string ActorId, string ResponseId);
+public sealed record LlmSessionRegistrationResult(string ActorId, string ResponseId);

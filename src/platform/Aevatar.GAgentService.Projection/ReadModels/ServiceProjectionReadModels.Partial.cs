@@ -217,7 +217,7 @@ public sealed partial class ServiceRunCurrentStateReadModel : IProjectionReadMod
     }
 }
 
-public sealed partial class ResponseSessionCurrentStateReadModel : IProjectionReadModel<ResponseSessionCurrentStateReadModel>
+public sealed partial class LlmSessionCurrentStateReadModel : IProjectionReadModel<LlmSessionCurrentStateReadModel>
 {
     public DateTimeOffset CreatedAt
     {
@@ -237,14 +237,14 @@ public sealed partial class ResponseSessionCurrentStateReadModel : IProjectionRe
         set => CancelledAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
     }
 
-    public IList<ResponseSessionForwardedToolCallReadModel> ForwardedToolCalls
+    public IList<LlmSessionForwardedToolCallReadModel> ForwardedToolCalls
     {
         get => ForwardedToolCallEntries;
         set => ServiceProjectionReadModelSupport.ReplaceCollection(ForwardedToolCallEntries, value);
     }
 }
 
-public sealed partial class ResponseSessionForwardedToolCallReadModel
+public sealed partial class LlmSessionForwardedToolCallReadModel
 {
     public DateTimeOffset? Expiry
     {

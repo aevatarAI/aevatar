@@ -47,8 +47,8 @@ internal static class ResponsesApiEndpoints
         [FromServices] ILLMProviderFactory providerFactory,
         [FromServices] IResponsesCallerScopeResolver callerScopeResolver,
         [FromServices] IResponsesRouteResolver routeResolver,
-        [FromServices] IResponseSessionRegistrationPort responseSessionRegistrationPort,
-        [FromServices] IResponseSessionQueryPort responseSessionQueryPort,
+        [FromServices] ILlmSessionRegistrationPort responseSessionRegistrationPort,
+        [FromServices] ILlmSessionQueryPort responseSessionQueryPort,
         [FromServices] IResponsesCompletionApplicationService completionService,
         [FromServices] IEnumerable<IResponsesToolProvider> toolProviders,
         [FromServices] ILoggerFactory loggerFactory,
@@ -93,7 +93,7 @@ internal static class ResponsesApiEndpoints
             return ToErrorResult(StatusCodes.Status401Unauthorized, "authentication_required", ex.Message);
         }
 
-        ResponseSessionSnapshot? previousSnapshot = null;
+        LlmSessionSnapshot? previousSnapshot = null;
         if (normalized.PreviousResponseId is not null)
         {
             previousSnapshot = await responseSessionQueryPort.GetByResponseIdAsync(normalized.PreviousResponseId, ct);
@@ -128,7 +128,7 @@ internal static class ResponsesApiEndpoints
         }
 
         var createdAt = DateTimeOffset.UtcNow;
-        ResponseSessionRegistrationResult responseSession;
+        LlmSessionRegistrationResult responseSession;
         try
         {
             responseSession = await responseSessionRegistrationPort.RegisterAsync(
@@ -263,7 +263,7 @@ internal static class ResponsesApiEndpoints
                 responseSessionRegistrationPort,
                 logger,
                 responseSession,
-                ResponseSessionStatus.Completed,
+                LlmSessionStatus.Completed,
                 ct);
             var completed = BuildCompletedResponse(
                 normalized,
@@ -280,7 +280,7 @@ internal static class ResponsesApiEndpoints
                 responseSessionRegistrationPort,
                 logger,
                 responseSession,
-                ResponseSessionStatus.Failed,
+                LlmSessionStatus.Failed,
                 CancellationToken.None);
             // Authentication failure messages from NyxID are intentionally surfaced
             // — they describe why the caller's own token was rejected and don't
@@ -293,7 +293,7 @@ internal static class ResponsesApiEndpoints
                 responseSessionRegistrationPort,
                 logger,
                 responseSession,
-                ResponseSessionStatus.Failed,
+                LlmSessionStatus.Failed,
                 CancellationToken.None);
             var statusCode = ex.Status switch
             {
@@ -317,7 +317,7 @@ internal static class ResponsesApiEndpoints
                 responseSessionRegistrationPort,
                 logger,
                 responseSession,
-                ResponseSessionStatus.Cancelled,
+                LlmSessionStatus.Cancelled,
                 CancellationToken.None);
             return Results.StatusCode(StatusCodes.Status408RequestTimeout);
         }
@@ -327,7 +327,7 @@ internal static class ResponsesApiEndpoints
                 responseSessionRegistrationPort,
                 logger,
                 responseSession,
-                ResponseSessionStatus.Failed,
+                LlmSessionStatus.Failed,
                 CancellationToken.None);
             var correlation = LogAndCorrelate(logger, ex, "execution", normalized.ResponseId);
             return ToErrorResult(
@@ -357,8 +357,8 @@ internal static class ResponsesApiEndpoints
         HttpContext http,
         [FromRoute] string id,
         [FromServices] IResponsesCallerScopeResolver callerScopeResolver,
-        [FromServices] IResponseSessionRegistrationPort responseSessionRegistrationPort,
-        [FromServices] IResponseSessionQueryPort responseSessionQueryPort,
+        [FromServices] ILlmSessionRegistrationPort responseSessionRegistrationPort,
+        [FromServices] ILlmSessionQueryPort responseSessionQueryPort,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(http);
@@ -402,7 +402,7 @@ internal static class ResponsesApiEndpoints
             return visibilityError;
 
         var visibleSnapshot = snapshot!;
-        if (visibleSnapshot.Status == ResponseSessionStatus.Expired)
+        if (visibleSnapshot.Status == LlmSessionStatus.Expired)
         {
             return ToErrorResult(
                 StatusCodes.Status400BadRequest,
@@ -411,14 +411,14 @@ internal static class ResponsesApiEndpoints
         }
 
         var cancelledAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        if (visibleSnapshot.Status != ResponseSessionStatus.Cancelled)
+        if (visibleSnapshot.Status != LlmSessionStatus.Cancelled)
         {
             try
             {
                 await responseSessionRegistrationPort.UpdateStatusAsync(
                     visibleSnapshot.ActorId,
                     visibleSnapshot.ResponseId,
-                    ResponseSessionStatus.Cancelled,
+                    LlmSessionStatus.Cancelled,
                     ct);
             }
             catch (OperationCanceledException)
@@ -451,13 +451,13 @@ internal static class ResponsesApiEndpoints
         HttpResponse response,
         ILLMProviderFactory providerFactory,
         IResponsesCompletionApplicationService completionService,
-        IResponseSessionRegistrationPort responseSessionRegistrationPort,
+        ILlmSessionRegistrationPort responseSessionRegistrationPort,
         ILogger logger,
-        ResponseSessionRegistrationResult responseSession,
+        LlmSessionRegistrationResult responseSession,
         LLMRequest request,
         IReadOnlyDictionary<string, string> toolContextMetadata,
         NormalizedResponsesRequest normalized,
-        ResponseSessionSnapshot? previousSnapshot,
+        LlmSessionSnapshot? previousSnapshot,
         ResponsesToolClassification toolClassification,
         DateTimeOffset createdAtOffset,
         CancellationToken ct)
@@ -620,7 +620,7 @@ internal static class ResponsesApiEndpoints
                 responseSessionRegistrationPort,
                 logger,
                 responseSession,
-                ResponseSessionStatus.Completed,
+                LlmSessionStatus.Completed,
                 ct);
         }
         catch (NyxIdAuthenticationRequiredException ex)
@@ -629,7 +629,7 @@ internal static class ResponsesApiEndpoints
                 responseSessionRegistrationPort,
                 logger,
                 responseSession,
-                ResponseSessionStatus.Failed,
+                LlmSessionStatus.Failed,
                 CancellationToken.None);
             // NyxID authentication-required messages describe why the caller's
             // token was rejected; surface verbatim (not server internals).
@@ -648,7 +648,7 @@ internal static class ResponsesApiEndpoints
                 responseSessionRegistrationPort,
                 logger,
                 responseSession,
-                ResponseSessionStatus.Failed,
+                LlmSessionStatus.Failed,
                 CancellationToken.None);
             var correlation = LogAndCorrelate(logger, ex, "stream_nyxid_upstream", normalized.ResponseId);
             await WriteStreamFailureAsync(
@@ -666,7 +666,7 @@ internal static class ResponsesApiEndpoints
                 responseSessionRegistrationPort,
                 logger,
                 responseSession,
-                ResponseSessionStatus.Cancelled,
+                LlmSessionStatus.Cancelled,
                 CancellationToken.None);
         }
         catch (Exception ex)
@@ -675,7 +675,7 @@ internal static class ResponsesApiEndpoints
                 responseSessionRegistrationPort,
                 logger,
                 responseSession,
-                ResponseSessionStatus.Failed,
+                LlmSessionStatus.Failed,
                 CancellationToken.None);
             var correlation = LogAndCorrelate(logger, ex, "stream_execution", normalized.ResponseId);
             await WriteStreamFailureAsync(
@@ -768,7 +768,7 @@ internal static class ResponsesApiEndpoints
 
     private static List<ChatMessage> BuildLlmMessages(
         NormalizedResponsesRequest normalized,
-        ResponseSessionSnapshot? previousSnapshot)
+        LlmSessionSnapshot? previousSnapshot)
     {
         var messages = new List<ChatMessage>();
         if (normalized.ToolResults.Count > 0 && previousSnapshot != null)
@@ -795,7 +795,7 @@ internal static class ResponsesApiEndpoints
 
     private static IReadOnlyList<ToolCall> BuildPreviousToolCalls(
         NormalizedResponsesRequest normalized,
-        ResponseSessionSnapshot previousSnapshot)
+        LlmSessionSnapshot previousSnapshot)
     {
         var forwardedCalls = previousSnapshot.ForwardedToolCalls ?? [];
         var callsById = forwardedCalls
@@ -883,8 +883,8 @@ internal static class ResponsesApiEndpoints
     }
 
     private static async Task<IResult?> PersistIncomingToolResultsAsync(
-        IResponseSessionRegistrationPort responseSessionRegistrationPort,
-        ResponseSessionSnapshot previousSnapshot,
+        ILlmSessionRegistrationPort responseSessionRegistrationPort,
+        LlmSessionSnapshot previousSnapshot,
         NormalizedResponsesRequest normalized,
         CancellationToken ct)
     {
@@ -911,11 +911,11 @@ internal static class ResponsesApiEndpoints
                     $"Forwarded tool call '{result.CallId}' schema hash mismatch.");
             }
 
-            if (call.Status == ResponseSessionForwardedToolCallStatus.Resolved)
+            if (call.Status == LlmSessionForwardedToolCallStatus.Resolved)
                 continue;
 
-            if (call.Status is ResponseSessionForwardedToolCallStatus.Cancelled
-                or ResponseSessionForwardedToolCallStatus.Expired)
+            if (call.Status is LlmSessionForwardedToolCallStatus.Cancelled
+                or LlmSessionForwardedToolCallStatus.Expired)
             {
                 return ToErrorResult(
                     StatusCodes.Status400BadRequest,
@@ -947,7 +947,7 @@ internal static class ResponsesApiEndpoints
 
     private static bool TryBuildAlreadyResolvedToolResultResponse(
         NormalizedResponsesRequest normalized,
-        ResponseSessionSnapshot previousSnapshot,
+        LlmSessionSnapshot previousSnapshot,
         [NotNullWhen(true)] out IResult? result)
     {
         result = null;
@@ -961,7 +961,7 @@ internal static class ResponsesApiEndpoints
         foreach (var input in normalized.ToolResults)
         {
             if (!callsById.TryGetValue(input.CallId, out var call) ||
-                call.Status != ResponseSessionForwardedToolCallStatus.Resolved)
+                call.Status != LlmSessionForwardedToolCallStatus.Resolved)
             {
                 return false;
             }
@@ -997,9 +997,9 @@ internal static class ResponsesApiEndpoints
     }
 
     private static async Task TryResolveIncomingToolResultsAsync(
-        IResponseSessionRegistrationPort responseSessionRegistrationPort,
+        ILlmSessionRegistrationPort responseSessionRegistrationPort,
         ILogger logger,
-        ResponseSessionSnapshot? previousSnapshot,
+        LlmSessionSnapshot? previousSnapshot,
         NormalizedResponsesRequest normalized,
         CancellationToken ct)
     {
@@ -1035,9 +1035,9 @@ internal static class ResponsesApiEndpoints
     }
 
     private static async Task PersistForwardedToolCallsAsync(
-        IResponseSessionRegistrationPort responseSessionRegistrationPort,
+        ILlmSessionRegistrationPort responseSessionRegistrationPort,
         ILogger logger,
-        ResponseSessionRegistrationResult responseSession,
+        LlmSessionRegistrationResult responseSession,
         ResponsesToolClassification toolClassification,
         IReadOnlyList<ToolCall> toolCalls,
         DateTimeOffset emittedAt,
@@ -1061,13 +1061,13 @@ internal static class ResponsesApiEndpoints
             }
 
             var argumentsJson = string.IsNullOrWhiteSpace(toolCall.ArgumentsJson) ? "{}" : toolCall.ArgumentsJson;
-            var call = new ResponseSessionForwardedToolCall
+            var call = new LlmSessionForwardedToolCall
             {
                 CallId = toolCall.Id,
                 ToolName = toolCall.Name,
                 SchemaHash = declaration.SchemaHash,
                 Arguments = ResponsesJsonValues.ParseBoundaryPayload(argumentsJson),
-                Status = ResponseSessionForwardedToolCallStatus.Pending,
+                Status = LlmSessionForwardedToolCallStatus.Pending,
                 EmittedAt = Timestamp.FromDateTimeOffset(emittedAt),
                 Expiry = Timestamp.FromDateTimeOffset(expiry),
             };
@@ -1155,19 +1155,19 @@ internal static class ResponsesApiEndpoints
         };
     }
 
-    private static ResponseSessionRecord BuildResponseSessionRecord(
+    private static LlmSessionRecord BuildResponseSessionRecord(
         NormalizedResponsesRequest normalized,
         ResponsesCallerScope callerScope,
         DateTimeOffset createdAt)
     {
-        return new ResponseSessionRecord
+        return new LlmSessionRecord
         {
             ResponseId = normalized.ResponseId,
             ScopeId = callerScope.ScopeId,
             OwnerSubject = callerScope.OwnerSubject,
             OriginKind = callerScope.OriginKind,
             PreviousResponseId = normalized.PreviousResponseId ?? string.Empty,
-            Status = ResponseSessionStatus.Accepted,
+            Status = LlmSessionStatus.Accepted,
             CreatedAt = Timestamp.FromDateTime(createdAt.UtcDateTime),
             UpdatedAt = Timestamp.FromDateTime(createdAt.UtcDateTime),
             Ttl = Duration.FromTimeSpan(TimeSpan.FromHours(24)),
@@ -1175,7 +1175,7 @@ internal static class ResponsesApiEndpoints
     }
 
     private static IResult? ValidatePreviousResponse(
-        ResponseSessionSnapshot? previous,
+        LlmSessionSnapshot? previous,
         ResponsesCallerScope callerScope)
     {
         var visibilityError = ValidateResponseVisibility(
@@ -1196,9 +1196,9 @@ internal static class ResponsesApiEndpoints
                 "previous_response_id refers to an expired response session.");
         }
 
-        if (visiblePrevious.Status is ResponseSessionStatus.Cancelled
-            or ResponseSessionStatus.Expired
-            or ResponseSessionStatus.Failed)
+        if (visiblePrevious.Status is LlmSessionStatus.Cancelled
+            or LlmSessionStatus.Expired
+            or LlmSessionStatus.Failed)
         {
             return ToErrorResult(
                 StatusCodes.Status400BadRequest,
@@ -1210,7 +1210,7 @@ internal static class ResponsesApiEndpoints
     }
 
     private static IResult? ValidateResponseVisibility(
-        ResponseSessionSnapshot? response,
+        LlmSessionSnapshot? response,
         ResponsesCallerScope callerScope,
         string notFoundCode,
         string notFoundMessage)
@@ -1244,10 +1244,10 @@ internal static class ResponsesApiEndpoints
     }
 
     private static async Task TryUpdateSessionStatusAsync(
-        IResponseSessionRegistrationPort responseSessionRegistrationPort,
+        ILlmSessionRegistrationPort responseSessionRegistrationPort,
         ILogger logger,
-        ResponseSessionRegistrationResult responseSession,
-        ResponseSessionStatus status,
+        LlmSessionRegistrationResult responseSession,
+        LlmSessionStatus status,
         CancellationToken ct)
     {
         try

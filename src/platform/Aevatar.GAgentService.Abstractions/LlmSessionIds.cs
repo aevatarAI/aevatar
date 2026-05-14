@@ -1,6 +1,6 @@
 namespace Aevatar.GAgentService.Abstractions;
 
-public static class ResponseSessionIds
+public static class LlmSessionIds
 {
     public static string BuildKey(string responseId)
     {

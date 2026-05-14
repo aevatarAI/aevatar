@@ -115,10 +115,10 @@ public sealed class MainnetResponsesEndpointsTests
         sessions.Registered.Should().ContainSingle();
         sessions.Registered[0].ScopeId.Should().Be("user-1");
         sessions.Registered[0].OwnerSubject.Should().Be("user-1");
-        sessions.Registered[0].OriginKind.Should().Be(ResponseSessionOriginKind.ApiKey);
+        sessions.Registered[0].OriginKind.Should().Be(LlmSessionOriginKind.ApiKey);
         var snapshot = await sessions.GetByResponseIdAsync(responseId);
         snapshot!.ActorId.Should().NotContain(responseId);
-        sessions.StatusUpdates.Should().ContainSingle(x => x.Status == ResponseSessionStatus.Completed);
+        sessions.StatusUpdates.Should().ContainSingle(x => x.Status == LlmSessionStatus.Completed);
     }
 
     [Fact]
@@ -167,7 +167,7 @@ public sealed class MainnetResponsesEndpointsTests
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
         provider.LastRequest.CallerContext!.Credentials!.NyxIdBearer.Should().Be("stream-secret");
-        sessions.StatusUpdates.Should().ContainSingle(x => x.Status == ResponseSessionStatus.Completed);
+        sessions.StatusUpdates.Should().ContainSingle(x => x.Status == LlmSessionStatus.Completed);
     }
 
     [Fact]
@@ -233,7 +233,7 @@ public sealed class MainnetResponsesEndpointsTests
         persisted.ToolName.Should().Be("get_weather");
         persisted.SchemaHash.Should().Be(ResponsesToolSchemaHashes.Compute(parametersJson));
         ResponsesJsonValues.ToBoundaryJson(persisted.Arguments).Should().Be("""{"city":"Singapore"}""");
-        persisted.Status.Should().Be(ResponseSessionForwardedToolCallStatus.Pending);
+        persisted.Status.Should().Be(LlmSessionForwardedToolCallStatus.Pending);
         persisted.Expiry.Should().NotBeNull();
     }
 
@@ -452,13 +452,13 @@ public sealed class MainnetResponsesEndpointsTests
         };
         var sessions = new RecordingResponseSessionStore();
         var schemaHash = ResponsesToolSchemaHashes.Compute("""{"type":"object"}""");
-        sessions.Seed(new ResponseSessionSnapshot(
+        sessions.Seed(new LlmSessionSnapshot(
             "resp_previous",
             "user-1",
             "user-1",
-            ResponseSessionOriginKind.ApiKey,
+            LlmSessionOriginKind.ApiKey,
             null,
-            ResponseSessionStatus.Completed,
+            LlmSessionStatus.Completed,
             DateTimeOffset.UtcNow.AddMinutes(-1),
             TimeSpan.FromHours(1),
             null,
@@ -466,12 +466,12 @@ public sealed class MainnetResponsesEndpointsTests
             2,
             "resp_previous:tool:call_1:emitted",
             [
-                new ResponseSessionForwardedToolCallSnapshot(
+                new LlmSessionForwardedToolCallSnapshot(
                     "call_1",
                     "get_weather",
                     schemaHash,
                     """{"city":"Singapore"}""",
-                    ResponseSessionForwardedToolCallStatus.Pending,
+                    LlmSessionForwardedToolCallStatus.Pending,
                     DateTimeOffset.UtcNow.AddHours(1),
                     null,
                     DateTimeOffset.UtcNow.AddMinutes(-1),
@@ -532,13 +532,13 @@ public sealed class MainnetResponsesEndpointsTests
         };
         var sessions = new RecordingResponseSessionStore();
         var schemaHash = ResponsesToolSchemaHashes.Compute("""{"type":"object"}""");
-        sessions.Seed(new ResponseSessionSnapshot(
+        sessions.Seed(new LlmSessionSnapshot(
             "resp_previous",
             "user-1",
             "user-1",
-            ResponseSessionOriginKind.ApiKey,
+            LlmSessionOriginKind.ApiKey,
             null,
-            ResponseSessionStatus.Completed,
+            LlmSessionStatus.Completed,
             DateTimeOffset.UtcNow.AddMinutes(-1),
             TimeSpan.FromHours(1),
             null,
@@ -546,23 +546,23 @@ public sealed class MainnetResponsesEndpointsTests
             3,
             "resp_previous:tool:call_2:emitted",
             [
-                new ResponseSessionForwardedToolCallSnapshot(
+                new LlmSessionForwardedToolCallSnapshot(
                     "call_1",
                     "get_weather",
                     schemaHash,
                     """{"city":"Singapore"}""",
-                    ResponseSessionForwardedToolCallStatus.Pending,
+                    LlmSessionForwardedToolCallStatus.Pending,
                     DateTimeOffset.UtcNow.AddHours(1),
                     null,
                     DateTimeOffset.UtcNow.AddMinutes(-1),
                     null,
                     null),
-                new ResponseSessionForwardedToolCallSnapshot(
+                new LlmSessionForwardedToolCallSnapshot(
                     "call_2",
                     "get_time",
                     schemaHash,
                     """{"city":"Singapore"}""",
-                    ResponseSessionForwardedToolCallStatus.Pending,
+                    LlmSessionForwardedToolCallStatus.Pending,
                     DateTimeOffset.UtcNow.AddHours(1),
                     null,
                     DateTimeOffset.UtcNow.AddMinutes(-1),
@@ -605,7 +605,7 @@ public sealed class MainnetResponsesEndpointsTests
             .Which.CallId.Should().Be("call_2");
         var snapshot = await sessions.GetByResponseIdAsync("resp_previous");
         snapshot!.ForwardedToolCalls!.Single(x => x.CallId == "call_1").Status
-            .Should().Be(ResponseSessionForwardedToolCallStatus.Pending);
+            .Should().Be(LlmSessionForwardedToolCallStatus.Pending);
     }
 
     [Fact]
@@ -620,13 +620,13 @@ public sealed class MainnetResponsesEndpointsTests
         };
         var sessions = new RecordingResponseSessionStore();
         var schemaHash = ResponsesToolSchemaHashes.Compute("""{"type":"object"}""");
-        sessions.Seed(new ResponseSessionSnapshot(
+        sessions.Seed(new LlmSessionSnapshot(
             "resp_previous",
             "user-1",
             "user-1",
-            ResponseSessionOriginKind.ApiKey,
+            LlmSessionOriginKind.ApiKey,
             null,
-            ResponseSessionStatus.Completed,
+            LlmSessionStatus.Completed,
             DateTimeOffset.UtcNow.AddMinutes(-1),
             TimeSpan.FromHours(1),
             null,
@@ -634,12 +634,12 @@ public sealed class MainnetResponsesEndpointsTests
             4,
             "resp_previous:tool:call_1:resolved",
             [
-                new ResponseSessionForwardedToolCallSnapshot(
+                new LlmSessionForwardedToolCallSnapshot(
                     "call_1",
                     "get_weather",
                     schemaHash,
                     """{"city":"Singapore"}""",
-                    ResponseSessionForwardedToolCallStatus.Resolved,
+                    LlmSessionForwardedToolCallStatus.Resolved,
                     DateTimeOffset.UtcNow.AddHours(1),
                     """{"temperature":28}""",
                     DateTimeOffset.UtcNow.AddMinutes(-2),
@@ -687,13 +687,13 @@ public sealed class MainnetResponsesEndpointsTests
     {
         var provider = new RecordingLLMProvider();
         var sessions = new RecordingResponseSessionStore();
-        sessions.Seed(new ResponseSessionSnapshot(
+        sessions.Seed(new LlmSessionSnapshot(
             "resp_previous",
             "user-1",
             "user-1",
-            ResponseSessionOriginKind.ApiKey,
+            LlmSessionOriginKind.ApiKey,
             null,
-            ResponseSessionStatus.Completed,
+            LlmSessionStatus.Completed,
             DateTimeOffset.UtcNow.AddMinutes(-1),
             TimeSpan.FromHours(1),
             null,
@@ -701,12 +701,12 @@ public sealed class MainnetResponsesEndpointsTests
             2,
             "resp_previous:tool:call_1:emitted",
             [
-                new ResponseSessionForwardedToolCallSnapshot(
+                new LlmSessionForwardedToolCallSnapshot(
                     "call_1",
                     "get_weather",
                     "expected-hash",
                     "{}",
-                    ResponseSessionForwardedToolCallStatus.Pending,
+                    LlmSessionForwardedToolCallStatus.Pending,
                     DateTimeOffset.UtcNow.AddHours(1),
                     null,
                     DateTimeOffset.UtcNow.AddMinutes(-1),
@@ -756,13 +756,13 @@ public sealed class MainnetResponsesEndpointsTests
             ],
         };
         var sessions = new RecordingResponseSessionStore();
-        sessions.Seed(new ResponseSessionSnapshot(
+        sessions.Seed(new LlmSessionSnapshot(
             "resp_previous",
             "user-1",
             "user-1",
-            ResponseSessionOriginKind.ApiKey,
+            LlmSessionOriginKind.ApiKey,
             null,
-            ResponseSessionStatus.Completed,
+            LlmSessionStatus.Completed,
             DateTimeOffset.UtcNow.AddMinutes(-1),
             TimeSpan.FromHours(1),
             null,
@@ -799,13 +799,13 @@ public sealed class MainnetResponsesEndpointsTests
     {
         var provider = new RecordingLLMProvider();
         var sessions = new RecordingResponseSessionStore();
-        sessions.Seed(new ResponseSessionSnapshot(
+        sessions.Seed(new LlmSessionSnapshot(
             "resp_previous",
             "user-1",
             "user-1",
-            ResponseSessionOriginKind.ApiKey,
+            LlmSessionOriginKind.ApiKey,
             null,
-            ResponseSessionStatus.Completed,
+            LlmSessionStatus.Completed,
             DateTimeOffset.UtcNow.AddHours(-2),
             TimeSpan.FromHours(1),
             null,
@@ -835,13 +835,13 @@ public sealed class MainnetResponsesEndpointsTests
     {
         var provider = new RecordingLLMProvider();
         var sessions = new RecordingResponseSessionStore();
-        sessions.Seed(new ResponseSessionSnapshot(
+        sessions.Seed(new LlmSessionSnapshot(
             "resp_foreign",
             "other-user",
             "other-user",
-            ResponseSessionOriginKind.ApiKey,
+            LlmSessionOriginKind.ApiKey,
             null,
-            ResponseSessionStatus.Completed,
+            LlmSessionStatus.Completed,
             DateTimeOffset.UtcNow.AddMinutes(-1),
             TimeSpan.FromHours(1),
             null,
@@ -871,13 +871,13 @@ public sealed class MainnetResponsesEndpointsTests
     {
         var provider = new RecordingLLMProvider();
         var sessions = new RecordingResponseSessionStore();
-        sessions.Seed(new ResponseSessionSnapshot(
+        sessions.Seed(new LlmSessionSnapshot(
             "resp_channel",
             "user-1",
             "user-1",
-            ResponseSessionOriginKind.Channel,
+            LlmSessionOriginKind.Channel,
             null,
-            ResponseSessionStatus.Completed,
+            LlmSessionStatus.Completed,
             DateTimeOffset.UtcNow.AddMinutes(-1),
             TimeSpan.FromHours(1),
             null,
@@ -907,13 +907,13 @@ public sealed class MainnetResponsesEndpointsTests
     {
         var provider = new RecordingLLMProvider();
         var sessions = new RecordingResponseSessionStore();
-        sessions.Seed(new ResponseSessionSnapshot(
+        sessions.Seed(new LlmSessionSnapshot(
             "resp_previous",
             "user-1",
             "user-1",
-            ResponseSessionOriginKind.ApiKey,
+            LlmSessionOriginKind.ApiKey,
             null,
-            ResponseSessionStatus.Completed,
+            LlmSessionStatus.Completed,
             DateTimeOffset.UtcNow.AddMinutes(-1),
             TimeSpan.FromHours(1),
             null,
@@ -921,12 +921,12 @@ public sealed class MainnetResponsesEndpointsTests
             2,
             "resp_previous:tool:call_1:emitted",
             [
-                new ResponseSessionForwardedToolCallSnapshot(
+                new LlmSessionForwardedToolCallSnapshot(
                     "call_1",
                     "get_weather",
                     "schema-1",
                     "{}",
-                    ResponseSessionForwardedToolCallStatus.Pending,
+                    LlmSessionForwardedToolCallStatus.Pending,
                     DateTimeOffset.UtcNow.AddHours(1),
                     null,
                     DateTimeOffset.UtcNow.AddMinutes(-1),
@@ -946,11 +946,11 @@ public sealed class MainnetResponsesEndpointsTests
         using var doc = JsonDocument.Parse(body);
         doc.RootElement.GetProperty("id").GetString().Should().Be("resp_previous");
         doc.RootElement.GetProperty("status").GetString().Should().Be("cancelled");
-        sessions.StatusUpdates.Should().ContainSingle(x => x.Status == ResponseSessionStatus.Cancelled);
+        sessions.StatusUpdates.Should().ContainSingle(x => x.Status == LlmSessionStatus.Cancelled);
         var snapshot = await sessions.GetByResponseIdAsync("resp_previous");
-        snapshot!.Status.Should().Be(ResponseSessionStatus.Cancelled);
+        snapshot!.Status.Should().Be(LlmSessionStatus.Cancelled);
         snapshot.ForwardedToolCalls.Should().ContainSingle()
-            .Which.Status.Should().Be(ResponseSessionForwardedToolCallStatus.Cancelled);
+            .Which.Status.Should().Be(LlmSessionForwardedToolCallStatus.Cancelled);
         provider.LastRequest.Should().BeNull();
     }
 
@@ -1000,8 +1000,8 @@ public sealed class MainnetResponsesEndpointsTests
 
         builder.Services.AddSingleton<ILLMProviderFactory>(provider);
         builder.Services.AddSingleton(sessions);
-        builder.Services.AddSingleton<IResponseSessionRegistrationPort>(sessions);
-        builder.Services.AddSingleton<IResponseSessionQueryPort>(sessions);
+        builder.Services.AddSingleton<ILlmSessionRegistrationPort>(sessions);
+        builder.Services.AddSingleton<ILlmSessionQueryPort>(sessions);
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         builder.Services.AddSingleton<IResponsesCallerScopeResolver>(new StubResponsesCallerScopeResolver());
         builder.Services.AddSingleton<IResponsesRouteResolver>(new RecordingResponsesRouteResolver());
@@ -1417,8 +1417,8 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton<ILLMProviderFactory>(provider);
         responseSessions ??= new RecordingResponseSessionStore();
         builder.Services.AddSingleton(responseSessions);
-        builder.Services.AddSingleton<IResponseSessionRegistrationPort>(responseSessions);
-        builder.Services.AddSingleton<IResponseSessionQueryPort>(responseSessions);
+        builder.Services.AddSingleton<ILlmSessionRegistrationPort>(responseSessions);
+        builder.Services.AddSingleton<ILlmSessionQueryPort>(responseSessions);
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         builder.Services.AddSingleton(callerScopeResolver ?? new StubResponsesCallerScopeResolver());
         builder.Services.AddSingleton(modelsAggregator ?? new RecordingResponsesModelsAggregator());
@@ -1534,7 +1534,7 @@ public sealed class MainnetResponsesEndpointsTests
         public StubResponsesCallerScopeResolver(
             string scopeId = "user-1",
             string ownerSubject = "user-1",
-            ResponseSessionOriginKind originKind = ResponseSessionOriginKind.ApiKey)
+            LlmSessionOriginKind originKind = LlmSessionOriginKind.ApiKey)
         {
             _scope = new ResponsesCallerScope(scopeId, ownerSubject, originKind);
         }
@@ -1690,34 +1690,34 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     private sealed class RecordingResponseSessionStore :
-        IResponseSessionRegistrationPort,
-        IResponseSessionQueryPort
+        ILlmSessionRegistrationPort,
+        ILlmSessionQueryPort
     {
-        private readonly Dictionary<string, ResponseSessionSnapshot> _snapshots = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, LlmSessionSnapshot> _snapshots = new(StringComparer.Ordinal);
 
-        public List<ResponseSessionRecord> Registered { get; } = [];
+        public List<LlmSessionRecord> Registered { get; } = [];
 
-        public List<(string ActorId, string ResponseId, ResponseSessionStatus Status)> StatusUpdates { get; } = [];
+        public List<(string ActorId, string ResponseId, LlmSessionStatus Status)> StatusUpdates { get; } = [];
 
-        public List<(string ActorId, string ResponseId, ResponseSessionForwardedToolCall Call)> ForwardedToolCalls { get; } = [];
+        public List<(string ActorId, string ResponseId, LlmSessionForwardedToolCall Call)> ForwardedToolCalls { get; } = [];
 
         public List<(string ActorId, string ResponseId, string CallId, string SchemaHash, string ResultJson)> ToolResults { get; } = [];
 
         public List<(string ActorId, string ResponseId, string CallId)> ResolvedToolResults { get; } = [];
 
-        public void Seed(ResponseSessionSnapshot snapshot)
+        public void Seed(LlmSessionSnapshot snapshot)
         {
             _snapshots[snapshot.ResponseId] = snapshot;
         }
 
-        public Task<ResponseSessionRegistrationResult> RegisterAsync(
-            ResponseSessionRecord record,
+        public Task<LlmSessionRegistrationResult> RegisterAsync(
+            LlmSessionRecord record,
             CancellationToken ct = default)
         {
             var clone = record.Clone();
             Registered.Add(clone);
-            var actorId = ResponseSessionIds.NewActorId();
-            _snapshots[clone.ResponseId] = new ResponseSessionSnapshot(
+            var actorId = LlmSessionIds.NewActorId();
+            _snapshots[clone.ResponseId] = new LlmSessionSnapshot(
                 clone.ResponseId,
                 clone.ScopeId,
                 clone.OwnerSubject,
@@ -1730,13 +1730,13 @@ public sealed class MainnetResponsesEndpointsTests
                 actorId,
                 1,
                 $"{clone.ResponseId}:registered");
-            return Task.FromResult(new ResponseSessionRegistrationResult(actorId, clone.ResponseId));
+            return Task.FromResult(new LlmSessionRegistrationResult(actorId, clone.ResponseId));
         }
 
         public Task UpdateStatusAsync(
             string sessionActorId,
             string responseId,
-            ResponseSessionStatus status,
+            LlmSessionStatus status,
             CancellationToken ct = default)
         {
             StatusUpdates.Add((sessionActorId, responseId, status));
@@ -1745,7 +1745,7 @@ public sealed class MainnetResponsesEndpointsTests
                 _snapshots[responseId] = current with
                 {
                     Status = status,
-                    CancelledAt = status == ResponseSessionStatus.Cancelled
+                    CancelledAt = status == LlmSessionStatus.Cancelled
                         ? DateTimeOffset.UtcNow
                         : current.CancelledAt,
                     ForwardedToolCalls = MarkCallsForStatus(current.ForwardedToolCalls, status),
@@ -1759,7 +1759,7 @@ public sealed class MainnetResponsesEndpointsTests
         public Task RecordForwardedToolCallAsync(
             string sessionActorId,
             string responseId,
-            ResponseSessionForwardedToolCall call,
+            LlmSessionForwardedToolCall call,
             CancellationToken ct = default)
         {
             var clone = call.Clone();
@@ -1768,7 +1768,7 @@ public sealed class MainnetResponsesEndpointsTests
             {
                 var calls = (current.ForwardedToolCalls ?? [])
                     .Where(existing => !string.Equals(existing.CallId, clone.CallId, StringComparison.Ordinal))
-                    .Append(new ResponseSessionForwardedToolCallSnapshot(
+                    .Append(new LlmSessionForwardedToolCallSnapshot(
                         clone.CallId,
                         clone.ToolName,
                         clone.SchemaHash,
@@ -1808,7 +1808,7 @@ public sealed class MainnetResponsesEndpointsTests
                     .Select(call => string.Equals(call.CallId, callId, StringComparison.Ordinal)
                         ? call with
                         {
-                            Status = ResponseSessionForwardedToolCallStatus.Received,
+                            Status = LlmSessionForwardedToolCallStatus.Received,
                             ResultJson = resultJson,
                             ReceivedAt = DateTimeOffset.UtcNow,
                         }
@@ -1838,7 +1838,7 @@ public sealed class MainnetResponsesEndpointsTests
                     .Select(call => string.Equals(call.CallId, callId, StringComparison.Ordinal)
                         ? call with
                         {
-                            Status = ResponseSessionForwardedToolCallStatus.Resolved,
+                            Status = LlmSessionForwardedToolCallStatus.Resolved,
                             ResolvedAt = DateTimeOffset.UtcNow,
                         }
                         : call)
@@ -1854,7 +1854,7 @@ public sealed class MainnetResponsesEndpointsTests
             return Task.CompletedTask;
         }
 
-        public Task<ResponseSessionSnapshot?> GetByResponseIdAsync(
+        public Task<LlmSessionSnapshot?> GetByResponseIdAsync(
             string responseId,
             CancellationToken ct = default)
         {
@@ -1862,12 +1862,12 @@ public sealed class MainnetResponsesEndpointsTests
             return Task.FromResult(snapshot);
         }
 
-        private static IReadOnlyList<ResponseSessionForwardedToolCallSnapshot>? MarkCallsForStatus(
-            IReadOnlyList<ResponseSessionForwardedToolCallSnapshot>? calls,
-            ResponseSessionStatus status)
+        private static IReadOnlyList<LlmSessionForwardedToolCallSnapshot>? MarkCallsForStatus(
+            IReadOnlyList<LlmSessionForwardedToolCallSnapshot>? calls,
+            LlmSessionStatus status)
         {
             if (calls is not { Count: > 0 } ||
-                status is not (ResponseSessionStatus.Cancelled or ResponseSessionStatus.Expired))
+                status is not (LlmSessionStatus.Cancelled or LlmSessionStatus.Expired))
             {
                 return calls;
             }
@@ -1875,23 +1875,23 @@ public sealed class MainnetResponsesEndpointsTests
             return calls
                 .Select(call =>
                 {
-                    if (call.Status is not (ResponseSessionForwardedToolCallStatus.Pending
-                        or ResponseSessionForwardedToolCallStatus.Received))
+                    if (call.Status is not (LlmSessionForwardedToolCallStatus.Pending
+                        or LlmSessionForwardedToolCallStatus.Received))
                     {
                         return call;
                     }
 
-                    var callStatus = status == ResponseSessionStatus.Cancelled
-                        ? ResponseSessionForwardedToolCallStatus.Cancelled
-                        : ResponseSessionForwardedToolCallStatus.Expired;
+                    var callStatus = status == LlmSessionStatus.Cancelled
+                        ? LlmSessionForwardedToolCallStatus.Cancelled
+                        : LlmSessionForwardedToolCallStatus.Expired;
                     return call with
                     {
                         Status = callStatus,
-                        ResultJson = callStatus == ResponseSessionForwardedToolCallStatus.Expired &&
+                        ResultJson = callStatus == LlmSessionForwardedToolCallStatus.Expired &&
                                      string.IsNullOrWhiteSpace(call.ResultJson)
                             ? $$"""{"error":"tool_call_expired","call_id":"{{call.CallId}}"}"""
                             : call.ResultJson,
-                        ReceivedAt = callStatus == ResponseSessionForwardedToolCallStatus.Expired
+                        ReceivedAt = callStatus == LlmSessionForwardedToolCallStatus.Expired
                             ? DateTimeOffset.UtcNow
                             : call.ReceivedAt,
                     };

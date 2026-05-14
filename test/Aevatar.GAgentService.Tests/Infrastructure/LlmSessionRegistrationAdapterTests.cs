@@ -10,7 +10,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Tests.Infrastructure;
 
-public sealed class ResponseSessionRegistrationAdapterTests
+public sealed class LlmSessionRegistrationAdapterTests
 {
     [Fact]
     public void Constructor_ShouldRejectNullDependencies()
@@ -19,11 +19,11 @@ public sealed class ResponseSessionRegistrationAdapterTests
         var dispatch = new RecordingDispatchPort();
         var projection = new RecordingProjectionPort();
 
-        ((Action)(() => new ResponseSessionRegistrationAdapter(null!, dispatch, projection)))
+        ((Action)(() => new LlmSessionRegistrationAdapter(null!, dispatch, projection)))
             .Should().Throw<ArgumentNullException>().WithMessage("*runtime*");
-        ((Action)(() => new ResponseSessionRegistrationAdapter(runtime, null!, projection)))
+        ((Action)(() => new LlmSessionRegistrationAdapter(runtime, null!, projection)))
             .Should().Throw<ArgumentNullException>().WithMessage("*dispatchPort*");
-        ((Action)(() => new ResponseSessionRegistrationAdapter(runtime, dispatch, null!)))
+        ((Action)(() => new LlmSessionRegistrationAdapter(runtime, dispatch, null!)))
             .Should().Throw<ArgumentNullException>().WithMessage("*projectionPort*");
     }
 
@@ -33,19 +33,19 @@ public sealed class ResponseSessionRegistrationAdapterTests
         var (adapter, runtime, dispatch, projection) = CreateAdapter();
         var record = BuildRecord();
         record.CreatedAt = null;
-        record.Status = ResponseSessionStatus.Unspecified;
+        record.Status = LlmSessionStatus.Unspecified;
 
         var result = await adapter.RegisterAsync(record);
 
         result.ResponseId.Should().Be("resp_1");
         result.ActorId.Should().StartWith("response-session-");
         runtime.CreateCalls.Should().ContainSingle();
-        runtime.CreateCalls[0].agentType.Should().Be(typeof(ResponseSessionGAgent));
+        runtime.CreateCalls[0].agentType.Should().Be(typeof(LlmSessionGAgent));
         projection.EnsureCalls.Should().ContainSingle().Which.Should().Be(result.ActorId);
         dispatch.Calls.Should().ContainSingle();
         dispatch.Calls[0].envelope.Payload.TypeUrl.Should().Contain("RegisterResponseSessionRequested");
         var packed = dispatch.Calls[0].envelope.Payload.Unpack<RegisterResponseSessionRequested>();
-        packed.Record.Status.Should().Be(ResponseSessionStatus.Accepted);
+        packed.Record.Status.Should().Be(LlmSessionStatus.Accepted);
         packed.Record.CreatedAt.Should().NotBeNull();
         packed.Record.UpdatedAt.Should().NotBeNull();
     }
@@ -57,12 +57,12 @@ public sealed class ResponseSessionRegistrationAdapterTests
         var preset = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-04-01T00:00:00+00:00"));
         var record = BuildRecord();
         record.CreatedAt = preset;
-        record.Status = ResponseSessionStatus.Failed;
+        record.Status = LlmSessionStatus.Failed;
 
         await adapter.RegisterAsync(record);
 
         var packed = dispatch.Calls[0].envelope.Payload.Unpack<RegisterResponseSessionRequested>();
-        packed.Record.Status.Should().Be(ResponseSessionStatus.Failed);
+        packed.Record.Status.Should().Be(LlmSessionStatus.Failed);
         packed.Record.CreatedAt.Should().Be(preset);
         packed.Record.UpdatedAt.Should().Be(preset);
     }
@@ -93,14 +93,14 @@ public sealed class ResponseSessionRegistrationAdapterTests
     {
         var (adapter, _, dispatch, _) = CreateAdapter();
 
-        await adapter.UpdateStatusAsync("session-actor-1", "resp_1", ResponseSessionStatus.Completed);
+        await adapter.UpdateStatusAsync("session-actor-1", "resp_1", LlmSessionStatus.Completed);
 
         dispatch.Calls.Should().ContainSingle();
         dispatch.Calls[0].actorId.Should().Be("session-actor-1");
         dispatch.Calls[0].envelope.Payload.TypeUrl.Should().Contain("UpdateResponseSessionStatusRequested");
         var packed = dispatch.Calls[0].envelope.Payload.Unpack<UpdateResponseSessionStatusRequested>();
         packed.ResponseId.Should().Be("resp_1");
-        packed.Status.Should().Be(ResponseSessionStatus.Completed);
+        packed.Status.Should().Be(LlmSessionStatus.Completed);
     }
 
     [Fact]
@@ -108,7 +108,7 @@ public sealed class ResponseSessionRegistrationAdapterTests
     {
         var (adapter, _, dispatch, _) = CreateAdapter();
 
-        await adapter.UpdateStatusAsync("session-actor-1", "resp_1", ResponseSessionStatus.Unspecified);
+        await adapter.UpdateStatusAsync("session-actor-1", "resp_1", LlmSessionStatus.Unspecified);
 
         dispatch.Calls.Should().BeEmpty();
     }
@@ -120,7 +120,7 @@ public sealed class ResponseSessionRegistrationAdapterTests
     {
         var (adapter, _, _, _) = CreateAdapter();
 
-        var act = () => adapter.UpdateStatusAsync(actorId, respId, ResponseSessionStatus.Completed);
+        var act = () => adapter.UpdateStatusAsync(actorId, respId, LlmSessionStatus.Completed);
 
         await act.Should().ThrowAsync<ArgumentException>().Where(ex => ex.ParamName == param);
     }
@@ -129,7 +129,7 @@ public sealed class ResponseSessionRegistrationAdapterTests
     public async Task RecordForwardedToolCallAsync_ShouldDispatch_WithDefaultStatusAndTimestamp()
     {
         var (adapter, _, dispatch, _) = CreateAdapter();
-        var call = new ResponseSessionForwardedToolCall
+        var call = new LlmSessionForwardedToolCall
         {
             CallId = "call-1",
             ToolName = "WebFetch",
@@ -141,7 +141,7 @@ public sealed class ResponseSessionRegistrationAdapterTests
 
         dispatch.Calls.Should().ContainSingle();
         var packed = dispatch.Calls[0].envelope.Payload.Unpack<RecordForwardedToolCallRequested>();
-        packed.Call.Status.Should().Be(ResponseSessionForwardedToolCallStatus.Pending);
+        packed.Call.Status.Should().Be(LlmSessionForwardedToolCallStatus.Pending);
         packed.Call.EmittedAt.Should().NotBeNull();
         ResponsesJsonValues.ToBoundaryJson(packed.Call.Arguments)
             .Should().Be("""{"url":"https://example.com"}""");
@@ -152,18 +152,18 @@ public sealed class ResponseSessionRegistrationAdapterTests
     {
         var (adapter, _, dispatch, _) = CreateAdapter();
         var preset = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-04-01T00:00:00+00:00"));
-        var call = new ResponseSessionForwardedToolCall
+        var call = new LlmSessionForwardedToolCall
         {
             CallId = "call-1",
             ToolName = "WebFetch",
-            Status = ResponseSessionForwardedToolCallStatus.Resolved,
+            Status = LlmSessionForwardedToolCallStatus.Resolved,
             EmittedAt = preset,
         };
 
         await adapter.RecordForwardedToolCallAsync("actor-1", "resp_1", call);
 
         var packed = dispatch.Calls[0].envelope.Payload.Unpack<RecordForwardedToolCallRequested>();
-        packed.Call.Status.Should().Be(ResponseSessionForwardedToolCallStatus.Resolved);
+        packed.Call.Status.Should().Be(LlmSessionForwardedToolCallStatus.Resolved);
         packed.Call.EmittedAt.Should().Be(preset);
     }
 
@@ -171,7 +171,7 @@ public sealed class ResponseSessionRegistrationAdapterTests
     public async Task RecordForwardedToolCallAsync_ShouldRejectMissingArguments()
     {
         var (adapter, _, _, _) = CreateAdapter();
-        var call = new ResponseSessionForwardedToolCall { CallId = "call-1" };
+        var call = new LlmSessionForwardedToolCall { CallId = "call-1" };
 
         await ((Func<Task>)(() => adapter.RecordForwardedToolCallAsync("", "resp_1", call)))
             .Should().ThrowAsync<ArgumentException>().Where(ex => ex.ParamName == "sessionActorId");
@@ -180,7 +180,7 @@ public sealed class ResponseSessionRegistrationAdapterTests
         await ((Func<Task>)(() => adapter.RecordForwardedToolCallAsync("actor-1", "resp_1", null!)))
             .Should().ThrowAsync<ArgumentNullException>();
 
-        var emptyCallId = new ResponseSessionForwardedToolCall { CallId = string.Empty };
+        var emptyCallId = new LlmSessionForwardedToolCall { CallId = string.Empty };
         await ((Func<Task>)(() => adapter.RecordForwardedToolCallAsync("actor-1", "resp_1", emptyCallId)))
             .Should().ThrowAsync<InvalidOperationException>().WithMessage("call_id*");
     }
@@ -261,21 +261,21 @@ public sealed class ResponseSessionRegistrationAdapterTests
         await act.Should().ThrowAsync<ArgumentException>().Where(ex => ex.ParamName == param);
     }
 
-    private static (ResponseSessionRegistrationAdapter adapter, RecordingRuntime runtime, RecordingDispatchPort dispatch, RecordingProjectionPort projection) CreateAdapter()
+    private static (LlmSessionRegistrationAdapter adapter, RecordingRuntime runtime, RecordingDispatchPort dispatch, RecordingProjectionPort projection) CreateAdapter()
     {
         var runtime = new RecordingRuntime();
         var dispatch = new RecordingDispatchPort();
         var projection = new RecordingProjectionPort();
-        var adapter = new ResponseSessionRegistrationAdapter(runtime, dispatch, projection);
+        var adapter = new LlmSessionRegistrationAdapter(runtime, dispatch, projection);
         return (adapter, runtime, dispatch, projection);
     }
 
-    private static ResponseSessionRecord BuildRecord() => new()
+    private static LlmSessionRecord BuildRecord() => new()
     {
         ResponseId = "resp_1",
         ScopeId = "scope-1",
         OwnerSubject = "owner-1",
-        OriginKind = ResponseSessionOriginKind.ApiKey,
+        OriginKind = LlmSessionOriginKind.ApiKey,
     };
 
     private sealed class RecordingRuntime : IActorRuntime
@@ -310,7 +310,7 @@ public sealed class ResponseSessionRegistrationAdapterTests
         }
     }
 
-    private sealed class RecordingProjectionPort : IResponseSessionCurrentStateProjectionPort
+    private sealed class RecordingProjectionPort : ILlmSessionCurrentStateProjectionPort
     {
         public List<string> EnsureCalls { get; } = [];
 
