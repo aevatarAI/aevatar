@@ -158,15 +158,13 @@ public sealed class StudioMemberEndpointsTests
     }
 
     [Fact]
-    public async Task HandleBindAsync_ShouldReturnOk_OnSuccess()
+    public async Task HandleBindAsync_ShouldReturnAccepted_OnSuccess()
     {
-        var binding = new StudioMemberBindingResponse(
-            MemberId: "m-1",
-            PublishedServiceId: "member-m-1",
-            RevisionId: "rev-1",
-            ImplementationKind: MemberImplementationKindNames.Workflow,
+        var binding = new StudioMemberBindingAcceptedResponse(
+            Status: StudioMemberBindingRunStatusNames.Accepted,
+            BindingRunId: "bind-1",
             ScopeId: ScopeId,
-            ExpectedActorId: "actor");
+            MemberId: "m-1");
         var service = new RecordingMemberService
         {
             BindResponse = binding,
@@ -182,7 +180,7 @@ public sealed class StudioMemberEndpointsTests
             service,
             CancellationToken.None);
 
-        result.Should().BeOfType<Ok<StudioMemberBindingResponse>>()
+        result.Should().BeOfType<Accepted<StudioMemberBindingAcceptedResponse>>()
             .Which.Value.Should().BeSameAs(binding);
     }
 
@@ -252,6 +250,93 @@ public sealed class StudioMemberEndpointsTests
 
         result.Should().BeOfType<Ok<StudioMemberBindingViewResponse>>()
             .Which.Value!.LastBinding.Should().BeSameAs(contract);
+    }
+
+    [Fact]
+    public async Task HandleGetBindingRunAsync_ShouldReturnOk_WhenServiceReturnsRunStatus()
+    {
+        var run = new StudioMemberBindingRunStatusResponse(
+            BindingRunId: "bind-1",
+            ScopeId: ScopeId,
+            MemberId: "member-1",
+            Status: StudioMemberBindingRunStatusNames.PlatformBindingPending,
+            UpdatedAt: DateTimeOffset.UtcNow);
+        var service = new RecordingMemberService
+        {
+            GetBindingRunResponse = run,
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandleGetBindingRunAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-1",
+            "bind-1",
+            service,
+            CancellationToken.None);
+
+        result.Should().BeOfType<Ok<StudioMemberBindingRunStatusResponse>>()
+            .Which.Value.Should().BeSameAs(run);
+    }
+
+    [Fact]
+    public async Task HandleGetBindingRunAsync_ShouldReturnTyped404_WhenBindingRunMissing()
+    {
+        var service = new RecordingMemberService
+        {
+            GetBindingRunException = new StudioMemberBindingRunNotFoundException(
+                ScopeId,
+                "m-1",
+                "bind-missing"),
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandleGetBindingRunAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-1",
+            "bind-missing",
+            service,
+            CancellationToken.None);
+
+        AssertNotFoundResult(result, "STUDIO_MEMBER_BINDING_RUN_NOT_FOUND");
+    }
+
+    [Fact]
+    public async Task HandleGetBindingRunAsync_ShouldReturnBadRequest_OnDomainError()
+    {
+        var service = new RecordingMemberService
+        {
+            GetBindingRunException = new InvalidOperationException("bindingRunId is required."),
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandleGetBindingRunAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-1",
+            "",
+            service,
+            CancellationToken.None);
+
+        AssertBadRequestResult(result, "INVALID_STUDIO_MEMBER_REQUEST");
+    }
+
+    [Fact]
+    public async Task HandleGetBindingRunAsync_ShouldReturnForbidden_WhenScopeAccessDenied()
+    {
+        var service = new RecordingMemberService();
+
+        var result = await InvokeHandle<IResult>(
+            "HandleGetBindingRunAsync",
+            CreateAuthenticatedContext("other-scope"),
+            ScopeId,
+            "m-1",
+            "bind-1",
+            service,
+            CancellationToken.None);
+
+        AssertIsJsonStatus(result, expectedStatus: StatusCodes.Status403Forbidden);
     }
 
     [Fact]
@@ -631,9 +716,11 @@ public sealed class StudioMemberEndpointsTests
         public StudioMemberRosterResponse? ListResponse { get; set; }
         public StudioMemberDetailResponse? GetResponse { get; set; }
         public Exception? GetException { get; set; }
-        public StudioMemberBindingResponse? BindResponse { get; set; }
+        public StudioMemberBindingAcceptedResponse? BindResponse { get; set; }
         public Exception? BindException { get; set; }
         public StudioMemberBindingContractResponse? GetBindingResponse { get; set; }
+        public StudioMemberBindingRunStatusResponse? GetBindingRunResponse { get; set; }
+        public Exception? GetBindingRunException { get; set; }
         public StudioMemberEndpointContractResponse? EndpointContractResponse { get; set; }
         public Exception? EndpointContractException { get; set; }
         public StudioMemberBindingActivationResponse? ActivateResponse { get; set; }
@@ -663,16 +750,23 @@ public sealed class StudioMemberEndpointsTests
                 GetResponse ?? throw new StudioMemberNotFoundException(scopeId, memberId));
         }
 
-        public Task<StudioMemberBindingResponse> BindAsync(
+        public Task<StudioMemberBindingAcceptedResponse> BindAsync(
             string scopeId, string memberId, UpdateStudioMemberBindingRequest request, CancellationToken ct = default)
         {
             if (BindException != null) throw BindException;
             return Task.FromResult(BindResponse!);
         }
 
-        public Task<StudioMemberBindingContractResponse?> GetBindingAsync(
+        public Task<StudioMemberBindingViewResponse> GetBindingAsync(
             string scopeId, string memberId, CancellationToken ct = default)
-            => Task.FromResult(GetBindingResponse);
+            => Task.FromResult(new StudioMemberBindingViewResponse(GetBindingResponse));
+
+        public Task<StudioMemberBindingRunStatusResponse> GetBindingRunAsync(
+            string scopeId, string memberId, string bindingRunId, CancellationToken ct = default)
+        {
+            if (GetBindingRunException != null) throw GetBindingRunException;
+            return Task.FromResult(GetBindingRunResponse!);
+        }
 
         public Task<StudioMemberEndpointContractResponse?> GetEndpointContractAsync(
             string scopeId, string memberId, string endpointId, CancellationToken ct = default)

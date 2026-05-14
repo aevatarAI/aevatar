@@ -35,13 +35,12 @@ public interface IStudioMemberService
         CancellationToken ct = default);
 
     /// <summary>
-    /// Binds the given member to its own stable <c>publishedServiceId</c>
-    /// (never the scope default service). Resolves the member, builds a
-    /// scope binding request with <c>ServiceId = publishedServiceId</c>,
-    /// delegates to the existing scope binding command port, and records the
-    /// resulting revision back on the member authority.
+    /// Accepts a binding request for asynchronous actor-owned execution.
+    /// The returned receipt only means the command was dispatched with a
+    /// stable binding run id; admission and platform completion are observed
+    /// later through binding run status queries.
     /// </summary>
-    Task<StudioMemberBindingResponse> BindAsync(
+    Task<StudioMemberBindingAcceptedResponse> BindAsync(
         string scopeId,
         string memberId,
         UpdateStudioMemberBindingRequest request,
@@ -54,9 +53,15 @@ public interface IStudioMemberService
     /// itself does not exist — endpoints distinguish "missing member" (404)
     /// from "exists, never bound" (200 with null binding).
     /// </summary>
-    Task<StudioMemberBindingContractResponse?> GetBindingAsync(
+    Task<StudioMemberBindingViewResponse> GetBindingAsync(
         string scopeId,
         string memberId,
+        CancellationToken ct = default);
+
+    Task<StudioMemberBindingRunStatusResponse> GetBindingRunAsync(
+        string scopeId,
+        string memberId,
+        string bindingRunId,
         CancellationToken ct = default);
 
     /// <summary>
