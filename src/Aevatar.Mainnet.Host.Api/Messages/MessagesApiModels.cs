@@ -103,11 +103,38 @@ internal static class MessagesRequestNormalizer
                 "temperature must be between 0 and 2.");
         }
 
+        if (request.TopP.HasValue)
+        {
+            return MessagesRequestNormalizationResult.Failed(
+                "unsupported_parameter",
+                "top_p is not supported by this /v1/messages facade.");
+        }
+
+        if (request.TopK.HasValue)
+        {
+            return MessagesRequestNormalizationResult.Failed(
+                "unsupported_parameter",
+                "top_k is not supported by this /v1/messages facade.");
+        }
+
+        if (request.StopSequences is { Count: > 0 })
+        {
+            return MessagesRequestNormalizationResult.Failed(
+                "unsupported_parameter",
+                "stop_sequences is not supported by this /v1/messages facade.");
+        }
+
+        if (!TryNormalizeToolChoice(request.ToolChoice, out var toolChoiceDisablesTools, out var toolChoiceError))
+            return MessagesRequestNormalizationResult.Failed("unsupported_parameter", toolChoiceError ?? "tool_choice is not supported.");
+
         if (!TryExtractDeclaredTools(request.Tools, out var declaredTools, out var toolsError))
-            return MessagesRequestNormalizationResult.Failed("invalid_tools", toolsError);
+            return MessagesRequestNormalizationResult.Failed("invalid_tools", toolsError ?? "tools is invalid.");
+
+        if (toolChoiceDisablesTools)
+            declaredTools = [];
 
         if (!TryExtractChatMessages(request.System, request.Messages, out var chatMessages, out var droppedImages, out var messagesError))
-            return MessagesRequestNormalizationResult.Failed("invalid_messages", messagesError);
+            return MessagesRequestNormalizationResult.Failed("invalid_messages", messagesError ?? "messages is invalid.");
 
         var normalized = new NormalizedMessagesRequest(
             MessageId: $"msg_{Guid.NewGuid():N}",
@@ -204,6 +231,7 @@ internal static class MessagesRequestNormalizer
         }
 
         var textBuffer = new System.Text.StringBuilder();
+        var reasoningBuffer = new System.Text.StringBuilder();
         var toolCalls = new List<ToolCall>();
         var toolResults = new List<(string callId, string output)>();
 
@@ -260,6 +288,20 @@ internal static class MessagesRequestNormalizer
                     toolCalls.Add(new ToolCall { Id = id, Name = name, ArgumentsJson = input });
                     break;
                 }
+                case "thinking":
+                {
+                    if (role != "assistant")
+                    {
+                        error = "thinking block is only valid in assistant messages.";
+                        return false;
+                    }
+                    if (block.TryGetProperty("thinking", out var thinking) && thinking.ValueKind == JsonValueKind.String)
+                    {
+                        if (reasoningBuffer.Length > 0) reasoningBuffer.Append('\n');
+                        reasoningBuffer.Append(thinking.GetString());
+                    }
+                    break;
+                }
                 case "tool_result":
                 {
                     if (role != "user")
@@ -304,18 +346,20 @@ internal static class MessagesRequestNormalizer
         if (role == "assistant")
         {
             var text = textBuffer.ToString();
+            var reasoning = reasoningBuffer.Length > 0 ? reasoningBuffer.ToString() : null;
             if (toolCalls.Count > 0)
             {
                 collected.Add(new ChatMessage
                 {
                     Role = "assistant",
                     Content = text,
+                    ReasoningContent = reasoning,
                     ToolCalls = toolCalls,
                 });
             }
-            else if (text.Length > 0)
+            else if (text.Length > 0 || !string.IsNullOrEmpty(reasoning))
             {
-                collected.Add(ChatMessage.Assistant(text));
+                collected.Add(ChatMessage.Assistant(text, reasoning));
             }
         }
         else
@@ -450,6 +494,46 @@ internal static class MessagesRequestNormalizer
 
         result = collected;
         return true;
+    }
+
+    private static bool TryNormalizeToolChoice(
+        JsonElement toolChoice,
+        out bool disablesTools,
+        out string? error)
+    {
+        disablesTools = false;
+        error = null;
+
+        if (toolChoice.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+            return true;
+
+        string? type = null;
+        if (toolChoice.ValueKind == JsonValueKind.String)
+        {
+            type = toolChoice.GetString();
+        }
+        else if (toolChoice.ValueKind == JsonValueKind.Object &&
+                 toolChoice.TryGetProperty("type", out var typeEl) &&
+                 typeEl.ValueKind == JsonValueKind.String)
+        {
+            type = typeEl.GetString();
+        }
+
+        switch (type)
+        {
+            case "auto":
+                return true;
+            case "none":
+                disablesTools = true;
+                return true;
+            case "any":
+            case "tool":
+                error = $"tool_choice '{type}' requires provider-level forcing and is not supported by this /v1/messages facade.";
+                return false;
+            default:
+                error = "tool_choice must be one of auto, none, any, or tool.";
+                return false;
+        }
     }
 
     private static string ComputeSchemaHash(string name, string schemaJson)

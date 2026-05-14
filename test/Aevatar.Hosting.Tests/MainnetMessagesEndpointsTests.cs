@@ -212,6 +212,13 @@ public sealed class MainnetMessagesEndpointsTests
         content[0].GetProperty("id").GetString().Should().Be("toolu_abc");
         content[0].GetProperty("name").GetString().Should().Be("get_weather");
         content[0].GetProperty("input").GetProperty("city").GetString().Should().Be("SF");
+
+        provider.LastRequest.Should().NotBeNull();
+        var tool = provider.LastRequest!.Tools.Should().ContainSingle().Subject;
+        tool.Name.Should().Be("get_weather");
+        tool.Description.Should().Be("Look up the weather.");
+        tool.ParametersSchema.Should().Contain("\"city\"");
+        tool.IsReadOnly.Should().BeTrue();
     }
 
     [Fact]
@@ -230,6 +237,25 @@ public sealed class MainnetMessagesEndpointsTests
         using var doc = JsonDocument.Parse(body);
         doc.RootElement.GetProperty("type").GetString().Should().Be("error");
         doc.RootElement.GetProperty("error").GetProperty("type").GetString().Should().Be("authentication_error");
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostMessages_WithNonBearerAuthorization_ShouldReturn401()
+    {
+        var provider = new MessagesRecordingLLMProvider();
+        await using var app = await CreateAppAsync(provider);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
+        {
+            Content = JsonContent("""{"model":"claude-haiku-4-5","max_tokens":1,"messages":[{"role":"user","content":"x"}]}"""),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Basic", "not-a-bearer");
+
+        var response = await client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         provider.LastRequest.Should().BeNull();
     }
 
@@ -283,6 +309,82 @@ public sealed class MainnetMessagesEndpointsTests
         messages[2].Role.Should().Be("tool");
         messages[2].ToolCallId.Should().Be("toolu_x");
         messages[2].Content.Should().Be("sunny");
+    }
+
+    [Fact]
+    public async Task PostMessages_WithThinkingBlock_ShouldPreserveAssistantReasoning()
+    {
+        var provider = new MessagesRecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk { DeltaContent = "OK", IsLast = true },
+            ],
+        };
+        await using var app = await CreateAppAsync(provider);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
+        {
+            Content = JsonContent("""
+            {
+              "model": "claude-haiku-4-5",
+              "max_tokens": 64,
+              "messages": [
+                {"role": "user", "content": "2+2?"},
+                {"role": "assistant", "content": [
+                  {"type": "thinking", "thinking": "Need simple arithmetic."},
+                  {"type": "text", "text": "4"}
+                ]},
+                {"role": "user", "content": "thanks"}
+              ]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "thinking-bearer");
+
+        var response = await client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        provider.LastRequest.Should().NotBeNull();
+        var assistant = provider.LastRequest!.Messages.Should().Contain(m => m.Role == "assistant").Subject;
+        assistant.Content.Should().Be("4");
+        assistant.ReasoningContent.Should().Be("Need simple arithmetic.");
+    }
+
+    [Theory]
+    [InlineData("""{"top_p":0.5}""")]
+    [InlineData("""{"top_k":10}""")]
+    [InlineData("""{"stop_sequences":["END"]}""")]
+    [InlineData("""{"tool_choice":{"type":"any"}}""")]
+    public async Task PostMessages_WithUnsupportedControlParameter_ShouldReturn400(string extraJson)
+    {
+        var provider = new MessagesRecordingLLMProvider();
+        await using var app = await CreateAppAsync(provider);
+        var client = app.GetTestClient();
+        var extra = JsonDocument.Parse(extraJson).RootElement.EnumerateObject().Single();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
+        {
+            Content = JsonContent($$"""
+            {
+              "model": "claude-haiku-4-5",
+              "max_tokens": 64,
+              "messages": [{"role": "user", "content": "ping"}],
+              "{{extra.Name}}": {{extra.Value.GetRawText()}}
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unsupported-bearer");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        using var doc = JsonDocument.Parse(body);
+        doc.RootElement.GetProperty("type").GetString().Should().Be("error");
+        doc.RootElement.GetProperty("error").GetProperty("type").GetString().Should().Be("unsupported_parameter");
+        provider.LastRequest.Should().BeNull();
     }
 
     // ----- Test fixtures -------------------------------------------------------

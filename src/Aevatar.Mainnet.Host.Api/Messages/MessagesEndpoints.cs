@@ -112,11 +112,10 @@ internal static class MessagesApiEndpoints
         // injected here because Anthropic Messages clients (Claude Code in
         // particular) ship their own tool harness on top of the response;
         // injecting Aevatar's substitutes would shadow client tools.
-        var toolClassification = new ResponsesToolClassification(
-            ForwardedTools: normalized.DeclaredTools,
-            EffectiveTools: [],
-            SubstitutedToolNames: [],
-            AdditiveToolNames: []);
+        var toolClassification = ResponsesToolClassifier.Classify(
+            normalized.DeclaredTools,
+            Array.Empty<IResponsesToolProvider>(),
+            logger);
 
         // OpenRouter-style vendor prefix routing (same as Path A). If the
         // model is `vendor/name`, resolve the route value through the catalog;
@@ -520,7 +519,7 @@ internal static class MessagesApiEndpoints
         const string prefix = "Bearer ";
         return raw.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
             ? raw[prefix.Length..].Trim()
-            : raw.Trim();
+            : null;
     }
 
     private static IResult ToErrorResult(int statusCode, string errorType, string message)
