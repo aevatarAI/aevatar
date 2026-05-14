@@ -79,8 +79,10 @@ public sealed class AgentRunGAgentTests
 
         var next = InvokeAgentTransition(runtime, new AgentRunGAgentState(), historical);
 
-        next.Status.Should().Be(AgentRunStatus.ReplyProduced);
-        next.ReplyDispatched.Should().BeTrue();
+        // Legacy events get promoted straight to handed-off on replay (ADR-0021):
+        // historically a ReplyProduced event was only persisted *after* successful
+        // dispatch, so on replay we treat the event as if dispatch had also landed.
+        next.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
     }
 
     [Fact]
@@ -120,21 +122,22 @@ public sealed class AgentRunGAgentTests
 
         var next = InvokeAgentTransition(runtime, new AgentRunGAgentState(), interactiveOnly);
 
+        // Interactive-only fresh event: payload persisted, but status stays at
+        // REPLY_PRODUCED until ApplyReplyDispatched promotes it to REPLY_HANDED_OFF.
         next.Status.Should().Be(AgentRunStatus.ReplyProduced);
-        next.ReplyDispatched.Should().BeFalse();
         next.ProducedReplyText.Should().BeEmpty();
         next.ProducedOutbound.Should().NotBeNull();
         next.ProducedOutbound!.Actions.Should().ContainSingle(a => a.ActionId == "confirm");
     }
 
     [Fact]
-    public void ApplyReplyProduced_NewEventWithReplyText_LeavesReplyAsNotYetDispatched()
+    public void ApplyReplyProduced_NewEventWithReplyText_LeavesStatusAtReplyProduced()
     {
         // New events always carry a non-empty reply_text (empty replies get replaced with a
         // user-visible fallback before persisting). Those events represent "payload persisted
-        // but not yet dispatched" — ReplyDispatched stays false here; the subsequent
-        // AgentRunReplyDispatchedEvent flips it after the conversation actor accepts the
-        // LlmReplyReadyEvent.
+        // but not yet handed off" — Status stays at REPLY_PRODUCED here; the subsequent
+        // AgentRunReplyDispatchedEvent promotes it to REPLY_HANDED_OFF after the
+        // conversation actor accepts the LlmReplyReadyEvent (ADR-0021).
         var runtime = CreateRunAgent(
             new DispatchingActorRuntime(),
             new RecordingReplyGenerator(() => false),
@@ -154,7 +157,6 @@ public sealed class AgentRunGAgentTests
         var next = InvokeAgentTransition(runtime, new AgentRunGAgentState(), fresh);
 
         next.Status.Should().Be(AgentRunStatus.ReplyProduced);
-        next.ReplyDispatched.Should().BeFalse();
         next.ProducedReplyText.Should().Be("hello");
         next.ProducedTerminalState.Should().Be(LlmReplyTerminalState.Completed);
     }
@@ -205,11 +207,10 @@ public sealed class AgentRunGAgentTests
         ready.TerminalState.Should().Be(LlmReplyTerminalState.Completed);
         replyGenerator.CallCount.Should().Be(1);
 
-        // State stays at ReplyProduced+!ReplyDispatched (the Dispatched event failed to
-        // persist). The actor lingers until idle eviction — acceptable trade-off vs.
-        // delivering a duplicate user-visible fallback.
+        // State stays at REPLY_PRODUCED (the Dispatched event failed to persist, so
+        // status is NOT promoted to REPLY_HANDED_OFF). The actor lingers until idle
+        // eviction — acceptable trade-off vs. delivering a duplicate user-visible fallback.
         runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
-        runtime.State.ReplyDispatched.Should().BeFalse();
         runtime.State.ProducedReplyText.Should().Be("the real reply");
     }
 
@@ -240,7 +241,10 @@ public sealed class AgentRunGAgentTests
         await runtime.HandleStartAsync(request);
         await runtime.HandleStartAsync(request.Clone());
 
-        runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
+        // First call ran the LLM and dispatched the ready event, promoting status to
+        // REPLY_HANDED_OFF (ADR-0021). The duplicate start must short-circuit on
+        // terminal-status check and NOT re-run the LLM or re-dispatch.
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
         replyGenerator.CallCount.Should().Be(1);
         handled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor));
     }
@@ -354,9 +358,8 @@ public sealed class AgentRunGAgentTests
         await runtime.HandleStartAsync(request);
 
         // After the first call the LLM ran once and the produced payload is persisted, but
-        // dispatch failed so ReplyDispatched is false.
+        // dispatch failed so status stayed at REPLY_PRODUCED (no promotion to REPLY_HANDED_OFF).
         runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
-        runtime.State.ReplyDispatched.Should().BeFalse();
         runtime.State.ProducedReplyText.Should().Be("ok");
         replyGenerator.CallCount.Should().Be(1);
         handled.Should().BeEmpty();
@@ -370,9 +373,8 @@ public sealed class AgentRunGAgentTests
         await runtime.HandleStartAsync(retryCommand);
 
         // After the retry the same persisted reply is delivered — but the LLM was not
-        // re-invoked.
-        runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
-        runtime.State.ReplyDispatched.Should().BeTrue();
+        // re-invoked. Status promoted to REPLY_HANDED_OFF by ApplyReplyDispatched (ADR-0021).
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
         replyGenerator.CallCount.Should().Be(1);
         handled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor));
     }
@@ -459,9 +461,9 @@ public sealed class AgentRunGAgentTests
 
         // The unhandled exception fires the persist-before-dispatch path: the failure
         // terminal state lands as ProducedTerminalState=Failed with a user-visible fallback,
-        // and dispatch succeeds so ReplyDispatched is true. The LLM was never invoked.
-        runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
-        runtime.State.ReplyDispatched.Should().BeTrue();
+        // and dispatch succeeds so status is promoted to REPLY_HANDED_OFF (ADR-0021).
+        // The LLM was never invoked.
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
         runtime.State.ProducedTerminalState.Should().Be(LlmReplyTerminalState.Failed);
         runtime.State.ErrorCode.Should().Be("agent_run_unhandled_exception");
         replyGenerator.CallCount.Should().Be(0);

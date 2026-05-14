@@ -107,23 +107,25 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var startedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
 
         // Reply already produced AND dispatched: terminal, only schedule cleanup.
-        // Reply produced but NOT dispatched: this is the output-dispatch retry path —
-        // re-deliver the persisted payload without re-running the LLM / tool chain so
-        // we don't repeat tool side effects (SSH exec, external API calls, billing)
-        // or produce a different reply.
-        if (State.Status is AgentRunStatus.Dropped or AgentRunStatus.Failed ||
-            (State.Status is AgentRunStatus.ReplyProduced && State.ReplyDispatched))
+        // Terminal status (ADR-0021 chain.finalized precondition): the run has
+        // either dropped, failed, or already handed the reply off to the
+        // conversation actor. Late starts in any of these cases must no-op
+        // beyond scheduling cleanup — never re-run the LLM / tool chain.
+        if (State.Status is AgentRunStatus.Dropped or AgentRunStatus.Failed or AgentRunStatus.ReplyHandedOff)
         {
             _logger.LogInformation(
-                "Ignoring duplicate terminal agent run start: runId={RunId} status={Status} dispatched={Dispatched}",
+                "Ignoring duplicate terminal agent run start: runId={RunId} status={Status}",
                 runId,
-                State.Status,
-                State.ReplyDispatched);
+                State.Status);
             await ScheduleTerminalCleanupAsync(NormalizeOptional(State.RunId) ?? runId);
             return;
         }
 
-        if (State.Status is AgentRunStatus.ReplyProduced && !State.ReplyDispatched)
+        // ReplyProduced but not yet handed off: this is the output-dispatch retry path —
+        // re-deliver the persisted payload without re-running the LLM / tool chain so
+        // we don't repeat tool side effects (SSH exec, external API calls, billing)
+        // or produce a different reply.
+        if (State.Status is AgentRunStatus.ReplyProduced)
         {
             _logger.LogInformation(
                 "Re-dispatching previously produced reply (output-dispatch retry): runId={RunId} correlation={CorrelationId}",
@@ -177,9 +179,9 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     public async Task HandleCleanupAsync(AgentRunCleanupRequested command)
     {
         ArgumentNullException.ThrowIfNull(command);
-        var terminal =
-            State.Status is AgentRunStatus.Dropped or AgentRunStatus.Failed ||
-            (State.Status is AgentRunStatus.ReplyProduced && State.ReplyDispatched);
+        var terminal = State.Status is AgentRunStatus.Dropped
+                                    or AgentRunStatus.Failed
+                                    or AgentRunStatus.ReplyHandedOff;
         if (!terminal)
             return;
         if (!string.IsNullOrWhiteSpace(command.RunId) &&
@@ -421,7 +423,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     /// <summary>
     /// Output-dispatch retry path: re-deliver the produced payload from state without
     /// re-running the LLM. Triggered when <see cref="HandleStartAsync"/> sees
-    /// <c>State.Status == ReplyProduced &amp;&amp; !State.ReplyDispatched</c>.
+    /// <c>State.Status == ReplyProduced</c> (committed but not yet handed off).
     /// </summary>
     private async Task ReDispatchProducedReplyAsync(NeedsLlmReplyEvent request, string runId)
     {
@@ -983,7 +985,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         // on deserialize). Historically, Status=ReplyProduced was only written *after* the
         // LlmReplyReadyEvent was successfully dispatched (old code's `await Dispatch...;
         // await PersistReplyProduced...;` order), so those events semantically mean
-        // "delivered". Treat them as ReplyDispatched=true on replay so:
+        // "handed off". Promote them straight to REPLY_HANDED_OFF on replay so:
         //   1. ReDispatchProducedReplyAsync doesn't fire with an empty payload
         //      (would surface as a blank reply / structural error to the user).
         //   2. HandleCleanupAsync recognizes them as terminal so the actor can be destroyed.
@@ -994,9 +996,10 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         // outbound (card / button intent). Misclassifying those as "historical" would skip
         // the dispatch retry on failure and silently drop the user's interactive reply.
         if (string.IsNullOrEmpty(evt.ReplyText) && evt.Outbound is null)
-            next.ReplyDispatched = true;
-        // For new events, ReplyDispatched stays false here; flipped to true by
-        // ApplyReplyDispatched once the LlmReplyReadyEvent is delivered.
+            next.Status = AgentRunStatus.ReplyHandedOff;
+        // For new events, Status stays at REPLY_PRODUCED here; promoted to REPLY_HANDED_OFF
+        // by ApplyReplyDispatched once the LlmReplyReadyEvent is accepted by the
+        // conversation actor (see ADR-0021).
         return next;
     }
 
@@ -1008,7 +1011,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.RunId = string.IsNullOrWhiteSpace(next.RunId) ? evt.RunId : next.RunId;
         next.CorrelationId = string.IsNullOrWhiteSpace(next.CorrelationId) ? evt.CorrelationId : next.CorrelationId;
         next.TargetActorId = string.IsNullOrWhiteSpace(next.TargetActorId) ? evt.TargetActorId : next.TargetActorId;
-        next.ReplyDispatched = true;
+        // Promote committed -> handed-off (ADR-0021 AgentRunGAgent-side terminal).
+        next.Status = AgentRunStatus.ReplyHandedOff;
         return next;
     }
 

@@ -230,8 +230,8 @@ internal static bool IsTerminal(AgentRunState s) =>
   - [ ] 新增 `IsTerminal()` helper
   - [ ] 替换 cs:114-124 隐式终态判定
   - [ ] 所有 handler 入口加 `IsTerminal()` short-circuit
-  - [ ] `reply_dispatched` bool 读改 `Status == REPLY_HANDED_OFF`，写改 `RaiseEvent(LlmReplyHandedOffEvent)`
-  - [ ] `ScheduleTerminalCleanupAsync` 在完成时 raise `AgentRunCleanupCompletedEvent` 或直接置位 `cleanup_completed_at` 字段
+  - [ ] `reply_dispatched` bool 读改 `Status == REPLY_HANDED_OFF`；写复用既有 `AgentRunReplyDispatchedEvent`（state matcher 升级 `status = REPLY_HANDED_OFF`，无需新事件）
+  - [ ] `ScheduleTerminalCleanupAsync` 完成时 raise `AgentRunCleanupCompletedEvent`，state matcher 写入 `cleanup_completed_at_unix_ms`
 - [ ] `ConversationGAgent`：
   - [ ] `RunLlmReplyAsync` (cs:458) 成功后 raise `LlmReplyDeliveredEvent`，失败 raise `LlmReplyDeliveryFailedEvent`
   - [ ] streaming chunk path (cs:532, cs:546) 在 final chunk 编辑成功后 raise `LlmReplyDeliveredEvent`

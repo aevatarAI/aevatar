@@ -365,12 +365,18 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
 
         try
         {
-            await dispatcher.DispatchAsync(enriched.Clone(), ct);
+            var outcome = await dispatcher.DispatchAsync(enriched.Clone(), ct);
             Logger.LogInformation(
-                "Dispatched LLM reply run request: correlation={CorrelationId} conversation={Key} replyTokenSource={Source}",
+                "Dispatched LLM reply run request: correlation={CorrelationId} conversation={Key} replyTokenSource={Source} phase={Phase} commandId={CommandId}",
                 enriched.CorrelationId,
                 enriched.Activity?.Conversation?.CanonicalKey,
-                DescribeDispatchedReplyTokenSource(request, enriched));
+                DescribeDispatchedReplyTokenSource(request, enriched),
+                outcome.Phase,
+                outcome.CommandId);
+            // C3 will branch on outcome.Phase to retire the pending entry on
+            // Rejected* outcomes. Today the run actor inbox handler drops
+            // stale requests and surfaces them through DeferredLlmReplyDroppedEvent,
+            // so behaviour is preserved either way.
         }
         catch (Exception ex)
         {

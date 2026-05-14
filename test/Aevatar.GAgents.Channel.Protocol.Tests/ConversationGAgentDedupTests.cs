@@ -1584,10 +1584,14 @@ public sealed class ConversationGAgentDedupTests
     {
         public List<NeedsLlmReplyEvent> Dispatched { get; } = [];
 
-        public Task DispatchAsync(NeedsLlmReplyEvent request, CancellationToken ct)
+        public Task<DispatchOutcome> DispatchAsync(NeedsLlmReplyEvent request, CancellationToken ct)
         {
             Dispatched.Add(request.Clone());
-            return Task.CompletedTask;
+            return Task.FromResult(new DispatchOutcome(
+                Phase: DispatchPhase.Accepted,
+                CommandId: request.CorrelationId ?? string.Empty,
+                RunActorId: null,
+                AcceptedAtUnixMs: 0));
         }
     }
 

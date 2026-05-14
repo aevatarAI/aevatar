@@ -217,3 +217,32 @@ enum FailureKind {
   FAILURE_KIND_CREDENTIAL_RESOLUTION_FAILED = 3;
   FAILURE_KIND_PLATFORM_UNAVAILABLE = 4;
 }
+
+// Persisted by ConversationGAgent after the channel sink (e.g. Lark
+// edit_message) has ack'd the final reply chunk. Drives
+// ConversationGAgentState.last_reply_delivery into the Delivered outcome,
+// satisfying chain.delivered per ADR-0021. Single source of user-visible
+// delivery truth — downstream readers MUST NOT rely on lark API log lines
+// or other side-channel signals.
+message LlmReplyDeliveredEvent {
+  string correlation_id = 1;
+  // AgentRunGAgent run_id producing this reply (used to anchor delivery
+  // against a specific committed reply).
+  string run_id = 2;
+  int64 acked_at_unix_ms = 3;
+  // Channel-side message id from the sink ack (e.g. Lark message_id).
+  string channel_message_id = 4;
+}
+
+// Persisted by ConversationGAgent when the channel sink rejects or times
+// out on the reply send/edit. Drives
+// ConversationGAgentState.last_reply_delivery into the DeliveryFailed
+// outcome. The downstream ConversationContinueFailedEvent is the
+// chain-finalizing signal — this event captures the structured cause.
+message LlmReplyDeliveryFailedEvent {
+  string correlation_id = 1;
+  string run_id = 2;
+  int64 failed_at_unix_ms = 3;
+  string error_code = 4;
+  string error_message = 5;
+}
