@@ -8,6 +8,7 @@ using Xunit;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -159,6 +160,75 @@ public sealed class ConversationReplyGeneratorTests
         }
 
         approvalHandler.RequestCount.Should().Be(4);
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithSkillRegistryButNoRemoteFetcher_LogsWarningOnlyOnceAcrossTurns()
+    {
+        var logger = new ListLogger<NyxIdConversationReplyGenerator>();
+        var skillRegistry = new SkillRegistry();
+        skillRegistry.Register(new SkillDefinition
+        {
+            Name = "remote-skill",
+            Description = "Remote skill",
+            Instructions = "Does remote work",
+            Source = SkillSource.Remote,
+            RemoteId = "remote-skill-id",
+        });
+        var generator = new NyxIdConversationReplyGenerator(
+            new RecordingProviderFactory(),
+            skillRegistry: skillRegistry,
+            remoteSkillFetcher: null,
+            logger: logger);
+
+        for (var i = 0; i < 2; i++)
+        {
+            var reply = await generator.GenerateReplyAsync(
+                new ChatActivity
+                {
+                    Id = $"msg-warning-{i}",
+                    Conversation = new ConversationReference { CanonicalKey = $"lark:dm:user-warning-{i}" },
+                    Content = new MessageContent { Text = "hello" },
+                },
+                new Dictionary<string, string>(),
+                streamingSink: null,
+                CancellationToken.None);
+
+            reply.Should().Be("ok");
+        }
+
+        logger.WarningMessages.Should().ContainSingle(message =>
+            message.Contains("SkillRegistry is registered without IRemoteSkillFetcher", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithStreamingSink_EmitsPlaceholderThenFinalTextAcrossToolFollowUp()
+    {
+        var providerFactory = new ToolCallingProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources: [new SingleToolSource(new ApprovalRequiredTool())],
+            relayOptions: new global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                StreamingPlaceholderText = "…",
+            });
+        var sink = new RecordingStreamingSink();
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-tool-follow-up",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-tool-follow-up" },
+                Content = new MessageContent { Text = "run tool" },
+            },
+            new Dictionary<string, string>(),
+            sink,
+            CancellationToken.None);
+
+        reply.Should().Be("done");
+        providerFactory.Requests.Should().HaveCount(2);
+        providerFactory.Requests[1].Messages.Should().Contain(message => message.Role == "tool");
+        sink.Emissions.Should().Equal("…", "done");
     }
 
     [Fact]
@@ -569,6 +639,8 @@ public sealed class ConversationReplyGeneratorTests
     {
         public string Name => "tool-calling";
 
+        public List<LLMRequest> Requests { get; } = [];
+
         public ILLMProvider GetProvider(string name) => this;
 
         public ILLMProvider GetDefault() => this;
@@ -582,6 +654,7 @@ public sealed class ConversationReplyGeneratorTests
             LLMRequest request,
             [EnumeratorCancellation] CancellationToken ct = default)
         {
+            Requests.Add(request);
             if (request.Messages.Any(static message => message.Role == "tool"))
             {
                 yield return new LLMStreamChunk { DeltaContent = "done" };
@@ -634,6 +707,35 @@ public sealed class ConversationReplyGeneratorTests
         {
             RequestCount++;
             return Task.FromResult(ToolApprovalResult.Denied("test denial"));
+        }
+    }
+
+    private sealed class ListLogger<T> : ILogger<T>
+    {
+        public List<string> WarningMessages { get; } = [];
+
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning)
+                WarningMessages.Add(formatter(state, exception));
+        }
+
+        private sealed class NullScope : IDisposable
+        {
+            public static readonly NullScope Instance = new();
+
+            public void Dispose()
+            {
+            }
         }
     }
 }

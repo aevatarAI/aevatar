@@ -234,6 +234,77 @@ public sealed class TurnStreamingReplySinkTests
     }
 
     [Fact]
+    public async Task Dispose_WhenFinalizeIsAwaitingDrain_UnblocksWithoutDispatchingStashedFinalText()
+    {
+        var firstDispatchGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var envelopes = new List<EventEnvelope>();
+        var dispatchCount = 0;
+
+        var dispatchPort = Substitute.For<IActorDispatchPort>();
+        dispatchPort.DispatchAsync("target-actor", Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                envelopes.Add(call.Arg<EventEnvelope>());
+                dispatchCount++;
+                return dispatchCount == 1 ? firstDispatchGate.Task : Task.CompletedTask;
+            });
+
+        var sink = CreateSink(dispatchPort, throttleMs: 0, out _);
+
+        var deltaTask = sink.OnDeltaAsync("first", CancellationToken.None);
+        var finalizeTask = sink.FinalizeAsync("first plus final", CancellationToken.None);
+
+        deltaTask.IsCompleted.Should().BeFalse();
+        finalizeTask.IsCompleted.Should().BeFalse();
+        envelopes.Should().ContainSingle();
+
+        sink.Dispose();
+        await finalizeTask;
+
+        envelopes.Should().ContainSingle("disposing the sink must drop the stashed final flush");
+
+        firstDispatchGate.SetResult();
+        await deltaTask;
+
+        envelopes.Should().ContainSingle();
+        sink.ChunksEmitted.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task OnDeltaAsync_WhenDeferredFlushDispatchFails_LaterDeltaStillPublishesLatestTextOnce()
+    {
+        var dispatchAttempts = 0;
+        var dispatchPort = Substitute.For<IActorDispatchPort>();
+        dispatchPort.DispatchAsync("target-actor", Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                dispatchAttempts++;
+                if (dispatchAttempts == 2)
+                    return Task.FromException(new InvalidOperationException("boom"));
+
+                return Task.CompletedTask;
+            });
+
+        var sink = CreateSink(dispatchPort, throttleMs: 750, out var time);
+
+        await sink.OnDeltaAsync("chunk 1", CancellationToken.None);
+        time.Advance(TimeSpan.FromMilliseconds(100));
+        await sink.OnDeltaAsync("chunk 1 + 2", CancellationToken.None);
+
+        time.Advance(TimeSpan.FromMilliseconds(800));
+
+        sink.ChunksEmitted.Should().Be(1, "the timer-driven dispatch failed and must not count as emitted");
+
+        time.Advance(TimeSpan.FromMilliseconds(100));
+        await sink.OnDeltaAsync("chunk 1 + 3", CancellationToken.None);
+
+        sink.ChunksEmitted.Should().Be(2);
+        dispatchAttempts.Should().Be(3);
+        time.Advance(TimeSpan.FromMilliseconds(2000));
+        sink.ChunksEmitted.Should().Be(2);
+    }
+
+    [Fact]
     public async Task PendingTimerEqualsLastEmitted_DoesNotEmitDuplicate()
     {
         var (dispatchPort, envelopes) = BuildRecordingDispatchPort();

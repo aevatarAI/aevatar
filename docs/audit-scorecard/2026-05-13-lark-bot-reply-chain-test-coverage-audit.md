@@ -89,7 +89,7 @@ branch: test/2026-05-12_lark-bot-reply-chain-regressions
 | `TurnStreamingReplySink` throttle/cap/finalize race | 15 个测试，覆盖 cap、throttle、timer、dispatch in flight、idempotent dispose、duplicate suppression、dispatch throw | 覆盖非常强 | 本轮不需要再做大面积补测，只需补 review 指向的新竞态时再加 | P2 |
 | `ConversationReplyGenerator` placeholder / owner vs sender prefs / route fallback / approval middleware | 已覆盖主要分支 | 覆盖中等 | 缺 warning/closeout 联动测试 | P1 |
 | `ToolCallLoop` tool round / middleware / request identity / reasoning propagation / length recovery | 覆盖强 | 单体循环语义稳定 | 缺和 generator / runtime 的联动 closeout 测试 | P1 |
-| `ChatRuntime` 多轮流式收尾语义 | `ChatRuntimeStreamingBufferTests` 已直接覆盖 `ChatStreamAsync` 的流式 chunk、tool-call follow-up、reasoning 透传；另有 `ToolCallLoopTests` 与 AI tests 辅助覆盖 | 覆盖中等，流式主路径已有直接保护 | 仍缺更贴 reply-chain closeout 的联动表达，建议只补一到两个 closeout 级回归，不要大规模重写测试 | P1 |
+| `ChatRuntime` 多轮流式收尾语义 | `ChatRuntimeStreamingBufferTests` 已直接覆盖 `ChatStreamAsync` 的流式 chunk、tool-call follow-up、reasoning 透传；另有 `ToolCallLoopTests` 与 AI tests 辅助覆盖 | 覆盖中等，流式主路径已有直接保护 | `outer stream` 是否应该把 per-round terminal signal 收口成 single overall terminal chunk 目前仍属目标态问题，不是已接受契约；后续应先定契约，再决定是否补 failing test 或实现改动 | P1 |
 | 新 seam `IChannelLlmReplyRunDispatcher` 的依赖方向 | 现有 architecture/channel guard 已限制“不要直连 NyxIdChatGAgent”，但没有直接锁住这条 seam | 结构护栏缺口明确 | 在 `#637` 增加 architecture test 或 CI guard | P0 |
 
 ## 分文件审计
@@ -193,6 +193,7 @@ branch: test/2026-05-12_lark-bot-reply-chain-regressions
 
 - 当前没有发现明显大洞
 - 若要补，也应只补“新 code path 引入的新 race”，不要做覆盖率型补测
+- 本轮新增的两条回归更接近这个方向：一条锁 `FinalizeAsync` 等待 drain 时 `Dispose()` 不应再把 stashed final flush 发出去；一条锁 deferred flush dispatch 失败后，后续 delta 仍可恢复推进且不重复计数
 
 对应后续：
 
@@ -212,6 +213,7 @@ branch: test/2026-05-12_lark-bot-reply-chain-regressions
 
 - 配置和偏好层面的覆盖不错
 - 但 generator 与 `ToolCallLoop` / `ChatRuntime` 的 closeout 联动还比较少
+- 其中 `ChatRuntime` 的 terminal chunk contract 目前还没有稳定成仓库内共识，不适合在这一层直接写死“single overall terminal chunk”断言；这更像后续需要和研发先对齐的目标态
 
 主要缺口：
 
@@ -258,6 +260,12 @@ branch: test/2026-05-12_lark-bot-reply-chain-regressions
   - 已限制 channel relay/runtime 直连 `NyxIdChatGAgent`
 - `test/Aevatar.Architecture.Tests/Rules/ChannelArchitectureTests.cs`
   - 已限制外部入口绕过 `ConversationGAgent`
+
+新增补强：
+
+- `test/Aevatar.Architecture.Tests/Rules/ChannelArchitectureTests.cs`
+  - 可以补一条直接锁 `ConversationGAgent -> IChannelLlmReplyRunDispatcher` seam 的最小门禁
+  - 但当前更适合先作为 regex / source-text 级最小护栏看待，不应误认为已经升级为 Roslyn / 编译级依赖门禁
 
 当前缺口：
 
