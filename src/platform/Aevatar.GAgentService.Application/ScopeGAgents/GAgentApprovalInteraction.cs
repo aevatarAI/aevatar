@@ -18,13 +18,16 @@ internal sealed class GAgentApprovalCommandTarget
       ICommandDispatchCleanupAware
 {
     private readonly IGAgentDraftRunProjectionPort _projectionPort;
+    private readonly IGAgentRunTerminalProjectionPort _terminalProjectionPort;
 
     public GAgentApprovalCommandTarget(
         IActor actor,
-        IGAgentDraftRunProjectionPort projectionPort)
+        IGAgentDraftRunProjectionPort projectionPort,
+        IGAgentRunTerminalProjectionPort terminalProjectionPort)
     {
         Actor = actor ?? throw new ArgumentNullException(nameof(actor));
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
+        _terminalProjectionPort = terminalProjectionPort ?? throw new ArgumentNullException(nameof(terminalProjectionPort));
     }
 
     public IActor Actor { get; }
@@ -32,7 +35,13 @@ internal sealed class GAgentApprovalCommandTarget
     public string ActorId => Actor.Id;
     public string SessionId { get; private set; } = string.Empty;
     public IGAgentDraftRunProjectionLease? ProjectionLease { get; private set; }
+    public IGAgentRunTerminalProjectionLease? TerminalProjectionLease { get; private set; }
     public IEventSink<AGUIEvent>? LiveSink { get; private set; }
+
+    public void BindTerminalProjection(IGAgentRunTerminalProjectionLease? lease)
+    {
+        TerminalProjectionLease = lease;
+    }
 
     public void BindLiveObservation(
         IGAgentDraftRunProjectionLease lease,
@@ -113,6 +122,20 @@ internal sealed class GAgentApprovalCommandTarget
             }
         }
 
+        var terminalProjectionLease = TerminalProjectionLease;
+        if (terminalProjectionLease != null)
+        {
+            try
+            {
+                await _terminalProjectionPort.ReleaseProjectionAsync(terminalProjectionLease, ct);
+                TerminalProjectionLease = null;
+            }
+            catch (Exception ex)
+            {
+                firstException ??= ex;
+            }
+        }
+
         if (firstException != null)
             ExceptionDispatchInfo.Capture(firstException).Throw();
     }
@@ -123,13 +146,16 @@ internal sealed class GAgentApprovalCommandTargetResolver
 {
     private readonly IActorRuntime _actorRuntime;
     private readonly IGAgentDraftRunProjectionPort _projectionPort;
+    private readonly IGAgentRunTerminalProjectionPort _terminalProjectionPort;
 
     public GAgentApprovalCommandTargetResolver(
         IActorRuntime actorRuntime,
-        IGAgentDraftRunProjectionPort projectionPort)
+        IGAgentDraftRunProjectionPort projectionPort,
+        IGAgentRunTerminalProjectionPort terminalProjectionPort)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
+        _terminalProjectionPort = terminalProjectionPort ?? throw new ArgumentNullException(nameof(terminalProjectionPort));
     }
 
     public async Task<CommandTargetResolution<GAgentApprovalCommandTarget, GAgentApprovalStartError>> ResolveAsync(
@@ -146,7 +172,7 @@ internal sealed class GAgentApprovalCommandTargetResolver
         }
 
         return CommandTargetResolution<GAgentApprovalCommandTarget, GAgentApprovalStartError>.Success(
-            new GAgentApprovalCommandTarget(actor, _projectionPort));
+            new GAgentApprovalCommandTarget(actor, _projectionPort, _terminalProjectionPort));
     }
 }
 
@@ -175,10 +201,16 @@ internal sealed class GAgentApprovalCommandTargetBinder
         ArgumentNullException.ThrowIfNull(context);
 
         var sink = new EventChannel<AGUIEvent>();
+        IGAgentRunTerminalProjectionLease? terminalProjectionLease = null;
 
         try
         {
-            await _terminalProjectionPort.EnsureProjectionAsync(target.ActorId, context.CorrelationId, ct);
+            terminalProjectionLease = await _terminalProjectionPort.EnsureProjectionAsync(
+                target.ActorId,
+                context.CorrelationId,
+                GAgentRunTerminalInteractionKind.Approval,
+                ct);
+            target.BindTerminalProjection(terminalProjectionLease);
 
             var projectionLease = await _projectionPort.EnsureAndAttachAsync(
                 token => _projectionPort.EnsureActorProjectionAsync(
@@ -203,6 +235,12 @@ internal sealed class GAgentApprovalCommandTargetBinder
         }
         catch
         {
+            if (terminalProjectionLease != null)
+            {
+                await _terminalProjectionPort.ReleaseProjectionAsync(terminalProjectionLease, ct);
+                target.BindTerminalProjection(null);
+            }
+
             sink.Complete();
             await sink.DisposeAsync();
             throw;

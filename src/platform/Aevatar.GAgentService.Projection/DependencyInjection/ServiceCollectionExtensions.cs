@@ -86,6 +86,7 @@ public static class ServiceCollectionExtensions
                 RootActorId = scopeKey.RootActorId,
                 ProjectionKind = scopeKey.ProjectionKind,
                 CorrelationId = scopeKey.SessionId,
+                InteractionKind = GAgentRunTerminalProjectionPort.ResolveInteractionKind(scopeKey.ProjectionKind),
             },
             static context => new ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>(context.RootActorId, context));
         services.AddEventSinkProjectionRuntimeCore<

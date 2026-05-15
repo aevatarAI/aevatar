@@ -137,17 +137,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
                     "[{Role}] Approval continuation FAILED. request={RequestId}",
                     RoleName, pending.RequestId);
 
-                // Still clear pending so we don't get stuck
-                try { await PersistDomainEventAsync(new ClearPendingApprovalEvent { RequestId = pending.RequestId }); }
-                catch { /* best effort */ }
-                try
-                {
-                    await PersistApprovalTerminalFailureAsync(
-                        pending,
-                        "approval_continuation_failed",
-                        ex.Message);
-                }
-                catch { /* best effort */ }
+                await TryPersistApprovalTerminalFailureThenClearPendingAsync(
+                    pending,
+                    "approval_continuation_failed",
+                    ex.Message);
 
                 throw; // Re-throw so the SSE endpoint sees the error
             }
@@ -158,8 +151,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         }
         else
         {
-            await PersistDomainEventAsync(new ClearPendingApprovalEvent { RequestId = pending.RequestId });
-            await PersistApprovalTerminalFailureAsync(
+            await PersistApprovalTerminalFailureThenClearPendingAsync(
                 pending,
                 "approval_denied",
                 string.IsNullOrWhiteSpace(evt.Reason)
@@ -190,8 +182,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         {
             Logger.LogWarning("[{Role}] No remote approval handler configured. Clearing pending. request={RequestId}",
                 RoleName, evt.RequestId);
-            await PersistDomainEventAsync(new ClearPendingApprovalEvent { RequestId = pending.RequestId });
-            await PersistApprovalTerminalFailureAsync(
+            await PersistApprovalTerminalFailureThenClearPendingAsync(
                 pending,
                 "approval_timeout",
                 "Tool approval timed out and no remote approval handler is configured.");
@@ -244,9 +235,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             AgentToolRequestContext.CurrentMetadata = prevMetadata;
         }
 
-        // Remote failed/denied/timed out → clear pending
-        await PersistDomainEventAsync(new ClearPendingApprovalEvent { RequestId = pending.RequestId });
-        await PersistApprovalTerminalFailureAsync(
+        // Remote failed/denied/timed out → persist terminal fact before clearing pending.
+        await PersistApprovalTerminalFailureThenClearPendingAsync(
             pending,
             ResolveApprovalTerminalReasonCode(result?.Decision),
             string.IsNullOrWhiteSpace(result?.Reason)
@@ -726,6 +716,52 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             ToolCalls = { ToToolCallEvents(replayRecord.ToolCalls) },
             OutputParts = { ContentPartProtoMapper.ToProtoList(replayRecord.ContentParts) },
         });
+    }
+
+    private async Task PersistApprovalTerminalFailureThenClearPendingAsync(
+        PendingToolApprovalState pending,
+        string reasonCode,
+        string reasonMessage)
+    {
+        await PersistApprovalTerminalFailureAsync(pending, reasonCode, reasonMessage);
+        await PersistDomainEventAsync(new ClearPendingApprovalEvent { RequestId = pending.RequestId });
+    }
+
+    private async Task TryPersistApprovalTerminalFailureThenClearPendingAsync(
+        PendingToolApprovalState pending,
+        string reasonCode,
+        string reasonMessage)
+    {
+        try
+        {
+            await PersistApprovalTerminalFailureAsync(pending, reasonCode, reasonMessage);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(
+                ex,
+                "[{Role}] Failed to persist approval terminal failure. request={RequestId} session={SessionId} reasonCode={ReasonCode}",
+                RoleName,
+                pending.RequestId,
+                pending.SessionId,
+                reasonCode);
+            return;
+        }
+
+        try
+        {
+            await PersistDomainEventAsync(new ClearPendingApprovalEvent { RequestId = pending.RequestId });
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(
+                ex,
+                "[{Role}] Failed to clear pending approval after terminal failure was persisted. request={RequestId} session={SessionId} reasonCode={ReasonCode}",
+                RoleName,
+                pending.RequestId,
+                pending.SessionId,
+                reasonCode);
+        }
     }
 
     private Task PersistApprovalTerminalFailureAsync(

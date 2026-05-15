@@ -40,10 +40,24 @@ public interface IGAgentRunTerminalQueryPort
         CancellationToken ct = default);
 }
 
+public interface IGAgentRunTerminalProjectionLease
+{
+    string ActorId { get; }
+
+    string CorrelationId { get; }
+
+    GAgentRunTerminalInteractionKind InteractionKind { get; }
+}
+
 public interface IGAgentRunTerminalProjectionPort
 {
-    Task EnsureProjectionAsync(
+    Task<IGAgentRunTerminalProjectionLease?> EnsureProjectionAsync(
         string actorId,
         string correlationId,
+        GAgentRunTerminalInteractionKind interactionKind,
+        CancellationToken ct = default);
+
+    Task ReleaseProjectionAsync(
+        IGAgentRunTerminalProjectionLease lease,
         CancellationToken ct = default);
 }

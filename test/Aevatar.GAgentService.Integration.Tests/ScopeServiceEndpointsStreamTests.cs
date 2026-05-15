@@ -701,7 +701,8 @@ public sealed class ScopeServiceEndpointsStreamTests
         var pipeline = new DefaultCommandDispatchPipeline<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError>(
             new GAgentDraftRunCommandTargetResolver(
                 runtime,
-                projectionPort),
+                projectionPort,
+                new StubGAgentRunTerminalProjectionPort()),
             new DefaultCommandContextPolicy(),
             new GAgentDraftRunCommandTargetBinder(
                 projectionPort,
@@ -839,17 +840,31 @@ public sealed class ScopeServiceEndpointsStreamTests
 
     private sealed class StubGAgentRunTerminalProjectionPort : IGAgentRunTerminalProjectionPort
     {
-        public Task EnsureProjectionAsync(
+        public Task<IGAgentRunTerminalProjectionLease?> EnsureProjectionAsync(
             string actorId,
             string correlationId,
+            GAgentRunTerminalInteractionKind interactionKind,
             CancellationToken ct = default)
         {
-            _ = actorId;
-            _ = correlationId;
+            _ = ct;
+            return Task.FromResult<IGAgentRunTerminalProjectionLease?>(
+                new StubGAgentRunTerminalProjectionLease(actorId, correlationId, interactionKind));
+        }
+
+        public Task ReleaseProjectionAsync(
+            IGAgentRunTerminalProjectionLease lease,
+            CancellationToken ct = default)
+        {
+            _ = lease;
             _ = ct;
             return Task.CompletedTask;
         }
     }
+
+    private sealed record StubGAgentRunTerminalProjectionLease(
+        string ActorId,
+        string CorrelationId,
+        GAgentRunTerminalInteractionKind InteractionKind) : IGAgentRunTerminalProjectionLease;
 
     private sealed class StubGAgentRunTerminalQueryPort : IGAgentRunTerminalQueryPort
     {

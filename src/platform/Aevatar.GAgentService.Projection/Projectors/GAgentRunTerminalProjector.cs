@@ -66,7 +66,7 @@ public sealed class GAgentRunTerminalProjector
             LastEventId = eventId,
             SessionId = completed.SessionId,
             CorrelationId = correlationId,
-            InteractionKind = (int)ResolveInteractionKind(completed.SessionId, correlationId),
+            InteractionKind = (int)context.InteractionKind,
             Status = (int)status,
             ReasonCode = reasonCode,
             ReasonMessage = reasonMessage,
@@ -82,14 +82,6 @@ public sealed class GAgentRunTerminalProjector
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         return $"gagent-run-terminal:{actorId}:{key}";
     }
-
-    private static GAgentRunTerminalInteractionKind ResolveInteractionKind(
-        string sessionId,
-        string correlationId) =>
-        string.IsNullOrWhiteSpace(correlationId) ||
-        string.Equals(sessionId, correlationId, StringComparison.Ordinal)
-            ? GAgentRunTerminalInteractionKind.DraftRun
-            : GAgentRunTerminalInteractionKind.Approval;
 
     private static (GAgentRunTerminalStatus status, string reasonCode, string reasonMessage) ResolveTerminal(
         RoleChatSessionCompletedEvent completed)

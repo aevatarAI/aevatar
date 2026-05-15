@@ -58,7 +58,7 @@ public sealed class GAgentRunTerminalProjectorTests
             new FixedProjectionClock(DateTimeOffset.Parse("2026-05-14T00:00:00+00:00")));
 
         await projector.ProjectAsync(
-            CreateContext("actor-1", "corr-approval"),
+            CreateContext("actor-1", "corr-approval", GAgentRunTerminalInteractionKind.Approval),
             WrapCommitted(
                 new RoleChatSessionCompletedEvent
                 {
@@ -87,7 +87,7 @@ public sealed class GAgentRunTerminalProjectorTests
             new FixedProjectionClock(DateTimeOffset.Parse("2026-05-14T00:00:00+00:00")));
 
         await projector.ProjectAsync(
-            CreateContext("actor-1", "corr-approval"),
+            CreateContext("actor-1", "corr-approval", GAgentRunTerminalInteractionKind.Approval),
             WrapCommitted(
                 new RoleChatSessionCompletedEvent
                 {
@@ -104,6 +104,80 @@ public sealed class GAgentRunTerminalProjectorTests
         doc!.Status.Should().Be((int)GAgentRunTerminalStatus.Failed);
         doc.ReasonCode.Should().Be("approval_denied");
         doc.ReasonMessage.Should().Be("User said no.");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldKeepDraftRunKind_WhenExplicitSessionDiffersFromCorrelation()
+    {
+        var store = new RecordingDocumentStore<GAgentRunTerminalReadModel>(x => x.Id);
+        var projector = new GAgentRunTerminalProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-05-14T00:00:00+00:00")));
+
+        await projector.ProjectAsync(
+            CreateContext("actor-1", "corr-1", GAgentRunTerminalInteractionKind.DraftRun),
+            WrapCommitted(
+                new RoleChatSessionCompletedEvent
+                {
+                    SessionId = "explicit-session-1",
+                    Content = "done",
+                    ContentEmitted = true,
+                },
+                stateVersion: 5,
+                eventId: "evt-explicit-session",
+                correlationId: "corr-1",
+                observedAt: DateTimeOffset.Parse("2026-05-14T01:00:00+00:00")));
+
+        var doc = await store.GetAsync(GAgentRunTerminalProjector.BuildDocumentId("actor-1", "corr-1"));
+        doc.Should().NotBeNull();
+        doc!.SessionId.Should().Be("explicit-session-1");
+        doc.CorrelationId.Should().Be("corr-1");
+        doc.InteractionKind.Should().Be((int)GAgentRunTerminalInteractionKind.DraftRun);
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldNotOverwriteNewerReadModel_WithOlderStateVersion()
+    {
+        var store = new RecordingDocumentStore<GAgentRunTerminalReadModel>(x => x.Id)
+        {
+            EnforceMonotonicWrites = true,
+        };
+        var projector = new GAgentRunTerminalProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-05-14T00:00:00+00:00")));
+
+        await projector.ProjectAsync(
+            CreateContext("actor-1", "corr-1"),
+            WrapCommitted(
+                new RoleChatSessionCompletedEvent
+                {
+                    SessionId = "corr-1",
+                    Content = "newer",
+                    ContentEmitted = true,
+                },
+                stateVersion: 6,
+                eventId: "evt-newer",
+                correlationId: "corr-1",
+                observedAt: DateTimeOffset.Parse("2026-05-14T02:00:00+00:00")));
+        await projector.ProjectAsync(
+            CreateContext("actor-1", "corr-1"),
+            WrapCommitted(
+                new RoleChatSessionCompletedEvent
+                {
+                    SessionId = "corr-1",
+                    Content = "older",
+                    ContentEmitted = true,
+                },
+                stateVersion: 5,
+                eventId: "evt-older",
+                correlationId: "corr-1",
+                observedAt: DateTimeOffset.Parse("2026-05-14T01:00:00+00:00")));
+
+        var doc = await store.GetAsync(GAgentRunTerminalProjector.BuildDocumentId("actor-1", "corr-1"));
+        doc.Should().NotBeNull();
+        doc!.StateVersion.Should().Be(6);
+        doc.LastEventId.Should().Be("evt-newer");
+        doc.ObservedAt.Should().Be(DateTimeOffset.Parse("2026-05-14T02:00:00+00:00"));
     }
 
     [Fact]
@@ -189,12 +263,16 @@ public sealed class GAgentRunTerminalProjectorTests
 
     private static GAgentRunTerminalProjectionContext CreateContext(
         string actorId,
-        string correlationId = "corr-1") =>
+        string correlationId = "corr-1",
+        GAgentRunTerminalInteractionKind interactionKind = GAgentRunTerminalInteractionKind.DraftRun) =>
         new()
         {
             RootActorId = actorId,
-            ProjectionKind = "gagent-run-terminal",
+            ProjectionKind = interactionKind == GAgentRunTerminalInteractionKind.Approval
+                ? "gagent-run-terminal-approval"
+                : "gagent-run-terminal-draft-run",
             CorrelationId = correlationId,
+            InteractionKind = interactionKind,
         };
 
     private static EventEnvelope WrapCommitted(

@@ -6,6 +6,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.GAgentService.Projection.Contexts;
@@ -96,6 +97,50 @@ public sealed class ServiceProjectionInfrastructureTests
 
         catalogActivation.Calls.Should().BeEmpty();
         revisionActivation.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GAgentRunTerminalProjectionPort_ShouldActivateAndReleaseByInteractionKind()
+    {
+        var activationService = new RecordingProjectionActivationService<GAgentRunTerminalProjectionContext>(
+            static (rootActorId, projectionName) => new GAgentRunTerminalProjectionContext
+            {
+                RootActorId = rootActorId,
+                ProjectionKind = projectionName,
+                CorrelationId = "corr-1",
+                InteractionKind = GAgentRunTerminalProjectionPort.ResolveInteractionKind(projectionName),
+            });
+        var releaseService = new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>();
+        IGAgentRunTerminalProjectionPort service = new GAgentRunTerminalProjectionPort(
+            new ServiceProjectionOptions(),
+            activationService,
+            releaseService);
+
+        var draftLease = await service.EnsureProjectionAsync(
+            "actor-1",
+            "corr-1",
+            GAgentRunTerminalInteractionKind.DraftRun);
+        var approvalLease = await service.EnsureProjectionAsync(
+            "actor-1",
+            "corr-2",
+            GAgentRunTerminalInteractionKind.Approval);
+
+        draftLease.Should().NotBeNull();
+        draftLease!.InteractionKind.Should().Be(GAgentRunTerminalInteractionKind.DraftRun);
+        approvalLease.Should().NotBeNull();
+        approvalLease!.InteractionKind.Should().Be(GAgentRunTerminalInteractionKind.Approval);
+        activationService.Requests.Should().Contain(x =>
+            x.RootActorId == "actor-1" &&
+            x.SessionId == "corr-1" &&
+            x.ProjectionKind == "gagent-run-terminal-draft-run");
+        activationService.Requests.Should().Contain(x =>
+            x.RootActorId == "actor-1" &&
+            x.SessionId == "corr-2" &&
+            x.ProjectionKind == "gagent-run-terminal-approval");
+
+        await service.ReleaseProjectionAsync(draftLease);
+
+        releaseService.Released.Should().ContainSingle();
     }
 
     [Fact]
