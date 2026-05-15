@@ -59,7 +59,6 @@ export function buildRuntimeRunsHref(options?: {
   payloadTypeUrl?: string;
   payloadBase64?: string;
   actorId?: string;
-  runId?: string;
   draftKey?: string;
   returnTo?: string;
 }): string {
