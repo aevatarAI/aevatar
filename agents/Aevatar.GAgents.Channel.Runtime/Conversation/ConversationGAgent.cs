@@ -73,6 +73,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             .On<ConversationContinueRejectedEvent>(ApplyContinueRejected)
             .On<ConversationContinueFailedEvent>(ApplyContinueFailed)
             .On<InboundTurnRetryScheduledEvent>(ApplyInboundTurnRetryScheduled)
+            .On<LlmReplyDeliveredEvent>(ApplyLastReplyDelivered)
+            .On<LlmReplyDeliveryFailedEvent>(ApplyLastReplyDeliveryFailed)
             .OrCurrent();
 
     /// <summary>
@@ -282,6 +284,19 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
     {
         ArgumentNullException.ThrowIfNull(evt);
 
+        // ADR-0021 §6 / canon §9 absorbing-finalized: a late drop notification for an
+        // already-finalized turn (e.g. the run actor's terminal-cleanup callback fires
+        // after a successful reply already landed) must no-op rather than overwrite the
+        // turn outcome with a synthetic ConversationContinueFailedEvent.
+        if (IsLlmReplyTurnFinalized(evt.CorrelationId))
+        {
+            Logger.LogDebug(
+                "Ignoring deferred LLM reply drop for already-finalized turn: correlation={CorrelationId} reason={Reason}",
+                evt.CorrelationId,
+                evt.Reason);
+            return;
+        }
+
         var pending = FindPendingLlmReplyRequest(evt.CorrelationId);
         if (pending is null)
         {
@@ -365,12 +380,18 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
 
         try
         {
-            await dispatcher.DispatchAsync(enriched.Clone(), ct);
+            var outcome = await dispatcher.DispatchAsync(enriched.Clone(), ct);
             Logger.LogInformation(
-                "Dispatched LLM reply run request: correlation={CorrelationId} conversation={Key} replyTokenSource={Source}",
+                "Dispatched LLM reply run request: correlation={CorrelationId} conversation={Key} replyTokenSource={Source} phase={Phase} commandId={CommandId}",
                 enriched.CorrelationId,
                 enriched.Activity?.Conversation?.CanonicalKey,
-                DescribeDispatchedReplyTokenSource(request, enriched));
+                DescribeDispatchedReplyTokenSource(request, enriched),
+                outcome.Phase,
+                outcome.CommandId);
+            // C3 will branch on outcome.Phase to retire the pending entry on
+            // Rejected* outcomes. Today the run actor inbox handler drops
+            // stale requests and surfaces them through DeferredLlmReplyDroppedEvent,
+            // so behaviour is preserved either way.
         }
         catch (Exception ex)
         {
@@ -425,7 +446,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
 
         var commandId = BuildLlmReplyCommandId(evt.CorrelationId);
         var pendingRequest = FindPendingLlmReplyRequest(evt.CorrelationId);
-        if (State.ProcessedCommandIds.Contains(commandId))
+        if (IsLlmReplyTurnFinalized(evt.CorrelationId))
         {
             Logger.LogInformation(
                 "Duplicate LLM reply ready event {CorrelationId} (conversation={Key}); skipping outbound",
@@ -474,6 +495,18 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 CompletedAtUnixMs = nowMs,
                 OutboundDelivery = ToOutboundDeliveryReceipt(result.OutboundDelivery),
             };
+            // ADR-0021 chain.delivered observable: persist the user-visible delivery ack
+            // before the turn-completed summary event so readers do not need to infer
+            // delivery status from the channel sink return code, and so existing
+            // "events.Last() is turn-completed" consumers stay correct.
+            var delivered = new LlmReplyDeliveredEvent
+            {
+                CorrelationId = evt.CorrelationId ?? string.Empty,
+                RunId = evt.CorrelationId ?? string.Empty,
+                AckedAtUnixMs = nowMs,
+                ChannelMessageId = result.OutboundDelivery?.ReplyMessageId ?? string.Empty,
+            };
+            await PersistDomainEventAsync(delivered);
             await PersistDomainEventAsync(completed);
             RemoveNyxRelayReplyToken(evt.CorrelationId, pendingRequest?.Activity ?? evt.Activity);
             Logger.LogInformation(
@@ -495,6 +528,18 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             FailedAtUnixMs = nowMs,
         };
         AssignRetryPolicy(failed, result);
+        // ADR-0021 chain.delivered failure observable: structured delivery failure persists
+        // before the chain-finalizing failure event so existing "events.Last() is
+        // ConversationContinueFailedEvent" consumers stay correct.
+        var deliveryFailed = new LlmReplyDeliveryFailedEvent
+        {
+            CorrelationId = evt.CorrelationId ?? string.Empty,
+            RunId = evt.CorrelationId ?? string.Empty,
+            FailedAtUnixMs = nowMs,
+            ErrorCode = result.ErrorCode ?? string.Empty,
+            ErrorMessage = result.ErrorSummary ?? string.Empty,
+        };
+        await PersistDomainEventAsync(deliveryFailed);
         await PersistDomainEventAsync(failed);
         SweepExpiredNyxRelayReplyTokens();
         if (failed.RetryPolicyCase == ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable)
@@ -556,7 +601,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             return;
         }
 
-        if (State.ProcessedCommandIds.Contains(BuildLlmReplyCommandId(evt.CorrelationId)))
+        if (IsLlmReplyTurnFinalized(evt.CorrelationId))
         {
             // Turn already finalized; drop any late chunk that sneaks in via the actor inbox.
             return;
@@ -593,7 +638,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             return;
         }
 
-        if (State.ProcessedCommandIds.Contains(BuildLlmReplyCommandId(evt.CorrelationId)))
+        if (IsLlmReplyTurnFinalized(evt.CorrelationId))
         {
             // Turn already finalized; drop any late chunk that sneaks in via the actor inbox.
             return;
@@ -858,6 +903,19 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             CompletedAtUnixMs = nowMs,
             OutboundDelivery = ToOutboundDeliveryReceipt(evt.Activity?.OutboundDelivery),
         };
+        // ADR-0021 chain.delivered observable: the streaming path always reaches this
+        // function with a user-visible placeholder message id (any partial / full /
+        // failure-self-heal text the user actually saw). Persist a Delivered event
+        // BEFORE the turn-completed summary so "events.Last() is turn-completed"
+        // consumers keep working.
+        var delivered = new LlmReplyDeliveredEvent
+        {
+            CorrelationId = evt.CorrelationId ?? string.Empty,
+            RunId = evt.CorrelationId ?? string.Empty,
+            AckedAtUnixMs = nowMs,
+            ChannelMessageId = $"nyx-relay-stream:{platformMessageId}",
+        };
+        await PersistDomainEventAsync(delivered);
         await PersistDomainEventAsync(completed);
         RemoveNyxRelayReplyToken(evt.CorrelationId, referenceActivity);
         Logger.LogInformation(
@@ -975,6 +1033,14 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
 
     private static string BuildLlmReplyCommandId(string? correlationId) =>
         $"llm:{correlationId?.Trim() ?? string.Empty}";
+
+    // ADR-0021 §6 / canon §9 — single source of truth for "this LLM reply turn is
+    // already finalized". Every reply-ready / dropped / streaming-chunk handler entry
+    // uses this so late or duplicate signals uniformly no-op. The dedup key is the
+    // `llm:<correlationId>` form appended to ProcessedCommandIds by
+    // ApplyTurnCompleted / ApplyContinueFailed when the turn reaches chain.finalized.
+    private bool IsLlmReplyTurnFinalized(string? correlationId) =>
+        State.ProcessedCommandIds.Contains(BuildLlmReplyCommandId(correlationId));
 
     private static string BuildDeferredLlmReplyCallbackId(string? correlationId) =>
         $"conversation-llm-dispatch:{correlationId?.Trim() ?? string.Empty}";
@@ -1353,6 +1419,47 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             RemovePendingInboundTurn(next.PendingInboundTurns, evt.CorrelationId);
         }
         next.LastUpdatedUnixMs = evt.FailedAtUnixMs;
+        return next;
+    }
+
+    // ADR-0021 chain.delivered observable: user-visible delivery succeeded via the channel sink.
+    private static ConversationGAgentState ApplyLastReplyDelivered(
+        ConversationGAgentState current,
+        LlmReplyDeliveredEvent evt)
+    {
+        var next = current.Clone();
+        next.LastReplyDelivery = new ReplyDeliveryStatus
+        {
+            RunId = evt.RunId ?? string.Empty,
+            Delivered = new ReplyDeliveryStatus.Types.Delivered
+            {
+                AckedAtUnixMs = evt.AckedAtUnixMs,
+                ChannelMessageId = evt.ChannelMessageId ?? string.Empty,
+            },
+        };
+        if (evt.AckedAtUnixMs > 0)
+            next.LastUpdatedUnixMs = evt.AckedAtUnixMs;
+        return next;
+    }
+
+    // ADR-0021 chain.delivered failure observable: channel sink rejected the reply (4xx/5xx/timeout).
+    private static ConversationGAgentState ApplyLastReplyDeliveryFailed(
+        ConversationGAgentState current,
+        LlmReplyDeliveryFailedEvent evt)
+    {
+        var next = current.Clone();
+        next.LastReplyDelivery = new ReplyDeliveryStatus
+        {
+            RunId = evt.RunId ?? string.Empty,
+            Failed = new ReplyDeliveryStatus.Types.DeliveryFailed
+            {
+                FailedAtUnixMs = evt.FailedAtUnixMs,
+                ErrorCode = evt.ErrorCode ?? string.Empty,
+                ErrorMessage = evt.ErrorMessage ?? string.Empty,
+            },
+        };
+        if (evt.FailedAtUnixMs > 0)
+            next.LastUpdatedUnixMs = evt.FailedAtUnixMs;
         return next;
     }
 

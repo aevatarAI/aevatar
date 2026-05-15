@@ -8,14 +8,14 @@ using Aevatar.GAgentService.Projection.ReadModels;
 
 namespace Aevatar.GAgentService.Projection.Projectors;
 
-public sealed class ResponseSessionCurrentStateProjector
-    : ICurrentStateProjectionMaterializer<ResponseSessionCurrentStateProjectionContext>
+public sealed class LlmSessionCurrentStateProjector
+    : ICurrentStateProjectionMaterializer<LlmSessionCurrentStateProjectionContext>
 {
-    private readonly IProjectionWriteDispatcher<ResponseSessionCurrentStateReadModel> _writeDispatcher;
+    private readonly IProjectionWriteDispatcher<LlmSessionCurrentStateReadModel> _writeDispatcher;
     private readonly IProjectionClock _clock;
 
-    public ResponseSessionCurrentStateProjector(
-        IProjectionWriteDispatcher<ResponseSessionCurrentStateReadModel> writeDispatcher,
+    public LlmSessionCurrentStateProjector(
+        IProjectionWriteDispatcher<LlmSessionCurrentStateReadModel> writeDispatcher,
         IProjectionClock clock)
     {
         _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
@@ -23,11 +23,11 @@ public sealed class ResponseSessionCurrentStateProjector
     }
 
     public async ValueTask ProjectAsync(
-        ResponseSessionCurrentStateProjectionContext context,
+        LlmSessionCurrentStateProjectionContext context,
         EventEnvelope envelope,
         CancellationToken ct = default)
     {
-        if (!CommittedStateEventEnvelope.TryUnpackState<ResponseSessionState>(
+        if (!CommittedStateEventEnvelope.TryUnpackState<LlmSessionState>(
                 envelope,
                 out _,
                 out var stateEvent,
@@ -50,9 +50,9 @@ public sealed class ResponseSessionCurrentStateProjector
         var updatedAt = record.UpdatedAt?.ToDateTimeOffset()
                         ?? record.CreatedAt?.ToDateTimeOffset()
                         ?? observedAt;
-        var document = new ResponseSessionCurrentStateReadModel
+        var document = new LlmSessionCurrentStateReadModel
         {
-            Id = ResponseSessionIds.BuildKey(record.ResponseId),
+            Id = LlmSessionIds.BuildKey(record.ResponseId),
             ActorId = context.RootActorId,
             ResponseId = record.ResponseId,
             ScopeId = record.ScopeId ?? string.Empty,
@@ -68,7 +68,7 @@ public sealed class ResponseSessionCurrentStateProjector
             LastEventId = stateEvent.EventId ?? string.Empty,
         };
         document.ForwardedToolCalls = state.ForwardedToolCalls
-            .Select(static call => new ResponseSessionForwardedToolCallReadModel
+            .Select(static call => new LlmSessionForwardedToolCallReadModel
             {
                 CallId = call.CallId ?? string.Empty,
                 ToolName = call.ToolName ?? string.Empty,

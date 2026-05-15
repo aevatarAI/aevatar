@@ -7,11 +7,11 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Core.GAgents;
 
-public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
+public sealed class LlmSessionGAgent : GAgentBase<LlmSessionState>
 {
     private static readonly Duration DefaultTtl = Duration.FromTimeSpan(TimeSpan.FromHours(24));
 
-    public ResponseSessionGAgent()
+    public LlmSessionGAgent()
     {
         InitializeId();
     }
@@ -32,7 +32,7 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
             return;
         }
 
-        await PersistDomainEventAsync(new ResponseSessionRegisteredEvent
+        await PersistDomainEventAsync(new LlmSessionRegisteredEvent
         {
             Record = record,
         });
@@ -58,7 +58,7 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
                 $"Response session actor '{Id}' is bound to response '{existing.ResponseId}' and cannot update response '{responseId}'.");
         }
 
-        if (command.Status == ResponseSessionStatus.Unspecified)
+        if (command.Status == LlmSessionStatus.Unspecified)
             return;
 
         if (existing.Status == command.Status)
@@ -74,7 +74,7 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
                 $"Response session '{existing.ResponseId}' is {existing.Status} and cannot transition to {command.Status}.");
         }
 
-        await PersistDomainEventAsync(new ResponseSessionStatusUpdatedEvent
+        await PersistDomainEventAsync(new LlmSessionStatusUpdatedEvent
         {
             ResponseId = existing.ResponseId,
             Status = command.Status,
@@ -99,10 +99,10 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
             return;
         }
 
-        await PersistDomainEventAsync(new ResponseSessionStatusUpdatedEvent
+        await PersistDomainEventAsync(new LlmSessionStatusUpdatedEvent
         {
             ResponseId = existing.ResponseId,
-            Status = ResponseSessionStatus.Expired,
+            Status = LlmSessionStatus.Expired,
             UpdatedAt = Timestamp.FromDateTimeOffset(observedAt),
         });
     }
@@ -131,7 +131,7 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
             return;
         }
 
-        await PersistDomainEventAsync(new ResponseSessionForwardedToolCallEmittedEvent
+        await PersistDomainEventAsync(new LlmSessionForwardedToolCallEmittedEvent
         {
             ResponseId = existing.ResponseId,
             Call = call,
@@ -165,20 +165,20 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
                 $"Forwarded tool call '{callId}' schema hash mismatch.");
         }
 
-        if (existingCall.Status is ResponseSessionForwardedToolCallStatus.Received
-            or ResponseSessionForwardedToolCallStatus.Resolved)
+        if (existingCall.Status is LlmSessionForwardedToolCallStatus.Received
+            or LlmSessionForwardedToolCallStatus.Resolved)
         {
             return;
         }
 
-        if (existingCall.Status is ResponseSessionForwardedToolCallStatus.Cancelled
-            or ResponseSessionForwardedToolCallStatus.Expired)
+        if (existingCall.Status is LlmSessionForwardedToolCallStatus.Cancelled
+            or LlmSessionForwardedToolCallStatus.Expired)
         {
             throw new InvalidOperationException(
                 $"Forwarded tool call '{callId}' is {existingCall.Status} and cannot receive a result.");
         }
 
-        await PersistDomainEventAsync(new ResponseSessionForwardedToolResultReceivedEvent
+        await PersistDomainEventAsync(new LlmSessionForwardedToolResultReceivedEvent
         {
             ResponseId = existing.ResponseId,
             CallId = callId,
@@ -203,16 +203,16 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
                 $"Response session '{existing.ResponseId}' has no forwarded tool call '{callId}'.");
         }
 
-        if (existingCall.Status == ResponseSessionForwardedToolCallStatus.Resolved)
+        if (existingCall.Status == LlmSessionForwardedToolCallStatus.Resolved)
             return;
 
-        if (existingCall.Status != ResponseSessionForwardedToolCallStatus.Received)
+        if (existingCall.Status != LlmSessionForwardedToolCallStatus.Received)
         {
             throw new InvalidOperationException(
                 $"Forwarded tool call '{callId}' is {existingCall.Status} and cannot be resolved.");
         }
 
-        await PersistDomainEventAsync(new ResponseSessionForwardedToolCallResolvedEvent
+        await PersistDomainEventAsync(new LlmSessionForwardedToolCallResolvedEvent
         {
             ResponseId = existing.ResponseId,
             CallId = callId,
@@ -220,45 +220,45 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
         });
     }
 
-    protected override ResponseSessionState TransitionState(ResponseSessionState current, IMessage evt) =>
+    protected override LlmSessionState TransitionState(LlmSessionState current, IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)
-            .On<ResponseSessionRegisteredEvent>(ApplyRegistered)
-            .On<ResponseSessionStatusUpdatedEvent>(ApplyStatusUpdated)
-            .On<ResponseSessionForwardedToolCallEmittedEvent>(ApplyForwardedToolCallEmitted)
-            .On<ResponseSessionForwardedToolResultReceivedEvent>(ApplyForwardedToolResultReceived)
-            .On<ResponseSessionForwardedToolCallResolvedEvent>(ApplyForwardedToolCallResolved)
+            .On<LlmSessionRegisteredEvent>(ApplyRegistered)
+            .On<LlmSessionStatusUpdatedEvent>(ApplyStatusUpdated)
+            .On<LlmSessionForwardedToolCallEmittedEvent>(ApplyForwardedToolCallEmitted)
+            .On<LlmSessionForwardedToolResultReceivedEvent>(ApplyForwardedToolResultReceived)
+            .On<LlmSessionForwardedToolCallResolvedEvent>(ApplyForwardedToolCallResolved)
             .OrCurrent();
 
-    private static ResponseSessionState ApplyRegistered(
-        ResponseSessionState state,
-        ResponseSessionRegisteredEvent evt)
+    private static LlmSessionState ApplyRegistered(
+        LlmSessionState state,
+        LlmSessionRegisteredEvent evt)
     {
         var next = state.Clone();
-        next.Record = evt.Record?.Clone() ?? new ResponseSessionRecord();
+        next.Record = evt.Record?.Clone() ?? new LlmSessionRecord();
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = $"{next.Record.ResponseId}:registered";
         return next;
     }
 
-    private static ResponseSessionState ApplyStatusUpdated(
-        ResponseSessionState state,
-        ResponseSessionStatusUpdatedEvent evt)
+    private static LlmSessionState ApplyStatusUpdated(
+        LlmSessionState state,
+        LlmSessionStatusUpdatedEvent evt)
     {
         var next = state.Clone();
         if (next.Record == null)
-            next.Record = new ResponseSessionRecord();
+            next.Record = new LlmSessionRecord();
 
         next.Record.Status = evt.Status;
         next.Record.UpdatedAt = evt.UpdatedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
-        if (evt.Status == ResponseSessionStatus.Cancelled)
+        if (evt.Status == LlmSessionStatus.Cancelled)
         {
             next.Record.CancelledAt = next.Record.UpdatedAt.Clone();
-            MarkOpenToolCalls(next, ResponseSessionForwardedToolCallStatus.Cancelled);
+            MarkOpenToolCalls(next, LlmSessionForwardedToolCallStatus.Cancelled);
         }
-        else if (evt.Status == ResponseSessionStatus.Expired)
+        else if (evt.Status == LlmSessionStatus.Expired)
         {
-            MarkOpenToolCalls(next, ResponseSessionForwardedToolCallStatus.Expired);
+            MarkOpenToolCalls(next, LlmSessionForwardedToolCallStatus.Expired);
         }
 
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
@@ -266,9 +266,9 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
         return next;
     }
 
-    private static ResponseSessionState ApplyForwardedToolCallEmitted(
-        ResponseSessionState state,
-        ResponseSessionForwardedToolCallEmittedEvent evt)
+    private static LlmSessionState ApplyForwardedToolCallEmitted(
+        LlmSessionState state,
+        LlmSessionForwardedToolCallEmittedEvent evt)
     {
         var next = state.Clone();
         if (evt.Call != null)
@@ -278,16 +278,16 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
         return next;
     }
 
-    private static ResponseSessionState ApplyForwardedToolResultReceived(
-        ResponseSessionState state,
-        ResponseSessionForwardedToolResultReceivedEvent evt)
+    private static LlmSessionState ApplyForwardedToolResultReceived(
+        LlmSessionState state,
+        LlmSessionForwardedToolResultReceivedEvent evt)
     {
         var next = state.Clone();
         var call = next.ForwardedToolCalls
             .FirstOrDefault(x => string.Equals(x.CallId, evt.CallId, StringComparison.Ordinal));
         if (call != null)
         {
-            call.Status = ResponseSessionForwardedToolCallStatus.Received;
+            call.Status = LlmSessionForwardedToolCallStatus.Received;
             call.Result = evt.Result?.Clone();
             call.ReceivedAt = evt.ReceivedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
         }
@@ -297,16 +297,16 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
         return next;
     }
 
-    private static ResponseSessionState ApplyForwardedToolCallResolved(
-        ResponseSessionState state,
-        ResponseSessionForwardedToolCallResolvedEvent evt)
+    private static LlmSessionState ApplyForwardedToolCallResolved(
+        LlmSessionState state,
+        LlmSessionForwardedToolCallResolvedEvent evt)
     {
         var next = state.Clone();
         var call = next.ForwardedToolCalls
             .FirstOrDefault(x => string.Equals(x.CallId, evt.CallId, StringComparison.Ordinal));
         if (call != null)
         {
-            call.Status = ResponseSessionForwardedToolCallStatus.Resolved;
+            call.Status = LlmSessionForwardedToolCallStatus.Resolved;
             call.ResolvedAt = evt.ResolvedAt ?? Timestamp.FromDateTime(DateTime.UtcNow);
         }
 
@@ -315,7 +315,7 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
         return next;
     }
 
-    private static ResponseSessionRecord NormalizeRecord(ResponseSessionRecord record)
+    private static LlmSessionRecord NormalizeRecord(LlmSessionRecord record)
     {
         record.ResponseId = NormalizeRequired(record.ResponseId);
         record.ScopeId = NormalizeRequired(record.ScopeId);
@@ -327,12 +327,12 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
             record.UpdatedAt = record.CreatedAt.Clone();
         if (record.Ttl == null)
             record.Ttl = DefaultTtl.Clone();
-        if (record.Status == ResponseSessionStatus.Unspecified)
-            record.Status = ResponseSessionStatus.Accepted;
+        if (record.Status == LlmSessionStatus.Unspecified)
+            record.Status = LlmSessionStatus.Accepted;
         return record;
     }
 
-    private static void ValidateRecord(ResponseSessionRecord record)
+    private static void ValidateRecord(LlmSessionRecord record)
     {
         if (string.IsNullOrWhiteSpace(record.ResponseId))
             throw new InvalidOperationException("response_id is required.");
@@ -340,13 +340,13 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
             throw new InvalidOperationException("scope_id is required.");
         if (string.IsNullOrWhiteSpace(record.OwnerSubject))
             throw new InvalidOperationException("owner_subject is required.");
-        if (record.OriginKind == ResponseSessionOriginKind.Unspecified)
+        if (record.OriginKind == LlmSessionOriginKind.Unspecified)
             throw new InvalidOperationException("origin_kind is required.");
         if (record.Ttl == null || record.Ttl.ToTimeSpan() <= TimeSpan.Zero)
             throw new InvalidOperationException("ttl must be greater than zero.");
     }
 
-    private ResponseSessionRecord EnsureRegisteredSession(string? responseId)
+    private LlmSessionRecord EnsureRegisteredSession(string? responseId)
     {
         var existing = State.Record;
         if (existing == null || string.IsNullOrWhiteSpace(existing.ResponseId))
@@ -365,13 +365,13 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
         return existing;
     }
 
-    private static ResponseSessionForwardedToolCall NormalizeToolCall(ResponseSessionForwardedToolCall call)
+    private static LlmSessionForwardedToolCall NormalizeToolCall(LlmSessionForwardedToolCall call)
     {
         call.CallId = NormalizeRequired(call.CallId);
         call.ToolName = NormalizeRequired(call.ToolName);
         call.SchemaHash = NormalizeRequired(call.SchemaHash);
-        if (call.Status == ResponseSessionForwardedToolCallStatus.Unspecified)
-            call.Status = ResponseSessionForwardedToolCallStatus.Pending;
+        if (call.Status == LlmSessionForwardedToolCallStatus.Unspecified)
+            call.Status = LlmSessionForwardedToolCallStatus.Pending;
         if (call.EmittedAt == null)
             call.EmittedAt = Timestamp.FromDateTime(DateTime.UtcNow);
         if (call.Expiry == null)
@@ -379,7 +379,7 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
         return call;
     }
 
-    private static void ValidateToolCall(ResponseSessionForwardedToolCall call)
+    private static void ValidateToolCall(LlmSessionForwardedToolCall call)
     {
         if (string.IsNullOrWhiteSpace(call.CallId))
             throw new InvalidOperationException("call_id is required.");
@@ -387,15 +387,15 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
             throw new InvalidOperationException("tool_name is required.");
         if (string.IsNullOrWhiteSpace(call.SchemaHash))
             throw new InvalidOperationException("schema_hash is required.");
-        if (call.Status != ResponseSessionForwardedToolCallStatus.Pending)
+        if (call.Status != LlmSessionForwardedToolCallStatus.Pending)
             throw new InvalidOperationException("forwarded tool calls must start as pending.");
         if (call.Expiry == null)
             throw new InvalidOperationException("expiry is required.");
     }
 
     private static void EnsureExistingMatches(
-        ResponseSessionRecord existing,
-        ResponseSessionRecord incoming)
+        LlmSessionRecord existing,
+        LlmSessionRecord incoming)
     {
         if (!string.Equals(existing.ResponseId, incoming.ResponseId, StringComparison.Ordinal))
             throw new InvalidOperationException(
@@ -430,8 +430,8 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
     }
 
     private static void EnsureExistingToolCallMatches(
-        ResponseSessionForwardedToolCall existing,
-        ResponseSessionForwardedToolCall incoming)
+        LlmSessionForwardedToolCall existing,
+        LlmSessionForwardedToolCall incoming)
     {
         if (!string.Equals(existing.ToolName, incoming.ToolName, StringComparison.Ordinal) ||
             !string.Equals(existing.SchemaHash, incoming.SchemaHash, StringComparison.Ordinal) ||
@@ -443,16 +443,16 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
     }
 
     private static void MarkOpenToolCalls(
-        ResponseSessionState state,
-        ResponseSessionForwardedToolCallStatus status)
+        LlmSessionState state,
+        LlmSessionForwardedToolCallStatus status)
     {
         foreach (var call in state.ForwardedToolCalls)
         {
-            if (call.Status is ResponseSessionForwardedToolCallStatus.Pending
-                or ResponseSessionForwardedToolCallStatus.Received)
+            if (call.Status is LlmSessionForwardedToolCallStatus.Pending
+                or LlmSessionForwardedToolCallStatus.Received)
             {
                 call.Status = status;
-                if (status == ResponseSessionForwardedToolCallStatus.Expired)
+                if (status == LlmSessionForwardedToolCallStatus.Expired)
                 {
                     // Mark received timestamp so downstream snapshots know when
                     // expiry happened. The result value stays empty —
@@ -466,7 +466,7 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
     }
 
     private Task ScheduleTtlExpiryAsync(
-        ResponseSessionRecord record,
+        LlmSessionRecord record,
         DateTimeOffset? observedAt = null)
     {
         var expiresAt = ResolveExpiry(record);
@@ -485,18 +485,18 @@ public sealed class ResponseSessionGAgent : GAgentBase<ResponseSessionState>
             });
     }
 
-    private static DateTimeOffset ResolveExpiry(ResponseSessionRecord record)
+    private static DateTimeOffset ResolveExpiry(LlmSessionRecord record)
     {
         var createdAt = record.CreatedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
         var ttl = record.Ttl?.ToTimeSpan() ?? DefaultTtl.ToTimeSpan();
         return createdAt.Add(ttl);
     }
 
-    private static bool IsTerminal(ResponseSessionStatus status) =>
-        status is ResponseSessionStatus.Completed
-            or ResponseSessionStatus.Failed
-            or ResponseSessionStatus.Cancelled
-            or ResponseSessionStatus.Expired;
+    private static bool IsTerminal(LlmSessionStatus status) =>
+        status is LlmSessionStatus.Completed
+            or LlmSessionStatus.Failed
+            or LlmSessionStatus.Cancelled
+            or LlmSessionStatus.Expired;
 
     private static bool DurationEquals(Duration? left, Duration? right) =>
         left?.ToTimeSpan() == right?.ToTimeSpan();

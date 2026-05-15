@@ -79,8 +79,10 @@ public sealed class AgentRunGAgentTests
 
         var next = InvokeAgentTransition(runtime, new AgentRunGAgentState(), historical);
 
-        next.Status.Should().Be(AgentRunStatus.ReplyProduced);
-        next.ReplyDispatched.Should().BeTrue();
+        // Legacy events get promoted straight to handed-off on replay (ADR-0021):
+        // historically a ReplyProduced event was only persisted *after* successful
+        // dispatch, so on replay we treat the event as if dispatch had also landed.
+        next.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
     }
 
     [Fact]
@@ -120,21 +122,22 @@ public sealed class AgentRunGAgentTests
 
         var next = InvokeAgentTransition(runtime, new AgentRunGAgentState(), interactiveOnly);
 
+        // Interactive-only fresh event: payload persisted, but status stays at
+        // REPLY_PRODUCED until ApplyReplyDispatched promotes it to REPLY_HANDED_OFF.
         next.Status.Should().Be(AgentRunStatus.ReplyProduced);
-        next.ReplyDispatched.Should().BeFalse();
         next.ProducedReplyText.Should().BeEmpty();
         next.ProducedOutbound.Should().NotBeNull();
         next.ProducedOutbound!.Actions.Should().ContainSingle(a => a.ActionId == "confirm");
     }
 
     [Fact]
-    public void ApplyReplyProduced_NewEventWithReplyText_LeavesReplyAsNotYetDispatched()
+    public void ApplyReplyProduced_NewEventWithReplyText_LeavesStatusAtReplyProduced()
     {
         // New events always carry a non-empty reply_text (empty replies get replaced with a
         // user-visible fallback before persisting). Those events represent "payload persisted
-        // but not yet dispatched" — ReplyDispatched stays false here; the subsequent
-        // AgentRunReplyDispatchedEvent flips it after the conversation actor accepts the
-        // LlmReplyReadyEvent.
+        // but not yet handed off" — Status stays at REPLY_PRODUCED here; the subsequent
+        // AgentRunReplyDispatchedEvent promotes it to REPLY_HANDED_OFF after the
+        // conversation actor accepts the LlmReplyReadyEvent (ADR-0021).
         var runtime = CreateRunAgent(
             new DispatchingActorRuntime(),
             new RecordingReplyGenerator(() => false),
@@ -154,7 +157,6 @@ public sealed class AgentRunGAgentTests
         var next = InvokeAgentTransition(runtime, new AgentRunGAgentState(), fresh);
 
         next.Status.Should().Be(AgentRunStatus.ReplyProduced);
-        next.ReplyDispatched.Should().BeFalse();
         next.ProducedReplyText.Should().Be("hello");
         next.ProducedTerminalState.Should().Be(LlmReplyTerminalState.Completed);
     }
@@ -205,11 +207,10 @@ public sealed class AgentRunGAgentTests
         ready.TerminalState.Should().Be(LlmReplyTerminalState.Completed);
         replyGenerator.CallCount.Should().Be(1);
 
-        // State stays at ReplyProduced+!ReplyDispatched (the Dispatched event failed to
-        // persist). The actor lingers until idle eviction — acceptable trade-off vs.
-        // delivering a duplicate user-visible fallback.
+        // State stays at REPLY_PRODUCED (the Dispatched event failed to persist, so
+        // status is NOT promoted to REPLY_HANDED_OFF). The actor lingers until idle
+        // eviction — acceptable trade-off vs. delivering a duplicate user-visible fallback.
         runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
-        runtime.State.ReplyDispatched.Should().BeFalse();
         runtime.State.ProducedReplyText.Should().Be("the real reply");
     }
 
@@ -240,7 +241,10 @@ public sealed class AgentRunGAgentTests
         await runtime.HandleStartAsync(request);
         await runtime.HandleStartAsync(request.Clone());
 
-        runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
+        // First call ran the LLM and dispatched the ready event, promoting status to
+        // REPLY_HANDED_OFF (ADR-0021). The duplicate start must short-circuit on
+        // terminal-status check and NOT re-run the LLM or re-dispatch.
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
         replyGenerator.CallCount.Should().Be(1);
         handled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor));
     }
@@ -348,6 +352,205 @@ public sealed class AgentRunGAgentTests
         });
 
         actorRuntime.DestroyedIds.Should().Contain(runtime.Id);
+    }
+
+    // ───────────────────────────────────────────────────────────────
+    // ADR-0021 §6 / canon §9 #649 — absorbing-terminal regressions
+    // ───────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task HandleCleanupAsync_TwiceAfterTerminal_ShouldDestroyOnceAndPersistCompletion()
+    {
+        // #649 regression: cleanup is an absorbing operation. A duplicate
+        // cleanup callback (e.g. retry from a scheduler outage) must short-circuit
+        // on cleanup_completed_at_unix_ms != 0 instead of re-destroying the actor.
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            new RecordingReplyGenerator(() => false) { ReplyText = "ok" },
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            });
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-cleanup-dup",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-cleanup-dup",
+        });
+        var cleanup = new AgentRunCleanupRequested { RunId = "corr-cleanup-dup" };
+        await runtime.HandleCleanupAsync(cleanup);
+        await runtime.HandleCleanupAsync(cleanup);
+
+        actorRuntime.DestroyedIds.Should().ContainSingle(id => id == runtime.Id);
+        runtime.State.CleanupCompletedAtUnixMs.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task HandleCleanupAsync_StaleRunId_ShouldNoOp()
+    {
+        // #649 regression: a cleanup callback that references a different RunId
+        // (e.g. an older grain run after grain identity churn) must NOT destroy
+        // the current actor, even if the current actor is terminal.
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            new RecordingReplyGenerator(() => false) { ReplyText = "ok" },
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            });
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-stale-cleanup",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-stale",
+        });
+        await runtime.HandleCleanupAsync(new AgentRunCleanupRequested
+        {
+            RunId = "corr-different-run",
+        });
+
+        actorRuntime.DestroyedIds.Should().BeEmpty();
+        runtime.State.CleanupCompletedAtUnixMs.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleCleanupAsync_BeforeTerminal_ShouldNoOp()
+    {
+        // #649 regression: a cleanup callback that fires while the run is still
+        // STARTED (e.g. scheduler clock skew) must NOT destroy the actor mid-run.
+        // IsTerminal short-circuit blocks the path.
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var hangingGenerator = new HangingReplyGenerator();
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            hangingGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            });
+
+        // Fire a cleanup before any HandleStartAsync has even run — state is
+        // STATUS_UNSPECIFIED (treated as non-terminal), so cleanup must no-op.
+        await runtime.HandleCleanupAsync(new AgentRunCleanupRequested
+        {
+            RunId = "corr-pre-terminal",
+        });
+
+        actorRuntime.DestroyedIds.Should().BeEmpty();
+        runtime.State.CleanupCompletedAtUnixMs.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_AfterCleanupCompleted_ShouldNotReScheduleCleanup()
+    {
+        // #649 regression: once chain.finalized is established (terminal status +
+        // cleanup_completed_at != 0), a late duplicate start must NOT re-schedule
+        // a fresh cleanup callback. Otherwise a flaky retry could pile up
+        // callbacks indefinitely on a dead actor.
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var scheduler = new RecordingCallbackScheduler();
+        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "ok" };
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            },
+            callbackScheduler: scheduler);
+        var request = new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-no-resched",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-no-resched",
+        };
+
+        await runtime.HandleStartAsync(request);
+        await runtime.HandleCleanupAsync(new AgentRunCleanupRequested
+        {
+            RunId = "corr-no-resched",
+        });
+        var cleanupCountAfterFirst = scheduler.Timeouts
+            .Count(t => t.TriggerEnvelope.Payload.Is(AgentRunCleanupRequested.Descriptor));
+
+        // Late duplicate start after chain.finalized.
+        await runtime.HandleStartAsync(request.Clone());
+
+        replyGenerator.CallCount.Should().Be(1);
+        scheduler.Timeouts
+            .Count(t => t.TriggerEnvelope.Payload.Is(AgentRunCleanupRequested.Descriptor))
+            .Should().Be(cleanupCountAfterFirst, "cleanup_completed_at gates duplicate scheduling");
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_AfterDropped_ShouldNotReRunLlmOrPersistAdditionalEvents()
+    {
+        // #649 regression: stale-gate drop is itself an absorbing terminal state.
+        // A second start with the same (still stale) request must short-circuit on
+        // IsTerminal — neither replay the LLM nor persist additional drop events.
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "should-not-be-invoked" };
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            });
+
+        // First start: ages out via the stale gate (>5min request age) -> DROPPED.
+        var staleRequest = new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-stale-drop",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-stale-drop",
+            RequestedAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(-30).ToUnixTimeMilliseconds(),
+        };
+        await runtime.HandleStartAsync(staleRequest);
+        runtime.State.Status.Should().Be(AgentRunStatus.Dropped);
+        var droppedDispatchCount = handled.Count;
+
+        // Duplicate stale start: IsTerminal short-circuit blocks LLM/dispatch.
+        await runtime.HandleStartAsync(staleRequest.Clone());
+
+        runtime.State.Status.Should().Be(AgentRunStatus.Dropped);
+        replyGenerator.CallCount.Should().Be(0);
+        handled.Count.Should().Be(droppedDispatchCount, "no additional drop events on duplicate start");
     }
 
     [Fact]
@@ -519,9 +722,8 @@ public sealed class AgentRunGAgentTests
         await runtime.HandleStartAsync(request);
 
         // After the first call the LLM ran once and the produced payload is persisted, but
-        // dispatch failed so ReplyDispatched is false.
+        // dispatch failed so status stayed at REPLY_PRODUCED (no promotion to REPLY_HANDED_OFF).
         runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
-        runtime.State.ReplyDispatched.Should().BeFalse();
         runtime.State.ProducedReplyText.Should().Be("ok");
         replyGenerator.CallCount.Should().Be(1);
         handled.Should().BeEmpty();
@@ -535,9 +737,8 @@ public sealed class AgentRunGAgentTests
         await runtime.HandleStartAsync(retryCommand);
 
         // After the retry the same persisted reply is delivered — but the LLM was not
-        // re-invoked.
-        runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
-        runtime.State.ReplyDispatched.Should().BeTrue();
+        // re-invoked. Status promoted to REPLY_HANDED_OFF by ApplyReplyDispatched (ADR-0021).
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
         replyGenerator.CallCount.Should().Be(1);
         handled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor));
     }
@@ -624,9 +825,9 @@ public sealed class AgentRunGAgentTests
 
         // The unhandled exception fires the persist-before-dispatch path: the failure
         // terminal state lands as ProducedTerminalState=Failed with a user-visible fallback,
-        // and dispatch succeeds so ReplyDispatched is true. The LLM was never invoked.
-        runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
-        runtime.State.ReplyDispatched.Should().BeTrue();
+        // and dispatch succeeds so status is promoted to REPLY_HANDED_OFF (ADR-0021).
+        // The LLM was never invoked.
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
         runtime.State.ProducedTerminalState.Should().Be(LlmReplyTerminalState.Failed);
         runtime.State.ErrorCode.Should().Be("agent_run_unhandled_exception");
         replyGenerator.CallCount.Should().Be(0);
@@ -1691,7 +1892,7 @@ public sealed class AgentRunGAgentTests
 
         public Action<IReadOnlyDictionary<string, string>>? MetadataObserver { get; init; }
 
-        public async Task<string?> GenerateReplyAsync(
+        public async Task<ConversationReplyResult> GenerateReplyAsync(
             ChatActivity activity,
             IReadOnlyDictionary<string, string> metadata,
             IStreamingReplySink? streamingSink,
@@ -1702,17 +1903,17 @@ public sealed class AgentRunGAgentTests
             MetadataObserver?.Invoke(metadata);
             if (streamingSink is not null && !string.IsNullOrEmpty(ReplyText))
                 await streamingSink.OnDeltaAsync(ReplyText, ct);
-            return ReplyText;
+            return new ConversationReplyResult(ReplyText, Usage: null, FinishReason: null);
         }
     }
 
     private sealed class ThrowingReplyGenerator(Exception exception) : IConversationReplyGenerator
     {
-        public Task<string?> GenerateReplyAsync(
+        public Task<ConversationReplyResult> GenerateReplyAsync(
             ChatActivity activity,
             IReadOnlyDictionary<string, string> metadata,
             IStreamingReplySink? streamingSink,
-            CancellationToken ct) => Task.FromException<string?>(exception);
+            CancellationToken ct) => Task.FromException<ConversationReplyResult>(exception);
     }
 
     /// <summary>Generator that never completes on its own; only ends when the runtime cancels it.</summary>
@@ -1720,13 +1921,13 @@ public sealed class AgentRunGAgentTests
     {
         public bool WasCancelled { get; private set; }
 
-        public async Task<string?> GenerateReplyAsync(
+        public async Task<ConversationReplyResult> GenerateReplyAsync(
             ChatActivity activity,
             IReadOnlyDictionary<string, string> metadata,
             IStreamingReplySink? streamingSink,
             CancellationToken ct)
         {
-            var pendingReply = new TaskCompletionSource<string?>(
+            var pendingReply = new TaskCompletionSource<ConversationReplyResult>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             using var cancellationRegistration = ct.Register(() =>
             {

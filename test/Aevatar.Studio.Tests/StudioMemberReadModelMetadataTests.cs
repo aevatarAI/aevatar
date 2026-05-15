@@ -24,6 +24,16 @@ public sealed class StudioMemberReadModelMetadataTests
     }
 
     [Fact]
+    public void BindingRunMetadataProvider_ShouldExposeStudioMemberBindingRunsIndex()
+    {
+        var provider = new StudioMemberBindingRunCurrentStateDocumentMetadataProvider();
+        provider.Metadata.IndexName.Should().Be("studio-member-binding-runs");
+        provider.Metadata.Mappings.Should().ContainKey("dynamic");
+        provider.Metadata.Settings.Should().BeEmpty();
+        provider.Metadata.Aliases.Should().BeEmpty();
+    }
+
+    [Fact]
     public void ReadModel_ShouldSurfaceProjectionContractFields()
     {
         var updatedAt = DateTimeOffset.Parse("2026-04-27T01:02:03Z");
@@ -49,6 +59,36 @@ public sealed class StudioMemberReadModelMetadataTests
         IProjectionReadModel readModel = new StudioMemberCurrentStateDocument
         {
             Id = "studio-member:scope-1:m-1",
+        };
+        readModel.UpdatedAt.Should().Be(DateTimeOffset.MinValue);
+    }
+
+    [Fact]
+    public void BindingRunReadModel_ShouldSurfaceProjectionContractFields()
+    {
+        var updatedAt = DateTimeOffset.Parse("2026-04-30T01:02:03Z");
+        var doc = new StudioMemberBindingRunCurrentStateDocument
+        {
+            Id = "studio-member-binding-run:bind-1",
+            ActorId = "studio-member-binding-run:bind-1",
+            StateVersion = 3,
+            LastEventId = "evt-3",
+            UpdatedAt = Timestamp.FromDateTimeOffset(updatedAt),
+        };
+
+        IProjectionReadModel readModel = doc;
+        readModel.ActorId.Should().Be(doc.ActorId);
+        readModel.StateVersion.Should().Be(doc.StateVersion);
+        readModel.LastEventId.Should().Be(doc.LastEventId);
+        readModel.UpdatedAt.Should().Be(updatedAt);
+    }
+
+    [Fact]
+    public void BindingRunReadModel_ShouldReturnMinValueWhenUpdatedAtIsNull()
+    {
+        IProjectionReadModel readModel = new StudioMemberBindingRunCurrentStateDocument
+        {
+            Id = "studio-member-binding-run:bind-1",
         };
         readModel.UpdatedAt.Should().Be(DateTimeOffset.MinValue);
     }

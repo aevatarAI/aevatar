@@ -414,8 +414,11 @@ public sealed class ConversationGAgentDedupTests
         runner.LlmReplyCount.ShouldBe(1);
         agent.State.ProcessedCommandIds.ShouldContain("llm:act-llm-ready");
         var events = await store.GetEventsAsync(agent.Id);
-        events.Count.ShouldBe(2);
+        // NeedsLlmReplyEvent + LlmReplyDeliveredEvent (ADR-0021 chain.delivered) +
+        // ConversationTurnCompletedEvent. Duplicate ready event must not add more.
+        events.Count.ShouldBe(3);
         events.Last().EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
+        events.Select(e => e.EventType).ShouldContain(s => s.Contains(nameof(LlmReplyDeliveredEvent)));
     }
 
     [Fact]
@@ -1618,10 +1621,14 @@ public sealed class ConversationGAgentDedupTests
     {
         public List<NeedsLlmReplyEvent> Dispatched { get; } = [];
 
-        public Task DispatchAsync(NeedsLlmReplyEvent request, CancellationToken ct)
+        public Task<DispatchOutcome> DispatchAsync(NeedsLlmReplyEvent request, CancellationToken ct)
         {
             Dispatched.Add(request.Clone());
-            return Task.CompletedTask;
+            return Task.FromResult(new DispatchOutcome(
+                Phase: DispatchPhase.Accepted,
+                CommandId: request.CorrelationId ?? string.Empty,
+                RunActorId: null,
+                AcceptedAtUnixMs: 0));
         }
     }
 

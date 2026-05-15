@@ -90,13 +90,42 @@ internal static class ResponsesRequestNormalizer
                 "max_output_tokens must be greater than zero when provided.");
         }
 
+        var previousResponseId = NormalizeOptional(request.PreviousResponseId);
+
+        // OpenAI Responses spec pairs `function_call_output` items in `input` with
+        // `previous_response_id` so the server can match them to a pending tool call
+        // (#629 §13 continuation contract). But Anthropic→OpenAI translators (CC Switch,
+        // Codex when wrapping Claude Code) often forward Claude Code's prior tool-result
+        // turns in the `input` array WITHOUT propagating previous_response_id — they
+        // don't model OpenAI's server-side session. Treating that strictly returns
+        // `function_call_output requires previous_response_id` and the agent can't
+        // ever continue a multi-turn tool conversation.
+        //
+        // Resolution: when previous_response_id is absent, fold any function_call_output
+        // entries into the user prompt as historical context (with a synthetic
+        // `[tool_result …]` marker) and clear ToolResults. The continuation contract
+        // only kicks in when previous_response_id IS provided — that path is unchanged.
+        if (previousResponseId is null && toolResults.Count > 0)
+        {
+            var foldedSections = new List<string>();
+            if (!string.IsNullOrWhiteSpace(prompt))
+                foldedSections.Add(prompt);
+            foreach (var tr in toolResults)
+            {
+                var marker = $"[tool_result call_id={tr.CallId}]";
+                foldedSections.Add(string.IsNullOrWhiteSpace(tr.Output) ? marker : $"{marker} {tr.Output}");
+            }
+            prompt = string.Join("\n", foldedSections);
+            toolResults = [];
+        }
+
         return ResponsesRequestNormalizationResult.Success(new NormalizedResponsesRequest(
             ResponseId: ResponsesIds.NewResponseId(),
             MessageItemId: ResponsesIds.NewMessageId(),
             Model: model,
             Prompt: prompt,
             Stream: request.Stream == true,
-            PreviousResponseId: NormalizeOptional(request.PreviousResponseId),
+            PreviousResponseId: previousResponseId,
             Temperature: request.Temperature,
             MaxOutputTokens: request.MaxOutputTokens,
             DeclaredTools: declaredTools,
@@ -239,13 +268,41 @@ internal static class ResponsesRequestNormalizer
         }
 
         var result = new List<ResponsesToolDeclaration>();
+        var toolIndex = -1;
         foreach (var tool in tools.EnumerateArray())
         {
+            toolIndex++;
             if (tool.ValueKind != JsonValueKind.Object)
             {
-                error = "Each tool must be an object.";
+                error = $"tool at index {toolIndex} must be an object.";
                 return false;
             }
+
+            // OpenAI Responses API allows built-in tool declarations like
+            // `{type: "web_search_preview"}` / `{type: "file_search", ...}` /
+            // `{type: "code_interpreter", ...}` / `{type: "computer_use_preview", ...}`
+            // that don't carry a `function` block or `name`. They're routing hints to
+            // the model provider, not custom function definitions. aevatar's classifier
+            // only owns function-typed tools (forward / substitute / additive); silently
+            // pass over the rest so an OpenAI-compatible client (CC Switch, Codex,
+            // Cursor) can advertise built-ins without breaking the request — even
+            // though aevatar won't map them to a local handler and the model provider
+            // gets to decide what to do with them.
+            // OpenAI Responses API allows built-in tool declarations like
+            // `{type: "web_search_preview"}` / `{type: "file_search", ...}` /
+            // `{type: "code_interpreter", ...}` / `{type: "computer_use_preview", ...}`
+            // that don't carry a `function` block or `name`. They're routing hints to
+            // the model provider, not custom function definitions. aevatar's classifier
+            // only owns function-typed tools (forward / substitute / additive); silently
+            // pass over the rest so an OpenAI-compatible client (CC Switch, Codex,
+            // Cursor) can advertise built-ins without breaking the request — even
+            // though aevatar won't map them to a local handler and the model provider
+            // gets to decide what to do with them.
+            var toolType = GetStringProperty(tool, "type");
+            var isFunctionType = string.IsNullOrWhiteSpace(toolType) ||
+                                 string.Equals(toolType, "function", StringComparison.OrdinalIgnoreCase);
+            if (!isFunctionType)
+                continue;
 
             var function = tool.TryGetProperty("function", out var functionElement) &&
                            functionElement.ValueKind == JsonValueKind.Object
@@ -254,7 +311,7 @@ internal static class ResponsesRequestNormalizer
             var name = GetStringProperty(function, "name");
             if (string.IsNullOrWhiteSpace(name))
             {
-                error = "Each tool requires a non-empty name.";
+                error = $"function tool at index {toolIndex} requires a non-empty name.";
                 return false;
             }
 
@@ -568,6 +625,29 @@ internal sealed record ResponsesModelEntry
 
     [JsonPropertyName("status")]
     public required string Status { get; init; }
+
+    // Optional upstream-forwarded metadata. Present when the upstream `/v1/models`
+    // response carried richer fields (anthropic gives display_name + max_input_tokens
+    // + max_tokens; OpenAI-spec backends like deepseek / chrono-llm only return the
+    // minimal `{id, object, created, owned_by}` shape so these stay null and are
+    // omitted from JSON output). OpenRouter-style clients (CC Switch, Codex) read
+    // these to size requests; sparse upstreams cause a UI warning but not failure.
+
+    [JsonPropertyName("context_length")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? ContextLength { get; init; }
+
+    [JsonPropertyName("max_output_tokens")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? MaxOutputTokens { get; init; }
+
+    [JsonPropertyName("display_name")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DisplayName { get; init; }
+
+    [JsonPropertyName("description")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Description { get; init; }
 }
 
 /// <summary>Splits an OpenRouter-style `vendor/model` identifier. Vendor is preserved only when it

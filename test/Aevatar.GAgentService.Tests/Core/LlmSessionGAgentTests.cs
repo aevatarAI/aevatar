@@ -8,7 +8,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Tests.Core;
 
-public sealed class ResponseSessionGAgentTests
+public sealed class LlmSessionGAgentTests
 {
     [Fact]
     public async Task HandleRegisterAsync_ShouldPersistRecord_AndDefaultStatusToAccepted()
@@ -22,7 +22,7 @@ public sealed class ResponseSessionGAgentTests
 
         actor.State.Record.Should().NotBeNull();
         actor.State.Record!.ResponseId.Should().Be("resp_1");
-        actor.State.Record.Status.Should().Be(ResponseSessionStatus.Accepted);
+        actor.State.Record.Status.Should().Be(LlmSessionStatus.Accepted);
         actor.State.Record.UpdatedAt.Should().NotBeNull();
         actor.State.LastAppliedEventVersion.Should().Be(1);
     }
@@ -56,10 +56,10 @@ public sealed class ResponseSessionGAgentTests
         await actor.HandleUpdateStatusAsync(new UpdateResponseSessionStatusRequested
         {
             ResponseId = "resp_1",
-            Status = ResponseSessionStatus.Cancelled,
+            Status = LlmSessionStatus.Cancelled,
         });
 
-        actor.State.Record!.Status.Should().Be(ResponseSessionStatus.Cancelled);
+        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Cancelled);
         actor.State.Record.CancelledAt.Should().NotBeNull();
         actor.State.LastAppliedEventVersion.Should().Be(2);
     }
@@ -72,7 +72,7 @@ public sealed class ResponseSessionGAgentTests
         var act = () => actor.HandleUpdateStatusAsync(new UpdateResponseSessionStatusRequested
         {
             ResponseId = "resp_1",
-            Status = ResponseSessionStatus.Completed,
+            Status = LlmSessionStatus.Completed,
         });
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -100,7 +100,7 @@ public sealed class ResponseSessionGAgentTests
         call.ToolName.Should().Be("get_weather");
         call.SchemaHash.Should().Be("schema-1");
         ResponsesJsonValues.ToBoundaryJson(call.Arguments).Should().Be("""{"city":"Singapore"}""");
-        call.Status.Should().Be(ResponseSessionForwardedToolCallStatus.Pending);
+        call.Status.Should().Be(LlmSessionForwardedToolCallStatus.Pending);
         call.Expiry.Should().NotBeNull();
     }
 
@@ -137,7 +137,7 @@ public sealed class ResponseSessionGAgentTests
 
         actor.State.LastAppliedEventVersion.Should().Be(versionAfterFirstResult);
         var call = actor.State.ForwardedToolCalls.Should().ContainSingle().Which;
-        call.Status.Should().Be(ResponseSessionForwardedToolCallStatus.Received);
+        call.Status.Should().Be(LlmSessionForwardedToolCallStatus.Received);
         ResponsesJsonValues.ToBoundaryJson(call.Result).Should().Be("""{"temperature":28}""");
         call.ReceivedAt.Should().NotBeNull();
     }
@@ -204,7 +204,7 @@ public sealed class ResponseSessionGAgentTests
 
         actor.State.LastAppliedEventVersion.Should().Be(versionAfterFirstResolve);
         var call = actor.State.ForwardedToolCalls.Should().ContainSingle().Which;
-        call.Status.Should().Be(ResponseSessionForwardedToolCallStatus.Resolved);
+        call.Status.Should().Be(LlmSessionForwardedToolCallStatus.Resolved);
         call.ResolvedAt.Should().NotBeNull();
     }
 
@@ -251,11 +251,11 @@ public sealed class ResponseSessionGAgentTests
         await actor.HandleUpdateStatusAsync(new UpdateResponseSessionStatusRequested
         {
             ResponseId = "resp_1",
-            Status = ResponseSessionStatus.Cancelled,
+            Status = LlmSessionStatus.Cancelled,
         });
 
         actor.State.ForwardedToolCalls.Should().ContainSingle()
-            .Which.Status.Should().Be(ResponseSessionForwardedToolCallStatus.Cancelled);
+            .Which.Status.Should().Be(LlmSessionForwardedToolCallStatus.Cancelled);
     }
 
     [Fact]
@@ -281,42 +281,42 @@ public sealed class ResponseSessionGAgentTests
             ObservedAt = Timestamp.FromDateTime(DateTime.UtcNow),
         });
 
-        actor.State.Record!.Status.Should().Be(ResponseSessionStatus.Expired);
+        actor.State.Record!.Status.Should().Be(LlmSessionStatus.Expired);
         var call = actor.State.ForwardedToolCalls.Should().ContainSingle().Which;
-        call.Status.Should().Be(ResponseSessionForwardedToolCallStatus.Expired);
+        call.Status.Should().Be(LlmSessionForwardedToolCallStatus.Expired);
         // The "tool_call_expired" envelope is synthesized by the query reader at
         // the read boundary, not by the actor.
         call.Result.Should().BeNull();
         call.ReceivedAt.Should().NotBeNull();
     }
 
-    private static ResponseSessionGAgent CreateActor(string responseId) =>
-        GAgentServiceTestKit.CreateStatefulAgent<ResponseSessionGAgent, ResponseSessionState>(
+    private static LlmSessionGAgent CreateActor(string responseId) =>
+        GAgentServiceTestKit.CreateStatefulAgent<LlmSessionGAgent, LlmSessionState>(
             new InMemoryEventStore(),
             "response-session-actor-" + responseId,
-            static () => new ResponseSessionGAgent());
+            static () => new LlmSessionGAgent());
 
-    private static ResponseSessionRecord BuildRecord(string responseId) =>
+    private static LlmSessionRecord BuildRecord(string responseId) =>
         new()
         {
             ResponseId = responseId,
             ScopeId = "user-1",
             OwnerSubject = "user-1",
-            OriginKind = ResponseSessionOriginKind.ApiKey,
+            OriginKind = LlmSessionOriginKind.ApiKey,
             PreviousResponseId = string.Empty,
-            Status = ResponseSessionStatus.Unspecified,
+            Status = LlmSessionStatus.Unspecified,
             CreatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
             Ttl = Duration.FromTimeSpan(TimeSpan.FromHours(24)),
         };
 
-    private static ResponseSessionForwardedToolCall BuildToolCall(string callId) =>
+    private static LlmSessionForwardedToolCall BuildToolCall(string callId) =>
         new()
         {
             CallId = callId,
             ToolName = "get_weather",
             SchemaHash = "schema-1",
             Arguments = ResponsesJsonValues.ParseBoundaryPayload("""{"city":"Singapore"}"""),
-            Status = ResponseSessionForwardedToolCallStatus.Pending,
+            Status = LlmSessionForwardedToolCallStatus.Pending,
             EmittedAt = Timestamp.FromDateTime(DateTime.UtcNow),
             Expiry = Timestamp.FromDateTime(DateTime.UtcNow.AddHours(1)),
         };

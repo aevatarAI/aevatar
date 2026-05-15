@@ -1436,6 +1436,7 @@ const TeamDetailPage: React.FC = () => {
     lens.currentService?.serviceId ||
     lens.currentRun?.serviceId ||
     undefined;
+  const routeBackendMemberId = trimText(routeState.memberId);
   const firstTeamRosterMemberId = trimText(teamMembersQuery.data?.members?.[0]?.memberId);
   const currentMemberId =
     trimText(preferredMemberSummary?.memberId) ||
@@ -1445,6 +1446,7 @@ const TeamDetailPage: React.FC = () => {
     if (
       !hasTeamIdentity ||
       !canonicalMemberId ||
+      !trimText(routeState.serviceId) ||
       trimText(routeState.memberId)
     ) {
       return;
@@ -1484,7 +1486,9 @@ const TeamDetailPage: React.FC = () => {
     [currentPlatformService?.appId, currentPlatformService?.namespace, currentPlatformService?.tenantId, runtimeServiceId, scopeId],
   );
   const selectedStudioBackendMemberId =
-    firstTeamRosterMemberId || (hasTeamIdentity ? "" : currentMemberId);
+    routeBackendMemberId ||
+    firstTeamRosterMemberId ||
+    (hasTeamIdentity ? "" : currentMemberId);
   const selectedStudioLegacyMemberId =
     hasTeamIdentity
       ? ""

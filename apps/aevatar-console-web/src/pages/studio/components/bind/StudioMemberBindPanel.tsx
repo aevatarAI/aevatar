@@ -5,7 +5,7 @@ import {
   LinkOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Button, Collapse, Empty, Input, Select, Space, Tag, Typography, message } from 'antd';
+import { Alert, Button, Collapse, Empty, Input, Space, Tag, Typography, message } from 'antd';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   applyRuntimeEvent,
@@ -29,8 +29,10 @@ import {
   describeStudioMemberBindingRevisionContext,
   describeStudioMemberBindingRevisionTarget,
   formatStudioMemberBindingImplementationKind,
-  getStudioMemberBindingCurrentRevision,
   type StudioAuthSession,
+  type StudioMemberBindingContract,
+  type StudioMemberBindingRevision,
+  type StudioMemberBindingRunStatusResponse,
 } from '@/shared/studio/models';
 import { studioApi } from '@/shared/studio/api';
 import { AevatarPanel, AevatarStatusTag } from '@/shared/ui/aevatarPageShells';
@@ -52,7 +54,7 @@ type StudioMemberBindPanelProps = {
   readonly memberId?: string;
   readonly initialServiceId?: string;
   readonly onContinueToInvoke?: (serviceId: string, endpointId: string) => void;
-  readonly onBindPendingCandidate?: (() => Promise<void>) | null;
+  readonly onBindPendingCandidate?: (() => Promise<PendingBindNotice | void>) | null;
   readonly onSelectionChange?: (selection: {
     serviceId: string;
     endpointId: string;
@@ -70,6 +72,11 @@ type StudioMemberBindPanelProps = {
   readonly services: readonly ServiceCatalogSnapshot[];
 };
 
+type PendingBindNotice = {
+  readonly message: string;
+  readonly type: 'success' | 'info' | 'warning' | 'error';
+};
+
 type SnippetTab = 'curl' | 'fetch' | 'sdk';
 
 type SmokeTestResult = {
@@ -80,6 +87,93 @@ type SmokeTestResult = {
   readonly runId: string;
   readonly status: 'idle' | 'running' | 'success' | 'error';
 };
+
+function isStudioMemberBindingRunTerminal(
+  run: StudioMemberBindingRunStatusResponse | null | undefined,
+): boolean {
+  return Boolean(
+    run && ['succeeded', 'failed', 'rejected'].includes(run.status),
+  );
+}
+
+function describeStudioMemberBindingRunStatus(
+  run: StudioMemberBindingRunStatusResponse,
+): PendingBindNotice {
+  if (run.status === 'succeeded') {
+    return {
+      message: 'Binding completed. Studio is refreshing the published contract.',
+      type: 'success',
+    };
+  }
+
+  if (run.status === 'failed' || run.status === 'rejected') {
+    return {
+      message:
+        run.failure?.message ||
+        (run.status === 'rejected'
+          ? 'Binding request was rejected by the member authority.'
+          : 'Binding failed while publishing the member contract.'),
+      type: 'error',
+    };
+  }
+
+  if (run.status === 'platform_binding_pending') {
+    return {
+      message:
+        'Binding request accepted. Platform publication is still running; Invoke is not ready until the run completes.',
+      type: 'info',
+    };
+  }
+
+  if (run.status === 'admitted') {
+    return {
+      message:
+        'Binding request admitted. Studio is starting platform publication; the member is not callable yet.',
+      type: 'info',
+    };
+  }
+
+  return {
+    message:
+      'Binding request accepted. Studio is waiting for the member authority; this does not mean the member is bound yet.',
+    type: 'info',
+  };
+}
+
+function buildRevisionFromMemberBinding(
+  binding: StudioMemberBindingContract | null | undefined,
+): StudioMemberBindingRevision | null {
+  if (!binding) {
+    return null;
+  }
+
+  return {
+    allocationWeight: 100,
+    artifactHash: '',
+    createdAt: binding.boundAt,
+    deploymentId: '',
+    failureReason: '',
+    implementationKind: binding.implementationKind,
+    inlineWorkflowCount: 0,
+    isActiveServing: true,
+    isDefaultServing: true,
+    isServingTarget: true,
+    preparedAt: binding.boundAt,
+    primaryActorId: '',
+    publishedAt: binding.boundAt,
+    retiredAt: null,
+    revisionId: binding.revisionId,
+    scriptDefinitionActorId: '',
+    scriptId: '',
+    scriptRevision: '',
+    scriptSourceHash: '',
+    servingState: 'active',
+    staticActorTypeName: '',
+    status: 'active',
+    workflowDefinitionActorId: '',
+    workflowName: '',
+  };
+}
 
 const monoFontFamily =
   "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace";
@@ -155,9 +249,31 @@ const sourceControlStackStyle: React.CSSProperties = {
   minWidth: 0,
 };
 
-const sourceControlSelectStyle: React.CSSProperties = {
-  height: 58,
-  width: '100%',
+const endpointChoiceRowStyle: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 6,
+};
+
+const endpointChoiceButtonStyle: React.CSSProperties = {
+  alignItems: 'center',
+  background: '#ffffff',
+  border: '1px solid #d9e2ef',
+  borderRadius: 999,
+  color: '#334155',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  fontSize: 12,
+  fontWeight: 700,
+  minHeight: 30,
+  padding: '0 10px',
+};
+
+const endpointChoiceButtonActiveStyle: React.CSSProperties = {
+  ...endpointChoiceButtonStyle,
+  background: '#111827',
+  border: '1px solid #111827',
+  color: '#ffffff',
 };
 
 const parameterGridStyle: React.CSSProperties = {
@@ -352,10 +468,8 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
     createIdleSmokeTestResult(),
   );
   const [pendingBindBusy, setPendingBindBusy] = useState(false);
-  const [pendingBindNotice, setPendingBindNotice] = useState<{
-    readonly message: string;
-    readonly type: 'success' | 'error';
-  } | null>(null);
+  const [pendingBindNotice, setPendingBindNotice] =
+    useState<PendingBindNotice | null>(null);
   const runsCurrentWorkflowDraft = Boolean(buildWorkflowYamls);
   const normalizedMemberId = trimOptional(memberId);
 
@@ -456,20 +570,30 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
       scopeRuntimeApi.getServiceRevisions(scopeId, selectedService?.serviceId || ''),
   });
   const memberBindingStatusQuery = useQuery({
-    enabled: Boolean(scopeId && normalizedMemberId && selectedService?.serviceId),
+    enabled: Boolean(scopeId && normalizedMemberId),
     queryKey: ['studio-bind', 'member-binding', scopeId, normalizedMemberId],
     queryFn: () => studioApi.getMemberBinding(scopeId, normalizedMemberId),
+    refetchInterval: (query) => {
+      const data = query.state.data as
+        | Awaited<ReturnType<typeof studioApi.getMemberBinding>>
+        | undefined;
+      return data?.currentBindingRun &&
+        !isStudioMemberBindingRunTerminal(data.currentBindingRun)
+        ? 1_500
+        : false;
+    },
   });
-  const revisionCatalogQuery = normalizedMemberId
-    ? memberBindingStatusQuery
-    : revisionsQuery;
+  const currentBindingRun = memberBindingStatusQuery.data?.currentBindingRun ?? null;
+  const revisionCatalogQuery = revisionsQuery;
   const currentPublishedRevision = useMemo(
     () =>
-      normalizedMemberId
-        ? getStudioMemberBindingCurrentRevision(memberBindingStatusQuery.data)
-        : getScopeServiceCurrentRevision(revisionsQuery.data),
-    [memberBindingStatusQuery.data, normalizedMemberId, revisionsQuery.data],
+      buildRevisionFromMemberBinding(memberBindingStatusQuery.data?.lastBinding) ??
+      getScopeServiceCurrentRevision(revisionsQuery.data),
+    [memberBindingStatusQuery.data?.lastBinding, revisionsQuery.data],
   );
+  const currentBindingRunNotice = currentBindingRun
+    ? describeStudioMemberBindingRunStatus(currentBindingRun)
+    : null;
 
   const bindContract = useMemo<StudioBindContract | null>(
     () =>
@@ -624,24 +748,6 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
     smokeInput,
   ]);
 
-  const serviceOptions = useMemo(
-    () =>
-      services.map((service) => ({
-        label: service.displayName || service.serviceId,
-        value: service.serviceId,
-      })),
-    [services],
-  );
-
-  const endpointOptions = useMemo(
-    () =>
-      (selectedService?.endpoints ?? []).map((endpoint) => ({
-        label: endpoint.displayName || endpoint.endpointId,
-        value: endpoint.endpointId,
-      })),
-    [selectedService?.endpoints],
-  );
-
   const snippetMap = useMemo(() => {
     if (!bindContract) {
       return {
@@ -661,7 +767,6 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
   const selectedSnippet = snippetMap[snippetTab];
   const bindingCatalog: ScopeServiceBindingCatalogSnapshot | undefined = bindingsQuery.data;
   const bindingList = bindingCatalog?.bindings ?? [];
-  const hasMultiplePublishedServices = services.length > 1;
   const revisionList = revisionCatalogQuery.data?.revisions ?? [];
   const hasEndpointOptions = Boolean(selectedService?.endpoints.length);
   const endpointUnavailableMessage =
@@ -709,13 +814,15 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
     setPendingBindBusy(true);
     setPendingBindNotice(null);
     try {
-      await onBindPendingCandidate();
+      const resultNotice = await onBindPendingCandidate();
       if (bindSurfaceIdentityRef.current !== requestBindIdentity) {
         return;
       }
       setPendingBindNotice({
-        message: `${pendingBindingCandidate.displayName} is now bound. Review the invoke contract below.`,
-        type: 'success',
+        message:
+          resultNotice?.message ||
+          `${pendingBindingCandidate.displayName} binding request was accepted. Studio will show the published contract after the run completes.`,
+        type: resultNotice?.type || 'info',
       });
     } catch (error) {
       if (bindSurfaceIdentityRef.current !== requestBindIdentity) {
@@ -736,7 +843,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
     return (
       <Alert
         showIcon
-        message="Resolve a team scope before binding this member."
+        message="Resolve a workspace before binding this member."
         type="info"
       />
     );
@@ -749,7 +856,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
           <Alert
             showIcon
             message="Loading current member contracts..."
-            description="Studio is checking whether this member already has a callable published contract in the current scope."
+            description="Studio is checking whether this member already has a callable published contract in the current workspace."
             type="info"
           />
         </div>
@@ -788,7 +895,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   </Typography.Text>
                 </div>
                 <div style={valueCardStyle}>
-                  <Typography.Text type="secondary">Scope</Typography.Text>
+                  <Typography.Text type="secondary">Workspace ID</Typography.Text>
                   <Typography.Text strong style={{ wordBreak: 'break-word' }}>
                     {scopeId}
                   </Typography.Text>
@@ -802,6 +909,14 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   showIcon
                   message={pendingBindNotice.message}
                   type={pendingBindNotice.type}
+                />
+              ) : null}
+              {currentBindingRunNotice ? (
+                <Alert
+                  showIcon
+                  message={currentBindingRunNotice.message}
+                  description={`Run ${currentBindingRun?.bindingRunId}`}
+                  type={currentBindingRunNotice.type}
                 />
               ) : null}
               <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
@@ -823,7 +938,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
       <div data-testid="studio-bind-surface" style={rootStyle}>
         <Alert
           showIcon
-          message="No published contract is available for this member in the current scope yet."
+          message="No published contract is available for this member in the current workspace yet."
           description="Bind a workflow, script, or gagent revision first so Studio can reveal the invoke contract."
           type="warning"
         />
@@ -837,12 +952,12 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
         <AevatarPanel
           layoutMode="document"
           padding={14}
-          title="Published contract source"
-          titleHelp="Choose the service and endpoint first. The invoke URL, smoke test, and snippets all follow this selection."
+          title="Current member publication"
+          titleHelp="Bind is pinned to the selected member. Published service ids stay visible only as supporting diagnostics."
           extra={
             <Space wrap size={[6, 6]}>
               <Tag color={bindContract ? 'green' : 'default'}>
-                {bindContract ? 'contract selected' : 'needs endpoint'}
+                {bindContract ? 'member contract selected' : 'needs endpoint'}
               </Tag>
               {revisionList.length > 0 ? (
                 <Tag>revisions · {revisionList.length}</Tag>
@@ -876,45 +991,49 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
             </div>
             <div style={controlsGridStyle}>
               <div style={sourceControlStackStyle}>
-                <Typography.Text type="secondary">Published service</Typography.Text>
-                {hasMultiplePublishedServices ? (
-                  <Select
-                    options={serviceOptions}
-                    placeholder="Select a published service"
-                    style={sourceControlSelectStyle}
-                    value={selectedServiceId || undefined}
-                    onChange={(value) => {
-                      setSelectedServiceId(String(value || ''));
-                      setSelectedEndpointId('');
-                    }}
-                  />
-                ) : (
-                  <div style={valueCardStyle}>
-                    <Typography.Text strong style={{ wordBreak: 'break-word' }}>
-                      {selectedService?.displayName ||
-                        selectedService?.serviceId ||
-                        'No published service'}
-                    </Typography.Text>
-                    <Typography.Text type="secondary">
-                      {selectedService?.serviceId || 'No service id'}
-                    </Typography.Text>
-                  </div>
-                )}
+                <Typography.Text type="secondary">Current member</Typography.Text>
+                <div style={valueCardStyle}>
+                  <Typography.Text strong style={{ wordBreak: 'break-word' }}>
+                    {selectedService?.displayName ||
+                      selectedService?.serviceId ||
+                      'No published contract'}
+                  </Typography.Text>
+                  <Typography.Text type="secondary">
+                    {selectedService?.serviceId || 'No service id'}
+                  </Typography.Text>
+                </div>
               </div>
               <div style={sourceControlStackStyle}>
                 <Typography.Text type="secondary">Endpoint</Typography.Text>
-                <Select
-                  disabled={!selectedService || !hasEndpointOptions}
-                  options={endpointOptions}
-                  placeholder={
-                    hasEndpointOptions
-                      ? 'Select an endpoint'
-                      : 'No endpoint data available'
-                  }
-                  style={sourceControlSelectStyle}
-                  value={selectedEndpointId || undefined}
-                  onChange={(value) => setSelectedEndpointId(String(value || ''))}
-                />
+                {selectedService && hasEndpointOptions ? (
+                  <div style={endpointChoiceRowStyle}>
+                    {selectedService.endpoints.map((endpoint) => {
+                      const active = endpoint.endpointId === selectedEndpointId;
+                      return (
+                        <button
+                          key={endpoint.endpointId}
+                          className={AEVATAR_INTERACTIVE_CHIP_CLASS}
+                          type="button"
+                          style={
+                            active
+                              ? endpointChoiceButtonActiveStyle
+                              : endpointChoiceButtonStyle
+                          }
+                          onClick={() => setSelectedEndpointId(endpoint.endpointId)}
+                        >
+                          {endpoint.displayName || endpoint.endpointId}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div style={valueCardStyle}>
+                    <Typography.Text strong>No endpoint data available</Typography.Text>
+                    <Typography.Text type="secondary">
+                      This member publication has not exposed callable endpoints yet.
+                    </Typography.Text>
+                  </div>
+                )}
               </div>
             </div>
             {endpointUnavailableMessage ? (
@@ -1224,14 +1343,23 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 children: bindContract ? (
                   <div style={parameterGridStyle}>
                     <div style={valueCardStyle}>
-                      <Typography.Text type="secondary">Scope</Typography.Text>
+                      <Typography.Text type="secondary">Published service</Typography.Text>
+                      <Typography.Text strong style={{ wordBreak: 'break-word' }}>
+                        {bindContract.serviceId}
+                      </Typography.Text>
+                      <Typography.Text type="secondary">
+                        Platform diagnostic id for this member contract.
+                      </Typography.Text>
+                    </div>
+                    <div style={valueCardStyle}>
+                      <Typography.Text type="secondary">Workspace ID</Typography.Text>
                       <Typography.Text strong style={{ wordBreak: 'break-word' }}>
                         {bindContract.scopeLabel}
                       </Typography.Text>
                       <Typography.Text type="secondary">
                         {bindContract.scopeSource
                           ? `Resolved from ${bindContract.scopeSource}.`
-                          : 'Bound to the current Studio scope.'}
+                          : 'Bound to the current Studio workspace.'}
                       </Typography.Text>
                     </div>
                     <div style={valueCardStyle}>
@@ -1319,7 +1447,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   </div>
                 ) : (
                   <Empty
-                    description="This service does not depend on any extra connectors, secrets, or service bindings in the current scope."
+                    description="This service does not depend on any extra connectors, secrets, or service bindings in the current workspace."
                     image={Empty.PRESENTED_IMAGE_SIMPLE}
                   />
                 ),

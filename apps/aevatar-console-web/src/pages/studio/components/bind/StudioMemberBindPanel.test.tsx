@@ -284,7 +284,8 @@ describe('StudioMemberBindPanel', () => {
     expect(screen.getByTestId('studio-bind-smoke-test-section')).toBeTruthy();
     expect(screen.getByTestId('studio-bind-snippet-section')).toBeTruthy();
     expect(screen.getByTestId('studio-bind-supporting-section')).toBeTruthy();
-    fireEvent.click(screen.getByText('Published contract source'));
+    expect(screen.getByText('Current member publication')).toBeTruthy();
+    fireEvent.click(screen.getByText('Contract details'));
     expect(await screen.findByText('Published service')).toBeTruthy();
     expect(primaryGrid.contains(screen.getByText('Published service'))).toBe(false);
     expect(screen.queryByText('Binding Contract')).toBeNull();
@@ -670,16 +671,24 @@ describe('StudioMemberBindPanel', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Bind current revision' }));
     });
 
-    expect(await screen.findByText('draft1 is now bound. Review the invoke contract below.')).toBeTruthy();
+    expect(
+      await screen.findByText(
+        'draft1 binding request was accepted. Studio will show the published contract after the run completes.',
+      ),
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Switch candidate' }));
 
     expect(await screen.findByText('No published contract exists for joker yet.')).toBeTruthy();
     expect(
-      screen.queryByText('draft1 is now bound. Review the invoke contract below.'),
+      screen.queryByText(
+        'draft1 binding request was accepted. Studio will show the published contract after the run completes.',
+      ),
     ).toBeNull();
     expect(
-      screen.queryByText('joker is now bound. Review the invoke contract below.'),
+      screen.queryByText(
+        'joker binding request was accepted. Studio will show the published contract after the run completes.',
+      ),
     ).toBeNull();
   });
 });

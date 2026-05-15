@@ -11,14 +11,21 @@ enum AgentRunStatus {
   AGENT_RUN_STATUS_UNSPECIFIED = 0;
   AGENT_RUN_STATUS_STARTED = 1;
   // The LLM run has produced an immutable reply payload (success or failure
-  // terminal state) and persisted it. Whether the LlmReplyReadyEvent has been
-  // successfully delivered to the conversation actor is tracked separately by
-  // `reply_dispatched` on AgentRunGAgentState. Output dispatch retries that
-  // happen while `reply_dispatched=false` must re-deliver the persisted payload
-  // rather than re-run the LLM / tool chain.
+  // terminal state) and persisted it, but the LlmReplyReadyEvent has not yet
+  // been accepted by the target conversation actor. Output-dispatch retries
+  // that happen in this status must re-deliver the persisted payload rather
+  // than re-run the LLM / tool chain.
   AGENT_RUN_STATUS_REPLY_PRODUCED = 2;
   AGENT_RUN_STATUS_DROPPED = 3;
   AGENT_RUN_STATUS_FAILED = 4;
+  // The LlmReplyReadyEvent has been accepted by the target conversation
+  // actor. This is the AgentRunGAgent-side terminal: from here on the run
+  // actor only schedules cleanup; it never re-runs the LLM or re-dispatches.
+  // NOTE: REPLY_HANDED_OFF != chain.delivered. The chain-level delivered
+  // phase (user-visible) is owned by ConversationGAgent and observed via
+  // ConversationGAgentState.last_reply_delivery; REPLY_HANDED_OFF is a
+  // necessary-not-sufficient precondition. See ADR-0021.
+  AGENT_RUN_STATUS_REPLY_HANDED_OFF = 5;
 }
 
 message AgentRunGAgentState {
@@ -35,10 +42,17 @@ message AgentRunGAgentState {
   string produced_reply_text = 9;
   aevatar.gagents.channel.abstractions.MessageContent produced_outbound = 10;
   aevatar.gagents.channel.runtime.LlmReplyTerminalState produced_terminal_state = 11;
-  // True once the LlmReplyReadyEvent has been accepted by the target
-  // conversation actor. Until then, the run actor must retry only the
-  // dispatch — never the LLM call.
-  bool reply_dispatched = 12;
+  // Field 12 (`reply_dispatched`) was a bool flag promoted to the explicit
+  // AGENT_RUN_STATUS_REPLY_HANDED_OFF status in ADR-0021. Reserved here so
+  // accidental reuse of the field number, or a stale serializer built before
+  // the split, fails loudly instead of silently masking the new status.
+  reserved 12;
+  reserved "reply_dispatched";
+  // Wall-clock when the terminal-state cleanup callback completed. Combined
+  // with status ∈ {DROPPED, FAILED, REPLY_HANDED_OFF}, a non-zero value
+  // marks the run as finalized (chain.finalized) — late ready/dropped/failed
+  // /cleanup signals must no-op from this point.
+  int64 cleanup_completed_at_unix_ms = 13;
 }
 
 // Transient command for the run actor. The nested NeedsLlmReplyEvent may carry
@@ -102,4 +116,15 @@ message AgentRunFailedEvent {
   string error_code = 4;
   string error_summary = 5;
   int64 failed_at_unix_ms = 6;
+}
+
+// Persisted by the terminal-state cleanup callback after it has finished its
+// idempotent work (in-memory token eviction, scheduler unregistration, etc.).
+// Combined with terminal status, this event drives
+// AgentRunGAgentState.cleanup_completed_at_unix_ms to a non-zero value and
+// marks the run as finalized (chain.finalized) per ADR-0021.
+message AgentRunCleanupCompletedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  int64 completed_at_unix_ms = 3;
 }

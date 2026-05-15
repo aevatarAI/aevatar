@@ -12,47 +12,47 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Tests.Projection;
 
-public sealed class ResponseSessionCurrentStateProjectorTests
+public sealed class LlmSessionCurrentStateProjectorTests
 {
     private const string ActorId = "response-session-actor-1";
 
     [Fact]
     public async Task ProjectAsync_ShouldMaterializeCurrentState_AndQueryByResponseId()
     {
-        var store = new RecordingDocumentStore<ResponseSessionCurrentStateReadModel>(x => x.Id);
-        var projector = new ResponseSessionCurrentStateProjector(
+        var store = new RecordingDocumentStore<LlmSessionCurrentStateReadModel>(x => x.Id);
+        var projector = new LlmSessionCurrentStateProjector(
             store,
             new FixedProjectionClock(DateTimeOffset.Parse("2026-04-27T00:00:00+00:00")));
-        var reader = new ResponseSessionQueryReader(store);
+        var reader = new LlmSessionQueryReader(store);
         var observedAt = DateTimeOffset.Parse("2026-04-27T01:00:00+00:00");
         var record = BuildRecord("resp_1", previousResponseId: "resp_0", observedAt);
 
         await projector.ProjectAsync(
-            new ResponseSessionCurrentStateProjectionContext
+            new LlmSessionCurrentStateProjectionContext
             {
                 RootActorId = ActorId,
                 ProjectionKind = "response-sessions",
             },
             WrapCommittedSessionState(record, stateVersion: 7, eventId: "evt-1", observedAt));
 
-        var doc = await store.GetAsync(ResponseSessionIds.BuildKey("resp_1"));
+        var doc = await store.GetAsync(LlmSessionIds.BuildKey("resp_1"));
         doc.Should().NotBeNull();
         doc!.ResponseId.Should().Be("resp_1");
         doc.PreviousResponseId.Should().Be("resp_0");
         doc.ScopeId.Should().Be("user-1");
         doc.OwnerSubject.Should().Be("user-1");
-        doc.OriginKind.Should().Be((int)ResponseSessionOriginKind.ApiKey);
-        doc.Status.Should().Be((int)ResponseSessionStatus.Completed);
+        doc.OriginKind.Should().Be((int)LlmSessionOriginKind.ApiKey);
+        doc.Status.Should().Be((int)LlmSessionStatus.Completed);
         doc.ActorId.Should().Be(ActorId);
         doc.StateVersion.Should().Be(7);
         doc.ForwardedToolCalls.Should().ContainSingle();
         doc.ForwardedToolCalls[0].CallId.Should().Be("call_1");
-        doc.ForwardedToolCalls[0].Status.Should().Be((int)ResponseSessionForwardedToolCallStatus.Received);
+        doc.ForwardedToolCalls[0].Status.Should().Be((int)LlmSessionForwardedToolCallStatus.Received);
 
         var snapshot = await reader.GetByResponseIdAsync("resp_1");
         snapshot.Should().NotBeNull();
         snapshot!.PreviousResponseId.Should().Be("resp_0");
-        snapshot.Status.Should().Be(ResponseSessionStatus.Completed);
+        snapshot.Status.Should().Be(LlmSessionStatus.Completed);
         snapshot.ForwardedToolCalls.Should().ContainSingle();
         snapshot.ForwardedToolCalls![0].ResultJson.Should().Be("""{"temperature":28}""");
     }
@@ -60,15 +60,15 @@ public sealed class ResponseSessionCurrentStateProjectorTests
     [Fact]
     public async Task ProjectAsync_ShouldIgnoreState_WithMissingOwner()
     {
-        var store = new RecordingDocumentStore<ResponseSessionCurrentStateReadModel>(x => x.Id);
-        var projector = new ResponseSessionCurrentStateProjector(
+        var store = new RecordingDocumentStore<LlmSessionCurrentStateReadModel>(x => x.Id);
+        var projector = new LlmSessionCurrentStateProjector(
             store,
             new FixedProjectionClock(DateTimeOffset.UtcNow));
         var record = BuildRecord("resp_1", previousResponseId: null, DateTimeOffset.UtcNow);
         record.OwnerSubject = string.Empty;
 
         await projector.ProjectAsync(
-            new ResponseSessionCurrentStateProjectionContext
+            new LlmSessionCurrentStateProjectionContext
             {
                 RootActorId = ActorId,
                 ProjectionKind = "response-sessions",
@@ -81,29 +81,29 @@ public sealed class ResponseSessionCurrentStateProjectorTests
     [Fact]
     public async Task QueryReader_ShouldSynthesizeExpiredToolCallResult_WhenReadModelHasNoResult()
     {
-        var store = new RecordingDocumentStore<ResponseSessionCurrentStateReadModel>(x => x.Id);
-        var reader = new ResponseSessionQueryReader(store);
-        await store.UpsertAsync(new ResponseSessionCurrentStateReadModel
+        var store = new RecordingDocumentStore<LlmSessionCurrentStateReadModel>(x => x.Id);
+        var reader = new LlmSessionQueryReader(store);
+        await store.UpsertAsync(new LlmSessionCurrentStateReadModel
         {
-            Id = ResponseSessionIds.BuildKey("resp_1"),
+            Id = LlmSessionIds.BuildKey("resp_1"),
             ResponseId = "resp_1",
             ScopeId = "user-1",
             OwnerSubject = "user-1",
-            OriginKind = (int)ResponseSessionOriginKind.ApiKey,
-            Status = (int)ResponseSessionStatus.Expired,
+            OriginKind = (int)LlmSessionOriginKind.ApiKey,
+            Status = (int)LlmSessionStatus.Expired,
             ActorId = ActorId,
             StateVersion = 3,
             CreatedAt = DateTimeOffset.Parse("2026-04-27T01:00:00+00:00"),
             TtlSeconds = (long)TimeSpan.FromHours(1).TotalSeconds,
             ForwardedToolCalls =
             [
-                new ResponseSessionForwardedToolCallReadModel
+                new LlmSessionForwardedToolCallReadModel
                 {
                     CallId = "call_1",
                     ToolName = "get_weather",
                     SchemaHash = "schema-1",
                     Arguments = ResponsesJsonValues.ParseBoundaryPayload("""{"city":"Singapore"}"""),
-                    Status = (int)ResponseSessionForwardedToolCallStatus.Expired,
+                    Status = (int)LlmSessionForwardedToolCallStatus.Expired,
                 },
             ],
         });
@@ -116,7 +116,7 @@ public sealed class ResponseSessionCurrentStateProjectorTests
             .Should().Be("""{"error":"tool_call_expired","call_id":"call_1"}""");
     }
 
-    private static ResponseSessionRecord BuildRecord(
+    private static LlmSessionRecord BuildRecord(
         string responseId,
         string? previousResponseId,
         DateTimeOffset observedAt) =>
@@ -125,33 +125,33 @@ public sealed class ResponseSessionCurrentStateProjectorTests
             ResponseId = responseId,
             ScopeId = "user-1",
             OwnerSubject = "user-1",
-            OriginKind = ResponseSessionOriginKind.ApiKey,
+            OriginKind = LlmSessionOriginKind.ApiKey,
             PreviousResponseId = previousResponseId ?? string.Empty,
-            Status = ResponseSessionStatus.Completed,
+            Status = LlmSessionStatus.Completed,
             CreatedAt = Timestamp.FromDateTimeOffset(observedAt),
             UpdatedAt = Timestamp.FromDateTimeOffset(observedAt),
             Ttl = Duration.FromTimeSpan(TimeSpan.FromHours(24)),
         };
 
     private static EventEnvelope WrapCommittedSessionState(
-        ResponseSessionRecord record,
+        LlmSessionRecord record,
         long stateVersion,
         string eventId,
         DateTimeOffset observedAt)
     {
-        var state = new ResponseSessionState
+        var state = new LlmSessionState
         {
             Record = record.Clone(),
             LastAppliedEventVersion = stateVersion,
             LastEventId = eventId,
         };
-        state.ForwardedToolCalls.Add(new ResponseSessionForwardedToolCall
+        state.ForwardedToolCalls.Add(new LlmSessionForwardedToolCall
         {
             CallId = "call_1",
             ToolName = "get_weather",
             SchemaHash = "schema-1",
             Arguments = ResponsesJsonValues.ParseBoundaryPayload("""{"city":"Singapore"}"""),
-            Status = ResponseSessionForwardedToolCallStatus.Received,
+            Status = LlmSessionForwardedToolCallStatus.Received,
             Result = ResponsesJsonValues.ParseBoundaryPayload("""{"temperature":28}"""),
             EmittedAt = Timestamp.FromDateTimeOffset(observedAt.AddMinutes(-2)),
             ReceivedAt = Timestamp.FromDateTimeOffset(observedAt.AddMinutes(-1)),
@@ -169,7 +169,7 @@ public sealed class ResponseSessionCurrentStateProjectorTests
                     EventId = eventId,
                     Version = stateVersion,
                     Timestamp = Timestamp.FromDateTimeOffset(observedAt),
-                    EventData = Any.Pack(new ResponseSessionRegisteredEvent
+                    EventData = Any.Pack(new LlmSessionRegisteredEvent
                     {
                         Record = record.Clone(),
                     }),

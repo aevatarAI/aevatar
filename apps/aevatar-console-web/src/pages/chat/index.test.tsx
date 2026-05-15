@@ -1136,7 +1136,7 @@ describe("ChatPage", () => {
     });
   });
 
-  it("opens the advanced console and queries the current scope binding", async () => {
+  it("opens the advanced console and queries the current workspace binding", async () => {
     renderWithQueryClient(React.createElement(ChatPage));
 
     const serviceSelector = await screen.findByLabelText("Chat service");
@@ -1148,7 +1148,7 @@ describe("ChatPage", () => {
     expect(await screen.findByText("Advanced Console")).toBeTruthy();
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Query Scope Binding" })
+      await screen.findByRole("button", { name: "Query Workspace Binding" })
     );
 
     expect(

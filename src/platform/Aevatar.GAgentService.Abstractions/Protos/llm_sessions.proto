@@ -8,37 +8,37 @@ import "google/protobuf/duration.proto";
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 
-enum ResponseSessionOriginKind {
-  RESPONSE_SESSION_ORIGIN_KIND_UNSPECIFIED = 0;
-  RESPONSE_SESSION_ORIGIN_KIND_API_KEY = 1;
-  RESPONSE_SESSION_ORIGIN_KIND_CHANNEL = 2;
+enum LlmSessionOriginKind {
+  LLM_SESSION_ORIGIN_KIND_UNSPECIFIED = 0;
+  LLM_SESSION_ORIGIN_KIND_API_KEY = 1;
+  LLM_SESSION_ORIGIN_KIND_CHANNEL = 2;
 }
 
-enum ResponseSessionStatus {
-  RESPONSE_SESSION_STATUS_UNSPECIFIED = 0;
-  RESPONSE_SESSION_STATUS_ACCEPTED = 1;
-  RESPONSE_SESSION_STATUS_COMPLETED = 2;
-  RESPONSE_SESSION_STATUS_FAILED = 3;
-  RESPONSE_SESSION_STATUS_CANCELLED = 4;
-  RESPONSE_SESSION_STATUS_EXPIRED = 5;
+enum LlmSessionStatus {
+  LLM_SESSION_STATUS_UNSPECIFIED = 0;
+  LLM_SESSION_STATUS_ACCEPTED = 1;
+  LLM_SESSION_STATUS_COMPLETED = 2;
+  LLM_SESSION_STATUS_FAILED = 3;
+  LLM_SESSION_STATUS_CANCELLED = 4;
+  LLM_SESSION_STATUS_EXPIRED = 5;
 }
 
-enum ResponseSessionForwardedToolCallStatus {
-  RESPONSE_SESSION_FORWARDED_TOOL_CALL_STATUS_UNSPECIFIED = 0;
-  RESPONSE_SESSION_FORWARDED_TOOL_CALL_STATUS_PENDING = 1;
-  RESPONSE_SESSION_FORWARDED_TOOL_CALL_STATUS_RECEIVED = 2;
-  RESPONSE_SESSION_FORWARDED_TOOL_CALL_STATUS_RESOLVED = 3;
-  RESPONSE_SESSION_FORWARDED_TOOL_CALL_STATUS_EXPIRED = 4;
-  RESPONSE_SESSION_FORWARDED_TOOL_CALL_STATUS_CANCELLED = 5;
+enum LlmSessionForwardedToolCallStatus {
+  LLM_SESSION_FORWARDED_TOOL_CALL_STATUS_UNSPECIFIED = 0;
+  LLM_SESSION_FORWARDED_TOOL_CALL_STATUS_PENDING = 1;
+  LLM_SESSION_FORWARDED_TOOL_CALL_STATUS_RECEIVED = 2;
+  LLM_SESSION_FORWARDED_TOOL_CALL_STATUS_RESOLVED = 3;
+  LLM_SESSION_FORWARDED_TOOL_CALL_STATUS_EXPIRED = 4;
+  LLM_SESSION_FORWARDED_TOOL_CALL_STATUS_CANCELLED = 5;
 }
 
-message ResponseSessionRecord {
+message LlmSessionRecord {
   string response_id = 1;
   string scope_id = 2;
   string owner_subject = 3;
-  ResponseSessionOriginKind origin_kind = 4;
+  LlmSessionOriginKind origin_kind = 4;
   string previous_response_id = 5;
-  ResponseSessionStatus status = 6;
+  LlmSessionStatus status = 6;
   google.protobuf.Timestamp created_at = 7;
   google.protobuf.Duration ttl = 8;
   google.protobuf.Timestamp cancelled_at = 9;
@@ -47,12 +47,12 @@ message ResponseSessionRecord {
 
 // Forwarded tool call. External JSON is converted at the host/adapter boundary
 // into protobuf Value before entering actor state/events.
-message ResponseSessionForwardedToolCall {
+message LlmSessionForwardedToolCall {
   string call_id = 1;
   string tool_name = 2;
   string schema_hash = 3;
   google.protobuf.Value arguments = 4;
-  ResponseSessionForwardedToolCallStatus status = 5;
+  LlmSessionForwardedToolCallStatus status = 5;
   google.protobuf.Timestamp expiry = 6;
   google.protobuf.Value result = 7;
   google.protobuf.Timestamp emitted_at = 8;
@@ -60,30 +60,30 @@ message ResponseSessionForwardedToolCall {
   google.protobuf.Timestamp resolved_at = 10;
 }
 
-message ResponseSessionState {
-  ResponseSessionRecord record = 1;
+message LlmSessionState {
+  LlmSessionRecord record = 1;
   int64 last_applied_event_version = 2;
   string last_event_id = 3;
-  repeated ResponseSessionForwardedToolCall forwarded_tool_calls = 4;
+  repeated LlmSessionForwardedToolCall forwarded_tool_calls = 4;
 }
 
 message RegisterResponseSessionRequested {
-  ResponseSessionRecord record = 1;
+  LlmSessionRecord record = 1;
 }
 
-message ResponseSessionRegisteredEvent {
-  ResponseSessionRecord record = 1;
+message LlmSessionRegisteredEvent {
+  LlmSessionRecord record = 1;
 }
 
 message UpdateResponseSessionStatusRequested {
   string response_id = 1;
-  ResponseSessionStatus status = 2;
+  LlmSessionStatus status = 2;
   google.protobuf.Timestamp updated_at = 3;
 }
 
-message ResponseSessionStatusUpdatedEvent {
+message LlmSessionStatusUpdatedEvent {
   string response_id = 1;
-  ResponseSessionStatus status = 2;
+  LlmSessionStatus status = 2;
   google.protobuf.Timestamp updated_at = 3;
 }
 
@@ -94,12 +94,12 @@ message ExpireResponseSessionRequested {
 
 message RecordForwardedToolCallRequested {
   string response_id = 1;
-  ResponseSessionForwardedToolCall call = 2;
+  LlmSessionForwardedToolCall call = 2;
 }
 
-message ResponseSessionForwardedToolCallEmittedEvent {
+message LlmSessionForwardedToolCallEmittedEvent {
   string response_id = 1;
-  ResponseSessionForwardedToolCall call = 2;
+  LlmSessionForwardedToolCall call = 2;
 }
 
 message ReceiveForwardedToolResultRequested {
@@ -110,7 +110,7 @@ message ReceiveForwardedToolResultRequested {
   google.protobuf.Timestamp received_at = 5;
 }
 
-message ResponseSessionForwardedToolResultReceivedEvent {
+message LlmSessionForwardedToolResultReceivedEvent {
   string response_id = 1;
   string call_id = 2;
   string schema_hash = 3;
@@ -124,7 +124,7 @@ message ResolveForwardedToolResultRequested {
   google.protobuf.Timestamp resolved_at = 3;
 }
 
-message ResponseSessionForwardedToolCallResolvedEvent {
+message LlmSessionForwardedToolCallResolvedEvent {
   string response_id = 1;
   string call_id = 2;
   google.protobuf.Timestamp resolved_at = 3;

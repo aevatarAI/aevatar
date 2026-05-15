@@ -205,9 +205,9 @@ message ServiceRunCurrentStateReadModel {
   google.protobuf.Timestamp updated_at_utc_value = 21;
 }
 
-// --- ResponseSessionCurrentStateReadModel ---
+// --- LlmSessionCurrentStateReadModel ---
 
-message ResponseSessionCurrentStateReadModel {
+message LlmSessionCurrentStateReadModel {
   string id = 1;
   string actor_id = 2;
   int64 state_version = 3;
@@ -224,10 +224,10 @@ message ResponseSessionCurrentStateReadModel {
   google.protobuf.Timestamp updated_at_utc_value = 12;
   google.protobuf.Timestamp cancelled_at_utc_value = 13;
   int64 ttl_seconds = 14;
-  repeated ResponseSessionForwardedToolCallReadModel forwarded_tool_call_entries = 15;
+  repeated LlmSessionForwardedToolCallReadModel forwarded_tool_call_entries = 15;
 }
 
-message ResponseSessionForwardedToolCallReadModel {
+message LlmSessionForwardedToolCallReadModel {
   string call_id = 1;
   string tool_name = 2;
   string schema_hash = 3;

@@ -165,24 +165,6 @@ public sealed class StudioMemberPRReviewFixesTests
     }
 
     [Fact]
-    public async Task HandleBindAsync_ShouldReturn404_WhenMemberNotFoundExceptionThrown()
-    {
-        var service = new ThrowingService(new StudioMemberNotFoundException("scope-1", "m-missing"));
-
-        var result = await InvokeHandle(
-            "HandleBindAsync",
-            CreateAuthenticatedContext("scope-1"),
-            "scope-1",
-            "m-missing",
-            new UpdateStudioMemberBindingRequest(),
-            service,
-            CancellationToken.None);
-
-        var statusCode = result.GetType().GetProperty("StatusCode")?.GetValue(result) as int?;
-        statusCode.Should().Be(StatusCodes.Status404NotFound);
-    }
-
-    [Fact]
     public async Task HandleGetBindingAsync_ShouldReturn404_WhenMemberNotFoundExceptionThrown()
     {
         var service = new ThrowingService(new StudioMemberNotFoundException("scope-1", "m-missing"));
@@ -252,14 +234,17 @@ public sealed class StudioMemberPRReviewFixesTests
         public Task<StudioMemberRosterResponse> ListAsync(
             string scopeId, StudioMemberRosterPageRequest? page = null, CancellationToken ct = default) => throw _ex;
 
-        public Task<StudioMemberDetailResponse?> GetAsync(
+        public Task<StudioMemberDetailResponse> GetAsync(
             string scopeId, string memberId, CancellationToken ct = default) => throw _ex;
 
-        public Task<StudioMemberBindingResponse> BindAsync(
+        public Task<StudioMemberBindingAcceptedResponse> BindAsync(
             string scopeId, string memberId, UpdateStudioMemberBindingRequest request, CancellationToken ct = default) => throw _ex;
 
-        public Task<StudioMemberBindingContractResponse?> GetBindingAsync(
+        public Task<StudioMemberBindingViewResponse> GetBindingAsync(
             string scopeId, string memberId, CancellationToken ct = default) => throw _ex;
+
+        public Task<StudioMemberBindingRunStatusResponse> GetBindingRunAsync(
+            string scopeId, string memberId, string bindingRunId, CancellationToken ct = default) => throw _ex;
 
         public Task<StudioMemberEndpointContractResponse?> GetEndpointContractAsync(
             string scopeId, string memberId, string endpointId, CancellationToken ct = default) => throw _ex;

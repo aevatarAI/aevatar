@@ -42,12 +42,47 @@ public sealed class ConversationReplyGeneratorTests
             streamingSink: null,
             CancellationToken.None);
 
-        reply.Should().Be("ok");
+        reply.Text.Should().Be("ok");
         providerFactory.Requests.Should().ContainSingle();
         var systemPrompt = providerFactory.Requests[0].Messages.First(message => message.Role == "system").Content;
         systemPrompt.Should().Contain("https://dev.aevatar.local/api/webhooks/nyxid-relay");
         systemPrompt.Should().NotContain("https://aevatar-console-backend-api.aevatar.ai/api/webhooks/nyxid-relay");
         systemPrompt.Should().Contain("chrono-ai-daily");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_AggregatesUsageAndFinishReasonAtActorEdge()
+    {
+        // ADR-0021 §6 / canon §8: the actor-edge closeout returned by GenerateReplyAsync
+        // MUST surface aggregated Usage and FinishReason from the underlying provider
+        // stream, regardless of whether those values arrived on a mid-stream Usage chunk
+        // or on the IsLast marker. Round-internal terminal markers must not leak past
+        // ConversationReplyGenerator.
+        var providerFactory = new UsageReportingProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            relayOptions: new global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                WebhookBaseUrl = "https://dev.aevatar.local/",
+            });
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-closeout",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("answer");
+        reply.Usage.Should().NotBeNull();
+        reply.Usage!.PromptTokens.Should().Be(7);
+        reply.Usage.CompletionTokens.Should().Be(11);
+        reply.Usage.TotalTokens.Should().Be(18);
+        reply.FinishReason.Should().Be("stop");
     }
 
     [Fact]
@@ -76,7 +111,7 @@ public sealed class ConversationReplyGeneratorTests
             sink,
             CancellationToken.None);
 
-        reply.Should().Be("ok");
+        reply.Text.Should().Be("ok");
         // First emit must be the placeholder, before any LLM delta.
         sink.Emissions.Should().NotBeEmpty();
         sink.Emissions[0].Should().Be("…");
@@ -131,7 +166,7 @@ public sealed class ConversationReplyGeneratorTests
             streamingSink: null,
             CancellationToken.None);
 
-        reply.Should().Be("ok");
+        reply.Text.Should().Be("ok");
     }
 
     [Fact]
@@ -156,7 +191,7 @@ public sealed class ConversationReplyGeneratorTests
                 streamingSink: null,
                 CancellationToken.None);
 
-            reply.Should().Be("done");
+            reply.Text.Should().Be("done");
         }
 
         approvalHandler.RequestCount.Should().Be(4);
@@ -391,7 +426,7 @@ public sealed class ConversationReplyGeneratorTests
             streamingSink: null,
             CancellationToken.None);
 
-        reply.Should().Be("ok");
+        reply.Text.Should().Be("ok");
         providerFactory.Requests.Should().HaveCount(2);
         var senderMetadata = providerFactory.Requests[0].Metadata!;
         senderMetadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("sender-model");
@@ -592,6 +627,36 @@ public sealed class ConversationReplyGeneratorTests
         {
             Emissions.Add(accumulatedText);
             return Task.CompletedTask;
+        }
+    }
+
+    // ADR-0021 §6 / canon §8 contract harness: a provider that emits Usage and
+    // FinishReason in mid-stream and IsLast chunks so the test asserts the
+    // actor-edge closeout aggregates them instead of letting round-internal
+    // markers leak past ConversationReplyGenerator.
+    private sealed class UsageReportingProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "usage-reporting";
+        public ILLMProvider GetProvider(string name) => this;
+        public ILLMProvider GetDefault() => this;
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default) =>
+            Task.FromResult(new LLMResponse { Content = "non-streaming path should not be used" });
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            yield return new LLMStreamChunk { DeltaContent = "answer" };
+            // Provider emits Usage in a mid-stream "bookkeeping" chunk before IsLast.
+            yield return new LLMStreamChunk
+            {
+                Usage = new TokenUsage(PromptTokens: 7, CompletionTokens: 11, TotalTokens: 18),
+                FinishReason = "stop",
+            };
+            await Task.CompletedTask;
+            yield return new LLMStreamChunk { IsLast = true };
         }
     }
 

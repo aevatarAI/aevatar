@@ -2,9 +2,9 @@ using Aevatar.GAgentService.Abstractions.Queries;
 
 namespace Aevatar.GAgentService.Abstractions.Ports;
 
-public interface IResponseSessionQueryPort
+public interface ILlmSessionQueryPort
 {
-    Task<ResponseSessionSnapshot?> GetByResponseIdAsync(
+    Task<LlmSessionSnapshot?> GetByResponseIdAsync(
         string responseId,
         CancellationToken ct = default);
 }

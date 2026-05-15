@@ -811,7 +811,7 @@ const RunsPage: React.FC = () => {
           requestedRun.payloadBase64?.trim() ?? "";
 
         if (!normalizedScopeId) {
-          throw new Error("Scope ID is required.");
+          throw new Error("Workspace ID is required.");
         }
         if (normalizedEndpointKind === "command" && !normalizedEndpointId) {
           throw new Error("Endpoint ID is required for command invokes.");
@@ -896,7 +896,7 @@ const RunsPage: React.FC = () => {
                 messageApi.warning(
                   `Selected service '${extractMissingServiceId(
                     event.message ?? ""
-                  )}' is no longer available. Retrying with the scope default binding.`
+                  )}' is no longer available. Retrying with the workspace default binding.`
                 );
                 await runAttempt(
                   {
@@ -987,7 +987,7 @@ const RunsPage: React.FC = () => {
             messageApi.warning(
               `Selected service '${extractMissingServiceId(
                 text
-              )}' is no longer available. Retrying with the scope default binding.`
+              )}' is no longer available. Retrying with the workspace default binding.`
             );
             await runAttempt(
               {
@@ -1074,7 +1074,7 @@ const RunsPage: React.FC = () => {
       const scopeId = resolveRunScopeId();
       const serviceOverrideId = resolveRunServiceOverrideId();
       if (!scopeId) {
-        throw new Error("Scope ID is required to resume a run.");
+        throw new Error("Workspace ID is required to resume a run.");
       }
 
       return runtimeRunsApi.resume(scopeId, request, {
@@ -1085,7 +1085,7 @@ const RunsPage: React.FC = () => {
       const scopeId = resolveRunScopeId();
       const serviceOverrideId = resolveRunServiceOverrideId();
       if (!scopeId) {
-        throw new Error("Scope ID is required to signal a run.");
+        throw new Error("Workspace ID is required to signal a run.");
       }
 
       return runtimeRunsApi.signal(scopeId, request, {
@@ -1325,7 +1325,7 @@ const RunsPage: React.FC = () => {
 
       return {
         routeName: endpointName,
-        groupLabel: endpointInvocationDraftPayload ? "Scope" : "Scope binding",
+        groupLabel: endpointInvocationDraftPayload ? "Workspace" : "Workspace binding",
         sourceLabel: endpointInvocationDraftPayload
           ? "Invocation draft"
           : payloadTypeUrl

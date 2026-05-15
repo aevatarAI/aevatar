@@ -7,7 +7,7 @@ namespace Aevatar.Mainnet.Host.Api.Responses;
 internal sealed record ResponsesCallerScope(
     string ScopeId,
     string OwnerSubject,
-    ResponseSessionOriginKind OriginKind);
+    LlmSessionOriginKind OriginKind);
 
 internal interface IResponsesCallerScopeResolver
 {
@@ -45,7 +45,7 @@ internal sealed class NyxIdResponsesCallerScopeResolver : IResponsesCallerScopeR
         return new ResponsesCallerScope(
             ScopeId: normalizedUserId,
             OwnerSubject: normalizedUserId,
-            OriginKind: ResponseSessionOriginKind.ApiKey);
+            OriginKind: LlmSessionOriginKind.ApiKey);
     }
 }
 

@@ -38,18 +38,22 @@ public sealed class CachingResponsesRouteResolverTests
     }
 
     [Fact]
-    public async Task ResolveRouteValueAsync_ShouldOmitDisallowedServicesFromRouteMap()
+    public async Task ResolveRouteValueAsync_ShouldIncludeDisallowedServicesSoDownstreamCanReturnHonestError()
     {
-        // `Allowed=false` (e.g. provider exists but caller isn't connected) means the
-        // proxy will reject anyway — don't pretend the route is usable.
+        // Catalog's `Allowed=false` reflects "user hasn't bound a credential" (a UI hint),
+        // not "this route can't serve requests." Several services with
+        // `requires_connection=true + connected=false` (e.g. chrono-llm in prod) still
+        // serve traffic because the backing LLM is shared at deployment level. Including
+        // the route lets NyxID return the honest 403/404 if the caller really can't reach
+        // the upstream, instead of aevatar pretending the slug doesn't exist.
         var catalog = new RecordingCatalogPort(new NyxIdLlmServicesResult(
         [
-            MakeService("openai", "/api/v1/llm/openai/v1", allowed: false),
+            MakeService("chrono-llm", "/api/v1/proxy/s/chrono-llm", allowed: false),
         ], null));
         var resolver = new CachingResponsesRouteResolver(catalog, NullLogger<CachingResponsesRouteResolver>.Instance);
 
-        (await resolver.ResolveRouteValueAsync("openai", "bearer-1", CancellationToken.None))
-            .Should().BeNull();
+        (await resolver.ResolveRouteValueAsync("chrono-llm", "bearer-1", CancellationToken.None))
+            .Should().Be("/api/v1/proxy/s/chrono-llm");
     }
 
     [Fact]

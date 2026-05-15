@@ -80,13 +80,13 @@ public static class ServiceCollectionExtensions
                 ProjectionKind = scopeKey.ProjectionKind,
             },
             static context => new ServiceProjectionRuntimeLease<ServiceRunCurrentStateProjectionContext>(context.RootActorId, context));
-        services.AddServiceProjectionRuntime<ResponseSessionCurrentStateProjectionContext, ProjectionMaterializationScopeGAgent<ResponseSessionCurrentStateProjectionContext>>(
-            static scopeKey => new ResponseSessionCurrentStateProjectionContext
+        services.AddServiceProjectionRuntime<LlmSessionCurrentStateProjectionContext, ProjectionMaterializationScopeGAgent<LlmSessionCurrentStateProjectionContext>>(
+            static scopeKey => new LlmSessionCurrentStateProjectionContext
             {
                 RootActorId = scopeKey.RootActorId,
                 ProjectionKind = scopeKey.ProjectionKind,
             },
-            static context => new ServiceProjectionRuntimeLease<ResponseSessionCurrentStateProjectionContext>(context.RootActorId, context));
+            static context => new ServiceProjectionRuntimeLease<LlmSessionCurrentStateProjectionContext>(context.RootActorId, context));
         services.AddServiceProjectionRuntime<ResponsesAgentToolStateCurrentStateProjectionContext, ProjectionMaterializationScopeGAgent<ResponsesAgentToolStateCurrentStateProjectionContext>>(
             static scopeKey => new ResponsesAgentToolStateCurrentStateProjectionContext
             {
@@ -114,7 +114,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceTrafficViewProjectionPort, ServiceTrafficViewProjectionPort>();
         services.TryAddSingleton<IServiceRevisionCatalogProjectionPort, ServiceRevisionCatalogProjectionPort>();
         services.TryAddSingleton<IServiceRunCurrentStateProjectionPort, ServiceRunCurrentStateProjectionPort>();
-        services.TryAddSingleton<IResponseSessionCurrentStateProjectionPort, ResponseSessionCurrentStateProjectionPort>();
+        services.TryAddSingleton<ILlmSessionCurrentStateProjectionPort, LlmSessionCurrentStateProjectionPort>();
         services.TryAddSingleton<IResponsesAgentToolStateCurrentStateProjectionPort, ResponsesAgentToolStateCurrentStateProjectionPort>();
         services.TryAddSingleton<IProjectionSessionEventCodec<AGUIEvent>, GAgentDraftRunSessionEventCodec>();
         services.TryAddSingleton<IProjectionSessionEventHub<AGUIEvent>, ProjectionSessionEventHub<AGUIEvent>>();
@@ -127,7 +127,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceTrafficViewReadModel>, ServiceTrafficViewReadModelMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceRevisionCatalogReadModel>, ServiceRevisionCatalogReadModelMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceRunCurrentStateReadModel>, ServiceRunCurrentStateReadModelMetadataProvider>();
-        services.TryAddSingleton<IProjectionDocumentMetadataProvider<ResponseSessionCurrentStateReadModel>, ResponseSessionCurrentStateReadModelMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<LlmSessionCurrentStateReadModel>, LlmSessionCurrentStateReadModelMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ResponsesAgentToolStateCurrentStateReadModel>, ResponsesAgentToolStateCurrentStateReadModelMetadataProvider>();
         services.TryAddSingleton<IServiceCatalogQueryReader, ServiceCatalogQueryReader>();
         services.TryAddSingleton<IServiceDeploymentCatalogQueryReader, ServiceDeploymentCatalogQueryReader>();
@@ -137,7 +137,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceTrafficViewQueryReader, ServiceTrafficViewQueryReader>();
         services.TryAddSingleton<IServiceRevisionCatalogQueryReader, ServiceRevisionCatalogQueryReader>();
         services.TryAddSingleton<IServiceRunQueryPort, ServiceRunQueryReader>();
-        services.TryAddSingleton<IResponseSessionQueryPort, ResponseSessionQueryReader>();
+        services.TryAddSingleton<ILlmSessionQueryPort, LlmSessionQueryReader>();
         services.TryAddSingleton<IResponsesAgentToolStateQueryPort, ResponsesAgentToolStateQueryReader>();
         services.AddProjectionArtifactMaterializer<
             ServiceCatalogProjectionContext,
@@ -164,8 +164,8 @@ public static class ServiceCollectionExtensions
             ServiceRunCurrentStateProjectionContext,
             ServiceRunCurrentStateProjector>();
         services.AddCurrentStateProjectionMaterializer<
-            ResponseSessionCurrentStateProjectionContext,
-            ResponseSessionCurrentStateProjector>();
+            LlmSessionCurrentStateProjectionContext,
+            LlmSessionCurrentStateProjector>();
         services.AddCurrentStateProjectionMaterializer<
             ResponsesAgentToolStateCurrentStateProjectionContext,
             ResponsesAgentToolStateCurrentStateProjector>();

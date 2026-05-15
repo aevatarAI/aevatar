@@ -420,11 +420,14 @@ public sealed class StudioTeamEndpointTests
         public Task<StudioMemberDetailResponse> GetAsync(
             string scopeId, string memberId, CancellationToken ct = default) =>
             throw new NotImplementedException();
-        public Task<StudioMemberBindingResponse> BindAsync(
+        public Task<StudioMemberBindingAcceptedResponse> BindAsync(
             string scopeId, string memberId, UpdateStudioMemberBindingRequest request, CancellationToken ct = default) =>
             throw new NotImplementedException();
-        public Task<StudioMemberBindingContractResponse?> GetBindingAsync(
+        public Task<StudioMemberBindingViewResponse> GetBindingAsync(
             string scopeId, string memberId, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+        public Task<StudioMemberBindingRunStatusResponse> GetBindingRunAsync(
+            string scopeId, string memberId, string bindingRunId, CancellationToken ct = default) =>
             throw new NotImplementedException();
         public Task<StudioMemberEndpointContractResponse?> GetEndpointContractAsync(
             string scopeId, string memberId, string endpointId, CancellationToken ct = default) =>

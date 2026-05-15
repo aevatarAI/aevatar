@@ -67,7 +67,7 @@ public sealed class ResponsesCallerScopeResolverTests
 
         scope.ScopeId.Should().Be("alice-1");
         scope.OwnerSubject.Should().Be("alice-1");
-        scope.OriginKind.Should().Be(ResponseSessionOriginKind.ApiKey);
+        scope.OriginKind.Should().Be(LlmSessionOriginKind.ApiKey);
     }
 
     [Fact]
