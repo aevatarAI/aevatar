@@ -148,10 +148,13 @@ internal static class ResponsesApiEndpoints
                 $"Failed to register response session. Correlation: {correlation}");
         }
 
-        var toolClassification = ResponsesToolClassifier.Classify(
+        var toolProviderContext = BuildToolProviderContext(callerScope, normalized.ResponseId, bearerToken);
+        var toolClassification = await ResponsesToolClassifier.ClassifyAsync(
             normalized.DeclaredTools.Select(ToApplicationToolDeclaration).ToArray(),
             toolProviders,
-            logger);
+            toolProviderContext,
+            logger,
+            ct);
         // OpenRouter-style vendor prefix: the catalog advertises every model as
         // `{slug}/{model}` regardless of route shape (gateway provider, user
         // service, proxy service). When the slug resolves to a known catalog
@@ -186,15 +189,7 @@ internal static class ResponsesApiEndpoints
         };
         if (resolvedRouteValue is not null)
             llmMetadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = resolvedRouteValue;
-        var toolContextMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [LLMRequestMetadataKeys.RequestId] = normalized.ResponseId,
-            [LLMRequestMetadataKeys.ResponseId] = normalized.ResponseId,
-            [LLMRequestMetadataKeys.ScopeId] = callerScope.ScopeId,
-            [LLMRequestMetadataKeys.OwnerSubject] = callerScope.OwnerSubject,
-            [ChannelMetadataKeys.RegistrationScopeId] = callerScope.ScopeId,
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken,
-        };
+        var toolContextMetadata = toolProviderContext.ToolContextMetadata;
 
         var llmRequest = new LLMRequest
         {
@@ -1153,6 +1148,29 @@ internal static class ResponsesApiEndpoints
             Usage = null,
             Metadata = new Dictionary<string, string>(StringComparer.Ordinal),
         };
+    }
+
+    internal static ResponsesToolProviderContext BuildToolProviderContext(
+        ResponsesCallerScope callerScope,
+        string responseId,
+        string bearerToken)
+    {
+        ArgumentNullException.ThrowIfNull(callerScope);
+
+        return new ResponsesToolProviderContext(
+            new ResponsesToolProviderCallerScope(
+                callerScope.ScopeId,
+                callerScope.OwnerSubject,
+                callerScope.OriginKind.ToString()),
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [LLMRequestMetadataKeys.RequestId] = responseId,
+                [LLMRequestMetadataKeys.ResponseId] = responseId,
+                [LLMRequestMetadataKeys.ScopeId] = callerScope.ScopeId,
+                [LLMRequestMetadataKeys.OwnerSubject] = callerScope.OwnerSubject,
+                [ChannelMetadataKeys.RegistrationScopeId] = callerScope.ScopeId,
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken,
+            });
     }
 
     private static LlmSessionRecord BuildResponseSessionRecord(
