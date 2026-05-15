@@ -213,6 +213,23 @@ describe("TeamsHomePage", () => {
     expect(screen.queryByText("查看运行")).toBeNull();
   });
 
+  it("opens the default member run shortcut with current run context", async () => {
+    renderWithQueryClient(React.createElement(TeamsHomePage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "更多" }));
+    fireEvent.click(await screen.findByText("查看默认成员运行"));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/runtime/runs");
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("actorId")).toBe("actor://workflow-alpha");
+    expect(params.get("runId")).toBe("run-latest");
+    expect(params.get("scopeId")).toBe("scope-a");
+    expect(params.get("serviceOverrideId")).toBe("service-alpha");
+  });
+
   it("routes Create Team to the real create-team page", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
