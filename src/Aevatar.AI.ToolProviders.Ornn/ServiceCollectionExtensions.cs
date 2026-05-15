@@ -44,8 +44,28 @@ public static class ServiceCollectionExtensions
                 sp.GetService<ILogger<OrnnSkillClient>>());
         });
         services.TryAddSingleton<IRemoteSkillFetcher, OrnnRemoteSkillFetcher>();
-        services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IAgentToolSource, OrnnAgentToolSource>());
+        services.TryAddSingleton<OrnnAgentToolSource>();
+        services.TryAddAgentToolSourceAlias<OrnnAgentToolSource>(GetOrnnAgentToolSource);
         return services;
+    }
+
+    private static IAgentToolSource GetOrnnAgentToolSource(IServiceProvider sp) =>
+        sp.GetRequiredService<OrnnAgentToolSource>();
+
+    private static void TryAddAgentToolSourceAlias<TSource>(
+        this IServiceCollection services,
+        Func<IServiceProvider, IAgentToolSource> factory)
+        where TSource : class, IAgentToolSource
+    {
+        if (services.Any(descriptor =>
+                descriptor.ServiceType == typeof(IAgentToolSource) &&
+                (descriptor.ImplementationType == typeof(TSource) ||
+                 descriptor.ImplementationInstance is TSource ||
+                 descriptor.ImplementationFactory?.Method == factory.Method)))
+        {
+            return;
+        }
+
+        services.Add(ServiceDescriptor.Singleton(factory));
     }
 }
