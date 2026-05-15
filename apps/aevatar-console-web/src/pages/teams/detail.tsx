@@ -3,9 +3,6 @@ import {
   AGUIEventType,
   CustomEventName,
 } from "@aevatar-react-sdk/types";
-import {
-  DeploymentUnitOutlined,
-} from "@ant-design/icons";
 import type { Edge, Node } from "@xyflow/react";
 import { Input, Modal, Space, Typography, message, theme } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -1611,6 +1608,7 @@ const TeamDetailPage: React.FC = () => {
           endpointId: "chat",
           endpointKind: "chat",
           prompt: lens.playback.launchPrompt || undefined,
+          runId,
           route: lens.playback.workflowName || undefined,
           scopeId,
           serviceId: runtimeServiceId,
@@ -1780,6 +1778,11 @@ const TeamDetailPage: React.FC = () => {
     focusedOperationalUnit?.latestRun?.runId ||
     "";
   const currentRevisionId = trimText(lens.activeRevision?.revisionId) || "--";
+  const currentGovernanceRevisionId =
+    trimText(lens.activeRevision?.revisionId) ||
+    trimText(lens.currentService?.activeServingRevisionId) ||
+    trimText(lens.currentService?.defaultServingRevisionId) ||
+    "";
   const currentRevisionStatus =
     trimText(lens.activeRevision?.servingState) ||
     trimText(lens.activeRevision?.status) ||
@@ -3144,6 +3147,7 @@ const TeamDetailPage: React.FC = () => {
         scopeId,
         serviceId: runtimeServiceId,
         actorId: lens.currentRun?.actorId || undefined,
+        runId: lens.currentRun?.runId || undefined,
       }),
     );
   }, [
@@ -3153,8 +3157,16 @@ const TeamDetailPage: React.FC = () => {
     runtimeServiceId,
     scopeId,
   ]);
-  const conversationActionLabel = lens.playback.currentRunId ? "本次成员对话" : "成员运行记录";
+  const conversationActionLabel = lens.playback.currentRunId
+    ? lens.healthStatus === "blocked"
+      ? "处理等待 Run"
+      : lens.healthStatus === "degraded"
+        ? "排查失败 Run"
+        : "本次成员对话"
+    : "成员运行记录";
   const serviceMappingActionLabel = "服务映射";
+  const governanceActionLabel = "治理绑定";
+  const deploymentsActionLabel = "部署记录";
   const teamBuilderActionLabel = "高级编辑";
   const editTeamActionLabel = "Edit Team";
   const canEditSelectedTeam = Boolean(teamSummaryQuery.data && selectedTeamId);
@@ -3297,11 +3309,11 @@ const TeamDetailPage: React.FC = () => {
     history.push(
       buildPlatformGovernanceHref({
         ...platformRouteIdentity,
-        revisionId: currentRevisionId !== "--" ? currentRevisionId : undefined,
+        revisionId: currentGovernanceRevisionId || undefined,
         view: "bindings",
       }),
     );
-  }, [currentRevisionId, platformRouteIdentity]);
+  }, [currentGovernanceRevisionId, platformRouteIdentity]);
   const handleOpenDeployments = React.useCallback(() => {
     history.push(
       buildPlatformDeploymentsHref({
@@ -3507,11 +3519,19 @@ const TeamDetailPage: React.FC = () => {
           archiveTeamDisabled={!teamSummaryQuery.data || teamArchiving}
           archiveTeamHint={archiveTeamHint}
           conversationActionLabel={conversationActionLabel}
+          deploymentsActionLabel={deploymentsActionLabel}
+          deploymentsDisabled={currentDeploymentId === "--"}
+          deploymentsHint="当前还没有可定位的部署记录。"
           editTeamDisabled={!canEditSelectedTeam}
           editTeamHint={editTeamHint}
           editTeamLabel={editTeamActionLabel}
+          governanceActionLabel={governanceActionLabel}
+          governanceDisabled={!runtimeServiceId}
+          governanceHint="当前还没有可定位的服务绑定。"
           onArchiveTeam={openTeamArchive}
           onOpenConversation={handleOpenConversation}
+          onOpenDeployments={handleOpenDeployments}
+          onOpenGovernance={handleOpenGovernance}
           onOpenServiceMapping={handleOpenServiceMapping}
           onOpenTeamEditor={openTeamEditor}
           onOpenTeamBuilder={() => history.push(teamBuilderRoute)}
