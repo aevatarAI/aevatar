@@ -452,8 +452,14 @@ internal sealed class GAgentDraftRunDurableCompletionResolver
         try
         {
             var snapshot = await _queryPort.GetByCorrelationIdAsync(receipt.ActorId, receipt.CorrelationId, ct);
+            if (!MatchesReceipt(snapshot, receipt))
+                snapshot = null;
             if (snapshot == null && !string.IsNullOrWhiteSpace(receipt.SessionId))
-                snapshot = await _queryPort.GetBySessionIdAsync(receipt.ActorId, receipt.SessionId, ct);
+            {
+                var sessionSnapshot = await _queryPort.GetBySessionIdAsync(receipt.ActorId, receipt.SessionId, ct);
+                if (MatchesReceipt(sessionSnapshot, receipt))
+                    snapshot = sessionSnapshot;
+            }
             return Map(snapshot);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -465,6 +471,14 @@ internal sealed class GAgentDraftRunDurableCompletionResolver
             return CommandDurableCompletionObservation<GAgentDraftRunCompletionStatus>.Incomplete;
         }
     }
+
+    private static bool MatchesReceipt(
+        GAgentRunTerminalSnapshot? snapshot,
+        GAgentDraftRunAcceptedReceipt receipt) =>
+        snapshot != null &&
+        string.Equals(snapshot.ActorId, receipt.ActorId, StringComparison.Ordinal) &&
+        string.Equals(snapshot.CorrelationId, receipt.CorrelationId, StringComparison.Ordinal) &&
+        snapshot.InteractionKind == GAgentRunTerminalInteractionKind.DraftRun;
 
     private static CommandDurableCompletionObservation<GAgentDraftRunCompletionStatus> Map(
         GAgentRunTerminalSnapshot? snapshot) =>

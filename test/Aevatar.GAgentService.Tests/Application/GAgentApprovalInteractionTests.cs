@@ -253,6 +253,87 @@ public sealed class GAgentApprovalInteractionTests
         queryPort.CorrelationCalls.Should().ContainSingle(x => x.actorId == "actor-1" && x.correlationId == "corr-1");
     }
 
+    [Fact]
+    public async Task DurableCompletionResolver_ShouldIgnoreSessionFallback_WhenCorrelationDiffers()
+    {
+        var queryPort = new ApprovalTerminalQueryPort
+        {
+            SessionSnapshot = new GAgentRunTerminalSnapshot(
+                "actor-1",
+                "session-1",
+                "old-corr",
+                GAgentRunTerminalInteractionKind.Approval,
+                GAgentRunTerminalStatus.Failed,
+                "approval_denied",
+                "denied",
+                2,
+                "evt-1",
+                DateTimeOffset.UtcNow),
+        };
+        var resolver = new GAgentApprovalDurableCompletionResolver(queryPort);
+
+        var result = await resolver.ResolveAsync(
+            new GAgentApprovalAcceptedReceipt("actor-1", "cmd-1", "corr-1", "session-1"),
+            CancellationToken.None);
+
+        result.Should().Be(CommandDurableCompletionObservation<GAgentApprovalCompletionStatus>.Incomplete);
+        queryPort.SessionCalls.Should().ContainSingle(x => x.actorId == "actor-1" && x.sessionId == "session-1");
+    }
+
+    [Fact]
+    public async Task DurableCompletionResolver_ShouldIgnoreSessionFallback_WhenInteractionKindDiffers()
+    {
+        var queryPort = new ApprovalTerminalQueryPort
+        {
+            SessionSnapshot = new GAgentRunTerminalSnapshot(
+                "actor-1",
+                "session-1",
+                "corr-1",
+                GAgentRunTerminalInteractionKind.DraftRun,
+                GAgentRunTerminalStatus.Failed,
+                string.Empty,
+                string.Empty,
+                2,
+                "evt-1",
+                DateTimeOffset.UtcNow),
+        };
+        var resolver = new GAgentApprovalDurableCompletionResolver(queryPort);
+
+        var result = await resolver.ResolveAsync(
+            new GAgentApprovalAcceptedReceipt("actor-1", "cmd-1", "corr-1", "session-1"),
+            CancellationToken.None);
+
+        result.Should().Be(CommandDurableCompletionObservation<GAgentApprovalCompletionStatus>.Incomplete);
+    }
+
+    [Fact]
+    public async Task DurableCompletionResolver_ShouldUseSessionFallback_WhenReceiptMatches()
+    {
+        var queryPort = new ApprovalTerminalQueryPort
+        {
+            SessionSnapshot = new GAgentRunTerminalSnapshot(
+                "actor-1",
+                "session-1",
+                "corr-1",
+                GAgentRunTerminalInteractionKind.Approval,
+                GAgentRunTerminalStatus.RunFinished,
+                string.Empty,
+                string.Empty,
+                2,
+                "evt-1",
+                DateTimeOffset.UtcNow),
+        };
+        var resolver = new GAgentApprovalDurableCompletionResolver(queryPort);
+
+        var result = await resolver.ResolveAsync(
+            new GAgentApprovalAcceptedReceipt("actor-1", "cmd-1", "corr-1", "session-1"),
+            CancellationToken.None);
+
+        result.Should().Be(new CommandDurableCompletionObservation<GAgentApprovalCompletionStatus>(
+            true,
+            GAgentApprovalCompletionStatus.RunFinished));
+    }
+
     private sealed class ApprovalProjectionPort : IGAgentDraftRunProjectionPort
     {
         public ApprovalProjectionLease? LeaseToReturn { get; init; } = new("actor-1", "cmd-1");

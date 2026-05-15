@@ -239,6 +239,87 @@ public sealed class GAgentDraftRunInteractionCoverageTests
     }
 
     [Fact]
+    public async Task DurableCompletionResolver_ShouldIgnoreSessionFallback_WhenCorrelationDiffers()
+    {
+        var terminalQuery = new RecordingGAgentRunTerminalQueryPort
+        {
+            SessionSnapshot = new GAgentRunTerminalSnapshot(
+                "actor-1",
+                "session-1",
+                "old-corr",
+                GAgentRunTerminalInteractionKind.DraftRun,
+                GAgentRunTerminalStatus.TextMessageCompleted,
+                string.Empty,
+                string.Empty,
+                3,
+                "evt-1",
+                DateTimeOffset.UtcNow),
+        };
+        var durableResolver = new GAgentDraftRunDurableCompletionResolver(terminalQuery);
+
+        var result = await durableResolver.ResolveAsync(
+            new GAgentDraftRunAcceptedReceipt("actor-1", "actor-type", "cmd-1", "corr-1", "session-1"),
+            CancellationToken.None);
+
+        result.Should().Be(CommandDurableCompletionObservation<GAgentDraftRunCompletionStatus>.Incomplete);
+        terminalQuery.SessionCalls.Should().ContainSingle(x => x.actorId == "actor-1" && x.sessionId == "session-1");
+    }
+
+    [Fact]
+    public async Task DurableCompletionResolver_ShouldIgnoreSessionFallback_WhenInteractionKindDiffers()
+    {
+        var terminalQuery = new RecordingGAgentRunTerminalQueryPort
+        {
+            SessionSnapshot = new GAgentRunTerminalSnapshot(
+                "actor-1",
+                "session-1",
+                "corr-1",
+                GAgentRunTerminalInteractionKind.Approval,
+                GAgentRunTerminalStatus.TextMessageCompleted,
+                string.Empty,
+                string.Empty,
+                3,
+                "evt-1",
+                DateTimeOffset.UtcNow),
+        };
+        var durableResolver = new GAgentDraftRunDurableCompletionResolver(terminalQuery);
+
+        var result = await durableResolver.ResolveAsync(
+            new GAgentDraftRunAcceptedReceipt("actor-1", "actor-type", "cmd-1", "corr-1", "session-1"),
+            CancellationToken.None);
+
+        result.Should().Be(CommandDurableCompletionObservation<GAgentDraftRunCompletionStatus>.Incomplete);
+    }
+
+    [Fact]
+    public async Task DurableCompletionResolver_ShouldUseSessionFallback_WhenReceiptMatches()
+    {
+        var terminalQuery = new RecordingGAgentRunTerminalQueryPort
+        {
+            SessionSnapshot = new GAgentRunTerminalSnapshot(
+                "actor-1",
+                "session-1",
+                "corr-1",
+                GAgentRunTerminalInteractionKind.DraftRun,
+                GAgentRunTerminalStatus.RunFinished,
+                string.Empty,
+                string.Empty,
+                3,
+                "evt-1",
+                DateTimeOffset.UtcNow),
+        };
+        var durableResolver = new GAgentDraftRunDurableCompletionResolver(terminalQuery);
+
+        var result = await durableResolver.ResolveAsync(
+            new GAgentDraftRunAcceptedReceipt("actor-1", "actor-type", "cmd-1", "corr-1", "session-1"),
+            CancellationToken.None);
+
+        result.Should().Be(new CommandDurableCompletionObservation<GAgentDraftRunCompletionStatus>(
+            true,
+            GAgentDraftRunCompletionStatus.RunFinished));
+    }
+
+    [Fact]
     public async Task Binder_ShouldActivateTerminalMaterialization_BeforeLiveObservation()
     {
         var projectionPort = new DraftRunProjectionPort();
