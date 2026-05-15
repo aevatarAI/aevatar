@@ -112,10 +112,16 @@ internal static class MessagesApiEndpoints
         // injected here because Anthropic Messages clients (Claude Code in
         // particular) ship their own tool harness on top of the response;
         // injecting Aevatar's substitutes would shadow client tools.
-        var toolClassification = ResponsesToolClassifier.Classify(
+        var toolProviderContext = ResponsesApiEndpoints.BuildToolProviderContext(
+            callerScope,
+            normalized.MessageId,
+            bearerToken);
+        var toolClassification = await ResponsesToolClassifier.ClassifyAsync(
             normalized.DeclaredTools,
             Array.Empty<IResponsesToolProvider>(),
-            logger);
+            toolProviderContext,
+            logger,
+            ct);
 
         // OpenRouter-style vendor prefix routing (same as Path A). If the
         // model is `vendor/name`, resolve the route value through the catalog;
@@ -140,15 +146,7 @@ internal static class MessagesApiEndpoints
         if (resolvedRouteValue is not null)
             llmMetadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = resolvedRouteValue;
 
-        var toolContextMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [LLMRequestMetadataKeys.RequestId] = normalized.MessageId,
-            [LLMRequestMetadataKeys.ResponseId] = normalized.MessageId,
-            [LLMRequestMetadataKeys.ScopeId] = callerScope.ScopeId,
-            [LLMRequestMetadataKeys.OwnerSubject] = callerScope.OwnerSubject,
-            [ChannelMetadataKeys.RegistrationScopeId] = callerScope.ScopeId,
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken,
-        };
+        var toolContextMetadata = toolProviderContext.ToolContextMetadata;
 
         var llmRequest = new LLMRequest
         {

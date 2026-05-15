@@ -5,6 +5,9 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.Ornn;
+using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Authentication.Hosting;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -333,14 +336,19 @@ public sealed class MainnetResponsesEndpointsTests
             [LLMRequestMetadataKeys.ResponseId] = "resp_1",
         };
         var previous = AgentToolRequestContext.CurrentMetadata;
+        var context = ResponsesApiEndpoints.BuildToolProviderContext(
+            new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey),
+            "resp_1",
+            "token");
         try
         {
             AgentToolRequestContext.CurrentMetadata = metadata;
-            var todoTool = provider.GetSubstituteTools().Single(x => x.Name == "TodoWrite");
+            var substituteTools = await provider.GetSubstituteToolsAsync(context);
+            var todoTool = substituteTools.Single(x => x.Name == "TodoWrite");
             var todoResult = await todoTool.ExecuteAsync(
                 """{"todos":[{"id":"todo-1","content":"Ship prototype","status":"in_progress"}]}""");
 
-            var taskTool = provider.GetSubstituteTools().Single(x => x.Name == "Task");
+            var taskTool = substituteTools.Single(x => x.Name == "Task");
             var taskResult = await taskTool.ExecuteAsync("""{"prompt":"summarize state"}""");
 
             todoResult.Should().Contain("stored");
@@ -381,10 +389,14 @@ public sealed class MainnetResponsesEndpointsTests
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token",
         };
         var previous = AgentToolRequestContext.CurrentMetadata;
+        var context = ResponsesApiEndpoints.BuildToolProviderContext(
+            new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey),
+            "resp_1",
+            "token");
         try
         {
             AgentToolRequestContext.CurrentMetadata = metadata;
-            var fetchTool = provider.GetSubstituteTools().Single(x => x.Name == "WebFetch");
+            var fetchTool = (await provider.GetSubstituteToolsAsync(context)).Single(x => x.Name == "WebFetch");
             var result = await fetchTool.ExecuteAsync("""{"url":"https://example.com/docs"}""");
 
             result.Should().Contain("cached");
@@ -421,10 +433,14 @@ public sealed class MainnetResponsesEndpointsTests
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token",
         };
         var previous = AgentToolRequestContext.CurrentMetadata;
+        var context = ResponsesApiEndpoints.BuildToolProviderContext(
+            new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey),
+            "resp_1",
+            "token");
         try
         {
             AgentToolRequestContext.CurrentMetadata = metadata;
-            var searchTool = provider.GetSubstituteTools().Single(x => x.Name == "WebSearch");
+            var searchTool = (await provider.GetSubstituteToolsAsync(context)).Single(x => x.Name == "WebSearch");
             var result = await searchTool.ExecuteAsync("""{"query":"aevatar docs","max_results":3}""");
 
             result.Should().Contain("cached docs");
@@ -438,6 +454,81 @@ public sealed class MainnetResponsesEndpointsTests
         commandPort.WebTraces[0].Trace.CacheKey.Should().Be(cacheKey);
         commandPort.WebTraces[0].Trace.Query.Should().Be("aevatar docs");
         commandPort.WebTraces[0].Trace.CacheHit.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ResponsesUserSkillsToolProvider_ShouldBridgeOnlySkillMainlineTools()
+    {
+        var services = new ServiceCollection();
+        services.AddSkills(_ => { });
+        services.AddSingleton(new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(new NotFoundHttpMessageHandler())));
+        services.AddOrnnSkills();
+        services.AddSingleton<ResponsesUserSkillsToolProvider>();
+        services.AddSingleton<IAgentToolSource>(new StubAgentToolSource(
+            [new StubAgentTool("future_tool", "Future tool")]));
+
+        await using var provider = services.BuildServiceProvider();
+        var toolProvider = provider.GetRequiredService<ResponsesUserSkillsToolProvider>();
+
+        var tools = await toolProvider.GetAdditiveToolsAsync(
+            ResponsesApiEndpoints.BuildToolProviderContext(
+                new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey),
+                "resp_1",
+                "token"));
+
+        tools.Select(static tool => tool.Name)
+            .Should()
+            .Equal("use_skill", "ornn_search_skills");
+    }
+
+    [Fact]
+    public async Task PostResponses_WhenSkillBridgeProviderRegistered_ShouldForwardSkillToolsToLlmRequest()
+    {
+        var provider = new RecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "ok",
+                    IsLast = true,
+                    Usage = new TokenUsage(1, 1, 2),
+                },
+            ],
+        };
+        var sessions = new RecordingResponseSessionStore();
+        var bridgeProvider = new RecordingResponsesToolProvider(
+            [],
+            [
+                new StubAgentTool("use_skill", "Run a registered skill body"),
+                new StubAgentTool("ornn_search_skills", "Search Ornn skill catalog"),
+            ]);
+        await using var app = await CreateAppAsync(provider, sessions, responsesToolProvider: bridgeProvider);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""
+            {
+              "model": "gpt-5.4",
+              "input": "search a skill",
+              "stream": false
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.Tools.Should().NotBeNull();
+        provider.LastRequest.Tools.Select(static tool => tool.Name)
+            .Should()
+            .Contain(["use_skill", "ornn_search_skills"]);
     }
 
     [Fact]
@@ -1559,9 +1650,29 @@ public sealed class MainnetResponsesEndpointsTests
             _additiveTools = additiveTools;
         }
 
-        public IReadOnlyList<IAgentTool> GetSubstituteTools() => _substituteTools;
+        public ValueTask<IReadOnlyList<IAgentTool>> GetSubstituteToolsAsync(
+            ResponsesToolProviderContext context,
+            CancellationToken ct = default) =>
+            ValueTask.FromResult(_substituteTools);
 
-        public IReadOnlyList<IAgentTool> GetAdditiveTools() => _additiveTools;
+        public ValueTask<IReadOnlyList<IAgentTool>> GetAdditiveToolsAsync(
+            ResponsesToolProviderContext context,
+            CancellationToken ct = default) =>
+            ValueTask.FromResult(_additiveTools);
+    }
+
+    private sealed class StubAgentToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
+    {
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
+            Task.FromResult(tools);
+    }
+
+    private sealed class NotFoundHttpMessageHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
     }
 
     private sealed class StubAgentTool : IAgentTool

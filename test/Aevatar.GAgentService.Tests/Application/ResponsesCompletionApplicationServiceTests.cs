@@ -16,6 +16,10 @@ public sealed class ResponsesCompletionApplicationServiceTests
             ["owner_subject"] = "owner-1",
         };
 
+    private static readonly ResponsesToolProviderContext ToolProviderContext = new(
+        new ResponsesToolProviderCallerScope("scope-1", "owner-1", "ApiKey"),
+        ToolContext);
+
     [Fact]
     public async Task CollectAsync_ShouldExecuteLocalTool_AndContinueWithToolResult()
     {
@@ -417,16 +421,16 @@ public sealed class ResponsesCompletionApplicationServiceTests
     }
 
     [Fact]
-    public async Task Classify_ShouldSubstituteForwardAndFilterAdditiveTools()
+    public async Task ClassifyAsync_ShouldSubstituteForwardAndDeduplicateAdditiveTools()
     {
         var substitute = new RecordingTool("web_search", """{"type":"object","properties":{"q":{"type":"string"}}}""", "{}");
         var duplicateSubstitute = new RecordingTool("web_search", """{"type":"object"}""", "{}");
         var additive = new RecordingTool("aevatar_todo_write", """{"type":"object"}""", "{}");
         var duplicateAdditive = new RecordingTool("aevatar_todo_write", """{"type":"object"}""", "{}");
-        var ignoredAdditive = new RecordingTool("custom_additive", """{"type":"object"}""", "{}");
+        var customAdditive = new RecordingTool("custom_additive", """{"type":"object"}""", "{}");
         var logger = new RecordingLogger();
 
-        var result = ResponsesToolClassifier.Classify(
+        var result = await ResponsesToolClassifier.ClassifyAsync(
             [
                 new ResponsesApplicationToolDeclaration("web_search", "client search", """{"type":"object"}""", "mismatch"),
                 new ResponsesApplicationToolDeclaration("client_tool", "client tool", """{"type":"object"}""", "client-hash"),
@@ -434,21 +438,51 @@ public sealed class ResponsesCompletionApplicationServiceTests
             [
                 new RecordingResponsesToolProvider(
                     [substitute, duplicateSubstitute],
-                    [additive, duplicateAdditive, ignoredAdditive]),
+                    [additive, duplicateAdditive, customAdditive]),
             ],
+            ToolProviderContext,
             logger);
 
         result.ForwardedTools.Should().ContainSingle(x => x.Name == "client_tool");
         result.SubstitutedToolNames.Should().ContainSingle("web_search");
-        result.AdditiveToolNames.Should().ContainSingle("aevatar_todo_write");
+        result.AdditiveToolNames.Should().Equal("aevatar_todo_write", "custom_additive");
         result.EffectiveTools.Select(static tool => tool.Name)
-            .Should().Equal("web_search", "client_tool", "aevatar_todo_write");
-        logger.Messages.Should().ContainSingle(message =>
+            .Should().Equal("web_search", "client_tool", "aevatar_todo_write", "custom_additive");
+        logger.Messages.Should().Contain(message =>
             message.Contains("schema differs", StringComparison.Ordinal));
         result.EffectiveTools.Single(tool => tool.Name == "client_tool").IsReadOnly.Should().BeTrue();
         await ((Func<Task>)(() => result.EffectiveTools.Single(tool => tool.Name == "client_tool").ExecuteAsync("{}")))
             .Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*must be executed by the client*");
+    }
+
+    [Fact]
+    public async Task ClassifyAsync_ShouldSkipAdditiveToolsThatCollideWithEffectiveTools()
+    {
+        var logger = new RecordingLogger();
+
+        var result = await ResponsesToolClassifier.ClassifyAsync(
+            [
+                new ResponsesApplicationToolDeclaration("use_skill", "client tool", """{"type":"object"}""", "client-hash"),
+            ],
+            [
+                new RecordingResponsesToolProvider(
+                    [],
+                    [
+                        new RecordingTool("use_skill", """{"type":"object"}""", "{}"),
+                        new RecordingTool("ornn_search_skills", """{"type":"object"}""", "{}"),
+                    ]),
+            ],
+            ToolProviderContext,
+            logger);
+
+        result.ForwardedTools.Should().ContainSingle(x => x.Name == "use_skill");
+        result.EffectiveTools.Select(static tool => tool.Name)
+            .Should().Equal("use_skill", "ornn_search_skills");
+        result.AdditiveToolNames.Should().ContainSingle("ornn_search_skills");
+        logger.Messages.Should().ContainSingle(message =>
+            message.Contains("skipped", StringComparison.Ordinal) &&
+            message.Contains("use_skill", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -473,12 +507,12 @@ public sealed class ResponsesCompletionApplicationServiceTests
     }
 
     [Fact]
-    public void ResponsesToolProvider_DefaultMethods_ShouldReturnEmptyLists()
+    public async Task ResponsesToolProvider_DefaultMethods_ShouldReturnEmptyLists()
     {
         IResponsesToolProvider provider = new EmptyResponsesToolProvider();
 
-        provider.GetSubstituteTools().Should().BeEmpty();
-        provider.GetAdditiveTools().Should().BeEmpty();
+        (await provider.GetSubstituteToolsAsync(ToolProviderContext)).Should().BeEmpty();
+        (await provider.GetAdditiveToolsAsync(ToolProviderContext)).Should().BeEmpty();
     }
 
     [Fact]
@@ -567,12 +601,14 @@ public sealed class ResponsesCompletionApplicationServiceTests
             .Should().ThrowAsync<ArgumentNullException>();
         await ((Func<Task>)(() => service.StreamAsync(provider, request, ToolContext, classification, null!)))
             .Should().ThrowAsync<ArgumentNullException>();
-        ((Action)(() => ResponsesToolClassifier.Classify(null!, [], new RecordingLogger())))
-            .Should().Throw<ArgumentNullException>();
-        ((Action)(() => ResponsesToolClassifier.Classify([], null!, new RecordingLogger())))
-            .Should().Throw<ArgumentNullException>();
-        ((Action)(() => ResponsesToolClassifier.Classify([], [], null!)))
-            .Should().Throw<ArgumentNullException>();
+        await ((Func<Task>)(async () => await ResponsesToolClassifier.ClassifyAsync(null!, [], ToolProviderContext, new RecordingLogger())))
+            .Should().ThrowAsync<ArgumentNullException>();
+        await ((Func<Task>)(async () => await ResponsesToolClassifier.ClassifyAsync([], null!, ToolProviderContext, new RecordingLogger())))
+            .Should().ThrowAsync<ArgumentNullException>();
+        await ((Func<Task>)(async () => await ResponsesToolClassifier.ClassifyAsync([], [], null!, new RecordingLogger())))
+            .Should().ThrowAsync<ArgumentNullException>();
+        await ((Func<Task>)(async () => await ResponsesToolClassifier.ClassifyAsync([], [], ToolProviderContext, null!)))
+            .Should().ThrowAsync<ArgumentNullException>();
     }
 
     private static LLMRequest BuildRequest(params IAgentTool[] tools) =>
@@ -644,9 +680,15 @@ public sealed class ResponsesCompletionApplicationServiceTests
         IReadOnlyList<IAgentTool> substituteTools,
         IReadOnlyList<IAgentTool> additiveTools) : IResponsesToolProvider
     {
-        public IReadOnlyList<IAgentTool> GetSubstituteTools() => substituteTools;
+        public ValueTask<IReadOnlyList<IAgentTool>> GetSubstituteToolsAsync(
+            ResponsesToolProviderContext context,
+            CancellationToken ct = default) =>
+            ValueTask.FromResult(substituteTools);
 
-        public IReadOnlyList<IAgentTool> GetAdditiveTools() => additiveTools;
+        public ValueTask<IReadOnlyList<IAgentTool>> GetAdditiveToolsAsync(
+            ResponsesToolProviderContext context,
+            CancellationToken ct = default) =>
+            ValueTask.FromResult(additiveTools);
     }
 
     private sealed class EmptyResponsesToolProvider : IResponsesToolProvider

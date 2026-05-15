@@ -387,12 +387,60 @@ public sealed class MainnetMessagesEndpointsTests
         provider.LastRequest.Should().BeNull();
     }
 
+    [Fact]
+    public async Task PostMessages_WhenResponsesToolProviderRegistered_ShouldNotInjectAevatarAdditiveTools()
+    {
+        // Regression: /v1/messages must explicitly pass Array.Empty<IResponsesToolProvider>()
+        // to ResponsesToolClassifier so Aevatar substitutes/additives never shadow the
+        // Anthropic client's own tool harness (Claude Code in particular). If a future
+        // refactor wires DI providers into this path, this test fails.
+        var provider = new MessagesRecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "Hi",
+                    IsLast = true,
+                    Usage = new TokenUsage(1, 1, 2),
+                },
+            ],
+        };
+        var toolProvider = new MessagesRecordingResponsesToolProvider(
+            substituteTools: [new MessagesStubAgentTool("WebSearch", "would substitute client WebSearch")],
+            additiveTools: [
+                new MessagesStubAgentTool("use_skill", "would inject skill bridge"),
+                new MessagesStubAgentTool("ornn_search_skills", "would inject ornn bridge"),
+            ]);
+        await using var app = await CreateAppAsync(provider, responsesToolProvider: toolProvider);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
+        {
+            Content = JsonContent("""
+            {
+              "model": "claude-haiku-4-5",
+              "max_tokens": 32,
+              "messages": [{"role": "user", "content": "ping"}]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "anthropic-bearer");
+
+        var response = await client.SendAsync(request);
+        response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+        provider.LastRequest.Should().NotBeNull();
+        var toolNames = provider.LastRequest!.Tools?.Select(static tool => tool.Name).ToArray() ?? [];
+        toolNames.Should().NotContain(["use_skill", "ornn_search_skills", "WebSearch"]);
+    }
+
     // ----- Test fixtures -------------------------------------------------------
 
     private static async Task<WebApplication> CreateAppAsync(
         MessagesRecordingLLMProvider provider,
         MessagesRecordingSessionStore? sessions = null,
-        IResponsesCallerScopeResolver? callerScopeResolver = null)
+        IResponsesCallerScopeResolver? callerScopeResolver = null,
+        IResponsesToolProvider? responsesToolProvider = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -407,6 +455,8 @@ public sealed class MainnetMessagesEndpointsTests
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         builder.Services.AddSingleton(callerScopeResolver ?? new MessagesStubCallerScopeResolver());
         builder.Services.AddSingleton<IResponsesRouteResolver>(new MessagesNoopRouteResolver());
+        if (responsesToolProvider != null)
+            builder.Services.AddSingleton(responsesToolProvider);
 
         var app = builder.Build();
         app.MapMessagesApiEndpoints();
@@ -520,5 +570,49 @@ public sealed class MainnetMessagesEndpointsTests
             string responseId,
             CancellationToken ct = default) =>
             Task.FromResult<LlmSessionSnapshot?>(null);
+    }
+
+    private sealed class MessagesRecordingResponsesToolProvider : IResponsesToolProvider
+    {
+        private readonly IReadOnlyList<IAgentTool> _substituteTools;
+        private readonly IReadOnlyList<IAgentTool> _additiveTools;
+
+        public MessagesRecordingResponsesToolProvider(
+            IReadOnlyList<IAgentTool> substituteTools,
+            IReadOnlyList<IAgentTool> additiveTools)
+        {
+            _substituteTools = substituteTools;
+            _additiveTools = additiveTools;
+        }
+
+        public ValueTask<IReadOnlyList<IAgentTool>> GetSubstituteToolsAsync(
+            ResponsesToolProviderContext context,
+            CancellationToken ct = default) =>
+            ValueTask.FromResult(_substituteTools);
+
+        public ValueTask<IReadOnlyList<IAgentTool>> GetAdditiveToolsAsync(
+            ResponsesToolProviderContext context,
+            CancellationToken ct = default) =>
+            ValueTask.FromResult(_additiveTools);
+    }
+
+    private sealed class MessagesStubAgentTool : IAgentTool
+    {
+        public MessagesStubAgentTool(string name, string description)
+        {
+            Name = name;
+            Description = description;
+        }
+
+        public string Name { get; }
+
+        public string Description { get; }
+
+        public string ParametersSchema => """{"type":"object","properties":{}}""";
+
+        public bool IsReadOnly => true;
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
     }
 }

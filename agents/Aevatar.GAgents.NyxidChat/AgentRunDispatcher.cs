@@ -20,6 +20,7 @@ public sealed class AgentRunDispatcher : IChannelLlmReplyRunDispatcher
     private readonly IStreamProvider _streamProvider;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AgentRunDispatcher> _logger;
+    private readonly SemaphoreSlim _dispatchGate = new(1, 1);
 
     public AgentRunDispatcher(
         IActorRuntime actorRuntime,
@@ -40,56 +41,109 @@ public sealed class AgentRunDispatcher : IChannelLlmReplyRunDispatcher
             throw new InvalidOperationException("Deferred LLM reply request requires correlation_id for AgentRunGAgent dispatch.");
 
         var runId = request.CorrelationId.Trim();
-        var nowMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
-
-        if (request.RequestedAtUnixMs > 0 && nowMs - request.RequestedAtUnixMs > MaxRequestAgeMs)
+        var actorId = AgentRunGAgent.BuildActorId(runId);
+        await _dispatchGate.WaitAsync(ct);
+        try
         {
-            _logger.LogWarning(
-                "Rejected stale deferred LLM reply run at dispatcher: runId={RunId} ageMs={AgeMs} thresholdMs={Threshold} target={TargetActorId}",
+            var nowMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+
+            if (request.RequestedAtUnixMs > 0 && nowMs - request.RequestedAtUnixMs > MaxRequestAgeMs)
+            {
+                _logger.LogWarning(
+                    "Rejected stale deferred LLM reply run at dispatcher: runId={RunId} ageMs={AgeMs} thresholdMs={Threshold} target={TargetActorId}",
+                    runId,
+                    nowMs - request.RequestedAtUnixMs,
+                    MaxRequestAgeMs,
+                    request.TargetActorId);
+                return new DispatchOutcome(
+                    Phase: DispatchPhase.RejectedStale,
+                    CommandId: string.Empty,
+                    RunActorId: null,
+                    AcceptedAtUnixMs: 0);
+            }
+
+            if (await _actorRuntime.ExistsAsync(actorId))
+            {
+                _logger.LogInformation(
+                    "Rejected duplicate deferred LLM reply run at dispatcher: runId={RunId} actorId={ActorId} target={TargetActorId}",
+                    runId,
+                    actorId,
+                    request.TargetActorId);
+                return new DispatchOutcome(
+                    Phase: DispatchPhase.RejectedDuplicate,
+                    CommandId: string.Empty,
+                    RunActorId: actorId,
+                    AcceptedAtUnixMs: 0);
+            }
+
+            var actor = await _actorRuntime.CreateAsync<AgentRunGAgent>(actorId, ct);
+
+            var commandId = BuildStartCommandId(runId);
+            var command = new AgentRunStartRequested
+            {
+                Request = request.Clone(),
+            };
+            var envelope = new EventEnvelope
+            {
+                Id = commandId,
+                Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+                Payload = Any.Pack(command),
+                Route = EnvelopeRouteSemantics.CreateDirect("channel-llm-reply-run-dispatcher", actor.Id),
+                Propagation = new EnvelopePropagation
+                {
+                    CorrelationId = runId,
+                },
+                Runtime = new EnvelopeRuntime
+                {
+                    Deduplication = new DeliveryDeduplication
+                    {
+                        OperationId = commandId,
+                    },
+                },
+            };
+
+            try
+            {
+                await _streamProvider.GetStream(actor.Id).ProduceAsync(envelope, ct);
+            }
+            catch
+            {
+                await DestroyCreatedActorAfterDispatchFailureAsync(actor.Id);
+                throw;
+            }
+
+            _logger.LogInformation(
+                "Accepted deferred LLM reply run for actor inbox: runId={RunId} actorId={ActorId} commandId={CommandId} target={TargetActorId}",
                 runId,
-                nowMs - request.RequestedAtUnixMs,
-                MaxRequestAgeMs,
+                actor.Id,
+                commandId,
                 request.TargetActorId);
             return new DispatchOutcome(
-                Phase: DispatchPhase.RejectedStale,
-                CommandId: string.Empty,
-                RunActorId: null,
-                AcceptedAtUnixMs: 0);
+                Phase: DispatchPhase.Accepted,
+                CommandId: commandId,
+                RunActorId: actor.Id,
+                AcceptedAtUnixMs: nowMs);
         }
-
-        var actorId = AgentRunGAgent.BuildActorId(runId);
-        var actor = await _actorRuntime.GetAsync(actorId)
-                    ?? await _actorRuntime.CreateAsync<AgentRunGAgent>(actorId, ct);
-
-        var commandId = Guid.NewGuid().ToString("N");
-        var command = new AgentRunStartRequested
+        finally
         {
-            Request = request.Clone(),
-        };
-        var envelope = new EventEnvelope
+            _dispatchGate.Release();
+        }
+    }
+
+    private static string BuildStartCommandId(string runId) => $"agent-run-start:{runId}";
+
+    private async Task DestroyCreatedActorAfterDispatchFailureAsync(string actorId)
+    {
+        try
         {
-            Id = commandId,
-            Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
-            Payload = Any.Pack(command),
-            Route = EnvelopeRouteSemantics.CreateDirect("channel-llm-reply-run-dispatcher", actor.Id),
-            Propagation = new EnvelopePropagation
-            {
-                CorrelationId = runId,
-            },
-        };
-
-        await _streamProvider.GetStream(actor.Id).ProduceAsync(envelope, ct);
-        _logger.LogInformation(
-            "Accepted deferred LLM reply run for actor inbox: runId={RunId} actorId={ActorId} commandId={CommandId} target={TargetActorId}",
-            runId,
-            actor.Id,
-            commandId,
-            request.TargetActorId);
-
-        return new DispatchOutcome(
-            Phase: DispatchPhase.Accepted,
-            CommandId: commandId,
-            RunActorId: actor.Id,
-            AcceptedAtUnixMs: nowMs);
+            await _actorRuntime.DestroyAsync(actorId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to destroy agent run actor after dispatch enqueue failed: actorId={ActorId}",
+                actorId);
+        }
     }
 }

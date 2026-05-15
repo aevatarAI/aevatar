@@ -9,10 +9,25 @@ namespace Aevatar.GAgentService.Application.Responses;
 
 public interface IResponsesToolProvider
 {
-    IReadOnlyList<IAgentTool> GetSubstituteTools() => [];
+    ValueTask<IReadOnlyList<IAgentTool>> GetSubstituteToolsAsync(
+        ResponsesToolProviderContext context,
+        CancellationToken ct = default) =>
+        ValueTask.FromResult<IReadOnlyList<IAgentTool>>([]);
 
-    IReadOnlyList<IAgentTool> GetAdditiveTools() => [];
+    ValueTask<IReadOnlyList<IAgentTool>> GetAdditiveToolsAsync(
+        ResponsesToolProviderContext context,
+        CancellationToken ct = default) =>
+        ValueTask.FromResult<IReadOnlyList<IAgentTool>>([]);
 }
+
+public sealed record ResponsesToolProviderContext(
+    ResponsesToolProviderCallerScope CallerScope,
+    IReadOnlyDictionary<string, string> ToolContextMetadata);
+
+public sealed record ResponsesToolProviderCallerScope(
+    string ScopeId,
+    string OwnerSubject,
+    string OriginKind);
 
 public sealed record ResponsesApplicationToolDeclaration(
     string Name,
@@ -308,27 +323,45 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
 
 public static class ResponsesToolClassifier
 {
-    public static ResponsesToolClassification Classify(
+    public static async ValueTask<ResponsesToolClassification> ClassifyAsync(
         IReadOnlyList<ResponsesApplicationToolDeclaration> declaredTools,
         IEnumerable<IResponsesToolProvider> providers,
-        ILogger logger)
+        ResponsesToolProviderContext context,
+        ILogger logger,
+        CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(declaredTools);
         ArgumentNullException.ThrowIfNull(providers);
+        ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(logger);
 
         // Materialize providers once: substitute names are derived from the
         // provider's actual tool list, so there is no second hardcoded registry.
         var providerList = providers as IReadOnlyList<IResponsesToolProvider>
                            ?? providers.ToArray();
-        var substituteTools = providerList
-            .SelectMany(static provider => provider.GetSubstituteTools())
+
+        var discoveredSubstituteTools = new List<IAgentTool>();
+        foreach (var provider in providerList)
+        {
+            ct.ThrowIfCancellationRequested();
+            discoveredSubstituteTools.AddRange(
+                await provider.GetSubstituteToolsAsync(context, ct).ConfigureAwait(false));
+        }
+
+        var substituteTools = discoveredSubstituteTools
             .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
             .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
         var substituteNames = new HashSet<string>(substituteTools.Keys, StringComparer.Ordinal);
-        var additiveTools = providerList
-            .SelectMany(static provider => provider.GetAdditiveTools())
-            .Where(static tool => tool.Name.StartsWith("aevatar_", StringComparison.Ordinal))
+
+        var discoveredAdditiveTools = new List<IAgentTool>();
+        foreach (var provider in providerList)
+        {
+            ct.ThrowIfCancellationRequested();
+            discoveredAdditiveTools.AddRange(
+                await provider.GetAdditiveToolsAsync(context, ct).ConfigureAwait(false));
+        }
+
+        var additiveTools = discoveredAdditiveTools
             .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
             .Select(static group => group.First())
             .ToArray();
@@ -361,13 +394,29 @@ public static class ResponsesToolClassifier
             effective.Add(substitute);
         }
 
-        effective.AddRange(additiveTools);
+        var effectiveNames = new HashSet<string>(
+            effective.Select(static tool => tool.Name),
+            StringComparer.Ordinal);
+        var addedAdditiveNames = new List<string>();
+        foreach (var additive in additiveTools)
+        {
+            if (!effectiveNames.Add(additive.Name))
+            {
+                logger.LogWarning(
+                    "Responses additive tool {ToolName} skipped because an effective tool with the same name already exists.",
+                    additive.Name);
+                continue;
+            }
+
+            effective.Add(additive);
+            addedAdditiveNames.Add(additive.Name);
+        }
 
         return new ResponsesToolClassification(
             forwarded,
             effective,
             substitutedNames,
-            additiveTools.Select(static tool => tool.Name).ToArray());
+            addedAdditiveNames);
     }
 }
 

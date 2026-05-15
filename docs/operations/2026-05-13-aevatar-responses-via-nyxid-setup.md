@@ -1,29 +1,27 @@
-# Aevatar Responses 接入指南：用 nyxid CLI 签发 API Key 并配置 cc-switch
+# Aevatar Responses / Messages 接入指南：用 nyxid CLI 签发 API Key 并配置客户端
 
-面向终端用户：在 cc-switch / Codex / 任意支持 OpenAI Responses 协议的客户端里，
-通过 NyxID 把流量打到 Aevatar，由 Aevatar 完成补全后回复客户端。
+面向终端用户：在 Codex、cc-switch、Claude Code 或任意支持 OpenAI Responses / Anthropic Messages 协议的客户端里，通过 NyxID 把流量打到 Aevatar。
 
-> Aevatar 当前对外暴露的是 **OpenAI Responses 协议**（`/v1/responses`、`/v1/models`）。
-> - ✅ Codex CLI、Cursor、OpenCode 等 Responses 客户端可以接入
-> - 🚧 Claude Code（仅支持 Messages）：`/v1/messages` 路径 B 设计中（见 §6），未上线前不可用
+当前状态：
 
----
+- Responses 客户端走 `/v1/responses` 和 `/v1/models`，这是主入口。
+- Claude Code 这类 Messages-only 客户端走 `/v1/messages`，已经可用，但能力比 Responses 窄。
+- Ornn skill bridge 只在 `/v1/responses` 可用：服务端会注入 `use_skill` 和 `ornn_search_skills`。`/v1/messages` 不注入这些工具。
+- 客户端只持有 NyxID API key，不直接接触任何 LLM 供应商凭据。
 
 ## 1. 链路速览
 
-```
-cc-switch (codex app)
-   ↓ Authorization: Bearer nyx_xxx
-   ↓ POST /v1/responses
+```text
+client
+   ↓ Authorization: Bearer nyx_...
+   ↓ /v1/responses 或 /v1/messages
 NyxID proxy plane
-   https://nyx-api.chrono-ai.fun/api/v1/proxy/s/aevatar/v1/responses
-   ↓ 校验 API Key + allowed_services
-   ↓ 注入 X-NyxID-Delegation-Token（user 身份）
-Aevatar Responses API
-   https://aevatar-console-backend-api.aevatar.ai/v1/responses
-   ↓ 用 delegation token 经 NyxID 再调用 LLM provider
+   https://nyx-api.chrono-ai.fun/api/v1/proxy/s/aevatar/v1/...
+   ↓ 校验 API key + allowed services
+Aevatar /v1 API
+   ↓ 用同一调用者 bearer 经 NyxID 访问目标 LLM service
 NyxID LLM gateway / proxy
-   ↓ chrono-llm / llm-anthropic / llm-deepseek …
+   ↓ chrono-llm / llm-anthropic / llm-deepseek / ...
 真正的 LLM 上游
    ↓ SSE / JSON 回流
 原路返回客户端
@@ -31,88 +29,88 @@ NyxID LLM gateway / proxy
 
 关键点：
 
-- 客户端只持有 **一把 NyxID API Key**，不直接接触任何 LLM 供应商凭据。
-- API Key 既用于校验 `nyx-api → aevatar` 这一跳，也会作为 delegation token 让 Aevatar
-  在下游再次回到 NyxID 完成实际的 LLM 调用。
-- Aevatar 自身不存任何 LLM key，所有计费、限流、撤销都集中在 NyxID 侧。
-
----
+- `base_url` 必须指向 NyxID proxy，不要直连 Aevatar Host 域名。
+- API key 至少需要 `proxy` scope，因为 `/api/v1/proxy/s/aevatar/...` 是 NyxID REST proxy 路由。
+- Aevatar 不存 LLM key；真实供应商凭据仍由 NyxID 注入。
 
 ## 2. 前置条件
 
-- 已注册 NyxID 账号，本机安装好 `nyxid` CLI（`which nyxid` 应返回路径）。
+- 已注册 NyxID 账号，本机安装好 `nyxid` CLI。
 - NyxID 服务端：`https://nyx-api.chrono-ai.fun`
-- 本机安装好 cc-switch。
+- 需要使用的 LLM service 已在你的 NyxID 账户里可用。
 
-登录（首次或换机时）：
+首次登录：
 
 ```bash
 nyxid login --base-url https://nyx-api.chrono-ai.fun
 nyxid whoami
 ```
 
----
-
 ## 3. 添加你想用的 LLM 服务
 
-> **Aevatar 已经是 NyxID 的默认服务，每个 NyxID 用户登录后自动开通**（`auto_connected: true`，
-> 不出现在 `nyxid catalog list` 的 "Available Services" 里）。所以**不需要**
-> `nyxid service add aevatar`。
+Aevatar 是 NyxID 里的默认服务，用户登录后自动开通，通常不需要手动执行 `nyxid service add aevatar`。
 
-你只需要再挂一个 **LLM provider**，让 Aevatar 下游能找到真实模型。任选其一，按需多加：
+你需要添加下游 LLM service，让 Aevatar 能通过你的 NyxID 身份找到真实模型：
 
 ```bash
-nyxid service add chrono-llm       # 团队共享网关，无需自带 key（最简单）
-nyxid service add llm-anthropic    # 自带 Anthropic key
+nyxid service add chrono-llm
+nyxid service add llm-anthropic
 nyxid service add llm-deepseek
 nyxid service add llm-openai-codex
 
-# 确认已添加
 nyxid service list
 ```
 
-> 之后在 cc-switch 里发请求时，会用 `chrono-llm/gpt-5.5`、
-> `llm-anthropic/claude-haiku-4-5` 这种 `<provider-slug>/<model>` 形式指定模型，
-> Aevatar 的 `/v1/models` 会把你账户下能用的全部列出来。
+之后模型名使用 `/v1/models` 返回的完整 id，格式是：
 
----
+```text
+<service-slug>/<model>
+```
 
-## 4. 用 nyxid CLI 签发 API Key
+例如：
 
-最快路径（首次接入推荐，所有已添加的服务都放行）：
+```text
+chrono-llm/gpt-5.5
+llm-anthropic/claude-haiku-4-5
+```
+
+## 4. 签发 NyxID API Key
+
+最快路径，适合首次验证：
 
 ```bash
 nyxid api-key create \
-  --name "cc-switch aevatar" \
+  --name "aevatar responses" \
   --scopes proxy \
   --platform codex \
   --allow-all-services \
   --expires-in-days 0
 ```
 
-输出末尾会打印一次 **`nyx_...`** 形式的明文 Key，**只显示这一次**，复制保存。
+输出末尾会打印一次 `nyx_...` 明文 key，只显示这一次。
 
-如果想最小权限收紧（推荐生产用）：先拿到所选 LLM 服务的 UserService.id，再用 `--allowed-services`：
+如果要收紧权限，先拿到目标服务的 UserService id：
 
 ```bash
-# 取你要用的 LLM provider 的 UserService.id（aevatar 自动开通，不用列）
 nyxid service list --output json \
   | jq -r '.keys[] | select(.slug=="chrono-llm") | .id'
+```
 
-# 用这个 UserService ID 签发受限 Key
+再签发受限 key：
+
+```bash
 nyxid api-key create \
-  --name "cc-switch aevatar (scoped)" \
+  --name "aevatar responses scoped" \
   --scopes proxy \
   --platform codex \
   --allowed-services <chrono-llm-user-service-id>
 ```
 
-> ⚠️ 必须用 `nyxid service list` 里的 UserService.id，不是 `nyxid catalog list`
-> 里的目录 id。两者不同；后者会得到 `api_key_scope_forbidden_legacy`。
->
-> 如果收紧后访问 `/proxy/s/aevatar/*` 反而 403，把 aevatar 的 UserService.id
-> 也加进 `--allowed-services` 兜底——auto_connected 服务理论上应被 proxy 默认放行，
-> 但不同版本 NyxID 的行为可能不同。
+注意：
+
+- `--allowed-services` 必须用 `nyxid service list --output json` 里的 UserService id。
+- 不要用 `nyxid catalog list` 里的 catalog id；填错通常会遇到 `api_key_scope_forbidden_legacy`。
+- 如果受限 key 访问 `/proxy/s/aevatar/*` 也 403，把 aevatar 的 UserService id 一并加进 `--allowed-services`，或先用 `--allow-all-services` 验证链路。
 
 查看与吊销：
 
@@ -121,19 +119,19 @@ nyxid api-key list
 nyxid api-key delete <key-id>
 ```
 
----
+## 5. 配置 Responses 客户端
 
-## 5. 配置 cc-switch（codex / Responses 形态）
+适用于 Codex、cc-switch 的 Codex provider、OpenCode，以及任何支持 OpenAI Responses 协议的客户端。
 
-打开 cc-switch → **Codex** 标签 → 新建 Provider，填写如下字段：
+cc-switch 的 Codex 标签里新建 Provider：
 
-- **Name**：`Aevatar`
-- **OPENAI_API_KEY**：第 4 步生成的 `nyx_...`
-- **Config (toml)**：
+- Name：`Aevatar`
+- `OPENAI_API_KEY`：第 4 步生成的 `nyx_...`
+- Config：
 
 ```toml
 model_provider = "custom"
-model = "chrono-llm/gpt-5.5"          # 改成你实际想用的 <provider-slug>/<model>
+model = "chrono-llm/gpt-5.5"
 disable_response_storage = true
 
 [model_providers]
@@ -146,106 +144,125 @@ base_url = "https://nyx-api.chrono-ai.fun/api/v1/proxy/s/aevatar/v1"
 
 要点：
 
-- **`wire_api = "responses"`** 必填——Aevatar 只讲 Responses 协议。
-- **`base_url`** 必须停在 `/v1`，cc-switch 会自动追加 `/responses`、`/models`。
-- `model` 形如 `<nyxid-service-slug>/<model-name>`；可用清单见下一步。
+- `wire_api = "responses"` 必填。
+- `base_url` 停在 `/v1`，客户端会追加 `/responses`、`/models`。
+- `model` 优先使用 `/v1/models` 返回的 `<service-slug>/<model>`。
+- 如果要让 Responses 调用 Ornn skills，NyxID API key 的 allowed services 还要覆盖 Ornn API service，默认 slug 是 `ornn-api`。
 
-保存并切到这个 Provider。
+## 6. 配置 Claude Code / Messages 客户端
 
----
+适用于只支持 Anthropic Messages 协议的客户端。
 
-## 6. 接入 Claude Code（Messages 协议，路径 B，计划中）
+Claude Code / cc-switch 的 Claude provider 配置：
 
-> ⚠️ **状态：设计中，尚未实现。本节描述的是规划接入路径，不是当前可用的能力。**
-
-Claude Code 只支持 Anthropic Messages 协议，aevatar 计划新增 `/v1/messages` 端点作为
-**无状态视图（stateless facade）** 暴露给这类客户端。这条路是有意做"窄"的——
-权威的异步编排入口仍然是 `/v1/responses`，不要把 `/v1/messages` 当成它的同级替代品。
-
-### 能力对比
-
-| 能力 | `/v1/responses` | `/v1/messages` (路径 B) |
-|------|----------------|------------------------|
-| 模型路由（`<slug>/<model>`） | ✅ | ✅ |
-| 客户端发请求 / 收响应 | ✅ | ✅ |
-| 工具循环（NyxID 工具） | ✅ 服务端可观察 | ⚠️ 服务端闭环跑完，客户端只见最终文本 |
-| Session 连续性（`previous_response_id`） | ✅ | ❌ 每轮都是新 run |
-| Background 长任务 | ✅ | ❌ Anthropic 协议无对位字段 |
-| Reasoning blocks 透传 | ✅ | ❌ 协议有损 |
-
-### 协议错位简述
-
-Messages 是**无状态**协议，aevatar 是**有状态**运行时——路径 B 选择承认错位、把表面做窄：
-
-- Messages 要求客户端每轮重传完整 `messages` 数组；aevatar 不在这条表面上维护 session，
-  每个请求都是一次性 run。
-- Messages 的 `tool_use` 块协议假设客户端执行工具；NyxID 工具不在客户端侧，
-  aevatar 选择在服务端内闭环跑完工具循环，只回吐最终文本。
-- 想要完整异步编排能力（session、background、可观察工具循环），用 `/v1/responses`。
-
-### 计划中的 cc-switch 配置（合入后即用）
-
-cc-switch 的 **Claude** 标签新建 Provider：
-
-- **Name**：`Aevatar (Messages)`
-- **ANTHROPIC_BASE_URL**：`https://nyx-api.chrono-ai.fun/api/v1/proxy/s/aevatar`
-- **ANTHROPIC_AUTH_TOKEN**：第 4 步生成的 `nyx_...`（和 Codex 那把 key 同源）
-- **ANTHROPIC_MODEL**：`llm-anthropic/claude-haiku-4-5`（或其它 `<nyxid-service-slug>/<model>`）
+```bash
+export ANTHROPIC_BASE_URL="https://nyx-api.chrono-ai.fun/api/v1/proxy/s/aevatar"
+export ANTHROPIC_AUTH_TOKEN="nyx_xxxxxxxxxxxxxxxx"
+export ANTHROPIC_MODEL="chrono-llm/gpt-5.5"
+```
 
 要点：
 
-- 用 `ANTHROPIC_AUTH_TOKEN`（Bearer 头），**不要**用 `ANTHROPIC_API_KEY`（`x-api-key` 头）——
-  NyxID proxy plane 只识别 `Authorization: Bearer`。
-- `ANTHROPIC_BASE_URL` 停在 `/aevatar` 这一级（不带 `/v1`），Claude Code 自行拼 `/v1/messages`；
-  实际拼接行为以实现 PR 落地时验证为准。
-- 模型字段沿用 `<slug>/<model>` 形式，与 Responses 那条一致。
+- 用 `ANTHROPIC_AUTH_TOKEN`，让客户端发 `Authorization: Bearer ...`。
+- 不要用只会发 `x-api-key` 的配置项；NyxID proxy plane 识别 bearer。
+- `ANTHROPIC_BASE_URL` 停在 `/aevatar`，Claude Code 会自行拼 `/v1/messages`。
+- `/v1/messages` 是无状态窄门面，每次请求都是一轮新的 `LlmSession`；需要 `previous_response_id` continuation 时用 `/v1/responses`。
+- `/v1/messages` 不注入 Aevatar 服务端工具，也不注入 Ornn skill bridge；Claude Code 自己声明的工具仍由 Claude Code 自己处理。
+- Messages 的 `max_tokens` 必填。
 
-合入前不要在客户端配——会直接 404。
+## 7. curl 冒烟测试
 
----
-
-## 7. 端到端冒烟测试
-
-不进 cc-switch 也能验证（直接 curl）：
+准备环境变量：
 
 ```bash
 API_KEY="nyx_xxxxxxxxxxxxxxxx"
 BASE="https://nyx-api.chrono-ai.fun/api/v1/proxy/s/aevatar/v1"
+MODEL="chrono-llm/gpt-5.5"
+```
 
-# 1) 列出当前账户在 Aevatar 视角下可用的模型
+列模型：
+
+```bash
 curl -sS "$BASE/models" \
-  -H "Authorization: Bearer $API_KEY" | jq '.data[].id' | head -20
+  -H "Authorization: Bearer $API_KEY" \
+  | jq '.data[0]'
+```
 
-# 2) 发一次最简 Responses 请求
+Responses 非流式：
+
+```bash
 curl -sS "$BASE/responses" \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{
-    "model": "chrono-llm/gpt-5.5",
-    "input": "ping"
-  }' | jq
+  -d "{
+    \"model\": \"$MODEL\",
+    \"input\": \"ping\"
+  }" | jq
 ```
 
-正常返回里应包含 `id`、`output[].content[].text` 等 Responses 标准字段。
+Responses 流式：
 
----
+```bash
+curl -N "$BASE/responses" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"model\": \"$MODEL\",
+    \"input\": \"ping\",
+    \"stream\": true
+  }"
+```
+
+Messages 非流式：
+
+```bash
+curl -sS "$BASE/messages" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"model\": \"$MODEL\",
+    \"max_tokens\": 512,
+    \"messages\": [
+      {\"role\": \"user\", \"content\": \"ping\"}
+    ]
+  }" | jq
+```
+
+Messages 流式：
+
+```bash
+curl -N "$BASE/messages" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"model\": \"$MODEL\",
+    \"max_tokens\": 512,
+    \"stream\": true,
+    \"messages\": [
+      {\"role\": \"user\", \"content\": \"ping\"}
+    ]
+  }"
+```
 
 ## 8. 常见问题排查
 
 | 现象 | 多半原因 | 解法 |
 |---|---|---|
-| `401 unauthorized` 来自 `nyx-api.chrono-ai.fun` | API Key 错或被吊销 | `nyxid api-key list` 确认，必要时重发 |
-| `403 api_key_scope_forbidden_legacy` | `--allowed-services` 填的是 catalog id 而不是 UserService.id | 用 `nyxid service list --output json` 拿到的 id 重签 |
-| `403` 访问 `/proxy/s/aevatar/*` | 罕见——理论上 aevatar `auto_connected=true` 默认放行；若 NyxID 该版本仍走严格 allowed_services 校验则会 403 | 把 aevatar 的 UserService.id 也加进 `--allowed-services`，或 `--allow-all-services` |
-| `403` / 模型在 `/v1/models` 列表里看不到 | 想用的 LLM 服务还没加进你的 NyxID 账户 | `nyxid service add <slug>` 再列一次 |
-| `401 authentication_required` 来自 Aevatar | Bearer 没被 NyxID proxy 转写、或绕过了 proxy 直连了 Aevatar | 确认 `base_url` 是 `/api/v1/proxy/s/aevatar/v1`，**不要**直接写 `aevatar-console-backend-api.aevatar.ai` |
-| `wire_api` 报错 / Claude Code 接入失败 | 客户端只支持 Messages 协议 | `/v1/messages` 路径 B 设计中（见 §6）；未上线前 Claude Code 不可用 |
-| 模型清单为空 | API Key 没有 `--allow-all-services` 也没正确 `--allowed-services` | 先用 `--allow-all-services` 验证链路，再回头收紧 |
-
----
+| `401 unauthorized` 来自 `nyx-api.chrono-ai.fun` | API key 错或被吊销 | `nyxid api-key list` 确认，必要时重发 |
+| `403 api_key_scope_forbidden_legacy` | `--allowed-services` 填了 catalog id | 用 `nyxid service list --output json` 拿 UserService id 后重签 |
+| `403` 访问 `/proxy/s/aevatar/*` | 受限 key 没覆盖 aevatar service | 把 aevatar 的 UserService id 也加入 `--allowed-services`，或先用 `--allow-all-services` 验证 |
+| `/v1/models` 为空 | 没有可达的 LLM service，或 key service 权限太窄 | `nyxid service add <slug>`，或临时用 `--allow-all-services` |
+| Aevatar 返回 `authentication_required` | 没有带 bearer，或绕过了 NyxID proxy | 确认 URL 是 `/api/v1/proxy/s/aevatar/v1/...`，并带 `Authorization: Bearer` |
+| Claude Code 404 | `ANTHROPIC_BASE_URL` 拼错 | base URL 停在 `/api/v1/proxy/s/aevatar`，不要手写到 `/v1/messages` 两次 |
+| Messages 返回 `invalid_max_tokens` | `max_tokens` 缺失或不是正整数 | 给 Messages 请求补 `max_tokens` |
+| Messages 返回 `unsupported_parameter` | 使用了 `top_p`、`top_k`、`stop_sequences` 或 forced `tool_choice` | 删除这些参数；需要完整控制面时改用 Responses |
+| Messages 图片没有进入模型 | 当前 Messages facade v1 会丢弃 image content | 先走文本；图片输入等后续协议补齐 |
+| Ornn skill 工具没出现 | 走的是 `/v1/messages`，或 Responses host 没启用 skill bridge | 改走 `/v1/responses`；确认 Mainnet host 已注册 `ResponsesUserSkillsToolProvider` |
+| Ornn skill 工具能出现但搜索/加载失败 | 受限 NyxID API key 没覆盖 Ornn API service，或用户没有 Ornn 权限 | 把 Ornn API 的 UserService id 加进 `--allowed-services`；确认用户能访问 `ornn-api` |
 
 ## 9. 相关文档
 
-- `docs/canon/nyxid-llm-integration.md` — Aevatar 侧如何用 NyxID LLM Gateway
-- `docs/canon/chat-api.md` — Aevatar Responses API 详细字段语义
-- NyxID CLI 帮助：`nyxid api-key --help` / `nyxid proxy --help` / `nyxid service --help`
+- `docs/canon/nyxid-responses-direct.md` — NyxID Responses / Messages 直连权威口径
+- `docs/canon/nyxid-llm-integration.md` — Aevatar 内部如何经 NyxID 调 LLM
+- `docs/canon/chat-api.md` — Workflow Chat API 能力说明
+- NyxID CLI 帮助：`nyxid api-key --help`、`nyxid service --help`

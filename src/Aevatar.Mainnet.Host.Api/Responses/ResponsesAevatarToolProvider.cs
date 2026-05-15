@@ -29,16 +29,19 @@ internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider
         _webOptions = webOptions ?? throw new ArgumentNullException(nameof(webOptions));
     }
 
-    public IReadOnlyList<IAgentTool> GetSubstituteTools() =>
-    [
-        new TodoWriteTool(_commandPort),
-        new TaskTool("Task", _commandPort),
-        new TaskTool("task", _commandPort),
-        new WebFetchTool("WebFetch", _commandPort, _queryPort, _webClient),
-        new WebFetchTool("web_fetch", _commandPort, _queryPort, _webClient),
-        new WebSearchTool("WebSearch", _commandPort, _queryPort, _webClient, _webOptions),
-        new WebSearchTool("web_search", _commandPort, _queryPort, _webClient, _webOptions),
-    ];
+    public ValueTask<IReadOnlyList<IAgentTool>> GetSubstituteToolsAsync(
+        ResponsesToolProviderContext context,
+        CancellationToken ct = default) =>
+        ValueTask.FromResult<IReadOnlyList<IAgentTool>>(
+        [
+            new TodoWriteTool(_commandPort),
+            new TaskTool("Task", _commandPort),
+            new TaskTool("task", _commandPort),
+            new WebFetchTool("WebFetch", _commandPort, _queryPort, _webClient),
+            new WebFetchTool("web_fetch", _commandPort, _queryPort, _webClient),
+            new WebSearchTool("WebSearch", _commandPort, _queryPort, _webClient, _webOptions),
+            new WebSearchTool("web_search", _commandPort, _queryPort, _webClient, _webOptions),
+        ]);
 
     private abstract class ResponsesStateTool : IAgentTool
     {
