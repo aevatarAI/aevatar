@@ -153,20 +153,24 @@ bash tools/ci/orleans_3node_real_env_smoke.sh
 
 `Aevatar.Mainnet.Host.Api` 现在是 `aevatar app` 的唯一后端 API 面。当前用户面 contract 已经收敛为 `scope-first`，默认认为一个 `scope` 对应一个对外 service binding；内核仍保留 `service` 级别接口，作为未来扩展到多 service 的基础。
 
-Responses v1 最小原型也挂在主机上，入口是：
+Responses / Messages 直连接口也挂在主机上，外部推荐经 NyxID proxy 访问：
 
+- `GET /v1/models`
 - `POST /v1/responses`
 - `POST /v1/responses/{responseId}/cancel`
+- `POST /v1/messages`
 
 说明：
 
-- 这是最小 prototype，只支持文本输入；`previous_response_id` 会通过 response session read model 校验同一调用者、同一 ingress origin 下的上一条 response。`function_call_output` 会按上一条 response 的 forwarded tool call 记录用 `call_id` 对账。
+- `/v1/models` 会聚合当前调用者在 NyxID 上可达的 LLM service，并返回 `<service-slug>/<model>` 形态的模型 id。创建请求会把 service slug 解析成 NyxID route preference，裸 model 名仍作为旧调用方兼容路径。
+- `/v1/responses` 是 OpenAI Responses 兼容主入口；`previous_response_id` 会通过 response session read model 校验同一调用者、同一 ingress origin 下的上一条 response。`function_call_output` 会按上一条 response 的 forwarded tool call 记录用 `call_id` 对账。
 - `stream=true` 时返回 Responses 风格 SSE：`response.created`、`response.output_item.added`、`response.output_text.delta`、`response.output_text.done`、`response.output_item.done`、`response.completed`；失败时输出 `response.failed` / `error`。
 - `Authorization: Bearer <token>` 只在请求上下文中透传，不会落盘；持久化的 response session 只记录 NyxID `/me` 解析出的 caller scope 与 opaque `response.id`。
 - forward tool call 在输出给客户端前会先落 response session actor，记录 `call_id`、`tool_name`、`schema_hash`、arguments、状态与过期时间。客户端续传 tool result 时可携带 `schema_hash`，不匹配会返回明确 4xx。
 - `Task`、`Todo*`、`WebFetch`、`WebSearch` 属于 substitute 类，会在 `/v1/responses` boundary 被替换为 Aevatar tool；其他客户端 declared tools 默认 forward。`aevatar_*` additive tool 接口已预留。
 - substitute 工具状态归 `ResponsesAgentToolStateGAgent` 拥有：`TodoWrite` 写入 agent-scoped todo state，`Task` 记录可投影的 topology trace，`WebFetch` / `WebSearch` 记录 trace 与简单 cache 命中状态；这些状态通过 ProjectionPipeline 物化为 current-state read model，可供后续会话查询。
 - cancel 端点会复用同一 bearer token scope resolution；可见性通过后，session actor 会把 response 标记为 `cancelled` 并将 pending forwarded tool call 标为 `cancelled`。已过期或已取消的 `previous_response_id` 不能 resume。
+- `/v1/messages` 是 Anthropic Messages 窄门面。它每次请求注册一个新的 `LlmSession`，不支持 `previous_response_id`，`max_tokens` 必填，不注入 Aevatar substitute tools；`top_p`、`top_k`、`stop_sequences` 和 forced `tool_choice` 会被拒绝，image content v1 会被丢弃并记录 warning。
 
 当前推荐使用的 scope-first 入口：
 
