@@ -395,6 +395,44 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleStartAsync_TerminalRun_ShouldNotEmitDuplicateReadyEvent()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var scheduler = new RecordingCallbackScheduler();
+        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "ok" };
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            },
+            callbackScheduler: scheduler);
+        var request = new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-terminal-idempotent",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-terminal-idempotent",
+        };
+
+        await runtime.HandleStartAsync(request);
+        await runtime.HandleStartAsync(request.Clone());
+
+        replyGenerator.CallCount.Should().Be(1);
+        handled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor));
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+    }
+
+    [Fact]
     public async Task HandleCleanupAsync_ShouldDestroyTerminalRunActor()
     {
         var actor = Substitute.For<IActor>();
@@ -623,6 +661,132 @@ public sealed class AgentRunGAgentTests
         runtime.State.Status.Should().Be(AgentRunStatus.Dropped);
         replyGenerator.CallCount.Should().Be(0);
         handled.Count.Should().Be(droppedDispatchCount, "no additional drop events on duplicate start");
+    }
+
+    [Fact]
+    public async Task HandleCleanupAsync_ShouldIgnoreNonTerminalRun()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            new RecordingReplyGenerator(() => false) { ReplyText = "ok" },
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            });
+
+        await runtime.HandleCleanupAsync(new AgentRunCleanupRequested
+        {
+            RunId = "corr-non-terminal-cleanup",
+        });
+
+        actorRuntime.DestroyedIds.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleCleanupAsync_ShouldIgnoreMismatchedTerminalRunId()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            new RecordingReplyGenerator(() => false) { ReplyText = "ok" },
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            });
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-cleanup-mismatch",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-cleanup-mismatch",
+        });
+        await runtime.HandleCleanupAsync(new AgentRunCleanupRequested
+        {
+            RunId = "corr-some-other-run",
+        });
+
+        actorRuntime.DestroyedIds.Should().BeEmpty();
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        runtime.State.CleanupCompletedAtUnixMs.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_TerminalDrop_ShouldNotDispatchDuplicateDropNotification()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            new RecordingReplyGenerator(() => false) { ReplyText = "ok" },
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            });
+
+        var request = new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-terminal-drop-idempotent",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            // Relay request with no command-carried ReplyToken should drop before LLM execution.
+        };
+
+        await runtime.HandleStartAsync(request);
+        await runtime.HandleStartAsync(request.Clone());
+
+        handled.Should().ContainSingle(e => e.Payload.Is(DeferredLlmReplyDroppedEvent.Descriptor));
+        runtime.State.Status.Should().Be(AgentRunStatus.Dropped);
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_TerminalFailure_ShouldNotDispatchDuplicateFailureReadyEvent()
+    {
+        var collector = new AsyncLocalInteractiveReplyCollector();
+        var replyGenerator = new ThrowingReplyGenerator(new InvalidOperationException("boom"));
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("channel-conversation:lark:group:oc_group_chat_1");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            collector,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
+        var request = new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-terminal-failed-idempotent",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-terminal-failed-idempotent",
+        };
+
+        await runtime.HandleStartAsync(request);
+        await runtime.HandleStartAsync(request.Clone());
+
+        handled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor));
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        runtime.State.ProducedTerminalState.Should().Be(LlmReplyTerminalState.Failed);
     }
 
     [Fact]
