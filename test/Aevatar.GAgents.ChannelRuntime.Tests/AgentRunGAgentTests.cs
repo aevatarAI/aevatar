@@ -14,6 +14,7 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
 using Xunit;
 
@@ -48,6 +49,96 @@ public sealed class AgentRunGAgentTests
         command.Request.CorrelationId.Should().Be("corr-dispatch");
         command.Request.TargetActorId.Should().Be("conversation-actor");
         command.Request.ReplyToken.Should().Be("relay-token-dispatch");
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldReturnAcceptedOutcomeOnly()
+    {
+        var actorRuntime = new DispatchingActorRuntime();
+        var streamProvider = new RecordingStreamProvider();
+        var clock = new FakeTimeProvider(new DateTimeOffset(2026, 5, 15, 8, 0, 0, TimeSpan.Zero));
+        var dispatcher = new AgentRunDispatcher(
+            actorRuntime,
+            streamProvider,
+            NullLogger<AgentRunDispatcher>.Instance,
+            clock);
+
+        var result = await dispatcher.DispatchAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-accepted",
+            TargetActorId = "conversation-actor",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-accepted",
+            RequestedAtUnixMs = clock.GetUtcNow().ToUnixTimeMilliseconds(),
+        }, CancellationToken.None);
+
+        var produced = streamProvider.Produced.Should().ContainSingle().Subject;
+        result.Phase.Should().Be(DispatchPhase.Accepted);
+        result.CommandId.Should().NotBeNullOrWhiteSpace();
+        result.CommandId.Should().Be(produced.Envelope.Id);
+        result.RunActorId.Should().Be(AgentRunGAgent.BuildActorId("corr-accepted"));
+        result.RunActorId.Should().Be(produced.StreamId);
+        result.AcceptedAtUnixMs.Should().Be(clock.GetUtcNow().ToUnixTimeMilliseconds());
+    }
+
+    [Fact]
+    public async Task DispatchAsync_WhenRequestIsStale_ShouldRejectBeforeEnqueue()
+    {
+        var actorRuntime = new DispatchingActorRuntime();
+        var streamProvider = new RecordingStreamProvider();
+        var clock = new FakeTimeProvider(new DateTimeOffset(2026, 5, 15, 8, 10, 0, TimeSpan.Zero));
+        var dispatcher = new AgentRunDispatcher(
+            actorRuntime,
+            streamProvider,
+            NullLogger<AgentRunDispatcher>.Instance,
+            clock);
+
+        var result = await dispatcher.DispatchAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-stale",
+            TargetActorId = "conversation-actor",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            RequestedAtUnixMs = clock.GetUtcNow().AddMinutes(-6).ToUnixTimeMilliseconds(),
+        }, CancellationToken.None);
+
+        result.Phase.Should().Be(DispatchPhase.RejectedStale);
+        result.CommandId.Should().BeEmpty();
+        result.RunActorId.Should().BeNull();
+        result.AcceptedAtUnixMs.Should().Be(0);
+        streamProvider.Produced.Should().BeEmpty();
+    }
+
+    [Fact(Skip = "RejectedDuplicate is part of the ADR-0021 dispatcher contract but duplicate suppression is not implemented in AgentRunDispatcher yet.")]
+    public async Task DispatchAsync_WhenRequestIsDuplicate_ShouldReturnRejectedDuplicate_AndAvoidSecondEnqueue()
+    {
+        var actorRuntime = new DispatchingActorRuntime();
+        var streamProvider = new RecordingStreamProvider();
+        var clock = new FakeTimeProvider(new DateTimeOffset(2026, 5, 15, 8, 20, 0, TimeSpan.Zero));
+        var dispatcher = new AgentRunDispatcher(
+            actorRuntime,
+            streamProvider,
+            NullLogger<AgentRunDispatcher>.Instance,
+            clock);
+        var request = new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-duplicate-dispatch",
+            TargetActorId = "conversation-actor",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            RequestedAtUnixMs = clock.GetUtcNow().ToUnixTimeMilliseconds(),
+        };
+
+        await dispatcher.DispatchAsync(request, CancellationToken.None);
+        var duplicate = await dispatcher.DispatchAsync(request.Clone(), CancellationToken.None);
+
+        duplicate.Phase.Should().Be(DispatchPhase.RejectedDuplicate);
+        // ADR-0021 only locks the duplicate receipt phase and the fact that the
+        // duplicate request must not be enqueued again. The exact duplicate
+        // receipt payload shape (e.g. whether RunActorId/AcceptedAtUnixMs are
+        // populated) is intentionally left to the eventual implementation.
+        streamProvider.Produced.Should().ContainSingle("duplicate dispatch must not enqueue a second run start command");
     }
 
     [Fact]
@@ -319,7 +410,7 @@ public sealed class AgentRunGAgentTests
 
         replyGenerator.CallCount.Should().Be(1);
         handled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor));
-        runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
     }
 
     [Fact]
@@ -607,8 +698,8 @@ public sealed class AgentRunGAgentTests
         });
 
         actorRuntime.DestroyedIds.Should().BeEmpty();
-        runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
-        runtime.State.ReplyDispatched.Should().BeTrue();
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        runtime.State.CleanupCompletedAtUnixMs.Should().Be(0);
     }
 
     [Fact]
@@ -675,8 +766,7 @@ public sealed class AgentRunGAgentTests
         await runtime.HandleStartAsync(request.Clone());
 
         handled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor));
-        runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
-        runtime.State.ReplyDispatched.Should().BeTrue();
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
         runtime.State.ProducedTerminalState.Should().Be(LlmReplyTerminalState.Failed);
     }
 

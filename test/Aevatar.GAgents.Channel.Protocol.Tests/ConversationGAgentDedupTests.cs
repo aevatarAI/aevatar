@@ -419,6 +419,77 @@ public sealed class ConversationGAgentDedupTests
         events.Count.ShouldBe(3);
         events.Last().EventType.ShouldContain(nameof(ConversationTurnCompletedEvent));
         events.Select(e => e.EventType).ShouldContain(s => s.Contains(nameof(LlmReplyDeliveredEvent)));
+        agent.State.LastReplyDelivery.RunId.ShouldBe("act-llm-ready");
+        agent.State.LastReplyDelivery.OutcomeCase.ShouldBe(ReplyDeliveryStatus.OutcomeOneofCase.Delivered);
+        agent.State.LastReplyDelivery.Delivered.ChannelMessageId.ShouldBe(string.Empty);
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyReadyAsync_WhenDeliverySucceeds_UpdatesLastReplyDeliveryState()
+    {
+        var runner = new RecordingTurnRunner
+        {
+            LlmReplyResultFactory = reply => ConversationTurnResult.Sent(
+                "sent:llm:" + reply.CorrelationId,
+                reply.Outbound?.Clone() ?? new MessageContent { Text = "ack" },
+                "bot",
+                new OutboundDeliveryContext
+                {
+                    ReplyMessageId = "om_delivery_ok",
+                    CorrelationId = reply.CorrelationId,
+                }),
+        };
+        var (agent, store) = CreateAgent(runner, "conv-llm-delivered");
+
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = "corr-delivered",
+            RegistrationId = "reg-1",
+            SourceActorId = "agent-run",
+            Activity = CreateActivity("corr-delivered", "conv:slack:C1"),
+            Outbound = new MessageContent { Text = "reply-from-llm" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 43,
+        });
+
+        agent.State.LastReplyDelivery.RunId.ShouldBe("corr-delivered");
+        agent.State.LastReplyDelivery.OutcomeCase.ShouldBe(ReplyDeliveryStatus.OutcomeOneofCase.Delivered);
+        agent.State.LastReplyDelivery.Delivered.ChannelMessageId.ShouldBe("om_delivery_ok");
+        agent.State.LastReplyDelivery.Delivered.AckedAtUnixMs.ShouldBeGreaterThan(0);
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Select(e => e.EventType).ShouldContain(s => s.Contains(nameof(LlmReplyDeliveredEvent)));
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyReadyAsync_WhenDeliveryFails_UpdatesLastReplyDeliveryState()
+    {
+        var runner = new RecordingTurnRunner
+        {
+            LlmReplyResultFactory = _ => ConversationTurnResult.PermanentFailure("lark_send_failed", "lark rejected send"),
+        };
+        var (agent, store) = CreateAgent(runner, "conv-llm-delivery-failed");
+
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = "corr-delivery-failed",
+            RegistrationId = "reg-1",
+            SourceActorId = "agent-run",
+            Activity = CreateActivity("corr-delivery-failed", "conv:slack:C1"),
+            Outbound = new MessageContent { Text = "reply-from-llm" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 43,
+        });
+
+        agent.State.LastReplyDelivery.RunId.ShouldBe("corr-delivery-failed");
+        agent.State.LastReplyDelivery.OutcomeCase.ShouldBe(ReplyDeliveryStatus.OutcomeOneofCase.Failed);
+        agent.State.LastReplyDelivery.Failed.ErrorCode.ShouldBe("lark_send_failed");
+        agent.State.LastReplyDelivery.Failed.ErrorMessage.ShouldBe("lark rejected send");
+        agent.State.LastReplyDelivery.Failed.FailedAtUnixMs.ShouldBeGreaterThan(0);
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Select(e => e.EventType).ShouldContain(s => s.Contains(nameof(LlmReplyDeliveryFailedEvent)));
+        events.Last().EventType.ShouldContain(nameof(ConversationContinueFailedEvent));
     }
 
     [Fact]
