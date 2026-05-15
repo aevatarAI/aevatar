@@ -102,9 +102,10 @@ llm-anthropic/claude-haiku-4-5
 
 ## 5. Responses 工具行为
 
-`/v1/responses` 会把客户端声明的工具分成两类：
+`/v1/responses` 会把工具分成三类：
 
 - Aevatar substitute tools：由服务端接管执行并记录状态。
+- Aevatar additive tools：由服务端额外注入，供模型主动调用。
 - forwarded tools：保留给客户端或上游模型继续处理。
 
 当前 substitute tools 包括：
@@ -116,7 +117,14 @@ llm-anthropic/claude-haiku-4-5
 | `WebFetch` / `web_fetch` | 通过 Aevatar 抓取 URL，记录 trace/cache |
 | `WebSearch` / `web_search` | 通过 Aevatar 执行 web search，记录 trace/cache |
 
-注意：这些是 Responses 边界内的本地替代工具。仓库里的 Ornn 用户技能目前还没有桥接到 `/v1/responses` 的工具列表；不要把 `use_skill`、`ornn_search_skills` 写成已经可用的 Responses 能力。这个缺口对应 issue #664 的后续工作。
+当前 additive tools 包括：
+
+| 工具名 | 说明 |
+|---|---|
+| `use_skill` | 按名称加载本地或 Ornn 远程 skill，并把 skill 指令返回给模型执行 |
+| `ornn_search_skills` | 通过 NyxID proxy 搜索调用者在 Ornn 上可见的 skill |
+
+`use_skill` 和 `ornn_search_skills` 使用当前 `/v1/responses` 请求的 bearer token，经 NyxID proxy 访问 Ornn API。也就是说，它们看到的是这个调用者在 NyxID / Ornn 权限下可见的 skill，而不是 Aevatar 服务端的全局技能库。使用受限 NyxID API key 时，`--allowed-services` 需要同时覆盖 `aevatar`、目标 LLM service，以及 Ornn API service（默认 slug 为 `ornn-api`，可通过 `Aevatar:Ornn:NyxIdSlug` 覆盖）。
 
 ## 6. Messages 窄门面
 
@@ -129,14 +137,14 @@ llm-anthropic/claude-haiku-4-5
 - `max_tokens` 必填。
 - 支持 text、`tool_use`、`tool_result`、`thinking` 的基础映射。
 - 支持 streaming，并输出 Anthropic Messages 事件形态。
-- 不注入 Aevatar substitute tools，避免覆盖 Claude Code 自己的工具 harness。
+- 不注入 Aevatar substitute / additive tools，包括 `use_skill` 和 `ornn_search_skills`，避免覆盖 Claude Code 自己的工具 harness。
 
 当前限制：
 
 - `top_p`、`top_k`、`stop_sequences` 会被拒绝。
 - forced `tool_choice` 不支持；`tool_choice` 只能用于禁用工具。
 - image content v1 会被丢弃并记录 warning。
-- 它是无状态窄门面，不承载 background task、response session continuation、完整 Responses 工具可观察性。
+- 它是无状态窄门面，不承载 background task、response session continuation、完整 Responses 工具可观察性，也不提供服务端 Ornn skill bridge。
 
 需要完整异步编排和 continuation 时，用 `/v1/responses`。
 
