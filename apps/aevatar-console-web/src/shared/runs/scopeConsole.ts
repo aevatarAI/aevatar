@@ -169,8 +169,8 @@ export function extractRuntimeInvokeReceipt(
     response,
     "request_id",
     "requestId",
-    "command_id",
-    "commandId"
+    "run_id",
+    "runId"
   );
 
   return {
@@ -180,9 +180,8 @@ export function extractRuntimeInvokeReceipt(
       "targetActorId",
       "actorId"
     ),
-    commandId: readResponseField(response, "command_id", "commandId") || runId,
-    correlationId:
-      readResponseField(response, "correlation_id", "correlationId") || runId,
+    commandId: readResponseField(response, "command_id", "commandId"),
+    correlationId: readResponseField(response, "correlation_id", "correlationId"),
     runId,
   };
 }

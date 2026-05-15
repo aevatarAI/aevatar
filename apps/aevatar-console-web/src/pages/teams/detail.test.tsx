@@ -1526,6 +1526,37 @@ describe("TeamDetailPage", () => {
     pushSpy.mockRestore();
   });
 
+  it("keeps an explicit Team member when opening Studio from top actions", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1/t-alpha?memberId=member-support&workflowId=workflow-1",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("button", { name: "服务映射" });
+    await waitFor(() => {
+      expect(studioApi.listTeamMembers).toHaveBeenCalledWith("scope-1", "t-alpha");
+    });
+
+    const pushSpy = jest.spyOn(history, "push").mockImplementation(() => undefined);
+    fireEvent.click(screen.getByRole("button", { name: "高级编辑" }));
+
+    expect(pushSpy).toHaveBeenCalled();
+    const pushedHref = pushSpy.mock.calls.at(-1)?.[0] ?? "";
+    const pushedUrl = new URL(pushedHref, window.location.origin);
+    expect(pushedUrl.pathname).toBe("/studio");
+    const params = pushedUrl.searchParams;
+    expect(params.get("scopeId")).toBe("scope-1");
+    expect(params.get("teamId")).toBe("t-alpha");
+    expect(params.get("member")).toBe("member:member-support");
+    expect(params.get("memberId")).toBeNull();
+    expect(params.get("focus")).toBe("workflow:workflow-1");
+    expect(params.get("tab")).toBe("studio");
+    pushSpy.mockRestore();
+  });
+
   it("drops stale service and run hints in favor of the requested workflow truth", async () => {
     window.history.replaceState(
       {},

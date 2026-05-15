@@ -26,6 +26,19 @@ describe('runtimeRoutes', () => {
     expect(
       buildRuntimeRunsHref({
         actorId: 'actor://selected',
+        runId: 'run-1',
+        returnTo: buildRuntimeExplorerHref({
+          actorId: 'actor://selected',
+          runId: 'run-1',
+        }),
+      }),
+    ).toContain(
+      'actorId=actor%3A%2F%2Fselected&runId=run-1',
+    );
+    expect(
+      buildRuntimeRunsHref({
+        actorId: 'actor://selected',
+        runId: 'run-1',
         returnTo: buildRuntimeExplorerHref({
           actorId: 'actor://selected',
           runId: 'run-1',
