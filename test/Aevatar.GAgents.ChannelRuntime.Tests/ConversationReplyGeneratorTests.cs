@@ -229,7 +229,7 @@ public sealed class ConversationReplyGeneratorTests
                 streamingSink: null,
                 CancellationToken.None);
 
-            reply.Should().Be("ok");
+            reply.Text.Should().Be("ok");
         }
 
         logger.WarningMessages.Should().ContainSingle(message =>
@@ -260,7 +260,7 @@ public sealed class ConversationReplyGeneratorTests
             sink,
             CancellationToken.None);
 
-        reply.Should().Be("done");
+        reply.Text.Should().Be("done");
         providerFactory.Requests.Should().HaveCount(2);
         providerFactory.Requests[1].Messages.Should().Contain(message => message.Role == "tool");
         sink.Emissions.Should().Equal("…", "done");
