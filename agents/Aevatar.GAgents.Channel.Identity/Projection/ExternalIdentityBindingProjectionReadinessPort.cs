@@ -57,6 +57,8 @@ public sealed class ExternalIdentityBindingProjectionReadinessPort : IProjection
 
     private static bool Matches(ExternalIdentityBindingDocument? document, string? expectedBindingId)
     {
+        if (expectedBindingId is null && document is null)
+            return true;
         if (document is null)
             return false;
         if (expectedBindingId is null)

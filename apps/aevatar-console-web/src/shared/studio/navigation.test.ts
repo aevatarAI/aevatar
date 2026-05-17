@@ -141,10 +141,10 @@ describe('buildStudioRoute', () => {
       buildStudioWorkflowWorkspaceRoute({
         scopeId: 'scope-a',
         scopeLabel: '团队 A',
-        memberId: 'service-alpha',
+        memberId: 'member-alpha',
         memberLabel: '默认成员',
       }),
-    ).toBe('/studio?scopeId=scope-a&member=member%3Aservice-alpha&tab=studio');
+    ).toBe('/studio?scopeId=scope-a&member=member%3Amember-alpha&tab=studio');
     expect(
       buildStudioWorkflowEditorRoute({
         scopeId: 'scope-1',
@@ -217,12 +217,12 @@ describe('buildStudioRoute', () => {
       buildStudioRoute({
         scopeId: 'scope-a',
         scopeLabel: '团队 A',
-        memberId: 'service-alpha',
+        memberId: 'member-alpha',
         memberLabel: '成员 Alpha',
         focus: 'workflow:workflow-1',
       }),
     ).toBe(
-      '/studio?scopeId=scope-a&member=member%3Aservice-alpha&focus=workflow%3Aworkflow-1&tab=studio',
+      '/studio?scopeId=scope-a&member=member%3Amember-alpha&focus=workflow%3Aworkflow-1&tab=studio',
     );
   });
 });

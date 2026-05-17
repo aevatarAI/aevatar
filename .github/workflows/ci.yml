@@ -331,7 +331,7 @@ jobs:
         if: ${{ success() && env.CODECOV_TOKEN != '' }}
         uses: codecov/codecov-action@v5
         with:
-          files: ./artifacts/coverage/**/raw/**/coverage.cobertura.xml
+          files: ./artifacts/coverage/**/report/Cobertura.xml
           disable_search: true
           fail_ci_if_error: true
           flags: ci

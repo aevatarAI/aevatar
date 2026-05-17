@@ -5,7 +5,6 @@ using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.Maintenance;
 using Aevatar.GAgents.Channel.Runtime;
-using Aevatar.GAgents.Scheduled.WorkflowModules;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -71,7 +70,6 @@ public static class ScheduledServiceCollectionExtensions
         services.TryAddSingleton<UserAgentCatalogProjectionPort>();
         services.TryAddSingleton<IUserAgentCatalogCommandPort, UserAgentCatalogCommandPort>();
         services.TryAddSingleton<ISkillRunnerCommandPort, SkillRunnerCommandPort>();
-        services.TryAddSingleton<IWorkflowAgentCommandPort, WorkflowAgentCommandPort>();
         // Caller-scope resolver chain (issue #466 §B). Channel resolver runs first so
         // a request with channel metadata produces the per-sender scope rather than
         // the looser nyxid-scoped tuple from the underlying NyxID session.
@@ -107,12 +105,6 @@ public static class ScheduledServiceCollectionExtensions
             services.AddInMemoryDocumentProjectionStore<UserAgentCatalogNyxCredentialDocument, string>(
                 static doc => doc.Id, static key => key);
         }
-
-        // Register the scheduled-agent workflow module pack so the social_media template's
-        // `twitter_publish` step type resolves at workflow run time (issue #216).
-        // AddWorkflowModulePack uses TryAddEnumerable, so calling alongside AddAevatarWorkflow
-        // is idempotent.
-        services.AddScheduledWorkflowExtensions();
 
         return services;
     }

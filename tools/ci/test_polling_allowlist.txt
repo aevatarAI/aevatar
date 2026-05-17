@@ -18,3 +18,5 @@ test/Aevatar.Tools.Cli.Tests/ChronoStorageChatHistoryStoreTests.cs
 test/Aevatar.AI.Tests/StreamingToolExecutorTests.cs
 # Fake voice transport uses Task.Delay(Infinite, ct) to keep receive loop alive until relay teardown cancels it
 test/Aevatar.Foundation.VoicePresence.Tests/VoiceTransportRelayTests.cs
+# HangingReplyGenerator test double uses Task.Delay(Infinite, ct) to verify runtime cancels reply generation on timeout
+test/Aevatar.GAgents.ChannelRuntime.Tests/ChannelLlmReplyInboxRuntimeTests.cs

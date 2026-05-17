@@ -1,6 +1,5 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.ToolProviders.Web.Tools;
@@ -44,8 +43,6 @@ public sealed class WebFetchTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken) ?? "";
-
         var args = ToolArgs.Parse(argumentsJson);
         var url = args.Str("url");
         if (string.IsNullOrWhiteSpace(url))
@@ -56,7 +53,19 @@ public sealed class WebFetchTool : IAgentTool
         if (!url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
             url = "https://" + url;
 
-        var result = await _client.FetchUrlAsync(token, url, ct);
+        var validation = await WebFetchUrlGuard.ValidateResolvedAsync(url, ct);
+        if (!validation.IsAllowed)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = validation.RejectionCode ?? "url_rejected",
+            });
+        }
+
+        // The URL is LLM/user-controlled. Do not forward the caller's NyxID bearer
+        // to arbitrary hosts; authenticated downstream access must use a typed
+        // NyxID proxy tool instead.
+        var result = await _client.FetchUrlAsync(string.Empty, validation.NormalizedUrl!, ct);
 
         if (result.RedirectUrl != null)
         {

@@ -43,8 +43,28 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<SkillFrontmatterParser>();
         services.TryAddSingleton<SkillDiscovery>();
         services.TryAddSingleton<SkillRegistry>();
-        services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IAgentToolSource, SkillsAgentToolSource>());
+        services.TryAddSingleton<SkillsAgentToolSource>();
+        services.TryAddAgentToolSourceAlias<SkillsAgentToolSource>(GetSkillsAgentToolSource);
         return services;
+    }
+
+    private static IAgentToolSource GetSkillsAgentToolSource(IServiceProvider sp) =>
+        sp.GetRequiredService<SkillsAgentToolSource>();
+
+    private static void TryAddAgentToolSourceAlias<TSource>(
+        this IServiceCollection services,
+        Func<IServiceProvider, IAgentToolSource> factory)
+        where TSource : class, IAgentToolSource
+    {
+        if (services.Any(descriptor =>
+                descriptor.ServiceType == typeof(IAgentToolSource) &&
+                (descriptor.ImplementationType == typeof(TSource) ||
+                 descriptor.ImplementationInstance is TSource ||
+                 descriptor.ImplementationFactory?.Method == factory.Method)))
+        {
+            return;
+        }
+
+        services.Add(ServiceDescriptor.Singleton(factory));
     }
 }

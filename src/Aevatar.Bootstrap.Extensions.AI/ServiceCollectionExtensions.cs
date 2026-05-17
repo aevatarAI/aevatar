@@ -47,7 +47,12 @@ public sealed class AevatarAIFeatureOptions
     public bool EnableMCPTools { get; set; }
     public bool EnableSkills { get; set; }
     public bool EnableOrnnSkills { get; set; }
-    public string? OrnnBaseUrl { get; set; }
+    /// <summary>
+    /// Optional override for the NyxID-bound slug pointing at the Ornn skill API. Defaults to
+    /// chrono-ornn's canonical <c>"ornn"</c> when null/empty. Override only if the deployment's
+    /// NyxID catalog uses a different slug (e.g. organisations that re-registered the service).
+    /// </summary>
+    public string? OrnnNyxIdSlug { get; set; }
     public IAevatarSecretsStore? SecretsStore { get; set; }
     public string? ApiKey { get; set; }
     public NyxIdLlmEndpointSpec? NyxIdLlmEndpoint { get; set; }
@@ -888,10 +893,17 @@ public static class ServiceCollectionExtensions
 
     private static void RegisterOrnnSkills(IServiceCollection services, AevatarAIFeatureOptions options)
     {
-        if (string.IsNullOrWhiteSpace(options.OrnnBaseUrl))
-            return;
-
-        services.AddOrnnSkills(o => o.BaseUrl = options.OrnnBaseUrl);
+        // EnableOrnnSkills is the only gate. OrnnSkillClient routes through NyxID's proxy
+        // (slug defaults to chrono-ornn's canonical "ornn") so the upstream Ornn URL is
+        // not a configuration concern at this layer — NyxIdToolOptions.BaseUrl already
+        // supplies the NyxID host, and NyxID resolves the Ornn backend from the catalog
+        // entry matching the slug. Deployments override the slug only when their NyxID
+        // catalog re-registered the service under a non-default name.
+        services.AddOrnnSkills(o =>
+        {
+            if (!string.IsNullOrWhiteSpace(options.OrnnNyxIdSlug))
+                o.NyxIdSlug = options.OrnnNyxIdSlug;
+        });
     }
 
     private static void RegisterWebTools(IServiceCollection services, AevatarAIFeatureOptions options)

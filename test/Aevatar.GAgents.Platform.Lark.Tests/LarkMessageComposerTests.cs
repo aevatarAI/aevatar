@@ -68,6 +68,58 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
     }
 
     [Fact]
+    public void Compose_WhenPlainTextExceedsLegacyTwoThousandChars_DoesNotSilentlyTruncate()
+    {
+        var text = new string('a', 2_500);
+
+        var payload = CreateComposer().Compose(
+            new MessageContent
+            {
+                Text = text,
+            },
+            new ComposeContext
+            {
+                Conversation = ConversationReference.Create(
+                    ChannelId.From("lark"),
+                    BotInstanceId.From("bot-1"),
+                    ConversationScope.DirectMessage,
+                    partition: null,
+                    "user-1"),
+                Capabilities = LarkMessageComposer.DefaultCapabilities.Clone(),
+            });
+
+        payload.PlainText.ShouldBe(text);
+        using var document = JsonDocument.Parse(payload.ContentJson);
+        document.RootElement.GetProperty("text").GetString().ShouldBe(text);
+    }
+
+    [Fact]
+    public void Compose_WhenTextExceedsConfiguredLimit_AppendsTruncationMarker()
+    {
+        var payload = CreateComposer().Compose(
+            new MessageContent
+            {
+                Text = "0123456789ABCDEFGHIJ",
+            },
+            new ComposeContext
+            {
+                Conversation = ConversationReference.Create(
+                    ChannelId.From("lark"),
+                    BotInstanceId.From("bot-1"),
+                    ConversationScope.DirectMessage,
+                    partition: null,
+                    "user-1"),
+                Capabilities = new ChannelCapabilities
+                {
+                    MaxMessageLength = 18,
+                },
+            });
+
+        payload.PlainText.Length.ShouldBeLessThanOrEqualTo(18);
+        payload.PlainText.ShouldEndWith("...[truncated]");
+    }
+
+    [Fact]
     public void Compose_WhenRenderingInteractiveCard_UsesLarkV2BodyElements()
     {
         var intent = new MessageContent
@@ -130,7 +182,7 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
         {
             BlockId = "agents_list",
             Title = "Your Agents (1)",
-            Text = "1. `daily_report` · running",
+            Text = "1. `daily` · running",
         });
         intent.Actions.Add(new ActionElement
         {
@@ -162,7 +214,7 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
         var cardMarkdown = bodyElements[0].GetProperty("content").GetString();
         cardMarkdown.ShouldNotBeNull();
         cardMarkdown.ShouldNotContain("**Your Agents (1)**");
-        cardMarkdown.ShouldContain("daily_report");
+        cardMarkdown.ShouldContain("daily");
     }
 
     [Fact]
@@ -272,11 +324,11 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
         var submit = new ActionElement
         {
             Kind = ActionElementKind.FormSubmit,
-            ActionId = "submit_daily_report",
+            ActionId = "submit_daily",
             Label = "Create",
             IsPrimary = true,
         };
-        submit.Arguments["agent_builder_action"] = "create_daily_report";
+        submit.Arguments["agent_builder_action"] = "create_daily";
         intent.Actions.Add(submit);
 
         var payload = CreateComposer().Compose(
@@ -303,13 +355,13 @@ public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMess
             .EnumerateArray()
             .First(e => e.TryGetProperty("tag", out var tag) && tag.GetString() == "button");
 
-        submitButton.GetProperty("name").GetString().ShouldBe("submit_daily_report");
+        submitButton.GetProperty("name").GetString().ShouldBe("submit_daily");
         submitButton.GetProperty("form_action_type").GetString().ShouldBe("submit");
         submitButton.TryGetProperty("value", out _).ShouldBeFalse();
         var behavior = submitButton.GetProperty("behaviors")[0];
         behavior.GetProperty("type").GetString().ShouldBe("callback");
         var value = behavior.GetProperty("value");
-        value.GetProperty("action_id").GetString().ShouldBe("submit_daily_report");
-        value.GetProperty("agent_builder_action").GetString().ShouldBe("create_daily_report");
+        value.GetProperty("action_id").GetString().ShouldBe("submit_daily");
+        value.GetProperty("agent_builder_action").GetString().ShouldBe("create_daily");
     }
 }
