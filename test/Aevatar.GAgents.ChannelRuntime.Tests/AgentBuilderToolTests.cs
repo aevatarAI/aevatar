@@ -43,7 +43,7 @@ public sealed class AgentBuilderToolTests
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         catalogCommandPort.TombstoneAsync("skill-runner-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.Observed)));
+            .Returns(Task.FromResult(new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.Accepted)));
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-1", """{"ok":true}""");
@@ -78,10 +78,13 @@ public sealed class AgentBuilderToolTests
                 """);
 
             using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be("deleted");
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
             doc.RootElement.GetProperty("revoked_api_key_id").GetString().Should().Be("key-1");
             doc.RootElement.GetProperty("agents").GetArrayLength().Should().Be(0);
-            doc.RootElement.GetProperty("delete_notice").GetString().Should().Contain("Deleted agent");
+            doc.RootElement.GetProperty("delete_notice").GetString().Should().Contain("Delete submitted");
+            doc.RootElement.GetProperty("note").GetString()
+                .Should().Contain("propagating")
+                .And.Contain("/agents");
 
             await skillRunnerPort.Received(1).DisableAsync(
                 "skill-runner-1",
@@ -103,14 +106,11 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_DeleteAgent_ReturnsAcceptedWithPropagatingHint_WhenTombstoneDoesNotReflectWithinBudget()
+    public async Task ExecuteAsync_DeleteAgent_ReturnsAcceptedWithPropagatingHint()
     {
-        // Production bug class: with the old 5 s polling budget, /delete-agent
-        // routinely returned "accepted" + "tombstone is not yet reflected" while
-        // the document was still visible to /agents minutes later. This guard
-        // proves that when the read model legitimately stays behind, the user-
-        // facing payload now nudges the user to retry rather than implying the
-        // delete might not have landed at all.
+        // Refactor (iter4/cluster-009):
+        //   Old pattern: Delete relied on command-port polling to decide whether to claim immediate deletion.
+        //   New principle: Delete returns accepted and points confirmation to the explicit /agents query path.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("skill-runner-stuck", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
@@ -127,9 +127,6 @@ public sealed class AgentBuilderToolTests
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-        // Tombstone is dispatched but the projection has not yet caught up; the
-        // port surfaces an Accepted outcome and the tool reports the propagating
-        // notice so the user knows to re-check /agents.
         catalogCommandPort.TombstoneAsync("skill-runner-stuck", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.Accepted)));
 

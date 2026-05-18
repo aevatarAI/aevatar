@@ -180,23 +180,12 @@ public sealed class AgentBuilderTool : IAgentTool
         if (!string.IsNullOrWhiteSpace(entry.ApiKeyId))
             await nyxClient.DeleteApiKeyAsync(token, entry.ApiKeyId, ct);
 
-        var tombstoneResult = await catalogCommandPort.TombstoneAsync(entry.AgentId, ct);
-        var deleted = tombstoneResult.Outcome == CatalogCommandOutcome.Observed;
+        // Refactor (iter4/cluster-009):
+        //   Old pattern: Delete mapped command-port Observed to a synchronous deleted status.
+        //   New principle: Tombstone ACK is accepted-only; deletion visibility is confirmed by the catalog query path.
+        await catalogCommandPort.TombstoneAsync(entry.AgentId, ct);
 
         var agents = await QueryAgentsForCallerAsync(queryPort, caller, ct);
-
-        if (deleted)
-        {
-            return JsonSerializer.Serialize(new
-            {
-                status = "deleted",
-                agent_id = entry.AgentId,
-                revoked_api_key_id = entry.ApiKeyId,
-                delete_notice = $"Deleted agent `{entry.AgentId}`. Revoked API key: `{entry.ApiKeyId ?? "n/a"}`.",
-                agents,
-                total = agents.Length,
-            });
-        }
 
         return JsonSerializer.Serialize(new
         {
