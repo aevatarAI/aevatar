@@ -62,6 +62,11 @@ public sealed class ScopeServiceEndpointsTests
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<ScopeBindingUpsertResult>();
+        body.Should().NotBeNull();
+        body!.AcceptanceStage.Should().Be("accepted");
+        body.PropagationStage.Should().Be("readmodel_propagating");
+        body.ExpectedActorId.Should().Be("scope-binding:expected-actor");
         host.ScopeBindingPort.LastRequest.Should().NotBeNull();
         host.ScopeBindingPort.LastRequest!.ScopeId.Should().Be("scope-a");
         host.ScopeBindingPort.LastRequest.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Workflow);
@@ -85,6 +90,10 @@ public sealed class ScopeServiceEndpointsTests
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<ScopeBindingUpsertResult>();
+        body.Should().NotBeNull();
+        body!.AcceptanceStage.Should().Be("accepted");
+        body.PropagationStage.Should().Be("readmodel_propagating");
         host.ScopeBindingPort.LastRequest.Should().NotBeNull();
         host.ScopeBindingPort.LastRequest!.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Scripting);
         host.ScopeBindingPort.LastRequest.Script.Should().NotBeNull();
@@ -197,6 +206,10 @@ public sealed class ScopeServiceEndpointsTests
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<ScopeBindingUpsertResult>();
+        body.Should().NotBeNull();
+        body!.AcceptanceStage.Should().Be("accepted");
+        body.PropagationStage.Should().Be("readmodel_propagating");
         host.ScopeBindingPort.LastRequest.Should().NotBeNull();
         host.ScopeBindingPort.LastRequest!.ImplementationKind.Should().Be(ScopeBindingImplementationKind.GAgent);
         host.ScopeBindingPort.LastRequest.GAgent.Should().NotBeNull();
