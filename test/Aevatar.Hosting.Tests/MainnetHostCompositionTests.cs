@@ -5,6 +5,8 @@ using Aevatar.Configuration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgents.Channel.Identity;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.Scheduled;
@@ -63,6 +65,12 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetRequiredService<IProjectionDocumentReader<ScriptNativeDocumentReadModel, string>>()
             .Should()
             .NotBeNull();
+        app.Services.GetRequiredService<IExternalIdentityBindingQueryPort>().Should().NotBeNull();
+        app.Services.GetRequiredService<IProjectionReadinessPort>().Should().NotBeNull();
+        app.Services.GetRequiredService<ExternalIdentityBindingProjectionPort>().Should().NotBeNull();
+        app.Services.GetRequiredService<IProjectionDocumentReader<ExternalIdentityBindingDocument, string>>()
+            .Should()
+            .NotBeNull();
 
         var routePatterns = ((IEndpointRouteBuilder)app).DataSources
             .SelectMany(x => x.Endpoints)
@@ -73,6 +81,7 @@ public sealed class MainnetHostCompositionTests
 
         routePatterns.Should().Contain("/api/webhooks/nyxid-relay/health");
         routePatterns.Should().Contain("/api/channels/registrations");
+        routePatterns.Should().Contain("/api/oauth/nyxid-callback");
         routePatterns.Should().Contain("/api/services/");
         routePatterns.Should().Contain("/v1/responses");
 
