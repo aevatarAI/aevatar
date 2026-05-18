@@ -4285,6 +4285,78 @@ describe("StudioPage", () => {
     expect(screen.queryByText("services:default,billing-api")).toBeNull();
   });
 
+  it("keeps Invoke on the selected member when a stale bind selection exists", async () => {
+    mockStudioMembers = [
+      ...mockStudioMembers,
+      {
+        memberId: "support-member",
+        scopeId: "scope-1",
+        displayName: "support-member",
+        description: "Support member",
+        implementationKind: "workflow",
+        lifecycleStage: "bind_ready",
+        publishedServiceId: "support-service",
+        lastBoundRevisionId: "rev-support",
+        createdAt: "2026-04-27T08:00:00Z",
+        updatedAt: "2026-04-27T08:05:00Z",
+      },
+    ];
+    mockScopeRuntimeApi.listServices.mockResolvedValue([
+      {
+        serviceId: "default",
+        displayName: "workspace-demo",
+        deploymentStatus: "Active",
+        primaryActorId: "actor-default",
+        endpoints: [
+          {
+            endpointId: "chat",
+            displayName: "Chat",
+            kind: "chat",
+            description: "Chat with workspace-demo.",
+            requestTypeUrl: "",
+            responseTypeUrl: "",
+          },
+        ],
+      },
+      {
+        serviceId: "support-service",
+        displayName: "support-member",
+        deploymentStatus: "Active",
+        primaryActorId: "actor-support",
+        endpoints: [
+          {
+            endpointId: "support-chat",
+            displayName: "Support chat",
+            kind: "chat",
+            description: "Chat with support.",
+            requestTypeUrl: "",
+            responseTypeUrl: "",
+          },
+        ],
+      },
+    ]);
+
+    renderStudioPage(
+      "/studio?scopeId=scope-1&member=member%3Aworkspace-demo&step=bind"
+    );
+
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Select bind endpoint" }));
+
+    await replaceStudioRoute(
+      "/studio?scopeId=scope-1&member=member%3Asupport-member&step=invoke"
+    );
+
+    expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("service:support-service")).toBeTruthy();
+      expect(screen.getByText("member:support-member")).toBeTruthy();
+      expect(screen.getByText("services:support-service")).toBeTruthy();
+      expect(screen.getByText("endpoint:support-chat")).toBeTruthy();
+    });
+    expect(screen.queryByText("service:default")).toBeNull();
+  });
+
   it("shows an invoke empty state when a bound member has no endpoint data", async () => {
     mockStudioMembers = [
       ...mockStudioMembers,
