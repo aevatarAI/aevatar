@@ -999,7 +999,9 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                       'No published contract'}
                   </Typography.Text>
                   <Typography.Text type="secondary">
-                    {selectedService?.serviceId || 'No service id'}
+                    {normalizedMemberId
+                      ? `member:${normalizedMemberId}`
+                      : 'No member selected'}
                   </Typography.Text>
                 </div>
               </div>
@@ -1011,8 +1013,9 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                       const active = endpoint.endpointId === selectedEndpointId;
                       return (
                         <button
-                          key={endpoint.endpointId}
+                          aria-pressed={active}
                           className={AEVATAR_INTERACTIVE_CHIP_CLASS}
+                          key={endpoint.endpointId}
                           type="button"
                           style={
                             active
@@ -1030,7 +1033,8 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   <div style={valueCardStyle}>
                     <Typography.Text strong>No endpoint data available</Typography.Text>
                     <Typography.Text type="secondary">
-                      This member publication has not exposed callable endpoints yet.
+                      This member publication has not exposed callable endpoints
+                      yet. Bind can still show revision diagnostics below.
                     </Typography.Text>
                   </div>
                 )}

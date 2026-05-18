@@ -125,9 +125,13 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getByText('Status')).toBeTruthy();
     expect(screen.getByText('Run ID')).toBeTruthy();
     expect(screen.getByText('Command ID')).toBeTruthy();
+    expect(screen.getAllByText('Actor ID').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Member ID')).toBeTruthy();
     expect(screen.getByText('Elapsed')).toBeTruthy();
     expect(screen.getByText('尚未开始')).toBeTruthy();
     expect(screen.getByText('尚未发出')).toBeTruthy();
+    expect(screen.getAllByText('actor-default').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('default')).toBeTruthy();
     expect(screen.getByText('Member')).toBeTruthy();
     expect(screen.getByText('Published Context')).toBeTruthy();
     expect(screen.getByText('Revision')).toBeTruthy();
@@ -138,6 +142,7 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getByText('Events')).toBeTruthy();
     expect(screen.getByText('Advanced typed payload')).toBeTruthy();
     expect(screen.getByTestId('studio-invoke-playground-actions')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '打开运行记录' })).toBeDisabled();
     expect(
       screen.getByText('No conversation yet. Send a prompt to start the run.'),
     ).toBeTruthy();
@@ -364,6 +369,12 @@ describe('StudioMemberInvokePanel', () => {
     expect(inlineScope.getByText('Actor ID')).toBeTruthy();
     expect(inlineScope.getByText('actor-1')).toBeTruthy();
     expect(inlineScope.getByText('Duration')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '打开运行记录' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: '打开运行记录' }));
+
+    expect(window.location.pathname).toBe('/runtime/runs');
+    expect(new URLSearchParams(window.location.search).get('runId')).toBe('run-1');
 
     fireEvent.change(screen.getByLabelText('调用请求输入'), {
       target: {
@@ -372,6 +383,55 @@ describe('StudioMemberInvokePanel', () => {
     });
 
     expect(screen.getByLabelText('调用请求输入')).toHaveValue('Overwrite prompt');
+  });
+
+  it('does not enable Runs navigation when invoke only returns a command id', async () => {
+    (runtimeRunsApi.invokeEndpoint as jest.Mock).mockResolvedValueOnce({
+      accepted: true,
+      commandId: 'cmd-only',
+      targetActorId: 'actor-1',
+    });
+
+    render(
+      React.createElement(StudioMemberInvokePanel, {
+        memberId: 'default',
+        scopeId: 'scope-1',
+        services: [
+          {
+            deploymentStatus: 'Active',
+            displayName: 'workspace-demo',
+            endpoints: [
+              {
+                description: 'Send a structured request into the member.',
+                displayName: 'Submit',
+                endpointId: 'submit',
+                kind: 'invoke',
+                requestTypeUrl: 'type.googleapis.com/example.Submit',
+                responseTypeUrl: 'type.googleapis.com/example.SubmitResult',
+              },
+            ],
+            kind: 'service',
+            namespace: 'default',
+            primaryActorId: 'actor-default',
+            serviceId: 'default',
+          },
+        ],
+      }),
+    );
+
+    fireEvent.change(await screen.findByLabelText('调用请求输入'), {
+      target: {
+        value: 'Dispatch this typed command.',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Invoke' }));
+
+    await waitFor(() => {
+      expect(runtimeRunsApi.invokeEndpoint).toHaveBeenCalled();
+      expect(screen.getAllByText('cmd-only').length).toBeGreaterThanOrEqual(1);
+    });
+
+    expect(screen.getByRole('button', { name: '打开运行记录' })).toBeDisabled();
   });
 
   it('renders a clear empty state when no selected member is available for invoke', async () => {
