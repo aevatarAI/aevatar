@@ -52,6 +52,7 @@ message GroupChatRoomInitializedEvent {
 message GroupChatTopicEvent {
   string prompt = 1;
   string session_id = 2;
+  google.protobuf.Timestamp occurred_at = 3;
 }
 
 message GroupChatMessageEvent {
@@ -59,11 +60,13 @@ message GroupChatMessageEvent {
   string agent_name = 2;
   string content = 3;
   string session_id = 4;
+  google.protobuf.Timestamp occurred_at = 5;
 }
 
 message GroupChatParticipantJoinedEvent {
   string agent_id = 1;
   string display_name = 2;
+  google.protobuf.Timestamp joined_at = 3;
 }
 
 message GroupChatParticipantLeftEvent {

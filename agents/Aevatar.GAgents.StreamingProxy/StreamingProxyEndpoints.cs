@@ -430,6 +430,7 @@ public static class StreamingProxyEndpoints
             AgentName = request.AgentName?.Trim() ?? request.AgentId.Trim(),
             Content = request.Content.Trim(),
             SessionId = request.SessionId ?? Guid.NewGuid().ToString("N"),
+            OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 
         var envelope = new EventEnvelope
@@ -614,6 +615,7 @@ public static class StreamingProxyEndpoints
         {
             AgentId = agentId,
             DisplayName = displayName,
+            JoinedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 
         var envelope = new EventEnvelope

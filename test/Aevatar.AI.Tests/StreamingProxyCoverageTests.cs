@@ -1102,6 +1102,46 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
+    public async Task GAgent_ShouldDeriveRoomStateTimestampsFromCommittedEvents()
+    {
+        using var provider = AgentCoverageTestSupport.BuildServiceProvider();
+        var agent = CreateAgent(provider, "streaming-proxy-agent");
+        var publisher = new TestRecordingEventPublisher();
+        agent.EventPublisher = publisher;
+        var joinedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-18T10:15:00+00:00"));
+        var messageAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-18T10:16:00+00:00"));
+
+        await agent.ActivateAsync();
+        await agent.HandleGroupChatParticipantJoined(new GroupChatParticipantJoinedEvent
+        {
+            AgentId = "agent-1",
+            DisplayName = "Alice",
+            JoinedAt = joinedAt,
+        });
+        await agent.HandleGroupChatMessage(new GroupChatMessageEvent
+        {
+            AgentId = "agent-1",
+            AgentName = "Alice",
+            Content = "Replayable message",
+            SessionId = "room-session",
+            OccurredAt = messageAt,
+        });
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "Replayable topic",
+            SessionId = "topic-session",
+        });
+
+        agent.State.Participants.Should().ContainSingle();
+        agent.State.Participants[0].JoinedAt.Should().Be(joinedAt);
+        agent.State.Messages.Should().HaveCount(2);
+        agent.State.Messages[0].Timestamp.Should().Be(messageAt);
+        var topicEvent = publisher.Published.OfType<GroupChatTopicEvent>().Single();
+        topicEvent.OccurredAt.Should().NotBeNull();
+        agent.State.Messages[1].Timestamp.Should().Be(topicEvent.OccurredAt);
+    }
+
+    [Fact]
     public async Task StreamingProxySseWriter_ShouldStartStream_AndSerializeRoomFrames()
     {
         var context = new DefaultHttpContext();
