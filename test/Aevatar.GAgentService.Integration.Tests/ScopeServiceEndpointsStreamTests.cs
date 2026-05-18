@@ -175,8 +175,9 @@ public sealed class ScopeServiceEndpointsStreamTests
 
         runtime.CreateCalls.Should().ContainSingle(call => call.Id == null);
         var actor = runtime.Actors.Values.Should().ContainSingle().Subject.Should().BeOfType<StubActor>().Subject;
-        var request = actor.HandledEnvelopes.Should().ContainSingle().Subject.Payload.Unpack<ChatRequestEvent>();
-        request.SessionId.Should().BeEmpty();
+        var envelope = actor.HandledEnvelopes.Should().ContainSingle().Subject;
+        var request = envelope.Payload.Unpack<ChatRequestEvent>();
+        request.SessionId.Should().Be(envelope.Propagation.CorrelationId);
         request.InputParts.Select(part => part.Kind).Should().Equal(
             ChatContentPartKind.Image,
             ChatContentPartKind.Audio,
