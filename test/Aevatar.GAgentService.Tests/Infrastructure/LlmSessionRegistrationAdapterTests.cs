@@ -38,9 +38,10 @@ public sealed class LlmSessionRegistrationAdapterTests
         var result = await adapter.RegisterAsync(record);
 
         result.ResponseId.Should().Be("resp_1");
-        result.ActorId.Should().StartWith("response-session-");
+        result.ActorId.Should().Be("response-sessions/response:resp_1");
         runtime.CreateCalls.Should().ContainSingle();
         runtime.CreateCalls[0].agentType.Should().Be(typeof(LlmSessionGAgent));
+        runtime.CreateCalls[0].actorId.Should().Be(result.ActorId);
         projection.EnsureCalls.Should().ContainSingle().Which.Should().Be(result.ActorId);
         dispatch.Calls.Should().ContainSingle();
         dispatch.Calls[0].envelope.Payload.TypeUrl.Should().Contain("RegisterResponseSessionRequested");

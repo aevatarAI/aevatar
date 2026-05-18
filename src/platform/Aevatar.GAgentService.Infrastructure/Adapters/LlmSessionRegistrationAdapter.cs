@@ -44,7 +44,7 @@ public sealed class LlmSessionRegistrationAdapter : ILlmSessionRegistrationPort
         if (string.IsNullOrWhiteSpace(record.OwnerSubject))
             throw new InvalidOperationException("owner_subject is required.");
 
-        var actorId = LlmSessionIds.NewActorId();
+        var actorId = LlmSessionIds.BuildActorId(record.ResponseId);
         var actor = await _runtime.CreateAsync<LlmSessionGAgent>(actorId, ct: ct);
         await _projectionPort.EnsureProjectionAsync(actor.Id, ct);
 
