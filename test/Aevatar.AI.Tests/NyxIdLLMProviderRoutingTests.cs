@@ -94,6 +94,55 @@ public sealed class NyxIdLLMProviderRoutingTests
     }
 
     [Fact]
+    public async Task ResolveRouteAsync_ShouldUseAccessTokenFromCallerContextCredentials()
+    {
+        var provider = CreateProvider();
+
+        var request = new LLMRequest
+        {
+            Messages = [ChatMessage.User("hi")],
+            Model = "claude-3-7-sonnet",
+            CallerContext = new LLMRequestCallerContext(
+                "scope-1",
+                "owner-1",
+                "resp_1",
+                new LLMRequestCallerCredentials("typed-bearer")),
+        };
+
+        var route = await provider.ResolveRouteAsync(request);
+
+        route.AccessToken.Should().Be("typed-bearer");
+    }
+
+    [Fact]
+    public async Task ResolveRouteAsync_ShouldPreferCallerContextCredentialsOverMetadata()
+    {
+        // Resolution priority: typed CallerContext.Credentials wins over the legacy
+        // Metadata-keyed bearer. Locks in the migration direction set by
+        // project_responses_llm_metadata_bearer_excluded.md.
+        var provider = CreateProvider();
+
+        var request = new LLMRequest
+        {
+            Messages = [ChatMessage.User("hi")],
+            Model = "claude-3-7-sonnet",
+            Metadata = new Dictionary<string, string>
+            {
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-bearer",
+            },
+            CallerContext = new LLMRequestCallerContext(
+                "scope-1",
+                "owner-1",
+                "resp_1",
+                new LLMRequestCallerCredentials("typed-bearer")),
+        };
+
+        var route = await provider.ResolveRouteAsync(request);
+
+        route.AccessToken.Should().Be("typed-bearer");
+    }
+
+    [Fact]
     public void ResolveRouteAsync_ShouldThrow_WhenNoAccessToken()
     {
         var provider = CreateProvider();

@@ -159,7 +159,7 @@ issue #436 当时给了两条路：composite scope（补丁路径）vs. 引入 `
 
 ---
 
-### B3. `AgentBuilderTool.CreateDailyReportAgentAsync` 是 god 函数，违反"命令骨架内聚"
+### B3. `AgentBuilderTool.CreateDailyAgentAsync` 是 god 函数，违反"命令骨架内聚"
 
 **现状**
 
@@ -182,7 +182,7 @@ issue #436 当时给了两条路：composite scope（补丁路径）vs. 引入 `
 > CLAUDE.md "命令骨架内聚: Normalize → Resolve Target → Build Context → Build Envelope → Dispatch → Receipt → Observe" + "ACK 诚实" + "禁止 query-time replay/priming"
 
 **修复方向**
-- tool 只产出 `CreateDailyReportSubscriptionCommand` 一个 envelope 并 dispatch
+- tool 只产出 `CreateDailySubscriptionCommand` 一个 envelope 并 dispatch
 - 第 2-4 步的 NyxID 调用下沉到 `AgentExecutionCredentialGAgent`（A1 的资源 actor）saga 内
 - 第 7-8 步的 dispatch 由订阅 actor 自己 self-continuation 完成
 - 第 6 步的 prime / 第 9 步的轮询全部砍掉——committed 即可观察，readmodel 由 projector 异步追上
@@ -197,7 +197,7 @@ issue #436 当时给了两条路：composite scope（补丁路径）vs. 引入 `
 
 **现状**
 - `SkillRunnerGAgent` 是技术角色名（"运行 skill 的东西"）
-- 它用 `template_name` 字段决定自己是 daily_report 还是 social_media——多态 actor，业务语义全在 `skill_content` 这段冻结的 prompt 字符串里
+- 它用 `template_name` 字段决定自己是 daily 还是 social_media——多态 actor，业务语义全在 `skill_content` 这段冻结的 prompt 字符串里
 - `State` 揉了两类东西：
   - **订阅事实**（cron、target、GitHub binding、skill_content）—— 长期
   - **执行历史**（last_run_at, last_output, error_count, retry_attempt）—— 自然 session-scoped
@@ -211,7 +211,7 @@ issue #436 当时给了两条路：composite scope（补丁路径）vs. 引入 `
 > CLAUDE.md "Actor 即业务实体: 一个 actor = 一个业务实体（数据与方法同住）"
 
 **修复方向**
-- `DailyReportSubscriptionGAgent`（长期，订阅事实拥有者）+ `DailyReportRunGAgent`（session-scoped，每次执行一个）
+- `DailySubscriptionGAgent`（长期，订阅事实拥有者）+ `DailyRunGAgent`（session-scoped，每次执行一个）
 - 重试逻辑完全塞进 run actor（一个 run 失败 = run actor 进入 retry-scheduled 状态），订阅 actor 不知道"retry"是什么
 - 查询订阅历史 = 查 run readmodel
 - run actor 拆出来后，issue #439 的"假成功"改 run 状态机就够了，不再污染订阅事实
@@ -311,7 +311,7 @@ key 当前的物理位置：
 > CLAUDE.md "渐进演进: 开发期可用本地/内存实现，但生产语义必须能无缝迁移到分布式与持久化"——prompt 是事实但被当成代码常量
 
 **修复方向**
-`DailyReportTemplateCatalog`（actor 或 readmodel 文档），prompt 是有版本号的资源，agent 引用 `template_id + template_version`。issue #423 想做"更丰富的内容"时，在不破坏老 agent 的前提下出新版自然就有了。
+`DailyTemplateCatalog`（actor 或 readmodel 文档），prompt 是有版本号的资源，agent 引用 `template_id + template_version`。issue #423 想做"更丰富的内容"时，在不破坏老 agent 的前提下出新版自然就有了。
 
 > 跟踪：[#450 refactor(daily-prompt): versioned daily report prompt templates](https://github.com/aevatarAI/aevatar/issues/450)
 
@@ -328,7 +328,7 @@ key 当前的物理位置：
 | 3 | `nyxid_proxy` 工具响应分类（A3） | #439 | 小 | 大 | [#439](https://github.com/aevatarAI/aevatar/issues/439) |
 | 4 | `AgentExecutionCredentialGAgent`（A1 + C1） | 砍 best-effort revoke + 缩小 key 泄露面 + 与 NyxID 幂等问题解耦 | 中 | 中 | [#445](https://github.com/aevatarAI/aevatar/issues/445) |
 | 5 | webhook accept-fast + persisted inbox（A2） | aevatar 侧 #398 一类 | 中 | 中 | [#449](https://github.com/aevatarAI/aevatar/issues/449) |
-| 6 | 拆 `DailyReportSubscription` + `DailyReportRun`（B4） | retry-定时混跑 / 历史可查 / 命名 | 大 | 中 + 长期复利 | [#447](https://github.com/aevatarAI/aevatar/issues/447) |
+| 6 | 拆 `DailySubscription` + `DailyRun`（B4） | retry-定时混跑 / 历史可查 / 命名 | 大 | 中 + 长期复利 | [#447](https://github.com/aevatarAI/aevatar/issues/447) |
 | 7 | `lark_receive_id` 改运行时迟绑定（B5） | cross-app & chat 改名 | 中 | 中 | [#448](https://github.com/aevatarAI/aevatar/issues/448) |
 | 8 | `AgentBuilderTool` 解构成 command + saga（B3 + B7） | "ACK 诚实" + 砍 query-time priming | 大 | 中 | [#446](https://github.com/aevatarAI/aevatar/issues/446) |
 | 9 | prompt 模板版本化（C3） | #423 实施前置 | 小 | 中 | [#450](https://github.com/aevatarAI/aevatar/issues/450) |
@@ -347,7 +347,7 @@ key 当前的物理位置：
 | [#444](https://github.com/aevatarAI/aevatar/issues/444) | refactor(daily-catalog): make UserAgentCatalogGAgent pure set-membership; projector consumes SkillRunner committed events directly | B1 + B6 |
 | [#445](https://github.com/aevatarAI/aevatar/issues/445) | refactor(daily-credential): introduce AgentExecutionCredentialGAgent — proxy API key as actor-owned resource | A1 + C1 |
 | [#446](https://github.com/aevatarAI/aevatar/issues/446) | refactor(daily-builder): decompose AgentBuilderTool god function into command + saga; remove query-time projection polling | B3 + B7 |
-| [#447](https://github.com/aevatarAI/aevatar/issues/447) | refactor(daily-actor): split SkillRunnerGAgent into DailyReportSubscriptionGAgent + DailyReportRunGAgent | B4 |
+| [#447](https://github.com/aevatarAI/aevatar/issues/447) | refactor(daily-actor): split SkillRunnerGAgent into DailySubscriptionGAgent + DailyRunGAgent | B4 |
 | [#448](https://github.com/aevatarAI/aevatar/issues/448) | refactor(daily-outbound): late-bind lark_receive_id at send time instead of freezing at agent creation | B5 |
 | [#449](https://github.com/aevatarAI/aevatar/issues/449) | harden(webhook): nyxid-relay handler must accept-fast and persist to inbox before processing | A2 |
 | [#450](https://github.com/aevatarAI/aevatar/issues/450) | refactor(daily-prompt): versioned daily report prompt templates (prerequisite for #423 enrichment) | C3 |

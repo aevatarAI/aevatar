@@ -1,3 +1,4 @@
+using System.Net.Http;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -7,6 +8,7 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
+using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Slash;
 using Aevatar.GAgents.Channel.NyxIdRelay;
@@ -24,6 +26,10 @@ namespace Aevatar.GAgents.NyxidChat;
 
 public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 {
+    private const string DailySkillName = "chrono-ai-daily";
+
+    private sealed record ResolvedSenderBinding(string BindingId, ExternalSubjectRef Subject);
+
     private readonly IServiceProvider _toolServiceProvider;
     private readonly IChannelBotRegistrationQueryPort _registrationQueryPort;
     private readonly IChannelBotRegistrationQueryByNyxIdentityPort? _registrationQueryByNyxIdentityPort;
@@ -95,10 +101,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return ConversationTurnResult.PermanentFailure("registration_not_found", "Channel registration not found.");
 
         // Capture the typing-reaction Task instead of `_ =`-discarding it. The direct-reply
-        // AgentBuilder path can complete fast enough that the swap fires before Lark has
-        // persisted the typing reaction; the swap GET would then find nothing to delete and
-        // leave both Typing + DONE on the message. Threading the task to the swap site lets
-        // the swap await-with-timeout the typing POST first. The deferred-LLM and streaming
+        // AgentBuilder path can complete fast enough that the clear fires before Lark has
+        // persisted the typing reaction; the clear GET would then find nothing to delete and
+        // leave Typing on the message. Threading the task to the clear site lets the clear
+        // await-with-timeout the typing POST first. The deferred-LLM and streaming
         // paths don't get this task (different invocation), but their natural latency is
         // orders of magnitude greater than the typing POST so the race cannot fire.
         var typingReactionTask = TrySendImmediateLarkReactionAsync(activity, registration, ct);
@@ -113,19 +119,13 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (await TryHandleSlashCommandAsync(activity, inbound, registration, runtimeContext, ct) is { } slashResult)
             return slashResult;
 
-        // Pre-LLM binding gate: when broker mode is wired, an unbound sender
-        // MUST be prompted to bind NyxID rather than served by the bot owner's
-        // credentials (codex L65 security: ADR-0018 §Decision "未绑定 sender
-        // 一律强制绑定,不回落到 bot owner"). Falls through transparently
-        // when identity ports are not registered (legacy bot-owner-shared
-        // deployments). The gate also returns the resolved binding-id so the
-        // LLM dispatch can apply the sender prefs override chain (issue #513
-        // phase 3) without paying for a second projection lookup.
-        var (bindingGateResult, senderBindingId) = await TryEnforceBindingGateAsync(activity, inbound, registration, runtimeContext, ct).ConfigureAwait(false);
-        if (bindingGateResult is not null)
-            return bindingGateResult;
+        // Normal LLM messages do not force /init. If the sender is bound we
+        // carry that binding forward so the reply generator can try the
+        // sender's own NyxID LLM prefs first; otherwise the run actor/generator
+        // will use the bot owner's ambient LLM config.
+        var senderBinding = await TryResolveSenderBindingAsync(inbound, registration, ct).ConfigureAwait(false);
 
-        if (await TryHandleLlmSelectionCardActionAsync(activity, inbound, registration, runtimeContext, senderBindingId, ct).ConfigureAwait(false) is { } llmSelectionResult)
+        if (await TryHandleLlmSelectionCardActionAsync(activity, inbound, registration, runtimeContext, senderBinding?.BindingId, ct).ConfigureAwait(false) is { } llmSelectionResult)
             return llmSelectionResult;
 
         var inboundEvent = ToInboundEvent(activity, registration, inbound, ResolveUserAccessToken(activity));
@@ -157,7 +157,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
 
         return ConversationTurnResult.LlmReplyRequested(
-            await BuildLlmReplyRequestAsync(activity, registration, inboundEvent, runtimeContext, senderBindingId, ct).ConfigureAwait(false));
+            await BuildLlmReplyRequestAsync(activity, registration, inboundEvent, runtimeContext, senderBinding, ct).ConfigureAwait(false));
     }
 
     public Task<ConversationTurnResult> RunInboundAsync(ChatActivity activity, CancellationToken ct) =>
@@ -165,16 +165,16 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
     // ─── Slash command dispatch ───
     //
-    // ADR-0018 §Decision: when per-user binding is enabled, slash commands
-    // (/init, /unbind, /whoami, /model, ...) are routed before the LLM so the
-    // bot owner's bot-shared mode is bypassed for unbound senders. Handlers
+    // Slash commands (/init, /unbind, /whoami, /model, ...) are routed before
+    // the LLM so binding/configuration commands can own their per-user
+    // semantics without being swallowed by the chat model. Handlers
     // are discovered as IEnumerable<IChannelSlashCommandHandler> from DI;
     // identity ports are constructor-injected as optional capabilities so
     // deployments that have not enabled binding fall through to the legacy
     // flow. Phase 6 (issue #513):
     // each handler declares RequiresBinding so unbound senders trying to use
-    // a binding-only command (e.g. /model use) get the same hint as the LLM-
-    // turn binding gate instead of a stack trace.
+    // a binding-only command (e.g. /model use) get a binding hint instead of
+    // a stack trace; normal LLM turns still have owner fallback.
     private async Task<ConversationTurnResult?> TryHandleSlashCommandAsync(
         ChatActivity activity,
         InboundMessage inbound,
@@ -435,58 +435,72 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         return true;
     }
 
-    // Pre-LLM binding gate: when identity is wired, refuse to serve unbound
-    // senders with the bot owner's credentials (ADR-0018 §Decision). Returns
-    // (null, null) when binding is not enabled (legacy mode); returns
-    // (prompt, null) for unbound senders so the caller short-circuits with
-    // a binding prompt/card; returns (null, bindingId) for bound senders so the LLM
-    // dispatch can carry the binding-id forward into metadata for the issue
-    // #513 phase 3 prefs override chain.
-    private async Task<(ConversationTurnResult? Blocking, string? SenderBindingId)> TryEnforceBindingGateAsync(
-        ChatActivity activity,
+    // Normal LLM messages are allowed to use the bot owner's LLM config when
+    // the sender has no NyxID binding. Binding is only required by commands
+    // that configure or inspect per-user state (/models, /model use, ...).
+    private async Task<ResolvedSenderBinding?> TryResolveSenderBindingAsync(
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
-        ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
     {
         var queryPort = _identityBindingQueryPort;
         if (queryPort is null)
-            return (null, null);
+            return null;
 
-        if (string.IsNullOrWhiteSpace(inbound.SenderId) || string.IsNullOrWhiteSpace(inbound.Platform))
-            return (null, null);
-
-        var tenant = ResolveTenant(inbound, registration);
-        if (tenant is null)
-            return (null, null);
-
-        var subject = new ExternalSubjectRef
-        {
-            Platform = inbound.Platform.Trim().ToLowerInvariant(),
-            Tenant = tenant,
-            ExternalUserId = inbound.SenderId.Trim(),
-        };
+        if (!TryResolveExternalSubject(inbound, registration, out var subject))
+            return null;
 
         BindingId? existing;
         try
         {
             existing = await queryPort.ResolveAsync(subject, ct);
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (IsTransientBindingLookupFailure(ex))
+        {
+            // Transient infra failures (DB blip, transient HTTP, JSON shape mismatch from
+            // upstream): degrade to owner credentials and keep the conversation alive.
+            _logger.LogWarning(
+                ex,
+                "Transient sender NyxID binding lookup failure; falling back to bot owner LLM config. subject={Platform}:{Tenant}:{User}",
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            return null;
+        }
         catch (Exception ex)
         {
-            // Resolve failure should fail closed (refuse to serve with
-            // bot-owner credentials) rather than fail open. Log and treat as
-            // unbound.
-            _logger.LogError(ex, "Binding gate resolve failed for sender {Sender}; treating as unbound", inbound.SenderId);
-            existing = null;
+            // Non-transient (programmer error, unexpected NRE, serialization break): surface
+            // at Error level so ops can distinguish from "sender just isn't bound" — but still
+            // fall through to owner credentials so the user gets a reply rather than nothing.
+            _logger.LogError(
+                ex,
+                "Sender NyxID binding lookup raised non-transient exception; falling back to bot owner LLM config. subject={Platform}:{Tenant}:{User}",
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            return null;
         }
 
         if (existing is not null)
-            return (null, existing.Value); // bound — continue with sender binding-id
+            return new ResolvedSenderBinding(existing.Value, subject.Clone());
 
-        var prompt = await SendBindingPromptAsync(activity, inbound, registration, runtimeContext, ct).ConfigureAwait(false);
-        return (prompt, null);
+        return null;
     }
+
+    /// <summary>
+    /// Distinguish infra-shaped binding lookup failures (worth a Warning + owner fallback)
+    /// from logic/programmer errors (worth an Error log so ops sees them).
+    /// </summary>
+    private static bool IsTransientBindingLookupFailure(Exception ex) =>
+        ex is HttpRequestException
+            or TimeoutException
+            or TaskCanceledException
+            or System.Text.Json.JsonException
+            or System.IO.IOException;
 
     // Lark-aware private-chat detection. Other platforms map their direct-
     // message chat-type strings here as the runner gains support for them.
@@ -610,8 +624,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 await selectionService.SetByServiceAsync(selectionContext, value.Trim(), modelOverride: null, ct)
                     .ConfigureAwait(false);
                 var updated = await optionsService.GetOptionsAsync(query, ct).ConfigureAwait(false);
-                var picked = updated.Available.FirstOrDefault(option =>
-                    string.Equals(option.ServiceId, value.Trim(), StringComparison.OrdinalIgnoreCase)) ?? updated.Current;
+                var picked = updated.Current ?? updated.Available.FirstOrDefault(option =>
+                    string.Equals(option.ServiceId, value.Trim(), StringComparison.OrdinalIgnoreCase));
                 return picked is null
                     ? new MessageContent { Text = "已切换 LLM service。下一条消息会用新的设置回复。" }
                     : renderer.RenderSelectionConfirm(picked, picked.DefaultModel);
@@ -730,10 +744,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         var inbound = ToInboundMessage(reply.Activity);
         // Direct path requires registration to actually send the reply; relay path only wants it
-        // for the post-reply reaction swap (relay sends use the reply token, not registration).
+        // for the post-reply reaction clear (relay sends use the reply token, not registration).
         // So lookup is mandatory on the direct path and best-effort on the relay path — a
         // transient registration-store error on the relay path must not drop an otherwise valid
-        // reply, only degrade the swap to a no-op for that turn.
+        // reply, only degrade the clear to a no-op for that turn.
         ChannelBotRegistrationEntry? registration;
         if (HasRelayDelivery(inbound))
         {
@@ -749,7 +763,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             {
                 _logger.LogWarning(
                     ex,
-                    "Registration lookup failed on relay reply path; reply will proceed but post-reply reaction swap will be skipped. correlation={CorrelationId}",
+                    "Registration lookup failed on relay reply path; reply will proceed but post-reply reaction clear will be skipped. correlation={CorrelationId}",
                     reply.CorrelationId);
                 registration = null;
             }
@@ -777,7 +791,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             runtimeContext,
             ct);
         if (result.Success)
-            _ = TrySwapTypingReactionToDoneAsync(inbound, registration, ct);
+            _ = TryClearTypingReactionAsync(inbound, registration, ct);
         return result;
     }
 
@@ -829,9 +843,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     public async Task OnReplyDeliveredAsync(ChatActivity activity, CancellationToken ct)
     {
         // Streaming-completion path in ConversationGAgent calls this hook because it finalizes
-        // the reply without going through RunLlmReplyAsync (which is where the non-streaming swap
-        // lives). For non-Lark platforms or activities missing the platform message id, the swap
-        // helper short-circuits in ShouldSwapTypingReaction.
+        // the reply without going through RunLlmReplyAsync (which is where the non-streaming clear
+        // lives). For non-Lark platforms or activities missing the platform message id, the clear
+        // helper short-circuits in ShouldClearTypingReaction.
         if (activity is null)
             return;
 
@@ -840,7 +854,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return;
 
         var inbound = ToInboundMessage(activity);
-        await TrySwapTypingReactionToDoneAsync(inbound, registration, ct);
+        await TryClearTypingReactionAsync(inbound, registration, ct);
     }
 
     public async Task<ConversationStreamChunkResult> RunStreamChunkAsync(
@@ -978,7 +992,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             runtimeContext,
             ct);
         if (result.Success)
-            _ = AwaitTypingReactionThenSwapAsync(typingReactionTask, inbound, registration, ct);
+            _ = AwaitTypingReactionThenClearAsync(typingReactionTask, inbound, registration, ct);
         return result.Success
             ? ConversationTurnResult.Sent(
                 sentActivityId: $"direct-reply:{activity.Id}",
@@ -1485,21 +1499,22 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ChannelBotRegistrationEntry registration,
         ChannelInboundEvent inboundEvent,
         ConversationTurnRuntimeContext runtimeContext,
-        string? senderBindingId,
+        ResolvedSenderBinding? senderBinding,
         CancellationToken ct)
     {
+        var requestActivity = BuildLlmRequestActivity(activity, inboundEvent.Text);
         var request = new NeedsLlmReplyEvent
         {
             CorrelationId = activity.Id,
             TargetActorId = ConversationGAgent.BuildActorId(activity.Conversation!.CanonicalKey),
             RegistrationId = registration.Id,
-            Activity = activity.Clone(),
+            Activity = requestActivity,
             RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
 
-        // Carry the relay reply credential through the inbox as transient inbox-only
+        // Carry the relay reply credential through the run command as transient command-only
         // fields. ConversationGAgent strips these before persisting NeedsLlmReplyEvent;
-        // ChannelLlmReplyInboxRuntime echoes them into the LlmReplyReadyEvent so the
+        // AgentRunGAgent echoes them into the LlmReplyReadyEvent so the
         // outbound reply does not depend on the actor's in-memory token dict surviving
         // deactivation.
         if (runtimeContext.NyxRelayReplyToken is { } token &&
@@ -1512,13 +1527,87 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         foreach (var pair in await BuildReplyMetadataAsync(inboundEvent, activity, ct))
             request.Metadata[pair.Key] = pair.Value;
 
-        // Issue #513 phase 3: tag the request with the sender's binding-id so
-        // the downstream reply generator can apply the prefs override chain
-        // (sender → bot owner → provider default).
-        if (!string.IsNullOrWhiteSpace(senderBindingId))
-            request.Metadata[LLMRequestMetadataKeys.SenderBindingId] = senderBindingId;
+        // Tag the request with the sender's binding-id and a short-lived token
+        // so the downstream reply generator can try the sender's own LLM
+        // route first. Missing token/binding is not an error: the generator
+        // falls back to the bot owner's upstream-pinned LLM config.
+        if (senderBinding is not null)
+        {
+            request.Metadata[LLMRequestMetadataKeys.SenderBindingId] = senderBinding.BindingId;
+            var senderAccessToken = await TryIssueSenderLlmAccessTokenAsync(senderBinding.Subject, ct).ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(senderAccessToken))
+                request.Metadata[LLMRequestMetadataKeys.SenderNyxIdAccessToken] = senderAccessToken;
+        }
 
         return request;
+    }
+
+    private static ChatActivity BuildLlmRequestActivity(ChatActivity activity, string? inboundText)
+    {
+        var requestActivity = activity.Clone();
+        if (requestActivity.Content is null)
+            return requestActivity;
+
+        if (TryBuildDailySkillInvocationPrompt(inboundText, out var prompt))
+            requestActivity.Content.Text = prompt;
+
+        return requestActivity;
+    }
+
+    private static bool TryBuildDailySkillInvocationPrompt(string? text, out string prompt)
+    {
+        prompt = string.Empty;
+        if (!TryParseSlashCommand(text, out var commandName, out var argumentText) ||
+            !string.Equals(commandName, "daily", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var argsJson = JsonSerializer.Serialize(argumentText);
+        var originalJson = JsonSerializer.Serialize((text ?? string.Empty).Trim());
+        prompt =
+            "The user invoked the Lark `/daily` shortcut.\n" +
+            $"Route this turn through the Ornn skill `{DailySkillName}`.\n" +
+            $"First call `use_skill` with `skill` = `{DailySkillName}` and `args` = {argsJson}, " +
+            "then follow the loaded skill instructions to complete the request.\n" +
+            $"Original command: {originalJson}";
+        return true;
+    }
+
+    private async Task<string?> TryIssueSenderLlmAccessTokenAsync(
+        ExternalSubjectRef subject,
+        CancellationToken ct)
+    {
+        var broker = _capabilityBroker;
+        if (broker is null)
+            return null;
+
+        try
+        {
+            var handle = await broker
+                .IssueShortLivedAsync(
+                    subject,
+                    new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy },
+                    ct)
+                .ConfigureAwait(false);
+            return string.IsNullOrWhiteSpace(handle.AccessToken)
+                ? null
+                : handle.AccessToken.Trim();
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to issue sender NyxID LLM token; falling back to bot owner LLM config. subject={Platform}:{Tenant}:{User}",
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            return null;
+        }
     }
 
     private static string ResolveRoutingConversationId(ConversationReference? conversation)
@@ -1629,10 +1718,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         string.Equals(NormalizeOptional(activity.Bot?.Value), nyxAgentApiKeyId, StringComparison.Ordinal);
 
     // Lark reaction emoji_type for "hands typing on keyboard" — added immediately on inbound
-    // so the user sees the bot is working before the LLM reply lands. Swapped to DoneReactionEmojiType
-    // after the reply succeeds so the same message ends up with a single completion reaction.
+    // so the user sees the bot is working before the LLM reply lands. After a reply succeeds,
+    // the reaction is cleared instead of replaced with DONE because DONE reads as task completion,
+    // while a chat reply can be an intermediate progress update.
     private const string TypingReactionEmojiType = "Typing";
-    private const string DoneReactionEmojiType = "DONE";
 
     private async Task TrySendImmediateLarkReactionAsync(
         ChatActivity activity,
@@ -1698,14 +1787,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     }
 
     // Direct-reply paths (TryHandleAgentBuilderAsync) can complete a slash-command reply faster
-    // than the typing POST takes to land in Lark, leaving the swap GET to find no Typing reaction
-    // to delete and the orphaned typing reaction to materialize after DONE was already added —
-    // both reactions on the same message. Awaiting (with a short cap) the typing task before the
-    // GET closes that race. The cap protects against a hung POST stalling the swap forever; if it
-    // expires the swap still proceeds — Lark will at worst end up with both reactions, same as
-    // before this guard. The deferred-LLM and streaming paths skip this guard because their reply
-    // latency dwarfs the typing POST and so cannot race.
-    private async Task AwaitTypingReactionThenSwapAsync(
+    // than the typing POST takes to land in Lark, leaving the clear GET to find no Typing reaction
+    // to delete and the orphaned typing reaction to materialize after the clear already ran.
+    // Awaiting (with a short cap) the typing task before the GET closes that race. The cap protects
+    // against a hung POST stalling the clear forever. The deferred-LLM and streaming paths skip this
+    // guard because their reply latency dwarfs the typing POST and so cannot race.
+    private async Task AwaitTypingReactionThenClearAsync(
         Task typingReactionTask,
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
@@ -1722,24 +1809,23 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         catch (TimeoutException)
         {
             _logger.LogDebug(
-                "Lark typing reaction task did not complete within timeout before swap; proceeding anyway");
+                "Lark typing reaction task did not complete within timeout before clear; proceeding anyway");
         }
         catch (Exception)
         {
-            // The typing task already logged its own exception — proceed with the swap so the
-            // user-visible message still ends up with a DONE reaction whenever possible.
+            // The typing task already logged its own exception — proceed with the clear so any
+            // already-visible Typing reaction is still removed whenever possible.
         }
 
-        await TrySwapTypingReactionToDoneAsync(inbound, registration, ct);
+        await TryClearTypingReactionAsync(inbound, registration, ct);
     }
 
-    // After a successful reply, replace the bot's "Typing" reaction with a "DONE" reaction so the
-    // same message ends with a single completion marker. Uses list-based discovery (filter by
+    // After a successful reply, remove the bot's "Typing" reaction. Uses list-based discovery (filter by
     // emoji_type=Typing AND operator_type=app) instead of caching the immediate reaction's
     // reaction_id locally — the runner is a singleton and cross-turn state on it would violate the
     // "中间层进程内缓存作为事实源" rule. Filtering on operator_type=app avoids deleting any user
     // who happened to add the same Typing reaction.
-    private async Task TrySwapTypingReactionToDoneAsync(
+    private async Task TryClearTypingReactionAsync(
         InboundMessage inbound,
         ChannelBotRegistrationEntry? registration,
         CancellationToken ct)
@@ -1747,7 +1833,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (registration is null)
             return;
 
-        if (!ShouldSwapTypingReaction(inbound, registration, out var accessToken, out var providerSlug, out var platformMessageId))
+        if (!ShouldClearTypingReaction(inbound, registration, out var accessToken, out var providerSlug, out var platformMessageId))
             return;
 
         try
@@ -1755,7 +1841,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             var reactionIds = new List<string>();
             string? pageToken = null;
             // Bound the iteration so a misbehaving Lark response (e.g. always-true `has_more`)
-            // can't loop the swap forever. 10 pages × 50 per page = 500 Typing reactions on a
+            // can't loop the clear forever. 10 pages × 50 per page = 500 Typing reactions on a
             // single message — orders of magnitude more than realistic, since this list is
             // already scoped to one emoji_type and the bot only adds Typing once per inbound.
             const int MaxListPages = 10;
@@ -1777,7 +1863,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 if (LarkProxyResponse.TryGetError(listResponse, out var listCode, out var listDetail))
                 {
                     _logger.LogDebug(
-                        "Lark typing reaction list failed; skipping swap: provider={ProviderSlug}, message={MessageId}, page={Page}, larkCode={LarkCode}, detail={Detail}",
+                        "Lark typing reaction list failed; skipping clear: provider={ProviderSlug}, message={MessageId}, page={Page}, larkCode={LarkCode}, detail={Detail}",
                         providerSlug,
                         platformMessageId,
                         page,
@@ -1835,35 +1921,6 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 }
             }
 
-            var addResponse = await _nyxClient.ProxyRequestAsync(
-                accessToken!,
-                providerSlug!,
-                $"/open-apis/im/v1/messages/{Uri.EscapeDataString(platformMessageId!)}/reactions",
-                "POST",
-                $$$"""{"reaction_type":{"emoji_type":"{{{DoneReactionEmojiType}}}"}}""",
-                null,
-                ct);
-
-            if (LarkProxyResponse.TryGetError(addResponse, out var addCode, out var addDetail))
-            {
-                if (addCode == LarkBotErrorCodes.NoPermissionToReact)
-                {
-                    _logger.LogDebug(
-                        "Lark done reaction skipped (missing reaction scope): provider={ProviderSlug}, message={MessageId}, detail={Detail}",
-                        providerSlug,
-                        platformMessageId,
-                        addDetail);
-                }
-                else
-                {
-                    _logger.LogWarning(
-                        "Lark done reaction failed: provider={ProviderSlug}, message={MessageId}, larkCode={LarkCode}, detail={Detail}",
-                        providerSlug,
-                        platformMessageId,
-                        addCode,
-                        addDetail);
-                }
-            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -1873,7 +1930,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             _logger.LogWarning(
                 ex,
-                "Lark typing→done reaction swap threw: provider={ProviderSlug}, message={MessageId}",
+                "Lark typing reaction clear threw: provider={ProviderSlug}, message={MessageId}",
                 providerSlug,
                 platformMessageId);
         }
@@ -1930,7 +1987,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 continue;
 
             // Only delete reactions added by the bot itself (operator_type=app); leave any
-            // user-added Typing reactions alone so the swap doesn't accidentally erase them.
+            // user-added Typing reactions alone so the clear doesn't accidentally erase them.
             if (!item.TryGetProperty("operator", out var operatorProp) ||
                 operatorProp.ValueKind != JsonValueKind.Object)
             {
@@ -1958,7 +2015,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         return (ids, nextPageToken);
     }
 
-    private static bool ShouldSwapTypingReaction(
+    private static bool ShouldClearTypingReaction(
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
         out string? accessToken,

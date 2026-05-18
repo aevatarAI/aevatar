@@ -19,6 +19,9 @@ public sealed class LLMRequest
     /// <summary>Additional metadata passed through to the provider/middleware.</summary>
     public IReadOnlyDictionary<string, string>? Metadata { get; init; }
 
+    /// <summary>Typed caller/session semantics used by Aevatar-owned orchestration paths.</summary>
+    public LLMRequestCallerContext? CallerContext { get; init; }
+
     /// <summary>Optional list of tools available for the LLM to invoke.</summary>
     public IReadOnlyList<IAgentTool>? Tools { get; init; }
 
@@ -58,6 +61,25 @@ public sealed class LLMRequest
     }
 }
 
+/// <summary>
+/// Stable Aevatar caller/session identity for an LLM request.
+/// Keep business-control semantics here instead of in <see cref="LLMRequest.Metadata"/>.
+/// </summary>
+public sealed record LLMRequestCallerContext(
+    string ScopeId,
+    string OwnerSubject,
+    string? ResponseId,
+    LLMRequestCallerCredentials? Credentials = null);
+
+/// <summary>
+/// Per-request caller credentials. Carried out-of-band from <see cref="LLMRequest.Metadata"/>
+/// so providers can authenticate without forcing the caller to put secret material into a
+/// log-shaped string-keyed bag that telemetry sinks may serialize. New credential surfaces
+/// (delegation token, identity JWT) extend this record rather than adding more
+/// <see cref="LLMRequest.Metadata"/> keys.
+/// </summary>
+public sealed record LLMRequestCallerCredentials(string? NyxIdBearer);
+
 /// <summary>A single Chat message. Supports the system / user / assistant / tool roles.</summary>
 public sealed class ChatMessage
 {
@@ -66,6 +88,9 @@ public sealed class ChatMessage
 
     /// <summary>Text content; for the tool role, this represents the tool execution result.</summary>
     public string? Content { get; init; }
+
+    /// <summary>思考内容（如果适用）。</summary>
+    public string? ReasoningContent { get; init; }
 
     /// <summary>Multimodal content parts (text/image). When present, the provider should construct the message from the parts first.</summary>
     public IReadOnlyList<ContentPart>? ContentParts { get; init; }
@@ -83,7 +108,7 @@ public sealed class ChatMessage
     public static ChatMessage User(string content) => new() { Role = "user", Content = content };
 
     /// <summary>Creates an assistant-role message.</summary>
-    public static ChatMessage Assistant(string content) => new() { Role = "assistant", Content = content };
+    public static ChatMessage Assistant(string content, string? reasoningContent = null) => new() { Role = "assistant", Content = content, ReasoningContent = reasoningContent };
 
     /// <summary>Creates a tool-role message carrying the tool execution result.</summary>
     /// <param name="callId">The corresponding tool_call Id.</param>

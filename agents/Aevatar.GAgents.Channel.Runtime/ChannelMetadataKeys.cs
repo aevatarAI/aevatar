@@ -39,8 +39,8 @@ public static class ChannelMetadataKeys
     /// <summary>
     /// Authoritative outbound Lark <c>receive_id</c> for the current workflow run, captured at
     /// agent-create time. Propagated via <c>WorkflowChatRunRequest.Metadata</c> so workflow
-    /// modules (e.g. <c>TwitterPublishModule</c>) can surface their result back into the same
-    /// chat without having to look up the catalog at execution time.
+    /// modules can surface their result back into the same chat without having to look up the
+    /// catalog at execution time.
     /// </summary>
     public const string LarkReceiveId = "channel.lark.receive_id";
     /// <summary>Companion to <see cref="LarkReceiveId"/> — its <c>receive_id_type</c>.</summary>

@@ -48,6 +48,7 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
     private readonly IAevatarOAuthClientProvider _clientProvider;
     private readonly AevatarOAuthClientProjectionPort _projectionPort;
     private readonly IActorRuntime _actorRuntime;
+    private readonly IActorDispatchPort _actorDispatchPort;
     private readonly ILogger<AevatarOAuthClientBootstrapService> _logger;
     private readonly CancellationTokenSource _stoppingCts = new();
     private Task? _bootstrapTask;
@@ -56,6 +57,7 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
         IAevatarOAuthClientProvider clientProvider,
         AevatarOAuthClientProjectionPort projectionPort,
         IActorRuntime actorRuntime,
+        IActorDispatchPort actorDispatchPort,
         ILogger<AevatarOAuthClientBootstrapService> logger)
     {
         // Provider is registered as a singleton (so are its transitive deps);
@@ -67,6 +69,7 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
         _clientProvider = clientProvider ?? throw new ArgumentNullException(nameof(clientProvider));
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
+        _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -247,12 +250,11 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
                 RedirectUri = redirectUri,
                 ClientName = ClientName,
             }),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = AevatarOAuthClientGAgent.WellKnownId },
-            },
+            Route = EnvelopeRouteSemantics.CreateDirect(
+                "channel-identity.oauth-bootstrap",
+                AevatarOAuthClientGAgent.WellKnownId),
         };
-        await actor.HandleEventAsync(envelope, ct).ConfigureAwait(false);
+        await _actorDispatchPort.DispatchAsync(actor.Id, envelope, ct).ConfigureAwait(false);
 
         _logger.LogInformation(
             "Aevatar OAuth client EnsureProvisioned dispatched to {ActorId} (authority={Authority}). " +

@@ -94,6 +94,20 @@ public class ExternalIdentityBindingProjectionReadinessPortTests
     }
 
     [Fact]
+    public async Task WaitForBindingStateAsync_RevokeCaseMatchesMissingDocument()
+    {
+        var subject = SampleSubject();
+        var reader = new InMemoryReader();
+        var port = new ExternalIdentityBindingProjectionReadinessPort(
+            reader,
+            new FakeTimeProvider(DateTimeOffset.UtcNow));
+
+        await port.WaitForBindingStateAsync(subject, expectedBindingId: null, TimeSpan.FromSeconds(1));
+
+        reader.GetCalls.Should().Be(1);
+    }
+
+    [Fact]
     public async Task WaitForBindingStateAsync_ThrowsTimeoutWhenNoMatch()
     {
         var subject = SampleSubject();
