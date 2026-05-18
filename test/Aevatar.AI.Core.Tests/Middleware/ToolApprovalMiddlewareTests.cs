@@ -206,12 +206,13 @@ public class ToolApprovalMiddlewareTests
     }
 
     [Fact]
-    public async Task ConsecutiveDenialsEventuallyBlockExecution()
+    public async Task RepeatedDenialsRemainPerCallHandlerDecisions()
     {
         var handler = new ScriptedApprovalHandler(
             ToolApprovalResult.Denied("first"),
             ToolApprovalResult.Denied("second"),
-            ToolApprovalResult.Denied("third"));
+            ToolApprovalResult.Denied("third"),
+            ToolApprovalResult.Denied("fourth"));
         var middleware = new ToolApprovalMiddleware(handler);
 
         var ctx1 = NewContext("danger", "tc-9");
@@ -226,12 +227,13 @@ public class ToolApprovalMiddlewareTests
         ctx3.Result.Should().Contain("execution denied");
         ctx3.Terminate.Should().BeTrue();
         ctx4.Terminate.Should().BeTrue();
-        ctx4.Result.Should().Contain("has been denied 3 times");
-        handler.Requests.Should().HaveCount(3);
+        ctx4.Result.Should().Contain("fourth");
+        ctx4.Result.Should().NotContain("Automatic block");
+        handler.Requests.Should().HaveCount(4);
     }
 
     [Fact]
-    public async Task ApprovalResetAfterApprovedAllowsNextAttempt()
+    public async Task ApprovedDecisionDoesNotDependOnPriorDenialState()
     {
         var handler = new ScriptedApprovalHandler(
             ToolApprovalResult.Denied(),
