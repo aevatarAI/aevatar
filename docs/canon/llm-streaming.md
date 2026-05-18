@@ -12,7 +12,7 @@ owner: eanzhao
 
 1. `Host -> Application -> Domain -> Projection -> SSE/WS` 端到端执行路径。
 2. 会话语义（`actorId/commandId/sessionId/messageId`）与事实源落点。
-3. 统一投影链路中的分支协作（读模型分支 + AGUI 实时分支）。
+3. 统一投影链路中的分支协作（读模型分支 + workflow run-event 实时分支）。
 4. 当前支持的流类型、多模态输入输出与后续演进路径。
 
 不包含内容：
@@ -24,7 +24,7 @@ owner: eanzhao
 
 1. Host 只做协议适配与依赖组合，不承载业务状态机。
 2. `Application Command -> EventEnvelope -> Domain Event` 与 `Query -> ReadModel` 严格分离。
-3. CQRS 与 AGUI/SSE/WS 共享同一 Projection 输入链路，禁止双轨实现。
+3. CQRS/readmodel 与 workflow run-event 实时输出（SSE/WS）共享同一 Projection 输入链路，禁止双轨实现。
 4. 投影运行态通过 lease/session 显式句柄管理，禁止中间层 `actorId -> context` 事实态反查。
 5. 跨请求一致性事实必须落在 Actor 持久态/分布式状态，不依赖中间层进程内字典。
 
@@ -46,8 +46,8 @@ owner: eanzhao
 | Host | `WorkflowCapabilityEndpoints`、`ChatSseResponseWriter`、`ChatWebSocketRunCoordinator` | 协议适配（HTTP/SSE/WS），不编排业务 |
 | Application | `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>`、`WorkflowRunCommandTargetResolver`、`WorkflowRunCommandTargetBinder` | 命令目标解析、dispatch 编排、输出帧流化 |
 | Domain/AI | `WorkflowGAgent`、`LLMCallModule`、`RoleGAgent`、`ChatRuntime` | 触发 LLM 调用、发布文本/工具/媒体事件 |
-| Projection | `WorkflowExecutionCurrentStateProjector`、`WorkflowRunInsightReportArtifactProjector`、`WorkflowRunTimelineArtifactProjector`、`WorkflowRunGraphArtifactProjector`、`WorkflowExecutionAGUIEventProjector` | committed observation 到 current-state + durable artifacts 的物化 + 实时事件分发 |
-| Streaming | `ProjectionSessionEventHub<WorkflowRunEvent>`、`EventChannel<WorkflowRunEvent>` | 会话事件总线与 live sink 通道 |
+| Projection | `WorkflowExecutionCurrentStateProjector`、`WorkflowRunInsightReportArtifactProjector`、`WorkflowRunTimelineArtifactProjector`、`WorkflowRunGraphArtifactProjector`、`WorkflowExecutionRunEventProjector` | committed observation 到 current-state + durable artifacts 的物化 + workflow run-event 实时分发 |
+| Streaming | `ProjectionSessionEventHub<WorkflowRunEventEnvelope>`、`EventChannel<WorkflowRunEventEnvelope>` | 会话事件总线与 live sink 通道 |
 
 关键代码锚点：
 
@@ -56,8 +56,9 @@ owner: eanzhao
 3. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunCommandTargetBinder.cs`
 4. `src/Aevatar.AI.Core/RoleGAgent.cs:106`
 5. `src/Aevatar.AI.Core/Chat/ChatRuntime.cs:89`
-6. `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/WorkflowExecutionAGUIEventProjector.cs:34`
-7. `src/Aevatar.CQRS.Projection.Core/Streaming/ProjectionSessionEventHub.cs:21`
+6. `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/WorkflowExecutionRunEventProjector.cs`
+7. `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/EventEnvelopeToWorkflowRunEventMapper.cs`
+8. `src/Aevatar.CQRS.Projection.Core/Streaming/ProjectionSessionEventHub.cs`
 
 ## 4. 整体拓扑图
 
@@ -80,11 +81,11 @@ flowchart TB
     COOR --> RM2["WorkflowRunInsightReportArtifactProjector"]
     COOR --> RM3["WorkflowRunTimelineArtifactProjector"]
     COOR --> RM4["WorkflowRunGraphArtifactProjector"]
-    COOR --> AGP["WorkflowExecutionAGUIEventProjector"]
-    AGP --> MAP["EventEnvelopeToAGUIEventMapper"]
+    COOR --> REP["WorkflowExecutionRunEventProjector"]
+    REP --> MAP["EventEnvelopeToWorkflowRunEventMapper"]
     MAP --> HUB["ProjectionSessionEventHub\nworkflow-run:{actorId}:{commandId}"]
-    HUB --> FWD["EventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEvent>"]
-    FWD --> CH["EventChannel<WorkflowRunEvent>"]
+    HUB --> FWD["EventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEventEnvelope>"]
+    FWD --> CH["EventChannel<WorkflowRunEventEnvelope>"]
     CH --> STR["DefaultEventOutputStream + IdentityEventFrameMapper"]
     STR --> FR["WorkflowRunEventEnvelope"]
     FR --> H
@@ -124,7 +125,7 @@ sequenceDiagram
     participant ENG as "Exec Engine"
     participant ACT as "Workflow/Role Agent"
     participant LLM as "LLM Provider"
-    participant PRJ as "AGUI Projector"
+    participant PRJ as "RunEvent Projector"
     participant HUB as "Session Hub"
     participant SINK as "RunEvent Sink"
     participant OUT as "Output Streamer"
@@ -140,7 +141,7 @@ sequenceDiagram
     ENG->>ACT: "Process ChatRequestEvent"
     ACT->>LLM: "ChatStreamAsync"
     ACT-->>PRJ: "TextMessage* events"
-    PRJ->>HUB: "Publish WorkflowRunEvent"
+    PRJ->>HUB: "Publish WorkflowRunEventEnvelope"
     HUB-->>SINK: "Subscribe handler push"
     ENG->>OUT: "StreamAsync(ReadAllAsync)"
     OUT->>SSE: "Write WorkflowRunEventEnvelope"
@@ -155,7 +156,7 @@ sequenceDiagram
 2. `src/Aevatar.CQRS.Core/Interactions/FallbackCommandInteractionService.cs`
 3. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowRunCommandTargetBinder.cs`
 4. `src/Aevatar.AI.Core/RoleGAgent.cs:122`
-5. `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/WorkflowExecutionAGUIEventProjector.cs:48`
+5. `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/WorkflowExecutionRunEventProjector.cs`
 6. `src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/ChatSseResponseWriter.cs:45`
 
 ### 5.2 WebSocket 路径（`GET /api/ws/chat`，text/binary 类型化帧）
@@ -243,7 +244,7 @@ flowchart LR
     CO --> P2["WorkflowRunInsightReportArtifactProjector"]
     CO --> P3["WorkflowRunTimelineArtifactProjector"]
     CO --> P4["WorkflowRunGraphArtifactProjector"]
-    CO --> P5["WorkflowExecutionAGUIEventProjector"]
+    CO --> P5["WorkflowExecutionRunEventProjector"]
     P1 --> STORE["IProjectionStoreDispatcher"]
     P2 --> STORE
     P3 --> STORE
@@ -259,7 +260,7 @@ flowchart LR
 1. `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionCoordinator.cs:19`
 2. `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionCoordinator.cs:40`
 3. `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionCurrentStateProjector.cs`
-4. `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/WorkflowExecutionAGUIEventProjector.cs:45`
+4. `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/WorkflowExecutionRunEventProjector.cs`
 5. `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionDispatchFailureReporter.cs:38`
 
 ## 7. 会话语义与状态事实源
@@ -273,7 +274,7 @@ flowchart LR
 | `correlationId` | `DefaultCommandContextPolicy` | 与 `commandId` 同步（默认同值） | Application CommandContext | `EventEnvelope.Propagation.CorrelationId` |
 | `sessionId` | `WorkflowChatRunRequest.SessionId` + `WorkflowChatRequestEnvelopeFactory` fallback | 本次 chat 会话维度 | Command payload | `ChatRequestEvent.SessionId` |
 | `chatSessionId` | `ChatSessionKeys.CreateWorkflowStepSessionId` | 单 workflow step 维度 | `scopeId:stepId` 规则 | `LLMCallModule` pending 匹配 |
-| `messageId` | AGUI mapper | 单消息流维度 | `msg:{sessionId}` 或 `msg:{envelopeId}` | 文本增量拼装 |
+| `messageId` | run-event mapper | 单消息流维度 | `msg:{sessionId}` 或 `msg:{envelopeId}` | 文本增量拼装 |
 
 锚点：
 
@@ -282,7 +283,7 @@ flowchart LR
 3. `src/workflow/Aevatar.Workflow.Application/Runs/WorkflowChatRequestEnvelopeFactory.cs:13`
 4. `src/Aevatar.AI.Abstractions/ChatSessionKeys.cs:8`
 5. `src/workflow/Aevatar.Workflow.Core/Modules/LLMCallModule.cs:58`
-6. `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/EventEnvelopeToAGUIEventMapper.cs:339`
+6. `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/EventEnvelopeToWorkflowRunEventMapper.cs`
 
 ### 7.2 运行态约束
 
@@ -341,7 +342,7 @@ flowchart LR
 | 流类型 | 当前状态 | 说明 |
 |---|---|---|
 | 文本增量流（delta text） | 已支持 | 主链路能力 |
-| 工具调用结果流 | 已支持 | 通过 AGUI ToolCall 映射进入统一输出 |
+| 工具调用结果流 | 已支持 | 通过 workflow run-event ToolCall 映射进入统一输出 |
 | 状态快照流 | 已支持 | `STATE_SNAPSHOT` 统一携带 `actorId/commandId/projectionCompletion*` 与可选 projection snapshot |
 | 人工交互事件流 | 已支持 | `CUSTOM` 事件输出 `aevatar.step.request` / `aevatar.step.completed` / `aevatar.workflow.waiting_signal`（含显式 runId），用于 UI 渲染与回传 |
 | 流式 `DeltaToolCall` | 已支持 | Provider -> `ChatRuntime` -> `RoleGAgent` 贯通，转为 `ToolCallEvent` |

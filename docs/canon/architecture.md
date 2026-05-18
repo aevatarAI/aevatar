@@ -62,11 +62,11 @@ src/
 2. **Runtime 赋予 Actor 语义**：`IActorRuntime` / `IActor` 在 Stream 之上提供 Actor 创建、寻址、激活、邮箱串行和父子拓扑；`IActorDispatchPort` 负责 envelope 的定向投递。
 3. **统一路由执行**：`LocalActorPublisher` 对外暴露 `PublishAsync/SendToAsync`；其中 `PublishAsync` 构造 `PublicationRoute.topology(Self/Parent/Children/ParentAndChildren)`，`SendToAsync` 构造 `DirectRoute`。Event Sourcing commit 后的 `PublicationRoute.observer(CommittedFacts)` 由框架内部 `ICommittedStateEventPublisher` 发出，不进入业务 actor 公共能力面；`GAgentBase` 把静态 `[EventHandler]` 与动态 `IEventModule<IEventHandlerContext>` 合并后按优先级执行。
 4. **领域事实显式持久化**：有状态 Actor 只有在显式调用 `PersistDomainEventAsync(...)` / `PersistDomainEventsAsync(...)` 后，领域事件才进入 `EventStore` 成为事实源。
-5. **统一读侧投影**：同一条 Actor `EventEnvelope` 消息流可被投影为多个读模型（例如 AG-UI SSE 事件、运行报告、业务只读模型）。
+5. **统一读侧投影**：同一条 Actor `EventEnvelope` 消息流可被投影为多个输出分支（例如 workflow run-event SSE/WS 输出、运行报告、业务只读模型）。
 
 关键澄清：
 
-- 当前 AG-UI 主要是 **事件投影**，不是直接把 `State` 映射到前端。
+- 当前实时输出主要是 **workflow run-event 事件投影**，不是直接把 `State` 映射到前端。
 - `State` 是写侧运行态；读侧建议由投影生成独立只读模型（CQRS）。
 - Stream 上的 `EventEnvelope` 是运行时消息层；Event Sourcing 的 `StateEvent` 是事实层。两者有关联，但不是同一个概念。
 
@@ -197,12 +197,12 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 - **输出分支**：
   - `WorkflowExecutionCurrentStateProjector` 写入 canonical current-state store
   - `WorkflowRunInsightReportArtifactProjector` / `WorkflowRunTimelineArtifactProjector` / `WorkflowRunGraphArtifactProjector` 写入各自 artifact store
-  - `WorkflowExecutionAGUIEventProjector`（位于 `Aevatar.Workflow.Presentation.AGUIAdapter`）输出 AG-UI 实时事件（SSE/WS），与 CQRS 读模型共享同一输入 envelope 流
+  - `WorkflowExecutionRunEventProjector`（位于 `Aevatar.Workflow.Presentation.AGUIAdapter`）通过 `EventEnvelopeToWorkflowRunEventMapper` 将同一输入 envelope 流转换为 `WorkflowRunEventEnvelope`，再经 `ProjectionSessionEventHub<WorkflowRunEventEnvelope>` 输出 workflow run-event 实时流（SSE/WS），与 CQRS 读模型共享同一输入 envelope 流
 
 运行语义约束（当前实现）：
 
 - Stream 订阅粒度是 actor 级；run 输出分发粒度是 command/correlation 级。
-- `WorkflowExecutionAGUIEventProjector` 仅在 `EventEnvelope.Propagation.CorrelationId` 非空时发布 run-event，并按 `workflow-run:{actorId}:{commandId}` 事件流路由。
+- `WorkflowExecutionRunEventProjector` 优先使用 projection session command id，并在缺失时回退到 `EventEnvelope.Propagation.CorrelationId`，按 `workflow-run:{actorId}:{commandId}` 事件流路由。
 - 各 workflow readmodel projector 都只记录 committed `StateVersion` 与 `LastEventId`，用于读侧一致性观察。
 - Projection 消费的是 Actor 运行时 envelope 流；EventStore 仍只用于写侧事实持久化与重放。
 - 编排层守卫：
