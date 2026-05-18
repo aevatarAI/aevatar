@@ -1,25 +1,70 @@
 using System.Text;
+using Aevatar.AI.Core;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 using Aevatar.Studio.Application.Scripts.Contracts;
 namespace Aevatar.Studio.Hosting.Endpoints;
 
-internal sealed class ScriptGenerateActorService
+internal interface IScriptGenerateService
 {
-    private const string SessionName = nameof(ScriptGenerateGAgent);
-    internal const string ActorId = "app-script-generator:default";
+    Task<ScriptGenerateResult> GenerateAsync(
+        ScriptGenerateRequest request,
+        Func<string, CancellationToken, Task>? onReasoning,
+        Func<ScriptGenerateProgress, CancellationToken, Task>? onProgress,
+        CancellationToken ct);
+}
+
+internal sealed class ScriptGenerateService : IScriptGenerateService
+{
+    private const string SessionName = "app-script-generator";
 
     private readonly AppAuthoringChatSessionFactory _chatSessionFactory;
     private readonly ScriptGenerateOrchestrator _orchestrator;
-    private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly ScriptGeneratePromptCatalog _prompts;
 
-    public ScriptGenerateActorService(
+    public ScriptGenerateService(
         AppAuthoringChatSessionFactory chatSessionFactory,
-        ScriptGenerateOrchestrator orchestrator)
+        ScriptGenerateOrchestrator orchestrator,
+        ScriptGeneratePromptCatalog prompts)
     {
         _chatSessionFactory = chatSessionFactory ?? throw new ArgumentNullException(nameof(chatSessionFactory));
         _orchestrator = orchestrator ?? throw new ArgumentNullException(nameof(orchestrator));
+        _prompts = prompts ?? throw new ArgumentNullException(nameof(prompts));
+    }
+
+    public Task<ScriptGenerateResult> GenerateAsync(
+        ScriptGenerateRequest request,
+        Func<string, CancellationToken, Task>? onReasoning,
+        Func<ScriptGenerateProgress, CancellationToken, Task>? onProgress,
+        CancellationToken ct)
+    {
+        var session = _chatSessionFactory.Create(_prompts.CreateConfig(), SessionName, ct);
+        return _orchestrator.GenerateAsync(
+            request,
+            (prompt, metadata, token) => session.GenerateWithReasoningAsync(
+                prompt,
+                BuildRequestId(),
+                metadata,
+                onReasoning,
+                token),
+            onProgress,
+            ct);
+    }
+
+    private static string BuildRequestId() => Guid.NewGuid().ToString("N");
+}
+
+internal sealed class ScriptGenerateActorService
+{
+    internal const string ActorId = "app-script-generator:default";
+
+    private readonly IScriptGenerateService _generateService;
+    private readonly SemaphoreSlim _gate = new(1, 1);
+
+    public ScriptGenerateActorService(IScriptGenerateService generateService)
+    {
+        _generateService = generateService ?? throw new ArgumentNullException(nameof(generateService));
     }
 
     public Task EnsureInitializedAsync(CancellationToken ct)
@@ -58,15 +103,9 @@ internal sealed class ScriptGenerateActorService
         await _gate.WaitAsync(ct);
         try
         {
-            var session = await _chatSessionFactory.CreateAsync(typeof(ScriptGenerateGAgent), SessionName, ct);
-            return await _orchestrator.GenerateAsync(
+            return await _generateService.GenerateAsync(
                 request,
-                (prompt, metadata, token) => session.GenerateWithReasoningAsync(
-                    prompt,
-                    BuildRequestId(),
-                    metadata,
-                    onReasoning,
-                    token),
+                onReasoning,
                 onProgress,
                 ct);
         }
@@ -75,8 +114,6 @@ internal sealed class ScriptGenerateActorService
             _gate.Release();
         }
     }
-
-    private static string BuildRequestId() => Guid.NewGuid().ToString("N");
 }
 
 internal sealed class ScriptGenerateActorBootstrapHostedService : IHostedService
@@ -109,6 +146,16 @@ internal sealed class ScriptGeneratePromptCatalog
     }
 
     public string SystemPrompt { get; }
+
+    public AIAgentConfig CreateConfig() => new()
+    {
+        SystemPrompt = SystemPrompt,
+        Temperature = 0.1,
+        MaxTokens = 4096,
+        MaxToolRounds = 1,
+        MaxHistoryMessages = 12,
+        StreamBufferCapacity = 256,
+    };
 
     private string BuildSystemPrompt()
     {

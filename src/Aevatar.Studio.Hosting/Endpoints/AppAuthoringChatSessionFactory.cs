@@ -4,7 +4,6 @@ using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
-using Aevatar.Foundation.Core.Configurations;
 
 using Aevatar.Studio.Application.Scripts.Contracts;
 namespace Aevatar.Studio.Hosting.Endpoints;
@@ -14,39 +13,35 @@ namespace Aevatar.Studio.Hosting.Endpoints;
 internal sealed class AppAuthoringChatSessionFactory
 {
     private readonly ILLMProviderFactory _llmProviderFactory;
-    private readonly IAgentClassDefaultsProvider<AIAgentConfig> _defaultsProvider;
     private readonly IReadOnlyList<IAgentRunMiddleware> _agentMiddlewares;
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
 
     public AppAuthoringChatSessionFactory(
         ILLMProviderFactory llmProviderFactory,
-        IAgentClassDefaultsProvider<AIAgentConfig> defaultsProvider,
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null)
     {
         _llmProviderFactory = llmProviderFactory ?? throw new ArgumentNullException(nameof(llmProviderFactory));
-        _defaultsProvider = defaultsProvider ?? throw new ArgumentNullException(nameof(defaultsProvider));
         _agentMiddlewares = (agentMiddlewares ?? []).ToArray();
         _llmMiddlewares = (llmMiddlewares ?? []).ToArray();
     }
 
-    public async Task<AppAuthoringChatSession> CreateAsync(
-        Type generatorType,
+    public AppAuthoringChatSession Create(
+        AIAgentConfig config,
         string sessionName,
-        CancellationToken ct)
+        CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(generatorType);
+        ArgumentNullException.ThrowIfNull(config);
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionName);
         ct.ThrowIfCancellationRequested();
 
-        var defaults = await _defaultsProvider.GetSnapshotAsync(generatorType, ct);
-        var config = CloneAndNormalize(defaults.Defaults);
+        var normalizedConfig = CloneAndNormalize(config);
         var history = new ChatHistory
         {
-            MaxMessages = config.MaxHistoryMessages,
+            MaxMessages = normalizedConfig.MaxHistoryMessages,
         };
         var runtime = new ChatRuntime(
-            providerFactory: () => ResolveProvider(config),
+            providerFactory: () => ResolveProvider(normalizedConfig),
             history: history,
             toolLoop: new ToolCallLoop(
                 new ToolManager(),
@@ -54,12 +49,12 @@ internal sealed class AppAuthoringChatSessionFactory
                 toolMiddlewares: null,
                 llmMiddlewares: _llmMiddlewares),
             hooks: null,
-            requestBuilder: () => BuildRequest(config),
+            requestBuilder: () => BuildRequest(normalizedConfig),
             agentMiddlewares: _agentMiddlewares,
             llmMiddlewares: _llmMiddlewares,
             agentId: sessionName,
             agentName: sessionName,
-            streamBufferCapacity: config.StreamBufferCapacity);
+            streamBufferCapacity: normalizedConfig.StreamBufferCapacity);
 
         return new AppAuthoringChatSession(runtime);
     }

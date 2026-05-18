@@ -1,27 +1,70 @@
 using System.Text;
 using Aevatar.AI.Core;
 using Aevatar.Configuration;
-using Aevatar.Foundation.Core.Configurations;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Aevatar.Studio.Application.Scripts.Contracts;
 namespace Aevatar.Studio.Hosting.Endpoints;
 
-internal sealed class WorkflowGenerateActorService
+internal interface IWorkflowGenerateService
 {
-    private const string SessionName = nameof(WorkflowGenerateGAgent);
-    internal const string ActorId = "app-workflow-generator:default";
+    Task<WorkflowGenerateResult> GenerateAsync(
+        WorkflowGenerateRequest request,
+        Func<string, CancellationToken, Task>? onReasoning,
+        Func<WorkflowGenerateProgress, CancellationToken, Task>? onProgress,
+        CancellationToken ct);
+}
+
+internal sealed class WorkflowGenerateService : IWorkflowGenerateService
+{
+    private const string SessionName = "app-workflow-generator";
 
     private readonly AppAuthoringChatSessionFactory _chatSessionFactory;
     private readonly WorkflowGenerateOrchestrator _orchestrator;
-    private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly WorkflowGeneratePromptCatalog _prompts;
 
-    public WorkflowGenerateActorService(
+    public WorkflowGenerateService(
         AppAuthoringChatSessionFactory chatSessionFactory,
-        WorkflowGenerateOrchestrator orchestrator)
+        WorkflowGenerateOrchestrator orchestrator,
+        WorkflowGeneratePromptCatalog prompts)
     {
         _chatSessionFactory = chatSessionFactory ?? throw new ArgumentNullException(nameof(chatSessionFactory));
         _orchestrator = orchestrator ?? throw new ArgumentNullException(nameof(orchestrator));
+        _prompts = prompts ?? throw new ArgumentNullException(nameof(prompts));
+    }
+
+    public Task<WorkflowGenerateResult> GenerateAsync(
+        WorkflowGenerateRequest request,
+        Func<string, CancellationToken, Task>? onReasoning,
+        Func<WorkflowGenerateProgress, CancellationToken, Task>? onProgress,
+        CancellationToken ct)
+    {
+        var session = _chatSessionFactory.Create(_prompts.CreateConfig(), SessionName, ct);
+        return _orchestrator.GenerateAsync(
+            request,
+            (prompt, metadata, token) => session.GenerateWithReasoningAsync(
+                prompt,
+                BuildRequestId(),
+                metadata,
+                onReasoning,
+                token),
+            onProgress,
+            ct);
+    }
+
+    private static string BuildRequestId() => Guid.NewGuid().ToString("N");
+}
+
+internal sealed class WorkflowGenerateActorService
+{
+    internal const string ActorId = "app-workflow-generator:default";
+
+    private readonly IWorkflowGenerateService _generateService;
+    private readonly SemaphoreSlim _gate = new(1, 1);
+
+    public WorkflowGenerateActorService(IWorkflowGenerateService generateService)
+    {
+        _generateService = generateService ?? throw new ArgumentNullException(nameof(generateService));
     }
 
     public Task EnsureInitializedAsync(CancellationToken ct)
@@ -60,15 +103,9 @@ internal sealed class WorkflowGenerateActorService
         await _gate.WaitAsync(ct);
         try
         {
-            var session = await _chatSessionFactory.CreateAsync(typeof(WorkflowGenerateGAgent), SessionName, ct);
-            return await _orchestrator.GenerateAsync(
+            return await _generateService.GenerateAsync(
                 request,
-                (prompt, metadata, token) => session.GenerateWithReasoningAsync(
-                    prompt,
-                    BuildRequestId(),
-                    metadata,
-                    onReasoning,
-                    token),
+                onReasoning,
                 onProgress,
                 ct);
         }
@@ -77,8 +114,6 @@ internal sealed class WorkflowGenerateActorService
             _gate.Release();
         }
     }
-
-    private static string BuildRequestId() => Guid.NewGuid().ToString("N");
 }
 
 internal sealed class WorkflowGenerateActorBootstrapHostedService : IHostedService
@@ -100,56 +135,6 @@ internal sealed class WorkflowGenerateActorBootstrapHostedService : IHostedServi
     }
 }
 
-internal sealed class WorkflowGenerateAgentDefaultsProvider : IAgentClassDefaultsProvider<AIAgentConfig>
-{
-    private readonly AgentClassDefaultsSnapshot<AIAgentConfig> _generatorDefaults;
-    private readonly AgentClassDefaultsSnapshot<AIAgentConfig> _scriptGeneratorDefaults;
-    private readonly AgentClassDefaultsSnapshot<AIAgentConfig> _emptyDefaults = new(new AIAgentConfig(), 0);
-
-    public WorkflowGenerateAgentDefaultsProvider(
-        WorkflowGeneratePromptCatalog prompts,
-        ScriptGeneratePromptCatalog scriptPrompts)
-    {
-        _generatorDefaults = new AgentClassDefaultsSnapshot<AIAgentConfig>(
-            new AIAgentConfig
-            {
-                SystemPrompt = prompts.SystemPrompt,
-                Temperature = 0.1,
-                MaxTokens = 4096,
-                MaxToolRounds = 1,
-                MaxHistoryMessages = 12,
-                StreamBufferCapacity = 256,
-            },
-            1);
-        _scriptGeneratorDefaults = new AgentClassDefaultsSnapshot<AIAgentConfig>(
-            new AIAgentConfig
-            {
-                SystemPrompt = scriptPrompts.SystemPrompt,
-                Temperature = 0.1,
-                MaxTokens = 4096,
-                MaxToolRounds = 1,
-                MaxHistoryMessages = 12,
-                StreamBufferCapacity = 256,
-            },
-            1);
-    }
-
-    public ValueTask<AgentClassDefaultsSnapshot<AIAgentConfig>> GetSnapshotAsync(
-        Type agentType,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(agentType);
-        ct.ThrowIfCancellationRequested();
-
-        return ValueTask.FromResult(
-            agentType == typeof(WorkflowGenerateGAgent)
-                ? _generatorDefaults
-                : agentType == typeof(ScriptGenerateGAgent)
-                    ? _scriptGeneratorDefaults
-                : _emptyDefaults);
-    }
-}
-
 internal sealed class WorkflowGeneratePromptCatalog
 {
     private const string SkillRelativePath = ".cursor/skills/aevatar-workflow-yaml/SKILL.md";
@@ -162,6 +147,16 @@ internal sealed class WorkflowGeneratePromptCatalog
     }
 
     public string SystemPrompt { get; }
+
+    public AIAgentConfig CreateConfig() => new()
+    {
+        SystemPrompt = SystemPrompt,
+        Temperature = 0.1,
+        MaxTokens = 4096,
+        MaxToolRounds = 1,
+        MaxHistoryMessages = 12,
+        StreamBufferCapacity = 256,
+    };
 
     private string LoadSkillMarkdown()
     {

@@ -70,9 +70,11 @@ internal static class StudioHostingServiceCollectionExtensions
         services.AddSingleton<AppAuthoringChatSessionFactory>();
         services.AddSingleton<WorkflowGeneratePromptCatalog>();
         services.AddSingleton<WorkflowGenerateOrchestrator>();
+        services.AddSingleton<IWorkflowGenerateService, WorkflowGenerateService>();
         services.AddSingleton<WorkflowGenerateActorService>();
         services.AddSingleton<ScriptGeneratePromptCatalog>();
         services.AddSingleton<ScriptGenerateOrchestrator>();
+        services.AddSingleton<IScriptGenerateService, ScriptGenerateService>();
         services.AddSingleton<ScriptGenerateActorService>();
         services.AddSingleton<ScriptEditorValidationService>();
         return services;
