@@ -151,7 +151,13 @@ public sealed class ServiceProjectionInfrastructureTests
 
         catalog.Metadata.IndexName.Should().Be("gagent-service-catalog");
         revisions.Metadata.IndexName.Should().Be("gagent-service-revisions");
-        catalog.Metadata.Mappings.Should().BeEmpty();
+        var properties = catalog.Metadata.Mappings["properties"].Should()
+            .BeAssignableTo<IReadOnlyDictionary<string, object?>>()
+            .Subject;
+        var namespaceMapping = properties["namespace"].Should()
+            .BeAssignableTo<IReadOnlyDictionary<string, object?>>()
+            .Subject;
+        namespaceMapping["type"].Should().Be("keyword");
         revisions.Metadata.Settings.Should().BeEmpty();
     }
 
