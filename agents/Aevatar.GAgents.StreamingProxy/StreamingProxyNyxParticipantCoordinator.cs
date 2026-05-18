@@ -67,6 +67,7 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
             {
                 AgentId = participant.ParticipantId,
                 DisplayName = participant.DisplayName,
+                JoinedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             }, ct);
 
             await participantStore.AddAsync(roomId, participant.ParticipantId, participant.DisplayName, ct);
@@ -174,6 +175,7 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
                         AgentName = participant.DisplayName,
                         Content = content,
                         SessionId = sessionId,
+                        OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                     }, ct);
                 }
                 catch (OperationCanceledException)

@@ -37,6 +37,7 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
         {
             Prompt = request.Prompt,
             SessionId = request.SessionId,
+            OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 
         await PersistDomainEventAsync(topicEvent);
@@ -133,7 +134,7 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
             SenderAgentId = "user",
             SenderName = "User",
             Content = evt.Prompt,
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Timestamp = NormalizeTimestamp(evt.OccurredAt),
             IsTopic = true,
         });
         TrimMessages(next);
@@ -152,7 +153,7 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
             SenderAgentId = evt.AgentId,
             SenderName = evt.AgentName,
             Content = evt.Content,
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Timestamp = NormalizeTimestamp(evt.OccurredAt),
             IsTopic = false,
         });
         TrimMessages(next);
@@ -169,7 +170,7 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
         {
             AgentId = evt.AgentId,
             DisplayName = evt.DisplayName,
-            JoinedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            JoinedAt = NormalizeTimestamp(evt.JoinedAt),
         });
         return next;
     }
@@ -217,4 +218,9 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
         };
         return next;
     }
+
+    private static Timestamp NormalizeTimestamp(Timestamp? timestamp) =>
+        timestamp is null || timestamp.Seconds == 0 && timestamp.Nanos == 0
+            ? Timestamp.FromDateTimeOffset(DateTimeOffset.UnixEpoch)
+            : timestamp;
 }
