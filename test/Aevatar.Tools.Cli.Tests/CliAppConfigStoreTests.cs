@@ -89,10 +89,10 @@ public sealed class CliAppConfigStoreTests
     public void TryNormalizeApiBaseUrl_HttpScheme_ShouldSucceed()
     {
         var result = CliAppConfigStore.TryNormalizeApiBaseUrl(
-            "http://localhost:5000", out var normalized, out _);
+            "http://localhost:5100", out var normalized, out _);
 
         result.Should().BeTrue();
-        normalized.Should().Be("http://localhost:5000");
+        normalized.Should().Be("http://localhost:5100");
     }
 
     // ─── ResolveApiBaseUrl ───
@@ -114,7 +114,7 @@ public sealed class CliAppConfigStoreTests
     {
         var act = () => CliAppConfigStore.ResolveApiBaseUrl(
             overrideApiBaseUrl: "ftp://bad",
-            localFallbackUrl: "http://localhost:5000",
+            localFallbackUrl: "http://localhost:5100",
             out _);
 
         act.Should().Throw<ArgumentException>()
@@ -126,7 +126,7 @@ public sealed class CliAppConfigStoreTests
     {
         var result = CliAppConfigStore.ResolveApiBaseUrl(
             overrideApiBaseUrl: "https://override.example.com/",
-            localFallbackUrl: "http://localhost:5000",
+            localFallbackUrl: "http://localhost:5100",
             out _);
 
         result.Should().Be("https://override.example.com");

@@ -304,7 +304,7 @@ dotnet run --project src/workflow/Aevatar.Workflow.Host.Api
 ### 3. 发送 Chat 请求
 
 ```bash
-curl -X POST http://localhost:5000/api/chat \
+curl -X POST http://localhost:5100/api/chat \
   -H "Content-Type: application/json" \
   -H "Accept: text/event-stream" \
   -d '{"prompt": "分析微服务架构的优缺点", "workflow": "simple_qa"}'

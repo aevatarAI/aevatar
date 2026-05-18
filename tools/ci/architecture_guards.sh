@@ -136,6 +136,52 @@ if [ -n "${dispatch_projection_boundary_report}" ]; then
   exit 1
 fi
 
+# Refactor (iter8/cluster-018):
+#   Old: Web/API examples and SDK/test default-port values could reintroduce
+#   forbidden local API port tokens without any CI enforcement.
+#   New: Scan only URL/defaultPort-shaped port semantics for the forbidden
+#   Web/API ports, while leaving generic numeric values such as timeouts,
+#   page sizes, and histogram buckets outside the match surface.
+forbidden_web_api_port_scan_roots=()
+for scan_root in README*.md LOCAL_DEV_SETUP.md src test tools docs demos apps; do
+  if [ -e "${scan_root}" ]; then
+    forbidden_web_api_port_scan_roots+=("${scan_root}")
+  fi
+done
+
+set +e
+forbidden_web_api_port_report="$(
+  rg -n "localhost:50(00|50)|127\.0\.0\.1:50(00|50)|defaultPort:\s*50(00|50)|defaultPort\s*=\s*50(00|50)" \
+    "${forbidden_web_api_port_scan_roots[@]}" \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' \
+    -g '!**/node_modules/**' \
+    | awk -F: '
+{
+  file = $1;
+  line_no = $2;
+  text = substr($0, length(file) + length(line_no) + 3);
+
+  if (file == "tools/ci/architecture_guards.sh" && text ~ /^[[:space:]]*#/)
+    next;
+
+  print $0;
+}'
+)"
+forbidden_web_api_port_status=$?
+set -e
+
+if [[ ${forbidden_web_api_port_status} -ne 0 && ${forbidden_web_api_port_status} -ne 1 ]]; then
+  echo "Forbidden Web/API port guard execution failed."
+  exit "${forbidden_web_api_port_status}"
+fi
+
+if [ -n "${forbidden_web_api_port_report}" ]; then
+  echo "${forbidden_web_api_port_report}"
+  echo "Forbidden Web/API port tokens found. Use repo-approved local API defaults such as 5100 instead of 5000 or 5050."
+  exit 1
+fi
+
 bash "${SCRIPT_DIR}/query_projection_priming_guard.sh"
 bash "${SCRIPT_DIR}/scripting_write_path_cqrs_guard.sh"
 bash "${SCRIPT_DIR}/projection_state_version_guard.sh"
