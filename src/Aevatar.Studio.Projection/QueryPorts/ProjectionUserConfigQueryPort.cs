@@ -34,7 +34,7 @@ public sealed class ProjectionUserConfigQueryPort : IUserConfigQueryPort
     }
 
     public Task<UserConfig> GetAsync(CancellationToken ct = default) =>
-        GetAsync(_scopeResolver.Resolve()?.ScopeId ?? "default", ct);
+        GetAsync(ResolveAmbientScopeId(), ct);
 
     public async Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default)
     {
@@ -70,6 +70,18 @@ public sealed class ProjectionUserConfigQueryPort : IUserConfigQueryPort
             LocalRuntimeBaseUrl: _defaultLocalRuntimeBaseUrl,
             RemoteRuntimeBaseUrl: _defaultRemoteRuntimeBaseUrl,
             GithubUsername: null);
+
+    private string ResolveAmbientScopeId()
+    {
+        var scope = _scopeResolver.Resolve()?.ScopeId;
+        if (!string.IsNullOrWhiteSpace(scope))
+            return scope;
+
+        if (_scopeResolver.HasAuthenticatedRequestWithoutScope())
+            throw new InvalidOperationException("Authenticated user config requests require a resolved scope_id claim.");
+
+        return "default";
+    }
 
     private static string NormalizeScopeId(string? scopeId) =>
         string.IsNullOrWhiteSpace(scopeId) ? "default" : scopeId.Trim();

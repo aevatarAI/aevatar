@@ -32,7 +32,7 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
     }
 
     public Task SaveAsync(UserConfig config, CancellationToken ct = default) =>
-        SaveAsync(_scopeResolver.Resolve()?.ScopeId ?? "default", config, ct);
+        SaveAsync(ResolveAmbientScopeId(), config, ct);
 
     public async Task SaveAsync(string scopeId, UserConfig config, CancellationToken ct = default)
     {
@@ -62,6 +62,18 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
                 GithubUsername = NormalizeOptional(githubUsername) ?? string.Empty,
             },
             ct);
+
+    private string ResolveAmbientScopeId()
+    {
+        var scope = _scopeResolver.Resolve()?.ScopeId;
+        if (!string.IsNullOrWhiteSpace(scope))
+            return scope;
+
+        if (_scopeResolver.HasAuthenticatedRequestWithoutScope())
+            throw new InvalidOperationException("Authenticated user config requests require a resolved scope_id claim.");
+
+        return "default";
+    }
 
     private static string NormalizeScopeId(string? scopeId) =>
         string.IsNullOrWhiteSpace(scopeId) ? "default" : scopeId.Trim();
