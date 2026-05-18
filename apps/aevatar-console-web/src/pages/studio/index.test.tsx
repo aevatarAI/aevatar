@@ -3999,6 +3999,7 @@ describe("StudioPage", () => {
     fireEvent.click(gagentChip);
 
     expect(gagentChip).toHaveAttribute("aria-pressed", "true");
+    expect(within(createDialog).queryByLabelText("Member name")).toBeNull();
     const gAgentNameInput = within(createDialog).getByLabelText("GAgent name");
     expect(gAgentNameInput).toHaveValue("gagent-1");
     fireEvent.change(gAgentNameInput, {
@@ -4023,6 +4024,11 @@ describe("StudioPage", () => {
         implementationKind: "gagent",
       }),
     );
+    await waitFor(() => {
+      expect(message.success).toHaveBeenCalledWith(
+        "Created GAgent member Orders Worker and opened Build.",
+      );
+    });
     await waitFor(() => {
       const searchParams = new URLSearchParams(window.location.search);
       expect(searchParams.get("tab")).toBe("gagents");
