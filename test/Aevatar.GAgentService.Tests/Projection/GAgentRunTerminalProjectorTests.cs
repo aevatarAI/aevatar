@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.Projectors;
 using Aevatar.GAgentService.Projection.Queries;
@@ -104,6 +105,34 @@ public sealed class GAgentRunTerminalProjectorTests
         doc!.Status.Should().Be((int)GAgentRunTerminalStatus.Failed);
         doc.ReasonCode.Should().Be("legacy_llm_error");
         doc.ReasonMessage.Should().Be("LLM request failed [tools=search,fetch]: provider exploded");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldPreserveUnknownLegacyReason_AsLegacyFailureMessage()
+    {
+        var store = new RecordingDocumentStore<GAgentRunTerminalReadModel>(x => x.Id);
+        var projector = new GAgentRunTerminalProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-05-14T00:00:00+00:00")));
+
+        await projector.ProjectAsync(
+            CreateContext("actor-1", "corr-1"),
+            WrapCommitted(
+                new RoleChatSessionCompletedEvent
+                {
+                    SessionId = "corr-1",
+                    Content = "[[AEVATAR_LLM_ERROR]] provider_burst: quota exceeded",
+                },
+                stateVersion: 3,
+                eventId: "evt-unknown-legacy",
+                correlationId: "corr-1",
+                observedAt: DateTimeOffset.Parse("2026-05-14T01:00:00+00:00")));
+
+        var doc = await store.GetAsync(GAgentRunTerminalProjector.BuildDocumentId("actor-1", "corr-1"));
+        doc.Should().NotBeNull();
+        doc!.Status.Should().Be((int)GAgentRunTerminalStatus.Failed);
+        doc.ReasonCode.Should().Be("legacy_llm_error");
+        doc.ReasonMessage.Should().Be("provider_burst: quota exceeded");
     }
 
     [Fact]
@@ -259,6 +288,73 @@ public sealed class GAgentRunTerminalProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ShouldIgnoreCompletion_WhenTerminalIdentityIsIncomplete()
+    {
+        var store = new RecordingDocumentStore<GAgentRunTerminalReadModel>(x => x.Id);
+        var projector = new GAgentRunTerminalProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.UtcNow));
+
+        await projector.ProjectAsync(
+            CreateContext("actor-1", "corr-1"),
+            WrapCommitted(
+                new RoleChatSessionCompletedEvent { SessionId = " ", Content = "done" },
+                stateVersion: 9,
+                eventId: "evt-blank-session",
+                correlationId: "corr-1",
+                observedAt: DateTimeOffset.Parse("2026-05-14T01:00:00+00:00")));
+        await projector.ProjectAsync(
+            CreateContext("actor-1", "corr-1"),
+            WrapCommitted(
+                new RoleChatSessionCompletedEvent { SessionId = "corr-1", Content = "done" },
+                stateVersion: 10,
+                eventId: "evt-blank-correlation",
+                correlationId: " ",
+                observedAt: DateTimeOffset.Parse("2026-05-14T01:00:00+00:00")));
+        await projector.ProjectAsync(
+            CreateContext("actor-1", " "),
+            WrapCommitted(
+                new RoleChatSessionCompletedEvent { SessionId = "corr-1", Content = "done" },
+                stateVersion: 11,
+                eventId: "evt-blank-context",
+                correlationId: "corr-1",
+                observedAt: DateTimeOffset.Parse("2026-05-14T01:00:00+00:00")));
+
+        (await store.ReadItemsAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldIgnoreCommittedPayload_WhenItIsNotSessionCompletion()
+    {
+        var store = new RecordingDocumentStore<GAgentRunTerminalReadModel>(x => x.Id);
+        var projector = new GAgentRunTerminalProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.UtcNow));
+
+        await projector.ProjectAsync(
+            CreateContext("actor-1", "corr-1"),
+            new EventEnvelope
+            {
+                Id = "outer-string-payload",
+                Propagation = new EnvelopePropagation
+                {
+                    CorrelationId = "corr-1",
+                },
+                Payload = Any.Pack(new CommittedStateEventPublished
+                {
+                    StateEvent = new StateEvent
+                    {
+                        EventId = "evt-string-payload",
+                        Version = 12,
+                        EventData = Any.Pack(new StringValue { Value = "not a terminal completion" }),
+                    },
+                }),
+            });
+
+        (await store.ReadItemsAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task QueryReader_ShouldResolveByCorrelationId_ThenSessionId()
     {
         var store = new RecordingDocumentStore<GAgentRunTerminalReadModel>(x => x.Id);
@@ -287,6 +383,51 @@ public sealed class GAgentRunTerminalProjectorTests
         var bySession = await reader.GetBySessionIdAsync("actor-1", "session-1");
         bySession.Should().NotBeNull();
         bySession!.CorrelationId.Should().Be("corr-1");
+    }
+
+    [Fact]
+    public async Task QueryReader_ShouldReturnNull_WhenDisabledOrIdentityIsBlank()
+    {
+        var store = new RecordingDocumentStore<GAgentRunTerminalReadModel>(x => x.Id);
+        var disabledReader = new GAgentRunTerminalQueryReader(
+            store,
+            new ServiceProjectionOptions { Enabled = false });
+        var reader = new GAgentRunTerminalQueryReader(store);
+
+        (await disabledReader.GetByCorrelationIdAsync("actor-1", "corr-1")).Should().BeNull();
+        (await disabledReader.GetBySessionIdAsync("actor-1", "session-1")).Should().BeNull();
+        (await reader.GetByCorrelationIdAsync("", "corr-1")).Should().BeNull();
+        (await reader.GetByCorrelationIdAsync("actor-1", " ")).Should().BeNull();
+        (await reader.GetBySessionIdAsync(" ", "session-1")).Should().BeNull();
+        (await reader.GetBySessionIdAsync("actor-1", "")).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task QueryReader_ShouldTrimLookupKeys()
+    {
+        var store = new RecordingDocumentStore<GAgentRunTerminalReadModel>(x => x.Id);
+        var reader = new GAgentRunTerminalQueryReader(store);
+        await store.UpsertAsync(new GAgentRunTerminalReadModel
+        {
+            Id = GAgentRunTerminalProjector.BuildDocumentId("actor-1", "corr-1"),
+            ActorId = "actor-1",
+            SessionId = "session-1",
+            CorrelationId = "corr-1",
+            InteractionKind = (int)GAgentRunTerminalInteractionKind.DraftRun,
+            Status = (int)GAgentRunTerminalStatus.TextMessageCompleted,
+            StateVersion = 13,
+            LastEventId = "evt-13",
+            ObservedAt = DateTimeOffset.Parse("2026-05-14T01:00:00+00:00"),
+        });
+
+        var byCorrelation = await reader.GetByCorrelationIdAsync(" actor-1 ", " corr-1 ");
+        var bySession = await reader.GetBySessionIdAsync(" actor-1 ", " session-1 ");
+
+        byCorrelation.Should().NotBeNull();
+        byCorrelation!.ActorId.Should().Be("actor-1");
+        bySession.Should().NotBeNull();
+        bySession!.SessionId.Should().Be("session-1");
+        store.LastQueryTake.Should().Be(1);
     }
 
     private static GAgentRunTerminalProjectionContext CreateContext(
