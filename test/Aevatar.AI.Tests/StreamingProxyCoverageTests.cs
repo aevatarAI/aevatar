@@ -96,6 +96,23 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
+    public void StreamingProxyRoomAndCoordinatorSource_ShouldNotInlineDispatchActorEvents()
+    {
+        var root = GetRepositoryRoot();
+        var roomCommandService = File.ReadAllText(Path.Combine(
+            root,
+            "agents/Aevatar.GAgents.StreamingProxy/Application/Rooms/StreamingProxyRoomCommandService.cs"));
+        var nyxCoordinator = File.ReadAllText(Path.Combine(
+            root,
+            "agents/Aevatar.GAgents.StreamingProxy/StreamingProxyNyxParticipantCoordinator.cs"));
+
+        roomCommandService.Should().NotContain("actor.HandleEventAsync(");
+        roomCommandService.Should().NotContain(".HandleEventAsync(");
+        nyxCoordinator.Should().NotContain("actor.HandleEventAsync(");
+        nyxCoordinator.Should().NotContain(".HandleEventAsync(");
+    }
+
+    [Fact]
     public async Task HandleCreateRoomAsync_ShouldCreateRoomAndInitActor()
     {
         var roomCommandService = new StubRoomCommandService(
@@ -1647,6 +1664,7 @@ public class StreamingProxyCoverageTests
         var httpClientFactory = new StubHttpClientFactory();
 
         return new StreamingProxyNyxParticipantCoordinator(
+            new StubActorDispatchPort(new StubActorRuntime()),
             llmFactory,
             configuration,
             httpClientFactory,
