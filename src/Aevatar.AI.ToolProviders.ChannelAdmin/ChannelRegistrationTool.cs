@@ -505,24 +505,14 @@ public sealed class ChannelRegistrationTool : IAgentTool
             registrationId,
             ct);
 
-        var confirmed = false;
-        for (var attempt = 0; attempt < 10; attempt++)
-        {
-            if (attempt > 0)
-                await Task.Delay(500, ct);
-
-            if (await queryPort.GetAsync(registrationId, ct) == null)
-            {
-                confirmed = true;
-                break;
-            }
-        }
-
+        // Refactor (iter6/cluster-014):
+        //   Old pattern: Delete slept and re-read the projection to upgrade accepted into deleted.
+        //   New principle: Unregister ACK is accepted-only; deletion visibility is observed by follow-up query.
         return JsonSerializer.Serialize(new
         {
-            status = confirmed ? "deleted" : "accepted",
+            status = "accepted",
             registration_id = registrationId,
-            note = confirmed ? string.Empty : "Delete submitted but projection not yet confirmed. Try 'list' after a few seconds.",
+            note = "Unregister accepted. Projection is propagating; try 'list' in a few seconds to confirm the registration is gone.",
         });
     }
 }
