@@ -79,6 +79,34 @@ public sealed class GAgentRunTerminalProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ShouldMaterializeFailedSession_FromToolAwareLlmFailureMessage()
+    {
+        var store = new RecordingDocumentStore<GAgentRunTerminalReadModel>(x => x.Id);
+        var projector = new GAgentRunTerminalProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-05-14T00:00:00+00:00")));
+
+        await projector.ProjectAsync(
+            CreateContext("actor-1", "corr-1", GAgentRunTerminalInteractionKind.DraftRun),
+            WrapCommitted(
+                new RoleChatSessionCompletedEvent
+                {
+                    SessionId = "corr-1",
+                    Content = "LLM request failed [tools=search,fetch]: provider exploded",
+                },
+                stateVersion: 2,
+                eventId: "evt-tool-failed",
+                correlationId: "corr-1",
+                observedAt: DateTimeOffset.Parse("2026-05-14T01:00:00+00:00")));
+
+        var doc = await store.GetAsync(GAgentRunTerminalProjector.BuildDocumentId("actor-1", "corr-1"));
+        doc.Should().NotBeNull();
+        doc!.Status.Should().Be((int)GAgentRunTerminalStatus.Failed);
+        doc.ReasonCode.Should().Be("legacy_llm_error");
+        doc.ReasonMessage.Should().Be("LLM request failed [tools=search,fetch]: provider exploded");
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldPreserveKnownApprovalReasonCode_FromFailureMarker()
     {
         var store = new RecordingDocumentStore<GAgentRunTerminalReadModel>(x => x.Id);

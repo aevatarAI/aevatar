@@ -12,7 +12,7 @@ public sealed class GAgentRunTerminalProjector
     : ICurrentStateProjectionMaterializer<GAgentRunTerminalProjectionContext>
 {
     private const string LegacyLlmErrorPrefix = "[[AEVATAR_LLM_ERROR]]";
-    private const string LegacyLlmFailedPrefix = "LLM request failed:";
+    private const string LegacyLlmFailedPrefix = "LLM request failed";
     private const string ReasonCodeLegacyLlmError = "legacy_llm_error";
 
     private readonly IProjectionWriteDispatcher<GAgentRunTerminalReadModel> _writeDispatcher;

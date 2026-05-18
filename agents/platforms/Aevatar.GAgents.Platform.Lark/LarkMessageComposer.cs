@@ -6,6 +6,9 @@ namespace Aevatar.GAgents.Platform.Lark;
 
 public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
 {
+    public const int DefaultMaxMessageLength = 30_000;
+    private const string TruncationMarker = "\n\n...[truncated]";
+
     public static readonly ChannelCapabilities DefaultCapabilities = new()
     {
         SupportsEphemeral = false,
@@ -14,7 +17,7 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         SupportsThread = true,
         Streaming = StreamingSupport.Native,
         SupportsFiles = false,
-        MaxMessageLength = 2000,
+        MaxMessageLength = DefaultMaxMessageLength,
         SupportsActionButtons = true,
         SupportsConfirmDialog = false,
         SupportsModal = false,
@@ -385,6 +388,11 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         if (textInfo.LengthInTextElements <= maxLength)
             return text;
 
-        return textInfo.SubstringByTextElements(0, maxLength);
+        var markerInfo = new StringInfo(TruncationMarker);
+        var markerLength = markerInfo.LengthInTextElements;
+        if (maxLength <= markerLength)
+            return textInfo.SubstringByTextElements(0, maxLength);
+
+        return textInfo.SubstringByTextElements(0, maxLength - markerLength) + TruncationMarker;
     }
 }

@@ -284,7 +284,8 @@ describe('StudioMemberBindPanel', () => {
     expect(screen.getByTestId('studio-bind-smoke-test-section')).toBeTruthy();
     expect(screen.getByTestId('studio-bind-snippet-section')).toBeTruthy();
     expect(screen.getByTestId('studio-bind-supporting-section')).toBeTruthy();
-    fireEvent.click(screen.getByText('Published contract source'));
+    expect(screen.getByText('Current member publication')).toBeTruthy();
+    fireEvent.click(screen.getByText('Contract details'));
     expect(await screen.findByText('Published service')).toBeTruthy();
     expect(primaryGrid.contains(screen.getByText('Published service'))).toBe(false);
     expect(screen.queryByText('Binding Contract')).toBeNull();

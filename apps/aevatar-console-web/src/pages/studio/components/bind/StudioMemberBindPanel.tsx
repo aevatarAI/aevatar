@@ -5,7 +5,7 @@ import {
   LinkOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Button, Collapse, Empty, Input, Select, Space, Tag, Typography, message } from 'antd';
+import { Alert, Button, Collapse, Empty, Input, Space, Tag, Typography, message } from 'antd';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   applyRuntimeEvent,
@@ -249,9 +249,31 @@ const sourceControlStackStyle: React.CSSProperties = {
   minWidth: 0,
 };
 
-const sourceControlSelectStyle: React.CSSProperties = {
-  height: 58,
-  width: '100%',
+const endpointChoiceRowStyle: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 6,
+};
+
+const endpointChoiceButtonStyle: React.CSSProperties = {
+  alignItems: 'center',
+  background: '#ffffff',
+  border: '1px solid #d9e2ef',
+  borderRadius: 999,
+  color: '#334155',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  fontSize: 12,
+  fontWeight: 700,
+  minHeight: 30,
+  padding: '0 10px',
+};
+
+const endpointChoiceButtonActiveStyle: React.CSSProperties = {
+  ...endpointChoiceButtonStyle,
+  background: '#111827',
+  border: '1px solid #111827',
+  color: '#ffffff',
 };
 
 const parameterGridStyle: React.CSSProperties = {
@@ -726,24 +748,6 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
     smokeInput,
   ]);
 
-  const serviceOptions = useMemo(
-    () =>
-      services.map((service) => ({
-        label: service.displayName || service.serviceId,
-        value: service.serviceId,
-      })),
-    [services],
-  );
-
-  const endpointOptions = useMemo(
-    () =>
-      (selectedService?.endpoints ?? []).map((endpoint) => ({
-        label: endpoint.displayName || endpoint.endpointId,
-        value: endpoint.endpointId,
-      })),
-    [selectedService?.endpoints],
-  );
-
   const snippetMap = useMemo(() => {
     if (!bindContract) {
       return {
@@ -763,7 +767,6 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
   const selectedSnippet = snippetMap[snippetTab];
   const bindingCatalog: ScopeServiceBindingCatalogSnapshot | undefined = bindingsQuery.data;
   const bindingList = bindingCatalog?.bindings ?? [];
-  const hasMultiplePublishedServices = services.length > 1;
   const revisionList = revisionCatalogQuery.data?.revisions ?? [];
   const hasEndpointOptions = Boolean(selectedService?.endpoints.length);
   const endpointUnavailableMessage =
@@ -949,12 +952,12 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
         <AevatarPanel
           layoutMode="document"
           padding={14}
-          title="Published contract source"
-          titleHelp="Choose the service and endpoint first. The invoke URL, smoke test, and snippets all follow this selection."
+          title="Current member publication"
+          titleHelp="Bind is pinned to the selected member. Published service ids stay visible only as supporting diagnostics."
           extra={
             <Space wrap size={[6, 6]}>
               <Tag color={bindContract ? 'green' : 'default'}>
-                {bindContract ? 'contract selected' : 'needs endpoint'}
+                {bindContract ? 'member contract selected' : 'needs endpoint'}
               </Tag>
               {revisionList.length > 0 ? (
                 <Tag>revisions · {revisionList.length}</Tag>
@@ -988,45 +991,49 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
             </div>
             <div style={controlsGridStyle}>
               <div style={sourceControlStackStyle}>
-                <Typography.Text type="secondary">Published service</Typography.Text>
-                {hasMultiplePublishedServices ? (
-                  <Select
-                    options={serviceOptions}
-                    placeholder="Select a published service"
-                    style={sourceControlSelectStyle}
-                    value={selectedServiceId || undefined}
-                    onChange={(value) => {
-                      setSelectedServiceId(String(value || ''));
-                      setSelectedEndpointId('');
-                    }}
-                  />
-                ) : (
-                  <div style={valueCardStyle}>
-                    <Typography.Text strong style={{ wordBreak: 'break-word' }}>
-                      {selectedService?.displayName ||
-                        selectedService?.serviceId ||
-                        'No published service'}
-                    </Typography.Text>
-                    <Typography.Text type="secondary">
-                      {selectedService?.serviceId || 'No service id'}
-                    </Typography.Text>
-                  </div>
-                )}
+                <Typography.Text type="secondary">Current member</Typography.Text>
+                <div style={valueCardStyle}>
+                  <Typography.Text strong style={{ wordBreak: 'break-word' }}>
+                    {selectedService?.displayName ||
+                      selectedService?.serviceId ||
+                      'No published contract'}
+                  </Typography.Text>
+                  <Typography.Text type="secondary">
+                    {selectedService?.serviceId || 'No service id'}
+                  </Typography.Text>
+                </div>
               </div>
               <div style={sourceControlStackStyle}>
                 <Typography.Text type="secondary">Endpoint</Typography.Text>
-                <Select
-                  disabled={!selectedService || !hasEndpointOptions}
-                  options={endpointOptions}
-                  placeholder={
-                    hasEndpointOptions
-                      ? 'Select an endpoint'
-                      : 'No endpoint data available'
-                  }
-                  style={sourceControlSelectStyle}
-                  value={selectedEndpointId || undefined}
-                  onChange={(value) => setSelectedEndpointId(String(value || ''))}
-                />
+                {selectedService && hasEndpointOptions ? (
+                  <div style={endpointChoiceRowStyle}>
+                    {selectedService.endpoints.map((endpoint) => {
+                      const active = endpoint.endpointId === selectedEndpointId;
+                      return (
+                        <button
+                          key={endpoint.endpointId}
+                          className={AEVATAR_INTERACTIVE_CHIP_CLASS}
+                          type="button"
+                          style={
+                            active
+                              ? endpointChoiceButtonActiveStyle
+                              : endpointChoiceButtonStyle
+                          }
+                          onClick={() => setSelectedEndpointId(endpoint.endpointId)}
+                        >
+                          {endpoint.displayName || endpoint.endpointId}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div style={valueCardStyle}>
+                    <Typography.Text strong>No endpoint data available</Typography.Text>
+                    <Typography.Text type="secondary">
+                      This member publication has not exposed callable endpoints yet.
+                    </Typography.Text>
+                  </div>
+                )}
               </div>
             </div>
             {endpointUnavailableMessage ? (
@@ -1335,6 +1342,15 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 label: 'Contract details',
                 children: bindContract ? (
                   <div style={parameterGridStyle}>
+                    <div style={valueCardStyle}>
+                      <Typography.Text type="secondary">Published service</Typography.Text>
+                      <Typography.Text strong style={{ wordBreak: 'break-word' }}>
+                        {bindContract.serviceId}
+                      </Typography.Text>
+                      <Typography.Text type="secondary">
+                        Platform diagnostic id for this member contract.
+                      </Typography.Text>
+                    </div>
                     <div style={valueCardStyle}>
                       <Typography.Text type="secondary">Workspace ID</Typography.Text>
                       <Typography.Text strong style={{ wordBreak: 'break-word' }}>

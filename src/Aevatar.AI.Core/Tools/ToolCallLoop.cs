@@ -111,7 +111,7 @@ public sealed class ToolCallLoop
                     && block is true)
                 {
                     if (response.Content != null)
-                        messages.Add(ChatMessage.Assistant(response.Content));
+                        messages.Add(ChatMessage.Assistant(response.Content, response.ReasoningContent));
                     return response.Content;
                 }
             }
@@ -134,6 +134,7 @@ public sealed class ToolCallLoop
                                 LLMResponse = new LLMResponse
                                 {
                                     Content = parsed.CleanedContent,
+                                    ReasoningContent = response.ReasoningContent,
                                     ToolCalls = parsed.ToolCalls,
                                 },
                             };
@@ -144,14 +145,15 @@ public sealed class ToolCallLoop
                                 && block is true)
                             {
                                 if (parsed.CleanedContent != null)
-                                    messages.Add(ChatMessage.Assistant(parsed.CleanedContent));
+                                    messages.Add(ChatMessage.Assistant(parsed.CleanedContent, response.ReasoningContent));
                                 return parsed.CleanedContent;
                             }
                         }
 
-                        if (!string.IsNullOrWhiteSpace(parsed.CleanedContent))
-                            messages.Add(ChatMessage.Assistant(parsed.CleanedContent));
-                        messages.Add(new ChatMessage { Role = "assistant", ToolCalls = parsed.ToolCalls });
+                        messages.Add(BuildAssistantToolCallMessage(
+                            parsed.CleanedContent,
+                            response.ReasoningContent,
+                            parsed.ToolCalls));
                         await ExecuteToolCallsCoreAsync(parsed.ToolCalls, messages, ct);
                         accumulatedContent = null;
                         continue;
@@ -168,7 +170,7 @@ public sealed class ToolCallLoop
                     {
                         accumulatedContent ??= new StringBuilder();
                         accumulatedContent.Append(response.Content);
-                        messages.Add(ChatMessage.Assistant(response.Content));
+                        messages.Add(ChatMessage.Assistant(response.Content, response.ReasoningContent));
                     }
                     messages.Add(ChatMessage.User(LengthRecoveryNudge));
                     lengthRecoveryCount++;
@@ -186,7 +188,7 @@ public sealed class ToolCallLoop
                 }
 
                 if (resultContent != null)
-                    messages.Add(ChatMessage.Assistant(resultContent));
+                    messages.Add(ChatMessage.Assistant(resultContent, response.ReasoningContent));
                 return resultContent;
             }
 
@@ -194,7 +196,13 @@ public sealed class ToolCallLoop
             accumulatedContent = null;
 
             // 记录 assistant tool_call 消息
-            messages.Add(new ChatMessage { Role = "assistant", ToolCalls = response.ToolCalls });
+            messages.Add(new ChatMessage
+            {
+                Role = "assistant",
+                Content = response.Content,
+                ReasoningContent = response.ReasoningContent,
+                ToolCalls = response.ToolCalls,
+            });
             await ExecuteToolCallsCoreAsync(response.ToolCalls!, messages, ct);
         }
 
@@ -221,9 +229,10 @@ public sealed class ToolCallLoop
             var finalParsed = TextToolCallParser.Parse(finalContent);
             if (finalParsed.ToolCalls.Count > 0)
             {
-                if (!string.IsNullOrWhiteSpace(finalParsed.CleanedContent))
-                    messages.Add(ChatMessage.Assistant(finalParsed.CleanedContent));
-                messages.Add(new ChatMessage { Role = "assistant", ToolCalls = finalParsed.ToolCalls });
+                messages.Add(BuildAssistantToolCallMessage(
+                    finalParsed.CleanedContent,
+                    finalResponse?.ReasoningContent,
+                    finalParsed.ToolCalls));
                 await ExecuteToolCallsCoreAsync(finalParsed.ToolCalls, messages, ct);
 
                 // One more LLM call to summarize
@@ -241,11 +250,11 @@ public sealed class ToolCallLoop
                 var (summaryResponse, _) = await InvokeLlmAsync(provider, summaryRequest, ct);
                 var summaryContent = summaryResponse?.Content;
                 if (summaryContent != null)
-                    messages.Add(ChatMessage.Assistant(summaryContent));
+                    messages.Add(ChatMessage.Assistant(summaryContent, summaryResponse?.ReasoningContent));
                 return summaryContent;
             }
 
-            messages.Add(ChatMessage.Assistant(finalContent));
+            messages.Add(ChatMessage.Assistant(finalContent, finalResponse?.ReasoningContent));
         }
 
         return finalContent;
@@ -567,6 +576,18 @@ public sealed class ToolCallLoop
         await foreach (var result in executor.GetRemainingResultsAsync(ct))
             messages.Add(BuildToolResultMessage(result.CallId, result.Result));
     }
+
+    private static ChatMessage BuildAssistantToolCallMessage(
+        string? content,
+        string? reasoningContent,
+        IReadOnlyList<ToolCall> toolCalls) =>
+        new()
+        {
+            Role = "assistant",
+            Content = string.IsNullOrWhiteSpace(content) ? null : content,
+            ReasoningContent = reasoningContent,
+            ToolCalls = toolCalls,
+        };
 
     /// <summary>
     /// Detects whether the LLM response was truncated by the output token limit.

@@ -44,6 +44,8 @@ internal sealed class GAgentDraftRunCommandTarget
     public IGAgentDraftRunProjectionLease? ProjectionLease { get; private set; }
     public IGAgentRunTerminalProjectionLease? TerminalProjectionLease { get; private set; }
     public IEventSink<AGUIEvent>? LiveSink { get; private set; }
+    private IEventSink<AGUIEvent>? InteractionLiveSink { get; set; }
+    public bool AwaitingApprovalTerminalFact { get; private set; }
 
     public void BindTerminalProjection(IGAgentRunTerminalProjectionLease? lease)
     {
@@ -57,11 +59,17 @@ internal sealed class GAgentDraftRunCommandTarget
     {
         ProjectionLease = lease ?? throw new ArgumentNullException(nameof(lease));
         LiveSink = sink ?? throw new ArgumentNullException(nameof(sink));
+        InteractionLiveSink = new ApprovalObservingEventSink(sink, MarkAwaitingApprovalTerminalFact);
         SessionId = sessionId;
     }
 
     public IEventSink<AGUIEvent> RequireLiveSink() =>
-        LiveSink ?? throw new InvalidOperationException("GAgent draft-run live sink is not bound.");
+        InteractionLiveSink ?? throw new InvalidOperationException("GAgent draft-run live sink is not bound.");
+
+    public void MarkAwaitingApprovalTerminalFact()
+    {
+        AwaitingApprovalTerminalFact = true;
+    }
 
     public Task CleanupAfterDispatchFailureAsync(CancellationToken ct = default) =>
         ReleaseAsync(ct);
@@ -73,10 +81,19 @@ internal sealed class GAgentDraftRunCommandTarget
     {
         ArgumentNullException.ThrowIfNull(receipt);
         ArgumentNullException.ThrowIfNull(cleanup);
-        return ReleaseAsync(ct);
+        return ReleaseAsync(ShouldReleaseTerminalProjection(cleanup), ct);
     }
 
-    private async Task ReleaseAsync(CancellationToken ct)
+    private bool ShouldReleaseTerminalProjection(
+        CommandInteractionCleanupContext<GAgentDraftRunCompletionStatus> cleanup) =>
+        !cleanup.ObservedCompleted ||
+        cleanup.ObservedCompletion != GAgentDraftRunCompletionStatus.TextMessageCompleted ||
+        !AwaitingApprovalTerminalFact;
+
+    private async Task ReleaseAsync(CancellationToken ct) =>
+        await ReleaseAsync(releaseTerminalProjection: true, ct);
+
+    private async Task ReleaseAsync(bool releaseTerminalProjection, CancellationToken ct)
     {
         Exception? firstException = null;
         var projectionLease = ProjectionLease;
@@ -93,6 +110,7 @@ internal sealed class GAgentDraftRunCommandTarget
                     ct);
                 ProjectionLease = null;
                 LiveSink = null;
+                InteractionLiveSink = null;
             }
             catch (Exception ex)
             {
@@ -108,6 +126,7 @@ internal sealed class GAgentDraftRunCommandTarget
                     sink.Complete();
                     await sink.DisposeAsync();
                     LiveSink = null;
+                    InteractionLiveSink = null;
                 }
                 catch (Exception ex)
                 {
@@ -121,6 +140,7 @@ internal sealed class GAgentDraftRunCommandTarget
                 {
                     await _projectionPort.ReleaseActorProjectionAsync(projectionLease, ct);
                     ProjectionLease = null;
+                    InteractionLiveSink = null;
                 }
                 catch (Exception ex)
                 {
@@ -130,12 +150,13 @@ internal sealed class GAgentDraftRunCommandTarget
         }
 
         var terminalProjectionLease = TerminalProjectionLease;
-        if (terminalProjectionLease != null)
+        if (releaseTerminalProjection && terminalProjectionLease != null)
         {
             try
             {
                 await _terminalProjectionPort.ReleaseProjectionAsync(terminalProjectionLease, ct);
                 TerminalProjectionLease = null;
+                AwaitingApprovalTerminalFact = false;
             }
             catch (Exception ex)
             {
@@ -145,6 +166,32 @@ internal sealed class GAgentDraftRunCommandTarget
 
         if (firstException != null)
             ExceptionDispatchInfo.Capture(firstException).Throw();
+    }
+
+    private sealed class ApprovalObservingEventSink(
+        IEventSink<AGUIEvent> inner,
+        Action markAwaitingApproval) : IEventSink<AGUIEvent>
+    {
+        public void Push(AGUIEvent evt) => inner.Push(evt);
+
+        public ValueTask PushAsync(AGUIEvent evt, CancellationToken ct = default) =>
+            inner.PushAsync(evt, ct);
+
+        public void Complete() => inner.Complete();
+
+        public async IAsyncEnumerable<AGUIEvent> ReadAllAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await foreach (var evt in inner.ReadAllAsync(ct))
+            {
+                if (evt.Custom?.Name == "TOOL_APPROVAL_REQUEST")
+                    markAwaitingApproval();
+
+                yield return evt;
+            }
+        }
+
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
     }
 }
 

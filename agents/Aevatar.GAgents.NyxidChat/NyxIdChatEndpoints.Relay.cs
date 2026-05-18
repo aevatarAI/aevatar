@@ -28,6 +28,7 @@ public static partial class NyxIdChatEndpoints
     private static async Task<IResult> HandleRelayWebhookAsync(
         HttpContext http,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IActorDispatchPort actorDispatchPort,
         [FromServices] NyxIdRelayTransport relayTransport,
         [FromServices] NyxIdRelayAuthValidator relayAuthValidator,
         [FromServices] Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions relayOptions,
@@ -129,13 +130,10 @@ public static partial class NyxIdChatEndpoints
                 Id = Guid.NewGuid().ToString("N"),
                 Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                 Payload = Any.Pack(relayInbound),
-                Route = new EnvelopeRoute
-                {
-                    Direct = new DirectRoute { TargetActorId = actorId },
-                },
+                Route = EnvelopeRouteSemantics.CreateDirect("nyxid-chat.relay", actorId),
             };
 
-            await actor.HandleEventAsync(command, ct);
+            await actorDispatchPort.DispatchAsync(actor.Id, command, ct);
 
             logger.LogInformation(
                 "Accepted relay callback into channel conversation backbone: message={MessageId}, actor={ActorId}, platform={Platform}, activity={ActivityType}",

@@ -68,6 +68,7 @@ public sealed class ChatHistory
         {
             Role = m.Role,
             Content = m.Content,
+            ReasoningContent = m.ReasoningContent,
             ContentParts = m.ContentParts?.Select(ClonePart).ToArray(),
             ToolCallId = m.ToolCallId,
             ToolCalls = m.ToolCalls?.Select(CloneToolCall).ToArray(),
@@ -84,6 +85,7 @@ public sealed class ChatHistory
             {
                 Role = m.Role,
                 Content = m.Content,
+                ReasoningContent = m.ReasoningContent,
                 ContentParts = m.ContentParts?.Select(ClonePart).ToArray(),
                 ToolCallId = m.ToolCallId,
                 ToolCalls = m.ToolCalls?.Select(CloneToolCall).ToArray(),
@@ -120,6 +122,7 @@ public sealed class SerializableMessage
 {
     public required string Role { get; init; }
     public string? Content { get; init; }
+    public string? ReasoningContent { get; init; }
     public IReadOnlyList<ContentPart>? ContentParts { get; init; }
     public string? ToolCallId { get; init; }
     public IReadOnlyList<ToolCall>? ToolCalls { get; init; }

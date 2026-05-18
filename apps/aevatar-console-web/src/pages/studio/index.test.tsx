@@ -3202,6 +3202,21 @@ describe("StudioPage", () => {
   });
 
   it("strips legacy label params while preserving stable scope and member ids", async () => {
+    mockStudioMembers = [
+      {
+        memberId: "member-alpha",
+        scopeId: "scope-a",
+        displayName: "成员 Alpha",
+        description: "Legacy service mapped member",
+        implementationKind: "workflow",
+        lifecycleStage: "bind_ready",
+        publishedServiceId: "service-alpha",
+        lastBoundRevisionId: "rev-alpha",
+        createdAt: "2026-04-27T08:00:00Z",
+        updatedAt: "2026-04-27T08:05:00Z",
+      },
+    ];
+
     renderStudioPage(
       "/studio?scopeId=scope-a&scopeLabel=%E5%9B%A2%E9%98%9F+A&memberId=service-alpha&memberLabel=%E6%88%90%E5%91%98+Alpha&focus=workflow%3Aworkflow-1&tab=studio"
     );
@@ -3220,7 +3235,7 @@ describe("StudioPage", () => {
 
     const searchParams = new URLSearchParams(window.location.search);
     expect(searchParams.get("scopeId")).toBe("scope-a");
-    expect(searchParams.get("member")).toBe("member:service-alpha");
+    expect(searchParams.get("member")).toBe("member:member-alpha");
     expect(searchParams.get("memberId")).toBeNull();
     expect(searchParams.get("scopeLabel")).toBeNull();
     expect(searchParams.get("memberLabel")).toBeNull();
@@ -3228,7 +3243,54 @@ describe("StudioPage", () => {
     expect(searchParams.get("tab")).toBe("studio");
   });
 
+  it("canonicalizes a legacy service member link to the real backend member identity", async () => {
+    renderStudioPage(
+      "/studio?scopeId=scope-1&memberId=default&step=invoke&tab=invoke"
+    );
+
+    expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("member:workspace-demo")).toBeTruthy();
+      expect(screen.getByText("service:default")).toBeTruthy();
+    });
+
+    const searchParams = new URLSearchParams(window.location.search);
+    expect(searchParams.get("scopeId")).toBe("scope-1");
+    expect(searchParams.get("member")).toBe("member:workspace-demo");
+    expect(searchParams.get("memberId")).toBeNull();
+    expect(searchParams.get("step")).toBe("invoke");
+    expect(searchParams.get("tab")).toBe("invoke");
+    expect(studioApi.getMember).not.toHaveBeenCalledWith("scope-1", "default");
+  });
+
   it("resyncs the Studio state from stable scope and member ids when the route changes after mount", async () => {
+    mockStudioMembers = [
+      {
+        memberId: "member-alpha",
+        scopeId: "scope-a",
+        displayName: "成员 Alpha",
+        description: "Legacy service mapped member",
+        implementationKind: "workflow",
+        lifecycleStage: "bind_ready",
+        publishedServiceId: "service-alpha",
+        lastBoundRevisionId: "rev-alpha",
+        createdAt: "2026-04-27T08:00:00Z",
+        updatedAt: "2026-04-27T08:05:00Z",
+      },
+      {
+        memberId: "member-beta",
+        scopeId: "scope-b",
+        displayName: "成员 Beta",
+        description: "Legacy service mapped member",
+        implementationKind: "workflow",
+        lifecycleStage: "bind_ready",
+        publishedServiceId: "service-beta",
+        lastBoundRevisionId: "rev-beta",
+        createdAt: "2026-04-27T08:00:00Z",
+        updatedAt: "2026-04-27T08:05:00Z",
+      },
+    ];
+
     renderStudioPage(
       "/studio?scopeId=scope-a&scopeLabel=%E5%9B%A2%E9%98%9F+A&memberId=service-alpha&memberLabel=%E6%88%90%E5%91%98+Alpha&focus=workflow%3Aworkflow-1&tab=studio"
     );
@@ -3244,7 +3306,6 @@ describe("StudioPage", () => {
     expect(screen.getByTestId("studio-context-title")).toHaveTextContent(
       "workspace-demo"
     );
-    expect(screen.getByTestId("studio-context-meta")).toHaveTextContent("service-beta");
     expect(screen.getByTestId("studio-context-meta")).not.toHaveTextContent("团队 B");
     expect(screen.getByTestId("studio-context-meta")).not.toHaveTextContent("成员 Beta");
     expect(screen.getByTestId("studio-workflow-build-panel")).toBeTruthy();
@@ -3258,9 +3319,15 @@ describe("StudioPage", () => {
       );
     });
 
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("member")).toBe("member:member-beta");
+      expect(searchParams.get("memberId")).toBeNull();
+    });
+
     const searchParams = new URLSearchParams(window.location.search);
     expect(searchParams.get("scopeId")).toBe("scope-b");
-    expect(searchParams.get("member")).toBe("member:service-beta");
+    expect(searchParams.get("member")).toBe("member:member-beta");
     expect(searchParams.get("memberId")).toBeNull();
     expect(searchParams.get("scopeLabel")).toBeNull();
     expect(searchParams.get("memberLabel")).toBeNull();
@@ -3659,7 +3726,7 @@ describe("StudioPage", () => {
   });
 
   it("returns to canonical Team detail when Studio has Team context", async () => {
-    renderStudioPage("/studio?scopeId=scope-1&teamId=t-alpha&memberId=workspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
+    renderStudioPage("/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
 
     fireEvent.click(await screen.findByRole("button", { name: "返回团队" }));
 
@@ -3765,12 +3832,12 @@ describe("StudioPage", () => {
     });
     expect(
       screen.getByText(
-        "Script starts as a named draft. It becomes a callable member only after Save script is catalog-applied and Bind succeeds.",
+        "Script creates a backend member and opens a stable script draft identity in Build. It becomes callable after Save script is catalog-applied and Bind succeeds.",
       ),
     ).toBeTruthy();
     expect(screen.getByText(/Script id: refund-handler/)).toBeTruthy();
     fireEvent.click(
-      within(createDialog).getByRole("button", { name: "Create Script draft" }),
+      within(createDialog).getByRole("button", { name: "Create member" }),
     );
 
     expect(await screen.findByTestId("studio-script-build-panel")).toBeTruthy();
@@ -3805,7 +3872,7 @@ describe("StudioPage", () => {
     );
 
     expect(
-      within(createDialog).getByRole("button", { name: "Create Script draft" })
+      within(createDialog).getByRole("button", { name: "Create member" })
     ).toBeDisabled();
     expect(screen.getByRole("dialog", { name: "Create member" })).toBeTruthy();
   });
@@ -3832,11 +3899,17 @@ describe("StudioPage", () => {
     ).toHaveAttribute("aria-pressed", "true");
     expect(within(createDialog).getByLabelText("Script name")).toHaveValue("script-1");
     expect(
-      within(createDialog).getByRole("button", { name: "Create Script draft" }),
+      within(createDialog).getByRole("button", { name: "Create member" }),
     ).toBeEnabled();
   });
 
-  it("shows GAgent as a builder member kind before its create API lands", async () => {
+  it("creates a named GAgent member authority and opens GAgent Build", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+
     renderStudioPage("/studio?focus=workflow%3Aworkflow-1&tab=studio");
 
     fireEvent.click(await screen.findByRole("button", { name: "Create member" }));
@@ -3848,21 +3921,35 @@ describe("StudioPage", () => {
     fireEvent.click(gagentChip);
 
     expect(gagentChip).toHaveAttribute("aria-pressed", "true");
-    expect(within(createDialog).queryByLabelText("Member name")).toBeNull();
+    const gAgentNameInput = within(createDialog).getByLabelText("GAgent name");
+    expect(gAgentNameInput).toHaveValue("gagent-1");
+    fireEvent.change(gAgentNameInput, {
+      target: {
+        value: "Orders Worker",
+      },
+    });
     expect(
       screen.getByText(
-        "GAgent member authority exists on backend, but this modal still hands off through Build > GAgent for implementation editing and binding prep.",
+        "GAgent creates a backend member and opens Build > GAgent for actor type, role, prompt, tools, and persistence authoring.",
       ),
     ).toBeTruthy();
     fireEvent.click(
-      within(createDialog).getByRole("button", { name: "Open GAgent builder" }),
+      within(createDialog).getByRole("button", { name: "Create member" }),
     );
 
     expect(await screen.findByTestId("studio-gagent-build-panel")).toBeTruthy();
+    expect(studioApi.createMember).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scopeId: "scope-1",
+        displayName: "Orders Worker",
+        implementationKind: "gagent",
+      }),
+    );
     await waitFor(() => {
       const searchParams = new URLSearchParams(window.location.search);
       expect(searchParams.get("tab")).toBe("gagents");
       expect(searchParams.get("step")).toBe("build");
+      expect(searchParams.get("member")).toBe("member:orders-worker");
     });
   });
 
@@ -4031,7 +4118,7 @@ describe("StudioPage", () => {
   });
 
   it("carries the selected bind contract into invoke after continuing from build", async () => {
-    renderStudioPage("/studio?scopeId=scope-1&memberId=workspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
+    renderStudioPage("/studio?scopeId=scope-1&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
 
     expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
 
@@ -4115,6 +4202,21 @@ describe("StudioPage", () => {
   });
 
   it("shows an invoke empty state when a bound member has no endpoint data", async () => {
+    mockStudioMembers = [
+      ...mockStudioMembers,
+      {
+        memberId: "script-alpha",
+        scopeId: "scope-1",
+        displayName: "script-alpha",
+        description: "Script member",
+        implementationKind: "script",
+        lifecycleStage: "bind_ready",
+        publishedServiceId: "script-alpha",
+        lastBoundRevisionId: "rev-script-1",
+        createdAt: "2026-04-27T08:00:00Z",
+        updatedAt: "2026-04-27T08:05:00Z",
+      },
+    ];
     mockScopeRuntimeApi.listServices.mockResolvedValueOnce([
       {
         serviceId: "script-alpha",
@@ -4126,12 +4228,14 @@ describe("StudioPage", () => {
     ]);
 
     renderStudioPage(
-      "/studio?scopeId=scope-1&memberId=script-alpha&step=invoke&tab=invoke"
+      "/studio?scopeId=scope-1&member=member%3Ascript-alpha&step=invoke&tab=invoke"
     );
 
     expect(await screen.findByTestId("studio-invoke-surface")).toBeTruthy();
-    expect(screen.getByText("service:script-alpha")).toBeTruthy();
-    expect(screen.getByText("member:script-alpha")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("service:script-alpha")).toBeTruthy();
+      expect(screen.getByText("member:script-alpha")).toBeTruthy();
+    });
     expect(screen.getByText("services:none")).toBeTruthy();
     expect(screen.getByText("endpoint:no-endpoint")).toBeTruthy();
     expect(screen.getByText(/empty:script-alpha 还不能直接调用。/)).toBeTruthy();
@@ -4161,7 +4265,7 @@ describe("StudioPage", () => {
       ]);
     (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce(null);
 
-    renderStudioPage("/studio?scopeId=scope-1&memberId=workspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
+    renderStudioPage("/studio?scopeId=scope-1&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
 
     expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
 
@@ -4235,15 +4339,17 @@ describe("StudioPage", () => {
       updatedAt: "2026-04-27T08:15:01Z",
     });
 
-    renderStudioPage("/studio?scopeId=scope-1&memberId=workspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
+    renderStudioPage("/studio?scopeId=scope-1&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
 
     expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Continue to Bind" }));
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
     await waitFor(() => {
+      expect(screen.getByText("member:workspace-demo")).toBeTruthy();
       expect(screen.getByText("service:no-service")).toBeTruthy();
       expect(screen.getByText("services:none")).toBeTruthy();
+      expect(screen.getByText("candidate:workspace-demo")).toBeTruthy();
     });
 
     await act(async () => {
@@ -4522,7 +4628,7 @@ describe("StudioPage", () => {
     );
 
     renderStudioPage(
-      "/studio?scopeId=scope-1&memberId=draft1&focus=workflow%3Aworkflow-1&step=bind&tab=bindings"
+      "/studio?scopeId=scope-1&member=member%3Adraft1&focus=workflow%3Aworkflow-1&step=bind&tab=bindings"
     );
 
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
@@ -4645,7 +4751,7 @@ describe("StudioPage", () => {
     );
 
     renderStudioPage(
-      "/studio?scopeId=scope-1&memberId=joker&focus=workflow%3Aworkflow-1&tab=studio"
+      "/studio?scopeId=scope-1&member=member%3Ajoker&focus=workflow%3Aworkflow-1&tab=studio"
     );
 
     expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
@@ -4744,7 +4850,7 @@ describe("StudioPage", () => {
         })
     );
 
-    renderStudioPage("/studio?scopeId=scope-1&memberId=joker&step=bind&tab=bindings");
+    renderStudioPage("/studio?scopeId=scope-1&member=member%3Ajoker&step=bind&tab=bindings");
 
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
     await waitFor(() => {
@@ -4858,6 +4964,21 @@ describe("StudioPage", () => {
   });
 
   it("keeps the current bind surface active when switching members from the rail", async () => {
+    mockStudioMembers = [
+      ...mockStudioMembers,
+      {
+        memberId: "joker",
+        scopeId: "scope-1",
+        displayName: "joker",
+        description: "Joker workflow member",
+        implementationKind: "workflow",
+        lifecycleStage: "bind_ready",
+        publishedServiceId: "joker",
+        lastBoundRevisionId: "rev-joker",
+        createdAt: "2026-04-27T08:00:00Z",
+        updatedAt: "2026-04-27T08:05:00Z",
+      },
+    ];
     mockScopeRuntimeApi.listServices.mockResolvedValueOnce([
       {
         serviceId: "default",
@@ -4915,7 +5036,7 @@ describe("StudioPage", () => {
         })
     );
 
-    renderStudioPage("/studio?scopeId=scope-1&memberId=default&step=bind&tab=bindings");
+    renderStudioPage("/studio?scopeId=scope-1&member=member%3Aworkspace-demo&step=bind&tab=bindings");
 
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
     await waitFor(() => {
@@ -4949,6 +5070,21 @@ describe("StudioPage", () => {
         name: "draft1",
       },
     };
+    mockStudioMembers = [
+      ...mockStudioMembers,
+      {
+        memberId: "joker",
+        scopeId: "scope-1",
+        displayName: "joker",
+        description: "Joker workflow member",
+        implementationKind: "workflow",
+        lifecycleStage: "bind_ready",
+        publishedServiceId: "joker",
+        lastBoundRevisionId: "rev-joker",
+        createdAt: "2026-04-27T08:00:00Z",
+        updatedAt: "2026-04-27T08:05:00Z",
+      },
+    ];
     (studioApi.listWorkflows as jest.Mock).mockResolvedValueOnce([
       {
         workflowId: "workflow-1",
@@ -5004,10 +5140,11 @@ describe("StudioPage", () => {
         })
     );
 
-    renderStudioPage("/studio?scopeId=scope-1&memberId=joker&step=bind&tab=bindings");
+    renderStudioPage("/studio?scopeId=scope-1&member=member%3Ajoker&step=bind&tab=bindings");
 
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
     await waitFor(() => {
+      expect(screen.getByText("member:joker")).toBeTruthy();
       expect(screen.getByText("service:joker")).toBeTruthy();
     });
 
@@ -5862,7 +5999,7 @@ describe("StudioPage", () => {
     );
 
     renderStudioPage(
-      "/studio?scopeId=scope-1&memberId=script-member&step=bind&tab=bindings"
+      "/studio?scopeId=scope-1&member=member%3Ascript-member&step=bind&tab=bindings"
     );
 
     expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
@@ -6173,7 +6310,7 @@ describe("StudioPage", () => {
   });
 
   it("opens the Studio invoke surface from the bind surface endpoint action", async () => {
-    renderStudioPage("/studio?scopeId=scope-1&teamId=t-alpha&memberId=workspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
+    renderStudioPage("/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
 
     fireEvent.click(await screen.findByRole("button", { name: "Bind" }));
     await waitFor(() => {
@@ -6330,7 +6467,7 @@ describe("StudioPage", () => {
   });
 
   it("walks the lifecycle flow from build to bind to invoke to observe", async () => {
-    renderStudioPage("/studio?scopeId=scope-1&memberId=workspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
+    renderStudioPage("/studio?scopeId=scope-1&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio");
 
     expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
 
