@@ -1,10 +1,12 @@
 ---
 title: "Workflow 调度 Actor 化 & 多智能体协作演进方案"
-status: active
+status: superseded
 owner: eanzhao
 ---
 
 # Workflow 调度 Actor 化 & 多智能体协作演进方案
+
+> Superseded by #643 (2026-05-18): TaskBoardGAgent and TeamManagerGAgent deleted as dead code; kept here for history.
 
 > 日期：2026-04-01
 > 状态：RFC（Request for Comments）
