@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -6,10 +7,16 @@ namespace Aevatar.AI.ToolProviders.NyxId;
 
 public sealed class NyxIdSpecCatalog : IDisposable
 {
+    public const string HttpClientName = "nyxid-spec-catalog";
+
     private readonly NyxIdToolOptions _options;
-    private readonly HttpClient _http;
+    private readonly IHttpClientFactory? _httpClientFactory;
+    private readonly HttpClient? _manualHttpClient;
     private readonly ILogger _logger;
-    private readonly Timer? _refreshTimer;
+    private readonly CancellationTokenSource _refreshCts = new();
+    private readonly Task? _refreshLoop;
+    private readonly bool _ownsHttpClient;
+    private int _disposed;
 
     private OperationCard[] _catalog = [];
 
@@ -19,24 +26,30 @@ public sealed class NyxIdSpecCatalog : IDisposable
         ILogger<NyxIdSpecCatalog>? logger = null)
     {
         _options = options;
-        _http = httpClient ?? new HttpClient();
+        // Refactor (iter10/cluster-019):
+        // Old: singleton catalog owned an ambiguous raw HttpClient and a Timer callback.
+        // New: singleton state uses IHttpClientFactory named clients in DI; manual construction owns only its fallback client.
+        _manualHttpClient = httpClient ?? new HttpClient();
+        _ownsHttpClient = httpClient is null;
         _logger = logger ?? NullLogger<NyxIdSpecCatalog>.Instance;
 
-        if (string.IsNullOrWhiteSpace(_options.BaseUrl))
-            return;
+        _refreshLoop = StartRefreshLoopIfConfigured();
+    }
 
-        if (string.IsNullOrWhiteSpace(_options.SpecFetchToken))
-        {
-            // NyxID's /api/v1/docs/openapi.json is human-only; without a token
-            // every fetch returns 401. Skip the timer to avoid 30-min noise.
-            _logger.LogInformation(
-                "NyxIdSpecCatalog: SpecFetchToken not configured; skipping background refresh, catalog will remain empty");
-            return;
-        }
+    [ActivatorUtilitiesConstructor]
+    public NyxIdSpecCatalog(
+        NyxIdToolOptions options,
+        IHttpClientFactory httpClientFactory,
+        ILogger<NyxIdSpecCatalog>? logger = null)
+    {
+        _options = options;
+        _httpClientFactory = httpClientFactory;
+        _logger = logger ?? NullLogger<NyxIdSpecCatalog>.Instance;
 
-        _ = InitialFetchAsync();
-        _refreshTimer = new Timer(_ => _ = RefreshAsync(), null,
-            TimeSpan.FromMinutes(30), TimeSpan.FromMinutes(30));
+        // Refactor (iter10/cluster-019):
+        // Old: singleton catalog pinned one HttpClient and only disposed the Timer.
+        // New: singleton catalog owns only catalog state; named clients come from IHttpClientFactory per refresh.
+        _refreshLoop = StartRefreshLoopIfConfigured();
     }
 
     public OperationCard[] Operations => Volatile.Read(ref _catalog);
@@ -79,12 +92,48 @@ public sealed class NyxIdSpecCatalog : IDisposable
         return score;
     }
 
-    private async Task InitialFetchAsync()
+    private Task? StartRefreshLoopIfConfigured()
+    {
+        if (string.IsNullOrWhiteSpace(_options.BaseUrl))
+            return null;
+
+        if (string.IsNullOrWhiteSpace(_options.SpecFetchToken))
+        {
+            // NyxID's /api/v1/docs/openapi.json is human-only; without a token
+            // every fetch returns 401. Skip the timer to avoid 30-min noise.
+            _logger.LogInformation(
+                "NyxIdSpecCatalog: SpecFetchToken not configured; skipping background refresh, catalog will remain empty");
+            return null;
+        }
+
+        return Task.Run(() => RefreshLoopAsync(_refreshCts.Token));
+    }
+
+    private async Task RefreshLoopAsync(CancellationToken ct)
+    {
+        await InitialFetchAsync(ct);
+
+        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(30));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+                await RefreshAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+    }
+
+    private async Task InitialFetchAsync(CancellationToken ct)
     {
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(5));
             await FetchAndUpdateAsync(cts.Token);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
@@ -92,22 +141,27 @@ public sealed class NyxIdSpecCatalog : IDisposable
         }
     }
 
-    private async Task RefreshAsync()
+    private async Task RefreshAsync(CancellationToken ct)
     {
         const int maxRetries = 3;
         for (var i = 0; i < maxRetries; i++)
         {
             try
             {
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                cts.CancelAfter(TimeSpan.FromSeconds(10));
                 await FetchAndUpdateAsync(cts.Token);
+                return;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
                 return;
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "NyxIdSpecCatalog refresh attempt {Attempt}/{Max} failed", i + 1, maxRetries);
                 if (i < maxRetries - 1)
-                    await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, i + 1)));
+                    await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, i + 1)), ct);
             }
         }
     }
@@ -120,21 +174,70 @@ public sealed class NyxIdSpecCatalog : IDisposable
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.SpecFetchToken!);
 
-        using var response = await _http.SendAsync(request, ct);
-        response.EnsureSuccessStatusCode();
-
-        var json = await response.Content.ReadAsStringAsync(ct);
-        var cards = OpenApiSpecParser.ParseSpec(json, "nyxid");
-
-        if (cards.Length == 0)
+        var (http, disposeHttpClient) = CreateHttpClient();
+        try
         {
-            _logger.LogWarning("NyxIdSpecCatalog: spec yielded no operations, skipping update");
+            using var response = await http.SendAsync(request, ct);
+            response.EnsureSuccessStatusCode();
+
+            var json = await response.Content.ReadAsStringAsync(ct);
+            var cards = OpenApiSpecParser.ParseSpec(json, "nyxid");
+
+            if (cards.Length == 0)
+            {
+                _logger.LogWarning("NyxIdSpecCatalog: spec yielded no operations, skipping update");
+                return;
+            }
+
+            Volatile.Write(ref _catalog, cards);
+            _logger.LogInformation("NyxIdSpecCatalog updated: {Count} operations", cards.Length);
+        }
+        finally
+        {
+            if (disposeHttpClient)
+                http.Dispose();
+        }
+    }
+
+    private (HttpClient Client, bool DisposeClient) CreateHttpClient()
+    {
+        if (_httpClientFactory is not null)
+            return (_httpClientFactory.CreateClient(HttpClientName), true);
+
+        return (_manualHttpClient ?? throw new ObjectDisposedException(nameof(NyxIdSpecCatalog)), false);
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 1)
+            return;
+
+        _refreshCts.Cancel();
+        if (_refreshLoop is null)
+        {
+            _refreshCts.Dispose();
+            if (_ownsHttpClient)
+                _manualHttpClient?.Dispose();
             return;
         }
 
-        Volatile.Write(ref _catalog, cards);
-        _logger.LogInformation("NyxIdSpecCatalog updated: {Count} operations", cards.Length);
+        _ = DisposeAfterRefreshLoopAsync();
     }
 
-    public void Dispose() => _refreshTimer?.Dispose();
+    private async Task DisposeAfterRefreshLoopAsync()
+    {
+        try
+        {
+            await _refreshLoop!.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            _refreshCts.Dispose();
+            if (_ownsHttpClient)
+                _manualHttpClient?.Dispose();
+        }
+    }
 }
