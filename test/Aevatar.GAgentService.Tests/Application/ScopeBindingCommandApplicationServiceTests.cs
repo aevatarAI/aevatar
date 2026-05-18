@@ -58,6 +58,8 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         result.ScopeId.Should().Be(ScopeId);
         result.ServiceId.Should().Be(DefaultOptions.DefaultServiceId);
         result.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Workflow);
+        result.AcceptanceStage.Should().Be("accepted");
+        result.PropagationStage.Should().Be("readmodel_propagating");
         result.Workflow.Should().NotBeNull();
         result.Workflow!.WorkflowName.Should().Be("main");
         result.DisplayName.Should().Be("main");
@@ -74,6 +76,41 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         governanceCommandPort.CreateEndpointCatalogCommand!.Spec.Endpoints.Should().ContainSingle();
         governanceCommandPort.CreateEndpointCatalogCommand.Spec.Endpoints[0].EndpointId.Should().Be("chat");
         governanceCommandPort.CreateEndpointCatalogCommand.Spec.Endpoints[0].ExposureKind.Should().Be(ServiceEndpointExposureKind.Internal);
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldReturnAcceptedWithoutServingReadModelPolling()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var scopeScriptQueryPort = new FakeScopeScriptQueryPort();
+        var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
+
+        var result = await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec([
+                "name: main\nsteps:\n  - run: echo hello",
+            ])));
+
+        commandPort.Calls.Should().HaveCount(6);
+        lifecyclePort.GetServiceCallCount.Should().Be(1);
+        result.AcceptanceStage.Should().Be("accepted");
+        result.PropagationStage.Should().Be("readmodel_propagating");
+    }
+
+    [Fact]
+    public void ScopeBindingCommandApplicationServiceSource_ShouldNotContainReadModelVisibilityWait()
+    {
+        var source = File.ReadAllText(GetProductionSourcePath());
+
+        source.Should().NotContain(string.Concat("Task", ".Delay"));
+        source.Should().NotContain("WaitForBindingVisibleAsync");
+        source.Should().NotContain("ReadModelVisibility");
+        source.Should().NotContain("IServiceServingQueryPort");
+        source.Should().NotContain("GetServiceServingSetAsync");
     }
 
     [Fact]
@@ -1253,13 +1290,26 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         new(
             commandPort,
             lifecyclePort,
-            new FakeServiceServingQueryPort(),
             governanceCommandPort,
             governanceQueryPort,
             scopeScriptQueryPort,
             scriptDefinitionSnapshotPort,
             actorPort,
             Options.Create(options));
+
+    private static string GetProductionSourcePath(
+        [System.Runtime.CompilerServices.CallerFilePath] string testFilePath = "")
+    {
+        var root = Directory.GetParent(testFilePath)?.Parent?.Parent?.Parent?.FullName
+            ?? throw new InvalidOperationException("Could not resolve repository root from test file path.");
+        return Path.Combine(
+            root,
+            "src",
+            "platform",
+            "Aevatar.GAgentService.Application",
+            "Bindings",
+            "ScopeBindingCommandApplicationService.cs");
+    }
 
     private static ScriptDefinitionSnapshot CreateScriptDefinitionSnapshot(
         string scriptId,
@@ -1452,7 +1502,15 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         }
 
         public Task<ServiceCatalogSnapshot?> GetServiceAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult(_getResult);
+            Task.FromResult(RecordGetService(_getResult));
+
+        public int GetServiceCallCount { get; private set; }
+
+        private ServiceCatalogSnapshot? RecordGetService(ServiceCatalogSnapshot? snapshot)
+        {
+            GetServiceCallCount++;
+            return snapshot;
+        }
 
         public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListServicesAsync(string tenantId, string appId, string @namespace, int take = 200, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
@@ -1462,33 +1520,6 @@ public sealed class ScopeBindingCommandApplicationServiceTests
 
         public Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult<ServiceDeploymentCatalogSnapshot?>(null);
-    }
-
-    /// <summary>
-    /// Test stub — returns null for every readmodel lookup. Combined with
-    /// <see cref="FakeServiceLifecycleQueryPort"/> returning null for
-    /// <c>GetServiceAsync</c>, the bind service's post-activate visibility
-    /// poll fast-fails (8 consecutive no-progress polls at 25ms) and
-    /// <c>UpsertAsync</c> returns within ~200ms. Tests that want to exercise
-    /// the visibility wait should supply a custom stub.
-    /// </summary>
-    private sealed class FakeServiceServingQueryPort : IServiceServingQueryPort
-    {
-        public Task<ServiceServingSetSnapshot?> GetServiceServingSetAsync(
-            ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult<ServiceServingSetSnapshot?>(null);
-
-        public Task<ServiceRolloutSnapshot?> GetServiceRolloutAsync(
-            ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult<ServiceRolloutSnapshot?>(null);
-
-        public Task<ServiceRolloutCommandObservationSnapshot?> GetServiceRolloutCommandObservationAsync(
-            ServiceIdentity identity, string commandId, CancellationToken ct = default) =>
-            Task.FromResult<ServiceRolloutCommandObservationSnapshot?>(null);
-
-        public Task<ServiceTrafficViewSnapshot?> GetServiceTrafficViewAsync(
-            ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult<ServiceTrafficViewSnapshot?>(null);
     }
 
     private sealed class RecordingServiceGovernanceCommandPort : IServiceGovernanceCommandPort
