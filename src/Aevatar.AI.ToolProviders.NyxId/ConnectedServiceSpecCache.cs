@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net.Http.Headers;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -7,13 +8,18 @@ namespace Aevatar.AI.ToolProviders.NyxId;
 
 public sealed class ConnectedServiceSpecCache : IConnectedServiceSpecSource, IDisposable
 {
+    public const string HttpClientName = "nyxid-connected-service-spec-cache";
+
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(30);
     private static readonly TimeSpan FetchTimeout = TimeSpan.FromSeconds(5);
 
-    private readonly HttpClient _http;
+    private readonly IHttpClientFactory? _httpClientFactory;
+    private readonly HttpClient? _manualHttpClient;
     private readonly NyxIdToolOptions _options;
     private readonly ILogger _logger;
     private readonly ConcurrentDictionary<string, CacheEntry> _cache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly bool _ownsHttpClient;
+    private int _disposed;
 
     public ConnectedServiceSpecCache(
         NyxIdToolOptions options,
@@ -21,7 +27,25 @@ public sealed class ConnectedServiceSpecCache : IConnectedServiceSpecSource, IDi
         ILogger<ConnectedServiceSpecCache>? logger = null)
     {
         _options = options;
-        _http = httpClient ?? new HttpClient();
+        // Refactor (iter10/cluster-019):
+        // Old: injected and self-created HttpClient ownership was ambiguous and disposed unconditionally.
+        // New: DI uses IHttpClientFactory named clients; manual construction owns only its fallback client.
+        _manualHttpClient = httpClient ?? new HttpClient();
+        _ownsHttpClient = httpClient is null;
+        _logger = logger ?? NullLogger<ConnectedServiceSpecCache>.Instance;
+    }
+
+    [ActivatorUtilitiesConstructor]
+    public ConnectedServiceSpecCache(
+        NyxIdToolOptions options,
+        IHttpClientFactory httpClientFactory,
+        ILogger<ConnectedServiceSpecCache>? logger = null)
+    {
+        _options = options;
+        _httpClientFactory = httpClientFactory;
+        // Refactor (iter10/cluster-019):
+        // Old: singleton cache pinned one raw HttpClient for the process lifetime.
+        // New: singleton cache owns cache state only; named clients come from IHttpClientFactory per fetch.
         _logger = logger ?? NullLogger<ConnectedServiceSpecCache>.Instance;
     }
 
@@ -54,24 +78,34 @@ public sealed class ConnectedServiceSpecCache : IConnectedServiceSpecSource, IDi
             if (IsTrustedHost(url))
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
 
-            using var response = await _http.SendAsync(request, cts.Token);
-            if (!response.IsSuccessStatusCode)
+            var (http, disposeHttpClient) = CreateHttpClient();
+            try
             {
-                _logger.LogDebug(
-                    "ConnectedServiceSpecCache: spec fetch for '{Slug}' returned {Status}",
-                    slug, (int)response.StatusCode);
-                return null;
+                using var response = await http.SendAsync(request, cts.Token);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    _logger.LogDebug(
+                        "ConnectedServiceSpecCache: spec fetch for '{Slug}' returned {Status}",
+                        slug, (int)response.StatusCode);
+                    return null;
+                }
+
+                var json = await response.Content.ReadAsStringAsync(cts.Token);
+                var operations = OpenApiSpecParser.ParseSpec(json, slug);
+
+                _cache[cacheKey] = new CacheEntry(operations, DateTime.UtcNow + CacheTtl);
+                _logger.LogInformation(
+                    "ConnectedServiceSpecCache: cached {Count} operations for '{Slug}'",
+                    operations.Length, slug);
+
+                return operations;
             }
-
-            var json = await response.Content.ReadAsStringAsync(cts.Token);
-            var operations = OpenApiSpecParser.ParseSpec(json, slug);
-
-            _cache[cacheKey] = new CacheEntry(operations, DateTime.UtcNow + CacheTtl);
-            _logger.LogInformation(
-                "ConnectedServiceSpecCache: cached {Count} operations for '{Slug}'",
-                operations.Length, slug);
-
-            return operations;
+            finally
+            {
+                if (disposeHttpClient)
+                    http.Dispose();
+            }
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -110,7 +144,22 @@ public sealed class ConnectedServiceSpecCache : IConnectedServiceSpecSource, IDi
         return $"{_options.BaseUrl.TrimEnd('/')}/api/v1/proxy/services/{Uri.EscapeDataString(serviceId)}/openapi.json";
     }
 
-    public void Dispose() => _http.Dispose();
+    private (HttpClient Client, bool DisposeClient) CreateHttpClient()
+    {
+        if (_httpClientFactory is not null)
+            return (_httpClientFactory.CreateClient(HttpClientName), true);
+
+        return (_manualHttpClient ?? throw new ObjectDisposedException(nameof(ConnectedServiceSpecCache)), false);
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 1)
+            return;
+
+        if (_ownsHttpClient)
+            _manualHttpClient?.Dispose();
+    }
 
     private sealed record CacheEntry(OperationCard[] Operations, DateTime ExpiresAt)
     {

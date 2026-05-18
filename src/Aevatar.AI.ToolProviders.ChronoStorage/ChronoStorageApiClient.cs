@@ -6,11 +6,12 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.AI.ToolProviders.ChronoStorage;
 
 /// <summary>HTTP client for calling Explorer REST API endpoints.</summary>
-public sealed class ChronoStorageApiClient
+public sealed class ChronoStorageApiClient : IDisposable
 {
     private readonly HttpClient _http;
     private readonly ChronoStorageToolOptions _options;
     private readonly ILogger _logger;
+    private readonly bool _ownsHttpClient;
 
     public ChronoStorageApiClient(
         ChronoStorageToolOptions options,
@@ -18,7 +19,11 @@ public sealed class ChronoStorageApiClient
         ILogger<ChronoStorageApiClient>? logger = null)
     {
         _options = options;
+        // Refactor (iter10/cluster-019):
+        // Old: singleton DI registration could self-create and pin a raw HttpClient.
+        // New: DI registers this as an AddHttpClient<T> typed client; only manual construction owns this fallback.
         _http = httpClient ?? new HttpClient();
+        _ownsHttpClient = httpClient is null;
         _logger = logger ?? NullLogger<ChronoStorageApiClient>.Instance;
     }
 
@@ -104,5 +109,11 @@ public sealed class ChronoStorageApiClient
             _logger.LogWarning(ex, "ChronoStorage API request exception: {Method} {Url}", request.Method, request.RequestUri);
             return $"{{\"error\": true, \"message\": {System.Text.Json.JsonSerializer.Serialize(ex.Message)}}}";
         }
+    }
+
+    public void Dispose()
+    {
+        if (_ownsHttpClient)
+            _http.Dispose();
     }
 }

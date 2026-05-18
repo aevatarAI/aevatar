@@ -22,7 +22,7 @@ public sealed record NyxIdChannelRelayReplyResult(
     bool EditUnsupported = false);
 
 /// <summary>HTTP client for calling NyxID REST API endpoints.</summary>
-public sealed class NyxIdApiClient
+public sealed class NyxIdApiClient : IDisposable
 {
     /// <summary>
     /// Default <c>User-Agent</c> injected on every call to <see cref="ProxyRequestAsync"/>
@@ -40,6 +40,7 @@ public sealed class NyxIdApiClient
     private readonly HttpClient _http;
     private readonly NyxIdToolOptions _options;
     private readonly ILogger _logger;
+    private readonly bool _ownsHttpClient;
 
     public NyxIdApiClient(
         NyxIdToolOptions options,
@@ -47,7 +48,11 @@ public sealed class NyxIdApiClient
         ILogger<NyxIdApiClient>? logger = null)
     {
         _options = options;
+        // Refactor (iter10/cluster-019):
+        // Old: singleton DI registration could construct and permanently pin a raw HttpClient.
+        // New: DI registers this as an AddHttpClient<T> typed client; only manual construction owns this fallback.
         _http = httpClient ?? new HttpClient();
+        _ownsHttpClient = httpClient is null;
         _logger = logger ?? NullLogger<NyxIdApiClient>.Instance;
     }
 
@@ -841,5 +846,11 @@ public sealed class NyxIdApiClient
         {
             return false;
         }
+    }
+
+    public void Dispose()
+    {
+        if (_ownsHttpClient)
+            _http.Dispose();
     }
 }
