@@ -19,6 +19,10 @@ namespace Aevatar.GAgents.Scheduled;
 /// reads the projection document directly by id; ownership semantics live on
 /// the public <see cref="IUserAgentCatalogQueryPort"/> (caller-scoped) and are
 /// applied at the LLM tool layer, not here.
+///
+/// Refactor (iter1/cluster-001):
+///   Old pattern: catalog command plumbing was also available for execution updates.
+///   New principle: command port dispatches only catalog-owned membership mutations.
 /// </summary>
 internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
 {

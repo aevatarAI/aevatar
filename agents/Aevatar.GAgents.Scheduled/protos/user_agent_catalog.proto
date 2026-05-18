@@ -57,11 +57,8 @@ message UserAgentCatalogEntry {
   string api_key_id = 13;
   string schedule_cron = 14;
   string schedule_timezone = 15;
-  string status = 16;
-  google.protobuf.Timestamp last_run_at = 17;
-  google.protobuf.Timestamp next_run_at = 18;
-  int32 error_count = 19;
-  string last_error = 20;
+  reserved 16, 17, 18, 19, 20;
+  reserved "status", "last_run_at", "next_run_at", "error_count", "last_error";
   int64 tombstone_state_version = 21;
   // Authoritative Lark outbound delivery target captured at create time. When
   // both fields are present, outbound senders use them verbatim instead of
@@ -105,7 +102,8 @@ message UserAgentCatalogUpsertCommand {
   string api_key_id = 10;
   string schedule_cron = 11;
   string schedule_timezone = 12;
-  string status = 13;
+  reserved 13;
+  reserved "status";
   // See UserAgentCatalogEntry.lark_receive_id for semantics. Empty values
   // preserve any existing entry value via the merge-non-empty upsert policy.
   string lark_receive_id = 14;
@@ -121,15 +119,6 @@ message UserAgentCatalogTombstoneCommand {
   string agent_id = 1;
 }
 
-message UserAgentCatalogExecutionUpdateCommand {
-  string agent_id = 1;
-  string status = 2;
-  google.protobuf.Timestamp last_run_at = 3;
-  google.protobuf.Timestamp next_run_at = 4;
-  int32 error_count = 5;
-  string last_error = 6;
-}
-
 message UserAgentCatalogCompactTombstonesCommand {
   int64 safe_state_version = 1;
 }
@@ -141,15 +130,6 @@ message UserAgentCatalogUpsertedEvent {
 message UserAgentCatalogTombstonedEvent {
   string agent_id = 1;
   int64 tombstone_state_version = 2;
-}
-
-message UserAgentCatalogExecutionUpdatedEvent {
-  string agent_id = 1;
-  string status = 2;
-  google.protobuf.Timestamp last_run_at = 3;
-  google.protobuf.Timestamp next_run_at = 4;
-  int32 error_count = 5;
-  string last_error = 6;
 }
 
 message UserAgentCatalogTombstonesCompactedEvent {
@@ -199,6 +179,14 @@ message UserAgentCatalogDocument {
   // case the caller-scoped query port lazily synthesizes owner_scope on read
   // for the nyxid surface (issue #466 migration plan).
   OwnerScope owner_scope = 28;
+  // Source watermarks for the merged catalog read model. Catalog membership
+  // state and runner execution state are owned by different actors, so the
+  // document exposes both authority versions and derives state_version from
+  // their committed watermarks instead of inventing a local projection counter.
+  int64 catalog_source_version = 29;
+  string catalog_last_event_id = 30;
+  int64 runner_source_version = 31;
+  string runner_last_event_id = 32;
 }
 
 // Runtime-only Nyx credential read model for delivery-target execution paths.

@@ -85,8 +85,8 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
     [Fact]
     public async Task HandleUpsertAsync_PartialUpsertWithoutOwnerScope_PreservesExisting()
     {
-        // The execution-update / lifecycle-update paths re-upsert without recomputing
-        // OwnerScope. The actor must inherit the existing scope rather than dropping it.
+        // Partial membership updates can arrive without recomputing OwnerScope. The actor
+        // must inherit the existing scope rather than dropping it.
         var scope = OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice");
         await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
         {
@@ -95,11 +95,11 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
             OwnerScope = scope,
         });
 
-        // Second upsert (e.g. status update) without OwnerScope.
+        // Second membership upsert without OwnerScope.
         await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
         {
             AgentId = "alice-agent",
-            Status = "running",
+            ScheduleCron = "0 9 * * *",
         });
 
         _agent.State.Entries.Should().ContainSingle();

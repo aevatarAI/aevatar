@@ -108,7 +108,6 @@ public sealed class UserAgentCatalogCompatibilityTests
                         AgentId = "agent-compat-3",
                         AgentType = SkillRunnerDefaults.AgentType,
                         TemplateName = "daily",
-                        Status = "running",
                     },
                 }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("publisher-compat", TopologyAudience.Children),
@@ -119,7 +118,6 @@ public sealed class UserAgentCatalogCompatibilityTests
         agent.HandleCount.Should().Be(1);
         agent.LastHandled.Should().NotBeNull();
         agent.LastHandled!.Entry.AgentId.Should().Be("agent-compat-3");
-        agent.LastHandled.Entry.Status.Should().Be("running");
         agent.State.Entries.Should().ContainSingle(x =>
             x.AgentId == "agent-compat-3" &&
             x.TemplateName == "daily");

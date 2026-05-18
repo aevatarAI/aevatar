@@ -344,12 +344,13 @@ string failure_notification_provider_slug = 12;  // §C 旁路 proxy slug（入�
 - 运行态：`last_run_at`、`next_run_at`、`error_count`、`last_error`、`last_output`
 
 ### `UserAgentCatalogEntry`（well-known 注册表条目）
-- 关键字段：`agent_id`、`agent_type="skill_runner"`、`template_name="daily"`、`platform="lark"`、`conversation_id`、`scope_id`、`status`、`last_run_at`、`next_run_at`、`error_count`、`last_error`、`lark_receive_id*`
+- 关键字段：`agent_id`、`agent_type="skill_runner"`、`template_name="daily"`、`platform="lark"`、`conversation_id`、`scope_id`、`lark_receive_id*`
+- 不承载执行事实：`status`、`last_run_at`、`next_run_at`、`error_count`、`last_error` 由 `SkillRunnerState` 拥有，并由 `UserAgentCatalogProjector` 从 runner committed state 合并进 `UserAgentCatalogDocument`。
 - `nyx_api_key` / `api_key_id`：actor state 内的 catalog entry 保留这两个字段；公开 `UserAgentCatalogDocument` 不再暴露 `nyx_api_key`，运行时出站读取单独的 `UserAgentCatalogNyxCredentialDocument`。
 
 ### 命令 / 事件
-- 命令：`InitializeSkillRunnerCommand`、`TriggerSkillRunnerExecutionCommand{Reason, RetryAttempt}`、`DisableSkillRunnerCommand`、`EnableSkillRunnerCommand`、`UserAgentCatalogUpsertCommand`、`UserAgentCatalogExecutionUpdateCommand`、`UserAgentCatalogTombstoneCommand`
-- 事件：`SkillRunnerInitializedEvent`、`SkillRunnerNextRunScheduledEvent`、`SkillRunnerExecutionCompletedEvent`、`SkillRunnerExecutionFailedEvent`、`SkillRunnerDisabledEvent`、`SkillRunnerEnabledEvent`、`UserAgentCatalogUpsertedEvent`、`UserAgentCatalogExecutionUpdatedEvent`、`UserAgentCatalogTombstonedEvent`
+- 命令：`InitializeSkillRunnerCommand`、`TriggerSkillRunnerExecutionCommand{Reason, RetryAttempt}`、`DisableSkillRunnerCommand`、`EnableSkillRunnerCommand`、`UserAgentCatalogUpsertCommand`、`UserAgentCatalogTombstoneCommand`
+- 事件：`SkillRunnerInitializedEvent`、`SkillRunnerNextRunScheduledEvent`、`SkillRunnerExecutionCompletedEvent`、`SkillRunnerExecutionFailedEvent`、`SkillRunnerDisabledEvent`、`SkillRunnerEnabledEvent`、`UserAgentCatalogUpsertedEvent`、`UserAgentCatalogTombstonedEvent`
 
 ---
 
@@ -389,18 +390,18 @@ string failure_notification_provider_slug = 12;  // §C 旁路 proxy slug（入�
 
 ## 7. 状态 / Projection / 查询
 
-**事实源**：`SkillRunnerGAgent` actor state（每个 agent 一个 actor）+ `UserAgentCatalogGAgent`（well-known，全局唯一注册表 actor）
+**事实源**：`SkillRunnerGAgent` actor state（每个 agent 一个 actor，拥有执行事实）+ `UserAgentCatalogGAgent`（well-known，全局唯一注册表 actor，只拥有成员集合与静态属性）
 
-**Projection**：`UserAgentCatalogProjector` 消费 `UserAgentCatalogUpsertedEvent` / `UserAgentCatalogExecutionUpdatedEvent` / `UserAgentCatalogTombstonedEvent` → 物化到 `UserAgentCatalogDocument`
+**Projection**：`UserAgentCatalogProjector` 消费 catalog committed state 与 runner committed state → 合并物化到 `UserAgentCatalogDocument`。catalog membership 字段来自 `UserAgentCatalogState`；执行字段来自 `SkillRunnerState`。
 
 **查询端口**：`IUserAgentCatalogQueryPort`
-- `GetStateVersionAsync(agentId)`：阶段 ③.r 轮询用
-- `ListAsync(ownerId/scopeId)`：`/agents` 命令的数据源
-- 单条查询：`/agent-status <id>`
+- `QueryByCallerAsync(owner_scope)`：`/agents` 命令的数据源
+- `GetForCallerAsync(agentId, owner_scope)`：`/agent-status <id>` 单条查询
+- `GetStateVersionForCallerAsync(agentId, owner_scope)`：按 caller scope 读取投影水位
 
 **关键不变量 / 测试关注**：
-- `UpsertRegistryAsync` 在 `HandleInitializeAsync` 末尾发；之后立即可能被 `HandleTriggerAsync` 的 `UpdateRegistryExecutionAsync` 跟上 → 见 issue #440 怀疑的 race（init 端 upsert 和 trigger 端 execution-update 排序）。
-- `UserAgentCatalogGAgent.HandleExecutionUpdateAsync` 有 early-return guard：`State.Entries` 里没找到 agent_id 就 `LogWarning("Cannot update execution state for missing user agent catalog entry")` 并丢弃。如果丢的是首次执行的 update，`/agent-status` 永远看不到 `Last run`/`Next run`。
+- `UpsertRegistryAsync` 在 `HandleInitializeAsync` 末尾只注册 membership；它不写执行字段。
+- runner 执行完成、失败、启停后的 committed state 是 `/agent-status` 的执行事实来源；projection 必须从 runner state 合并 `status` / `last_run_at` / `next_run_at` / `error_count` / `last_error`。
 
 ---
 

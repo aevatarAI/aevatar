@@ -28,7 +28,7 @@ public sealed class AgentBuilderToolTests
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(
-                Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+                Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
                 {
                     AgentId = "skill-runner-1",
                     AgentType = SkillRunnerDefaults.AgentType,
@@ -36,9 +36,9 @@ public sealed class AgentBuilderToolTests
                     ApiKeyId = "key-1",
                     OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
                 }),
-                Task.FromResult<UserAgentCatalogEntry?>(null));
+                Task.FromResult<UserAgentCatalogReadModelEntry?>(null));
         queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogEntry>>(Array.Empty<UserAgentCatalogEntry>()));
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(Array.Empty<UserAgentCatalogReadModelEntry>()));
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
@@ -113,7 +113,7 @@ public sealed class AgentBuilderToolTests
         // delete might not have landed at all.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("skill-runner-stuck", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
             {
                 AgentId = "skill-runner-stuck",
                 AgentType = SkillRunnerDefaults.AgentType,
@@ -122,8 +122,8 @@ public sealed class AgentBuilderToolTests
                 OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
             }));
         queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogEntry>>(
-                [new UserAgentCatalogEntry { AgentId = "skill-runner-stuck", OwnerScope = OwnerScope.ForNyxIdNative("user-1") }]));
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(
+                [new UserAgentCatalogReadModelEntry { AgentId = "skill-runner-stuck", OwnerScope = OwnerScope.ForNyxIdNative("user-1") }]));
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
@@ -195,7 +195,7 @@ public sealed class AgentBuilderToolTests
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
             {
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,
@@ -254,7 +254,7 @@ public sealed class AgentBuilderToolTests
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
             {
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,
@@ -314,7 +314,7 @@ public sealed class AgentBuilderToolTests
         //   New principle: Lifecycle commands return accepted; freshness is observed by follow-up query or push event.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("skill-runner-fast", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
             {
                 AgentId = "skill-runner-fast",
                 AgentType = SkillRunnerDefaults.AgentType,
@@ -382,7 +382,7 @@ public sealed class AgentBuilderToolTests
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
             {
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,
@@ -447,7 +447,7 @@ public sealed class AgentBuilderToolTests
         //   New principle: Lifecycle commands return accepted; freshness is observed by follow-up query or push event.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
             {
                 AgentId = "skill-runner-1",
                 AgentType = SkillRunnerDefaults.AgentType,

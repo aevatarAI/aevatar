@@ -32,10 +32,14 @@ internal sealed class SkillRunnerCommandPort : ISkillRunnerCommandPort
         ArgumentNullException.ThrowIfNull(command);
 
         await EnsureSkillRunnerActorAsync(agentId, ct);
-        // Prime the catalog projection scope BEFORE dispatch — a late prime
-        // can't recover an event the projector already missed when the
-        // SkillRunner emits its initialize → catalog upsert chain.
+        // Refactor (iter1/cluster-001):
+        //   Old pattern: initialize only primed the catalog actor stream because runners pushed execution updates there.
+        //   New principle: prime both membership and runner streams before dispatch so runner committed facts project directly.
+        //
+        // Prime projection scopes BEFORE dispatch — a late prime can't recover
+        // committed events the projector already missed.
         await _catalogProjectionPort.EnsureProjectionForActorAsync(UserAgentCatalogGAgent.WellKnownId, ct);
+        await _catalogProjectionPort.EnsureProjectionForActorAsync(agentId, ct);
 
         await DispatchAsync(agentId, command, ct);
 
@@ -49,6 +53,7 @@ internal sealed class SkillRunnerCommandPort : ISkillRunnerCommandPort
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
         await EnsureSkillRunnerActorAsync(agentId, ct);
+        await _catalogProjectionPort.EnsureProjectionForActorAsync(agentId, ct);
         await DispatchAsync(agentId, new TriggerSkillRunnerExecutionCommand { Reason = reason ?? string.Empty }, ct);
     }
 
@@ -56,6 +61,7 @@ internal sealed class SkillRunnerCommandPort : ISkillRunnerCommandPort
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
         await EnsureSkillRunnerActorAsync(agentId, ct);
+        await _catalogProjectionPort.EnsureProjectionForActorAsync(agentId, ct);
         await DispatchAsync(agentId, new DisableSkillRunnerCommand { Reason = reason ?? string.Empty }, ct);
     }
 
@@ -63,6 +69,7 @@ internal sealed class SkillRunnerCommandPort : ISkillRunnerCommandPort
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
         await EnsureSkillRunnerActorAsync(agentId, ct);
+        await _catalogProjectionPort.EnsureProjectionForActorAsync(agentId, ct);
         await DispatchAsync(agentId, new EnableSkillRunnerCommand { Reason = reason ?? string.Empty }, ct);
     }
 
