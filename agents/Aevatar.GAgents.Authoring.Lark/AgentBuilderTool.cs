@@ -183,6 +183,9 @@ public sealed class AgentBuilderTool : IAgentTool
         // Refactor (iter4/cluster-009):
         //   Old pattern: Delete mapped command-port Observed to a synchronous deleted status.
         //   New principle: Tombstone ACK is accepted-only; deletion visibility is confirmed by the catalog query path.
+        // Refactor (iter5/cluster-012):
+        //   Old pattern: Delete awaited a tombstone result object that carried only accepted.
+        //   New principle: Delete awaits command completion; accepted status is emitted by this tool boundary.
         await catalogCommandPort.TombstoneAsync(entry.AgentId, ct);
 
         var agents = await QueryAgentsForCallerAsync(queryPort, caller, ct);
