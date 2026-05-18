@@ -7,7 +7,16 @@ public sealed class ServiceCatalogReadModelMetadataProvider : IProjectionDocumen
 {
     public DocumentIndexMetadata Metadata { get; } = new(
         "gagent-service-catalog",
-        Mappings: new Dictionary<string, object?>(),
+        Mappings: new Dictionary<string, object?>
+        {
+            ["properties"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["namespace"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["type"] = "keyword",
+                },
+            },
+        },
         Settings: new Dictionary<string, object?>(),
         Aliases: new Dictionary<string, object?>());
 }
