@@ -9,6 +9,7 @@ using Aevatar.GAgentService.Projection.ReadModels;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgentService.Tests.Projection;
 
@@ -55,6 +56,56 @@ public sealed class ResponsesAgentToolStateCurrentStateProjectorTests
         var cache = await reader.GetWebCacheEntryAsync(ScopeId, OwnerSubject, "WebFetch", "cache-1");
         cache.Should().NotBeNull();
         cache!.ResultJson.Should().Be("""{"content":"fresh"}""");
+    }
+
+    [Fact]
+    public async Task QueryReader_WhenReadableIdsEnabled_ShouldReadReadableIdFirst()
+    {
+        var store = new RecordingDocumentStore<ResponsesAgentToolStateCurrentStateReadModel>(x => x.Id);
+        var reader = new ResponsesAgentToolStateQueryReader(
+            store,
+            Options.Create(new ResponsesAgentToolStateIdOptions
+            {
+                AevatarResponsesAgentToolReadableIds = true,
+            }));
+        var readableActorId = ResponseAgentToolStateIds.BuildReadableActorId("scope/1", "owner:1");
+        await store.UpsertAsync(new ResponsesAgentToolStateCurrentStateReadModel
+        {
+            Id = readableActorId,
+            ActorId = readableActorId,
+            ScopeId = "scope/1",
+            OwnerSubject = "owner:1",
+        });
+
+        var snapshot = await reader.GetAsync("scope/1", "owner:1");
+
+        snapshot.Should().NotBeNull();
+        snapshot!.ActorId.Should().Be(readableActorId);
+    }
+
+    [Fact]
+    public async Task QueryReader_WhenReadableIdsEnabled_ShouldFallbackToLegacyHashId()
+    {
+        var store = new RecordingDocumentStore<ResponsesAgentToolStateCurrentStateReadModel>(x => x.Id);
+        var reader = new ResponsesAgentToolStateQueryReader(
+            store,
+            Options.Create(new ResponsesAgentToolStateIdOptions
+            {
+                AevatarResponsesAgentToolReadableIds = true,
+            }));
+        var legacyActorId = ResponseAgentToolStateIds.BuildLegacyActorId("scope-1", "owner-1");
+        await store.UpsertAsync(new ResponsesAgentToolStateCurrentStateReadModel
+        {
+            Id = legacyActorId,
+            ActorId = legacyActorId,
+            ScopeId = "scope-1",
+            OwnerSubject = "owner-1",
+        });
+
+        var snapshot = await reader.GetAsync("scope-1", "owner-1");
+
+        snapshot.Should().NotBeNull();
+        snapshot!.ActorId.Should().Be(legacyActorId);
     }
 
     private static EventEnvelope WrapCommittedState(DateTimeOffset observedAt)
