@@ -42,8 +42,11 @@ public sealed class AgentBuilderToolTests
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        // Refactor (iter5/cluster-012):
+        //   Old pattern: Stub manufactured a tombstone result just to satisfy a dead return shape.
+        //   New principle: Stub returns Task.CompletedTask; test asserts dispatch happened at the tool boundary.
         catalogCommandPort.TombstoneAsync("skill-runner-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.Accepted)));
+            .Returns(Task.CompletedTask);
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-1", """{"ok":true}""");
@@ -127,8 +130,11 @@ public sealed class AgentBuilderToolTests
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        // Refactor (iter5/cluster-012):
+        //   Old pattern: Stub manufactured a tombstone result just to satisfy a dead return shape.
+        //   New principle: Stub returns Task.CompletedTask; test asserts accepted copy plus source/query guard behavior.
         catalogCommandPort.TombstoneAsync("skill-runner-stuck", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.Accepted)));
+            .Returns(Task.CompletedTask);
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-stuck", """{"ok":true}""");

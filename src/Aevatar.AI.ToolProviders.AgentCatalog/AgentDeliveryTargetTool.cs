@@ -220,6 +220,9 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         // Refactor (iter4/cluster-009):
         //   Old pattern: Upsert mapped command-port Observed to a synchronous upserted status.
         //   New principle: Upsert ACK is accepted-only; projection freshness is observed by explicit list/get queries.
+        // Refactor (iter5/cluster-012):
+        //   Old pattern: Upsert awaited a result object that only repeated accepted.
+        //   New principle: Upsert awaits command completion; accepted status is emitted by this tool boundary.
         await commandPort.UpsertAsync(
             new UserAgentCatalogUpsertCommand
             {
@@ -283,6 +286,9 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         // Refactor (iter4/cluster-009):
         //   Old pattern: Tombstone mapped command-port Observed/NotFound to synchronous delete outcomes.
         //   New principle: Caller-scoped pre-check owns existence; tombstone ACK is accepted-only.
+        // Refactor (iter5/cluster-012):
+        //   Old pattern: Delete awaited a tombstone result object that only repeated accepted.
+        //   New principle: Delete awaits command completion; accepted status is emitted by this tool boundary.
         await commandPort.TombstoneAsync(agentId, ct);
         return JsonSerializer.Serialize(new
         {

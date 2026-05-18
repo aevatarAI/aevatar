@@ -166,8 +166,11 @@ public sealed class AgentDeliveryTargetToolTests
             }));
 
         var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        // Refactor (iter5/cluster-012):
+        //   Old pattern: Stub manufactured an upsert result just to satisfy a dead return shape.
+        //   New principle: Stub returns Task.CompletedTask; test asserts caller-scoped guard and command dispatch.
         commandPort.UpsertAsync(Arg.Any<UserAgentCatalogUpsertCommand>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new UserAgentCatalogUpsertResult(CatalogCommandOutcome.Accepted)));
+            .Returns(Task.CompletedTask);
 
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
@@ -336,8 +339,11 @@ public sealed class AgentDeliveryTargetToolTests
                 OwnerScope = caller,
             }));
         var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        // Refactor (iter5/cluster-012):
+        //   Old pattern: Stub manufactured a tombstone result just to satisfy a dead return shape.
+        //   New principle: Stub returns Task.CompletedTask; test asserts caller-scoped guard and command dispatch.
         commandPort.TombstoneAsync("agent-3", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.Accepted)));
+            .Returns(Task.CompletedTask);
 
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
@@ -391,8 +397,11 @@ public sealed class AgentDeliveryTargetToolTests
                 OwnerScope = caller,
             }));
         var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        // Refactor (iter5/cluster-012):
+        //   Old pattern: Stub manufactured a tombstone result just to satisfy a dead return shape.
+        //   New principle: Stub returns Task.CompletedTask; accepted JSON remains a tool-boundary concern.
         commandPort.TombstoneAsync("agent-7", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.Accepted)));
+            .Returns(Task.CompletedTask);
 
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
@@ -615,8 +624,11 @@ public sealed class AgentDeliveryTargetToolTests
             }));
 
         var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        // Refactor (iter5/cluster-012):
+        //   Old pattern: Stub manufactured an upsert result just to satisfy a dead return shape.
+        //   New principle: Stub returns Task.CompletedTask; accepted JSON remains a tool-boundary concern.
         commandPort.UpsertAsync(Arg.Any<UserAgentCatalogUpsertCommand>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new UserAgentCatalogUpsertResult(CatalogCommandOutcome.Accepted)));
+            .Returns(Task.CompletedTask);
 
         var resolver = Substitute.For<ICallerScopeResolver>();
         resolver.TryResolveAsync(Arg.Any<CancellationToken>())
@@ -694,8 +706,11 @@ public sealed class AgentDeliveryTargetToolTests
             }));
 
         var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        // Refactor (iter5/cluster-012):
+        //   Old pattern: Stub manufactured a tombstone result just to satisfy a dead return shape.
+        //   New principle: Stub returns Task.CompletedTask; accepted JSON remains a tool-boundary concern.
         commandPort.TombstoneAsync("agent-slow", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.Accepted)));
+            .Returns(Task.CompletedTask);
 
         var resolver = Substitute.For<ICallerScopeResolver>();
         resolver.TryResolveAsync(Arg.Any<CancellationToken>())

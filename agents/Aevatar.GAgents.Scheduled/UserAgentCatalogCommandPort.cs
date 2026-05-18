@@ -22,6 +22,10 @@ namespace Aevatar.GAgents.Scheduled;
 /// Refactor (iter4/cluster-009):
 ///   Old pattern: Command dispatch polled projection documents to report observed state.
 ///   New principle: Command ACKs are accepted-only; observation belongs to explicit query/projection paths.
+///
+/// Refactor (iter5/cluster-012):
+///   Old pattern: Accepted-only dispatch returned dead result records that callers ignored.
+///   New principle: Command success is represented by Task completion; no synthetic receipt is produced.
 /// </summary>
 internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
 {
@@ -41,7 +45,10 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
     }
 
-    public async Task<UserAgentCatalogUpsertResult> UpsertAsync(
+    // Refactor (iter5/cluster-012):
+    //   Old pattern: Upsert returned a single-value accepted result wrapper.
+    //   New principle: Upsert completes after projection activation, actor lifecycle ensure, and dispatch.
+    public async Task UpsertAsync(
         UserAgentCatalogUpsertCommand command,
         CancellationToken ct = default)
     {
@@ -60,11 +67,12 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
             Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, UserAgentCatalogGAgent.WellKnownId),
         };
         await _actorDispatchPort.DispatchAsync(UserAgentCatalogGAgent.WellKnownId, envelope, ct);
-
-        return new UserAgentCatalogUpsertResult(CatalogCommandOutcome.Accepted);
     }
 
-    public async Task<UserAgentCatalogTombstoneResult> TombstoneAsync(
+    // Refactor (iter5/cluster-012):
+    //   Old pattern: Tombstone returned a single-value accepted result wrapper.
+    //   New principle: Tombstone completes after projection activation, actor lifecycle ensure, and dispatch.
+    public async Task TombstoneAsync(
         string agentId,
         CancellationToken ct = default)
     {
@@ -82,8 +90,6 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
             Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, UserAgentCatalogGAgent.WellKnownId),
         };
         await _actorDispatchPort.DispatchAsync(UserAgentCatalogGAgent.WellKnownId, envelope, ct);
-
-        return new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.Accepted);
     }
 
     private async Task EnsureCatalogActorAsync(CancellationToken ct)

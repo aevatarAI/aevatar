@@ -13,11 +13,14 @@ public sealed class UserAgentCatalogCommandPortTests
     private const string ExpectedPublisher = "scheduled.user-agent-catalog";
 
     [Fact]
-    public async Task UpsertAsync_DispatchesCommand_AndReturnsAccepted()
+    public async Task UpsertAsync_DispatchesCommand_AndCompletes()
     {
         // Refactor (iter4/cluster-009):
         //   Old pattern: Upsert polled projection documents until a matching version appeared.
         //   New principle: Upsert returns accepted after dispatch; observation is a separate query/projection concern.
+        // Refactor (iter5/cluster-012):
+        //   Old pattern: Upsert asserted a single-value accepted result enum.
+        //   New principle: Upsert completion plus dispatch capture is the command-port contract.
         var fixture = new Fixture();
         const string agentId = "agent-upsert-1";
 #pragma warning disable CS0612 // legacy fields kept on the command for rollback safety during owner_scope migration
@@ -31,9 +34,8 @@ public sealed class UserAgentCatalogCommandPortTests
         };
 #pragma warning restore CS0612
 
-        var result = await fixture.Port.UpsertAsync(command, CancellationToken.None);
+        await fixture.Port.UpsertAsync(command, CancellationToken.None);
 
-        result.Outcome.Should().Be(CatalogCommandOutcome.Accepted);
         fixture.Captured.Should().ContainSingle();
         var env = fixture.Captured[0];
         env.Payload.Is(UserAgentCatalogUpsertCommand.Descriptor).Should().BeTrue();
@@ -65,17 +67,19 @@ public sealed class UserAgentCatalogCommandPortTests
     }
 
     [Fact]
-    public async Task TombstoneAsync_DispatchesCommand_AndReturnsAccepted()
+    public async Task TombstoneAsync_DispatchesCommand_AndCompletes()
     {
         // Refactor (iter4/cluster-009):
         //   Old pattern: Tombstone checked projection documents before dispatch and polled after dispatch.
         //   New principle: Caller-scoped existence checks happen before the port; the port only ACKs accepted dispatch.
+        // Refactor (iter5/cluster-012):
+        //   Old pattern: Tombstone asserted a single-value accepted result enum.
+        //   New principle: Tombstone completion plus dispatch capture is the command-port contract.
         var fixture = new Fixture();
         const string agentId = "agent-tombstone-1";
 
-        var result = await fixture.Port.TombstoneAsync(agentId, CancellationToken.None);
+        await fixture.Port.TombstoneAsync(agentId, CancellationToken.None);
 
-        result.Outcome.Should().Be(CatalogCommandOutcome.Accepted);
         fixture.Captured.Should().ContainSingle();
         var env = fixture.Captured[0];
         env.Payload.Is(UserAgentCatalogTombstoneCommand.Descriptor).Should().BeTrue();
@@ -121,6 +125,21 @@ public sealed class UserAgentCatalogCommandPortTests
         source.Should().NotContain("StateVersion");
     }
 
+    [Fact]
+    public void PortSource_ShouldNotContainAcceptedOnlyResultAbstractions()
+    {
+        // Refactor (iter5/cluster-012):
+        //   Old pattern: Source kept single-value result abstractions after observed outcomes were removed.
+        //   New principle: Command-port source exposes Task-only mutation methods.
+        var interfaceSource = File.ReadAllText(GetInterfaceSourcePath());
+        var productionSource = File.ReadAllText(GetProductionSourcePath());
+        var combinedSource = interfaceSource + productionSource;
+
+        combinedSource.Should().NotContain("Catalog" + "CommandOutcome");
+        combinedSource.Should().NotContain("UserAgentCatalog" + "UpsertResult");
+        combinedSource.Should().NotContain("UserAgentCatalog" + "TombstoneResult");
+    }
+
     private static string GetProductionSourcePath()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
@@ -138,6 +157,25 @@ public sealed class UserAgentCatalogCommandPortTests
         }
 
         throw new FileNotFoundException("Could not locate UserAgentCatalogCommandPort.cs from test output directory.");
+    }
+
+    private static string GetInterfaceSourcePath()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(
+                directory.FullName,
+                "agents",
+                "Aevatar.GAgents.Scheduled",
+                "IUserAgentCatalogCommandPort.cs");
+            if (File.Exists(candidate))
+                return candidate;
+
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException("Could not locate IUserAgentCatalogCommandPort.cs from test output directory.");
     }
 
     private sealed class Fixture
