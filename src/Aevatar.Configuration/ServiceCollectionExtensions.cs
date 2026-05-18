@@ -46,16 +46,16 @@ public static class ServiceCollectionExtensions
         if (allowLocalFileStore)
         {
             AevatarPaths.EnsureDirectories();
-            services.TryAddSingleton<IAevatarSecretsStore, AevatarSecretsStore>();
             services.TryAddSingleton<AevatarSecretsStore>();
+            services.TryAddSingleton<IAevatarSecretsStore>(sp => sp.GetRequiredService<AevatarSecretsStore>());
         }
         else
         {
-            services.TryAddSingleton<IAevatarSecretsStore, EnvironmentSecretsStore>();
             services.TryAddSingleton<EnvironmentSecretsStore>();
+            services.TryAddSingleton<IAevatarSecretsStore>(sp => sp.GetRequiredService<EnvironmentSecretsStore>());
         }
-        services.TryAddSingleton<ICredentialProvider, SecretsStoreCredentialProvider>();
         services.TryAddSingleton<SecretsStoreCredentialProvider>();
+        services.TryAddSingleton<ICredentialProvider>(sp => sp.GetRequiredService<SecretsStoreCredentialProvider>());
         return services;
     }
 }
