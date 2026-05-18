@@ -104,12 +104,22 @@ public sealed class LocalActorRuntime : IActorRuntime
         }
 
         var agentTypeName = agentType.AssemblyQualifiedName ?? agentType.FullName ?? agentType.Name;
-        await _activationIndexStore.UpsertAsync(actorId, agentTypeName, ct);
+        using var activity = AevatarActivitySource.StartAgentSpawn(actorId, agentTypeName);
+        try
+        {
+            await _activationIndexStore.UpsertAsync(actorId, agentTypeName, ct);
 
-        await actor.ActivateAsync(ct);
-        AgentMetrics.ActiveActors.Add(1);
-        _logger.LogInformation("Actor {Id} ({Type}) created", actorId, agentType.Name);
-        return actor;
+            await actor.ActivateAsync(ct);
+            AgentMetrics.ActiveActors.Add(1);
+            AevatarActivitySource.SafeSetStatus(activity, System.Diagnostics.ActivityStatusCode.Ok);
+            _logger.LogInformation("Actor {Id} ({Type}) created", actorId, agentType.Name);
+            return actor;
+        }
+        catch (Exception ex)
+        {
+            AevatarActivitySource.SafeSetStatus(activity, System.Diagnostics.ActivityStatusCode.Error, ex.Message);
+            throw;
+        }
     }
 
     /// <summary>Destroys actor and cleans up stream and activation index.</summary>
@@ -145,7 +155,20 @@ public sealed class LocalActorRuntime : IActorRuntime
             await _streams.GetStream(id).RemoveRelayAsync(childId, ct);
         }
 
-        await actor.DeactivateAsync(ct);
+        using var activity = AevatarActivitySource.StartAgentDeactivate(
+            id,
+            actor.Agent.GetType().AssemblyQualifiedName ?? actor.Agent.GetType().FullName ?? actor.Agent.GetType().Name);
+        try
+        {
+            await actor.DeactivateAsync(ct);
+            AevatarActivitySource.SafeSetStatus(activity, System.Diagnostics.ActivityStatusCode.Ok);
+        }
+        catch (Exception ex)
+        {
+            AevatarActivitySource.SafeSetStatus(activity, System.Diagnostics.ActivityStatusCode.Error, ex.Message);
+            throw;
+        }
+
         AgentMetrics.ActiveActors.Add(-1);
         _streamLifecycleManager.RemoveStream(id);
         await _activationIndexStore.DeleteAsync(id, ct);
@@ -187,6 +210,8 @@ public sealed class LocalActorRuntime : IActorRuntime
             StreamForwardingRules.CreateHierarchyBinding(parentId, childId),
             ct);
 
+        using var activity = AevatarActivitySource.StartAgentLink(parentId, childId);
+        AevatarActivitySource.SafeSetStatus(activity, System.Diagnostics.ActivityStatusCode.Ok);
         _logger.LogInformation("Link: {Parent} → {Child}", parentId, childId);
     }
 
@@ -208,6 +233,12 @@ public sealed class LocalActorRuntime : IActorRuntime
         }
 
         await child.UnsubscribeFromParentAsync();
+
+        if (parentId != null)
+        {
+            using var activity = AevatarActivitySource.StartAgentUnlink(parentId, childId);
+            AevatarActivitySource.SafeSetStatus(activity, System.Diagnostics.ActivityStatusCode.Ok);
+        }
     }
 
     private async Task EnsureActorMaterializedAsync(string actorId, CancellationToken ct = default)

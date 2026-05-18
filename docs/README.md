@@ -20,6 +20,7 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [Workflow LLM 流式链路详细架构文档（2026-02-25）](canon/llm-streaming.md)
 - [NyxID LLM Provider 集成指南](canon/nyxid-llm-integration.md)
 - [NyxID Responses 直连](canon/nyxid-responses-direct.md)
+- [Aevatar Observability — OTel Semantic Conventions](canon/observability.md)
 - [Aevatar 项目架构（Maker 插件化基线）](canon/overview.md)
 - [Role 与工作流、Connector 配置指南](canon/role-model.md)
 - [Aevatar.Scripting 架构文档](canon/scripting.md)
@@ -50,6 +51,8 @@ Immutable records of architectural choices and their rationale.
 - [0019 — Stable AgentKind identity replaces CLR-name actor identity](adr/0019-stable-agent-kind-identity.md)
 - [0020 — Actor state schema version lives on the runtime envelope](adr/0020-actor-state-version-placement.md)
 - [Lark Reply Chain Completion Semantics](adr/0021-lark-reply-chain-completion-semantics.md)
+- [0022 — OpenTelemetry semantic conventions for aevatar.* activities](adr/0022-otel-aevatar-semantic-conventions.md)
+- [0023 — Two-tier Inspector architecture (canonical readmodel vs observation OTel)](adr/0023-two-tier-inspector-architecture.md)
 
 ## History
 
@@ -72,10 +75,16 @@ Point-in-time design snapshots. Not authoritative — for context only.
 - [claude-code-architecture-learnings](history/2026-04/claude-code-architecture-learnings.md)
 - [nyxid-chat-console-design](history/2026-04/nyxid-chat-console-design.md)
 
+### 2026-05
+
+- [2026-05-11-aevatar-inspector-design](history/2026-05/2026-05-11-aevatar-inspector-design.md)
+- [2026-05-14-issue-370-gagent-durable-terminal-completion-design](history/2026-05/2026-05-14-issue-370-gagent-durable-terminal-completion-design.md)
+
 ## Audit Scorecard
 
 - [2026-04-08-architecture-audit-detailed.md](audit-scorecard/2026-04-08-architecture-audit-detailed.md)
 - [2026-04-27-daily-pipeline-architecture-review.md](audit-scorecard/2026-04-27-daily-pipeline-architecture-review.md)
+- [2026-05-13-lark-bot-reply-chain-test-coverage-audit.md](audit-scorecard/2026-05-13-lark-bot-reply-chain-test-coverage-audit.md)
 - [FEATURE_APP_SERVICES_AUDIT.md](audit-scorecard/FEATURE_APP_SERVICES_AUDIT.md)
 
 ## Templates

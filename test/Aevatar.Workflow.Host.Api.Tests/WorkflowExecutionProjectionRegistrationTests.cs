@@ -64,10 +64,10 @@ public class WorkflowExecutionProjectionRegistrationTests
         timelineDispatcher.Should().NotBeNull();
         dispatcher.Should().NotBeNull();
         graphWriter.Should().NotBeNull();
-        currentStateMaterializers.Should().ContainSingle()
-            .Which.Should().BeOfType<WorkflowExecutionCurrentStateProjector>();
-        artifactMaterializers.Should().ContainSingle()
-            .Which.Should().BeOfType<WorkflowRunInsightReportArtifactProjector>();
+        currentStateMaterializers.Should().ContainSingle();
+        artifactMaterializers.Should().ContainSingle();
+        provider.GetRequiredService<WorkflowExecutionCurrentStateProjector>().Should().NotBeNull();
+        provider.GetRequiredService<WorkflowRunInsightReportArtifactProjector>().Should().NotBeNull();
 
         Func<Task> act = () => StartHostedServicesAsync(provider);
         await act.Should().NotThrowAsync();

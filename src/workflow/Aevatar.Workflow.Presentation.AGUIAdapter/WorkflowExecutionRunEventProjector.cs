@@ -1,6 +1,8 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Runtime.Observability;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Orchestration;
@@ -41,6 +43,12 @@ public sealed class WorkflowExecutionRunEventProjector
         if (runEvents.Count == 0)
             return EmptyEntries;
 
+        using var activity = AevatarActivitySource.StartWorkflowRun(
+            context.RootActorId,
+            ResolveWorkflowName(envelope),
+            ResolveStepName(runEvents));
+        AevatarActivitySource.SafeSetStatus(activity, System.Diagnostics.ActivityStatusCode.Ok);
+
         var entries = new List<ProjectionSessionEventEntry<WorkflowRunEventEnvelope>>(runEvents.Count);
         foreach (var runEvent in runEvents)
         {
@@ -52,4 +60,47 @@ public sealed class WorkflowExecutionRunEventProjector
 
         return entries;
     }
+
+    private static string ResolveWorkflowName(EventEnvelope envelope)
+    {
+        var mappedEnvelope = envelope;
+        if (CommittedStateEventEnvelope.TryCreateObservedEnvelope(envelope, out var observed) && observed?.Payload != null)
+            mappedEnvelope = observed;
+
+        var payload = mappedEnvelope.Payload;
+        if (payload == null)
+            return "unknown";
+
+        if (payload.Is(StartWorkflowEvent.Descriptor))
+            return NormalizeWorkflowName(payload.Unpack<StartWorkflowEvent>().WorkflowName);
+        if (payload.Is(WorkflowRunExecutionStartedEvent.Descriptor))
+            return NormalizeWorkflowName(payload.Unpack<WorkflowRunExecutionStartedEvent>().WorkflowName);
+        if (payload.Is(WorkflowCompletedEvent.Descriptor))
+            return NormalizeWorkflowName(payload.Unpack<WorkflowCompletedEvent>().WorkflowName);
+        if (payload.Is(WorkflowStoppedEvent.Descriptor))
+            return NormalizeWorkflowName(payload.Unpack<WorkflowStoppedEvent>().WorkflowName);
+
+        return "unknown";
+    }
+
+    private static string? ResolveStepName(IReadOnlyList<WorkflowRunEventEnvelope> runEvents)
+    {
+        foreach (var runEvent in runEvents)
+        {
+            var stepName = runEvent.EventCase switch
+            {
+                WorkflowRunEventEnvelope.EventOneofCase.StepStarted => runEvent.StepStarted.StepName,
+                WorkflowRunEventEnvelope.EventOneofCase.StepFinished => runEvent.StepFinished.StepName,
+                _ => null,
+            };
+
+            if (!string.IsNullOrWhiteSpace(stepName))
+                return stepName;
+        }
+
+        return null;
+    }
+
+    private static string NormalizeWorkflowName(string? workflowName) =>
+        string.IsNullOrWhiteSpace(workflowName) ? "unknown" : workflowName.Trim();
 }
