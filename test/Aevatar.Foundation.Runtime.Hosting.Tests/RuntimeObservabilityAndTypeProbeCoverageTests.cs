@@ -201,6 +201,91 @@ public sealed class RuntimeObservabilityAndTypeProbeCoverageTests
         activity.ActivityTraceFlags.Should().Be(ActivityTraceFlags.Recorded);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("Recorded")]
+    [InlineData("not-a-flag")]
+    public void AevatarActivitySource_ShouldResolveEnvelopeTraceFlags(string traceFlags)
+    {
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == AevatarActivitySource.ActivitySourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            SampleUsingParentId = static (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.AllDataAndRecorded,
+        };
+        ActivitySource.AddActivityListener(listener);
+        var traceId = ActivityTraceId.CreateRandom();
+        var parentSpanId = ActivitySpanId.CreateRandom();
+        var envelope = new EventEnvelope
+        {
+            Id = "evt-flags",
+            Propagation = new EnvelopePropagation
+            {
+                Trace = new TraceContext
+                {
+                    TraceId = traceId.ToString(),
+                    SpanId = parentSpanId.ToString(),
+                    TraceFlags = traceFlags,
+                },
+            },
+        };
+
+        using var activity = AevatarActivitySource.StartHandleEvent("agent-flags", envelope);
+
+        activity.Should().NotBeNull();
+        activity!.TraceId.Should().Be(traceId);
+        activity.ParentSpanId.Should().Be(parentSpanId);
+    }
+
+    [Fact]
+    public void AevatarActivitySource_ShouldFallbackToFreshActivity_WhenEnvelopeTraceIsInvalid()
+    {
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == AevatarActivitySource.ActivitySourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            SampleUsingParentId = static (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.AllDataAndRecorded,
+        };
+        ActivitySource.AddActivityListener(listener);
+        var envelope = new EventEnvelope
+        {
+            Id = "evt-invalid-trace",
+            Propagation = new EnvelopePropagation
+            {
+                Trace = new TraceContext
+                {
+                    TraceId = "not-a-trace-id",
+                    SpanId = "not-a-span-id",
+                    TraceFlags = "01",
+                },
+            },
+        };
+
+        using var activity = AevatarActivitySource.StartHandleEvent("agent-invalid-trace", envelope);
+
+        activity.Should().NotBeNull();
+        activity!.DisplayName.Should().Be("HandleEvent:UnknownEvent");
+        activity.ParentSpanId.Should().Be(default(ActivitySpanId));
+    }
+
+    [Fact]
+    public void AevatarActivitySource_ShouldUseResolvedTypeName_WhenTypeUrlHasNoSlash()
+    {
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == AevatarActivitySource.ActivitySourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            SampleUsingParentId = static (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.AllDataAndRecorded,
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        using var activity = AevatarActivitySource.StartHandleEvent("agent-1", "evt-1", "CustomEvent");
+
+        activity.Should().NotBeNull();
+        activity!.DisplayName.Should().Be("HandleEvent:CustomEvent");
+        activity.GetTagItem(AevatarActivitySource.EventTypeTag).Should().Be("CustomEvent");
+    }
+
     [Fact]
     public void AgentMetrics_Instruments_ShouldAllowRecording()
     {

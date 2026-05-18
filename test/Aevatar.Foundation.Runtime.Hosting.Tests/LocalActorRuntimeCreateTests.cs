@@ -58,6 +58,73 @@ public sealed class LocalActorRuntimeCreateTests
     }
 
     [Fact]
+    public async Task CreateAsync_ShouldMarkSpawnActivityError_WhenActivationThrows()
+    {
+        var stopped = new ConcurrentQueue<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == AevatarActivitySource.ActivitySourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            SampleUsingParentId = static (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = stopped.Enqueue,
+        };
+        ActivitySource.AddActivityListener(listener);
+        var runtime = CreateRuntime();
+
+        Func<Task> act = () => runtime.CreateAsync<ThrowingActivateAgent>("spawn-error");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("activate boom");
+        stopped
+            .Where(activity =>
+                activity.DisplayName == AevatarActivitySource.AgentSpawnActivityName &&
+                string.Equals(
+                    activity.GetTagItem(AevatarActivitySource.AgentIdTag) as string,
+                    "spawn-error",
+                    StringComparison.Ordinal))
+            .Should()
+            .ContainSingle()
+            .Which
+            .Status
+            .Should()
+            .Be(ActivityStatusCode.Error);
+    }
+
+    [Fact]
+    public async Task DestroyAsync_ShouldMarkDeactivateActivityError_WhenDeactivationThrows()
+    {
+        var stopped = new ConcurrentQueue<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == AevatarActivitySource.ActivitySourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            SampleUsingParentId = static (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = stopped.Enqueue,
+        };
+        ActivitySource.AddActivityListener(listener);
+        var runtime = CreateRuntime();
+        await runtime.CreateAsync<ThrowingDeactivateAgent>("deactivate-error");
+
+        Func<Task> act = () => runtime.DestroyAsync("deactivate-error");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("deactivate boom");
+        stopped
+            .Where(activity =>
+                activity.DisplayName == AevatarActivitySource.AgentDeactivateActivityName &&
+                string.Equals(
+                    activity.GetTagItem(AevatarActivitySource.AgentIdTag) as string,
+                    "deactivate-error",
+                    StringComparison.Ordinal))
+            .Should()
+            .ContainSingle()
+            .Which
+            .Status
+            .Should()
+            .Be(ActivityStatusCode.Error);
+    }
+
+    [Fact]
     public async Task CreateAsync_ShouldThrow_WhenSameIdAlreadyUsesDifferentType()
     {
         var runtime = CreateRuntime();
@@ -216,6 +283,44 @@ public sealed class LocalActorRuntimeCreateTests
         public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
 
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class ThrowingActivateAgent : IAgent
+    {
+        public string Id => "throwing-activate";
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult("throwing-activate");
+
+        public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            throw new InvalidOperationException("activate boom");
+        }
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class ThrowingDeactivateAgent : IAgent
+    {
+        public string Id => "throwing-deactivate";
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult("throwing-deactivate");
+
+        public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            throw new InvalidOperationException("deactivate boom");
+        }
     }
 
     private sealed class BlockingSameTypeAgent : IAgent

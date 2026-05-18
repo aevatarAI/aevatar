@@ -165,6 +165,69 @@ public class ProjectionStoreDispatcherTests
     }
 
     [Fact]
+    public async Task ObservedProjectionWriteDispatcher_ShouldMarkUpsertActivityError_WhenInnerThrows()
+    {
+        var stopped = new ConcurrentQueue<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == AevatarActivitySource.ActivitySourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            SampleUsingParentId = static (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = stopped.Enqueue,
+        };
+        ActivitySource.AddActivityListener(listener);
+        var dispatcher = new ObservedProjectionWriteDispatcher<TestReadModel>(
+            new ProjectionStoreDispatcher<TestReadModel>([new ThrowingBinding("document", throwOnUpsert: true)]));
+
+        Func<Task> act = () => dispatcher.UpsertAsync(new TestReadModel
+        {
+            Id = "id-error",
+            StateVersion = 17,
+            Value = "v-error",
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("upsert boom");
+        stopped
+            .Where(activity => activity.DisplayName == AevatarActivitySource.ReadModelUpsertActivityName)
+            .Should()
+            .ContainSingle()
+            .Which
+            .Status
+            .Should()
+            .Be(ActivityStatusCode.Error);
+    }
+
+    [Fact]
+    public async Task ObservedProjectionWriteDispatcher_ShouldMarkDeleteActivityError_WhenInnerThrows()
+    {
+        var stopped = new ConcurrentQueue<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == AevatarActivitySource.ActivitySourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            SampleUsingParentId = static (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = stopped.Enqueue,
+        };
+        ActivitySource.AddActivityListener(listener);
+        var dispatcher = new ObservedProjectionWriteDispatcher<TestReadModel>(
+            new ProjectionStoreDispatcher<TestReadModel>([new ThrowingBinding("document", throwOnDelete: true)]));
+
+        Func<Task> act = () => dispatcher.DeleteAsync("id-error");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("delete boom");
+        stopped
+            .Where(activity => activity.DisplayName == AevatarActivitySource.ReadModelDeleteActivityName)
+            .Should()
+            .ContainSingle()
+            .Which
+            .Status
+            .Should()
+            .Be(ActivityStatusCode.Error);
+    }
+
+    [Fact]
     public void AddProjectionReadModelRuntime_ShouldResolveObservedDispatcherAroundStoreDispatcher()
     {
         var services = new ServiceCollection();
@@ -294,6 +357,36 @@ public class ProjectionStoreDispatcherTests
         {
             ct.ThrowIfCancellationRequested();
             Deletes.Add(id);
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+    }
+
+    private sealed class ThrowingBinding(
+        string sinkName,
+        bool throwOnUpsert = false,
+        bool throwOnDelete = false) : IProjectionWriteSink<TestReadModel>
+    {
+        public string SinkName { get; } = sinkName;
+
+        public bool IsEnabled => true;
+
+        public string DisabledReason => "enabled";
+
+        public Task<ProjectionWriteResult> UpsertAsync(TestReadModel readModel, CancellationToken ct = default)
+        {
+            _ = readModel;
+            ct.ThrowIfCancellationRequested();
+            if (throwOnUpsert)
+                throw new InvalidOperationException("upsert boom");
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+        {
+            _ = id;
+            ct.ThrowIfCancellationRequested();
+            if (throwOnDelete)
+                throw new InvalidOperationException("delete boom");
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }
