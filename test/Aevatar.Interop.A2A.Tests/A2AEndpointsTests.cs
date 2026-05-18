@@ -25,14 +25,14 @@ public class A2AEndpointsTests : IDisposable
     private readonly TestServer _server;
     private readonly HttpClient _client;
     private readonly StubDispatchPort _dispatchPort = new();
-    private readonly InMemoryA2ATaskStore _taskStore = new();
+    private readonly InMemoryA2ATaskStatePort _taskState = new();
 
     public A2AEndpointsTests()
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Services.AddSingleton<IActorDispatchPort>(_dispatchPort);
-        builder.Services.AddSingleton<IA2ATaskStore>(_taskStore);
+        builder.Services.AddSingleton<IA2ATaskStatePort>(_taskState);
         builder.Services.AddScoped<IA2AAdapterService, A2AAdapterService>();
 
         var app = builder.Build();
@@ -145,7 +145,7 @@ public class A2AEndpointsTests : IDisposable
     [Fact]
     public async Task TasksGet_ExistingTask_ReturnsTask()
     {
-        await _taskStore.CreateTaskAsync("t-get", null,
+        await _taskState.CreateTaskAsync("t-get", null,
             new Message { Role = "user", Parts = [new TextPart { Text = "hi" }] });
 
         var rpc = new { jsonrpc = "2.0", id = 3, method = "tasks/get", @params = new { id = "t-get" } };
@@ -172,9 +172,9 @@ public class A2AEndpointsTests : IDisposable
     [Fact]
     public async Task TasksCancel_WorkingTask_ReturnsCanceled()
     {
-        await _taskStore.CreateTaskAsync("t-cancel", null,
+        await _taskState.CreateTaskAsync("t-cancel", null,
             new Message { Role = "user", Parts = [new TextPart { Text = "hi" }] });
-        await _taskStore.UpdateTaskStateAsync("t-cancel", TaskState.Working);
+        await _taskState.UpdateTaskStateAsync("t-cancel", TaskState.Working);
 
         var rpc = new { jsonrpc = "2.0", id = 5, method = "tasks/cancel", @params = new { id = "t-cancel" } };
         var response = await PostJsonRpcAsync(rpc);
@@ -187,9 +187,9 @@ public class A2AEndpointsTests : IDisposable
     [Fact]
     public async Task TasksCancel_CompletedTask_ReturnsNotCancelable()
     {
-        await _taskStore.CreateTaskAsync("t-done", null,
+        await _taskState.CreateTaskAsync("t-done", null,
             new Message { Role = "user", Parts = [new TextPart { Text = "hi" }] });
-        await _taskStore.UpdateTaskStateAsync("t-done", TaskState.Completed);
+        await _taskState.UpdateTaskStateAsync("t-done", TaskState.Completed);
 
         var rpc = new { jsonrpc = "2.0", id = 6, method = "tasks/cancel", @params = new { id = "t-done" } };
         var response = await PostJsonRpcAsync(rpc);
@@ -293,9 +293,9 @@ public class A2AEndpointsTests : IDisposable
     [Fact]
     public async Task Subscribe_CompletedTask_ReturnsStatusAndCloses()
     {
-        await _taskStore.CreateTaskAsync("t-sse", null,
+        await _taskState.CreateTaskAsync("t-sse", null,
             new Message { Role = "user", Parts = [new TextPart { Text = "hi" }] });
-        await _taskStore.UpdateTaskStateAsync("t-sse", TaskState.Completed);
+        await _taskState.UpdateTaskStateAsync("t-sse", TaskState.Completed);
 
         var response = await _client.GetAsync("/a2a/subscribe/t-sse");
         response.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -310,9 +310,9 @@ public class A2AEndpointsTests : IDisposable
     [Fact]
     public async Task Subscribe_WorkingTask_StreamsUpdates()
     {
-        await _taskStore.CreateTaskAsync("t-stream", null,
+        await _taskState.CreateTaskAsync("t-stream", null,
             new Message { Role = "user", Parts = [new TextPart { Text = "hi" }] });
-        await _taskStore.UpdateTaskStateAsync("t-stream", TaskState.Working);
+        await _taskState.UpdateTaskStateAsync("t-stream", TaskState.Working);
 
         using var request = new HttpRequestMessage(HttpMethod.Get, "/a2a/subscribe/t-stream");
         var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
@@ -323,7 +323,7 @@ public class A2AEndpointsTests : IDisposable
         initialEvent.Should().Contain("event: status");
         initialEvent.Should().Contain("working");
 
-        await _taskStore.UpdateTaskStateAsync("t-stream", TaskState.Completed);
+        await _taskState.UpdateTaskStateAsync("t-stream", TaskState.Completed);
 
         var body = initialEvent + await reader.ReadToEndAsync();
 
@@ -343,22 +343,22 @@ public class A2AEndpointsTests : IDisposable
 
         var provider = services.BuildServiceProvider();
 
-        provider.GetService<IA2ATaskStore>().Should().NotBeNull();
+        provider.GetService<IA2ATaskStatePort>().Should().NotBeNull();
         provider.GetService<IA2AAdapterService>().Should().NotBeNull();
     }
 
     [Fact]
     public void AddA2AAdapter_DoesNotOverrideExistingRegistrations()
     {
-        var customStore = new InMemoryA2ATaskStore();
+        var customTaskState = new InMemoryA2ATaskStatePort();
         var services = new ServiceCollection();
         services.AddSingleton<IActorDispatchPort>(new StubDispatchPort());
-        services.AddSingleton<IA2ATaskStore>(customStore);
+        services.AddSingleton<IA2ATaskStatePort>(customTaskState);
         services.AddLogging();
         services.AddA2AAdapter();
 
         var provider = services.BuildServiceProvider();
-        provider.GetService<IA2ATaskStore>().Should().BeSameAs(customStore);
+        provider.GetService<IA2ATaskStatePort>().Should().BeSameAs(customTaskState);
     }
 
     // ─── Stub ───

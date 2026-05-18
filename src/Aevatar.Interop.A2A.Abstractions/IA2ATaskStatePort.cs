@@ -3,8 +3,8 @@ using Aevatar.Interop.A2A.Abstractions.Models;
 
 namespace Aevatar.Interop.A2A.Abstractions;
 
-/// <summary>A2A Task state store. Tracks the mapping between A2A tasks and internal actor commands.</summary>
-public interface IA2ATaskStore
+/// <summary>A2A task state port. Tracks the mapping between A2A tasks and internal actor commands.</summary>
+public interface IA2ATaskStatePort
 {
     Task<A2ATask> CreateTaskAsync(string taskId, string? sessionId, Message message, CancellationToken ct = default);
     Task<A2ATask?> GetTaskAsync(string taskId, CancellationToken ct = default);
