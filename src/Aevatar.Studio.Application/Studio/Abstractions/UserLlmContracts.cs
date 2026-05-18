@@ -74,6 +74,7 @@ public static class NyxIdLlmProviderSource
 {
     public const string GatewayProvider = "gateway_provider";
     public const string UserService = "user_service";
+    public const string ProxyService = "proxy_service";
 }
 
 public interface IUserLlmCatalogPort

@@ -41,7 +41,7 @@ owner: eanzhao
   Semantic Conventions。本文档不重复其规范；引用见 [OTel GenAI SemConv](https://opentelemetry.io/docs/specs/semconv/gen-ai/)。
 
 ActivityListener 消费方过滤：`source.Name == "Aevatar.Agents"`（单源
-模式，对应 ADR [0021](../adr/0021-otel-aevatar-semantic-conventions.md)
+模式，对应 ADR [0022](../adr/0022-otel-aevatar-semantic-conventions.md)
 的决定）。
 
 ## 3. Activity 清单 (`Aevatar.Agents`)
@@ -215,7 +215,7 @@ SSE 流维持原状。
 - 生产部署的 sampler 由部署侧决定；本文档不强制。建议生产用
   `ParentBased(TraceIdRatioBased)`，开发用 `AlwaysOn`。
 - Inspector demo（[demos/Aevatar.Demos.Inspector](../../demos/Aevatar.Demos.Inspector)，
-  详见 ADR [0022](../adr/0022-two-tier-inspector-architecture.md)）在
+  详见 ADR [0023](../adr/0023-two-tier-inspector-architecture.md)）在
   注册时显式覆盖为 `AlwaysOn`，仅本地生效。
 - Activity emit **必须 infallible**：tag set 失败 / listener 抛错 **不**
   传播到业务路径。`AevatarActivitySource` 的 helper 方法内置 try/catch
@@ -268,7 +268,7 @@ var listener = new ActivityListener
 ActivitySource.AddActivityListener(listener);
 ```
 
-Channel policy（ADR [0022](../adr/0022-two-tier-inspector-architecture.md)
+Channel policy（ADR [0023](../adr/0023-two-tier-inspector-architecture.md)
 强制）：
 
 ```csharp
@@ -318,7 +318,7 @@ SSE 通道，由 `WorkflowExecutionRunEventProjector` 派发。本文档新增�
 ## 11. CI 守护
 
 - `tools/ci/inspector_tier_boundary_guard.sh`（ADR
-  [0022](../adr/0022-two-tier-inspector-architecture.md) 引入）：扫描
+  [0023](../adr/0023-two-tier-inspector-architecture.md) 引入）：扫描
   `demos/Aevatar.Demos.Inspector*`，禁止任何 `/api/inspector/*`
   endpoint 读 `Channel<TelemetryFrame>` 或返回历史 telemetry 列表。
 - `tools/ci/projection_state_version_guard.sh`：现有 guard，wrap
@@ -328,9 +328,9 @@ SSE 通道，由 `WorkflowExecutionRunEventProjector` 派发。本文档新增�
 
 ## 12. 参考
 
-- ADR [0021](../adr/0021-otel-aevatar-semantic-conventions.md) —
+- ADR [0022](../adr/0022-otel-aevatar-semantic-conventions.md) —
   semantic conventions 的决议。
-- ADR [0022](../adr/0022-two-tier-inspector-architecture.md) —
+- ADR [0023](../adr/0023-two-tier-inspector-architecture.md) —
   Inspector two-tier 架构。
 - ADR [0019](../adr/0019-stable-agent-kind-identity.md) +
   [0020](../adr/0020-actor-state-version-placement.md) —

@@ -17,13 +17,14 @@ namespace Aevatar.GAgents.Channel.Identity;
 /// Pre-this-port, the binding scope was never activated for any actor and
 /// every legacy cluster's binding readmodel was empty even when the
 /// actor's State held an active binding — the OAuth callback's readiness
-/// wait would time out, and the next inbound message's binding gate would
-/// keep sending the user back to /init forever (issue #549 follow-up
+/// wait would time out, and binding-required commands would keep sending
+/// the user back to /init forever (issue #549 follow-up
 /// observed 2026-05-01: <c>CommitBinding discarded: already bound</c>
 /// without a corresponding readmodel materialization).
 /// </remarks>
 public sealed class ExternalIdentityBindingProjectionPort
-    : MaterializationProjectionPortBase<ExternalIdentityBindingMaterializationRuntimeLease>
+    : MaterializationProjectionPortBase<ExternalIdentityBindingMaterializationRuntimeLease>,
+      IExternalIdentityBindingProjectionPort
 {
     public const string ProjectionKind = "external-identity-binding";
 

@@ -572,7 +572,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
     </div>
   ) : (
     <Empty
-      description="No scope-specific bindings are published for this service yet."
+      description="No workspace bindings are published for this service yet."
       image={Empty.PRESENTED_IMAGE_SIMPLE}
     />
   );
@@ -759,7 +759,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
 
           <AevatarPanel
             title="Endpoint Surface"
-            titleHelp="Operators can switch endpoints from here without losing the current scope and service context."
+            titleHelp="Operators can switch endpoints from here without losing the current workspace and service context."
           >
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               {selectedService.endpoints.length > 0 ? (
@@ -848,7 +848,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
               </Button>
             }
             title="Dependency Surface"
-            titleHelp="Scope-specific bindings describe which services, connectors, or secrets this published service is allowed to depend on inside the project."
+            titleHelp="Workspace bindings describe which services, connectors, or secrets this published service is allowed to depend on inside the project."
           >
             {bindingsQuery.error ? (
               <Alert

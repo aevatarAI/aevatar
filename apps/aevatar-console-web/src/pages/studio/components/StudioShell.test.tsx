@@ -21,7 +21,7 @@ describe('StudioShell', () => {
       key: 'script:risk-review',
       label: 'risk-review',
       description: 'definition-1',
-      meta: 'rev-2 · Scope script',
+      meta: 'rev-2 · Workspace script',
       kind: 'script',
       tone: 'draft',
     },

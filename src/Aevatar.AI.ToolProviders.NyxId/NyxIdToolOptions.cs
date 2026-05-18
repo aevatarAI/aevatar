@@ -16,4 +16,14 @@ public sealed class NyxIdToolOptions
     /// unavailable but specialized NyxID tools continue to work.
     /// </summary>
     public string? SpecFetchToken { get; set; }
+
+    /// <summary>
+    /// When <c>true</c>, expose the <c>ssh_exec</c> tool to the LLM. Off by default
+    /// because <c>ssh_exec</c> can run arbitrary commands on a remote host: hosts
+    /// without an approval middleware in their tool execution pipeline would let
+    /// the model run shell commands directly. Hosts that have wired the approval
+    /// middleware (or that explicitly accept the risk for an internal-only deploy
+    /// like the share-ops Lark bot) opt in by setting this to <c>true</c>.
+    /// </summary>
+    public bool EnableSshExecTool { get; set; }
 }

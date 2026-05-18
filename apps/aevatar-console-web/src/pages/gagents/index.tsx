@@ -630,7 +630,7 @@ const GAgentsPage: React.FC = () => {
     }
 
     if (!bindingQuery.data?.available || !currentBindingRevision) {
-      return 'This will create the first published default service for the current scope.';
+      return 'This will create the first published default service for the current workspace.';
     }
 
     if (currentBindingMatchesSelectedType) {
@@ -825,7 +825,7 @@ const GAgentsPage: React.FC = () => {
     if (!normalizedScopeId) {
       setRegistryNotice({
         type: 'error',
-        message: 'Scope is required before removing a saved actor.',
+        message: 'Workspace is required before removing a saved actor.',
       });
       return;
     }
@@ -986,7 +986,7 @@ const GAgentsPage: React.FC = () => {
       setBindingNotice({
         type: 'error',
         message:
-          'Resolve the current scope before publishing a GAgent binding.',
+          'Resolve the current workspace before publishing a GAgent binding.',
       });
       return;
     }
@@ -1091,7 +1091,7 @@ const GAgentsPage: React.FC = () => {
       setIsRevisionDrawerOpen(true);
       setBindingNotice({
         type: 'success',
-        message: `Scope ${result.scopeId} is now serving revision ${result.revisionId}.`,
+        message: `Workspace ${result.scopeId} is now serving revision ${result.revisionId}.`,
       });
     } catch (error) {
       setBindingNotice({
@@ -1144,7 +1144,7 @@ const GAgentsPage: React.FC = () => {
     if (!normalizedScopeId || !normalizedActorTypeName || !normalizedPrompt) {
       setRunState((current) => ({
         ...current,
-        error: 'Scope, GAgent type, and prompt are required before running.',
+        error: 'Workspace, GAgent type, and prompt are required before running.',
         status: 'error',
       }));
       return;
@@ -1320,17 +1320,17 @@ const GAgentsPage: React.FC = () => {
   const rail = (
     <div style={cliRailShellStyle}>
       <div style={cliRailSectionStyle}>
-        <div style={cliCardLabelStyle}>Scope Context</div>
+        <div style={cliCardLabelStyle}>Workspace Context</div>
         <Input
-          aria-label="Scope ID"
+          aria-label="Workspace ID"
           onChange={(event) => setScopeId(event.target.value)}
-          placeholder="Scope ID"
+          placeholder="Workspace ID"
           value={scopeId}
         />
         <Typography.Text type="secondary">
           {resolvedScope?.scopeId
-            ? `NyxID resolved scope: ${resolvedScope.scopeId}`
-            : 'No scope was resolved from the current session.'}
+            ? `NyxID resolved workspace: ${resolvedScope.scopeId}`
+            : 'No workspace was resolved from the current session.'}
         </Typography.Text>
         {bindingQuery.data?.available ? (
           <div
@@ -1704,8 +1704,8 @@ const GAgentsPage: React.FC = () => {
     <WorkbenchCard
       description={
         selectedType
-          ? `Reusable actor ids saved for ${selectedType.typeName} in this scope.`
-          : 'Reusable actor ids saved for this scope.'
+          ? `Reusable actor ids saved for ${selectedType.typeName} in this workspace.`
+          : 'Reusable actor ids saved for this workspace.'
       }
       eyebrow="Actor Registry"
       extra={
@@ -1742,7 +1742,7 @@ const GAgentsPage: React.FC = () => {
             description={
               gAgentActorsQuery.isLoading
                 ? 'Loading actor registry.'
-                : 'No saved actors were found for this scope.'
+                : 'No saved actors were found for this workspace.'
             }
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           />
@@ -1871,8 +1871,8 @@ const GAgentsPage: React.FC = () => {
 
   const currentBindingPanel = (
     <WorkbenchCard
-      description="Current default service for this scope."
-      eyebrow="Current Scope Binding"
+      description="Current default service for this workspace."
+      eyebrow="Current Workspace Binding"
       extra={
         <Space size={[8, 8]} wrap>
           <Button
@@ -2000,7 +2000,7 @@ const GAgentsPage: React.FC = () => {
 
   const publishBindingPanel = (
     <WorkbenchCard
-      description="Publish the selected GAgent type as this scope's default service."
+      description="Publish the selected GAgent type as this workspace's default service."
       eyebrow="Publish Binding"
       extra={
         <Button
@@ -2327,7 +2327,7 @@ const GAgentsPage: React.FC = () => {
               checked={publishAcknowledged}
               onChange={(event) => setPublishAcknowledged(event.target.checked)}
             >
-              I understand this changes the scope's published default service.
+              I understand this changes the workspace's published default service.
             </Checkbox>
 
             <Space size={[8, 8]} wrap>
@@ -2722,7 +2722,7 @@ const GAgentsPage: React.FC = () => {
       layoutMode="document"
       extra={
         <Space size={[8, 8]} wrap>
-          <Typography.Text type="secondary">Scope</Typography.Text>
+          <Typography.Text type="secondary">Workspace ID</Typography.Text>
           <Typography.Text style={{ maxWidth: 320 }} strong>
             {normalizedScopeId || resolvedScope?.scopeId || 'Not resolved'}
           </Typography.Text>

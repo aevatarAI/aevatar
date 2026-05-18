@@ -16,8 +16,7 @@ namespace Aevatar.Studio.Tests;
 ///   immutable publishedServiceId from the member id (rename-safe).
 /// - All three implementation kinds (workflow / script / gagent) build the
 ///   typed implementation_ref the actor expects.
-/// - RecordBindingAsync rejects empty publishedServiceId / revisionId so the
-///   member authority cannot record a degenerate binding.
+/// - Binding requests route through the run actor with a stable payload hash.
 /// - Dispatch always goes through IStudioActorBootstrap before
 ///   IActorDispatchPort, so the projection scope is active before the
 ///   command lands on the inbox.
@@ -155,53 +154,167 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
     }
 
     [Fact]
-    public async Task RecordBindingAsync_ShouldRejectEmptyPublishedServiceId()
-    {
-        var service = new ActorDispatchStudioMemberCommandService(
-            new RecordingBootstrap(), new RecordingDispatchPort());
-
-        var act = () => service.RecordBindingAsync(
-            ScopeId, "m-1", "", "rev-1", MemberImplementationKindNames.Workflow, CancellationToken.None);
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*publishedServiceId is required*");
-    }
-
-    [Fact]
-    public async Task RecordBindingAsync_ShouldRejectEmptyRevisionId()
-    {
-        var service = new ActorDispatchStudioMemberCommandService(
-            new RecordingBootstrap(), new RecordingDispatchPort());
-
-        var act = () => service.RecordBindingAsync(
-            ScopeId, "m-1", "member-m-1", "", MemberImplementationKindNames.Workflow, CancellationToken.None);
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*revisionId is required*");
-    }
-
-    [Fact]
-    public async Task RecordBindingAsync_ShouldDispatchBoundEvent()
+    public async Task StartBindingRunAsync_ShouldDispatchRequestedEventToRunActor()
     {
         var bootstrap = new RecordingBootstrap();
         var dispatch = new RecordingDispatchPort();
         var service = new ActorDispatchStudioMemberCommandService(bootstrap, dispatch);
 
-        await service.RecordBindingAsync(
-            ScopeId,
-            "m-1",
-            "member-m-1",
-            "rev-7",
-            MemberImplementationKindNames.GAgent,
+        await service.StartBindingRunAsync(
+            new StudioMemberBindingRunStartRequest(
+                BindingRunId: "bind-1",
+                ScopeId: ScopeId,
+                MemberId: "m-1",
+                ImplementationKind: MemberImplementationKindNames.Script,
+                Binding: new UpdateStudioMemberBindingRequest(
+                    Script: new StudioMemberScriptBindingSpec(
+                        ScriptId: "script-1",
+                        ScriptRevision: "rev-a"))),
             CancellationToken.None);
 
-        bootstrap.EnsuredActorIds.Should().ContainSingle()
-            .Which.Should().Be("studio-member:scope-1:m-1");
+        bootstrap.EnsuredActorIds.Should().Equal(
+            "studio-member-binding-run:bind-1",
+            "studio-member:scope-1:m-1");
         dispatch.Dispatches.Should().ContainSingle();
-        var evt = dispatch.Dispatches[0].Envelope.Payload.Unpack<StudioMemberBoundEvent>();
-        evt.PublishedServiceId.Should().Be("member-m-1");
-        evt.RevisionId.Should().Be("rev-7");
-        evt.ImplementationKind.Should().Be(StudioMemberImplementationKind.Gagent);
+        var dispatched = dispatch.Dispatches[0];
+        dispatched.ActorId.Should().Be("studio-member-binding-run:bind-1");
+        dispatched.Envelope.Payload.Is(StudioMemberBindingRunRequested.Descriptor).Should().BeTrue();
+        var evt = dispatched.Envelope.Payload.Unpack<StudioMemberBindingRunRequested>();
+        evt.Request.BindingRunId.Should().Be("bind-1");
+        evt.Request.ScopeId.Should().Be(ScopeId);
+        evt.Request.MemberId.Should().Be("m-1");
+        evt.Request.RequestHash.Should().NotBeNullOrWhiteSpace();
+        evt.Request.RequestHash.Should().MatchRegex("^[0-9a-f]{64}$");
+        evt.Request.Script.ScriptId.Should().Be("script-1");
+        evt.Request.Script.ScriptRevision.Should().Be("rev-a");
+    }
+
+    [Fact]
+    public async Task StartBindingRunAsync_ShouldDispatchWorkflowBindingPayload()
+    {
+        var bootstrap = new RecordingBootstrap();
+        var dispatch = new RecordingDispatchPort();
+        var service = new ActorDispatchStudioMemberCommandService(bootstrap, dispatch);
+
+        await service.StartBindingRunAsync(
+            new StudioMemberBindingRunStartRequest(
+                BindingRunId: "bind-workflow",
+                ScopeId: ScopeId,
+                MemberId: "m-1",
+                ImplementationKind: MemberImplementationKindNames.Workflow,
+                Binding: new UpdateStudioMemberBindingRequest(
+                    RevisionId: "rev-explicit",
+                    Workflow: new StudioMemberWorkflowBindingSpec([
+                        "workflow:\n  name: alpha",
+                        "workflow:\n  name: beta",
+                    ]))),
+            CancellationToken.None);
+
+        var evt = dispatch.Dispatches.Should().ContainSingle().Which
+            .Envelope.Payload.Unpack<StudioMemberBindingRunRequested>();
+        evt.Request.RevisionId.Should().Be("rev-explicit");
+        evt.Request.Workflow.WorkflowYamls.Should().Equal(
+            "workflow:\n  name: alpha",
+            "workflow:\n  name: beta");
+    }
+
+    [Fact]
+    public async Task StartBindingRunAsync_ShouldComputeStableHashFromPayload()
+    {
+        var firstDispatch = new RecordingDispatchPort();
+        var firstService = new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), firstDispatch);
+        await firstService.StartBindingRunAsync(NewScriptRunStartRequest("bind-1", "rev-a"), CancellationToken.None);
+
+        var repeatDispatch = new RecordingDispatchPort();
+        var repeatService = new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), repeatDispatch);
+        await repeatService.StartBindingRunAsync(NewScriptRunStartRequest("bind-1", "rev-a"), CancellationToken.None);
+
+        var changedDispatch = new RecordingDispatchPort();
+        var changedService = new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), changedDispatch);
+        await changedService.StartBindingRunAsync(NewScriptRunStartRequest("bind-1", "rev-b"), CancellationToken.None);
+
+        var firstHash = firstDispatch.Dispatches[0].Envelope.Payload
+            .Unpack<StudioMemberBindingRunRequested>().Request.RequestHash;
+        var repeatHash = repeatDispatch.Dispatches[0].Envelope.Payload
+            .Unpack<StudioMemberBindingRunRequested>().Request.RequestHash;
+        var changedHash = changedDispatch.Dispatches[0].Envelope.Payload
+            .Unpack<StudioMemberBindingRunRequested>().Request.RequestHash;
+
+        firstHash.Should().MatchRegex("^[0-9a-f]{64}$");
+        repeatHash.Should().Be(firstHash);
+        changedHash.Should().NotBe(firstHash);
+    }
+
+    [Fact]
+    public async Task StartBindingRunAsync_ShouldDispatchGAgentBindingPayload()
+    {
+        var bootstrap = new RecordingBootstrap();
+        var dispatch = new RecordingDispatchPort();
+        var service = new ActorDispatchStudioMemberCommandService(bootstrap, dispatch);
+
+        await service.StartBindingRunAsync(
+            new StudioMemberBindingRunStartRequest(
+                BindingRunId: "bind-gagent",
+                ScopeId: ScopeId,
+                MemberId: "m-1",
+                ImplementationKind: MemberImplementationKindNames.GAgent,
+                Binding: new UpdateStudioMemberBindingRequest(
+                    GAgent: new StudioMemberGAgentBindingSpec(
+                        ActorTypeName: "MyCompany.MyGAgent",
+                        Endpoints: [
+                            new StudioMemberGAgentEndpointSpec(
+                                EndpointId: "chat",
+                                DisplayName: "Chat",
+                                Kind: "chat",
+                                RequestTypeUrl: "type.googleapis.com/a.Request",
+                                ResponseTypeUrl: "type.googleapis.com/a.Response",
+                                Description: "chat endpoint")
+                        ]))),
+            CancellationToken.None);
+
+        var evt = dispatch.Dispatches.Should().ContainSingle().Which
+            .Envelope.Payload.Unpack<StudioMemberBindingRunRequested>();
+        evt.Request.Gagent.ActorTypeName.Should().Be("MyCompany.MyGAgent");
+        evt.Request.Gagent.Endpoints.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(new StudioMemberGAgentEndpointBindingRequest
+            {
+                EndpointId = "chat",
+                DisplayName = "Chat",
+                Kind = StudioMemberGAgentEndpointKind.Chat,
+                RequestTypeUrl = "type.googleapis.com/a.Request",
+                ResponseTypeUrl = "type.googleapis.com/a.Response",
+                Description = "chat endpoint",
+            });
+    }
+
+    [Fact]
+    public async Task StartBindingRunAsync_ShouldRejectMissingGAgentEndpointKind()
+    {
+        var service = new ActorDispatchStudioMemberCommandService(
+            new RecordingBootstrap(),
+            new RecordingDispatchPort());
+
+        var act = () => service.StartBindingRunAsync(
+            new StudioMemberBindingRunStartRequest(
+                BindingRunId: "bind-gagent",
+                ScopeId: ScopeId,
+                MemberId: "m-1",
+                ImplementationKind: MemberImplementationKindNames.GAgent,
+                Binding: new UpdateStudioMemberBindingRequest(
+                    GAgent: new StudioMemberGAgentBindingSpec(
+                        ActorTypeName: "MyCompany.MyGAgent",
+                        Endpoints: [
+                            new StudioMemberGAgentEndpointSpec(
+                                EndpointId: "chat",
+                                DisplayName: "Chat",
+                                Kind: "",
+                                RequestTypeUrl: "type.googleapis.com/a.Request",
+                                ResponseTypeUrl: "type.googleapis.com/a.Response")
+                        ]))),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*gagent endpoint kind is required*");
     }
 
     [Fact]
@@ -252,4 +365,17 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
 
         public sealed record DispatchedCommand(string ActorId, EventEnvelope Envelope);
     }
+
+    private static StudioMemberBindingRunStartRequest NewScriptRunStartRequest(
+        string bindingRunId,
+        string scriptRevision) =>
+        new(
+            BindingRunId: bindingRunId,
+            ScopeId: ScopeId,
+            MemberId: "m-1",
+            ImplementationKind: MemberImplementationKindNames.Script,
+            Binding: new UpdateStudioMemberBindingRequest(
+                Script: new StudioMemberScriptBindingSpec(
+                    ScriptId: "script-1",
+                    ScriptRevision: scriptRevision)));
 }

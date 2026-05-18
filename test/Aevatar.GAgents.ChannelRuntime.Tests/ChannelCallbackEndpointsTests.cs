@@ -41,6 +41,30 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
+    public void MapChannelCallbackEndpoints_ShouldNotRegisterRetiredDirectPlatformCallback()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = "Development",
+        });
+
+        var app = builder.Build();
+        var routeBuilder = (IEndpointRouteBuilder)app;
+        app.MapChannelCallbackEndpoints();
+
+        var routePatterns = routeBuilder.DataSources
+            .SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Select(route => route.RoutePattern.RawText)
+            .ToArray();
+
+        routePatterns.Any(pattern => pattern?.Contains("/callback/", StringComparison.Ordinal) == true)
+            .Should().BeFalse();
+        routePatterns.Should().Contain("/api/channels/registrations");
+        routePatterns.Should().Contain("/api/channels/diagnostics/errors");
+    }
+
+    [Fact]
     public async Task HandleRegisterAsync_RejectsUnsupportedPlatform()
     {
         var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();

@@ -2,7 +2,7 @@
 #
 # Inspector tier boundary guard.
 #
-# Enforces ADR 0022 (Two-tier Inspector architecture):
+# Enforces ADR 0023 (Two-tier Inspector architecture):
 #   Tier 1 (canonical state) is served from readmodels via query ports.
 #   Tier 2 (observation) is OTel ActivityListener → BoundedChannel<TelemetryFrame>
 #   → SSE stream `/api/inspector/events`, and ONLY that one endpoint.
@@ -135,7 +135,7 @@ fi
 
 if [[ ${violations} -gt 0 ]]; then
   echo
-  echo "Inspector tier boundary guard FAILED — ${violations} violation(s). See ADR 0022 (Two-tier Inspector architecture)."
+  echo "Inspector tier boundary guard FAILED — ${violations} violation(s). See ADR 0023 (Two-tier Inspector architecture)."
   exit 1
 fi
 

@@ -6,6 +6,7 @@ using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Projection.Mapping;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using System.Security.Cryptography;
 
 namespace Aevatar.Studio.Projection.CommandServices;
 
@@ -19,6 +20,7 @@ namespace Aevatar.Studio.Projection.CommandServices;
 internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCommandPort
 {
     private const string DirectRoute = "aevatar.studio.projection.studio-member";
+    private const string BindingRunDirectRoute = "aevatar.studio.projection.studio-member-binding-run";
 
     private readonly IStudioActorBootstrap _bootstrap;
     private readonly IActorDispatchPort _dispatchPort;
@@ -224,38 +226,41 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
     }
 
-    public async Task RecordBindingAsync(
-        string scopeId,
-        string memberId,
-        string publishedServiceId,
-        string revisionId,
-        string implementationKindName,
+    public async Task StartBindingRunAsync(
+        StudioMemberBindingRunStartRequest request,
         CancellationToken ct = default)
     {
-        var normalizedScopeId = StudioMemberConventions.NormalizeScopeId(scopeId);
-        var normalizedMemberId = StudioMemberConventions.NormalizeMemberId(memberId);
+        ArgumentNullException.ThrowIfNull(request);
 
-        if (string.IsNullOrWhiteSpace(publishedServiceId))
-        {
-            throw new InvalidOperationException(
-                $"member '{normalizedMemberId}' bind: publishedServiceId is required to record binding.");
-        }
+        var normalizedBindingRunId = StudioMemberConventions.NormalizeBindingRunId(request.BindingRunId);
+        var normalizedScopeId = StudioMemberConventions.NormalizeScopeId(request.ScopeId);
+        var normalizedMemberId = StudioMemberConventions.NormalizeMemberId(request.MemberId);
+        var actorId = StudioMemberConventions.BuildBindingRunActorId(normalizedBindingRunId);
+        var actor = await _bootstrap.EnsureAsync<StudioMemberBindingRunGAgent>(actorId, ct);
+        await _bootstrap.EnsureAsync<StudioMemberGAgent>(
+            StudioMemberConventions.BuildActorId(normalizedScopeId, normalizedMemberId),
+            ct);
 
-        if (string.IsNullOrWhiteSpace(revisionId))
+        var payload = new StudioMemberBindingRunRequested
         {
-            throw new InvalidOperationException(
-                $"member '{normalizedMemberId}' bind: revisionId is required to record binding.");
-        }
-
-        var evt = new StudioMemberBoundEvent
-        {
-            PublishedServiceId = publishedServiceId,
-            RevisionId = revisionId,
-            ImplementationKind = MemberImplementationKindMapper.Parse(implementationKindName),
-            BoundAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Request = BuildBindingRequest(
+                normalizedBindingRunId,
+                normalizedScopeId,
+                normalizedMemberId,
+                request.ImplementationKind,
+                request.Binding),
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 
-        await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(payload),
+            Route = EnvelopeRouteSemantics.CreateDirect(BindingRunDirectRoute, actor.Id),
+        };
+
+        await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
     }
 
     private static StudioMemberImplementationRef BuildImplementationRefMessage(
@@ -290,6 +295,79 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         }
 
         return message;
+    }
+
+    private static StudioMemberBindingRequest BuildBindingRequest(
+        string bindingRunId,
+        string scopeId,
+        string memberId,
+        string implementationKindName,
+        UpdateStudioMemberBindingRequest binding)
+    {
+        var request = new StudioMemberBindingRequest
+        {
+            BindingRunId = bindingRunId,
+            ScopeId = scopeId,
+            MemberId = memberId,
+        };
+        if (!string.IsNullOrWhiteSpace(binding.RevisionId))
+            request.RevisionId = binding.RevisionId;
+
+        switch (implementationKindName)
+        {
+            case MemberImplementationKindNames.Workflow:
+                request.Workflow = new StudioMemberWorkflowBindingRequest();
+                request.Workflow.WorkflowYamls.Add(binding.Workflow?.WorkflowYamls ?? []);
+                break;
+            case MemberImplementationKindNames.Script:
+                request.Script = new StudioMemberScriptBindingRequest
+                {
+                    ScriptId = binding.Script?.ScriptId ?? string.Empty,
+                };
+                if (!string.IsNullOrWhiteSpace(binding.Script?.ScriptRevision))
+                    request.Script.ScriptRevision = binding.Script.ScriptRevision;
+                break;
+            case MemberImplementationKindNames.GAgent:
+                request.Gagent = new StudioMemberGAgentBindingRequest
+                {
+                    ActorTypeName = binding.GAgent?.ActorTypeName ?? string.Empty,
+                };
+                foreach (var endpoint in binding.GAgent?.Endpoints ?? [])
+                {
+                    request.Gagent.Endpoints.Add(new StudioMemberGAgentEndpointBindingRequest
+                    {
+                        EndpointId = endpoint.EndpointId,
+                        DisplayName = endpoint.DisplayName,
+                        Kind = ParseGAgentEndpointKind(endpoint.Kind),
+                        RequestTypeUrl = endpoint.RequestTypeUrl,
+                        ResponseTypeUrl = endpoint.ResponseTypeUrl,
+                        Description = endpoint.Description ?? string.Empty,
+                    });
+                }
+                break;
+            default:
+                throw new InvalidOperationException(
+                    $"Unknown implementationKind '{implementationKindName}'.");
+        }
+
+        request.RequestHash = ComputeRequestHash(request);
+        return request;
+    }
+
+    private static StudioMemberGAgentEndpointKind ParseGAgentEndpointKind(string? rawValue) =>
+        rawValue?.Trim().ToLowerInvariant() switch
+        {
+            null or "" => throw new InvalidOperationException("gagent endpoint kind is required."),
+            "command" => StudioMemberGAgentEndpointKind.Command,
+            "chat" => StudioMemberGAgentEndpointKind.Chat,
+            _ => throw new InvalidOperationException($"Unsupported gagent endpoint kind '{rawValue}'."),
+        };
+
+    private static string ComputeRequestHash(StudioMemberBindingRequest request)
+    {
+        var normalized = request.Clone();
+        normalized.RequestHash = string.Empty;
+        return Convert.ToHexString(SHA256.HashData(normalized.ToByteArray())).ToLowerInvariant();
     }
 
     private async Task DispatchAsync(string scopeId, string memberId, IMessage payload, CancellationToken ct)

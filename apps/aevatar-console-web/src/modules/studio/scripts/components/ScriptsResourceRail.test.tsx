@@ -131,7 +131,7 @@ describe('ScriptsResourceRail', () => {
       target: { value: 'runtime' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'script-1' }));
-    fireEvent.click(screen.getByRole('button', { name: /Refresh scope catalog/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Refresh workspace catalog/ }));
     fireEvent.click(screen.getByRole('button', { name: 'scope-script' }));
     fireEvent.click(screen.getByRole('button', { name: /Runtimes \(1\)/ }));
     fireEvent.click(screen.getByRole('button', { name: /Refresh runtimes/ }));

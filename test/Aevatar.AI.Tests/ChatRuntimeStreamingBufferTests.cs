@@ -158,6 +158,88 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
+    public async Task ChatStreamAsync_WhenToolCallRoundHasReasoning_ShouldPreserveItInFollowUpRequest()
+    {
+        var provider = new QueuedStreamingProvider(
+        [
+            [
+                new LLMStreamChunk { DeltaReasoningContent = "thinking-before-tool" },
+                new LLMStreamChunk { DeltaContent = "checking" },
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "tc-reasoning",
+                        Name = "lookup",
+                        ArgumentsJson = "{\"q\":\"sg\"}",
+                    },
+                },
+            ],
+            [
+                new LLMStreamChunk { DeltaContent = "done" },
+            ],
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}"));
+        var runtime = CreateRuntime(provider, streamBufferCapacity: 2, tools: tools);
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 2))
+        {
+        }
+
+        provider.StreamRequests.Should().HaveCount(2);
+        var assistantToolCallMessage = provider.StreamRequests[1].Messages.Single(m =>
+            m.Role == "assistant" &&
+            m.ToolCalls is { Count: 1 } &&
+            m.ToolCalls[0].Id == "tc-reasoning");
+        assistantToolCallMessage.Content.Should().Be("checking");
+        assistantToolCallMessage.ReasoningContent.Should().Be("thinking-before-tool");
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenTextToolCallRoundHasReasoning_ShouldPreserveItInFollowUpRequest()
+    {
+        var provider = new QueuedStreamingProvider(
+        [
+            [
+                new LLMStreamChunk { DeltaReasoningContent = "thinking-before-text-tool" },
+                new LLMStreamChunk
+                {
+                    DeltaContent = """
+                        I will search now.
+                        <function_calls>
+                        <invoke name="lookup">
+                        <parameter name="q">lark</parameter>
+                        </invoke>
+                        </function_calls>
+                        """,
+                },
+            ],
+            [
+                new LLMStreamChunk { DeltaContent = "done" },
+            ],
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}"));
+        var runtime = CreateRuntime(provider, streamBufferCapacity: 2, tools: tools);
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 2))
+        {
+        }
+
+        provider.StreamRequests.Should().HaveCount(2);
+        var assistantToolCallMessage = provider.StreamRequests[1].Messages.Single(m =>
+            m.Role == "assistant" &&
+            m.ToolCalls is { Count: 1 } &&
+            m.ToolCalls[0].Name == "lookup");
+        assistantToolCallMessage.Content.Should().Be("I will search now.");
+        assistantToolCallMessage.ReasoningContent.Should().Be("thinking-before-text-tool");
+        provider.StreamRequests[1].Messages.Count(m =>
+            m.Role == "assistant" &&
+            m.ToolCalls is { Count: > 0 }).Should().Be(1);
+    }
+
+    [Fact]
     public async Task ChatStreamAsync_WhenFinalRoundParsesTextToolCall_ShouldIncludeToolResultInSummaryRequest()
     {
         var provider = new QueuedStreamingProvider(
@@ -174,6 +256,7 @@ public sealed class ChatRuntimeStreamingBufferTests
                 },
             ],
             [
+                new LLMStreamChunk { DeltaReasoningContent = "thinking-before-final-text-tool" },
                 new LLMStreamChunk
                 {
                     DeltaContent = """
@@ -205,6 +288,12 @@ public sealed class ChatRuntimeStreamingBufferTests
         provider.StreamRequests[2].Messages.Any(m =>
             m.Role == "tool" &&
             m.Content == "RESULT:{\"q\":\"final\"}").Should().BeTrue();
+        var assistantToolCallMessage = provider.StreamRequests[2].Messages.Single(m =>
+            m.Role == "assistant" &&
+            m.ToolCalls is { Count: 1 } &&
+            m.ToolCalls[0].Name == "lookup" &&
+            m.ReasoningContent == "thinking-before-final-text-tool");
+        assistantToolCallMessage.ReasoningContent.Should().Be("thinking-before-final-text-tool");
     }
 
     [Fact]
@@ -345,6 +434,37 @@ public sealed class ChatRuntimeStreamingBufferTests
 
         chunks.Should().Contain(x => x.DeltaContent == "middleware-content");
         chunks.Should().Contain(x => x.DeltaToolCall != null && x.DeltaToolCall.Id == "tool-1");
+        chunks.Should().Contain(x => x.IsLast);
+        provider.StreamCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenLlmMiddlewareTerminates_ShouldEmitReasoningContentChunk()
+    {
+        var provider = new StreamingProvider(["ignored"]);
+        var runtime = CreateRuntime(
+            provider,
+            streamBufferCapacity: 2,
+            llmMiddlewares:
+            [
+                new DelegateLlmCallMiddleware((context, _) =>
+                {
+                    context.Terminate = true;
+                    context.Response = new LLMResponse
+                    {
+                        Content = "answer",
+                        ReasoningContent = "thinking-step",
+                    };
+                    return Task.CompletedTask;
+                }),
+            ]);
+        var chunks = new List<LLMStreamChunk>();
+
+        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+            chunks.Add(chunk);
+
+        chunks.Should().Contain(x => x.DeltaReasoningContent == "thinking-step");
+        chunks.Should().Contain(x => x.DeltaContent == "answer");
         chunks.Should().Contain(x => x.IsLast);
         provider.StreamCallCount.Should().Be(0);
     }

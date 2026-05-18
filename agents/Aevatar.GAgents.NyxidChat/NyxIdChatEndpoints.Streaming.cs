@@ -21,6 +21,7 @@ public static partial class NyxIdChatEndpoints
         string actorId,
         NyxIdChatStreamRequest request,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IActorDispatchPort actorDispatchPort,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
         [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
         [FromServices] ILoggerFactory loggerFactory,
@@ -114,7 +115,7 @@ public static partial class NyxIdChatEndpoints
                     },
                 };
 
-                await actor.HandleEventAsync(envelope, runCt);
+                await actorDispatchPort.DispatchAsync(actor.Id, envelope, runCt);
             },
             mapAndWriteEventAsync: MapAndWriteEventAsync,
             errorMessages: new NyxIdChatStreamingRunner.ErrorMessages(
@@ -209,6 +210,7 @@ public static partial class NyxIdChatEndpoints
         string actorId,
         NyxIdApprovalRequest request,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IActorDispatchPort actorDispatchPort,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
         [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
         [FromServices] ILoggerFactory loggerFactory,
@@ -289,7 +291,7 @@ public static partial class NyxIdChatEndpoints
                     },
                 };
 
-                await actor.HandleEventAsync(envelope, runCt);
+                await actorDispatchPort.DispatchAsync(actor.Id, envelope, runCt);
             },
             mapAndWriteEventAsync: MapAndWriteEventAsync,
             errorMessages: new NyxIdChatStreamingRunner.ErrorMessages(

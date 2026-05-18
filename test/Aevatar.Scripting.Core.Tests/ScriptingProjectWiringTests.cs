@@ -52,32 +52,14 @@ public sealed class ScriptingProjectWiringTests
     }
 
     [Fact]
-    public void ScriptCatalogEntryDocumentMetadataProvider_ShouldDeclareSortableTimestampMappings()
+    public void ScriptCatalogEntryDocumentMetadataProvider_ShouldDeclareOpenIndexContract()
     {
         var provider = new ScriptCatalogEntryDocumentMetadataProvider();
 
         provider.Metadata.IndexName.Should().Be("script-catalog-entries");
         provider.Metadata.Mappings.Should().ContainKey("dynamic").WhoseValue.Should().Be(true);
-        provider.Metadata.Mappings.Should().ContainKey("properties");
-
-        var properties = provider.Metadata.Mappings["properties"].Should()
-            .BeAssignableTo<IReadOnlyDictionary<string, object?>>()
-            .Subject;
-        properties.Should().ContainKey("created_at_utc_value");
-        properties.Should().ContainKey("updated_at_utc_value");
-        GetFieldType(properties, "created_at_utc_value").Should().Be("date");
-        GetFieldType(properties, "updated_at_utc_value").Should().Be("date");
+        provider.Metadata.Mappings.Should().NotContainKey("properties");
         provider.Metadata.Settings.Should().BeEmpty();
         provider.Metadata.Aliases.Should().BeEmpty();
-    }
-
-    private static object? GetFieldType(
-        IReadOnlyDictionary<string, object?> properties,
-        string fieldName)
-    {
-        var field = properties[fieldName].Should()
-            .BeAssignableTo<IReadOnlyDictionary<string, object?>>()
-            .Subject;
-        return field["type"];
     }
 }

@@ -299,6 +299,7 @@ public sealed class NyxIdLLMProvider : ILLMProvider
             Messages = request.Messages,
             RequestId = request.RequestId,
             Metadata = request.Metadata,
+            CallerContext = request.CallerContext,
             Tools = request.Tools,
             Model = model,
             Temperature = NormalizeTemperatureForModel(model, request.Temperature),
@@ -355,9 +356,20 @@ public sealed class NyxIdLLMProvider : ILLMProvider
 
     private string ResolveAccessToken(LLMRequest request)
     {
-        var userToken = TryGetMetadataValue(request, LLMRequestMetadataKeys.NyxIdAccessToken);
-        if (!string.IsNullOrWhiteSpace(userToken))
-            return userToken;
+        // Preferred typed channel — keeps the bearer out of the string-keyed
+        // Metadata bag that telemetry sinks may serialize. Other call sites
+        // (workflow / studio / channel runtime) still populate Metadata; we
+        // read that as a legacy fallback until those callers migrate. The
+        // host-level accessor remains as the last resort (currently always
+        // null for NyxID providers — see Aevatar.Bootstrap.Extensions.AI
+        // BuildNyxIdFactory — but kept for future host-credential modes).
+        var typedToken = request.CallerContext?.Credentials?.NyxIdBearer?.Trim();
+        if (!string.IsNullOrWhiteSpace(typedToken))
+            return typedToken;
+
+        var metadataToken = TryGetMetadataValue(request, LLMRequestMetadataKeys.NyxIdAccessToken);
+        if (!string.IsNullOrWhiteSpace(metadataToken))
+            return metadataToken;
 
         var configuredToken = _accessTokenAccessor()?.Trim();
         if (!string.IsNullOrWhiteSpace(configuredToken))

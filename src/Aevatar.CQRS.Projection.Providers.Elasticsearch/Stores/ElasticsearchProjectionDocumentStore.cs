@@ -77,9 +77,14 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
             _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", token);
         }
 
+        var descriptor = new TReadModel().Descriptor;
         var normalizedMetadata = ElasticsearchProjectionDocumentStoreMetadataSupport.NormalizeMetadata(indexMetadata);
+        var augmentedMetadata = ElasticsearchProjectionDescriptorMappingSupport.AugmentMetadata(
+            normalizedMetadata,
+            descriptor);
+        var finalMetadata = ElasticsearchProjectionDocumentStoreMetadataSupport.NormalizeMetadata(augmentedMetadata);
         _indexPrefix = options.IndexPrefix?.Trim() ?? "";
-        var normalizedScope = ElasticsearchProjectionDocumentStoreNamingSupport.NormalizeToken(normalizedMetadata.IndexName);
+        var normalizedScope = ElasticsearchProjectionDocumentStoreNamingSupport.NormalizeToken(finalMetadata.IndexName);
         if (normalizedScope.Length == 0)
             normalizedScope = "readmodel";
         _indexName = ElasticsearchProjectionDocumentStoreNamingSupport.BuildIndexName(_indexPrefix, normalizedScope);
@@ -87,12 +92,11 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         _autoCreateIndex = options.AutoCreateIndex;
         _missingIndexBehavior = options.MissingIndexBehavior;
         _supportsDynamicIndexing = indexScopeSelector is not null;
-        _indexMetadata = normalizedMetadata with { IndexName = _indexName };
+        _indexMetadata = finalMetadata with { IndexName = _indexName };
         _keySelector = keySelector;
         _keyFormatter = keyFormatter ?? (key => key?.ToString() ?? "");
         _indexScopeSelector = indexScopeSelector;
         _defaultSortField = options.DefaultSortField?.Trim() ?? "";
-        var descriptor = new TReadModel().Descriptor;
         _fieldPathResolver = BuildFieldPathResolver(descriptor);
         _exactMatchFieldPathResolver = BuildExactMatchFieldPathResolver(descriptor, _indexMetadata);
         _logger = logger ?? NullLogger<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>.Instance;

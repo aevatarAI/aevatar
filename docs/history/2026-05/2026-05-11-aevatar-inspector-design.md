@@ -8,8 +8,8 @@ owner: eanzhao
 
 > **本文档是已归档的设计快照（snapshot, non-authoritative）。** 真正落地的权威口径请看：
 >
-> - ADR [0021](../../adr/0021-otel-aevatar-semantic-conventions.md) — OTel semantic conventions for `aevatar.*` activities
-> - ADR [0022](../../adr/0022-two-tier-inspector-architecture.md) — Two-tier Inspector architecture (canonical readmodel vs observation OTel)
+> - ADR [0022](../../adr/0022-otel-aevatar-semantic-conventions.md) — OTel semantic conventions for `aevatar.*` activities
+> - ADR [0023](../../adr/0023-two-tier-inspector-architecture.md) — Two-tier Inspector architecture (canonical readmodel vs observation OTel)
 > - [docs/canon/observability.md](../../canon/observability.md) — semantic conventions 的活文档
 > - CI guard: [`tools/ci/inspector_tier_boundary_guard.sh`](../../../tools/ci/inspector_tier_boundary_guard.sh)
 >
@@ -57,7 +57,7 @@ aevatar 的核心抽象（actor / projection / readmodel / workflow）现在只�
 
 ## Architecture: Two Tiers（核心约束）
 
-**为防止 OTel 既做观察又做事实源造成"双轨"，本设计严格分两层。** 详细决议见 ADR [0022](../../adr/0022-two-tier-inspector-architecture.md)。
+**为防止 OTel 既做观察又做事实源造成"双轨"，本设计严格分两层。** 详细决议见 ADR [0023](../../adr/0023-two-tier-inspector-architecture.md)。
 
 ### Tier 1 — Canonical State Tier（事实源）
 
@@ -445,8 +445,8 @@ V1 承诺级别 = **Baseline (AA color contrast + Tab/Enter/Esc/Arrow keyboard n
 
 V1 完成的标准：
 
-- [x] ADR-0021 `OTel semantic conventions for aevatar.* activities` 已立卷于 `docs/adr/0021-otel-aevatar-semantic-conventions.md` ✓ 已落地
-- [x] ADR-0022 `Two-tier Inspector architecture (canonical readmodel vs observation OTel)` 已立卷于 `docs/adr/0022-two-tier-inspector-architecture.md` ✓ 已落地
+- [x] ADR-0022 `OTel semantic conventions for aevatar.* activities` 已立卷于 `docs/adr/0022-otel-aevatar-semantic-conventions.md` ✓ 已落地
+- [x] ADR-0023 `Two-tier Inspector architecture (canonical readmodel vs observation OTel)` 已立卷于 `docs/adr/0023-two-tier-inspector-architecture.md` ✓ 已落地
 - [x] `docs/canon/observability.md` 新增：OTel semantic conventions section + experimental 等级标注 + 双层架构 + Host→browser JSON wire format 例外 ✓ 已落地
 - [x] `AevatarActivitySource` 已扩展上面表格中**全部 8 个**新 activity + 4 个新 tag
 - [x] `ProjectionMaterializerRegistration.AddCurrentStateProjectionMaterializer` / `AddProjectionArtifactMaterializer` 已修改，包装 `ObservedProjectionMaterializer<TContext>`；新增 projector 自动获 OTel activity 而无业务侧改动
@@ -482,7 +482,7 @@ V1 完成的标准：
 
 **Phase A — OTel 扩展（2 周，独立可 ship）**
 
-- A.1 (~3 天): 起草 `docs/canon/observability.md` semantic conventions；起草 ADR-0021 + ADR-0022；内部评审；OQ-1 (Local spawn 路径) / OQ-2 (dispatcher 注册中心) / OQ-3 (JSON helper 复用) 调研结论填卷 ← ✓ 已落地（OQ-1 / OQ-2 现地解决；OQ-3 留 Phase A.3）
+- A.1 (~3 天): 起草 `docs/canon/observability.md` semantic conventions；起草 ADR-0022 + ADR-0023；内部评审；OQ-1 (Local spawn 路径) / OQ-2 (dispatcher 注册中心) / OQ-3 (JSON helper 复用) 调研结论填卷 ← ✓ 已落地（OQ-1 / OQ-2 现地解决；OQ-3 留 Phase A.3）
 - A.2 (~2 天): 扩展 `AevatarActivitySource`：spawn / deactivate / link / unlink activities；patch **`LocalActorRuntime` only**（Orleans 留 V2）；加 agent.type tag 到 HandleEvent；单元测试覆盖
 - A.3 (~3-4 天): 修改 `ProjectionMaterializerRegistration` 包装 `ObservedProjectionMaterializer<TContext>`；定位 `IProjectionWriteDispatcher` 注册中心并包装 `ObservedProjectionWriteDispatcher<TReadModel>`；workflow 通过 projection materialize 路径自动获得 OTel (无需独立步骤)；过 `projection_state_version_guard.sh` 等专项 guard；context-type switch 内为 workflow projection context 加 `aevatar.workflow.*` tag
 - A.4 (~1 天): 可选额外：`aevatar.workflow.run` activity 装饰 `WorkflowExecutionRunEventProjector` 入口（如果 A.3 自动覆盖已经够用、可跳过本步）
