@@ -63,7 +63,7 @@ owner: eanzhao
 |----|------|------|
 | ① Lark → NyxID | 入站 | Lark 把 `im.message.receive_v1` 推到 NyxID 的 channel bot relay webhook |
 | ② NyxID → aevatar | 入站 | NyxID 把规范化后的 payload + 签名 JWT 转发到 aevatar `/api/webhooks/nyxid-relay` |
-| ③ aevatar 内部 | 处理 | 鉴权 → 解析 `/daily` → `AgentBuilderTool.CreateDailyReportAgentAsync` → 创建 `SkillRunnerGAgent` |
+| ③ aevatar 内部 | 处理 | 鉴权 → 解析 `/daily` → `AgentBuilderTool.CreateDailyAgentAsync` → 创建 `SkillRunnerGAgent` |
 | ④ aevatar → NyxID | 出站（创建 API key + GitHub 预检） | `POST /api/v1/api-keys`、`GET /api/v1/proxy/s/api-github/...`（preflight） |
 | ⑤ NyxID → GitHub | LLM 工具调用 | `nyxid_proxy` 工具 → NyxID 注入 GitHub OAuth token → GitHub Search API |
 | ⑥ GitHub → aevatar | 工具响应 | JSON 结果回到 LLM；LLM 总结成一段文本 |
@@ -184,25 +184,25 @@ QA 关注点：
    - 不在白名单 → 直接回 `BuildUnknownCommandReply()` 文案（不走 LLM）
    - 非私聊 → 回 `BuildPrivateChatRestrictionReply()`，不创建 agent、不执行 tool
 
-3. `TryResolveDailyReport(tokens, conversationId, out decision)` (NyxRelayAgentBuilderFlow.cs:142)
+3. `TryResolveDaily(tokens, conversationId, out decision)` (NyxRelayAgentBuilderFlow.cs:142)
    - 解析参数（顺序）：
      - `github_username`：先看 `github_username=...`，再看第一个位置参数
      - `schedule_time` / `schedule_cron` / `schedule_timezone` → `TryResolveSchedule()`
      - `repositories`
      - `run_immediately`（默认 true）
    - **保存偏好策略**：`save_github_username_preference = (githubUsername is not null)`——只有用户**显式**给了 username 才落库
-   - 输出：`AgentBuilderFlowDecision.ToolCall("create_daily_report", json)`
+   - 输出：`AgentBuilderFlowDecision.ToolCall("create_daily", json)`
      - JSON 结构：`{action, template, github_username, save_github_username_preference, repositories, schedule_cron, schedule_timezone, run_immediately, conversation_id}`
 
-4. `AgentBuilderTool.ExecuteAsync(argumentsJson, ct)` 派发到 `CreateDailyReportAgentAsync()`
+4. `AgentBuilderTool.ExecuteAsync(argumentsJson, ct)` 派发到 `CreateDailyAgentAsync()`
    - 文件：`agents/Aevatar.GAgents.ChannelRuntime/AgentBuilderTool.cs:178`
    - 关键步骤（**每步都有"失败时返回 JSON `{error: ...}`"分支，且都是测试覆盖点**）：
 
 | 步 | 行号 | 行为 | 失败分支 |
 |----|------|------|----------|
 | a | 186-187 | 解析 `scope_id`（来自 `AgentToolRequestContext`） | scope 缺失走默认 |
-| b | 188-195 | `ResolveDailyReportGithubUsernameAsync`：CLI 参数 → 已存偏好 → GitHub `/user` 接口反查 | 返回 `{error: "..."}` JSON |
-| c | 197-204 | `AgentBuilderTemplates.TryBuildDailyReportSpec` 拼 system prompt + execution prompt | `github_username is required` |
+| b | 188-195 | `ResolveDailyGithubUsernameAsync`：CLI 参数 → 已存偏好 → GitHub `/user` 接口反查 | 返回 `{error: "..."}` JSON |
+| c | 197-204 | `AgentBuilderTemplates.TryBuildDailySpec` 拼 system prompt + execution prompt | `github_username is required` |
 | d | 206-212 | `ChannelScheduleCalculator.TryGetNextOccurrence`：cron + tz → 下一次执行时间（UTC） | `Invalid schedule: ...` |
 | e | 214-217 | `conversation_id` 从参数或 metadata 取 | `conversation_id is required` |
 | f | 219-221 | `ResolveCurrentUserIdAsync` → NyxID `GET /api/v1/users/me` | `Could not resolve current NyxID user id` |
@@ -223,7 +223,7 @@ QA 关注点：
 
 5. `NyxRelayAgentBuilderFlow.FormatToolResult(decision, toolResultJson)`
    - 把 step (t) 的 JSON 渲染成 Lark 可接受的 `MessageContent`
-   - `create_daily_report` 走 `FormatCreateDailyReportResult()` → `AgentBuilderCardContent.FormatDailyReportToolReply()`，输出文字或卡片
+   - `create_daily` 走 `FormatCreateDailyResult()` → `AgentBuilderCardContent.FormatDailyToolReply()`，输出文字或卡片
 
 ### 阶段 ④ aevatar → NyxID（API key + 预检）
 
@@ -337,14 +337,14 @@ string failure_notification_provider_slug = 12;  // §C 旁路 proxy slug（入�
 ```
 
 ### `SkillRunnerState`
-- `skill_name="daily_report"`、`template_name="daily_report"`
+- `skill_name="daily"`、`template_name="daily"`
 - `skill_content` / `execution_prompt`：阶段 ③ 拼好后冻在 actor state，**不会再变**——QA 注意：用户改 GitHub 绑定后，已存活的 agent 不会自动重指向；这是 issue #436 acceptance criteria 第 5 条要保留的语义
 - `schedule_cron` / `schedule_timezone`、`enabled`、`scope_id`
 - `provider_name` / `model` / `temperature` / `max_tokens` / `max_tool_rounds=20` / `max_history_messages`
 - 运行态：`last_run_at`、`next_run_at`、`error_count`、`last_error`、`last_output`
 
 ### `UserAgentCatalogEntry`（well-known 注册表条目）
-- 关键字段：`agent_id`、`agent_type="skill_runner"`、`template_name="daily_report"`、`platform="lark"`、`conversation_id`、`scope_id`、`status`、`last_run_at`、`next_run_at`、`error_count`、`last_error`、`lark_receive_id*`
+- 关键字段：`agent_id`、`agent_type="skill_runner"`、`template_name="daily"`、`platform="lark"`、`conversation_id`、`scope_id`、`status`、`last_run_at`、`next_run_at`、`error_count`、`last_error`、`lark_receive_id*`
 - `nyx_api_key` / `api_key_id`：actor state 内的 catalog entry 保留这两个字段；公开 `UserAgentCatalogDocument` 不再暴露 `nyx_api_key`，运行时出站读取单独的 `UserAgentCatalogNyxCredentialDocument`。
 
 ### 命令 / 事件
@@ -435,7 +435,7 @@ string failure_notification_provider_slug = 12;  // §C 旁路 proxy slug（入�
 ### 9.1 用户看得到（直接回 Lark 的 JSON `{error:"..."}` 或文案）
 - `No NyxID access token available. User must be authenticated.` —— NyxID 会话失效
 - `Connect GitHub in NyxID, then run /daily again.` —— 没绑 GitHub provider
-- `github_username is required for template=daily_report`
+- `github_username is required for template=daily`
 - `schedule_cron is required for create_agent`
 - `Invalid schedule: {cronError}`
 - `conversation_id is required when no current channel conversation is available`
@@ -460,7 +460,7 @@ string failure_notification_provider_slug = 12;  // §C 旁路 proxy slug（入�
 
 ## 10. 命令参数与文案矩阵
 
-完整解析逻辑见 `NyxRelayAgentBuilderFlow.TryResolveDailyReport()`：
+完整解析逻辑见 `NyxRelayAgentBuilderFlow.TryResolveDaily()`：
 
 | 输入 | github_username 来源 | save_pref | 副作用 |
 |------|----------------------|-----------|--------|
@@ -505,7 +505,7 @@ string failure_notification_provider_slug = 12;  // §C 旁路 proxy slug（入�
 - ✅ `/daily github_username=alice`（命名形式）等价于上面
 - ✅ `/daily alice schedule_time=14:30` → `schedule_cron="30 14 * * *"`
 - ✅ `/daily alice schedule_timezone=Asia/Shanghai` → 透传 tz 字符串
-- ✅ `/daily alice repositories=a/b,c/d` → 透传 `"a/b,c/d"`，由 `TryBuildDailyReportSpec` 拆
+- ✅ `/daily alice repositories=a/b,c/d` → 透传 `"a/b,c/d"`，由 `TryBuildDailySpec` 拆
 - ✅ `/daily alice run_immediately=false` → `run_immediately=false`
 - ✅ 非私聊（`chat_type != "p2p"`）→ `BuildPrivateChatRestrictionReply`，**不**产生 ToolCall
 - ✅ 未知 slash 命令 `/foo` → `BuildUnknownCommandReply`

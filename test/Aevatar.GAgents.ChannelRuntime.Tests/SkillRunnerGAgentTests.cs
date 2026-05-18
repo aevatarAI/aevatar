@@ -91,6 +91,44 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleInitializeAsync_NonFetchTemplate_DoesNotDeriveProxySuccessFromTemplate()
+    {
+        // The legacy default applies only to known fetch-and-summarize templates. Skills
+        // that don't depend on tool data (future pure-LLM transformations) must not be
+        // falsely failed when they legitimately fan out zero nyxid_proxy calls.
+        var command = CreateInitializeCommand();
+        command.RequiresNyxidProxySuccess = false;
+        command.TemplateName = "future_pure_llm_template";
+
+        await _agent.HandleInitializeAsync(command);
+
+        _agent.State.RequiresNyxidProxySuccess.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task TryCreateStreamingSink_WhenRequiresNyxidProxySuccess_ReturnsNull()
+    {
+        // PR #569 review (codex P1 on SkillRunnerGAgent.cs:351): when the run is gated by
+        // EnsureToolStatusAllowsCompletion, streaming each delta to Lark would post the
+        // hallucinated text live before the guard ran, then repost it on each retry.
+        // TryCreateStreamingSink must short-circuit so chunked dispatch (which only fires
+        // AFTER the guard) is the only path that reaches Lark for fanout-gated runs.
+        AttachNyxIdApiClient(_agent, new RecordingHandler("""{"code":0,"msg":"success"}"""));
+        var command = CreateInitializeCommand();
+        command.RequiresNyxidProxySuccess = true;
+        await _agent.HandleInitializeAsync(command);
+        _agent.State.RequiresNyxidProxySuccess.Should().BeTrue();
+
+        var method = typeof(SkillRunnerGAgent).GetMethod(
+            "TryCreateStreamingSink",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        method.Should().NotBeNull();
+        var sink = method!.Invoke(_agent, []);
+
+        sink.Should().BeNull();
+    }
+
+    [Fact]
     public async Task HandleInitializeAsync_ShouldAwaitUpsertDispatchBeforeFiringExecutionUpdate()
     {
         // Issue #440 regression: pre-PR #451 the SkillRunner reached the catalog via
@@ -404,7 +442,6 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         assertion.WithMessage("*before cross-app union_id ingress existed*");
         assertion.WithMessage("*/agents*");
         assertion.WithMessage("*Delete*");
-        assertion.WithMessage("*/daily*");
     }
 
     [Fact]
@@ -475,7 +512,6 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         assertion.WithMessage("*different tenant*");
         assertion.WithMessage("*/agents*");
         assertion.WithMessage("*Delete*");
-        assertion.WithMessage("*/daily*");
     }
 
     [Fact]
@@ -576,7 +612,6 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         assertion.WithMessage("*chat_id-preferred*");
         assertion.WithMessage("*/agents*");
         assertion.WithMessage("*Delete*");
-        assertion.WithMessage("*/daily*");
     }
 
     [Fact]
@@ -748,7 +783,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     {
         // Regression for the "/daily failed: Provider 'openai' not connected" report:
         // skill runners must honor the bot owner's pre-configured model + NyxID route + tool
-        // cap — same shape ChannelLlmReplyInboxRuntime applies for nyxid-chat. Without it,
+        // cap — same shape AgentRunGAgent applies for nyxid-chat. Without it,
         // every scheduled run falls through to NyxIdLLMProvider's compile-time `gpt-5.4` +
         // gateway default, which the gateway routes to OpenAI and 400s for bot owners who
         // wired a custom NyxID service like `chrono-llm` at `/api/v1/proxy/s/chrono-llm`.
@@ -966,8 +1001,8 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
 
     private static InitializeSkillRunnerCommand CreateInitializeCommand() => new()
     {
-        SkillName = "daily_report",
-        TemplateName = "daily_report",
+        SkillName = "daily",
+        TemplateName = "daily",
         SkillContent = "You are a daily report runner.",
         ExecutionPrompt = "Run the report.",
         ScheduleCron = string.Empty,

@@ -13,8 +13,9 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 
 /// <summary>
 /// Behavior tests for <see cref="ExternalIdentityBindingGAgent"/>: state
-/// transitions, idempotent commit under concurrent /init, and revoke as
-/// no-op when no binding exists. Pinned by ADR-0017 §Implementation Notes #2.
+/// transitions, idempotent commit under concurrent /init, and revoke-driven
+/// projection repair when no binding exists. Pinned by ADR-0017 §Implementation
+/// Notes #2.
 ///
 /// FOLLOW-UP (tracked at <see href="https://github.com/aevatarAI/aevatar/issues/517"/>):
 /// most tests instantiate the agent directly with a hand-rolled
@@ -185,7 +186,7 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleRevokeBinding_IsNoOpWhenNoActiveBinding()
+    public async Task HandleRevokeBinding_RequestsProjectionRebuildWhenNoActiveBinding()
     {
         await _agent.HandleRevokeBinding(new RevokeBindingCommand
         {
@@ -195,6 +196,9 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
 
         _agent.State.BindingId.Should().BeEmpty();
         _agent.State.RevokedAt.Should().BeNull();
+        _agent.EventSourcing!.CurrentVersion.Should().Be(
+            1,
+            "a remote-side revoke/self-heal must overwrite any stale active binding readmodel from the actor's empty state");
     }
 
     [Fact]

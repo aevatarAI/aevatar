@@ -18,6 +18,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<NyxIdToolOptions>();
         services.TryAddSingleton<NyxIdApiClient>();
         services.TryAddSingleton<ILarkNyxClient, LarkNyxClient>();
+        services.TryAddSingleton<ILarkCardKitClient, LarkCardKitClient>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAgentToolSource, LarkAgentToolSource>());
 
         return services;

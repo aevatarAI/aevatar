@@ -17,7 +17,7 @@ namespace Aevatar.GAgents.Scheduled;
 ///
 /// Only counts <c>nyxid_proxy</c> calls — other tools may have their own success
 /// semantics (e.g., a search tool that returns 0 hits is not a failure), and the safety
-/// net is scoped to the proxy fan-out that powers the daily-report skill.
+/// net is scoped to the proxy fan-out that powers fetch-and-summarize skills.
 /// </remarks>
 internal sealed class NyxIdProxyToolFailureCountingMiddleware : IToolCallMiddleware
 {

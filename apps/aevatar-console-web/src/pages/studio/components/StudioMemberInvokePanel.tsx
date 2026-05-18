@@ -378,6 +378,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   );
   const runIdLabel = trimOptional(invokeResult.runId) || '尚未开始';
   const commandIdLabel = trimOptional(invokeResult.commandId) || '尚未发出';
+  const actorIdLabel =
+    trimOptional(invokeResult.actorId) || currentMemberActorId || '尚未分配';
+  const memberIdLabel = normalizedMemberId || '未选中成员';
   const endpointLabel = selectedEndpoint?.displayName || selectedEndpointId || '—';
 
   useEffect(() => {
@@ -1028,7 +1031,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   ]);
 
   const handleOpenRuns = useCallback(() => {
-    if (!scopeId || !normalizedMemberId || !selectedEndpoint) {
+    const currentRunId = trimOptional(invokeResult.runId);
+    if (!scopeId || !normalizedMemberId || !selectedEndpoint || !currentRunId) {
       return;
     }
 
@@ -1066,6 +1070,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         payloadTypeUrl: currentPayloadTypeUrl || undefined,
         prompt: currentPrompt || undefined,
         returnTo: returnTo || undefined,
+        runId: currentRunId,
         scopeId,
         serviceId: selectedService?.serviceId,
       }),
@@ -1156,6 +1161,18 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                   </div>
                 </div>
                 <div style={runSummaryCardStyle}>
+                  <div style={runSummaryLabelStyle}>Actor ID</div>
+                  <div title={actorIdLabel} style={runSummaryValueStyle}>
+                    {actorIdLabel}
+                  </div>
+                </div>
+                <div style={runSummaryCardStyle}>
+                  <div style={runSummaryLabelStyle}>Member ID</div>
+                  <div title={memberIdLabel} style={runSummaryValueStyle}>
+                    {memberIdLabel}
+                  </div>
+                </div>
+                <div style={runSummaryCardStyle}>
                   <div style={runSummaryLabelStyle}>Elapsed</div>
                   <div style={runSummaryValueStyle}>{runElapsedLabel}</div>
                 </div>
@@ -1185,7 +1202,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                 effectiveResponseTypeUrl={effectiveResponseTypeUrl}
                 endpointKind={selectedEndpoint?.kind || 'command'}
                 formError={formError}
-                hasOpenRunsTarget={Boolean(scopeId && selectedEndpoint)}
+                hasOpenRunsTarget={Boolean(trimOptional(invokeResult.runId))}
                 invokeStatus={invokeResult.status}
                 isChatEndpoint={isChatEndpoint}
                 layout="dock"

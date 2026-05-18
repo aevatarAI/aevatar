@@ -271,6 +271,112 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleProvision_PersistsRedirectUriAndScope_FromCommand()
+    {
+        // Pin issue #549 operator-rebuild path: when ops calls
+        // POST /api/oauth/aevatar-client/rebuild after a wedge, the actor
+        // must persist redirect_uri and oauth_scope so the next bootstrap
+        // pass observes no drift and does not re-DCR away the pinned
+        // client_id.
+        await _agent.HandleProvision(new ProvisionAevatarOAuthClientCommand
+        {
+            ClientId = "operator-rebuilt-client",
+            ClientIdIssuedAtUnix = 1700000000,
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            OauthScope = AevatarOAuthClientScopes.AuthorizationScope,
+        });
+
+        _agent.State.ClientId.Should().Be("operator-rebuilt-client");
+        _agent.State.RedirectUri.Should().Be("https://aevatar.test/api/oauth/nyxid-callback");
+        _agent.State.OauthScope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
+    }
+
+    [Fact]
+    public async Task HandleProvision_IsNoOp_WhenSnapshotMatches()
+    {
+        // Same-snapshot idempotency: client_id + authority + redirect_uri +
+        // oauth_scope all unchanged → no Provisioned event written. Only
+        // HMAC-seed event on first call (subsequent call is a full no-op).
+        var cmd = new ProvisionAevatarOAuthClientCommand
+        {
+            ClientId = "client-x",
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            OauthScope = AevatarOAuthClientScopes.AuthorizationScope,
+        };
+
+        await _agent.HandleProvision(cmd);
+        var versionAfterFirst = _agent.EventSourcing!.CurrentVersion;
+
+        await _agent.HandleProvision(cmd);
+
+        _agent.EventSourcing!.CurrentVersion.Should().Be(versionAfterFirst,
+            "matching snapshot must not append additional events");
+    }
+
+    [Fact]
+    public async Task HandleProvision_PreservesRedirectUriAndScope_WhenCommandFieldsEmpty()
+    {
+        // PR #570 Codex P1: legacy / pre-redirect_uri callers (manual operator
+        // scripts, fixtures using only ClientId + NyxidAuthority) must NOT
+        // clobber previously-persisted redirect_uri / oauth_scope with empty
+        // strings — that would let the next bootstrap pass observe an empty
+        // redirect_uri, detect drift, and re-DCR the freshly-pinned client.
+        // Empty cmd field = "field not supplied", not "set to empty".
+        await _agent.HandleProvision(new ProvisionAevatarOAuthClientCommand
+        {
+            ClientId = "client-x",
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            OauthScope = AevatarOAuthClientScopes.AuthorizationScope,
+        });
+
+        await _agent.HandleProvision(new ProvisionAevatarOAuthClientCommand
+        {
+            ClientId = "client-y",
+            NyxidAuthority = "https://nyxid.test",
+        });
+
+        _agent.State.ClientId.Should().Be("client-y");
+        _agent.State.RedirectUri.Should().Be(
+            "https://aevatar.test/api/oauth/nyxid-callback",
+            "empty cmd.RedirectUri must preserve existing state, not clear it");
+        _agent.State.OauthScope.Should().Be(
+            AevatarOAuthClientScopes.AuthorizationScope,
+            "empty cmd.OauthScope must preserve existing state, not clear it");
+    }
+
+    [Fact]
+    public async Task HandleProvision_RewritesEvent_WhenRedirectUriChanges()
+    {
+        // The same-snapshot check covers redirect_uri so an operator can
+        // heal a wedged actor that has the right client_id but stale
+        // redirect_uri without changing client_id. Pre-fix the check was
+        // (client_id, authority) only and this case silently no-op'd —
+        // leaving redirect_uri empty meant the next bootstrap detected
+        // drift and re-DCR'd the pinned client_id away.
+        await _agent.HandleProvision(new ProvisionAevatarOAuthClientCommand
+        {
+            ClientId = "client-x",
+            NyxidAuthority = "https://nyxid.test",
+        });
+        _agent.State.RedirectUri.Should().BeEmpty();
+
+        await _agent.HandleProvision(new ProvisionAevatarOAuthClientCommand
+        {
+            ClientId = "client-x",
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            OauthScope = AevatarOAuthClientScopes.AuthorizationScope,
+        });
+
+        _agent.State.ClientId.Should().Be("client-x");
+        _agent.State.RedirectUri.Should().Be("https://aevatar.test/api/oauth/nyxid-callback");
+        _agent.State.OauthScope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
+    }
+
+    [Fact]
     public async Task HandleObserveBrokerCapability_IsIdempotent()
     {
         await _agent.HandleProvision(new ProvisionAevatarOAuthClientCommand

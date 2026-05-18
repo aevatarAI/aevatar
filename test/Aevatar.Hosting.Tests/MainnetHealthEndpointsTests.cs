@@ -1,3 +1,4 @@
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Configuration;
 using Aevatar.GAgentService.Hosting.Endpoints;
@@ -50,6 +51,10 @@ public sealed class MainnetHealthEndpointsTests
         builder.AddAevatarPlatform(options =>
         {
             options.EnableMakerExtensions = true;
+        });
+        builder.Services.AddNyxIdTools(options =>
+        {
+            options.BaseUrl = "https://nyx.example.com";
         });
         builder.AddGAgentServiceCapabilityBundle();
         builder.AddStudioCapability();
