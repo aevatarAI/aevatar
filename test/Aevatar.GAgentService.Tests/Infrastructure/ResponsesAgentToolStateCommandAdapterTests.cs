@@ -7,6 +7,7 @@ using Aevatar.GAgentService.Core.GAgents;
 using Aevatar.GAgentService.Infrastructure.Adapters;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgentService.Tests.Infrastructure;
 
@@ -229,26 +230,68 @@ public sealed class ResponsesAgentToolStateCommandAdapterTests
         ResponsesJsonValues.ToBoundaryJson(packed.Result).Should().Be("{}");
     }
 
-    private static (ResponsesAgentToolStateCommandAdapter adapter, RecordingRuntime runtime, RecordingDispatchPort dispatch, RecordingProjectionPort projection) CreateAdapter()
+    [Fact]
+    public async Task ApplyTodoWriteAsync_WhenReadableIdsEnabled_ShouldUseReadableActorId()
+    {
+        var (adapter, runtime, _, projection) = CreateAdapter(readableIdsEnabled: true);
+
+        var result = await adapter.ApplyTodoWriteAsync("scope/1", "owner:1", "resp_1", "{}");
+
+        var expected = ResponseAgentToolStateIds.BuildReadableActorId("scope/1", "owner:1");
+        result.ActorId.Should().Be(expected);
+        runtime.CreateCalls.Should().ContainSingle().Which.Should().Be(expected);
+        projection.EnsureCalls.Should().ContainSingle().Which.Should().Be(expected);
+    }
+
+    [Fact]
+    public async Task ApplyTodoWriteAsync_WhenReadableIdsEnabledAndLegacyExists_ShouldUseLegacyActorIdDuringDualRead()
+    {
+        var legacyActorId = ResponseAgentToolStateIds.BuildLegacyActorId("scope-1", "owner-1");
+        var (adapter, runtime, _, projection) = CreateAdapter(readableIdsEnabled: true);
+        runtime.ExistingActorIds.Add(legacyActorId);
+
+        var result = await adapter.ApplyTodoWriteAsync("scope-1", "owner-1", "resp_1", "{}");
+
+        result.ActorId.Should().Be(legacyActorId);
+        runtime.CreateCalls.Should().ContainSingle().Which.Should().Be(legacyActorId);
+        projection.EnsureCalls.Should().ContainSingle().Which.Should().Be(legacyActorId);
+    }
+
+    private static (ResponsesAgentToolStateCommandAdapter adapter, RecordingRuntime runtime, RecordingDispatchPort dispatch, RecordingProjectionPort projection) CreateAdapter(
+        bool readableIdsEnabled = false)
     {
         var runtime = new RecordingRuntime();
         var dispatch = new RecordingDispatchPort();
         var projection = new RecordingProjectionPort();
-        var adapter = new ResponsesAgentToolStateCommandAdapter(runtime, dispatch, projection);
+        var adapter = new ResponsesAgentToolStateCommandAdapter(
+            runtime,
+            dispatch,
+            projection,
+            Options.Create(new ResponsesAgentToolStateIdOptions
+            {
+                AevatarResponsesAgentToolReadableIds = readableIdsEnabled,
+            }));
         return (adapter, runtime, dispatch, projection);
     }
 
     private sealed class RecordingRuntime : IActorRuntime
     {
+        public List<string> CreateCalls { get; } = [];
+        public HashSet<string> ExistingActorIds { get; } = [];
+
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default) where TAgent : IAgent =>
             CreateAsync(typeof(TAgent), id, ct);
 
-        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default) =>
-            Task.FromResult<IActor>(new RecordingActor(id ?? $"created:{agentType.Name}"));
+        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default)
+        {
+            var actorId = id ?? $"created:{agentType.Name}";
+            CreateCalls.Add(actorId);
+            return Task.FromResult<IActor>(new RecordingActor(actorId));
+        }
 
         public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
         public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(null);
-        public Task<bool> ExistsAsync(string id) => Task.FromResult(false);
+        public Task<bool> ExistsAsync(string id) => Task.FromResult(ExistingActorIds.Contains(id));
         public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
         public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
     }

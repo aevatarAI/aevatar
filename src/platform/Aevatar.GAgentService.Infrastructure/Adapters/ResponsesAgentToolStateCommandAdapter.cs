@@ -7,6 +7,7 @@ using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Core.GAgents;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgentService.Infrastructure.Adapters;
 
@@ -24,15 +25,18 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IResponsesAgentToolStateCurrentStateProjectionPort _projectionPort;
+    private readonly ResponsesAgentToolStateIdOptions _idOptions;
 
     public ResponsesAgentToolStateCommandAdapter(
         IActorRuntime runtime,
         IActorDispatchPort dispatchPort,
-        IResponsesAgentToolStateCurrentStateProjectionPort projectionPort)
+        IResponsesAgentToolStateCurrentStateProjectionPort projectionPort,
+        IOptions<ResponsesAgentToolStateIdOptions>? idOptions = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
+        _idOptions = idOptions?.Value ?? new ResponsesAgentToolStateIdOptions();
     }
 
     public async Task<ResponsesTodoWriteResult> ApplyTodoWriteAsync(
@@ -161,7 +165,9 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
         if (string.IsNullOrWhiteSpace(ownerSubject))
             throw new ArgumentException("ownerSubject is required.", nameof(ownerSubject));
 
-        var actorId = ResponseAgentToolStateIds.BuildActorId(scopeId, ownerSubject);
+        var normalizedScopeId = scopeId.Trim();
+        var normalizedOwnerSubject = ownerSubject.Trim();
+        var actorId = await ResolveActorIdAsync(normalizedScopeId, normalizedOwnerSubject, ct);
         var actor = await _runtime.CreateAsync<ResponsesAgentToolStateGAgent>(actorId, ct: ct);
         await _projectionPort.EnsureProjectionAsync(actor.Id, ct);
         // The register dispatch is idempotent at the actor (HandleRegisterAsync
@@ -179,8 +185,8 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
                 {
                     Record = new ResponsesAgentToolStateRecord
                     {
-                        ScopeId = scopeId.Trim(),
-                        OwnerSubject = ownerSubject.Trim(),
+                        ScopeId = normalizedScopeId,
+                        OwnerSubject = normalizedOwnerSubject,
                         CreatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
                         UpdatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
                     },
@@ -188,6 +194,24 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
                 $"{actor.Id}:registered"),
             ct);
         return actor;
+    }
+
+    private async Task<string> ResolveActorIdAsync(
+        string scopeId,
+        string ownerSubject,
+        CancellationToken ct)
+    {
+        var actorId = ResponseAgentToolStateIds.BuildActorId(scopeId, ownerSubject, _idOptions);
+        if (!_idOptions.AevatarResponsesAgentToolReadableIds)
+            return actorId;
+
+        var legacyActorId = ResponseAgentToolStateIds.BuildLegacyActorId(scopeId, ownerSubject);
+        // Dual-read rollout: while readable ids are enabled, prefer an existing legacy actor
+        // so writes keep landing on pre-migration state. Remove this hash fallback after the
+        // 30-day window documented in docs/adr/0024-responses-agent-tool-actor-id-scheme.md.
+        return await _runtime.ExistsAsync(legacyActorId)
+            ? legacyActorId
+            : actorId;
     }
 
     private static EventEnvelope CreateEnvelope(

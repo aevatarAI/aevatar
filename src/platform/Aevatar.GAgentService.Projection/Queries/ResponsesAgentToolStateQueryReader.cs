@@ -4,17 +4,21 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Projection.ReadModels;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgentService.Projection.Queries;
 
 public sealed class ResponsesAgentToolStateQueryReader : IResponsesAgentToolStateQueryPort
 {
     private readonly IProjectionDocumentReader<ResponsesAgentToolStateCurrentStateReadModel, string> _reader;
+    private readonly ResponsesAgentToolStateIdOptions _idOptions;
 
     public ResponsesAgentToolStateQueryReader(
-        IProjectionDocumentReader<ResponsesAgentToolStateCurrentStateReadModel, string> reader)
+        IProjectionDocumentReader<ResponsesAgentToolStateCurrentStateReadModel, string> reader,
+        IOptions<ResponsesAgentToolStateIdOptions>? idOptions = null)
     {
         _reader = reader ?? throw new ArgumentNullException(nameof(reader));
+        _idOptions = idOptions?.Value ?? new ResponsesAgentToolStateIdOptions();
     }
 
     public async Task<ResponsesAgentToolStateSnapshot?> GetAsync(
@@ -25,8 +29,19 @@ public sealed class ResponsesAgentToolStateQueryReader : IResponsesAgentToolStat
         if (string.IsNullOrWhiteSpace(scopeId) || string.IsNullOrWhiteSpace(ownerSubject))
             return null;
 
-        var actorId = ResponseAgentToolStateIds.BuildActorId(scopeId, ownerSubject);
+        var normalizedScopeId = scopeId.Trim();
+        var normalizedOwnerSubject = ownerSubject.Trim();
+        var actorId = ResponseAgentToolStateIds.BuildActorId(normalizedScopeId, normalizedOwnerSubject, _idOptions);
         var document = await _reader.GetAsync(actorId, ct);
+        if (document == null && _idOptions.AevatarResponsesAgentToolReadableIds)
+        {
+            // Dual-read rollout: readable ids are tried first, then the legacy hash id. Remove
+            // this hash fallback after the 30-day window documented in
+            // docs/adr/0024-responses-agent-tool-actor-id-scheme.md.
+            var legacyActorId = ResponseAgentToolStateIds.BuildLegacyActorId(normalizedScopeId, normalizedOwnerSubject);
+            document = await _reader.GetAsync(legacyActorId, ct);
+        }
+
         return document == null ? null : Map(document);
     }
 

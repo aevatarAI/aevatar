@@ -4,6 +4,7 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Application.Bindings;
 using Aevatar.GAgentService.Application.Services;
@@ -51,6 +52,8 @@ public static class ServiceCollectionExtensions
 
         services.AddOptions<GAgentServiceDemoOptions>()
             .Bind(configuration.GetSection("GAgentService:Demo"));
+        services.AddOptions<ResponsesAgentToolStateIdOptions>()
+            .Bind(configuration.GetSection(ResponsesAgentToolStateIdOptions.SectionName));
         services.AddGAgentServiceProjection();
         services.AddGAgentServiceProjectionReadModelProviders(configuration);
         services.AddGAgentServiceGovernanceCapability(configuration);
