@@ -35,9 +35,12 @@ public sealed class MainnetSecretsStoreInvariantTests
             .GetRequiredService<AevatarDefaultHostOptions>();
         hostOptions.AllowLocalFileSecretsStore.Should().BeFalse();
 
-        // The DI registration must reflect the enforced invariant.
-        var descriptor = builder.Services.Single(d => d.ServiceType == typeof(IAevatarSecretsStore));
-        descriptor.ImplementationType.Should().Be(typeof(EnvironmentSecretsStore));
+        // The DI registration must reflect the enforced invariant and share
+        // the same singleton instance across interface/concrete resolutions.
+        using var provider = builder.Services.BuildServiceProvider();
+        var store = provider.GetRequiredService<IAevatarSecretsStore>();
+        store.Should().BeOfType<EnvironmentSecretsStore>();
+        store.Should().BeSameAs(provider.GetRequiredService<EnvironmentSecretsStore>());
     }
 
     private static WebApplicationBuilder CreateBuilder() =>

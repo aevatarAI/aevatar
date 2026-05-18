@@ -16,13 +16,10 @@ public sealed class ServiceCollectionExtensionsTests
         var services = new ServiceCollection();
 
         services.AddAevatarConfig();
+        using var provider = services.BuildServiceProvider();
 
-        services.Any(descriptor =>
-                descriptor.ServiceType == typeof(ICredentialProvider) &&
-                descriptor.ImplementationType == typeof(SecretsStoreCredentialProvider))
-            .ShouldBeTrue();
-        services.Any(descriptor => descriptor.ServiceType == typeof(SecretsStoreCredentialProvider))
-            .ShouldBeTrue();
+        provider.GetRequiredService<ICredentialProvider>()
+            .ShouldBeSameAs(provider.GetRequiredService<SecretsStoreCredentialProvider>());
         Directory.Exists(Path.Combine(tempRoot, "agents")).ShouldBeTrue();
         Directory.Exists(Path.Combine(tempRoot, "skills")).ShouldBeTrue();
     }
@@ -35,12 +32,12 @@ public sealed class ServiceCollectionExtensionsTests
         var services = new ServiceCollection();
 
         services.AddAevatarConfig();
+        using var provider = services.BuildServiceProvider();
 
-        services.Any(d =>
-                d.ServiceType == typeof(IAevatarSecretsStore) &&
-                d.ImplementationType == typeof(AevatarSecretsStore))
-            .ShouldBeTrue();
-        services.Any(d => d.ImplementationType == typeof(EnvironmentSecretsStore))
+        var store = provider.GetRequiredService<IAevatarSecretsStore>();
+        store.ShouldBeOfType<AevatarSecretsStore>();
+        store.ShouldBeSameAs(provider.GetRequiredService<AevatarSecretsStore>());
+        services.Any(d => d.ServiceType == typeof(EnvironmentSecretsStore))
             .ShouldBeFalse();
     }
 
@@ -50,14 +47,15 @@ public sealed class ServiceCollectionExtensionsTests
         var tempRoot = Path.Combine(Path.GetTempPath(), $"aevatar-config-tests-{Guid.NewGuid():N}");
         using var scope = new EnvironmentVariableScope(AevatarPaths.HomeEnv, tempRoot);
         var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
 
         services.AddAevatarConfig(allowLocalFileStore: false);
+        using var provider = services.BuildServiceProvider();
 
-        services.Any(d =>
-                d.ServiceType == typeof(IAevatarSecretsStore) &&
-                d.ImplementationType == typeof(EnvironmentSecretsStore))
-            .ShouldBeTrue();
-        services.Any(d => d.ImplementationType == typeof(AevatarSecretsStore))
+        var store = provider.GetRequiredService<IAevatarSecretsStore>();
+        store.ShouldBeOfType<EnvironmentSecretsStore>();
+        store.ShouldBeSameAs(provider.GetRequiredService<EnvironmentSecretsStore>());
+        services.Any(d => d.ServiceType == typeof(AevatarSecretsStore))
             .ShouldBeFalse();
     }
 
