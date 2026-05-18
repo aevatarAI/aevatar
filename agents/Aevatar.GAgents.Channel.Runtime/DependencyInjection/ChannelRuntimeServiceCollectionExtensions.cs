@@ -48,6 +48,7 @@ public static class ChannelRuntimeServiceCollectionExtensions
         services.TryAddSingleton<LoggingMiddleware>();
         services.TryAddSingleton<TracingMiddleware>();
         services.TryAddSingleton<IConversationTurnRunner, NullConversationTurnRunner>();
+        services.TryAddSingleton<IConversationCardTurnRunner, NullConversationCardTurnRunner>();
 
         // ─── Tombstone compaction options + diagnostics + ES watermark ───
         services.AddOptions<ChannelRuntimeTombstoneCompactionOptions>();

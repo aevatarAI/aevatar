@@ -245,7 +245,7 @@ public sealed class NyxIdRelayTransportTests
               "sender": { "platform_id": "ou_1", "display_name": "User One" },
               "content": {
                 "content_type": "card_action",
-                "text": "{\"value\":{\"agent_builder_action\":\"create_daily_report\"},\"form_value\":{\"github_username\":\"eanzhao\",\"schedule_time\":\"09:00\"}}"
+                "text": "{\"value\":{\"agent_builder_action\":\"create_daily\"},\"form_value\":{\"github_username\":\"eanzhao\",\"schedule_time\":\"09:00\"}}"
               }
             }
             """;
@@ -258,12 +258,12 @@ public sealed class NyxIdRelayTransportTests
         var cardAction = parsed.Activity.Content.CardAction;
         cardAction.Should().NotBeNull();
         cardAction!.Arguments.Should().ContainKey("agent_builder_action")
-            .WhoseValue.Should().Be("create_daily_report");
+            .WhoseValue.Should().Be("create_daily");
         cardAction.FormFields.Should().ContainKey("github_username")
             .WhoseValue.Should().Be("eanzhao");
         cardAction.FormFields.Should().ContainKey("schedule_time")
             .WhoseValue.Should().Be("09:00");
-        cardAction.ActionId.Should().Be("create_daily_report");
+        cardAction.ActionId.Should().Be("create_daily");
     }
 
     [Fact]
@@ -446,7 +446,7 @@ public sealed class NyxIdRelayTransportTests
               "sender": { "platform_id": "ou_user_2", "display_name": "User Two" },
               "content": {
                 "content_type": "card_action",
-                "text": "{\"value\":{\"agent_builder_action\":\"create_daily_report\"}}"
+                "text": "{\"value\":{\"agent_builder_action\":\"create_daily\"}}"
               },
               "raw_platform_data": {
                 "schema": "2.0",
@@ -463,7 +463,7 @@ public sealed class NyxIdRelayTransportTests
                   },
                   "action": {
                     "tag": "button",
-                    "value": { "agent_builder_action": "create_daily_report" }
+                    "value": { "agent_builder_action": "create_daily" }
                   }
                 }
               }

@@ -50,6 +50,7 @@ export function buildRuntimeRunsHref(options?: {
   route?: string;
   workflow?: string;
   prompt?: string;
+  runId?: string;
   scopeId?: string;
   serviceOverrideId?: string;
   serviceId?: string;
@@ -58,13 +59,13 @@ export function buildRuntimeRunsHref(options?: {
   payloadTypeUrl?: string;
   payloadBase64?: string;
   actorId?: string;
-  runId?: string;
   draftKey?: string;
   returnTo?: string;
 }): string {
   return buildHref(runtimePaths.runs, {
     route: options?.route ?? options?.workflow,
     prompt: options?.prompt,
+    runId: options?.runId,
     scopeId: options?.scopeId,
     serviceOverrideId: options?.serviceOverrideId ?? options?.serviceId,
     endpointId: options?.endpointId,
@@ -72,7 +73,6 @@ export function buildRuntimeRunsHref(options?: {
     payloadTypeUrl: options?.payloadTypeUrl,
     payloadBase64: options?.payloadBase64,
     actorId: options?.actorId,
-    runId: options?.runId,
     draftKey: options?.draftKey,
     returnTo: options?.returnTo,
   });

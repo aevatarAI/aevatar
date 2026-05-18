@@ -137,9 +137,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
                     "[{Role}] Approval continuation FAILED. request={RequestId}",
                     RoleName, pending.RequestId);
 
-                // Still clear pending so we don't get stuck
-                try { await PersistDomainEventAsync(new ClearPendingApprovalEvent { RequestId = pending.RequestId }); }
-                catch { /* best effort */ }
+                await TryPersistApprovalTerminalFailureThenClearPendingAsync(
+                    pending,
+                    "approval_continuation_failed",
+                    ex.Message);
 
                 throw; // Re-throw so the SSE endpoint sees the error
             }
@@ -150,7 +151,12 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         }
         else
         {
-            await PersistDomainEventAsync(new ClearPendingApprovalEvent { RequestId = pending.RequestId });
+            await PersistApprovalTerminalFailureThenClearPendingAsync(
+                pending,
+                "approval_denied",
+                string.IsNullOrWhiteSpace(evt.Reason)
+                    ? "Tool approval denied."
+                    : evt.Reason);
         }
     }
 
@@ -176,19 +182,23 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         {
             Logger.LogWarning("[{Role}] No remote approval handler configured. Clearing pending. request={RequestId}",
                 RoleName, evt.RequestId);
-            await PersistDomainEventAsync(new ClearPendingApprovalEvent { RequestId = pending.RequestId });
+            await PersistApprovalTerminalFailureThenClearPendingAsync(
+                pending,
+                "approval_timeout",
+                "Tool approval timed out and no remote approval handler is configured.");
             return;
         }
 
         // Restore metadata (NyxID access token) for the remote handler
         var prevMetadata = AgentToolRequestContext.CurrentMetadata;
+        ToolApprovalResult? result = null;
         try
         {
             AgentToolRequestContext.CurrentMetadata = pending.Metadata.Count > 0
                 ? new Dictionary<string, string>(pending.Metadata, StringComparer.Ordinal)
                 : null;
 
-            var result = await remoteHandler.RequestApprovalAsync(
+            result = await remoteHandler.RequestApprovalAsync(
                 new ToolApprovalRequest
                 {
                     RequestId = pending.RequestId,
@@ -225,8 +235,13 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             AgentToolRequestContext.CurrentMetadata = prevMetadata;
         }
 
-        // Remote failed/denied/timed out → clear pending
-        await PersistDomainEventAsync(new ClearPendingApprovalEvent { RequestId = pending.RequestId });
+        // Remote failed/denied/timed out → persist terminal fact before clearing pending.
+        await PersistApprovalTerminalFailureThenClearPendingAsync(
+            pending,
+            ResolveApprovalTerminalReasonCode(result?.Decision),
+            string.IsNullOrWhiteSpace(result?.Reason)
+                ? "Tool approval timed out or was denied remotely."
+                : result.Reason);
     }
 
     /// <summary>Override in subclasses to provide the NyxID remote approval handler for timeout escalation.</summary>
@@ -702,6 +717,77 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             OutputParts = { ContentPartProtoMapper.ToProtoList(replayRecord.ContentParts) },
         });
     }
+
+    private async Task PersistApprovalTerminalFailureThenClearPendingAsync(
+        PendingToolApprovalState pending,
+        string reasonCode,
+        string reasonMessage)
+    {
+        await PersistApprovalTerminalFailureAsync(pending, reasonCode, reasonMessage);
+        await PersistDomainEventAsync(new ClearPendingApprovalEvent { RequestId = pending.RequestId });
+    }
+
+    private async Task TryPersistApprovalTerminalFailureThenClearPendingAsync(
+        PendingToolApprovalState pending,
+        string reasonCode,
+        string reasonMessage)
+    {
+        try
+        {
+            await PersistApprovalTerminalFailureAsync(pending, reasonCode, reasonMessage);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(
+                ex,
+                "[{Role}] Failed to persist approval terminal failure. request={RequestId} session={SessionId} reasonCode={ReasonCode}",
+                RoleName,
+                pending.RequestId,
+                pending.SessionId,
+                reasonCode);
+            return;
+        }
+
+        try
+        {
+            await PersistDomainEventAsync(new ClearPendingApprovalEvent { RequestId = pending.RequestId });
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(
+                ex,
+                "[{Role}] Failed to clear pending approval after terminal failure was persisted. request={RequestId} session={SessionId} reasonCode={ReasonCode}",
+                RoleName,
+                pending.RequestId,
+                pending.SessionId,
+                reasonCode);
+        }
+    }
+
+    private Task PersistApprovalTerminalFailureAsync(
+        PendingToolApprovalState pending,
+        string reasonCode,
+        string reasonMessage)
+    {
+        if (string.IsNullOrWhiteSpace(pending.SessionId))
+            return Task.CompletedTask;
+
+        var safeReason = string.IsNullOrWhiteSpace(reasonMessage)
+            ? "Tool approval failed."
+            : reasonMessage.Trim();
+        return PersistDomainEventAsync(new RoleChatSessionCompletedEvent
+        {
+            SessionId = pending.SessionId,
+            Content = BuildLlmFailureContent($"{reasonCode}: {safeReason}"),
+            Prompt = BuildContinuationPrompt(pending, safeReason),
+            ContentEmitted = false,
+        });
+    }
+
+    private static string ResolveApprovalTerminalReasonCode(ToolApprovalDecision? decision) =>
+        decision == ToolApprovalDecision.Denied
+            ? "approval_denied"
+            : "approval_timeout";
 
     private async Task ReplayCompletedSessionAsync(string sessionId, RoleChatSessionState trackedSession)
     {

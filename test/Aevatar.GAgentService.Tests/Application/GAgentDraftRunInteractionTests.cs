@@ -14,7 +14,10 @@ public sealed class GAgentDraftRunInteractionTests
     public async Task Resolver_ShouldRejectExistingActor_WhenRuntimeTypeDoesNotMatchRequestedType()
     {
         var runtime = new StubActorRuntime(new StubActor("actor-1", new DifferentAgent()));
-        var resolver = new GAgentDraftRunCommandTargetResolver(runtime, new NoOpDraftRunProjectionPort());
+        var resolver = new GAgentDraftRunCommandTargetResolver(
+            runtime,
+            new NoOpDraftRunProjectionPort(),
+            new NoOpGAgentRunTerminalProjectionPort());
 
         var result = await resolver.ResolveAsync(
             new GAgentDraftRunCommand(
@@ -36,6 +39,7 @@ public sealed class GAgentDraftRunInteractionTests
         var resolver = new GAgentDraftRunCommandTargetResolver(
             runtime,
             new NoOpDraftRunProjectionPort(),
+            new NoOpGAgentRunTerminalProjectionPort(),
             new StubAgentTypeVerifier(result: true));
 
         var result = await resolver.ResolveAsync(
@@ -118,6 +122,27 @@ public sealed class GAgentDraftRunInteractionTests
             CancellationToken ct = default) =>
             Task.CompletedTask;
     }
+
+    private sealed class NoOpGAgentRunTerminalProjectionPort : IGAgentRunTerminalProjectionPort
+    {
+        public Task<IGAgentRunTerminalProjectionLease?> EnsureProjectionAsync(
+            string actorId,
+            string correlationId,
+            GAgentRunTerminalInteractionKind interactionKind,
+            CancellationToken ct = default) =>
+            Task.FromResult<IGAgentRunTerminalProjectionLease?>(
+                new NoOpGAgentRunTerminalProjectionLease(actorId, correlationId, interactionKind));
+
+        public Task ReleaseProjectionAsync(
+            IGAgentRunTerminalProjectionLease lease,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+    }
+
+    private sealed record NoOpGAgentRunTerminalProjectionLease(
+        string ActorId,
+        string CorrelationId,
+        GAgentRunTerminalInteractionKind InteractionKind) : IGAgentRunTerminalProjectionLease;
 
     private sealed class StubAgentTypeVerifier(bool result) : IAgentTypeVerifier
     {

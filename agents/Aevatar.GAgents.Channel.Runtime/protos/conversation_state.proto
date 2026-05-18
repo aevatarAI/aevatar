@@ -15,6 +15,36 @@ message ConversationGAgentState {
   int64 last_updated_unix_ms = 5;
   repeated NeedsLlmReplyEvent pending_llm_reply_requests = 6;
   repeated PendingInboundTurn pending_inbound_turns = 7;
+  // User-visible delivery outcome of the most recent LLM reply turn —
+  // single field by design (multi-turn history reconstructable from event
+  // log). See ADR-0021 chain.delivered phase.
+  ReplyDeliveryStatus last_reply_delivery = 8;
+}
+
+// Channel-sink ack tracking for the most recent reply turn. Carries either
+// an in-flight pending marker, a successful delivery (with channel-side
+// message id) or a structured failure. Used by ConversationGAgent to make
+// chain.delivered observable per ADR-0021; downstream readers MUST NOT
+// infer delivery status from any other state field.
+message ReplyDeliveryStatus {
+  string run_id = 1;
+  oneof outcome {
+    Pending pending = 2;
+    Delivered delivered = 3;
+    DeliveryFailed failed = 4;
+  }
+  message Pending {
+    int64 started_at_unix_ms = 1;
+  }
+  message Delivered {
+    int64 acked_at_unix_ms = 1;
+    string channel_message_id = 2;
+  }
+  message DeliveryFailed {
+    int64 failed_at_unix_ms = 1;
+    string error_code = 2;
+    string error_message = 3;
+  }
 }
 
 message PendingSession {

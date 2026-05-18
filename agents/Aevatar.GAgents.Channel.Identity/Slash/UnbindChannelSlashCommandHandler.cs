@@ -16,16 +16,16 @@ namespace Aevatar.GAgents.Channel.Identity.Slash;
 public sealed class UnbindChannelSlashCommandHandler : IChannelSlashCommandHandler
 {
     private readonly INyxIdCapabilityBroker _broker;
-    private readonly IActorRuntime _actorRuntime;
+    private readonly IActorDispatchPort _actorDispatchPort;
     private readonly ILogger<UnbindChannelSlashCommandHandler> _logger;
 
     public UnbindChannelSlashCommandHandler(
         INyxIdCapabilityBroker broker,
-        IActorRuntime actorRuntime,
+        IActorDispatchPort actorDispatchPort,
         ILogger<UnbindChannelSlashCommandHandler> logger)
     {
         _broker = broker ?? throw new ArgumentNullException(nameof(broker));
-        _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
+        _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -70,9 +70,6 @@ public sealed class UnbindChannelSlashCommandHandler : IChannelSlashCommandHandl
         {
             try
             {
-                var actor = await _actorRuntime
-                    .CreateAsync<ExternalIdentityBindingGAgent>(actorId, ct)
-                    .ConfigureAwait(false);
                 var envelope = new EventEnvelope
                 {
                     Id = Guid.NewGuid().ToString("N"),
@@ -82,12 +79,9 @@ public sealed class UnbindChannelSlashCommandHandler : IChannelSlashCommandHandl
                         ExternalSubject = context.Subject.Clone(),
                         Reason = "user_unbind",
                     }),
-                    Route = new EnvelopeRoute
-                    {
-                        Direct = new DirectRoute { TargetActorId = actorId },
-                    },
+                    Route = EnvelopeRouteSemantics.CreateDirect("channel.identity.unbind", actorId),
                 };
-                await actor.HandleEventAsync(envelope, ct).ConfigureAwait(false);
+                await _actorDispatchPort.DispatchAsync(actorId, envelope, ct).ConfigureAwait(false);
                 localDispatchError = null;
                 break;
             }

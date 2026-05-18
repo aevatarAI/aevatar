@@ -1654,8 +1654,7 @@ public static class ScopeServiceEndpoints
                     PreferredActorId: resolvedActorId,
                     SessionId: sessionId,
                     Headers: headers,
-                    InputParts: MapGAgentDraftRunInputParts(inputParts),
-                    UseCorrelationIdAsFallbackSessionId: false),
+                    InputParts: MapGAgentDraftRunInputParts(inputParts)),
                 EmitAsync,
                 OnAcceptedAsync,
                 timeoutCts.Token);

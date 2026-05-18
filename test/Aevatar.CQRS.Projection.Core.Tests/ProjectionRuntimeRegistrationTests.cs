@@ -57,6 +57,53 @@ public sealed class ProjectionRuntimeRegistrationTests
     }
 
     [Fact]
+    public async Task AddProjectionMaterializationRuntimeCore_ShouldReleaseSessionScopedMaterialization()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var services = new ServiceCollection();
+        services.AddSingleton<IActorRuntime>(runtime);
+        services.AddSingleton<IActorDispatchPort>(dispatchPort);
+
+        services.AddProjectionMaterializationRuntimeCore<
+            TestSessionScopedMaterializationContext,
+            TestSessionScopedMaterializationLease,
+            ProjectionMaterializationScopeGAgent<TestSessionScopedMaterializationContext>>(
+            scopeKey => new TestSessionScopedMaterializationContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+                SessionId = scopeKey.SessionId,
+            },
+            context => new TestSessionScopedMaterializationLease(context));
+
+        await using var provider = services.BuildServiceProvider();
+        var activation = provider.GetRequiredService<IProjectionScopeActivationService<TestSessionScopedMaterializationLease>>();
+        var release = provider.GetRequiredService<IProjectionScopeReleaseService<TestSessionScopedMaterializationLease>>();
+
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            "actor-1",
+            "projection-a",
+            ProjectionRuntimeMode.DurableMaterialization,
+            "correlation-1");
+        var lease = await activation.EnsureAsync(new ProjectionScopeStartRequest
+        {
+            RootActorId = scopeKey.RootActorId,
+            ProjectionKind = scopeKey.ProjectionKind,
+            Mode = scopeKey.Mode,
+            SessionId = scopeKey.SessionId,
+        });
+        await release.ReleaseIfIdleAsync(lease);
+
+        runtime.CreatedActorIds.Should().ContainSingle()
+            .Which.Should().Be(ProjectionScopeActorId.Build(scopeKey));
+        dispatchPort.Dispatched.Should().HaveCount(2);
+        dispatchPort.Dispatched[1].actorId.Should().Be(ProjectionScopeActorId.Build(scopeKey));
+        dispatchPort.Dispatched[1].command.Payload!.Unpack<ReleaseProjectionScopeCommand>().SessionId
+            .Should().Be("correlation-1");
+    }
+
+    [Fact]
     public async Task AddEventSinkProjectionRuntimeCore_ShouldRegisterSessionLifecycleAndSessionScopeContext()
     {
         var runtime = new RecordingActorRuntime();
@@ -239,6 +286,28 @@ public sealed class ProjectionRuntimeRegistrationTests
         }
 
         public TestMaterializationContext Context { get; }
+    }
+
+    private sealed class TestSessionScopedMaterializationContext : IProjectionSessionScopedMaterializationContext
+    {
+        public string RootActorId { get; init; } = string.Empty;
+
+        public string ProjectionKind { get; init; } = string.Empty;
+
+        public string SessionId { get; init; } = string.Empty;
+    }
+
+    private sealed class TestSessionScopedMaterializationLease
+        : ProjectionRuntimeLeaseBase,
+          IProjectionContextRuntimeLease<TestSessionScopedMaterializationContext>
+    {
+        public TestSessionScopedMaterializationLease(TestSessionScopedMaterializationContext context)
+            : base(context.RootActorId)
+        {
+            Context = context;
+        }
+
+        public TestSessionScopedMaterializationContext Context { get; }
     }
 
     private sealed class TestSessionContext : IProjectionSessionContext

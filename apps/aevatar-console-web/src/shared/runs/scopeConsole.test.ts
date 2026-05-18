@@ -147,4 +147,18 @@ describe("scopeConsole", () => {
       )
     ).toBe(nyxIdChatServiceId);
   });
+
+  it("does not treat command id as a fallback run id", () => {
+    expect(
+      extractRuntimeInvokeReceipt({
+        commandId: "cmd-only",
+        targetActorId: "actor://svc",
+      })
+    ).toEqual({
+      actorId: "actor://svc",
+      commandId: "cmd-only",
+      correlationId: "",
+      runId: "",
+    });
+  });
 });

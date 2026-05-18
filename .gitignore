@@ -504,3 +504,6 @@ docs/.triage/
 mempalace.yaml
 entities.json
 .mempalace/
+
+# Paseo agent run-continuation state
+.sisyphus/
