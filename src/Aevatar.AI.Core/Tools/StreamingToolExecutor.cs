@@ -10,6 +10,8 @@ using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
+using System.Runtime.CompilerServices;
+using System.Threading.Channels;
 
 namespace Aevatar.AI.Core.Tools;
 
@@ -20,17 +22,20 @@ public readonly record struct ToolExecutionResult(string CallId, string Result, 
 /// Streaming tool executor that starts executing tools as soon as they appear,
 /// runs read-only tools in parallel, and yields results in call-order.
 /// </summary>
+// Refactor (iter1/cluster-005):
+//   Old pattern: lock-protected scheduler state was mutated by caller and background tool tasks.
+//   New principle: tool execution state advances only through one serialized channel coordinator loop.
 public sealed class StreamingToolExecutor : IDisposable
 {
     private readonly ToolManager _tools;
     private readonly AgentHookPipeline? _hooks;
     private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares;
     private readonly IReadOnlyDictionary<string, string>? _requestMetadata;
-    private readonly List<TrackedTool> _trackedTools = [];
+    private readonly Channel<CoordinatorSignal> _signals = Channel.CreateUnbounded<CoordinatorSignal>(
+        new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+    private readonly Channel<ToolExecutionResult> _readyResults = Channel.CreateUnbounded<ToolExecutionResult>(
+        new UnboundedChannelOptions { SingleReader = false, SingleWriter = true });
     private readonly CancellationTokenSource _discardCts = new();
-    private readonly object _lock = new();
-    private bool _hasErrored;
-    private bool _discarded;
 
     public StreamingToolExecutor(
         ToolManager tools,
@@ -42,6 +47,7 @@ public sealed class StreamingToolExecutor : IDisposable
         _hooks = hooks;
         _toolMiddlewares = toolMiddlewares ?? [];
         _requestMetadata = requestMetadata;
+        _ = RunCoordinatorAsync();
     }
 
     /// <summary>
@@ -52,40 +58,7 @@ public sealed class StreamingToolExecutor : IDisposable
     public void AddTool(ToolCall toolCall)
     {
         ArgumentNullException.ThrowIfNull(toolCall);
-
-        var tool = _tools.Get(toolCall.Name);
-        var isConcurrencySafe = tool?.IsReadOnly == true && tool.IsDestructive == false;
-
-        lock (_lock)
-        {
-            if (_discarded)
-            {
-                var discardedTool = new TrackedTool
-                {
-                    Call = toolCall,
-                    Tool = tool,
-                    IsConcurrencySafe = isConcurrencySafe,
-                    Status = ToolStatus.Completed,
-                    Completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
-                };
-                discardedTool.Result = new ToolExecutionResult(
-                    toolCall.Id, "Tool execution was discarded", IsError: true);
-                discardedTool.Completion.TrySetResult();
-                _trackedTools.Add(discardedTool);
-                return;
-            }
-
-            _trackedTools.Add(new TrackedTool
-            {
-                Call = toolCall,
-                Tool = tool,
-                IsConcurrencySafe = isConcurrencySafe,
-                Status = ToolStatus.Queued,
-                Completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
-            });
-        }
-
-        _ = ProcessQueueAsync();
+        PostSignal(new ToolDiscoveredSignal(toolCall));
     }
 
     /// <summary>
@@ -95,26 +68,8 @@ public sealed class StreamingToolExecutor : IDisposable
     public List<ToolExecutionResult> GetCompletedResults()
     {
         var results = new List<ToolExecutionResult>();
-        lock (_lock)
-        {
-            foreach (var tracked in _trackedTools)
-            {
-                if (tracked.Status == ToolStatus.Yielded)
-                    continue;
-
-                if (tracked.Status == ToolStatus.Completed)
-                {
-                    tracked.Status = ToolStatus.Yielded;
-                    results.Add(tracked.Result!.Value);
-                }
-                else
-                {
-                    // Must preserve call-order: stop at first non-completed
-                    break;
-                }
-            }
-        }
-
+        while (_readyResults.Reader.TryRead(out var result))
+            results.Add(result);
         return results;
     }
 
@@ -122,73 +77,26 @@ public sealed class StreamingToolExecutor : IDisposable
     /// Async: waits for all in-progress tools and yields results in call-order.
     /// </summary>
     public async IAsyncEnumerable<ToolExecutionResult> GetRemainingResultsAsync(
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
         while (true)
         {
-            TrackedTool? waitFor = null;
-            var hasUnyieldedCompletedResult = false;
-            var hasRemainingTool = false;
-
-            // Yield any completed results in order
             foreach (var result in GetCompletedResults())
                 yield return result;
 
-            lock (_lock)
+            var snapshot = await RequestStateAsync(ct);
+            var lateResults = GetCompletedResults();
+            if (lateResults.Count > 0)
             {
-                // Find the first non-yielded tool
-                foreach (var tracked in _trackedTools)
-                {
-                    if (tracked.Status == ToolStatus.Yielded)
-                        continue;
-
-                    hasRemainingTool = true;
-
-                    if (tracked.Status == ToolStatus.Completed)
-                    {
-                        // A tool completed after GetCompletedResults() drained the previous batch.
-                        // Loop again so we can surface this contiguous completed tail instead of
-                        // mistakenly treating the executor as fully drained.
-                        hasUnyieldedCompletedResult = true;
-                        break;
-                    }
-
-                    // Executing or Queued — wait for it
-                    waitFor = tracked;
-                    break;
-                }
-
-                if (!hasRemainingTool)
-                    yield break; // All done
-            }
-
-            if (hasUnyieldedCompletedResult)
-                continue;
-
-            // Wait for the next tool to complete
-            var discarded = false;
-            using (var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _discardCts.Token))
-            {
-                try
-                {
-                    await waitFor.Completion.Task.WaitAsync(linked.Token);
-                }
-                catch (OperationCanceledException) when (_discardCts.IsCancellationRequested)
-                {
-                    discarded = true;
-                }
-            }
-
-            if (discarded)
-            {
-                // Discard was called — yield synthetic errors for remaining tools
-                foreach (var result in DrainAsErrors("Execution discarded"))
+                foreach (var result in lateResults)
                     yield return result;
-                yield break;
+                continue;
             }
 
-            // Kick the queue in case new tools became eligible
-            await ProcessQueueAsync();
+            if (!snapshot.HasRemainingTools)
+                yield break;
+
+            await snapshot.NextChange.WaitAsync(ct);
         }
     }
 
@@ -199,101 +107,187 @@ public sealed class StreamingToolExecutor : IDisposable
     /// </summary>
     public void Discard()
     {
-        lock (_lock)
-        {
-            _discarded = true;
-        }
-
         _discardCts.Cancel();
-
-        lock (_lock)
-        {
-            foreach (var tracked in _trackedTools)
-            {
-                // Only force-complete queued tools; executing tools will observe
-                // the cancellation token and complete themselves.
-                if (tracked.Status == ToolStatus.Queued)
-                {
-                    tracked.Status = ToolStatus.Completed;
-                    tracked.Result = new ToolExecutionResult(
-                        tracked.Call.Id,
-                        "Tool execution was discarded",
-                        IsError: true);
-                    tracked.Completion.TrySetResult();
-                }
-            }
-        }
+        PostSignal(DiscardSignal.Instance);
     }
 
-    public void Dispose() => _discardCts.Dispose();
+    public void Dispose()
+    {
+        Discard();
+        _signals.Writer.TryComplete();
+        _discardCts.Dispose();
+    }
 
     // ─── Internal execution logic ───
 
-    private async Task ProcessQueueAsync()
+    private async Task RunCoordinatorAsync()
     {
-        List<TrackedTool> toExecute = [];
-
-        lock (_lock)
+        var state = new CoordinatorState();
+        await foreach (var signal in _signals.Reader.ReadAllAsync())
         {
-            foreach (var tracked in _trackedTools)
+            switch (signal)
             {
-                if (tracked.Status != ToolStatus.Queued)
-                    continue;
-
-                if (_hasErrored || _discarded)
-                {
-                    // Error cascade or discard: give synthetic error to queued tools
-                    tracked.Status = ToolStatus.Completed;
-                    tracked.Result = new ToolExecutionResult(
-                        tracked.Call.Id,
-                        _discarded ? "Tool execution was discarded" : "Skipped due to prior tool error",
-                        IsError: true);
-                    tracked.Completion.TrySetResult();
-                    continue;
-                }
-
-                if (CanExecute(tracked.IsConcurrencySafe))
-                {
-                    tracked.Status = ToolStatus.Executing;
-                    toExecute.Add(tracked);
-                }
-                else if (!tracked.IsConcurrencySafe)
-                {
-                    // Non-concurrent tool must wait; stop scanning
+                case ToolDiscoveredSignal discovered:
+                    HandleToolDiscovered(state, discovered.ToolCall);
                     break;
-                }
+                case ToolCompletedSignal completed:
+                    HandleToolCompleted(state, completed);
+                    break;
+                case SchedulerFaultSignal:
+                    state.HasErrored = true;
+                    break;
+                case DiscardSignal:
+                    state.Discarded = true;
+                    CompletePendingToolsAsDiscarded(state);
+                    break;
+                case StateRequestSignal request:
+                    request.Completion.TrySetResult(CreateSnapshot(state));
+                    continue;
             }
-        }
 
-        foreach (var tracked in toExecute)
-            _ = ExecuteToolAsync(tracked);
+            ProcessQueue(state);
+            PublishAvailableResults(state);
+            NotifyWaiters(state);
+        }
     }
 
-    private bool CanExecute(bool isConcurrencySafe)
+    private void HandleToolDiscovered(CoordinatorState state, ToolCall toolCall)
     {
-        // Must hold _lock
-        var hasExecuting = false;
-        var allExecutingAreConcurrencySafe = true;
+        var tool = _tools.Get(toolCall.Name);
+        var tracked = new TrackedTool(
+            Index: state.Tools.Count,
+            Call: toolCall,
+            Tool: tool,
+            IsConcurrencySafe: tool?.IsReadOnly == true && tool.IsDestructive == false);
 
-        foreach (var tracked in _trackedTools)
+        state.Tools.Add(tracked);
+
+        if (state.Discarded)
         {
-            if (tracked.Status != ToolStatus.Executing)
+            tracked.Status = ToolStatus.Completed;
+            tracked.Result = new ToolExecutionResult(
+                toolCall.Id,
+                "Tool execution was discarded",
+                IsError: true);
+        }
+    }
+
+    private static void HandleToolCompleted(CoordinatorState state, ToolCompletedSignal completed)
+    {
+        if (completed.Index < 0 || completed.Index >= state.Tools.Count)
+            return;
+
+        var tracked = state.Tools[completed.Index];
+        if (tracked.Status != ToolStatus.Executing)
+            return;
+
+        tracked.Status = ToolStatus.Completed;
+        tracked.Result = completed.Result;
+        if (completed.Result.IsError)
+            state.HasErrored = true;
+    }
+
+    private void ProcessQueue(CoordinatorState state)
+    {
+        foreach (var tracked in state.Tools)
+        {
+            if (tracked.Status != ToolStatus.Queued)
                 continue;
 
-            hasExecuting = true;
-            if (!tracked.IsConcurrencySafe)
+            if (state.HasErrored || state.Discarded)
             {
-                allExecutingAreConcurrencySafe = false;
+                tracked.Status = ToolStatus.Completed;
+                tracked.Result = new ToolExecutionResult(
+                    tracked.Call.Id,
+                    state.Discarded ? "Tool execution was discarded" : "Skipped due to prior tool error",
+                    IsError: true);
+                continue;
+            }
+
+            if (CanExecute(state, tracked.IsConcurrencySafe))
+            {
+                tracked.Status = ToolStatus.Executing;
+                _ = ExecuteToolAsync(tracked);
+            }
+            else if (!tracked.IsConcurrencySafe)
+            {
                 break;
             }
         }
+    }
 
-        if (!hasExecuting)
+    private static bool CanExecute(CoordinatorState state, bool isConcurrencySafe)
+    {
+        var executing = state.Tools.Where(static tracked => tracked.Status == ToolStatus.Executing).ToList();
+        if (executing.Count == 0)
             return true;
 
-        // Both must be concurrency-safe
-        return isConcurrencySafe && allExecutingAreConcurrencySafe;
+        return isConcurrencySafe && executing.All(static tracked => tracked.IsConcurrencySafe);
     }
+
+    private void PublishAvailableResults(CoordinatorState state)
+    {
+        while (state.NextResultIndex < state.Tools.Count)
+        {
+            var tracked = state.Tools[state.NextResultIndex];
+            if (tracked.Status != ToolStatus.Completed || tracked.Result is not { } result)
+                break;
+
+            tracked.Status = ToolStatus.Yielded;
+            state.NextResultIndex++;
+            _readyResults.Writer.TryWrite(result);
+            state.PublishedResult = true;
+        }
+    }
+
+    private static void CompletePendingToolsAsDiscarded(CoordinatorState state)
+    {
+        foreach (var tracked in state.Tools)
+        {
+            if (tracked.Status is ToolStatus.Completed or ToolStatus.Yielded)
+                continue;
+
+            tracked.Status = ToolStatus.Completed;
+            tracked.Result = new ToolExecutionResult(
+                tracked.Call.Id,
+                "Tool execution was discarded",
+                IsError: true);
+        }
+    }
+
+    private ExecutorStateSnapshot CreateSnapshot(CoordinatorState state)
+    {
+        if (!HasRemainingTools(state))
+            return new ExecutorStateSnapshot(false, Task.CompletedTask);
+
+        var waiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        state.Waiters.Add(waiter);
+        return new ExecutorStateSnapshot(true, waiter.Task);
+    }
+
+    private static bool HasRemainingTools(CoordinatorState state) =>
+        state.Tools.Any(static tracked => tracked.Status != ToolStatus.Yielded);
+
+    private static void NotifyWaiters(CoordinatorState state)
+    {
+        if (!state.PublishedResult && HasRemainingTools(state))
+            return;
+
+        foreach (var waiter in state.Waiters)
+            waiter.TrySetResult();
+        state.Waiters.Clear();
+        state.PublishedResult = false;
+    }
+
+    private async Task<ExecutorStateSnapshot> RequestStateAsync(CancellationToken ct)
+    {
+        var completion = new TaskCompletionSource<ExecutorStateSnapshot>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        await _signals.Writer.WriteAsync(new StateRequestSignal(completion), ct);
+        return await completion.Task.WaitAsync(ct);
+    }
+
+    private void PostSignal(CoordinatorSignal signal) => _signals.Writer.TryWrite(signal);
 
     private async Task ExecuteToolAsync(TrackedTool tracked)
     {
@@ -329,10 +323,7 @@ public sealed class StreamingToolExecutor : IDisposable
                     // The tool was admitted as concurrent but the rewritten tool is not —
                     // we cannot retroactively serialize, but we record this as an error
                     // to prevent further damage in follow-up rounds.
-                    lock (_lock)
-                    {
-                        _hasErrored = true;
-                    }
+                    PostSignal(new SchedulerFaultSignal(tracked.Index));
                 }
             }
 
@@ -369,67 +360,37 @@ public sealed class StreamingToolExecutor : IDisposable
             try { if (_hooks != null) await _hooks.RunToolExecuteEndAsync(toolCtx, ct); }
             catch { /* Hook failures must not crash tool execution */ }
 
-            lock (_lock)
+            if (_discardCts.IsCancellationRequested)
             {
-                // Guard against late write after Discard()
-                if (tracked.Status != ToolStatus.Executing) return;
-                tracked.Status = ToolStatus.Completed;
-                tracked.Result = new ToolExecutionResult(call.Id, toolResult, IsError: false);
+                PostSignal(new ToolCompletedSignal(
+                    tracked.Index,
+                    new ToolExecutionResult(
+                        call.Id, "Tool execution was discarded", IsError: true)));
+                return;
             }
+
+            PostSignal(new ToolCompletedSignal(
+                tracked.Index,
+                new ToolExecutionResult(call.Id, toolResult, IsError: false)));
         }
         catch (OperationCanceledException) when (_discardCts.IsCancellationRequested)
         {
-            lock (_lock)
-            {
-                if (tracked.Status != ToolStatus.Executing) return;
-                tracked.Status = ToolStatus.Completed;
-                tracked.Result = new ToolExecutionResult(
-                    tracked.Call.Id, "Tool execution was discarded", IsError: true);
-            }
+            PostSignal(new ToolCompletedSignal(
+                tracked.Index,
+                new ToolExecutionResult(
+                    tracked.Call.Id, "Tool execution was discarded", IsError: true)));
         }
         catch (Exception ex)
         {
-            lock (_lock)
-            {
-                if (tracked.Status != ToolStatus.Executing) return;
-                _hasErrored = true;
-                tracked.Status = ToolStatus.Completed;
-                tracked.Result = new ToolExecutionResult(
-                    tracked.Call.Id, ToolManager.BuildErrorJson(ex.Message), IsError: true);
-            }
+            PostSignal(new ToolCompletedSignal(
+                tracked.Index,
+                new ToolExecutionResult(
+                    tracked.Call.Id, ToolManager.BuildErrorJson(ex.Message), IsError: true)));
         }
         finally
         {
             AgentToolRequestContext.CurrentMetadata = null;
-            tracked.Completion.TrySetResult();
-            // Process queue: a non-concurrent tool may have been waiting
-            _ = ProcessQueueAsync();
         }
-    }
-
-    private List<ToolExecutionResult> DrainAsErrors(string reason)
-    {
-        var results = new List<ToolExecutionResult>();
-        lock (_lock)
-        {
-            foreach (var tracked in _trackedTools)
-            {
-                if (tracked.Status == ToolStatus.Yielded)
-                    continue;
-
-                if (tracked.Status == ToolStatus.Completed)
-                {
-                    tracked.Status = ToolStatus.Yielded;
-                    results.Add(tracked.Result!.Value);
-                    continue;
-                }
-
-                tracked.Status = ToolStatus.Yielded;
-                results.Add(new ToolExecutionResult(tracked.Call.Id, reason, IsError: true));
-            }
-        }
-
-        return results;
     }
 
     private sealed class NullAgentTool(string name) : IAgentTool
@@ -445,13 +406,39 @@ public sealed class StreamingToolExecutor : IDisposable
 
     private enum ToolStatus { Queued, Executing, Completed, Yielded }
 
-    private sealed class TrackedTool
+    private sealed class TrackedTool(
+        int Index,
+        ToolCall Call,
+        IAgentTool? Tool,
+        bool IsConcurrencySafe)
     {
-        public required ToolCall Call { get; init; }
-        public IAgentTool? Tool { get; init; }
-        public required bool IsConcurrencySafe { get; init; }
+        public int Index { get; } = Index;
+        public ToolCall Call { get; } = Call;
+        public IAgentTool? Tool { get; } = Tool;
+        public bool IsConcurrencySafe { get; } = IsConcurrencySafe;
         public ToolStatus Status { get; set; }
         public ToolExecutionResult? Result { get; set; }
-        public required TaskCompletionSource Completion { get; init; }
+    }
+
+    private sealed class CoordinatorState
+    {
+        public List<TrackedTool> Tools { get; } = [];
+        public List<TaskCompletionSource> Waiters { get; } = [];
+        public int NextResultIndex { get; set; }
+        public bool HasErrored { get; set; }
+        public bool Discarded { get; set; }
+        public bool PublishedResult { get; set; }
+    }
+
+    private readonly record struct ExecutorStateSnapshot(bool HasRemainingTools, Task NextChange);
+
+    private abstract record CoordinatorSignal;
+    private sealed record ToolDiscoveredSignal(ToolCall ToolCall) : CoordinatorSignal;
+    private sealed record ToolCompletedSignal(int Index, ToolExecutionResult Result) : CoordinatorSignal;
+    private sealed record SchedulerFaultSignal(int Index) : CoordinatorSignal;
+    private sealed record StateRequestSignal(TaskCompletionSource<ExecutorStateSnapshot> Completion) : CoordinatorSignal;
+    private sealed record DiscardSignal : CoordinatorSignal
+    {
+        public static DiscardSignal Instance { get; } = new();
     }
 }
