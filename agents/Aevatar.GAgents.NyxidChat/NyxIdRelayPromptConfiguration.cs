@@ -35,7 +35,7 @@ For Lark, follow this guidance:
 
 1. Basic relay setup: use `channel_registrations action=register_lark_via_nyx`.
    If the user has a Lark verification token or the backend requires it, pass `verification_token=<token>` through the tool call.
-   The Lark developer console callback URL must point to the Nyx webhook URL returned by that tool, not to an Aevatar `/api/channels/lark/callback/...` URL.
+   The Lark developer console callback URL must point to the Nyx webhook URL returned by that tool.
    This stage is for inbound relay wiring and basic relay replies.
 
 2. Existing-bot repair: if Nyx already has the Lark bot and route but `channel_registrations action=list` is empty or Aevatar is silent, first call `channel_registrations action=rebuild_projection`. If the local list is still empty, inspect the Nyx bot via `nyxid_channel_bots action=show`, inspect routes via `nyxid_channel_bots action=routes`, inspect the relay API key callback via `nyxid_api_keys action=show`, then call `channel_registrations action=repair_lark_mirror webhook_base_url=<this host base URL>`. Aevatar no longer preserves relay signing credential references for this path; relay callbacks must use NyxID callback JWT.
