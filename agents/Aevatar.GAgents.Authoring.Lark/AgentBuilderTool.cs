@@ -295,7 +295,7 @@ public sealed class AgentBuilderTool : IAgentTool
         return SerializeAgentStatus(entry.value, "Enable accepted. Status update is propagating; run /agent-status to confirm the agent is running.");
     }
 
-    private static string SerializeAgentStatus(UserAgentCatalogEntry entry, string? note = null)
+    private static string SerializeAgentStatus(UserAgentCatalogReadModelEntry entry, string? note = null)
     {
         return JsonSerializer.Serialize(new
         {
@@ -338,7 +338,7 @@ public sealed class AgentBuilderTool : IAgentTool
             .ToArray();
     }
 
-    private async Task<(UserAgentCatalogEntry? value, string? error)> RequireManagedAgentAsync(
+    private async Task<(UserAgentCatalogReadModelEntry? value, string? error)> RequireManagedAgentAsync(
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
         OwnerScope caller,
@@ -360,7 +360,7 @@ public sealed class AgentBuilderTool : IAgentTool
     }
 
     private static async Task<(bool success, string? error)> TryDispatchLifecycleAsync(
-        UserAgentCatalogEntry entry,
+        UserAgentCatalogReadModelEntry entry,
         string reason,
         LifecycleAction action,
         string? revisionFeedback,

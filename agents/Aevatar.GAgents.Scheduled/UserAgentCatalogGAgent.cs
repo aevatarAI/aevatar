@@ -7,6 +7,9 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Scheduled;
 
+// Refactor (iter1/cluster-001):
+//   Old pattern: UserAgentCatalogGAgent owned both catalog membership and per-runner execution summaries.
+//   New principle: Catalog actor owns membership only; execution facts remain runner-owned.
 public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
 {
     public const string WellKnownId = UserAgentCatalogStorageContracts.StoreActorId;
@@ -15,7 +18,6 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         StateTransitionMatcher
             .Match(current, evt)
             .On<UserAgentCatalogUpsertedEvent>(ApplyUpserted)
-            .On<UserAgentCatalogExecutionUpdatedEvent>(ApplyExecutionUpdated)
             .On<UserAgentCatalogTombstonedEvent>(ApplyTombstoned)
             .On<UserAgentCatalogTombstonesCompactedEvent>(ApplyTombstonesCompacted)
             .OrCurrent();
@@ -49,11 +51,6 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             ApiKeyId = MergeNonEmpty(command.ApiKeyId, existing?.ApiKeyId),
             ScheduleCron = MergeNonEmpty(command.ScheduleCron, existing?.ScheduleCron),
             ScheduleTimezone = MergeNonEmpty(command.ScheduleTimezone, existing?.ScheduleTimezone),
-            Status = MergeNonEmpty(command.Status, existing?.Status),
-            LastRunAt = existing?.LastRunAt,
-            NextRunAt = existing?.NextRunAt,
-            ErrorCount = existing?.ErrorCount ?? 0,
-            LastError = existing?.LastError ?? string.Empty,
             LarkReceiveId = MergeNonEmpty(command.LarkReceiveId, existing?.LarkReceiveId),
             LarkReceiveIdType = MergeNonEmpty(command.LarkReceiveIdType, existing?.LarkReceiveIdType),
             LarkReceiveIdFallback = MergeNonEmpty(command.LarkReceiveIdFallback, existing?.LarkReceiveIdFallback),
@@ -62,7 +59,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
 #pragma warning restore CS0612
 
         // Issue #466 critical: copy OwnerScope from the command (or inherit existing on
-        // partial upserts like UpdateRegistryExecutionAsync that don't recompute scope).
+        // partial upserts from older membership update paths that don't recompute scope).
         // Without this, every catalog row would land with OwnerScope=null and
         // DocumentMatchesCaller would fall through to the legacy backfill path — which
         // returns null for the lark surface, and `/agents` would always be empty.
@@ -95,38 +92,6 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         {
             AgentId = command.AgentId.Trim(),
             TombstoneStateVersion = NextCommittedVersion(),
-        });
-    }
-
-    [EventHandler]
-    public async Task HandleExecutionUpdateAsync(UserAgentCatalogExecutionUpdateCommand command)
-    {
-        if (string.IsNullOrWhiteSpace(command.AgentId))
-        {
-            Logger.LogWarning("Cannot update execution state with empty agent id");
-            return;
-        }
-
-        if (State.Entries.All(x => !string.Equals(x.AgentId, command.AgentId, StringComparison.Ordinal)))
-        {
-            // Caller contract: an Upsert must land before the first ExecutionUpdate (the
-            // SkillRunner / WorkflowAgent UpsertRegistryAsync sequence guarantees this when
-            // dispatch goes through IActorDispatchPort). If we ever drop here in production
-            // it means LastRunAt / NextRunAt are silently being lost from the catalog and
-            // the agent's /agent-status will read stale fields. Logged at Error so it
-            // surfaces in dashboards instead of being buried as a routine warning.
-            Logger.LogError("Cannot update execution state for missing user agent catalog entry: {AgentId}", command.AgentId);
-            return;
-        }
-
-        await PersistDomainEventAsync(new UserAgentCatalogExecutionUpdatedEvent
-        {
-            AgentId = command.AgentId.Trim(),
-            Status = command.Status?.Trim() ?? string.Empty,
-            LastRunAt = command.LastRunAt,
-            NextRunAt = command.NextRunAt,
-            ErrorCount = command.ErrorCount,
-            LastError = command.LastError?.Trim() ?? string.Empty,
         });
     }
 
@@ -178,22 +143,6 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         existing.Tombstoned = true;
         existing.UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
         existing.TombstoneStateVersion = evt.TombstoneStateVersion;
-        return next;
-    }
-
-    private static UserAgentCatalogState ApplyExecutionUpdated(UserAgentCatalogState current, UserAgentCatalogExecutionUpdatedEvent evt)
-    {
-        var next = current.Clone();
-        var existing = next.Entries.FirstOrDefault(x => string.Equals(x.AgentId, evt.AgentId, StringComparison.Ordinal));
-        if (existing == null)
-            return next;
-
-        existing.UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
-        existing.Status = evt.Status ?? string.Empty;
-        existing.LastRunAt = evt.LastRunAt;
-        existing.NextRunAt = evt.NextRunAt;
-        existing.ErrorCount = evt.ErrorCount;
-        existing.LastError = evt.LastError ?? string.Empty;
         return next;
     }
 

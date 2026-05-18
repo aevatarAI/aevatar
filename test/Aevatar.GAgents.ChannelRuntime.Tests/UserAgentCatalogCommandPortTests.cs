@@ -40,6 +40,7 @@ public sealed class UserAgentCatalogCommandPortTests
                 Task.FromResult<UserAgentCatalogDocument?>(new UserAgentCatalogDocument
                 {
                     Id = agentId,
+                    ActorId = CatalogActorId,
                     Platform = "lark",
                     ConversationId = "oc_chat_1",
                     NyxProviderSlug = "api-lark-bot",
@@ -127,7 +128,7 @@ public sealed class UserAgentCatalogCommandPortTests
         const string agentId = "agent-tombstone-1";
 
 #pragma warning disable CS0612
-        var existing = new UserAgentCatalogDocument { Id = agentId, Platform = "lark", StateVersion = 5 };
+        var existing = new UserAgentCatalogDocument { Id = agentId, ActorId = CatalogActorId, Platform = "lark", StateVersion = 5 };
 #pragma warning restore CS0612
         // First GetAsync (existence check) returns the document; subsequent calls (after
         // dispatch) return null — projector deleted the document on tombstone.
@@ -153,8 +154,8 @@ public sealed class UserAgentCatalogCommandPortTests
         var fixture = new Fixture();
         const string agentId = "agent-tombstone-flag";
 #pragma warning disable CS0612
-        var existing = new UserAgentCatalogDocument { Id = agentId, Platform = "lark", StateVersion = 5 };
-        var tombstoned = new UserAgentCatalogDocument { Id = agentId, Platform = "lark", StateVersion = 6, Tombstoned = true };
+        var existing = new UserAgentCatalogDocument { Id = agentId, ActorId = CatalogActorId, Platform = "lark", StateVersion = 5 };
+        var tombstoned = new UserAgentCatalogDocument { Id = agentId, ActorId = CatalogActorId, Platform = "lark", StateVersion = 6, Tombstoned = true };
 #pragma warning restore CS0612
         fixture.DocumentReader.GetAsync(agentId, Arg.Any<CancellationToken>())
             .Returns(
@@ -172,7 +173,7 @@ public sealed class UserAgentCatalogCommandPortTests
         var fixture = new Fixture(projectionWaitAttempts: 3);
         const string agentId = "agent-tombstone-stuck";
 #pragma warning disable CS0612
-        var existing = new UserAgentCatalogDocument { Id = agentId, Platform = "lark", StateVersion = 5 };
+        var existing = new UserAgentCatalogDocument { Id = agentId, ActorId = CatalogActorId, Platform = "lark", StateVersion = 5 };
 #pragma warning restore CS0612
         // Existence check returns the document, subsequent polls return the same (no advance, no tombstone).
         fixture.DocumentReader.GetAsync(agentId, Arg.Any<CancellationToken>())

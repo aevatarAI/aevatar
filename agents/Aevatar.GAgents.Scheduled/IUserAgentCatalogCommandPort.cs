@@ -25,6 +25,9 @@ public sealed record UserAgentCatalogTombstoneResult(CatalogCommandOutcome Outco
 /// <see cref="Aevatar.Foundation.Abstractions.IActorDispatchPort"/>, and
 /// projection-version polling so callers (LLM tools, Studio admin endpoints,
 /// etc.) stay thin parameter-mapping adapters.
+/// Refactor (iter1/cluster-001):
+///   Old pattern: catalog mutation plumbing also carried per-runner execution status.
+///   New principle: command port mutations are membership-only; execution is projected from runner commits.
 /// </summary>
 public interface IUserAgentCatalogCommandPort
 {

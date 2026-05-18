@@ -8,16 +8,16 @@ namespace Aevatar.GAgents.Scheduled;
 /// "exists but not yours" — single semantic, no existence/version disclosure to non-owners
 /// (issue #466).
 ///
-/// The DTO returned (<see cref="UserAgentCatalogEntry"/>) does not surface
+/// The DTO returned (<see cref="UserAgentCatalogReadModelEntry"/>) does not surface
 /// <c>NyxApiKey</c>; that secret is only readable through the narrow internal
 /// <see cref="IUserAgentDeliveryTargetReader"/> registered for outbound delivery code,
 /// not for LLM tools.
 /// </summary>
 public interface IUserAgentCatalogQueryPort
 {
-    Task<UserAgentCatalogEntry?> GetForCallerAsync(string agentId, OwnerScope caller, CancellationToken ct = default);
+    Task<UserAgentCatalogReadModelEntry?> GetForCallerAsync(string agentId, OwnerScope caller, CancellationToken ct = default);
 
-    Task<IReadOnlyList<UserAgentCatalogEntry>> QueryByCallerAsync(OwnerScope caller, CancellationToken ct = default);
+    Task<IReadOnlyList<UserAgentCatalogReadModelEntry>> QueryByCallerAsync(OwnerScope caller, CancellationToken ct = default);
 
     /// <summary>
     /// Returns the projected state version for an agent the caller owns; <c>null</c> when

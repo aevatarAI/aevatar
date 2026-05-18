@@ -66,14 +66,14 @@ public sealed class AgentDeliveryTargetToolTests
     [Fact]
     public async Task ExecuteAsync_List_DoesNotSurfaceCredentials()
     {
-        // Issue #466 §D: the public DTO `UserAgentCatalogEntry` no longer carries the
+        // Issue #466 §D: the public DTO `UserAgentCatalogReadModelEntry` no longer carries the
         // NyxApiKey at all (not even masked). Credentials live behind the internal
         // `IUserAgentDeliveryTargetReader` and are not surfaced through any LLM tool.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogEntry>>(
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(
                 [
-                new UserAgentCatalogEntry
+                new UserAgentCatalogReadModelEntry
                 {
                     AgentId = "agent-1",
                     ConversationId = "oc_chat_1",
@@ -157,7 +157,7 @@ public sealed class AgentDeliveryTargetToolTests
 
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("agent-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
             {
                 AgentId = "agent-1",
                 ConversationId = "oc_chat_existing",
@@ -230,7 +230,7 @@ public sealed class AgentDeliveryTargetToolTests
 
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("agent-2", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
             {
                 AgentId = "agent-2",
                 ConversationId = "oc_chat_2",
@@ -280,7 +280,7 @@ public sealed class AgentDeliveryTargetToolTests
 
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("agent-2", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(null));
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(null));
 
         var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
@@ -325,7 +325,7 @@ public sealed class AgentDeliveryTargetToolTests
 
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("agent-3", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
             {
                 AgentId = "agent-3",
                 ConversationId = "oc_chat_3",
@@ -382,7 +382,7 @@ public sealed class AgentDeliveryTargetToolTests
 
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("agent-7", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
             {
                 AgentId = "agent-7",
                 ConversationId = "oc_chat_7",
@@ -553,7 +553,7 @@ public sealed class AgentDeliveryTargetToolTests
 
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("agent-new", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(null));
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(null));
 
         var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         var resolver = Substitute.For<ICallerScopeResolver>();
@@ -601,7 +601,7 @@ public sealed class AgentDeliveryTargetToolTests
 
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("agent-pending", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
             {
                 AgentId = "agent-pending",
                 ConversationId = "oc_chat_old",
@@ -677,7 +677,7 @@ public sealed class AgentDeliveryTargetToolTests
 
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("agent-slow", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
             {
                 AgentId = "agent-slow",
                 ConversationId = "oc_chat_slow",
@@ -726,7 +726,7 @@ public sealed class AgentDeliveryTargetToolTests
 
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("agent-race", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogEntry?>(new UserAgentCatalogEntry
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
             {
                 AgentId = "agent-race",
                 ConversationId = "oc_chat_race",
