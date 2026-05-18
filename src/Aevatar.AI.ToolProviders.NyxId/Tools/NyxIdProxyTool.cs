@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Microsoft.Extensions.Logging;
@@ -81,7 +82,7 @@ public sealed class NyxIdProxyTool : IAgentTool
         if (args.HasParseError)
         {
             _logger.LogWarning("[nyxid_proxy] Argument parse failed: {Error}, raw={Raw}", args.ParseError, args.Raw);
-            return $"{{\"error\":\"Failed to parse tool arguments\",\"detail\":{System.Text.Json.JsonSerializer.Serialize(args.ParseError)},\"received\":{System.Text.Json.JsonSerializer.Serialize(args.Raw)}}}";
+            return $"{{\"error\":\"Failed to parse tool arguments\",\"detail\":{JsonSerializer.Serialize(args.ParseError)},\"received\":{JsonSerializer.Serialize(args.Raw)}}}";
         }
 
         var slug = args.Str("slug") ?? args.Str("service");
@@ -117,7 +118,7 @@ public sealed class NyxIdProxyTool : IAgentTool
                 approvalCode, approvalRequestId);
         }
 
-        return result;
+        return ClassifyProxyResponse(result, slug, path).ToJson();
     }
 
     // ─── Dual-token service discovery + routing ───
@@ -150,20 +151,20 @@ public sealed class NyxIdProxyTool : IAgentTool
 
         try
         {
-            using var userDoc = System.Text.Json.JsonDocument.Parse(userServicesJson);
-            using var orgDoc = System.Text.Json.JsonDocument.Parse(orgServicesJson);
+            using var userDoc = JsonDocument.Parse(userServicesJson);
+            using var orgDoc = JsonDocument.Parse(orgServicesJson);
 
             var userSlugs = ParseServiceSlugs(userDoc);
-            var merged = new List<System.Text.Json.JsonElement>();
+            var merged = new List<JsonElement>();
 
-            if (userDoc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+            if (userDoc.RootElement.ValueKind == JsonValueKind.Array)
             {
                 foreach (var svc in userDoc.RootElement.EnumerateArray())
                     merged.Add(svc);
             }
 
             // Add org services that don't collide with user services
-            if (orgDoc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+            if (orgDoc.RootElement.ValueKind == JsonValueKind.Array)
             {
                 foreach (var svc in orgDoc.RootElement.EnumerateArray())
                 {
@@ -180,9 +181,9 @@ public sealed class NyxIdProxyTool : IAgentTool
             _cache.SetSlugs(HashToken(userToken), userSlugs);
             _cache.SetSlugs(HashToken(orgToken), ParseServiceSlugs(orgDoc));
 
-            return System.Text.Json.JsonSerializer.Serialize(merged);
+            return JsonSerializer.Serialize(merged);
         }
-        catch (System.Text.Json.JsonException ex)
+        catch (JsonException ex)
         {
             _logger.LogWarning(ex, "[nyxid_proxy] Failed to merge service lists, returning user services only");
             return userServicesJson;
@@ -231,7 +232,7 @@ public sealed class NyxIdProxyTool : IAgentTool
         try
         {
             var servicesJson = await _client.DiscoverProxyServicesAsync(token, ct);
-            using var doc = System.Text.Json.JsonDocument.Parse(servicesJson);
+            using var doc = JsonDocument.Parse(servicesJson);
             var slugs = ParseServiceSlugs(doc);
             _cache.SetSlugs(hash, slugs);
             return slugs.Contains(slug);
@@ -247,7 +248,7 @@ public sealed class NyxIdProxyTool : IAgentTool
     /// <summary>
     /// Extract service slugs from a NyxID /proxy/services JSON response.
     /// </summary>
-    internal static HashSet<string> ParseServiceSlugs(System.Text.Json.JsonDocument doc)
+    internal static HashSet<string> ParseServiceSlugs(JsonDocument doc)
     {
         var slugs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var svc in EnumerateServiceItems(doc.RootElement))
@@ -263,22 +264,22 @@ public sealed class NyxIdProxyTool : IAgentTool
         return slugs;
     }
 
-    private static IEnumerable<System.Text.Json.JsonElement> EnumerateServiceItems(System.Text.Json.JsonElement root)
+    private static IEnumerable<JsonElement> EnumerateServiceItems(JsonElement root)
     {
-        if (root.ValueKind == System.Text.Json.JsonValueKind.Array)
+        if (root.ValueKind == JsonValueKind.Array)
         {
             foreach (var item in root.EnumerateArray())
                 yield return item;
             yield break;
         }
 
-        if (root.ValueKind != System.Text.Json.JsonValueKind.Object)
+        if (root.ValueKind != JsonValueKind.Object)
             yield break;
 
         foreach (var propertyName in new[] { "services", "custom_services", "data" })
         {
             if (!root.TryGetProperty(propertyName, out var items) ||
-                items.ValueKind != System.Text.Json.JsonValueKind.Array)
+                items.ValueKind != JsonValueKind.Array)
             {
                 continue;
             }
@@ -309,21 +310,67 @@ public sealed class NyxIdProxyTool : IAgentTool
 
         try
         {
-            using var doc = System.Text.Json.JsonDocument.Parse(response);
-            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object)
+            using var doc = JsonDocument.Parse(response);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
                 return false;
             if (!doc.RootElement.TryGetProperty("error", out var errorProp))
                 return false;
             return errorProp.ValueKind switch
             {
-                System.Text.Json.JsonValueKind.False => false,
-                System.Text.Json.JsonValueKind.Null => false,
+                JsonValueKind.False => false,
+                JsonValueKind.Null => false,
                 _ => true,
             };
         }
-        catch (System.Text.Json.JsonException)
+        catch (JsonException)
         {
             return false;
+        }
+    }
+
+    internal static NyxIdProxyToolResult ClassifyProxyResponse(string? response, string slug, string path)
+    {
+        if (string.IsNullOrWhiteSpace(response))
+        {
+            return NyxIdProxyToolResult.Ok(slug, path, JsonSerializer.SerializeToElement((string?)null));
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(response);
+            var root = doc.RootElement;
+            if (root.ValueKind == JsonValueKind.Object &&
+                root.TryGetProperty("error", out var errorProp) &&
+                errorProp.ValueKind == JsonValueKind.True)
+            {
+                var statusCode = root.TryGetProperty("status", out var statusProp) &&
+                                 statusProp.ValueKind == JsonValueKind.Number
+                    ? statusProp.GetInt32()
+                    : (int?)null;
+
+                var rawBody = root.TryGetProperty("body", out var bodyProp) &&
+                              bodyProp.ValueKind == JsonValueKind.String
+                    ? bodyProp.GetString()
+                    : null;
+
+                var message = root.TryGetProperty("message", out var messageProp) &&
+                              messageProp.ValueKind == JsonValueKind.String
+                    ? messageProp.GetString()
+                    : null;
+
+                return NyxIdProxyToolResult.UpstreamError(
+                    slug,
+                    path,
+                    statusCode,
+                    string.IsNullOrWhiteSpace(message) ? null : message,
+                    rawBody);
+            }
+
+            return NyxIdProxyToolResult.Ok(slug, path, root.Clone());
+        }
+        catch (JsonException)
+        {
+            return NyxIdProxyToolResult.Ok(slug, path, JsonSerializer.SerializeToElement(response));
         }
     }
 
@@ -336,8 +383,8 @@ public sealed class NyxIdProxyTool : IAgentTool
         requestId = null;
         try
         {
-            using var doc = System.Text.Json.JsonDocument.Parse(result);
-            if (doc.RootElement.TryGetProperty("code", out var c) && c.ValueKind == System.Text.Json.JsonValueKind.Number)
+            using var doc = JsonDocument.Parse(result);
+            if (doc.RootElement.TryGetProperty("code", out var c) && c.ValueKind == JsonValueKind.Number)
                 code = c.GetInt32();
             if (doc.RootElement.TryGetProperty("approval_request_id", out var rid))
                 requestId = rid.GetString();
@@ -347,5 +394,70 @@ public sealed class NyxIdProxyTool : IAgentTool
         {
             return false;
         }
+    }
+}
+
+internal sealed record NyxIdProxyToolResult(
+    string ToolStatus,
+    string Slug,
+    string Path,
+    int? StatusCode,
+    string? Error,
+    string? Detail,
+    JsonElement? Data)
+{
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
+    };
+
+    public static NyxIdProxyToolResult Ok(string slug, string path, JsonElement data) =>
+        new("ok", slug, path, null, null, null, data);
+
+    public static NyxIdProxyToolResult UpstreamError(
+        string slug,
+        string path,
+        int? statusCode,
+        string? detail,
+        string? rawBody)
+    {
+        var error = statusCode.HasValue ? $"upstream_http_{statusCode.Value}" : "upstream_error";
+        var normalizedDetail = !string.IsNullOrWhiteSpace(detail)
+            ? detail
+            : NormalizeRawBodyDetail(rawBody);
+        return new("error", slug, path, statusCode, error, normalizedDetail, null);
+    }
+
+    public string ToJson() => JsonSerializer.Serialize(this, JsonOptions);
+
+    private static string? NormalizeRawBodyDetail(string? rawBody)
+    {
+        if (string.IsNullOrWhiteSpace(rawBody))
+            return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(rawBody);
+            var root = doc.RootElement;
+            if (root.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var propertyName in new[] { "message", "error_description", "detail", "error" })
+                {
+                    if (root.TryGetProperty(propertyName, out var property) &&
+                        property.ValueKind == JsonValueKind.String)
+                    {
+                        return property.GetString();
+                    }
+                }
+            }
+
+            return "upstream_error_body_unclassified";
+        }
+        catch (JsonException)
+        {
+            // Fall through to a bounded text preview below.
+        }
+
+        return rawBody.Length <= 512 ? rawBody : rawBody[..512];
     }
 }
