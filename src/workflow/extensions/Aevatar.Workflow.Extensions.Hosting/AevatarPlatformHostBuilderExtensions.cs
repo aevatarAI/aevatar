@@ -46,7 +46,7 @@ public static class AevatarPlatformHostBuilderExtensions
                 aiOptions.EnableMCPTools = true;
                 aiOptions.EnableSkills = true;
                 aiOptions.EnableOrnnSkills = true;
-                aiOptions.OrnnBaseUrl = builder.Configuration["Ornn:BaseUrl"];
+                aiOptions.OrnnNyxIdSlug = builder.Configuration["Aevatar:Ornn:NyxIdSlug"];
                 aiOptions.EnableWebTools = true;
                 aiOptions.WebSearchNyxIdSlug = builder.Configuration["Aevatar:WebSearch:NyxIdSlug"];
                 aiOptions.WebSearchApiBaseUrl = builder.Configuration["Aevatar:WebSearch:ApiBaseUrl"];

@@ -533,6 +533,7 @@ function buildMemberRosterPreview(input: {
             latestRun?.actorId ||
             matchedService?.primaryActorId ||
             undefined,
+          runId: latestRun?.runId || undefined,
           scopeId: input.scopeId,
           serviceId,
         })
@@ -650,6 +651,7 @@ function buildTeamRosterPreview(input: {
     primaryMemberPreview?.serviceId && primaryMemberPreview.serviceId.length > 0
       ? buildRuntimeRunsHref({
           actorId: latestRun?.actorId || undefined,
+          runId: latestRun?.runId || undefined,
           scopeId: input.scopeId,
           serviceId: primaryMemberPreview.serviceId,
         })

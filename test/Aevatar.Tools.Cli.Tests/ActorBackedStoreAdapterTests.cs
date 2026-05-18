@@ -246,10 +246,14 @@ public sealed class ActorBackedStoreAdapterTests
     {
         private readonly Dictionary<string, TDoc> _docs = new(StringComparer.Ordinal);
 
+        public Exception? GetError { get; set; }
+
         public void Set(string key, TDoc document) => _docs[key] = document;
 
-        public Task<TDoc?> GetAsync(string key, CancellationToken ct = default)
-            => Task.FromResult(_docs.GetValueOrDefault(key));
+        public Task<TDoc?> GetAsync(string key, CancellationToken ct = default) =>
+            GetError is null
+                ? Task.FromResult(_docs.GetValueOrDefault(key))
+                : Task.FromException<TDoc?>(GetError);
 
         public Task<ProjectionDocumentQueryResult<TDoc>> QueryAsync(
             ProjectionDocumentQuery query, CancellationToken ct = default)
@@ -1126,8 +1130,9 @@ public sealed class ActorBackedStoreAdapterTests
         var removed = await store.RemoveEntryAsync("missing");
 
         removed.Should().BeFalse();
-        runtime.Actors.Should().NotContainKey("user-memory-user-1",
-            "no actor should be created when entry is missing");
+        runtime.Actors.Should().NotContainKey(
+            "user-memory-user-1",
+            "missing deletes should not create or activate a write actor");
     }
 
     [Fact]
@@ -1166,16 +1171,19 @@ public sealed class ActorBackedStoreAdapterTests
     }
 
     [Fact]
-    public async Task UserMemoryStore_BuildPromptSectionAsync_WhenReadFails_ReturnsEmpty()
+    public async Task UserMemoryStore_BuildPromptSectionAsync_ReadFailure_ReturnsEmpty()
     {
         var runtime = new FakeActorRuntime();
-        var scopeResolver = new FakeScopeResolver();
+        var reader = EmptyReader<UserMemoryCurrentStateDocument>();
+        reader.GetError = new InvalidOperationException("projection unavailable");
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "user-1" };
         var logger = NullLogger<ActorBackedUserMemoryStore>.Instance;
-        var store = new ActorBackedUserMemoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, EmptyReader<UserMemoryCurrentStateDocument>(), logger);
+        var store = new ActorBackedUserMemoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, reader, logger);
 
         var prompt = await store.BuildPromptSectionAsync();
 
         prompt.Should().BeEmpty();
+        runtime.Actors.Should().BeEmpty();
     }
 
     [Fact]
@@ -1189,6 +1197,45 @@ public sealed class ActorBackedStoreAdapterTests
         var act = () => store.AddEntryAsync("preference", "test", "explicit");
 
         await act.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task UserMemoryStore_RemoveEntryAsync_NoScope_Throws()
+    {
+        var runtime = new FakeActorRuntime();
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = null };
+        var logger = NullLogger<ActorBackedUserMemoryStore>.Instance;
+        var store = new ActorBackedUserMemoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, EmptyReader<UserMemoryCurrentStateDocument>(), logger);
+
+        var act = () => store.RemoveEntryAsync("some-id");
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task UserMemoryStore_GetAsync_NoScope_ReturnsEmpty()
+    {
+        var runtime = new FakeActorRuntime();
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = null };
+        var logger = NullLogger<ActorBackedUserMemoryStore>.Instance;
+        var store = new ActorBackedUserMemoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, EmptyReader<UserMemoryCurrentStateDocument>(), logger);
+
+        var doc = await store.GetAsync();
+
+        doc.Entries.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task UserMemoryStore_BuildPromptSectionAsync_NoScope_ReturnsEmpty()
+    {
+        var runtime = new FakeActorRuntime();
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = null };
+        var logger = NullLogger<ActorBackedUserMemoryStore>.Instance;
+        var store = new ActorBackedUserMemoryStore(new FakeStudioActorBootstrap(runtime), new FakeActorDispatchPort(runtime), scopeResolver, EmptyReader<UserMemoryCurrentStateDocument>(), logger);
+
+        var prompt = await store.BuildPromptSectionAsync();
+
+        prompt.Should().BeEmpty();
     }
 
     // ════════════════════════════════════════════════════════════

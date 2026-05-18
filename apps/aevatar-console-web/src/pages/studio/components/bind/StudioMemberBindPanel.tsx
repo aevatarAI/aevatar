@@ -1033,7 +1033,8 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   <div style={valueCardStyle}>
                     <Typography.Text strong>No endpoint data available</Typography.Text>
                     <Typography.Text type="secondary">
-                      Bind can still show revision diagnostics below.
+                      This member publication has not exposed callable endpoints
+                      yet. Bind can still show revision diagnostics below.
                     </Typography.Text>
                   </div>
                 )}
@@ -1346,9 +1347,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                 children: bindContract ? (
                   <div style={parameterGridStyle}>
                     <div style={valueCardStyle}>
-                      <Typography.Text type="secondary">
-                        Published service
-                      </Typography.Text>
+                      <Typography.Text type="secondary">Published service</Typography.Text>
                       <Typography.Text strong style={{ wordBreak: 'break-word' }}>
                         {bindContract.serviceId}
                       </Typography.Text>

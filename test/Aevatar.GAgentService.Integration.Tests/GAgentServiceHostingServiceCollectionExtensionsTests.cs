@@ -1,5 +1,6 @@
 #pragma warning disable CS0618 // Tests exercise legacy migration utilities pending removal
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Governance.Hosting.Migration;
@@ -63,6 +64,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
 
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<IServiceRolloutCommandObservationQueryReader>().Should().NotBeNull();
+        provider.GetRequiredService<IGAgentRunTerminalQueryPort>().Should().NotBeNull();
     }
 
     [Fact]
@@ -314,6 +316,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         provider.GetRequiredService<IProjectionDocumentReader<ServiceCatalogReadModel, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<ServiceRevisionCatalogReadModel, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<ServiceRolloutCommandObservationReadModel, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<GAgentRunTerminalReadModel, string>>().Should().NotBeNull();
     }
 
     [Fact]

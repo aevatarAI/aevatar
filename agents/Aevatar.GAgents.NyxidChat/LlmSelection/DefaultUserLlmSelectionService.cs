@@ -41,8 +41,7 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
         ArgumentException.ThrowIfNullOrWhiteSpace(serviceId);
 
         var view = await _optionsService.GetOptionsAsync(ToQuery(context), ct).ConfigureAwait(false);
-        var option = view.Available.FirstOrDefault(candidate =>
-            string.Equals(candidate.ServiceId, serviceId.Trim(), StringComparison.OrdinalIgnoreCase));
+        var option = FindSelectionOption(serviceId.Trim(), view.Available);
         if (option is null)
             throw new InvalidOperationException($"LLM service '{serviceId}' is not available for this user.");
         EnsureSelectable(option);
@@ -126,6 +125,32 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
         if (!string.Equals(option.Status, "ready", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"LLM service '{option.DisplayName}' is not ready: {option.Status}.");
     }
+
+    private static UserLlmOption? FindSelectionOption(string requested, IReadOnlyList<UserLlmOption> available)
+    {
+        var directMatches = available
+            .Where(option => string.Equals(option.ServiceId, requested, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var directSelectable = directMatches.Where(IsSelectable).Take(2).ToArray();
+        if (directSelectable.Length == 1)
+            return directSelectable[0];
+
+        var keyMatches = available
+            .Where(option =>
+                string.Equals(option.ServiceId, requested, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(option.ServiceSlug, requested, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(option.RouteValue, requested, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(option.DisplayName, requested, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var selectable = keyMatches.Where(IsSelectable).Take(2).ToArray();
+        if (selectable.Length == 1)
+            return selectable[0];
+
+        return directMatches.FirstOrDefault() ?? (keyMatches.Length == 1 ? keyMatches[0] : null);
+    }
+
+    private static bool IsSelectable(UserLlmOption option) =>
+        option.Allowed && string.Equals(option.Status, "ready", StringComparison.OrdinalIgnoreCase);
 
     public async Task ResetAsync(UserLlmSelectionContext context, CancellationToken ct)
     {

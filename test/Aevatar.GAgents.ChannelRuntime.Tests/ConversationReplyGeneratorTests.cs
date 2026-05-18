@@ -1,11 +1,14 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.GAgents.Channel.Abstractions;
 using FluentAssertions;
 using Xunit;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -39,11 +42,47 @@ public sealed class ConversationReplyGeneratorTests
             streamingSink: null,
             CancellationToken.None);
 
-        reply.Should().Be("ok");
+        reply.Text.Should().Be("ok");
         providerFactory.Requests.Should().ContainSingle();
         var systemPrompt = providerFactory.Requests[0].Messages.First(message => message.Role == "system").Content;
         systemPrompt.Should().Contain("https://dev.aevatar.local/api/webhooks/nyxid-relay");
         systemPrompt.Should().NotContain("https://aevatar-console-backend-api.aevatar.ai/api/webhooks/nyxid-relay");
+        systemPrompt.Should().Contain("chrono-ai-daily");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_AggregatesUsageAndFinishReasonAtActorEdge()
+    {
+        // ADR-0021 §6 / canon §8: the actor-edge closeout returned by GenerateReplyAsync
+        // MUST surface aggregated Usage and FinishReason from the underlying provider
+        // stream, regardless of whether those values arrived on a mid-stream Usage chunk
+        // or on the IsLast marker. Round-internal terminal markers must not leak past
+        // ConversationReplyGenerator.
+        var providerFactory = new UsageReportingProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            relayOptions: new global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                WebhookBaseUrl = "https://dev.aevatar.local/",
+            });
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-closeout",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("answer");
+        reply.Usage.Should().NotBeNull();
+        reply.Usage!.PromptTokens.Should().Be(7);
+        reply.Usage.CompletionTokens.Should().Be(11);
+        reply.Usage.TotalTokens.Should().Be(18);
+        reply.FinishReason.Should().Be("stop");
     }
 
     [Fact]
@@ -72,7 +111,7 @@ public sealed class ConversationReplyGeneratorTests
             sink,
             CancellationToken.None);
 
-        reply.Should().Be("ok");
+        reply.Text.Should().Be("ok");
         // First emit must be the placeholder, before any LLM delta.
         sink.Emissions.Should().NotBeEmpty();
         sink.Emissions[0].Should().Be("…");
@@ -127,7 +166,104 @@ public sealed class ConversationReplyGeneratorTests
             streamingSink: null,
             CancellationToken.None);
 
-        reply.Should().Be("ok");
+        reply.Text.Should().Be("ok");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_CreatesApprovalMiddlewarePerTurn()
+    {
+        var approvalHandler = new CountingApprovalHandler();
+        var generator = new NyxIdConversationReplyGenerator(
+            new ToolCallingProviderFactory(),
+            toolSources: [new SingleToolSource(new ApprovalRequiredTool())],
+            approvalHandler: approvalHandler);
+
+        for (var i = 0; i < 4; i++)
+        {
+            var reply = await generator.GenerateReplyAsync(
+                new ChatActivity
+                {
+                    Id = $"msg-approval-{i}",
+                    Conversation = new ConversationReference { CanonicalKey = $"lark:dm:user-{i}" },
+                    Content = new MessageContent { Text = "run tool" },
+                },
+                new Dictionary<string, string>(),
+                streamingSink: null,
+                CancellationToken.None);
+
+            reply.Text.Should().Be("done");
+        }
+
+        approvalHandler.RequestCount.Should().Be(4);
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithSkillRegistryButNoRemoteFetcher_LogsWarningOnlyOnceAcrossTurns()
+    {
+        var logger = new ListLogger<NyxIdConversationReplyGenerator>();
+        var skillRegistry = new SkillRegistry();
+        skillRegistry.Register(new SkillDefinition
+        {
+            Name = "remote-skill",
+            Description = "Remote skill",
+            Instructions = "Does remote work",
+            Source = SkillSource.Remote,
+            RemoteId = "remote-skill-id",
+        });
+        var generator = new NyxIdConversationReplyGenerator(
+            new RecordingProviderFactory(),
+            skillRegistry: skillRegistry,
+            remoteSkillFetcher: null,
+            logger: logger);
+
+        for (var i = 0; i < 2; i++)
+        {
+            var reply = await generator.GenerateReplyAsync(
+                new ChatActivity
+                {
+                    Id = $"msg-warning-{i}",
+                    Conversation = new ConversationReference { CanonicalKey = $"lark:dm:user-warning-{i}" },
+                    Content = new MessageContent { Text = "hello" },
+                },
+                new Dictionary<string, string>(),
+                streamingSink: null,
+                CancellationToken.None);
+
+            reply.Text.Should().Be("ok");
+        }
+
+        logger.WarningMessages.Should().ContainSingle(message =>
+            message.Contains("SkillRegistry is registered without IRemoteSkillFetcher", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithStreamingSink_EmitsPlaceholderThenFinalTextAcrossToolFollowUp()
+    {
+        var providerFactory = new ToolCallingProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources: [new SingleToolSource(new ApprovalRequiredTool())],
+            relayOptions: new global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                StreamingPlaceholderText = "…",
+            });
+        var sink = new RecordingStreamingSink();
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-tool-follow-up",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-tool-follow-up" },
+                Content = new MessageContent { Text = "run tool" },
+            },
+            new Dictionary<string, string>(),
+            sink,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("done");
+        providerFactory.Requests.Should().HaveCount(2);
+        providerFactory.Requests[1].Messages.Should().Contain(message => message.Role == "tool");
+        sink.Emissions.Should().Equal("…", "done");
     }
 
     [Fact]
@@ -251,6 +387,213 @@ public sealed class ConversationReplyGeneratorTests
         metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("5");
     }
 
+    [Fact]
+    public async Task GenerateReplyAsync_RetriesWithOwnerPrefsWhenSenderRouteFails()
+    {
+        var providerFactory = new RecordingProviderFactory
+        {
+            FailuresBeforeSuccess = 1,
+        };
+        var prefsStore = new ScopedStubPreferencesStore
+        {
+            ByBinding =
+            {
+                ["bnd_sender"] = new NyxIdUserLlmPreferences(
+                    "sender-model",
+                    "/api/v1/proxy/s/sender",
+                    MaxToolRounds: 7),
+            },
+        };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, preferencesStore: prefsStore);
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-sender-route-failure",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>
+            {
+                [LLMRequestMetadataKeys.ModelOverride] = "owner-model",
+                [LLMRequestMetadataKeys.NyxIdRoutePreference] = "/api/v1/proxy/s/owner",
+                [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "5",
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "owner-token",
+                [LLMRequestMetadataKeys.NyxIdOrgToken] = "owner-token",
+                [LLMRequestMetadataKeys.SenderBindingId] = "bnd_sender",
+                [LLMRequestMetadataKeys.SenderNyxIdAccessToken] = "sender-token",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("ok");
+        providerFactory.Requests.Should().HaveCount(2);
+        var senderMetadata = providerFactory.Requests[0].Metadata!;
+        senderMetadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("sender-model");
+        senderMetadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/api/v1/proxy/s/sender");
+        senderMetadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("7");
+        senderMetadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("sender-token");
+        senderMetadata[LLMRequestMetadataKeys.NyxIdOrgToken].Should().Be("sender-token");
+        senderMetadata.Should().NotContainKey(LLMRequestMetadataKeys.SenderNyxIdAccessToken);
+
+        var ownerMetadata = providerFactory.Requests[1].Metadata!;
+        ownerMetadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("owner-model");
+        ownerMetadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/api/v1/proxy/s/owner");
+        ownerMetadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("5");
+        ownerMetadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("owner-token");
+        ownerMetadata[LLMRequestMetadataKeys.NyxIdOrgToken].Should().Be("owner-token");
+        ownerMetadata.Should().NotContainKey(LLMRequestMetadataKeys.SenderBindingId);
+        ownerMetadata.Should().NotContainKey(LLMRequestMetadataKeys.SenderNyxIdAccessToken);
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_UsesOwnerPrefsImmediatelyWhenSenderRouteHasNoToken()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var prefsStore = new ScopedStubPreferencesStore
+        {
+            ByBinding =
+            {
+                ["bnd_sender"] = new NyxIdUserLlmPreferences(
+                    "sender-model",
+                    "/api/v1/proxy/s/sender",
+                    MaxToolRounds: 7),
+            },
+        };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, preferencesStore: prefsStore);
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-no-sender-token",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>
+            {
+                [LLMRequestMetadataKeys.ModelOverride] = "owner-model",
+                [LLMRequestMetadataKeys.NyxIdRoutePreference] = "/api/v1/proxy/s/owner",
+                [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "5",
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "owner-token",
+                [LLMRequestMetadataKeys.NyxIdOrgToken] = "owner-token",
+                [LLMRequestMetadataKeys.SenderBindingId] = "bnd_sender",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        var ownerMetadata = providerFactory.Requests.Should().ContainSingle().Subject.Metadata!;
+        ownerMetadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("owner-model");
+        ownerMetadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/api/v1/proxy/s/owner");
+        ownerMetadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("5");
+        ownerMetadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("owner-token");
+        ownerMetadata[LLMRequestMetadataKeys.NyxIdOrgToken].Should().Be("owner-token");
+        ownerMetadata.Should().NotContainKey(LLMRequestMetadataKeys.SenderBindingId);
+        ownerMetadata.Should().NotContainKey(LLMRequestMetadataKeys.SenderNyxIdAccessToken);
+    }
+
+    // ─── Issue #513 phase 3 — explicit 3 binding × 3 owner-prefs override matrix ───
+    //
+    // The four [Fact] tests above pin specific scenarios (owner-only,
+    // sender-overrides-model, sender-store-throws, route-failure-retry). This
+    // [Theory] adds the explicit 3×3 matrix the issue calls out: the binding
+    // axis (unbound / bound-with-empty-prefs / bound-with-model-only) is
+    // crossed with the owner-prefs axis (none / partial=model-only / full).
+    // Sender prefs in the bound-set row deliberately set ONLY DefaultModel so
+    // we exercise the "sender supplies a subset, owner fills the rest" path
+    // without crossing the route-applied + no-sender-token branch (which
+    // silently swaps in the owner snapshot — orthogonal to the matrix and
+    // already covered by UsesOwnerPrefsImmediatelyWhenSenderRouteHasNoToken).
+    public const string MatrixUnbound = "unbound";
+    public const string MatrixBoundEmpty = "bound_empty_prefs";
+    public const string MatrixBoundModelOnly = "bound_model_only";
+    public const string MatrixOwnerNone = "owner_none";
+    public const string MatrixOwnerPartial = "owner_partial_model_only";
+    public const string MatrixOwnerFull = "owner_full";
+
+    [Theory]
+    [InlineData(MatrixUnbound, MatrixOwnerNone, null, null, null)]
+    [InlineData(MatrixUnbound, MatrixOwnerPartial, "owner-model", null, null)]
+    [InlineData(MatrixUnbound, MatrixOwnerFull, "owner-model", "/api/v1/proxy/s/owner", "9")]
+    [InlineData(MatrixBoundEmpty, MatrixOwnerNone, null, null, null)]
+    [InlineData(MatrixBoundEmpty, MatrixOwnerPartial, "owner-model", null, null)]
+    [InlineData(MatrixBoundEmpty, MatrixOwnerFull, "owner-model", "/api/v1/proxy/s/owner", "9")]
+    [InlineData(MatrixBoundModelOnly, MatrixOwnerNone, "sender-model", null, null)]
+    [InlineData(MatrixBoundModelOnly, MatrixOwnerPartial, "sender-model", null, null)]
+    [InlineData(MatrixBoundModelOnly, MatrixOwnerFull, "sender-model", "/api/v1/proxy/s/owner", "9")]
+    public async Task GenerateReplyAsync_OverrideMatrix_BindingTimesOwnerPrefs(
+        string bindingState,
+        string ownerState,
+        string? expectedModel,
+        string? expectedRoute,
+        string? expectedRounds)
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var prefsStore = new ScopedStubPreferencesStore();
+
+        switch (bindingState)
+        {
+            case MatrixBoundEmpty:
+                // Lookup returns the default empty record (no entry in
+                // ByBinding), so SetIfFilled writes nothing.
+                break;
+            case MatrixBoundModelOnly:
+                prefsStore.ByBinding["bnd_sender"] = new NyxIdUserLlmPreferences(
+                    DefaultModel: "sender-model",
+                    PreferredRoute: string.Empty,
+                    MaxToolRounds: 0);
+                break;
+        }
+
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (bindingState != MatrixUnbound)
+            metadata[LLMRequestMetadataKeys.SenderBindingId] = "bnd_sender";
+
+        switch (ownerState)
+        {
+            case MatrixOwnerPartial:
+                metadata[LLMRequestMetadataKeys.ModelOverride] = "owner-model";
+                break;
+            case MatrixOwnerFull:
+                metadata[LLMRequestMetadataKeys.ModelOverride] = "owner-model";
+                metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = "/api/v1/proxy/s/owner";
+                metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride] = "9";
+                break;
+        }
+
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, preferencesStore: prefsStore);
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = $"msg-{bindingState}-{ownerState}",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            metadata,
+            streamingSink: null,
+            CancellationToken.None);
+
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        var effective = request.Metadata!;
+
+        AssertKey(effective, LLMRequestMetadataKeys.ModelOverride, expectedModel);
+        AssertKey(effective, LLMRequestMetadataKeys.NyxIdRoutePreference, expectedRoute);
+        AssertKey(effective, LLMRequestMetadataKeys.MaxToolRoundsOverride, expectedRounds);
+
+        if (bindingState == MatrixUnbound)
+            prefsStore.Lookups.Should().BeEmpty(
+                "no binding-id in metadata → generator must not consult the prefs store");
+        else
+            prefsStore.Lookups.Should().ContainSingle().Which.Should().Be("bnd_sender");
+    }
+
+    private static void AssertKey(IReadOnlyDictionary<string, string> metadata, string key, string? expected)
+    {
+        if (expected is null)
+            metadata.Should().NotContainKey(key);
+        else
+            metadata.Should().ContainKey(key).WhoseValue.Should().Be(expected);
+    }
+
     private sealed class ScopedStubPreferencesStore : INyxIdUserLlmPreferencesStore
     {
         public Dictionary<string, NyxIdUserLlmPreferences> ByBinding { get; } = new(StringComparer.Ordinal);
@@ -287,11 +630,43 @@ public sealed class ConversationReplyGeneratorTests
         }
     }
 
+    // ADR-0021 §6 / canon §8 contract harness: a provider that emits Usage and
+    // FinishReason in mid-stream and IsLast chunks so the test asserts the
+    // actor-edge closeout aggregates them instead of letting round-internal
+    // markers leak past ConversationReplyGenerator.
+    private sealed class UsageReportingProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "usage-reporting";
+        public ILLMProvider GetProvider(string name) => this;
+        public ILLMProvider GetDefault() => this;
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default) =>
+            Task.FromResult(new LLMResponse { Content = "non-streaming path should not be used" });
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            yield return new LLMStreamChunk { DeltaContent = "answer" };
+            // Provider emits Usage in a mid-stream "bookkeeping" chunk before IsLast.
+            yield return new LLMStreamChunk
+            {
+                Usage = new TokenUsage(PromptTokens: 7, CompletionTokens: 11, TotalTokens: 18),
+                FinishReason = "stop",
+            };
+            await Task.CompletedTask;
+            yield return new LLMStreamChunk { IsLast = true };
+        }
+    }
+
     private sealed class RecordingProviderFactory : ILLMProviderFactory, ILLMProvider
     {
         public string Name => "recording";
 
         public List<LLMRequest> Requests { get; } = [];
+
+        public int FailuresBeforeSuccess { get; init; }
 
         public ILLMProvider GetProvider(string name) => this;
 
@@ -310,6 +685,9 @@ public sealed class ConversationReplyGeneratorTests
             [EnumeratorCancellation] CancellationToken ct = default)
         {
             Requests.Add(request);
+            if (Requests.Count <= FailuresBeforeSuccess)
+                throw new InvalidOperationException("simulated sender route failure");
+
             yield return new LLMStreamChunk
             {
                 DeltaContent = "ok",
@@ -319,6 +697,110 @@ public sealed class ConversationReplyGeneratorTests
             {
                 IsLast = true,
             };
+        }
+    }
+
+    private sealed class ToolCallingProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "tool-calling";
+
+        public List<LLMRequest> Requests { get; } = [];
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default) =>
+            Task.FromResult(new LLMResponse { Content = "non-streaming path should not be used" });
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            if (request.Messages.Any(static message => message.Role == "tool"))
+            {
+                yield return new LLMStreamChunk { DeltaContent = "done" };
+                yield return new LLMStreamChunk { IsLast = true };
+                await Task.CompletedTask;
+                yield break;
+            }
+
+            yield return new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "call-approval",
+                    Name = ApprovalRequiredTool.ToolName,
+                    ArgumentsJson = "{}",
+                },
+            };
+            yield return new LLMStreamChunk { IsLast = true };
+            await Task.CompletedTask;
+        }
+    }
+
+    private sealed class SingleToolSource(IAgentTool tool) : IAgentToolSource
+    {
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<IAgentTool>>([tool]);
+    }
+
+    private sealed class ApprovalRequiredTool : IAgentTool
+    {
+        public const string ToolName = "approval_required_tool";
+
+        public string Name => ToolName;
+
+        public string Description => "Requires approval.";
+
+        public string ParametersSchema => "{}";
+
+        public ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("""{"executed":true}""");
+    }
+
+    private sealed class CountingApprovalHandler : IToolApprovalHandler
+    {
+        public int RequestCount { get; private set; }
+
+        public Task<ToolApprovalResult> RequestApprovalAsync(ToolApprovalRequest request, CancellationToken ct)
+        {
+            RequestCount++;
+            return Task.FromResult(ToolApprovalResult.Denied("test denial"));
+        }
+    }
+
+    private sealed class ListLogger<T> : ILogger<T>
+    {
+        public List<string> WarningMessages { get; } = [];
+
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning)
+                WarningMessages.Add(formatter(state, exception));
+        }
+
+        private sealed class NullScope : IDisposable
+        {
+            public static readonly NullScope Instance = new();
+
+            public void Dispose()
+            {
+            }
         }
     }
 }

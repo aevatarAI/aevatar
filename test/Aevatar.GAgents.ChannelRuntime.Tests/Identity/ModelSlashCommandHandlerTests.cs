@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
@@ -119,16 +120,94 @@ public sealed class ModelSlashCommandHandlerTests
     }
 
     [Fact]
-    public async Task List_ReturnsRebindMessage_WhenBindingScopeMissing()
+    public async Task List_SelfHealsAndRebindsMessage_WhenBindingScopeMissing()
     {
-        var handler = CreateHandler(broker: new ThrowingCapabilityBroker(
-            new BindingScopeMismatchException(Context().Subject)));
+        // NyxID rejects the binding's scope set: the binding was issued before
+        // aevatar's DCR started requesting `proxy`, so the broker can no longer
+        // mint LLM-API tokens for it. Self-heal by revoking the local actor so
+        // /init is unblocked, AND tell the user.
+        var dispatchPort = new RecordingActorDispatchPort();
+        var handler = CreateHandler(
+            broker: new ThrowingCapabilityBroker(new BindingScopeMismatchException(Context().Subject)),
+            actorDispatchPort: dispatchPort);
 
         var reply = await handler.HandleAsync(Context(), default);
 
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("缺少 LLM route 权限");
+        reply.Text.Should().Contain("清理已提交");
         reply.Text.Should().Contain("/init");
+        AssertRevokeBindingDispatched(dispatchPort, expectedReason: "auto_self_heal_scope_mismatch");
+    }
+
+    [Fact]
+    public async Task List_SelfHealsAndRebindsMessage_WhenBindingRevokedRemotely()
+    {
+        // NyxID itself returned binding_revoked (e.g. user revoked at NyxID admin
+        // or the binding tied to a re-DCR'd cluster client_id was invalidated).
+        // Wipe the local readmodel so /init isn't blocked by stale state.
+        var dispatchPort = new RecordingActorDispatchPort();
+        var handler = CreateHandler(
+            broker: new ThrowingCapabilityBroker(new BindingRevokedException(Context().Subject)),
+            actorDispatchPort: dispatchPort);
+
+        var reply = await handler.HandleAsync(Context(), default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("失效");
+        reply.Text.Should().Contain("清理已提交");
+        reply.Text.Should().Contain("/init");
+        AssertRevokeBindingDispatched(dispatchPort, expectedReason: "auto_self_heal_remote_revoked");
+    }
+
+    [Fact]
+    public async Task List_SelfHealsAndRebindsMessage_WhenBindingNotFoundRemotely()
+    {
+        var dispatchPort = new RecordingActorDispatchPort();
+        var handler = CreateHandler(
+            broker: new ThrowingCapabilityBroker(new BindingNotFoundException(Context().Subject)),
+            actorDispatchPort: dispatchPort);
+
+        var reply = await handler.HandleAsync(Context(), default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("不可用");
+        reply.Text.Should().Contain("清理已提交");
+        reply.Text.Should().Contain("/init");
+        AssertRevokeBindingDispatched(dispatchPort, expectedReason: "auto_self_heal_remote_not_found");
+    }
+
+    [Fact]
+    public async Task List_DegradesToUnbindGuidance_WhenSelfHealDispatchKeepsThrowing()
+    {
+        var dispatchPort = new ThrowingActorDispatchPort();
+        var handler = CreateHandler(
+            broker: new ThrowingCapabilityBroker(new BindingRevokedException(Context().Subject)),
+            actorDispatchPort: dispatchPort);
+
+        var reply = await handler.HandleAsync(Context(), default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("失效");
+        reply.Text.Should().Contain("清理提交失败");
+        reply.Text.Should().Contain("/unbind");
+        reply.Text.Should().NotContain("清理已提交");
+        dispatchPort.AttemptCount.Should().Be(2, "self-heal must attempt the local revoke twice before degrading");
+    }
+
+    private static void AssertRevokeBindingDispatched(RecordingActorDispatchPort dispatchPort, string expectedReason)
+    {
+        dispatchPort.Dispatched.Should().ContainSingle("self-heal must dispatch exactly one local revoke");
+        var (actorId, envelope) = dispatchPort.Dispatched[0];
+        actorId.Should().Be(Context().Subject.ToActorId());
+        envelope.Route.Direct.TargetActorId.Should().Be(actorId);
+        envelope.Route.PublisherActorId.Should().Be("nyxid-chat.model.self-heal");
+
+        var revoke = envelope.Payload.Unpack<RevokeBindingCommand>();
+        revoke.Reason.Should().Be(expectedReason);
+        revoke.ExternalSubject.Platform.Should().Be("lark");
+        revoke.ExternalSubject.Tenant.Should().Be("tenant");
+        revoke.ExternalSubject.ExternalUserId.Should().Be("ou_user");
     }
 
     [Fact]
@@ -172,6 +251,62 @@ public sealed class ModelSlashCommandHandlerTests
         reply.Should().NotBeNull();
         commandService.SavedConfigs.Should().ContainSingle()
             .Subject.Config.PreferredLlmRoute.Should().Be(OpenAi.RouteValue);
+    }
+
+    [Fact]
+    public async Task Use_ServiceName_PrefersSelectableDuplicate()
+    {
+        var disabledGateway = ChronoLlm with
+        {
+            UserServiceId = "chrono-llm",
+            DisplayName = "Chrono LLM",
+            RouteValue = "/api/v1/llm/chrono-llm/v1",
+            Status = "not_connected",
+            Source = NyxIdLlmProviderSource.GatewayProvider,
+            Allowed = false,
+        };
+        var selectableProxy = ChronoLlm with { DisplayName = "Chrono LLM" };
+        var catalog = new StubCatalogClient { Services = [disabledGateway, selectableProxy] };
+        var commandService = new StubUserConfigCommandService();
+        var handler = CreateHandler(catalog, commandService: commandService);
+
+        var reply = await handler.HandleAsync(Context(subAndArgs: "use Chrono LLM"), default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("Chrono LLM");
+        var saved = commandService.SavedConfigs.Should().ContainSingle().Subject;
+        saved.Config.PreferredLlmRoute.Should().Be(selectableProxy.RouteValue);
+        saved.Config.DefaultModel.Should().Be(selectableProxy.DefaultModel);
+    }
+
+    [Fact]
+    public async Task Selection_SetByService_PrefersSelectableDuplicateForSubmittedServiceId()
+    {
+        var disabledGateway = ChronoLlm with
+        {
+            UserServiceId = "chrono-llm",
+            DisplayName = "Chrono LLM",
+            RouteValue = "/api/v1/llm/chrono-llm/v1",
+            Status = "not_connected",
+            Source = NyxIdLlmProviderSource.GatewayProvider,
+            Allowed = false,
+        };
+        var selectableProxy = ChronoLlm with { DisplayName = "Chrono LLM" };
+        var catalog = new StubCatalogClient { Services = [disabledGateway, selectableProxy] };
+        var commandService = new StubUserConfigCommandService();
+        var provider = new ServiceCollection()
+            .AddSingleton<IUserConfigQueryPort>(new StubUserConfigQueryPort())
+            .AddSingleton<IUserConfigCommandService>(commandService)
+            .BuildServiceProvider();
+        var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
+        var options = new DefaultUserLlmOptionsService(catalog, scopeFactory);
+        var selection = new DefaultUserLlmSelectionService(options, catalog, scopeFactory);
+
+        await selection.SetByServiceAsync(BuildSelectionContext(), "chrono-llm", null, default);
+
+        var saved = commandService.SavedConfigs.Should().ContainSingle().Subject;
+        saved.Config.PreferredLlmRoute.Should().Be(selectableProxy.RouteValue);
+        saved.Config.DefaultModel.Should().Be(selectableProxy.DefaultModel);
     }
 
     [Fact]
@@ -324,11 +459,13 @@ public sealed class ModelSlashCommandHandlerTests
         StubCatalogClient? catalog = null,
         StubUserConfigQueryPort? queryPort = null,
         StubUserConfigCommandService? commandService = null,
-        INyxIdCapabilityBroker? broker = null)
+        INyxIdCapabilityBroker? broker = null,
+        IActorDispatchPort? actorDispatchPort = null)
     {
         catalog ??= new StubCatalogClient();
         queryPort ??= new StubUserConfigQueryPort();
         commandService ??= new StubUserConfigCommandService();
+        actorDispatchPort ??= new RecordingActorDispatchPort();
 
         var provider = new ServiceCollection()
             .AddSingleton<IUserConfigQueryPort>(queryPort)
@@ -339,9 +476,37 @@ public sealed class ModelSlashCommandHandlerTests
         var selection = new DefaultUserLlmSelectionService(options, catalog, scopeFactory, broker);
         return new ModelChannelSlashCommandHandler(
             NullLogger<ModelChannelSlashCommandHandler>.Instance,
+            actorDispatchPort,
             options,
             selection,
             new TextUserLlmOptionsRenderer());
+    }
+
+    private static UserLlmSelectionContext BuildSelectionContext() => new(
+        new BindingId { Value = "bnd_sender" },
+        Context().Subject,
+        "owner-scope");
+
+    private sealed class RecordingActorDispatchPort : IActorDispatchPort
+    {
+        public List<(string ActorId, EventEnvelope Envelope)> Dispatched { get; } = [];
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            Dispatched.Add((actorId, envelope));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowingActorDispatchPort : IActorDispatchPort
+    {
+        public int AttemptCount { get; private set; }
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            AttemptCount++;
+            throw new InvalidOperationException("simulated dispatch failure");
+        }
     }
 
     private static StudioConfig MakeConfig(

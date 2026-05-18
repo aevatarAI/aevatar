@@ -294,7 +294,9 @@ describe('StudioMemberBindPanel', () => {
       'aria-pressed',
       'true',
     );
-    expect(screen.queryByText('Published service')).toBeNull();
+    fireEvent.click(screen.getByText('Contract details'));
+    expect(await screen.findByText('Published service')).toBeTruthy();
+    expect(primaryGrid.contains(screen.getByText('Published service'))).toBe(false);
     expect(screen.queryByText('Binding Contract')).toBeNull();
     expect(screen.queryByText('Current contract')).toBeNull();
     expect(screen.queryByText('Published contract context')).toBeNull();

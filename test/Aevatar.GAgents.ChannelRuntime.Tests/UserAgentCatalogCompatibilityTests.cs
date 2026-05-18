@@ -28,7 +28,7 @@ public sealed class UserAgentCatalogCompatibilityTests
                 {
                     AgentId = "agent-compat-1",
                     AgentType = SkillRunnerDefaults.AgentType,
-                    TemplateName = "daily_report",
+                    TemplateName = "daily",
                 },
             },
         };
@@ -71,8 +71,8 @@ public sealed class UserAgentCatalogCompatibilityTests
                 Entry = new UserAgentCatalogEntry
                 {
                     AgentId = "agent-compat-2",
-                    AgentType = WorkflowAgentDefaults.AgentType,
-                    TemplateName = WorkflowAgentDefaults.TemplateName,
+                    AgentType = SkillRunnerDefaults.AgentType,
+                    TemplateName = "legacy-template",
                 },
             });
 
@@ -89,7 +89,7 @@ public sealed class UserAgentCatalogCompatibilityTests
 
         next.Entries.Should().ContainSingle(x =>
             x.AgentId == "agent-compat-2" &&
-            x.TemplateName == WorkflowAgentDefaults.TemplateName);
+            x.TemplateName == "legacy-template");
     }
 
     [Fact]
@@ -107,7 +107,7 @@ public sealed class UserAgentCatalogCompatibilityTests
                     {
                         AgentId = "agent-compat-3",
                         AgentType = SkillRunnerDefaults.AgentType,
-                        TemplateName = "daily_report",
+                        TemplateName = "daily",
                         Status = "running",
                     },
                 }),
@@ -122,7 +122,7 @@ public sealed class UserAgentCatalogCompatibilityTests
         agent.LastHandled.Entry.Status.Should().Be("running");
         agent.State.Entries.Should().ContainSingle(x =>
             x.AgentId == "agent-compat-3" &&
-            x.TemplateName == "daily_report");
+            x.TemplateName == "daily");
     }
 
     private static Any CreateLegacyAny(string typeUrl, Google.Protobuf.IMessage message) =>

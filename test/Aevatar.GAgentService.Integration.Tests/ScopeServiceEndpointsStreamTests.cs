@@ -175,8 +175,9 @@ public sealed class ScopeServiceEndpointsStreamTests
 
         runtime.CreateCalls.Should().ContainSingle(call => call.Id == null);
         var actor = runtime.Actors.Values.Should().ContainSingle().Subject.Should().BeOfType<StubActor>().Subject;
-        var request = actor.HandledEnvelopes.Should().ContainSingle().Subject.Payload.Unpack<ChatRequestEvent>();
-        request.SessionId.Should().BeEmpty();
+        var envelope = actor.HandledEnvelopes.Should().ContainSingle().Subject;
+        var request = envelope.Payload.Unpack<ChatRequestEvent>();
+        request.SessionId.Should().Be(envelope.Propagation.CorrelationId);
         request.InputParts.Select(part => part.Kind).Should().Equal(
             ChatContentPartKind.Image,
             ChatContentPartKind.Audio,
@@ -701,9 +702,12 @@ public sealed class ScopeServiceEndpointsStreamTests
         var pipeline = new DefaultCommandDispatchPipeline<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError>(
             new GAgentDraftRunCommandTargetResolver(
                 runtime,
-                projectionPort),
+                projectionPort,
+                new StubGAgentRunTerminalProjectionPort()),
             new DefaultCommandContextPolicy(),
-            new GAgentDraftRunCommandTargetBinder(projectionPort),
+            new GAgentDraftRunCommandTargetBinder(
+                projectionPort,
+                new StubGAgentRunTerminalProjectionPort()),
             new GAgentDraftRunCommandEnvelopeFactory(),
             new ActorCommandTargetDispatcher<GAgentDraftRunCommandTarget>(new InlineActorDispatchPort(runtime)),
             new GAgentDraftRunAcceptedReceiptFactory());
@@ -713,7 +717,7 @@ public sealed class ScopeServiceEndpointsStreamTests
             new DefaultEventOutputStream<AGUIEvent, AGUIEvent>(new IdentityEventFrameMapper<AGUIEvent>()),
             new GAgentDraftRunCompletionPolicy(),
             new GAgentDraftRunFinalizeEmitter(),
-            new GAgentDraftRunDurableCompletionResolver(),
+            new GAgentDraftRunDurableCompletionResolver(new StubGAgentRunTerminalQueryPort()),
             NullLogger<DefaultCommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, AGUIEvent, GAgentDraftRunCompletionStatus>>.Instance);
     }
 
@@ -834,6 +838,59 @@ public sealed class ScopeServiceEndpointsStreamTests
     }
 
     private sealed record StubDraftRunProjectionLease(string ActorId, string CommandId) : IGAgentDraftRunProjectionLease;
+
+    private sealed class StubGAgentRunTerminalProjectionPort : IGAgentRunTerminalProjectionPort
+    {
+        public Task<IGAgentRunTerminalProjectionLease?> EnsureProjectionAsync(
+            string actorId,
+            string correlationId,
+            GAgentRunTerminalInteractionKind interactionKind,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            return Task.FromResult<IGAgentRunTerminalProjectionLease?>(
+                new StubGAgentRunTerminalProjectionLease(actorId, correlationId, interactionKind));
+        }
+
+        public Task ReleaseProjectionAsync(
+            IGAgentRunTerminalProjectionLease lease,
+            CancellationToken ct = default)
+        {
+            _ = lease;
+            _ = ct;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed record StubGAgentRunTerminalProjectionLease(
+        string ActorId,
+        string CorrelationId,
+        GAgentRunTerminalInteractionKind InteractionKind) : IGAgentRunTerminalProjectionLease;
+
+    private sealed class StubGAgentRunTerminalQueryPort : IGAgentRunTerminalQueryPort
+    {
+        public Task<GAgentRunTerminalSnapshot?> GetByCorrelationIdAsync(
+            string actorId,
+            string correlationId,
+            CancellationToken ct = default)
+        {
+            _ = actorId;
+            _ = correlationId;
+            _ = ct;
+            return Task.FromResult<GAgentRunTerminalSnapshot?>(null);
+        }
+
+        public Task<GAgentRunTerminalSnapshot?> GetBySessionIdAsync(
+            string actorId,
+            string sessionId,
+            CancellationToken ct = default)
+        {
+            _ = actorId;
+            _ = sessionId;
+            _ = ct;
+            return Task.FromResult<GAgentRunTerminalSnapshot?>(null);
+        }
+    }
 
     private sealed class StubScriptExecutionProjectionPort : IScriptExecutionProjectionPort
     {

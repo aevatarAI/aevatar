@@ -175,6 +175,8 @@ public sealed class RoleGAgentStateCoverageTests
         });
 
         agent.State.PendingApproval.Should().BeNull();
+        agent.State.Sessions["session-a"].Completed.Should().BeTrue();
+        agent.State.Sessions["session-a"].FinalContent.Should().Contain("approval_denied: user denied");
     }
 
     [Fact]
@@ -258,6 +260,8 @@ public sealed class RoleGAgentStateCoverageTests
             .WithMessage("dispatch failed");
 
         agent.State.PendingApproval.Should().BeNull();
+        agent.State.Sessions["session-a"].Completed.Should().BeTrue();
+        agent.State.Sessions["session-a"].FinalContent.Should().Contain("approval_continuation_failed: dispatch failed");
         AgentToolRequestContext.CurrentMetadata.Should().BeNull();
     }
 
@@ -316,6 +320,8 @@ public sealed class RoleGAgentStateCoverageTests
         });
 
         agent.State.PendingApproval.Should().BeNull();
+        agent.State.Sessions["session-a"].Completed.Should().BeTrue();
+        agent.State.Sessions["session-a"].FinalContent.Should().Contain("approval_timeout: Tool approval timed out and no remote approval handler is configured.");
     }
 
     [Fact]
@@ -344,6 +350,8 @@ public sealed class RoleGAgentStateCoverageTests
         });
 
         agent.State.PendingApproval.Should().BeNull();
+        agent.State.Sessions["session-a"].Completed.Should().BeTrue();
+        agent.State.Sessions["session-a"].FinalContent.Should().Contain("approval_denied: not approved");
         AgentToolRequestContext.CurrentMetadata.Should().BeNull();
     }
 
