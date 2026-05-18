@@ -167,7 +167,7 @@ public sealed class AgentDeliveryTargetToolTests
 
         var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         commandPort.UpsertAsync(Arg.Any<UserAgentCatalogUpsertCommand>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new UserAgentCatalogUpsertResult(CatalogCommandOutcome.Observed)));
+            .Returns(Task.FromResult(new UserAgentCatalogUpsertResult(CatalogCommandOutcome.Accepted)));
 
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
@@ -202,7 +202,10 @@ public sealed class AgentDeliveryTargetToolTests
                 """);
 
             using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be("upserted");
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            doc.RootElement.GetProperty("note").GetString()
+                .Should().Contain("accepted")
+                .And.Contain("propagating");
 
 #pragma warning disable CS0612 // legacy fields kept on the command for rollback safety
             await commandPort.Received(1).UpsertAsync(
@@ -334,7 +337,7 @@ public sealed class AgentDeliveryTargetToolTests
             }));
         var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         commandPort.TombstoneAsync("agent-3", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.Observed)));
+            .Returns(Task.FromResult(new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.Accepted)));
 
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
@@ -360,7 +363,7 @@ public sealed class AgentDeliveryTargetToolTests
         {
             var result = await tool.ExecuteAsync("""{"action":"delete","agent_id":"agent-3","confirm":true}""");
             using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be("deleted");
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
 
             await commandPort.Received(1).TombstoneAsync("agent-3", Arg.Any<CancellationToken>());
         }
@@ -371,13 +374,11 @@ public sealed class AgentDeliveryTargetToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_Delete_ReturnsDeleted_WhenCommandPortReportsObserved()
+    public async Task ExecuteAsync_Delete_ReturnsAccepted_WhenCommandPortAccepts()
     {
-        // Regression guard for #278 review: under the tombstone-retention contract
-        // DeleteAsync removes the document outright, so a successful tombstone must
-        // surface as "deleted" once the command port reports `Observed`. The polling
-        // loop now lives in UserAgentCatalogCommandPort; the tool just maps outcome
-        // to status text.
+        // Refactor (iter4/cluster-009):
+        //   Old pattern: Delete surfaced "deleted" when the command port reported Observed.
+        //   New principle: Delete returns accepted; callers confirm removal through list/get query paths.
         var caller = OwnerScope.ForNyxIdNative("user-1");
 
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
@@ -391,7 +392,7 @@ public sealed class AgentDeliveryTargetToolTests
             }));
         var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         commandPort.TombstoneAsync("agent-7", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.Observed)));
+            .Returns(Task.FromResult(new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.Accepted)));
 
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
@@ -417,7 +418,10 @@ public sealed class AgentDeliveryTargetToolTests
         {
             var result = await tool.ExecuteAsync("""{"action":"delete","agent_id":"agent-7","confirm":true}""");
             using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("status").GetString().Should().Be("deleted");
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            doc.RootElement.GetProperty("note").GetString()
+                .Should().Contain("accepted")
+                .And.Contain("propagating");
         }
         finally
         {
@@ -595,8 +599,9 @@ public sealed class AgentDeliveryTargetToolTests
     [Fact]
     public async Task ExecuteAsync_Upsert_ReturnsAccepted_WhenCommandPortReportsAccepted()
     {
-        // Hits the !Observed branch on the upsert path: command port reports Accepted
-        // (projection wait timed out) and the tool surfaces "accepted" + propagating note.
+        // Refactor (iter4/cluster-009):
+        //   Old pattern: Test covered the !Observed branch after hidden projection polling timed out.
+        //   New principle: Upsert always returns accepted plus a propagating note.
         var caller = OwnerScope.ForNyxIdNative("user-1");
 
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
@@ -640,7 +645,9 @@ public sealed class AgentDeliveryTargetToolTests
 
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-            doc.RootElement.GetProperty("note").GetString().Should().Contain("not yet confirmed");
+            doc.RootElement.GetProperty("note").GetString()
+                .Should().Contain("accepted")
+                .And.Contain("propagating");
         }
         finally
         {
@@ -671,8 +678,9 @@ public sealed class AgentDeliveryTargetToolTests
     [Fact]
     public async Task ExecuteAsync_Delete_ReturnsAccepted_WhenCommandPortReportsAccepted()
     {
-        // Hits the !Observed branch on the delete path: command port reports Accepted
-        // and the tool maps it to "accepted" + propagating note.
+        // Refactor (iter4/cluster-009):
+        //   Old pattern: Test covered the !Observed branch after hidden projection polling timed out.
+        //   New principle: Delete always returns accepted plus a propagating note after the caller-scoped pre-check.
         var caller = OwnerScope.ForNyxIdNative("user-1");
 
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
@@ -709,53 +717,6 @@ public sealed class AgentDeliveryTargetToolTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
             doc.RootElement.GetProperty("note").GetString().Should().Contain("propagating");
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_Delete_ReturnsNotFound_WhenCommandPortReportsNotFound()
-    {
-        // Race condition: GetForCallerAsync saw the entry, but by the time we dispatch
-        // the tombstone the command port can't find it (e.g. another delete won the race).
-        // Tool should map NotFound → "not found" rather than swallowing it as success.
-        var caller = OwnerScope.ForNyxIdNative("user-1");
-
-        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetForCallerAsync("agent-race", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
-            {
-                AgentId = "agent-race",
-                ConversationId = "oc_chat_race",
-                NyxProviderSlug = "api-lark-bot",
-                OwnerScope = caller,
-            }));
-
-        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-        commandPort.TombstoneAsync("agent-race", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new UserAgentCatalogTombstoneResult(CatalogCommandOutcome.NotFound)));
-
-        var resolver = Substitute.For<ICallerScopeResolver>();
-        resolver.TryResolveAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<OwnerScope?>(caller));
-
-        var services = new ServiceCollection();
-        services.AddSingleton(queryPort);
-        services.AddSingleton(commandPort);
-        services.AddSingleton(resolver);
-        var tool = new AgentDeliveryTargetTool(services.BuildServiceProvider());
-
-        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        };
-        try
-        {
-            var result = await tool.ExecuteAsync("""{"action":"delete","agent_id":"agent-race","confirm":true}""");
-            result.Should().Contain("not found");
         }
         finally
         {
