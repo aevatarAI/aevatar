@@ -5,11 +5,13 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Projection;
+using Aevatar.Workflow.Projection.DependencyInjection;
 using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -759,7 +761,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         bool? expectedSuccess)
     {
         var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
-        var projector = new WorkflowExecutionCurrentStateProjector(
+        var projector = CreateWorkflowExecutionCurrentStateProjector(
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 18, 7, 0, 0, TimeSpan.Zero)));
 
@@ -801,7 +803,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     public async Task WorkflowExecutionCurrentStateProjector_WhenEnvelopeIsNotCommittedState_ShouldSkipWrite()
     {
         var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
-        var projector = new WorkflowExecutionCurrentStateProjector(
+        var projector = CreateWorkflowExecutionCurrentStateProjector(
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 18, 7, 30, 0, TimeSpan.Zero)));
 
@@ -1019,6 +1021,18 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                 StateRoot = Any.Pack(state),
             }),
         };
+    }
+
+    private static ICurrentStateProjectionMaterializer<WorkflowExecutionMaterializationContext> CreateWorkflowExecutionCurrentStateProjector(
+        IProjectionWriteDispatcher<WorkflowExecutionCurrentStateDocument> writeDispatcher,
+        IProjectionClock clock)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(writeDispatcher);
+        services.AddSingleton(clock);
+        services.AddWorkflowExecutionProjectionCQRS();
+        return services.BuildServiceProvider()
+            .GetRequiredService<ICurrentStateProjectionMaterializer<WorkflowExecutionMaterializationContext>>();
     }
 
     private sealed class RecordingWriteDispatcher<TReadModel> : IProjectionWriteDispatcher<TReadModel>

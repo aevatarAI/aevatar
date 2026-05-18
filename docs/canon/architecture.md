@@ -180,7 +180,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - `ProjectionSessionEventHub<WorkflowRunEventEnvelope>` 负责 session stream 分发
   - `WorkflowExecutionCurrentStateQueryPort` 负责 authority current-state 查询映射
   - `WorkflowExecutionArtifactQueryPort` 负责 artifact 查询映射
-  - `WorkflowExecutionCurrentStateProjector` 负责 authority current-state replica
+  - `AddCurrentStateProjection<WorkflowExecutionMaterializationContext, WorkflowRunState, WorkflowExecutionCurrentStateDocument>` 负责 authority current-state replica
   - `WorkflowRunInsightReportArtifactProjector` / `WorkflowRunTimelineArtifactProjector` / `WorkflowRunGraphArtifactProjector` 负责 derived durable artifacts
 - **Workflow 应用编排** 在 `Aevatar.Workflow.Application`：
   - `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 负责完整交互路径（dispatch + sink consume + finalize）
@@ -195,7 +195,7 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - 仅依赖 `Aevatar.Workflow.Application.Abstractions`
   - 暴露 `/api/agents`、`/api/workflows`（运行查询按配置开关）
 - **输出分支**：
-  - `WorkflowExecutionCurrentStateProjector` 写入 canonical current-state store
+  - `CurrentStateProjectionMaterializer<WorkflowExecutionMaterializationContext, WorkflowRunState, WorkflowExecutionCurrentStateDocument>` 写入 canonical current-state store
   - `WorkflowRunInsightReportArtifactProjector` / `WorkflowRunTimelineArtifactProjector` / `WorkflowRunGraphArtifactProjector` 写入各自 artifact store
   - `WorkflowExecutionAGUIEventProjector`（位于 `Aevatar.Workflow.Presentation.AGUIAdapter`）输出 AG-UI 实时事件（SSE/WS），与 CQRS 读模型共享同一输入 envelope 流
 

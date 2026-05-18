@@ -6,12 +6,14 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Projection;
+using Aevatar.Workflow.Projection.DependencyInjection;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -39,7 +41,9 @@ public sealed class WorkflowProjectionMaterializationTests
     public async Task WorkflowExecutionCurrentStateProjector_ShouldWriteCommittedSnapshot_AndIgnoreInvalidEnvelope()
     {
         var store = new RecordingDocumentStore<WorkflowExecutionCurrentStateDocument>(x => x.Id);
-        var projector = new WorkflowExecutionCurrentStateProjector(store, new FixedClock(DateTimeOffset.Parse("2026-03-17T10:00:00+00:00")));
+        var projector = CreateWorkflowExecutionCurrentStateProjector(
+            store,
+            new FixedClock(DateTimeOffset.Parse("2026-03-17T10:00:00+00:00")));
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -520,6 +524,18 @@ public sealed class WorkflowProjectionMaterializationTests
             FinalError = finalError,
             Compiled = true,
         };
+
+    private static ICurrentStateProjectionMaterializer<WorkflowExecutionMaterializationContext> CreateWorkflowExecutionCurrentStateProjector(
+        IProjectionWriteDispatcher<WorkflowExecutionCurrentStateDocument> writeDispatcher,
+        IProjectionClock clock)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(writeDispatcher);
+        services.AddSingleton(clock);
+        services.AddWorkflowExecutionProjectionCQRS();
+        return services.BuildServiceProvider()
+            .GetRequiredService<ICurrentStateProjectionMaterializer<WorkflowExecutionMaterializationContext>>();
+    }
 
     private sealed class FixedClock : IProjectionClock
     {

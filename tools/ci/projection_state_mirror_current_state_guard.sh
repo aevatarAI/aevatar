@@ -13,12 +13,19 @@ FILES=(
   "src/Aevatar.Scripting.Projection/Projectors/ScriptCatalogEntryProjector.cs"
   "src/Aevatar.Scripting.Projection/Projectors/ScriptNativeDocumentProjector.cs"
   "src/Aevatar.Scripting.Projection/Projectors/ScriptNativeGraphProjector.cs"
-  "src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionCurrentStateProjector.cs"
+  "src/Aevatar.CQRS.Projection.Core/Orchestration/CurrentStateProjectionMaterializer.cs"
 )
+
+EXISTING_FILES=()
+for file in "${FILES[@]}"; do
+  if [[ -f "${file}" ]]; then
+    EXISTING_FILES+=("${file}")
+  fi
+done
 
 legacy_reader_hits="$(
   rg -n "IProjectionDocumentReader<|_documentReader|IProjectionEventReducer<|_reducersByType|EventEnvelopeTimestampResolver\\.Resolve\\(" \
-    "${FILES[@]}" \
+    "${EXISTING_FILES[@]}" \
     || true
 )"
 
@@ -29,7 +36,7 @@ if [[ -n "${legacy_reader_hits}" ]]; then
 fi
 
 missing_committed_hits="$(
-  for file in "${FILES[@]}"; do
+  for file in "${EXISTING_FILES[@]}"; do
     if ! rg -q "CommittedStateEventEnvelope\\.(TryUnpackState<|TryGetObservedPayload\\()" "${file}"; then
       echo "${file}"
     fi

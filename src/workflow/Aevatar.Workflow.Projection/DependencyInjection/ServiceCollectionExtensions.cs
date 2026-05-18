@@ -11,6 +11,7 @@ using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
+using Aevatar.Workflow.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -97,12 +98,38 @@ public static class ServiceCollectionExtensions
         services.AddProjectionArtifactMaterializer<
             WorkflowBindingProjectionContext,
             WorkflowActorBindingProjector>();
-        services.AddCurrentStateProjectionMaterializer<
+        services.AddCurrentStateProjection<
             WorkflowExecutionMaterializationContext,
-            WorkflowExecutionCurrentStateProjector>();
+            WorkflowRunState,
+            WorkflowExecutionCurrentStateDocument>(
+            static (context, state, _) => new WorkflowExecutionCurrentStateDocument
+            {
+                CommandId = state.LastCommandId ?? string.Empty,
+                DefinitionActorId = state.DefinitionActorId ?? string.Empty,
+                RunId = string.IsNullOrWhiteSpace(state.RunId) ? context.RootActorId : state.RunId,
+                WorkflowName = state.WorkflowName ?? string.Empty,
+                Status = state.Status ?? string.Empty,
+                Compiled = state.Compiled,
+                CompilationError = state.CompilationError ?? string.Empty,
+                Input = state.Input ?? string.Empty,
+                FinalOutput = state.FinalOutput ?? string.Empty,
+                FinalError = state.FinalError ?? string.Empty,
+                ExecutionStateCount = state.ExecutionStates.Count,
+                Success = ResolveSuccess(state.Status),
+            });
         services.AddProjectionArtifactMaterializer<
             WorkflowExecutionMaterializationContext,
             WorkflowRunInsightReportArtifactProjector>();
         return services;
+    }
+
+    private static bool? ResolveSuccess(string? status)
+    {
+        return (status ?? string.Empty).Trim() switch
+        {
+            "completed" => true,
+            "failed" => false,
+            _ => null,
+        };
     }
 }

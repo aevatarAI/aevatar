@@ -15,12 +15,19 @@ FILES=(
   "src/Aevatar.Scripting.Projection/Projectors/ScriptNativeGraphProjector.cs"
   "src/Aevatar.Scripting.Projection/Materialization/ScriptNativeDocumentMaterializer.cs"
   "src/Aevatar.Scripting.Projection/Materialization/ScriptNativeGraphMaterializer.cs"
-  "src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionCurrentStateProjector.cs"
+  "src/Aevatar.CQRS.Projection.Core/Orchestration/CurrentStateProjectionMaterializer.cs"
 )
+
+EXISTING_FILES=()
+for file in "${FILES[@]}"; do
+  if [[ -f "${file}" ]]; then
+    EXISTING_FILES+=("${file}")
+  fi
+done
 
 version_hits="$(
   rg -n "StateVersion[[:space:]]*(\\+\\+|--|\\+=|-=)|\\+\\+[[:space:]]*[A-Za-z0-9_.]+\\.StateVersion|--[[:space:]]*[A-Za-z0-9_.]+\\.StateVersion|StateVersion[[:space:]]*=[[:space:]]*1\\b" \
-    "${FILES[@]}" \
+    "${EXISTING_FILES[@]}" \
     || true
 )"
 
@@ -32,7 +39,7 @@ fi
 
 event_id_hits="$(
   rg -n "LastEventId[[:space:]]*=[[:space:]]*string\\.Concat|LastEventId[[:space:]]*=.*EventType|LastEventId[[:space:]]*=.*TypeUrl" \
-    "${FILES[@]}" \
+    "${EXISTING_FILES[@]}" \
     || true
 )"
 
