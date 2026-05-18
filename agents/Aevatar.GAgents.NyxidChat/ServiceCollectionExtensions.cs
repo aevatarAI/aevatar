@@ -1,5 +1,10 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.DependencyInjection;
+using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Core.Streaming;
+using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
@@ -7,6 +12,7 @@ using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.NyxidChat.Slash;
+using Aevatar.Presentation.AGUI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -88,6 +94,26 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IUserLlmSelectionService, DefaultUserLlmSelectionService>();
         services.TryAddSingleton<IUserLlmOptionsRenderer<MessageContent>, TextUserLlmOptionsRenderer>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelSlashCommandHandler, ModelChannelSlashCommandHandler>());
+
+        services.AddEventSinkProjectionRuntimeCore<
+            NyxIdChatSessionProjectionContext,
+            NyxIdChatSessionRuntimeLease,
+            AGUIEvent,
+            ProjectionSessionScopeGAgent<NyxIdChatSessionProjectionContext>>(
+            static scopeKey => new NyxIdChatSessionProjectionContext
+            {
+                SessionId = scopeKey.SessionId,
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new NyxIdChatSessionRuntimeLease(context));
+        services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
+        services.TryAddSingleton<IProjectionSessionEventCodec<AGUIEvent>, NyxIdChatSessionEventCodec>();
+        services.TryAddSingleton<IProjectionSessionEventHub<AGUIEvent>, ProjectionSessionEventHub<AGUIEvent>>();
+        services.TryAddSingleton<INyxIdChatSessionProjectionPort, NyxIdChatSessionProjectionPort>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<NyxIdChatSessionProjectionContext>,
+            NyxIdChatSessionEventProjector>());
 
         return services;
     }

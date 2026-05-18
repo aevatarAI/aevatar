@@ -10,12 +10,15 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Authentication.Abstractions;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.Presentation.AGUI;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.Collections;
@@ -33,6 +36,11 @@ using Microsoft.IdentityModel.Tokens;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Microsoft.AspNetCore.Authorization;
+using AguiTextMessageContentEvent = Aevatar.Presentation.AGUI.TextMessageContentEvent;
+using AguiTextMessageEndEvent = Aevatar.Presentation.AGUI.TextMessageEndEvent;
+using AguiTextMessageStartEvent = Aevatar.Presentation.AGUI.TextMessageStartEvent;
+using AiTextMessageContentEvent = Aevatar.AI.Abstractions.TextMessageContentEvent;
+using AiTextMessageEndEvent = Aevatar.AI.Abstractions.TextMessageEndEvent;
 
 namespace Aevatar.AI.Tests;
 
@@ -74,6 +82,25 @@ public class NyxIdChatEndpointsCoverageTests
         var endpoint = BuildRouteEndpoint("/api/webhooks/nyxid-relay/diag");
 
         endpoint.Metadata.OfType<IAllowAnonymous>().Should().BeEmpty();
+    }
+
+    [Fact]
+    public void AgentSseEndpointSources_ShouldNotSubscribeRawEventEnvelope()
+    {
+        var root = GetRepositoryRoot();
+        var streamingRunner = File.ReadAllText(Path.Combine(
+            root,
+            "agents/Aevatar.GAgents.NyxidChat/NyxIdChatStreamingRunner.cs"));
+        var streamingEndpoints = File.ReadAllText(Path.Combine(
+            root,
+            "agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.Streaming.cs"));
+
+        streamingRunner.Should().NotContain("SubscribeAsync<EventEnvelope>");
+        streamingEndpoints.Should().NotContain("SubscribeAsync<EventEnvelope>");
+        streamingRunner.Should().NotContain("actor.HandleEventAsync");
+        streamingRunner.Should().NotContain(".HandleEventAsync(");
+        streamingEndpoints.Should().NotContain("actor.HandleEventAsync");
+        streamingEndpoints.Should().NotContain(".HandleEventAsync(");
     }
 
     [Fact]
@@ -500,7 +527,7 @@ public class NyxIdChatEndpointsCoverageTests
         var context = new DefaultHttpContext();
         context.Request.Headers.Authorization = "Bearer";
         var runtime = new StubActorRuntime();
-        var subscriptions = new StubSubscriptionProvider();
+        var subscriptions = new StubNyxIdChatSessionProjectionPort();
 
         await InvokeTaskAsync(
             "HandleStreamMessageAsync",
@@ -531,7 +558,7 @@ public class NyxIdChatEndpointsCoverageTests
             new NyxIdChatEndpoints.NyxIdChatStreamRequest(null),
             runtime,
             new StubGAgentActorStore(),
-            new StubSubscriptionProvider(),
+            new StubNyxIdChatSessionProjectionPort(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
         context.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
@@ -553,7 +580,7 @@ public class NyxIdChatEndpointsCoverageTests
             new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
             new StubActorRuntime(),
             actorStore,
-            new StubSubscriptionProvider(),
+            new StubNyxIdChatSessionProjectionPort(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
 
@@ -579,7 +606,7 @@ public class NyxIdChatEndpointsCoverageTests
             new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
             new StubActorRuntime(),
             actorStore,
-            new StubSubscriptionProvider(),
+            new StubNyxIdChatSessionProjectionPort(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
 
@@ -607,7 +634,7 @@ public class NyxIdChatEndpointsCoverageTests
             new NyxIdChatEndpoints.NyxIdApprovalRequest("req"),
             runtime,
             new StubGAgentActorStore(),
-            new StubSubscriptionProvider(),
+            new StubNyxIdChatSessionProjectionPort(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
         context.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
@@ -628,7 +655,7 @@ public class NyxIdChatEndpointsCoverageTests
             new NyxIdChatEndpoints.NyxIdApprovalRequest(null),
             runtime,
             new StubGAgentActorStore(),
-            new StubSubscriptionProvider(),
+            new StubNyxIdChatSessionProjectionPort(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
         context.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
@@ -650,7 +677,7 @@ public class NyxIdChatEndpointsCoverageTests
             new NyxIdChatEndpoints.NyxIdApprovalRequest("req"),
             new StubActorRuntime(),
             actorStore,
-            new StubSubscriptionProvider(),
+            new StubNyxIdChatSessionProjectionPort(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
 
@@ -676,7 +703,7 @@ public class NyxIdChatEndpointsCoverageTests
             new NyxIdChatEndpoints.NyxIdApprovalRequest("req"),
             new StubActorRuntime(),
             actorStore,
-            new StubSubscriptionProvider(),
+            new StubNyxIdChatSessionProjectionPort(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
 
@@ -706,13 +733,14 @@ public class NyxIdChatEndpointsCoverageTests
 
         var runtime = new StubActorRuntime();
         runtime.Actors["actor-1"] = new StubActor("actor-1");
-        var subscriptions = new StubSubscriptionProvider
+        var subscriptions = new StubNyxIdChatSessionProjectionPort
         {
             Messages =
             {
-                new EventEnvelope { Payload = Any.Pack(new TextMessageStartEvent()) },
-                new EventEnvelope { Payload = Any.Pack(new TextMessageContentEvent { Delta = "hello" }) },
-                new EventEnvelope { Payload = Any.Pack(new TextMessageEndEvent { Content = "done" }) },
+                new AGUIEvent { TextMessageStart = new AguiTextMessageStartEvent() },
+                new AGUIEvent { TextMessageContent = new AguiTextMessageContentEvent { Delta = "hello" } },
+                new AGUIEvent { TextMessageEnd = new AguiTextMessageEndEvent() },
+                new AGUIEvent { RunFinished = new RunFinishedEvent() },
             },
         };
 
@@ -764,7 +792,7 @@ public class NyxIdChatEndpointsCoverageTests
             new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
             new ThrowingActorRuntime(new InvalidOperationException("runtime failed")),
             new StubGAgentActorStore(),
-            new StubSubscriptionProvider(),
+            new StubNyxIdChatSessionProjectionPort(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
 
@@ -789,7 +817,7 @@ public class NyxIdChatEndpointsCoverageTests
             new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
             runtime,
             new StubGAgentActorStore(),
-            new ThrowingSubscriptionProvider(new InvalidOperationException("subscription failed")),
+            new ThrowingNyxIdChatSessionProjectionPort(new InvalidOperationException("subscription failed")),
             NullLoggerFactory.Instance,
             CancellationToken.None);
 
@@ -810,12 +838,13 @@ public class NyxIdChatEndpointsCoverageTests
 
         var runtime = new StubActorRuntime();
         runtime.Actors["actor-1"] = new StubActor("actor-1");
-        var subscriptions = new StubSubscriptionProvider
+        var subscriptions = new StubNyxIdChatSessionProjectionPort
         {
             Messages =
             {
-                new EventEnvelope { Payload = Any.Pack(new TextMessageStartEvent()) },
-                new EventEnvelope { Payload = Any.Pack(new TextMessageEndEvent { Content = "done" }) },
+                new AGUIEvent { TextMessageStart = new AguiTextMessageStartEvent() },
+                new AGUIEvent { TextMessageEnd = new AguiTextMessageEndEvent() },
+                new AGUIEvent { RunFinished = new RunFinishedEvent() },
             },
         };
 
@@ -859,7 +888,7 @@ public class NyxIdChatEndpointsCoverageTests
             new NyxIdChatEndpoints.NyxIdApprovalRequest("req-1"),
             new ThrowingActorRuntime(new InvalidOperationException("runtime failed")),
             new StubGAgentActorStore(),
-            new StubSubscriptionProvider(),
+            new StubNyxIdChatSessionProjectionPort(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
 
@@ -884,7 +913,7 @@ public class NyxIdChatEndpointsCoverageTests
             new NyxIdChatEndpoints.NyxIdApprovalRequest("req-1"),
             runtime,
             new StubGAgentActorStore(),
-            new ThrowingSubscriptionProvider(new InvalidOperationException("approval subscription failed")),
+            new ThrowingNyxIdChatSessionProjectionPort(new InvalidOperationException("approval subscription failed")),
             NullLoggerFactory.Instance,
             CancellationToken.None);
 
@@ -1769,224 +1798,32 @@ public class NyxIdChatEndpointsCoverageTests
         diag.Should().Contain("timeout");
     }
 
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task MapAndWriteEventAsync_ShouldSerializePayloads(bool hasError)
-    {
-        var envelope = hasError
-            ? new EventEnvelope { Payload = Any.Pack(new TextMessageEndEvent { Content = hasError ? "[[AEVATAR_LLM_ERROR]]boom" : string.Empty }) }
-            : new EventEnvelope { Payload = Any.Pack(new TextMessageStartEvent()) };
-        var context = new DefaultHttpContext();
-        context.Response.Body = new MemoryStream();
-
-        var writer = AgentCoverageTestSupport.CreateNonPublicInstance(
-            typeof(NyxIdChatEndpoints).Assembly,
-            "Aevatar.GAgents.NyxidChat.NyxIdChatSseWriter",
-            context.Response);
-
-        var method = EndpointsType.GetMethod("MapAndWriteEventAsync", BindingFlags.NonPublic | BindingFlags.Static)!;
-        var terminal = await InvokeValueTaskAsync<string?>(method, envelope, "m-1", writer);
-
-        context.Response.Body.Position = 0;
-        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
-        if (hasError)
-        {
-            terminal.Should().Be("RUN_ERROR");
-            body.Should().Contain("RUN_ERROR");
-            body.Should().NotContain("boom");
-            body.Should().Contain("something went wrong");
-        }
-        else
-        {
-            terminal.Should().BeNull();
-            body.Should().Contain("TEXT_MESSAGE_START");
-        }
-    }
-
     [Fact]
-    public async Task MapAndWriteEventAsync_ShouldSerializeContentToolingMediaAndNormalEnd()
+    public async Task NyxIdChatSessionEventProjector_ShouldPublishTypedAguiFrames_FromEventEnvelopeInput()
     {
-        var context = new DefaultHttpContext();
-        context.Response.Body = new MemoryStream();
+        var sessionHub = new RecordingNyxIdChatSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(sessionHub);
+        var context = new NyxIdChatSessionProjectionContext
+        {
+            RootActorId = "actor-1",
+            SessionId = "session-1",
+            ProjectionKind = NyxIdChatProjectionKinds.ChatSession,
+        };
 
-        var writer = AgentCoverageTestSupport.CreateNonPublicInstance(
-            typeof(NyxIdChatEndpoints).Assembly,
-            "Aevatar.GAgents.NyxidChat.NyxIdChatSseWriter",
-            context.Response);
+        await projector.ProjectAsync(
+            context,
+            new EventEnvelope { Payload = Any.Pack(new AiTextMessageContentEvent { Delta = "delta-1" }) },
+            CancellationToken.None);
+        await projector.ProjectAsync(
+            context,
+            new EventEnvelope { Payload = Any.Pack(new AiTextMessageEndEvent { Content = "done" }) },
+            CancellationToken.None);
 
-        var method = EndpointsType.GetMethod("MapAndWriteEventAsync", BindingFlags.NonPublic | BindingFlags.Static)!;
-
-        (await InvokeValueTaskAsync<string?>(
-            method,
-            new EventEnvelope { Payload = Any.Pack(new TextMessageContentEvent { Delta = "delta-1" }) },
-            "m-2",
-            writer)).Should().BeNull();
-        (await InvokeValueTaskAsync<string?>(
-            method,
-            new EventEnvelope
-            {
-                Payload = Any.Pack(new ToolCallEvent
-                {
-                    ToolName = "search",
-                    CallId = "call-1",
-                    ArgumentsJson = "{\"q\":\"abc\"}",
-                }),
-            },
-            "m-2",
-            writer)).Should().BeNull();
-        (await InvokeValueTaskAsync<string?>(
-            method,
-            new EventEnvelope
-            {
-                Payload = Any.Pack(new ToolResultEvent
-                {
-                    CallId = "call-1",
-                    ResultJson = "{\"ok\":true}",
-                    Success = true,
-                    Error = string.Empty,
-                }),
-            },
-            "m-2",
-            writer)).Should().BeNull();
-        (await InvokeValueTaskAsync<string?>(
-            method,
-            new EventEnvelope
-            {
-                Payload = Any.Pack(new ToolApprovalRequestEvent
-                {
-                    RequestId = "req-1",
-                    SessionId = "s1",
-                    ToolName = "connector.run",
-                    ToolCallId = "call-1",
-                    ArgumentsJson = "{}",
-                    IsDestructive = true,
-                    TimeoutSeconds = 30,
-                }),
-            },
-            "m-2",
-            writer)).Should().BeNull();
-        (await InvokeValueTaskAsync<string?>(
-            method,
-            new EventEnvelope
-            {
-                Payload = Any.Pack(new MediaContentEvent
-                {
-                    SessionId = "session-1",
-                    AgentId = "agent-1",
-                    Part = new ChatContentPart
-                    {
-                        Kind = ChatContentPartKind.Image,
-                        Uri = "https://example.com/cat.png",
-                        MediaType = "image/png",
-                        Name = "cat",
-                    },
-                }),
-            },
-            "m-2",
-            writer)).Should().BeNull();
-        (await InvokeValueTaskAsync<string?>(
-            method,
-            new EventEnvelope
-            {
-                Payload = Any.Pack(new MediaContentEvent
-                {
-                    SessionId = "session-1",
-                    AgentId = "agent-1",
-                    Part = new ChatContentPart
-                    {
-                        Kind = ChatContentPartKind.Audio,
-                        DataBase64 = "YXVkaW8=",
-                        MediaType = "audio/mpeg",
-                        Name = "clip",
-                    },
-                }),
-            },
-            "m-2",
-            writer)).Should().BeNull();
-        (await InvokeValueTaskAsync<string?>(
-            method,
-            new EventEnvelope
-            {
-                Payload = Any.Pack(new MediaContentEvent
-                {
-                    SessionId = "session-1",
-                    AgentId = "agent-1",
-                    Part = new ChatContentPart
-                    {
-                        Kind = ChatContentPartKind.Video,
-                        Uri = "https://example.com/video.mp4",
-                        MediaType = "video/mp4",
-                        Name = "clip-video",
-                    },
-                }),
-            },
-            "m-2",
-            writer)).Should().BeNull();
-        (await InvokeValueTaskAsync<string?>(
-            method,
-            new EventEnvelope
-            {
-                Payload = Any.Pack(new MediaContentEvent
-                {
-                    SessionId = "session-1",
-                    AgentId = "agent-1",
-                    Part = new ChatContentPart
-                    {
-                        Kind = ChatContentPartKind.Text,
-                        Text = "inline note",
-                    },
-                }),
-            },
-            "m-2",
-            writer)).Should().BeNull();
-        (await InvokeValueTaskAsync<string?>(
-            method,
-            new EventEnvelope
-            {
-                Payload = Any.Pack(new MediaContentEvent
-                {
-                    SessionId = "session-1",
-                    AgentId = "agent-1",
-                    Part = new ChatContentPart
-                    {
-                        Kind = ChatContentPartKind.Unspecified,
-                        Name = "mystery",
-                    },
-                }),
-            },
-            "m-2",
-            writer)).Should().BeNull();
-        (await InvokeValueTaskAsync<string?>(
-            method,
-            new EventEnvelope
-            {
-                Payload = Any.Pack(new MediaContentEvent
-                {
-                    SessionId = "session-1",
-                    AgentId = "agent-1",
-                }),
-            },
-            "m-2",
-            writer)).Should().BeNull();
-        (await InvokeValueTaskAsync<string?>(
-            method,
-            new EventEnvelope { Payload = Any.Pack(new TextMessageEndEvent { Content = "done" }) },
-            "m-2",
-            writer)).Should().Be("TEXT_MESSAGE_END");
-
-        context.Response.Body.Position = 0;
-        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
-        body.Should().Contain("delta-1");
-        body.Should().Contain("search");
-        body.Should().Contain("call-1");
-        body.Should().Contain("req-1");
-        body.Should().Contain("cat.png");
-        body.Should().Contain("\"kind\":\"audio\"");
-        body.Should().Contain("\"kind\":\"video\"");
-        body.Should().Contain("\"kind\":\"text\"");
-        body.Should().Contain("\"kind\":\"unknown\"");
-        body.Should().Contain("TEXT_MESSAGE_END");
+        sessionHub.Published.Should().HaveCount(3);
+        sessionHub.Published[0].Event.TextMessageContent.Delta.Should().Be("delta-1");
+        sessionHub.Published[1].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.TextMessageEnd);
+        sessionHub.Published[2].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.RunFinished);
+        sessionHub.Published.Should().OnlyContain(x => x.ScopeId == "actor-1" && x.SessionId == "session-1");
     }
 
     private static async Task<IResult> InvokeResultAsync(string methodName, params object[] args)
@@ -2043,18 +1880,20 @@ public class NyxIdChatEndpointsCoverageTests
             }
         }
 
-        return args;
-    }
-
-    private static async Task<T> InvokeValueTaskAsync<T>(MethodInfo method, params object[] args)
-    {
-        var result = method.Invoke(null, args)!;
-        return result switch
+        if (parameters.Length == args.Length + 1 && args.All(arg => arg is not INyxIdChatSessionProjectionPort))
         {
-            ValueTask<T> task => await task,
-            Task<T> task => await task,
-            _ => throw new InvalidOperationException($"Unexpected return type: {result.GetType().FullName}"),
-        };
+            var projectionPortIndex = Array.FindIndex(
+                parameters,
+                parameter => parameter.ParameterType == typeof(INyxIdChatSessionProjectionPort));
+            if (projectionPortIndex >= 0)
+            {
+                var normalized = args.ToList();
+                normalized.Insert(projectionPortIndex, new StubNyxIdChatSessionProjectionPort());
+                return normalized.ToArray();
+            }
+        }
+
+        return args;
     }
 
     private static void EnsureEndpointContextServices(IEnumerable<object> args)
@@ -2118,6 +1957,16 @@ public class NyxIdChatEndpointsCoverageTests
         var scopeHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(scopeId.Trim())))
             .ToLowerInvariant();
         return $"channel-conversation:{canonicalKey}:scope:{scopeHash}";
+    }
+
+    private static string GetRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory != null && !File.Exists(Path.Combine(directory.FullName, "aevatar.slnx")))
+            directory = directory.Parent;
+
+        return directory?.FullName
+            ?? throw new InvalidOperationException("Repository root could not be resolved.");
     }
 
     private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)
@@ -2385,25 +2234,130 @@ public class NyxIdChatEndpointsCoverageTests
         }
     }
 
-    private sealed class StubSubscriptionProvider : IActorEventSubscriptionProvider
+    private sealed class StubNyxIdChatSessionProjectionPort : INyxIdChatSessionProjectionPort
     {
-        public List<EventEnvelope> Messages { get; } = [];
+        private IEventSink<AGUIEvent>? _sink;
+        private INyxIdChatSessionProjectionLease? _lease;
 
-        public Task<IAsyncDisposable> SubscribeAsync<TMessage>(
+        public List<AGUIEvent> Messages { get; } = [];
+        public List<(string ActorId, string SessionId)> EnsureCalls { get; } = [];
+        public bool ProjectionEnabled => true;
+
+        public async Task<INyxIdChatSessionProjectionLease?> EnsureChatProjectionAsync(
             string actorId,
-            Func<TMessage, Task> handler,
+            string sessionId,
             CancellationToken ct = default)
-            where TMessage : class, IMessage, new()
         {
-            _ = actorId;
-            _ = ct;
-            if (typeof(TMessage) == typeof(EventEnvelope))
-            {
-                foreach (var message in Messages)
-                    handler((TMessage)(object)message).GetAwaiter().GetResult();
-            }
+            ct.ThrowIfCancellationRequested();
+            EnsureCalls.Add((actorId, sessionId));
+            _lease = new StubNyxIdChatSessionProjectionLease(actorId, sessionId);
+            await PublishBufferedMessagesAsync(ct);
+            return _lease;
+        }
+
+        public async Task AttachLiveSinkAsync(
+            INyxIdChatSessionProjectionLease lease,
+            IEventSink<AGUIEvent> sink,
+            CancellationToken ct = default)
+        {
+            _ = lease;
+            _sink = sink;
+            await PublishBufferedMessagesAsync(ct);
+        }
+
+        public Task DetachLiveSinkAsync(
+            INyxIdChatSessionProjectionLease lease,
+            IEventSink<AGUIEvent> sink,
+            CancellationToken ct = default)
+        {
+            _ = lease;
+            _ = sink;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task ReleaseActorProjectionAsync(
+            INyxIdChatSessionProjectionLease lease,
+            CancellationToken ct = default)
+        {
+            _ = lease;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        private async Task PublishBufferedMessagesAsync(CancellationToken ct)
+        {
+            if (_sink == null || _lease == null)
+                return;
+
+            foreach (var message in Messages)
+                await _sink.PushAsync(message, ct);
+        }
+    }
+
+    private sealed record StubNyxIdChatSessionProjectionLease(string ActorId, string SessionId)
+        : INyxIdChatSessionProjectionLease;
+
+    private sealed class RecordingNyxIdChatSessionEventHub : IProjectionSessionEventHub<AGUIEvent>
+    {
+        public List<(string ScopeId, string SessionId, AGUIEvent Event)> Published { get; } = [];
+
+        public Task PublishAsync(
+            string scopeId,
+            string sessionId,
+            AGUIEvent evt,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Published.Add((scopeId, sessionId, evt));
+            return Task.CompletedTask;
+        }
+
+        public Task<IAsyncDisposable> SubscribeAsync(
+            string scopeId,
+            string sessionId,
+            Func<AGUIEvent, ValueTask> handler,
+            CancellationToken ct = default)
+        {
+            _ = scopeId;
+            _ = sessionId;
+            _ = handler;
+            ct.ThrowIfCancellationRequested();
             return Task.FromResult<IAsyncDisposable>(new NoopDisposable());
         }
+    }
+
+    private sealed class ThrowingNyxIdChatSessionProjectionPort(Exception exception) : INyxIdChatSessionProjectionPort
+    {
+        public bool ProjectionEnabled => true;
+
+        public Task<INyxIdChatSessionProjectionLease?> EnsureChatProjectionAsync(
+            string actorId,
+            string sessionId,
+            CancellationToken ct = default)
+        {
+            _ = actorId;
+            _ = sessionId;
+            _ = ct;
+            throw exception;
+        }
+
+        public Task AttachLiveSinkAsync(
+            INyxIdChatSessionProjectionLease lease,
+            IEventSink<AGUIEvent> sink,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task DetachLiveSinkAsync(
+            INyxIdChatSessionProjectionLease lease,
+            IEventSink<AGUIEvent> sink,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task ReleaseActorProjectionAsync(
+            INyxIdChatSessionProjectionLease lease,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
     }
 
     private sealed class StubGAgentActorStore :
@@ -2530,21 +2484,6 @@ public class NyxIdChatEndpointsCoverageTests
                 throw DeleteConversationException;
             DeletedConversations.Add((scopeId, conversationId));
             return Task.CompletedTask;
-        }
-    }
-
-    private sealed class ThrowingSubscriptionProvider(Exception exception) : IActorEventSubscriptionProvider
-    {
-        public Task<IAsyncDisposable> SubscribeAsync<TMessage>(
-            string actorId,
-            Func<TMessage, Task> handler,
-            CancellationToken ct = default)
-            where TMessage : class, IMessage, new()
-        {
-            _ = actorId;
-            _ = handler;
-            _ = ct;
-            throw exception;
         }
     }
 
