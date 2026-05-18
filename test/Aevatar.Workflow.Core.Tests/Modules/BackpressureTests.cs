@@ -1,9 +1,14 @@
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
+using Google.Protobuf;
 
 namespace Aevatar.Workflow.Core.Tests.Modules;
 
+/// <summary>
+/// Refactor (iter11/cluster-021): Old tests allowed per-drain head removal to satisfy FIFO assertions.
+/// Refactor (iter11/cluster-021): New tests require cursor-based FIFO drain and source regression coverage.
+/// </summary>
 public class BackpressureHelperTests
 {
     [Fact]
@@ -60,7 +65,7 @@ public class BackpressureHelperTests
 
         BackpressureHelper.TryAdmit(bp, MakeEntry("s3")).Should().BeFalse();
         bp.ActiveWorkers.Should().Be(2);
-        bp.Queue.Should().HaveCount(1);
+        BackpressureHelper.QueuedCount(bp).Should().Be(1);
         bp.Queue[0].StepId.Should().Be("s3");
     }
 
@@ -77,7 +82,7 @@ public class BackpressureHelperTests
         next.Should().NotBeNull();
         next!.StepId.Should().Be("s2");
         bp.ActiveWorkers.Should().Be(1);
-        bp.Queue.Should().BeEmpty();
+        BackpressureHelper.QueuedCount(bp).Should().Be(0);
     }
 
     [Fact]
@@ -113,6 +118,81 @@ public class BackpressureHelperTests
     }
 
     [Fact]
+    public void TryDrainOne_OldStateWithoutHeadIndex_ShouldStartAtQueueHead()
+    {
+        var oldState = new BackpressureQueueState
+        {
+            ActiveWorkers = 1,
+            MaxConcurrentWorkers = 1,
+        };
+        oldState.Queue.Add(MakeEntry("old-s1"));
+        oldState.Queue.Add(MakeEntry("old-s2"));
+        var oldStateBytes = oldState.ToByteArray();
+
+        var bp = BackpressureQueueState.Parser.ParseFrom(oldStateBytes);
+        bp.HeadIndex.Should().Be(0);
+
+        var next = BackpressureHelper.TryDrainOne(bp);
+
+        next.Should().NotBeNull();
+        next!.StepId.Should().Be("old-s1");
+        BackpressureHelper.QueuedCount(bp).Should().Be(1);
+    }
+
+    [Fact]
+    public void TryDrainOne_ShouldAdvanceHeadIndexWithoutPerDrainHeadRemoval()
+    {
+        var bp = BackpressureHelper.Initialize(1);
+        BackpressureHelper.TryAdmit(bp, MakeEntry("active"));
+        for (var i = 0; i < 1_000; i++)
+            BackpressureHelper.TryAdmit(bp, MakeEntry($"queued-{i}"));
+
+        var queueCountBeforeDrain = bp.Queue.Count;
+        var first = BackpressureHelper.TryDrainOne(bp);
+
+        first!.StepId.Should().Be("queued-0");
+        bp.HeadIndex.Should().Be(1);
+        bp.Queue.Count.Should().Be(queueCountBeforeDrain);
+        BackpressureHelper.QueuedCount(bp).Should().Be(999);
+    }
+
+    [Fact]
+    public void TryDrainOne_ShouldCompactConsumedPrefixAndPreserveFIFO()
+    {
+        var bp = BackpressureHelper.Initialize(1);
+        BackpressureHelper.TryAdmit(bp, MakeEntry("active"));
+        for (var i = 0; i < 4; i++)
+            BackpressureHelper.TryAdmit(bp, MakeEntry($"queued-{i}"));
+
+        BackpressureHelper.TryDrainOne(bp)!.StepId.Should().Be("queued-0");
+        bp.HeadIndex.Should().Be(1);
+        bp.Queue.Count.Should().Be(4);
+
+        BackpressureHelper.TryDrainOne(bp)!.StepId.Should().Be("queued-1");
+        bp.HeadIndex.Should().Be(2);
+        bp.Queue.Count.Should().Be(4);
+
+        BackpressureHelper.TryDrainOne(bp)!.StepId.Should().Be("queued-2");
+
+        bp.HeadIndex.Should().Be(0);
+        bp.Queue.Select(entry => entry.StepId).Should().Equal("queued-3");
+        BackpressureHelper.QueuedCount(bp).Should().Be(1);
+
+        BackpressureHelper.TryDrainOne(bp)!.StepId.Should().Be("queued-3");
+        BackpressureHelper.TryDrainOne(bp).Should().BeNull();
+    }
+
+    [Fact]
+    public void BackpressureHelperSource_ShouldNotRemoveQueueHeadInDrainPath()
+    {
+        var sourcePath = FindBackpressureHelperSource();
+        var source = File.ReadAllText(sourcePath);
+
+        source.Should().NotContain("RemoveAt(0)");
+        source.Should().NotContain("bp.Queue[0]");
+    }
+
+    [Fact]
     public void ToStepRequest_ShouldConvertCorrectly()
     {
         var entry = new BackpressureQueueEntry
@@ -137,4 +217,25 @@ public class BackpressureHelperTests
 
     private static BackpressureQueueEntry MakeEntry(string stepId) =>
         new() { StepId = stepId, StepType = "llm_call", RunId = "r1", Input = "test" };
+
+    private static string FindBackpressureHelperSource()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory != null)
+        {
+            var candidate = Path.Combine(
+                directory.FullName,
+                "src",
+                "workflow",
+                "Aevatar.Workflow.Core",
+                "Modules",
+                "BackpressureHelper.cs");
+            if (File.Exists(candidate))
+                return candidate;
+
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException("Unable to locate BackpressureHelper.cs from test base directory.");
+    }
 }
