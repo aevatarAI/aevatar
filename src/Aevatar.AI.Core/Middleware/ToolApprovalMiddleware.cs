@@ -1,7 +1,6 @@
 // ─────────────────────────────────────────────────────────────
 // ToolApprovalMiddleware — 工具审批中间件
 // 根据 IAgentTool.ApprovalMode 决定是否需要审批
-// 支持 denial tracking（连续拒绝后自动阻断）
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.AI.Abstractions.Middleware;
@@ -16,11 +15,8 @@ namespace Aevatar.AI.Core.Middleware;
 /// </summary>
 public sealed class ToolApprovalMiddleware : IToolCallMiddleware
 {
-    private const int MaxConsecutiveDenials = 3;
-
     private readonly IToolApprovalHandler _handler;
     private readonly AgentHookPipeline? _hooks;
-    private readonly Dictionary<string, int> _denialCounts = new(StringComparer.OrdinalIgnoreCase);
 
     public ToolApprovalMiddleware(IToolApprovalHandler handler, AgentHookPipeline? hooks = null)
     {
@@ -66,15 +62,6 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
             // IsDestructive → 继续走审批流程
         }
 
-        // 检查 denial tracking — 连续拒绝过多则自动阻断
-        if (_denialCounts.TryGetValue(context.ToolName, out var count) && count >= MaxConsecutiveDenials)
-        {
-            context.Terminate = true;
-            context.Result = $"Tool '{context.ToolName}' has been denied {count} times consecutively. " +
-                             "Automatic block applied. Consider using a different approach.";
-            return;
-        }
-
         // 请求审批
         var request = new ToolApprovalRequest
         {
@@ -108,13 +95,10 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
         switch (result.Decision)
         {
             case ToolApprovalDecision.Approved:
-                // 重置该 tool 的 denial counter
-                _denialCounts.Remove(context.ToolName);
                 await next();
                 return;
 
             case ToolApprovalDecision.Denied:
-                _denialCounts[context.ToolName] = (_denialCounts.TryGetValue(context.ToolName, out var dc) ? dc : 0) + 1;
                 context.Terminate = true;
                 context.Result = !string.IsNullOrWhiteSpace(result.Reason)
                     ? $"Tool '{context.ToolName}' execution denied: {result.Reason}"
