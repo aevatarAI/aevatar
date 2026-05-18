@@ -526,21 +526,9 @@ public static class ScopeGAgentEndpoints
             ct);
     }
 
-    /// <summary>
-    /// Maps an EventEnvelope payload to an AGUIEvent wrapper.
-    /// RoleGAgent publishes AI Abstractions event types (aevatar.ai.*);
-    /// this maps them to the AGUI presentation types for SSE streaming.
-    /// </summary>
-    internal static AGUIEvent? TryMapEnvelopeToAguiEvent(EventEnvelope envelope)
-        => ScopeGAgentAguiEventMapper.TryMap(envelope);
-
-    /// <summary>
-    /// Decode ToolApprovalRequestEvent from raw Any bytes into a google.protobuf.Struct
-    /// so the AGUI SSE JsonFormatter can serialize it without needing the AI.Abstractions
-    /// type registered in its TypeRegistry.
-    /// </summary>
-    private static Google.Protobuf.WellKnownTypes.Struct BuildToolApprovalStruct(Any payload)
-        => ScopeGAgentAguiEventMapper.BuildToolApprovalStruct(payload);
+    // Refactor (iter5/cluster-010):
+    //   Old: Host exposed EventEnvelope -> AGUI mapper wrappers for endpoint-local tests.
+    //   New: AGUI mapping lives behind ScopeGAgentAguiEventMapper and projection session projectors.
 
     // ─── GAgent Registry ───
 
