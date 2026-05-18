@@ -124,6 +124,7 @@ public static class ServiceCollectionExtensions
             TryAddElasticsearchDocumentProjectionStore<ServiceRolloutCommandObservationReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<ServiceTrafficViewReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<ServiceRunCurrentStateReadModel>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<GAgentRunTerminalReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<LlmSessionCurrentStateReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<ResponsesAgentToolStateCurrentStateReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<UserConfigCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
@@ -138,6 +139,7 @@ public static class ServiceCollectionExtensions
             TryAddInMemoryDocumentProjectionStore<ServiceRolloutCommandObservationReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<ServiceTrafficViewReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<ServiceRunCurrentStateReadModel>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<GAgentRunTerminalReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<LlmSessionCurrentStateReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<ResponsesAgentToolStateCurrentStateReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<UserConfigCurrentStateDocument>(services, static readModel => readModel.Id);
@@ -158,6 +160,7 @@ public static class ServiceCollectionExtensions
                && HasProjectionDocumentReaderForProvider<ServiceRolloutCommandObservationReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<ServiceTrafficViewReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<ServiceRunCurrentStateReadModel>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<GAgentRunTerminalReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<LlmSessionCurrentStateReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<ResponsesAgentToolStateCurrentStateReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<UserConfigCurrentStateDocument>(services, providerKind);

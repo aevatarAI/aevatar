@@ -58,7 +58,8 @@ public sealed record GAgentDraftRunAcceptedReceipt(
     string ActorId,
     string ActorTypeName,
     string CommandId,
-    string CorrelationId);
+    string CorrelationId,
+    string SessionId = "");
 
 public sealed record GAgentApprovalCommand(
     string ActorId,
@@ -90,4 +91,5 @@ public enum GAgentApprovalCompletionStatus
 public sealed record GAgentApprovalAcceptedReceipt(
     string ActorId,
     string CommandId,
-    string CorrelationId);
+    string CorrelationId,
+    string SessionId);
