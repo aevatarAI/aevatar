@@ -78,6 +78,64 @@ if rg -n "IGAgentActorStore|ActorBackedGAgentActorStore" src agents; then
   exit 1
 fi
 
+# Refactor (iter7/cluster-016):
+#   Old: Direct actor.HandleEventAsync calls and raw SubscribeAsync<EventEnvelope>
+#   subscriptions were guarded only by capability-local source assertions, so new
+#   Host/Application endpoints could reintroduce the same dispatch/projection
+#   boundary bypasses outside those tests.
+#   New: Keep the runtime-owned transport internals as a short exact allowlist;
+#   every other production path must use dispatch/projection ports instead of
+#   directly invoking actor handlers or subscribing to raw event-envelope streams.
+set +e
+dispatch_projection_boundary_report="$(
+  rg -n "actor\.HandleEventAsync|\.HandleEventAsync\(|SubscribeAsync<EventEnvelope>" \
+    src agents tools \
+    -g '*.cs' \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' \
+    -g '!**/wwwroot/**' \
+    -g '!*.g.cs' \
+    -g '!*.Designer.cs' \
+    | awk -F: '
+BEGIN {
+  allowed["src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActorDispatchPort.cs"] = 1;
+  allowed["src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActor.cs"] = 1;
+  allowed["src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/RuntimeActorGrain.cs"] = 1;
+}
+
+{
+  file = $1;
+  line_no = $2;
+  text = substr($0, length(file) + length(line_no) + 3);
+
+  if (file in allowed)
+    next;
+  if (file ~ /(^|\/)test\// || file ~ /Tests\.cs$/ || file ~ /(^|\/)[^\/]*\.Tests\//)
+    next;
+  if (file ~ /\.g\.cs$/ || file ~ /\.Designer\.cs$/)
+    next;
+  if (text ~ /^[[:space:]]*\/\/\/?/)
+    next;
+  if (text ~ /^[[:space:]]*Task[[:space:]]+HandleEventAsync[[:space:]]*\(/)
+    next;
+
+  print $0;
+}'
+)"
+dispatch_projection_boundary_status=$?
+set -e
+
+if [[ ${dispatch_projection_boundary_status} -ne 0 && ${dispatch_projection_boundary_status} -ne 1 ]]; then
+  echo "Dispatch/projection source-regression guard execution failed."
+  exit "${dispatch_projection_boundary_status}"
+fi
+
+if [ -n "${dispatch_projection_boundary_report}" ]; then
+  echo "${dispatch_projection_boundary_report}"
+  echo "Direct actor HandleEventAsync dispatch and raw SubscribeAsync<EventEnvelope> subscriptions are forbidden outside runtime transport internals."
+  exit 1
+fi
+
 bash "${SCRIPT_DIR}/query_projection_priming_guard.sh"
 bash "${SCRIPT_DIR}/scripting_write_path_cqrs_guard.sh"
 bash "${SCRIPT_DIR}/projection_state_version_guard.sh"
