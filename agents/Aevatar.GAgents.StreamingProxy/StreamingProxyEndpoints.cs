@@ -1,8 +1,7 @@
 using Aevatar.AI.Abstractions;
-using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgents.StreamingProxy.Application.Rooms;
 using Aevatar.Hosting;
 using Google.Protobuf.WellKnownTypes;
@@ -175,6 +174,7 @@ public static class StreamingProxyEndpoints
         string roomId,
         ChatTopicRequest request,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IActorDispatchPort actorDispatchPort,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
         [FromServices] IStreamingProxyRoomSessionProjectionPort roomSessionProjectionPort,
         [FromServices] StreamingProxyChatDurableCompletionResolver durableCompletionResolver,
@@ -257,7 +257,7 @@ public static class StreamingProxyEndpoints
                     Payload = Any.Pack(chatRequest),
                     Route = new EnvelopeRoute { Direct = new DirectRoute { TargetActorId = actor.Id } },
                 };
-                await actor.HandleEventAsync(envelope, ct);
+                await DispatchRoomEnvelopeAsync(actorDispatchPort, actor.Id, envelope, ct);
 
                 IReadOnlyList<StreamingProxyNyxParticipantDefinition> participants = string.IsNullOrWhiteSpace(accessToken)
                     ? Array.Empty<StreamingProxyNyxParticipantDefinition>()
@@ -284,7 +284,8 @@ public static class StreamingProxyEndpoints
                         roomId);
                     var participantTerminalState = DetermineParticipantTerminalState(successfulReplies);
                     await PublishTerminalStateAsync(
-                        actor,
+                        actorDispatchPort,
+                        actor.Id,
                         sessionId,
                         participantTerminalState.Status,
                         participantTerminalState.ErrorMessage,
@@ -333,7 +334,8 @@ public static class StreamingProxyEndpoints
 
                 var idleTerminalState = DetermineIdleTerminalState(sawAgentMessage);
                 await PublishTerminalStateAsync(
-                    actor,
+                    actorDispatchPort,
+                    actor.Id,
                     sessionId,
                     idleTerminalState.Status,
                     idleTerminalState.ErrorMessage,
@@ -374,12 +376,13 @@ public static class StreamingProxyEndpoints
         }
         catch (OperationCanceledException)
         {
-            await TryPublishCanceledTerminalStateAsync(actor, sessionId, durableCompletionResolver, logger);
+            await TryPublishCanceledTerminalStateAsync(actorDispatchPort, actor, sessionId, durableCompletionResolver, logger);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "StreamingProxy chat failed for room {RoomId}", roomId);
             await TryPublishFailedTerminalStateAsync(
+                actorDispatchPort,
                 actor,
                 sessionId,
                 "StreamingProxy chat failed before completion.",
@@ -402,6 +405,7 @@ public static class StreamingProxyEndpoints
         string roomId,
         PostMessageRequest request,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IActorDispatchPort actorDispatchPort,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
         CancellationToken ct)
     {
@@ -439,7 +443,7 @@ public static class StreamingProxyEndpoints
             Payload = Any.Pack(messageEvent),
             Route = new EnvelopeRoute { Direct = new DirectRoute { TargetActorId = actor.Id } },
         };
-        await actor.HandleEventAsync(envelope, ct);
+        await DispatchRoomEnvelopeAsync(actorDispatchPort, actor.Id, envelope, ct);
 
         return Results.Ok(new { status = "accepted" });
     }
@@ -583,6 +587,7 @@ public static class StreamingProxyEndpoints
         string roomId,
         JoinRoomRequest request,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IActorDispatchPort actorDispatchPort,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
         [FromServices] IStreamingProxyParticipantStore participantStore,
         [FromServices] ILoggerFactory loggerFactory,
@@ -623,7 +628,7 @@ public static class StreamingProxyEndpoints
             Payload = Any.Pack(joinEvent),
             Route = new EnvelopeRoute { Direct = new DirectRoute { TargetActorId = actor.Id } },
         };
-        await actor.HandleEventAsync(envelope, ct);
+        await DispatchRoomEnvelopeAsync(actorDispatchPort, actor.Id, envelope, ct);
 
         var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
         try
@@ -639,10 +644,46 @@ public static class StreamingProxyEndpoints
         return Results.Ok(new { status = "joined", agentId });
     }
 
-    // ─── Event mapping ───
-
-    private static async ValueTask<StreamingProxyStreamSignal?> MapAndWriteEventAsync(EventEnvelope envelope, StreamingProxySseWriter writer)
+    private static async Task PumpRoomSessionEventsAsync(
+        IEventSink<StreamingProxyRoomSessionEnvelope> eventSink,
+        StreamingProxySseWriter writer,
+        ChannelWriter<StreamingProxyStreamSignal>? signalWriter = null)
     {
+        ArgumentNullException.ThrowIfNull(eventSink);
+        ArgumentNullException.ThrowIfNull(writer);
+
+        try
+        {
+            await foreach (var sessionEnvelope in eventSink.ReadAllAsync(CancellationToken.None))
+            {
+                if (sessionEnvelope.Envelope == null)
+                    continue;
+
+                var signal = await MapAndWriteRoomSessionEventAsync(sessionEnvelope, writer);
+                if (signal.HasValue)
+                    signalWriter?.TryWrite(signal.Value);
+            }
+        }
+        finally
+        {
+            signalWriter?.TryComplete();
+        }
+    }
+
+    private static async ValueTask<StreamingProxyStreamSignal?> MapAndWriteRoomSessionEventAsync(
+        StreamingProxyRoomSessionEnvelope sessionEnvelope,
+        StreamingProxySseWriter writer)
+    {
+        // Refactor (iter1/cluster-004):
+        //   Old pattern: StreamingProxy endpoint code mapped raw actor EventEnvelope subscriptions.
+        //   New principle: endpoint observes typed Projection Pipeline session events and writes SSE frames.
+        ArgumentNullException.ThrowIfNull(sessionEnvelope);
+        ArgumentNullException.ThrowIfNull(writer);
+
+        var envelope = sessionEnvelope.Envelope;
+        if (envelope == null)
+            return null;
+
         if (TryGetObservedTerminalEvent(envelope, out var terminalEvent))
         {
             if (terminalEvent.Status == StreamingProxyChatSessionTerminalStatus.Failed)
@@ -675,13 +716,15 @@ public static class StreamingProxyEndpoints
             await writer.WriteTopicStartedAsync(evt.Prompt, evt.SessionId, CancellationToken.None);
             return StreamingProxyStreamSignal.TopicStarted;
         }
-        else if (payload.Is(GroupChatMessageEvent.Descriptor))
+
+        if (payload.Is(GroupChatMessageEvent.Descriptor))
         {
             var evt = payload.Unpack<GroupChatMessageEvent>();
             await writer.WriteAgentMessageAsync(evt.AgentId, evt.AgentName, evt.Content, 0, CancellationToken.None);
             return StreamingProxyStreamSignal.AgentMessage;
         }
-        else if (payload.Is(GroupChatParticipantJoinedEvent.Descriptor))
+
+        if (payload.Is(GroupChatParticipantJoinedEvent.Descriptor))
         {
             var evt = payload.Unpack<GroupChatParticipantJoinedEvent>();
             await writer.WriteParticipantJoinedAsync(evt.AgentId, evt.DisplayName, CancellationToken.None);
@@ -693,32 +736,6 @@ public static class StreamingProxyEndpoints
         }
 
         return null;
-    }
-
-    private static async Task PumpRoomSessionEventsAsync(
-        IEventSink<StreamingProxyRoomSessionEnvelope> eventSink,
-        StreamingProxySseWriter writer,
-        ChannelWriter<StreamingProxyStreamSignal>? signalWriter = null)
-    {
-        ArgumentNullException.ThrowIfNull(eventSink);
-        ArgumentNullException.ThrowIfNull(writer);
-
-        try
-        {
-            await foreach (var sessionEnvelope in eventSink.ReadAllAsync(CancellationToken.None))
-            {
-                if (sessionEnvelope.Envelope == null)
-                    continue;
-
-                var signal = await MapAndWriteEventAsync(sessionEnvelope.Envelope, writer);
-                if (signal.HasValue)
-                    signalWriter?.TryWrite(signal.Value);
-            }
-        }
-        finally
-        {
-            signalWriter?.TryComplete();
-        }
     }
 
     private static bool ShouldWriteToSse(EventEnvelope envelope) =>
@@ -742,7 +759,8 @@ public static class StreamingProxyEndpoints
     }
 
     private static async Task PublishTerminalStateAsync(
-        IActor actor,
+        IActorDispatchPort actorDispatchPort,
+        string actorId,
         string sessionId,
         StreamingProxyChatSessionTerminalStatus status,
         string? errorMessage,
@@ -764,11 +782,23 @@ public static class StreamingProxyEndpoints
             {
                 Direct = new DirectRoute
                 {
-                    TargetActorId = actor.Id,
+                    TargetActorId = actorId,
                 },
             },
         };
-        await actor.HandleEventAsync(envelope, ct);
+        await DispatchRoomEnvelopeAsync(actorDispatchPort, actorId, envelope, ct);
+    }
+
+    private static Task DispatchRoomEnvelopeAsync(
+        IActorDispatchPort actorDispatchPort,
+        string actorId,
+        EventEnvelope envelope,
+        CancellationToken ct)
+    {
+        // Refactor (iter1/cluster-004):
+        //   Old pattern: StreamingProxy endpoints invoked actors inline.
+        //   New principle: endpoints publish commands through IActorDispatchPort with runtime-neutral delivery.
+        return actorDispatchPort.DispatchAsync(actorId, envelope, ct);
     }
 
     private static (StreamingProxyChatSessionTerminalStatus Status, string? ErrorMessage) DetermineParticipantTerminalState(
@@ -813,6 +843,7 @@ public static class StreamingProxyEndpoints
     }
 
     private static async Task TryPublishCanceledTerminalStateAsync(
+        IActorDispatchPort actorDispatchPort,
         IActor? actor,
         string? sessionId,
         StreamingProxyChatDurableCompletionResolver durableCompletionResolver,
@@ -828,7 +859,8 @@ public static class StreamingProxyEndpoints
                 return;
 
             await PublishTerminalStateAsync(
-                actor,
+                actorDispatchPort,
+                actor.Id,
                 sessionId,
                 StreamingProxyChatSessionTerminalStatus.Failed,
                 "StreamingProxy chat was cancelled before completion.",
@@ -845,6 +877,7 @@ public static class StreamingProxyEndpoints
     }
 
     private static async Task TryPublishFailedTerminalStateAsync(
+        IActorDispatchPort actorDispatchPort,
         IActor? actor,
         string? sessionId,
         string errorMessage,
@@ -861,7 +894,8 @@ public static class StreamingProxyEndpoints
                 return;
 
             await PublishTerminalStateAsync(
-                actor,
+                actorDispatchPort,
+                actor.Id,
                 sessionId,
                 StreamingProxyChatSessionTerminalStatus.Failed,
                 errorMessage,

@@ -1,7 +1,10 @@
-using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.AI.Abstractions;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.Presentation.AGUI;
+using Google.Protobuf.Collections;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -15,11 +18,9 @@ internal static class NyxIdChatStreamingRunner
     public static async Task RunAsync(
         HttpContext http,
         string actorId,
-        string subscriptionActorId,
-        IActorEventSubscriptionProvider subscriptionProvider,
+        INyxIdChatSessionProjectionPort projectionPort,
         ILogger logger,
         Func<string, CancellationToken, Task> dispatchAsync,
-        Func<EventEnvelope, string, NyxIdChatSseWriter, ValueTask<string?>> mapAndWriteEventAsync,
         ErrorMessages errorMessages,
         CancellationToken ct)
     {
@@ -32,45 +33,61 @@ internal static class NyxIdChatStreamingRunner
             var messageId = Guid.NewGuid().ToString("N");
             await writer.WriteRunStartedAsync(actorId, ct);
 
+            var eventChannel = new EventChannel<AGUIEvent>();
+            var projectionLease = await projectionPort.EnsureAndAttachAsync(
+                token => projectionPort.EnsureChatProjectionAsync(actorId, messageId, token),
+                eventChannel,
+                ct);
+            if (projectionLease == null)
+                throw new InvalidOperationException("NyxID chat projection pipeline is unavailable.");
+
+            // Refactor (iter1/cluster-004):
+            //   Old pattern: the runner subscribed to raw EventEnvelope and used TaskCompletionSource/timeout as RPC.
+            //   New principle: the runner observes typed AGUIEvent projection session frames and only dispatches commands.
             var completion = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             using var ctr = ct.Register(() => completion.TrySetCanceled());
+            var pumpTask = PumpAguiSessionEventsAsync(eventChannel, messageId, writer, completion, ct);
 
-            await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
-                subscriptionActorId,
-                async envelope =>
-                {
-                    try
-                    {
-                        var terminalFrame = await mapAndWriteEventAsync(envelope, messageId, writer);
-                        if (!string.IsNullOrWhiteSpace(terminalFrame))
-                            completion.TrySetResult(terminalFrame);
-                    }
-                    catch (Exception ex)
-                    {
-                        completion.TrySetException(ex);
-                    }
-                },
-                ct);
-
-            await dispatchAsync(messageId, ct);
-
-            var completedTask = await Task.WhenAny(completion.Task, Task.Delay(120_000, ct));
-            if (completedTask == completion.Task)
+            try
             {
-                if (completion.Task.IsFaulted)
-                {
-                    await writer.WriteRunErrorAsync(
-                        errorMessages.DispatchFailedBeforeCompletion,
-                        CancellationToken.None);
-                }
-                else if (string.Equals(completion.Task.Result, "TEXT_MESSAGE_END", StringComparison.Ordinal))
+                await dispatchAsync(messageId, ct);
+                await completion.Task.WaitAsync(TimeSpan.FromSeconds(120), ct);
+
+                if (string.Equals(completion.Task.Result, "RUN_FINISHED", StringComparison.Ordinal))
                 {
                     await writer.WriteRunFinishedAsync(CancellationToken.None);
                 }
             }
-            else
+            catch (TimeoutException)
             {
                 await writer.WriteRunErrorAsync(errorMessages.Timeout, CancellationToken.None);
+            }
+            catch (Exception) when (completion.Task.IsFaulted)
+            {
+                await writer.WriteRunErrorAsync(
+                    errorMessages.DispatchFailedBeforeCompletion,
+                    CancellationToken.None);
+            }
+            finally
+            {
+                await projectionPort.DetachReleaseAndDisposeAsync(
+                    projectionLease,
+                    eventChannel,
+                    null,
+                    CancellationToken.None);
+
+                try
+                {
+                    await pumpTask;
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                }
+                catch
+                {
+                    if (!completion.Task.IsFaulted)
+                        throw;
+                }
             }
         }
         catch (OperationCanceledException)
@@ -92,4 +109,114 @@ internal static class NyxIdChatStreamingRunner
             }
         }
     }
+
+    private static async Task PumpAguiSessionEventsAsync(
+        IEventSink<AGUIEvent> eventSink,
+        string messageId,
+        NyxIdChatSseWriter writer,
+        TaskCompletionSource<string> completion,
+        CancellationToken ct)
+    {
+        try
+        {
+            await foreach (var aguiEvent in eventSink.ReadAllAsync(ct))
+            {
+                var terminalFrame = await WriteAguiEventAsync(aguiEvent, messageId, writer);
+                if (!string.IsNullOrWhiteSpace(terminalFrame))
+                    completion.TrySetResult(terminalFrame);
+            }
+        }
+        catch (Exception ex)
+        {
+            completion.TrySetException(ex);
+            throw;
+        }
+    }
+
+    private static async ValueTask<string?> WriteAguiEventAsync(
+        AGUIEvent aguiEvent,
+        string messageId,
+        NyxIdChatSseWriter writer)
+    {
+        switch (aguiEvent.EventCase)
+        {
+            case AGUIEvent.EventOneofCase.TextMessageStart:
+                await writer.WriteTextStartAsync(
+                    string.IsNullOrWhiteSpace(aguiEvent.TextMessageStart.MessageId)
+                        ? messageId
+                        : aguiEvent.TextMessageStart.MessageId,
+                    CancellationToken.None);
+                return null;
+            case AGUIEvent.EventOneofCase.TextMessageContent:
+                if (!string.IsNullOrEmpty(aguiEvent.TextMessageContent.Delta))
+                    await writer.WriteTextDeltaAsync(aguiEvent.TextMessageContent.Delta, CancellationToken.None);
+                return null;
+            case AGUIEvent.EventOneofCase.TextMessageEnd:
+                await writer.WriteTextEndAsync(
+                    string.IsNullOrWhiteSpace(aguiEvent.TextMessageEnd.MessageId)
+                        ? messageId
+                        : aguiEvent.TextMessageEnd.MessageId,
+                    CancellationToken.None);
+                return null;
+            case AGUIEvent.EventOneofCase.ToolCallStart:
+                await writer.WriteToolCallStartAsync(
+                    aguiEvent.ToolCallStart.ToolName,
+                    aguiEvent.ToolCallStart.ToolCallId,
+                    CancellationToken.None);
+                return null;
+            case AGUIEvent.EventOneofCase.ToolCallEnd:
+                await writer.WriteToolCallEndAsync(
+                    aguiEvent.ToolCallEnd.ToolCallId,
+                    aguiEvent.ToolCallEnd.Result ?? string.Empty,
+                    CancellationToken.None);
+                return null;
+            case AGUIEvent.EventOneofCase.Custom:
+                await WriteCustomAguiEventAsync(aguiEvent.Custom, writer);
+                return null;
+            case AGUIEvent.EventOneofCase.RunError:
+                await writer.WriteRunErrorAsync(
+                    ClassifyError(aguiEvent.RunError.Message ?? string.Empty),
+                    CancellationToken.None);
+                return "RUN_ERROR";
+            case AGUIEvent.EventOneofCase.RunFinished:
+                return "RUN_FINISHED";
+            default:
+                return null;
+        }
+    }
+
+    private static async ValueTask WriteCustomAguiEventAsync(CustomEvent customEvent, NyxIdChatSseWriter writer)
+    {
+        if (string.Equals(customEvent.Name, "MEDIA_CONTENT", StringComparison.Ordinal) &&
+            customEvent.Payload?.Is(MediaContentEvent.Descriptor) == true)
+        {
+            await writer.WriteMediaContentAsync(customEvent.Payload.Unpack<MediaContentEvent>(), CancellationToken.None);
+            return;
+        }
+
+        if (string.Equals(customEvent.Name, "TOOL_APPROVAL_REQUEST", StringComparison.Ordinal) &&
+            customEvent.Payload?.Is(Struct.Descriptor) == true)
+        {
+            var fields = customEvent.Payload.Unpack<Struct>().Fields;
+            await writer.WriteToolApprovalRequestAsync(
+                GetString(fields, "requestId"),
+                GetString(fields, "toolName"),
+                GetString(fields, "toolCallId"),
+                GetString(fields, "argumentsJson"),
+                GetBool(fields, "isDestructive"),
+                GetInt32(fields, "timeoutSeconds"),
+                CancellationToken.None);
+        }
+    }
+
+    private static string GetString(IDictionary<string, Value> fields, string key) =>
+        fields.TryGetValue(key, out var value) ? value.StringValue ?? string.Empty : string.Empty;
+
+    private static bool GetBool(IDictionary<string, Value> fields, string key) =>
+        fields.TryGetValue(key, out var value) && value.BoolValue;
+
+    private static int GetInt32(IDictionary<string, Value> fields, string key) =>
+        fields.TryGetValue(key, out var value) ? (int)value.NumberValue : 0;
+
+    private static string ClassifyError(string error) => NyxIdRelayReplies.ClassifyError(error);
 }
