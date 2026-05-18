@@ -13,8 +13,9 @@ public interface IExternalIdentityBindingQueryPort
     /// <summary>
     /// Returns the active <see cref="BindingId"/> for the given external subject,
     /// or <c>null</c> when no active binding is materialized in the readmodel.
-    /// A miss MUST drive the caller to prompt the sender to <c>/init</c>;
-    /// callers MUST NOT fall back to bot-owner credentials or any cached token.
+    /// A miss means the sender has no usable per-user NyxID context. Callers
+    /// that require per-user state may prompt <c>/init</c>; normal LLM turns
+    /// may continue with bot-owner fallback credentials.
     /// </summary>
     Task<BindingId?> ResolveAsync(
         ExternalSubjectRef externalSubject,

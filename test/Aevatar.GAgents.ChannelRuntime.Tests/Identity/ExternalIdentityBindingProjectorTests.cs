@@ -75,7 +75,7 @@ public class ExternalIdentityBindingProjectorTests
     }
 
     [Fact]
-    public async Task ProjectAsync_WritesRevokedDocumentAsInactive()
+    public async Task ProjectAsync_DeletesRevokedBindingDocument()
     {
         var dispatcher = new RecordingDispatcher();
         var projector = new ExternalIdentityBindingProjector(dispatcher, new FixedClock(DateTimeOffset.UtcNow));
@@ -97,11 +97,34 @@ public class ExternalIdentityBindingProjectorTests
 
         await projector.ProjectAsync(context, envelope);
 
-        dispatcher.Upserts.Should().HaveCount(1);
-        var doc = dispatcher.Upserts[0];
-        doc.IsActive.Should().BeFalse();
-        doc.BindingId.Should().BeEmpty();
-        doc.RevokedAtUtcValue.Should().NotBeNull();
+        dispatcher.Upserts.Should().BeEmpty();
+        dispatcher.Deletes.Should().ContainSingle().Which.Should().Be(subject.ToActorId());
+    }
+
+    [Fact]
+    public async Task ProjectAsync_DeletesEmptyBindingDocument()
+    {
+        var dispatcher = new RecordingDispatcher();
+        var projector = new ExternalIdentityBindingProjector(dispatcher, new FixedClock(DateTimeOffset.UtcNow));
+        var subject = SampleSubject();
+        var context = new ExternalIdentityBindingMaterializationContext
+        {
+            RootActorId = subject.ToActorId(),
+            ProjectionKind = "external-identity-binding",
+        };
+
+        var state = new ExternalIdentityBindingState
+        {
+            ExternalSubject = subject,
+            BindingId = string.Empty,
+            BoundAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(-5)),
+        };
+        var envelope = TestEnvelopeBuilder.BuildCommittedEnvelope(state, version: 3, eventId: "ev-3");
+
+        await projector.ProjectAsync(context, envelope);
+
+        dispatcher.Upserts.Should().BeEmpty();
+        dispatcher.Deletes.Should().ContainSingle().Which.Should().Be(subject.ToActorId());
     }
 
     private sealed class FixedClock : IProjectionClock
@@ -113,6 +136,7 @@ public class ExternalIdentityBindingProjectorTests
     private sealed class RecordingDispatcher : IProjectionWriteDispatcher<ExternalIdentityBindingDocument>
     {
         public List<ExternalIdentityBindingDocument> Upserts { get; } = new();
+        public List<string> Deletes { get; } = new();
 
         public Task<ProjectionWriteResult> UpsertAsync(
             ExternalIdentityBindingDocument readModel,
@@ -123,6 +147,9 @@ public class ExternalIdentityBindingProjectorTests
         }
 
         public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
-            => Task.FromResult(ProjectionWriteResult.Applied());
+        {
+            Deletes.Add(id);
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
     }
 }

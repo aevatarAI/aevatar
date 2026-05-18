@@ -11,6 +11,81 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class TurnStreamingReplySinkTests
 {
     [Fact]
+    public async Task OnDeltaAsync_BeyondInterimCap_StashesButDoesNotDispatchUntilFinal()
+    {
+        // Lark caps message edits per om_id (~20 in mainnet, code 230072). Capping interim
+        // dispatches in the sink keeps headroom so FinalizeAsync's edit always lands —
+        // long replies freeze on the last interim until the final, which is preferable to
+        // truncation. This test pins the contract: interim chunks past the cap stash but
+        // do not dispatch; the final still goes through with the freshest accumulated text.
+        var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
+        var sink = CreateSink(dispatchPort, throttleMs: 0, out _, maxInterimChunks: 2);
+
+        await sink.OnDeltaAsync("chunk 1", CancellationToken.None);
+        await sink.OnDeltaAsync("chunk 1 + 2", CancellationToken.None);
+        await sink.OnDeltaAsync("chunk 1 + 2 + 3 (capped, stashed)", CancellationToken.None);
+        await sink.OnDeltaAsync("chunk 1 + 2 + 4 (still capped)", CancellationToken.None);
+
+        envelopes.Should().HaveCount(2, "interim chunks past the cap must stash, not dispatch");
+        envelopes[0].Payload.Unpack<LlmReplyStreamChunkEvent>().AccumulatedText.Should().Be("chunk 1");
+        envelopes[1].Payload.Unpack<LlmReplyStreamChunkEvent>().AccumulatedText.Should().Be("chunk 1 + 2");
+        sink.ChunksEmitted.Should().Be(2);
+
+        await sink.FinalizeAsync("complete final text after cap", CancellationToken.None);
+
+        envelopes.Should().HaveCount(3, "FinalizeAsync must bypass the cap so the user sees the complete text");
+        envelopes[2].Payload.Unpack<LlmReplyStreamChunkEvent>().AccumulatedText
+            .Should().Be("complete final text after cap");
+    }
+
+    [Fact]
+    public async Task DispatchLoop_StashesDuringDispatch_DefersToTimerInsteadOfDrainingImmediately()
+    {
+        // Regression: previously the dispatch loop drained _pendingText at dispatch-rate
+        // without re-checking _throttle, so streaming token bursts produced one Lark edit
+        // per token and exhausted the per-message edit cap (~20 in mainnet, code 230072).
+        // Pin the gate: when more deltas are stashed during a dispatch and the throttle
+        // window has not elapsed by the time the dispatch completes, the loop must hand
+        // off to the deferred flush timer instead of dispatching immediately.
+        var dispatchPort = Substitute.For<IActorDispatchPort>();
+        var envelopes = new List<EventEnvelope>();
+        var slowDispatch = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dispatchCount = 0;
+        dispatchPort.DispatchAsync("target-actor", Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                envelopes.Add(call.Arg<EventEnvelope>());
+                return Interlocked.Increment(ref dispatchCount) == 1 ? slowDispatch.Task : Task.CompletedTask;
+            });
+
+        var sink = CreateSink(dispatchPort, throttleMs: 750, out var time);
+
+        // First delta starts dispatch but is awaiting slowDispatch.
+        var firstFlush = sink.OnDeltaAsync("chunk 1", CancellationToken.None);
+
+        // Burst additional deltas while dispatch1 is in flight — they stash.
+        await sink.OnDeltaAsync("chunk 1 + 2", CancellationToken.None);
+        await sink.OnDeltaAsync("chunk 1 + 2 + 3 (latest)", CancellationToken.None);
+
+        // Release dispatch1. The loop reaches its post-dispatch check, sees pending text,
+        // observes the throttle window has not elapsed, and exits to arm the timer rather
+        // than dispatching immediately. Without this gate, all three chunks dispatch in
+        // rapid succession (the original bug).
+        slowDispatch.SetResult(true);
+        await firstFlush;
+
+        envelopes.Should().ContainSingle("loop must defer when throttle window has not elapsed");
+
+        // Advance across the throttle. The timer fires synchronously inside Advance and
+        // re-enters DispatchLoopAsync to drain the freshest stashed text.
+        time.Advance(TimeSpan.FromMilliseconds(800));
+
+        envelopes.Should().HaveCount(2);
+        envelopes[1].Payload.Unpack<LlmReplyStreamChunkEvent>().AccumulatedText
+            .Should().Be("chunk 1 + 2 + 3 (latest)");
+    }
+
+    [Fact]
     public async Task OnDeltaAsync_FirstDelta_DispatchesChunkEventToActor()
     {
         var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
@@ -116,7 +191,7 @@ public sealed class TurnStreamingReplySinkTests
     public async Task FinalizeAsync_DispatchInFlight_WaitsForFinalChunkOnWire()
     {
         // Regression for the race where FinalizeAsync would return as soon as the final text
-        // was stashed (while a prior dispatch was still in flight), letting the inbox runtime
+        // was stashed (while a prior dispatch was still in flight), letting the run actor
         // send LlmReplyReadyEvent past the late final chunk and triggering the
         // ConversationGAgent processed-command guard to drop it.
         var firstDispatchGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -155,6 +230,77 @@ public sealed class TurnStreamingReplySinkTests
         envelopes.Should().HaveCount(2);
         envelopes[1].Payload.Unpack<LlmReplyStreamChunkEvent>().AccumulatedText
             .Should().Be("first plus final");
+        sink.ChunksEmitted.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task Dispose_WhenFinalizeIsAwaitingDrain_UnblocksWithoutDispatchingStashedFinalText()
+    {
+        var firstDispatchGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var envelopes = new List<EventEnvelope>();
+        var dispatchCount = 0;
+
+        var dispatchPort = Substitute.For<IActorDispatchPort>();
+        dispatchPort.DispatchAsync("target-actor", Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                envelopes.Add(call.Arg<EventEnvelope>());
+                dispatchCount++;
+                return dispatchCount == 1 ? firstDispatchGate.Task : Task.CompletedTask;
+            });
+
+        var sink = CreateSink(dispatchPort, throttleMs: 0, out _);
+
+        var deltaTask = sink.OnDeltaAsync("first", CancellationToken.None);
+        var finalizeTask = sink.FinalizeAsync("first plus final", CancellationToken.None);
+
+        deltaTask.IsCompleted.Should().BeFalse();
+        finalizeTask.IsCompleted.Should().BeFalse();
+        envelopes.Should().ContainSingle();
+
+        sink.Dispose();
+        await finalizeTask;
+
+        envelopes.Should().ContainSingle("disposing the sink must drop the stashed final flush");
+
+        firstDispatchGate.SetResult();
+        await deltaTask;
+
+        envelopes.Should().ContainSingle();
+        sink.ChunksEmitted.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task OnDeltaAsync_WhenDeferredFlushDispatchFails_LaterDeltaStillPublishesLatestTextOnce()
+    {
+        var dispatchAttempts = 0;
+        var dispatchPort = Substitute.For<IActorDispatchPort>();
+        dispatchPort.DispatchAsync("target-actor", Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                dispatchAttempts++;
+                if (dispatchAttempts == 2)
+                    return Task.FromException(new InvalidOperationException("boom"));
+
+                return Task.CompletedTask;
+            });
+
+        var sink = CreateSink(dispatchPort, throttleMs: 750, out var time);
+
+        await sink.OnDeltaAsync("chunk 1", CancellationToken.None);
+        time.Advance(TimeSpan.FromMilliseconds(100));
+        await sink.OnDeltaAsync("chunk 1 + 2", CancellationToken.None);
+
+        time.Advance(TimeSpan.FromMilliseconds(800));
+
+        sink.ChunksEmitted.Should().Be(1, "the timer-driven dispatch failed and must not count as emitted");
+
+        time.Advance(TimeSpan.FromMilliseconds(100));
+        await sink.OnDeltaAsync("chunk 1 + 3", CancellationToken.None);
+
+        sink.ChunksEmitted.Should().Be(2);
+        dispatchAttempts.Should().Be(3);
+        time.Advance(TimeSpan.FromMilliseconds(2000));
         sink.ChunksEmitted.Should().Be(2);
     }
 
@@ -248,7 +394,8 @@ public sealed class TurnStreamingReplySinkTests
     private static TurnStreamingReplySink CreateSink(
         IActorDispatchPort dispatchPort,
         int throttleMs,
-        out FakeTimeProvider timeProvider)
+        out FakeTimeProvider timeProvider,
+        int maxInterimChunks = int.MaxValue)
     {
         timeProvider = new FakeTimeProvider(new DateTimeOffset(2026, 4, 24, 9, 0, 0, TimeSpan.Zero));
         return new TurnStreamingReplySink(
@@ -276,7 +423,8 @@ public sealed class TurnStreamingReplySinkTests
             },
             throttle: TimeSpan.FromMilliseconds(throttleMs),
             timeProvider,
-            NullLogger<TurnStreamingReplySink>.Instance);
+            NullLogger<TurnStreamingReplySink>.Instance,
+            maxInterimChunks: maxInterimChunks);
     }
 
     private static (IActorDispatchPort dispatchPort, List<EventEnvelope> envelopes) BuildRecordingDispatchPort()

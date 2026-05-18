@@ -6,9 +6,11 @@ using Aevatar.AI.ToolProviders.ChronoStorage;
 using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Telegram;
+using Aevatar.AI.ToolProviders.Web;
 using Aevatar.Authentication.Hosting;
 using Aevatar.Authentication.Providers.NyxId;
 using Aevatar.Bootstrap.Hosting;
+using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Identity.DependencyInjection;
@@ -23,6 +25,8 @@ using Aevatar.GAgents.Platform.Telegram;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
+using Aevatar.Mainnet.Host.Api.Messages;
+using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
 using Microsoft.AspNetCore.Builder;
@@ -86,6 +90,27 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddChannelIdentityProjectionStores(builder.Configuration);
         builder.Services.AddDeviceRegistration(builder.Configuration);
         builder.Services.AddScheduledAgents(builder.Configuration);
+        builder.Services.TryAddSingleton<IResponsesCallerScopeResolver, NyxIdResponsesCallerScopeResolver>();
+        builder.Services.TryAddSingleton<IResponsesModelsAggregator, NyxIdResponsesModelsAggregator>();
+        builder.Services.TryAddSingleton<IResponsesRouteResolver, CachingResponsesRouteResolver>();
+        builder.Services.Configure<ResponsesModelMetadataFallbackOptions>(options =>
+        {
+            // Bind a flat slug-or-slug/model → fallback dictionary from
+            // `Aevatar:Responses:ModelMetadataFallbacks` directly so deployments can
+            // express it with the natural shape `{slug: {context_length, ...}}` instead
+            // of the wrapped `{Entries: {…}}` shape that automatic-binding would force.
+            var section = builder.Configuration.GetSection(ResponsesModelMetadataFallbackOptions.SectionName);
+            foreach (var entry in section.GetChildren())
+            {
+                if (string.IsNullOrWhiteSpace(entry.Key)) continue;
+                var fallback = entry.Get<ResponsesModelMetadataFallback>();
+                if (fallback is null) continue;
+                options.Entries[entry.Key] = fallback;
+            }
+        });
+        builder.Services.AddHttpClient();
+        builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IResponsesToolProvider, ResponsesAevatarToolProvider>());
+        builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IResponsesToolProvider, ResponsesUserSkillsToolProvider>());
         // Bridge Studio's IUserConfigQueryPort onto the AI-layer IOwnerLlmConfigSource port so
         // SkillRunner / WorkflowAgent / NyxidChat honor the bot owner's pre-configured LLM model
         // + route (issue #509). The bridge lives here, not in any agent or AI package, so
@@ -107,6 +132,16 @@ public static class MainnetHostBuilderExtensions
                         ?? builder.Configuration["Cli:App:NyxId:Authority"]
                         ?? builder.Configuration["Aevatar:Authentication:Authority"];
             o.SpecFetchToken = builder.Configuration["Aevatar:NyxId:SpecFetchToken"];
+            // Opt-in: only the mainnet host (which runs the channel relay's approval-aware
+            // tool execution pipeline) advertises ssh_exec to the LLM. Other hosts that pull
+            // in NyxId tools (CLI, workflow runner) leave this off so a generic agent can't
+            // shell into a remote without an approval gate. Defaults to false in
+            // NyxIdToolOptions; flip via Aevatar:NyxId:EnableSshExecTool=true if a
+            // deployment opts in.
+            if (bool.TryParse(builder.Configuration["Aevatar:NyxId:EnableSshExecTool"], out var enableSsh))
+                o.EnableSshExecTool = enableSsh;
+            else
+                o.EnableSshExecTool = true; // mainnet default: enabled (Lark bot needs it)
         });
         builder.Services.AddLarkTools(o =>
         {
@@ -122,6 +157,15 @@ public static class MainnetHostBuilderExtensions
             var urls = builder.Configuration[WebHostDefaults.ServerUrlsKey] ?? "http://127.0.0.1:5080";
             o.ApiBaseUrl = urls.Split(';').FirstOrDefault()?.Trim();
         });
+        builder.Services.AddWebTools(o =>
+        {
+            o.NyxIdBaseUrl = builder.Configuration["Aevatar:NyxId:Authority"]
+                             ?? builder.Configuration["Cli:App:NyxId:Authority"]
+                             ?? builder.Configuration["Aevatar:Authentication:Authority"];
+            o.NyxIdSearchSlug = builder.Configuration["Aevatar:Web:NyxIdSearchSlug"]
+                                ?? builder.Configuration["Aevatar:Web:SearchSlug"];
+            o.SearchApiBaseUrl = builder.Configuration["Aevatar:Web:SearchApiBaseUrl"];
+        });
 
         return builder;
     }
@@ -133,6 +177,8 @@ public static class MainnetHostBuilderExtensions
         app.UseAevatarDefaultHost();
         app.MapNyxIdChatEndpoints();
         app.MapStreamingProxyEndpoints();
+        app.MapResponsesApiEndpoints();
+        app.MapMessagesApiEndpoints();
         app.MapChannelCallbackEndpoints();
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();
