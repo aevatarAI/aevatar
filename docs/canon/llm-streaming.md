@@ -46,7 +46,7 @@ owner: eanzhao
 | Host | `WorkflowCapabilityEndpoints`、`ChatSseResponseWriter`、`ChatWebSocketRunCoordinator` | 协议适配（HTTP/SSE/WS），不编排业务 |
 | Application | `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>`、`WorkflowRunCommandTargetResolver`、`WorkflowRunCommandTargetBinder` | 命令目标解析、dispatch 编排、输出帧流化 |
 | Domain/AI | `WorkflowGAgent`、`LLMCallModule`、`RoleGAgent`、`ChatRuntime` | 触发 LLM 调用、发布文本/工具/媒体事件 |
-| Projection | `WorkflowExecutionCurrentStateProjector`、`WorkflowRunInsightReportArtifactProjector`、`WorkflowRunTimelineArtifactProjector`、`WorkflowRunGraphArtifactProjector`、`WorkflowExecutionAGUIEventProjector` | committed observation 到 current-state + durable artifacts 的物化 + 实时事件分发 |
+| Projection | `CurrentStateProjectionMaterializer`、`WorkflowRunInsightReportArtifactProjector`、`WorkflowRunTimelineArtifactProjector`、`WorkflowRunGraphArtifactProjector`、`WorkflowExecutionAGUIEventProjector` | committed observation 到 current-state + durable artifacts 的物化 + 实时事件分发 |
 | Streaming | `ProjectionSessionEventHub<WorkflowRunEvent>`、`EventChannel<WorkflowRunEvent>` | 会话事件总线与 live sink 通道 |
 
 关键代码锚点：
@@ -76,7 +76,7 @@ flowchart TB
     DSP --> ACT["WorkflowRunGAgent / RoleGAgent"]
     ACT --> EVT["Actor Envelope Stream"]
     EVT --> COOR["ProjectionCoordinator"]
-    COOR --> RM1["WorkflowExecutionCurrentStateProjector"]
+    COOR --> RM1["CurrentStateProjectionMaterializer"]
     COOR --> RM2["WorkflowRunInsightReportArtifactProjector"]
     COOR --> RM3["WorkflowRunTimelineArtifactProjector"]
     COOR --> RM4["WorkflowRunGraphArtifactProjector"]
@@ -239,7 +239,7 @@ POST /api/workflows/signal
 flowchart LR
     EV["EventEnvelope"] --> DIS["ProjectionDispatcher"]
     DIS --> CO["ProjectionCoordinator"]
-    CO --> P1["WorkflowExecutionCurrentStateProjector"]
+    CO --> P1["CurrentStateProjectionMaterializer"]
     CO --> P2["WorkflowRunInsightReportArtifactProjector"]
     CO --> P3["WorkflowRunTimelineArtifactProjector"]
     CO --> P4["WorkflowRunGraphArtifactProjector"]
@@ -258,7 +258,7 @@ flowchart LR
 
 1. `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionCoordinator.cs:19`
 2. `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionCoordinator.cs:40`
-3. `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionCurrentStateProjector.cs`
+3. `src/workflow/Aevatar.Workflow.Projection/DependencyInjection/ServiceCollectionExtensions.cs`
 4. `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/WorkflowExecutionAGUIEventProjector.cs:45`
 5. `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionDispatchFailureReporter.cs:38`
 

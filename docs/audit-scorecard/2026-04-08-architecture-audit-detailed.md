@@ -102,7 +102,7 @@ HandleContinueChatStreamAsync (L769): TCS<string> + SubscribeAsync + MapAndWrite
 - 返回 `ProjectionSessionEventEntry` 由管线分发
 - 支持异步多消费者（readmodel, search, graph）
 
-**WorkflowExecutionCurrentStateProjector** (`src/workflow/Aevatar.Workflow.Projection/Projectors/`):
+**CurrentStateProjectionMaterializer** (`src/Aevatar.CQRS.Projection.Core/Orchestration/`):
 - 实现 `ICurrentStateProjectionMaterializer<WorkflowExecutionMaterializationContext>`
 - 通过投影管线接收 EventEnvelope，物化到 document store
 - 版本号来自权威 actor committed state

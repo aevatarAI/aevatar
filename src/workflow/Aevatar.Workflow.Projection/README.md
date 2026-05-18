@@ -13,7 +13,7 @@ workflow 领域的 projection/readmodel 实现。当前 durable materialization 
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
   RUN["WorkflowRunGAgent committed observation"]
-  CUR["WorkflowExecutionCurrentStateProjector"]
+  CUR["CurrentStateProjectionMaterializer"]
   REP["WorkflowRunInsightReportArtifactProjector"]
   TL["WorkflowRunTimelineArtifactProjector"]
   GRA["WorkflowRunGraphArtifactProjector"]
@@ -38,7 +38,7 @@ flowchart LR
 - [WorkflowExecutionMaterializationPort.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionMaterializationPort.cs)
 - [WorkflowExecutionCurrentStateQueryPort.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionCurrentStateQueryPort.cs)
 - [WorkflowExecutionArtifactQueryPort.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionArtifactQueryPort.cs)
-- [WorkflowExecutionCurrentStateProjector.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionCurrentStateProjector.cs)
+- [ServiceCollectionExtensions.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/DependencyInjection/ServiceCollectionExtensions.cs)
 - [WorkflowRunInsightReportArtifactProjector.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunInsightReportArtifactProjector.cs)
 - [WorkflowRunTimelineArtifactProjector.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunTimelineArtifactProjector.cs)
 - [WorkflowRunGraphArtifactProjector.cs](/Users/auric/aevatar/src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowRunGraphArtifactProjector.cs)
