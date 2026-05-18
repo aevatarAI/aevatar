@@ -13,7 +13,7 @@ public static class A2AServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddA2AAdapter(this IServiceCollection services)
     {
-        services.TryAddSingleton<IA2ATaskStore, InMemoryA2ATaskStore>();
+        services.TryAddSingleton<IA2ATaskStatePort, InMemoryA2ATaskStatePort>();
         services.TryAddScoped<IA2AAdapterService, A2AAdapterService>();
         return services;
     }

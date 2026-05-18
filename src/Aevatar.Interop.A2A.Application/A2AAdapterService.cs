@@ -19,16 +19,16 @@ namespace Aevatar.Interop.A2A.Application;
 public sealed class A2AAdapterService : IA2AAdapterService
 {
     private readonly IActorDispatchPort _dispatchPort;
-    private readonly IA2ATaskStore _taskStore;
+    private readonly IA2ATaskStatePort _taskState;
     private readonly ILogger _logger;
 
     public A2AAdapterService(
         IActorDispatchPort dispatchPort,
-        IA2ATaskStore taskStore,
+        IA2ATaskStatePort taskState,
         ILogger<A2AAdapterService>? logger = null)
     {
         _dispatchPort = dispatchPort;
-        _taskStore = taskStore;
+        _taskState = taskState;
         _logger = logger ?? NullLogger<A2AAdapterService>.Instance;
     }
 
@@ -45,7 +45,7 @@ public sealed class A2AAdapterService : IA2AAdapterService
             throw new ArgumentException("Target agent ID must be specified in metadata['agentId'] or sessionId.");
 
         // 3. Create the task record
-        var task = await _taskStore.CreateTaskAsync(sendParams.Id, sendParams.SessionId, sendParams.Message, ct);
+        var task = await _taskState.CreateTaskAsync(sendParams.Id, sendParams.SessionId, sendParams.Message, ct);
 
         // 4. Build the EventEnvelope and dispatch it
         var chatRequest = BuildChatRequestEvent(prompt, sendParams);
@@ -54,7 +54,7 @@ public sealed class A2AAdapterService : IA2AAdapterService
         try
         {
             await _dispatchPort.DispatchAsync(targetActorId, envelope, ct);
-            task = await _taskStore.UpdateTaskStateAsync(sendParams.Id, TaskState.Working, ct: ct);
+            task = await _taskState.UpdateTaskStateAsync(sendParams.Id, TaskState.Working, ct: ct);
             _logger.LogDebug("A2A task {TaskId} dispatched to actor {ActorId}", sendParams.Id, targetActorId);
         }
         catch (Exception ex)
@@ -65,7 +65,7 @@ public sealed class A2AAdapterService : IA2AAdapterService
                 Role = "agent",
                 Parts = [new TextPart { Text = $"Dispatch failed: {ex.Message}" }],
             };
-            task = await _taskStore.UpdateTaskStateAsync(sendParams.Id, TaskState.Failed, errorMessage, ct);
+            task = await _taskState.UpdateTaskStateAsync(sendParams.Id, TaskState.Failed, errorMessage, ct);
         }
 
         return task;
@@ -73,7 +73,7 @@ public sealed class A2AAdapterService : IA2AAdapterService
 
     public async Task<A2ATask?> GetTaskAsync(TaskQueryParams queryParams, CancellationToken ct = default)
     {
-        var task = await _taskStore.GetTaskAsync(queryParams.Id, ct);
+        var task = await _taskState.GetTaskAsync(queryParams.Id, ct);
         if (task == null) return null;
 
         // Trim by historyLength
@@ -91,14 +91,14 @@ public sealed class A2AAdapterService : IA2AAdapterService
 
     public async Task<A2ATask> CancelTaskAsync(TaskIdParams idParams, CancellationToken ct = default)
     {
-        var task = await _taskStore.GetTaskAsync(idParams.Id, ct);
+        var task = await _taskState.GetTaskAsync(idParams.Id, ct);
         if (task == null)
             throw new KeyNotFoundException($"Task '{idParams.Id}' not found.");
 
         if (task.Status.State is TaskState.Completed or TaskState.Failed or TaskState.Canceled)
             throw new InvalidOperationException($"Task '{idParams.Id}' is in terminal state '{task.Status.State}' and cannot be canceled.");
 
-        return await _taskStore.UpdateTaskStateAsync(idParams.Id, TaskState.Canceled, ct: ct);
+        return await _taskState.UpdateTaskStateAsync(idParams.Id, TaskState.Canceled, ct: ct);
     }
 
     public AgentCard GetAgentCard(string baseUrl)

@@ -141,7 +141,7 @@ public static class A2AEndpoints
         HttpContext context,
         string taskId,
         IA2AAdapterService adapter,
-        IA2ATaskStore taskStore)
+        IA2ATaskStatePort taskState)
     {
         var ct = context.RequestAborted;
 
@@ -161,7 +161,7 @@ public static class A2AEndpoints
         context.Response.Headers["X-Accel-Buffering"] = "no";
         await context.Response.StartAsync(ct);
 
-        var reader = taskStore.SubscribeAsync(taskId);
+        var reader = taskState.SubscribeAsync(taskId);
 
         // Subscribe before sending the first event so a transition that happens
         // during stream startup is still observed by the reader.

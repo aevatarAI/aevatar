@@ -5,8 +5,8 @@ using Aevatar.Interop.A2A.Abstractions.Models;
 
 namespace Aevatar.Interop.A2A.Application;
 
-/// <summary>In-memory implementation of the A2A Task store. For development/testing use only.</summary>
-public sealed class InMemoryA2ATaskStore : IA2ATaskStore
+/// <summary>In-memory implementation of the A2A Task state port. For development/testing use only.</summary>
+public sealed class InMemoryA2ATaskStatePort : IA2ATaskStatePort
 {
     private readonly ConcurrentDictionary<string, A2ATask> _tasks = new();
     private readonly ConcurrentDictionary<string, List<Channel<TaskStateUpdate>>> _subscribers = new();

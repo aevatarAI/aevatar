@@ -10,12 +10,12 @@ namespace Aevatar.Interop.A2A.Tests;
 public class A2AAdapterServiceTests
 {
     private readonly StubDispatchPort _dispatchPort = new();
-    private readonly InMemoryA2ATaskStore _taskStore = new();
+    private readonly InMemoryA2ATaskStatePort _taskState = new();
     private readonly A2AAdapterService _adapter;
 
     public A2AAdapterServiceTests()
     {
-        _adapter = new A2AAdapterService(_dispatchPort, _taskStore);
+        _adapter = new A2AAdapterService(_dispatchPort, _taskState);
     }
 
     private static Message MakeUserMessage(string text) => new()
@@ -235,7 +235,7 @@ public class A2AAdapterServiceTests
             Message = MakeUserMessage("Hello"),
             Metadata = new() { ["agentId"] = "a1" },
         });
-        await _taskStore.UpdateTaskStateAsync("t-done", TaskState.Completed);
+        await _taskState.UpdateTaskStateAsync("t-done", TaskState.Completed);
 
         var act = () => _adapter.CancelTaskAsync(new TaskIdParams { Id = "t-done" });
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*terminal*");
