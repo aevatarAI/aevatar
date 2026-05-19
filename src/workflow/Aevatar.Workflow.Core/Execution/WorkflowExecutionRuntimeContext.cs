@@ -21,14 +21,6 @@ internal interface IWorkflowExecutionRuntimeContextAccessor
 //                  runtime-only values stay non-durable, with no proto/state migration in this cluster.
 internal sealed class WorkflowExecutionRuntimeContext
 {
-    private static readonly HashSet<string> RuntimeControlMetadataKeys = new(StringComparer.Ordinal)
-    {
-        LLMRequestMetadataKeys.NyxIdAccessToken,
-        LLMRequestMetadataKeys.ModelOverride,
-        LLMRequestMetadataKeys.NyxIdRoutePreference,
-        ConnectorRequest.HttpAuthorizationMetadataKey,
-    };
-
     public WorkflowLlmRuntimeOverrides LlmOverrides { get; } = new();
 
     public WorkflowConnectorRuntimeContext Connector { get; } = new();
@@ -85,8 +77,7 @@ internal sealed class WorkflowExecutionRuntimeContext
                 continue;
             }
 
-            if (!RuntimeControlMetadataKeys.Contains(key))
-                RequestPassthroughMetadata.Set(key, value);
+            RequestPassthroughMetadata.Set(key, value);
         }
     }
 

@@ -9,6 +9,11 @@ namespace Aevatar.Workflow.Core.Execution;
 //                  for LLM overrides, connector authorization, and filtered passthrough metadata.
 internal static class WorkflowRequestMetadataRuntimeContextAccess
 {
+    // Refactor (iter16/cluster-031):
+    //   Old pattern: request metadata writes stored a normalized dictionary
+    //                under `workflow.request.metadata` in the item bag.
+    //   New principle: request metadata writes promote known control keys into
+    //                  typed runtime sections and keep only passthrough values.
     public static void SetRequestMetadata(
         IWorkflowExecutionStateHost stateHost,
         IReadOnlyDictionary<string, string>? metadata)
@@ -17,12 +22,22 @@ internal static class WorkflowRequestMetadataRuntimeContextAccess
         stateHost.RuntimeContext.ApplyRequestMetadata(metadata);
     }
 
+    // Refactor (iter16/cluster-031):
+    //   Old pattern: request metadata cleanup removed the generic
+    //                `workflow.request.metadata` item.
+    //   New principle: request metadata cleanup clears the typed LLM,
+    //                  connector, and passthrough runtime sections.
     public static void RemoveRequestMetadata(IWorkflowExecutionStateHost stateHost)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
         stateHost.RuntimeContext.ApplyRequestMetadata(null);
     }
 
+    // Refactor (iter16/cluster-031):
+    //   Old pattern: LLM calls copied request metadata out of the generic item
+    //                bag, where control keys and passthrough keys were mixed.
+    //   New principle: LLM calls copy only the filtered passthrough runtime
+    //                  metadata section.
     public static int CopyRequestMetadata(
         IWorkflowExecutionContext ctx,
         IDictionary<string, string> target)

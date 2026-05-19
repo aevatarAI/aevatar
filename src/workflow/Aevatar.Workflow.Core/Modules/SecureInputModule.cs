@@ -9,7 +9,7 @@ namespace Aevatar.Workflow.Core.Modules;
 /// <summary>
 /// Secure human input module. Suspends the workflow, captures a secret value,
 /// and only emits a redacted completion output while keeping the raw value in
-/// actor-local workflow runtime items instead of durable event payload/state.
+/// the actor-owned typed workflow runtime context instead of durable event payload/state.
 /// </summary>
 public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
 {
@@ -179,7 +179,7 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
             RunId = pending.RunId,
             StepId = pending.StepId,
             Variable = variableName,
-            // Keep payload redacted. Raw value remains in actor-local runtime items.
+            // Keep payload redacted. Raw value remains in the typed runtime context.
             Value = string.Empty,
         }, TopologyAudience.Self, ct);
 

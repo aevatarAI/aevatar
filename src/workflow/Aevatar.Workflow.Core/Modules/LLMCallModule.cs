@@ -348,6 +348,11 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         CopyOverride(metadata, LLMRequestMetadataKeys.NyxIdRoutePreference, overrides.NyxIdRoutePreference);
     }
 
+    // Refactor (iter16/cluster-031):
+    //   Old pattern: LLM override metadata was forwarded from generic execution
+    //                item values after string-key lookup.
+    //   New principle: LLM override metadata is copied from typed runtime
+    //                  override fields after blank-value filtering.
     private static void CopyOverride(
         MapField<string, string> metadata,
         string key,

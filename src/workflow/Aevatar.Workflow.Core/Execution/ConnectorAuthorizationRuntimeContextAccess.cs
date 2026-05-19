@@ -10,6 +10,11 @@ namespace Aevatar.Workflow.Core.Execution;
 //                  WorkflowExecutionRuntimeContext connector section.
 internal static class ConnectorAuthorizationRuntimeContextAccess
 {
+    // Refactor (iter16/cluster-031):
+    //   Old pattern: authorization writes used SetExecutionItem with the
+    //                `http.authorization` string key.
+    //   New principle: authorization writes update the typed connector section
+    //                  of WorkflowExecutionRuntimeContext.
     public static void SetAuthorization(
         IWorkflowExecutionStateHost stateHost,
         string? authorization)
@@ -19,12 +24,21 @@ internal static class ConnectorAuthorizationRuntimeContextAccess
             string.IsNullOrWhiteSpace(authorization) ? null : authorization.Trim();
     }
 
+    // Refactor (iter16/cluster-031):
+    //   Old pattern: clearing authorization removed a value from the generic
+    //                execution item bag by string key.
+    //   New principle: clearing authorization nulls the typed connector field.
     public static void RemoveAuthorization(IWorkflowExecutionStateHost stateHost)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
         stateHost.RuntimeContext.Connector.Authorization = null;
     }
 
+    // Refactor (iter16/cluster-031):
+    //   Old pattern: connector modules recovered authorization through generic
+    //                item lookup on IWorkflowExecutionItemsContext.
+    //   New principle: connector modules read authorization through the typed
+    //                  runtime context accessor contract.
     public static bool TryGetAuthorization(
         IWorkflowExecutionContext ctx,
         out string authorization)
