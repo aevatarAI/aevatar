@@ -282,6 +282,29 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     }
 
     [Fact]
+    public void ChatRunRequestNormalizer_ShouldIgnoreScopeMetadata_FromDefaults()
+    {
+        var input = new ChatInput
+        {
+            Prompt = "hello",
+        };
+        var defaultMetadata = new Dictionary<string, string>
+        {
+            ["scope_id"] = "default-scope",
+            [WorkflowRunCommandMetadataKeys.ScopeId] = "default-scope",
+            ["trace"] = "trace-1",
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input, defaultMetadata: defaultMetadata);
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.ScopeId.Should().BeNull();
+        result.Request.Metadata.Should().NotContainKey("scope_id");
+        result.Request.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
+        result.Request.Metadata.Should().Contain("trace", "trace-1");
+    }
+
+    [Fact]
     public void CapabilityTraceContext_CreateAcceptedPayload_ShouldUseReceiptValues()
     {
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");

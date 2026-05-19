@@ -45,7 +45,6 @@ public enum WorkflowChatRunStartError
     InvalidWorkflowYaml = 7,
     WorkflowNameMismatch = 8,
     PromptRequired = 9,
-    ConflictingScopeId = 10,
 }
 
 public enum WorkflowProjectionCompletionStatus

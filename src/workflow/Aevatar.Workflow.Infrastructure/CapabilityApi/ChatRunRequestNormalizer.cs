@@ -19,6 +19,9 @@ internal readonly record struct ChatRunRequestNormalizationResult(
 
 internal static class ChatRunRequestNormalizer
 {
+    // Refactor (iter15/cluster-029):
+    //   Old pattern: normalized context carried metadata-derived scope conflict state.
+    //   New principle: scope is owned by the typed field; metadata only carries open extension entries.
     private readonly record struct NormalizedChatContext(
         IReadOnlyDictionary<string, string> Metadata,
         string? ScopeId);
@@ -176,6 +179,9 @@ internal static class ChatRunRequestNormalizer
         return new NormalizedChatContext(normalized, normalizedScopeId);
     }
 
+    // Refactor (iter15/cluster-029):
+    //   Old pattern: scope metadata keys promoted into control-flow ScopeId or conflict errors.
+    //   New principle: scope metadata keys are not control input and are not forwarded as extension metadata.
     private static void AddNormalizedMetadataEntry(
         IDictionary<string, string> metadata,
         string key,
