@@ -93,6 +93,57 @@ public sealed class WorkflowExecutionRuntimeContextTests
     }
 
     [Fact]
+    public void ConnectorAuthorizationRuntimeAccess_ShouldTrimSetAndClearAuthorization()
+    {
+        var host = new RecordingStateHost();
+
+        ConnectorAuthorizationRuntimeContextAccess.SetAuthorization(host, " Bearer secret ");
+
+        host.RuntimeContext.Connector.Authorization.Should().Be("Bearer secret");
+
+        ConnectorAuthorizationRuntimeContextAccess.SetAuthorization(host, " ");
+
+        host.RuntimeContext.Connector.Authorization.Should().BeNull();
+
+        ConnectorAuthorizationRuntimeContextAccess.SetAuthorization(host, "Bearer secret");
+        ConnectorAuthorizationRuntimeContextAccess.RemoveAuthorization(host);
+
+        host.RuntimeContext.Connector.Authorization.Should().BeNull();
+        FluentActions.Invoking(() => ConnectorAuthorizationRuntimeContextAccess.SetAuthorization(null!, "secret"))
+            .Should()
+            .Throw<ArgumentNullException>();
+        FluentActions.Invoking(() => ConnectorAuthorizationRuntimeContextAccess.RemoveAuthorization(null!))
+            .Should()
+            .Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void ConnectorAuthorizationRuntimeAccess_ShouldReadOnlyFromRuntimeAccessor()
+    {
+        var context = new RecordingWorkflowExecutionContext();
+        context.RuntimeContext.Connector.Authorization = " Bearer secret ";
+
+        ConnectorAuthorizationRuntimeContextAccess.TryGetAuthorization(context, out var authorization)
+            .Should()
+            .BeTrue();
+        authorization.Should().Be("Bearer secret");
+
+        context.RuntimeContext.Connector.Authorization = " ";
+        ConnectorAuthorizationRuntimeContextAccess.TryGetAuthorization(context, out authorization)
+            .Should()
+            .BeFalse();
+        authorization.Should().BeEmpty();
+
+        ConnectorAuthorizationRuntimeContextAccess.TryGetAuthorization(new ContextWithoutRuntimeAccessor(), out authorization)
+            .Should()
+            .BeFalse();
+        authorization.Should().BeEmpty();
+        FluentActions.Invoking(() => ConnectorAuthorizationRuntimeContextAccess.TryGetAuthorization(null!, out _))
+            .Should()
+            .Throw<ArgumentNullException>();
+    }
+
+    [Fact]
     public void CopyRequestMetadata_ShouldReturnZeroWhenRuntimeContextIsMissingOrEmpty()
     {
         var target = new Dictionary<string, string>(StringComparer.Ordinal);

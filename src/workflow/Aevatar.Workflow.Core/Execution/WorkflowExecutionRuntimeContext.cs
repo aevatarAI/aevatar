@@ -94,6 +94,11 @@ internal sealed class WorkflowExecutionRuntimeContext
         string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
 }
 
+// Refactor (iter16/cluster-031):
+//   Old pattern: LLM request overrides were stored as string-key entries in the
+//                generic workflow execution item bag.
+//   New principle: LLM override values live in a typed runtime section owned by
+//                  the run actor.
 internal sealed class WorkflowLlmRuntimeOverrides
 {
     public string? NyxIdAccessToken { get; set; }
@@ -110,6 +115,11 @@ internal sealed class WorkflowLlmRuntimeOverrides
     }
 }
 
+// Refactor (iter16/cluster-031):
+//   Old pattern: connector authorization used the generic item bag key
+//                `http.authorization`.
+//   New principle: connector runtime inputs live in a typed connector section
+//                  owned by the run actor.
 internal sealed class WorkflowConnectorRuntimeContext
 {
     public string? Authorization { get; set; }
@@ -120,6 +130,11 @@ internal sealed class WorkflowConnectorRuntimeContext
     }
 }
 
+// Refactor (iter16/cluster-031):
+//   Old pattern: request metadata was copied wholesale into generic runtime
+//                items, mixing control values with passthrough values.
+//   New principle: only filtered passthrough metadata remains in this typed
+//                  runtime section after control values are promoted.
 internal sealed class WorkflowRequestPassthroughMetadata
 {
     private readonly Dictionary<string, string> _values = new(StringComparer.Ordinal);
@@ -136,6 +151,11 @@ internal sealed class WorkflowRequestPassthroughMetadata
     public void Clear() => _values.Clear();
 }
 
+// Refactor (iter16/cluster-031):
+//   Old pattern: captured secure input values were held in the generic item bag
+//                under string-composed keys.
+//   New principle: captured secure values live in a typed non-durable runtime
+//                  section owned by the run actor.
 internal sealed class CapturedSecureInputs
 {
     private readonly Dictionary<CapturedSecureInputKey, string> _values = new();
