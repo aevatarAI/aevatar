@@ -11,6 +11,7 @@ internal static class WorkflowRoleAgentEnvelopeFactory
     {
         var initialize = new InitializeRoleAgentEvent
         {
+            RoleId = role.Id ?? string.Empty,
             RoleName = role.Name ?? string.Empty,
             ProviderName = string.IsNullOrWhiteSpace(role.Provider) ? string.Empty : role.Provider,
             Model = string.IsNullOrWhiteSpace(role.Model) ? string.Empty : role.Model,

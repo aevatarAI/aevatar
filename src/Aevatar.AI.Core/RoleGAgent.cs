@@ -57,6 +57,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
 
     /// <summary>Role name.</summary>
     public string RoleName { get; private set; } = "";
+    public string RoleId { get; private set; } = "";
 
     [EventHandler]
     public async Task HandleInitializeRoleAgent(InitializeRoleAgentEvent evt)
@@ -407,6 +408,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     protected override Task OnStateChangedAfterConfigAppliedAsync(RoleGAgentState state, CancellationToken ct)
     {
         _ = ct;
+        RoleId = state.RoleId ?? string.Empty;
         RoleName = state.RoleName ?? string.Empty;
         ApplyModuleExtensionsFromStateIfNeeded(state);
         return Task.CompletedTask;
@@ -708,6 +710,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
 
         return PersistDomainEventAsync(new RoleChatSessionCompletedEvent
         {
+            RoleId = RoleId,
             SessionId = request.SessionId,
             Content = replayRecord.Content,
             ReasoningContent = replayRecord.ReasoningContent,
@@ -777,6 +780,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             : reasonMessage.Trim();
         return PersistDomainEventAsync(new RoleChatSessionCompletedEvent
         {
+            RoleId = RoleId,
             SessionId = pending.SessionId,
             Content = BuildLlmFailureContent($"{reasonCode}: {safeReason}"),
             Prompt = BuildContinuationPrompt(pending, safeReason),
@@ -876,6 +880,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     {
         var next = current.Clone();
         var overrides = EnsureConfigOverrides(next);
+        next.RoleId = evt.RoleId ?? string.Empty;
         next.RoleName = evt.RoleName ?? string.Empty;
         next.EventModules = NormalizeModuleExtensionText(evt.EventModules);
         next.EventRoutes = NormalizeModuleExtensionText(evt.EventRoutes);

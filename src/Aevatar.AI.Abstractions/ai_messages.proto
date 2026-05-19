@@ -51,6 +51,7 @@ message RoleChatSessionCompletedEvent {
   string prompt = 5;
   bool content_emitted = 6;
   repeated ChatContentPart output_parts = 7;
+  string role_id = 8;
 }
 
 message InitializeRoleAgentEvent {
@@ -68,6 +69,7 @@ message InitializeRoleAgentEvent {
   int32 max_prompt_token_budget = 12;
   double compression_threshold = 13;
   bool enable_summarization = 14;
+  string role_id = 15;
 }
 
 message AIAgentConfigOverrides {
@@ -124,6 +126,7 @@ message RoleGAgentState {
   string event_modules = 5;
   string event_routes = 6;
   PendingToolApprovalState pending_approval = 7;
+  string role_id = 8;
 }
 
 // ─── Multi-turn tool approval continuation ───
