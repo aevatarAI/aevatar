@@ -15,7 +15,6 @@ namespace Aevatar.Foundation.VoicePresence.Hosting;
 public sealed class RemoteActorVoicePresenceSessionResolver : IVoicePresenceSessionResolver
 {
     private const string DefaultVoiceModuleName = "voice_presence";
-    private const string RemoteAudioTransportUnavailable = "remote_audio_transport_unavailable";
     private readonly IServiceProvider _services;
     private readonly IReadOnlyDictionary<string, VoicePresenceModuleRegistration> _registrationsByName;
     private readonly IReadOnlyList<VoicePresenceModuleRegistration> _registrations;
@@ -133,14 +132,17 @@ public sealed class RemoteActorVoicePresenceSessionResolver : IVoicePresenceSess
                     SessionId = sessionId,
                 }, ct);
 
-                await DispatchCloseRequestAsync(sessionId, RemoteAudioTransportUnavailable, ct);
+                await DispatchCloseRequestAsync(
+                    sessionId,
+                    VoiceRemoteAudioTransportUnavailableException.Reason,
+                    ct);
             }
             finally
             {
                 await transport.DisposeAsync();
             }
 
-            throw new NotSupportedException(RemoteAudioTransportUnavailable);
+            throw new VoiceRemoteAudioTransportUnavailableException();
         }
 
         private async Task DetachTransportAsync(IVoiceTransport? expectedTransport, CancellationToken ct)

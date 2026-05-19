@@ -203,6 +203,29 @@ public class VoicePresenceEndpointsTests
     }
 
     [Fact]
+    public async Task Request_should_close_websocket_with_policy_violation_when_remote_audio_is_unavailable()
+    {
+        var socket = new RecordingCloseWebSocket(WebSocketState.Open);
+        var session = new VoicePresenceSession(
+            isInitialized: static () => true,
+            isTransportAttached: static () => false,
+            attachTransportAsync: static (_, _) => throw new VoiceRemoteAudioTransportUnavailableException(),
+            detachTransportAsync: static (_, _) => Task.CompletedTask,
+            pcmSampleRateHz: 24000);
+        using var app = CreateApp((_, _) => Task.FromResult<VoicePresenceSession?>(session));
+        var context = CreateHttpContext(app);
+        context.Features.Set<IHttpWebSocketFeature>(new RecordingHttpWebSocketFeature(socket));
+        context.Request.RouteValues["actorId"] = "agent-1";
+
+        await GetVoiceEndpoint(app).RequestDelegate!(context);
+
+        socket.CloseCalls.ShouldBe(1);
+        socket.LastCloseStatus.ShouldBe(WebSocketCloseStatus.PolicyViolation);
+        socket.LastCloseDescription.ShouldBe(VoiceRemoteAudioTransportUnavailableException.Reason);
+        socket.State.ShouldBe(WebSocketState.Closed);
+    }
+
+    [Fact]
     public async Task Request_should_prefer_route_module_name_over_query()
     {
         var module = CreateModule(new RecordingVoiceProvider());
@@ -396,6 +419,99 @@ public class VoicePresenceEndpointsTests
             Requests.Add(request);
             RequestedActorIds.Add(request.ActorId);
             return Task.FromResult(session);
+        }
+    }
+
+    private sealed class RecordingCloseWebSocket : WebSocket
+    {
+        private WebSocketState _state;
+
+        public RecordingCloseWebSocket(WebSocketState state)
+        {
+            _state = state;
+        }
+
+        public int CloseCalls { get; private set; }
+
+        public WebSocketCloseStatus? LastCloseStatus { get; private set; }
+
+        public string? LastCloseDescription { get; private set; }
+
+        public override WebSocketCloseStatus? CloseStatus => LastCloseStatus;
+
+        public override string? CloseStatusDescription => LastCloseDescription;
+
+        public override WebSocketState State => _state;
+
+        public override string? SubProtocol => null;
+
+        public override void Abort()
+        {
+            _state = WebSocketState.Aborted;
+        }
+
+        public override Task CloseAsync(
+            WebSocketCloseStatus closeStatus,
+            string? statusDescription,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            CloseCalls++;
+            LastCloseStatus = closeStatus;
+            LastCloseDescription = statusDescription;
+            _state = WebSocketState.Closed;
+            return Task.CompletedTask;
+        }
+
+        public override Task CloseOutputAsync(
+            WebSocketCloseStatus closeStatus,
+            string? statusDescription,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            LastCloseStatus = closeStatus;
+            LastCloseDescription = statusDescription;
+            _state = WebSocketState.CloseSent;
+            return Task.CompletedTask;
+        }
+
+        public override void Dispose()
+        {
+            _state = WebSocketState.Closed;
+        }
+
+        public override Task<WebSocketReceiveResult> ReceiveAsync(
+            ArraySegment<byte> buffer,
+            CancellationToken cancellationToken)
+        {
+            _ = buffer;
+            cancellationToken.ThrowIfCancellationRequested();
+            _state = WebSocketState.CloseReceived;
+            return Task.FromResult(new WebSocketReceiveResult(0, WebSocketMessageType.Close, true));
+        }
+
+        public override Task SendAsync(
+            ArraySegment<byte> buffer,
+            WebSocketMessageType messageType,
+            bool endOfMessage,
+            CancellationToken cancellationToken)
+        {
+            _ = buffer;
+            _ = messageType;
+            _ = endOfMessage;
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingHttpWebSocketFeature(RecordingCloseWebSocket socket) : IHttpWebSocketFeature
+    {
+        public bool IsWebSocketRequest => true;
+
+        public Task<WebSocket> AcceptAsync(WebSocketAcceptContext context)
+        {
+            _ = context;
+            return Task.FromResult<WebSocket>(socket);
         }
     }
 }

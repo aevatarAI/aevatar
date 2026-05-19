@@ -37,7 +37,7 @@ public class RemoteActorVoicePresenceSessionResolverTests
         var ex = await Should.ThrowAsync<NotSupportedException>(
             () => session.AttachTransportAsync(transport, CancellationToken.None));
 
-        ex.Message.ShouldBe("remote_audio_transport_unavailable");
+        ex.Message.ShouldBe(VoiceRemoteAudioTransportUnavailableException.Reason);
         transport.Disposed.ShouldBeTrue();
         session.IsTransportAttached.ShouldBeFalse();
 
@@ -50,7 +50,7 @@ public class RemoteActorVoicePresenceSessionResolverTests
         closeSignal.ModuleName.ShouldBe("voice_presence_openai");
         closeSignal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.RemoteSessionCloseRequested);
         closeSignal.RemoteSessionCloseRequested.SessionId.ShouldBe(openSignal.RemoteSessionOpenRequested.SessionId);
-        closeSignal.RemoteSessionCloseRequested.Reason.ShouldBe("remote_audio_transport_unavailable");
+        closeSignal.RemoteSessionCloseRequested.Reason.ShouldBe(VoiceRemoteAudioTransportUnavailableException.Reason);
     }
 
     [Fact]
