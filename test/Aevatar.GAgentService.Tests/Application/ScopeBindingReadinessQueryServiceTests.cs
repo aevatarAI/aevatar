@@ -137,7 +137,7 @@ public sealed class ScopeBindingReadinessQueryServiceTests
     }
 
     [Fact]
-    public async Task GetReadinessAsync_WhenExpectedEndpointMissingFromStaleCatalog_ShouldReturnEligibleServingTargetMissing()
+    public async Task GetReadinessAsync_WhenExpectedEndpointMissingFromStaleCatalog_ShouldReturnServiceCatalogTargetMissing()
     {
         var lifecyclePort = new FakeServiceLifecycleQueryPort
         {
@@ -146,7 +146,7 @@ public sealed class ScopeBindingReadinessQueryServiceTests
         var servingPort = new FakeServiceServingQueryPort
         {
             ServingSet = CreateServingSet([
-                CreateTarget("rev-ready", ServiceServingState.Active, allocationWeight: 100, enabledEndpointIds: ["old"]),
+                CreateTarget("rev-ready", ServiceServingState.Active, allocationWeight: 100, enabledEndpointIds: ["chat"]),
             ]),
         };
         var service = CreateService(lifecyclePort, servingPort);
@@ -156,8 +156,13 @@ public sealed class ScopeBindingReadinessQueryServiceTests
             "service-a",
             ExpectedEndpointIds: ["chat"]));
 
-        snapshot.Status.Should().Be(ScopeBindingReadinessStatus.EligibleServingTargetMissing);
+        snapshot.Status.Should().Be(ScopeBindingReadinessStatus.ServiceCatalogTargetMissing);
+        snapshot.ServiceCatalogVisible.Should().BeTrue();
+        snapshot.ServingSetVisible.Should().BeTrue();
+        snapshot.EligibleServingTargetVisible.Should().BeTrue();
         snapshot.InvokeReady.Should().BeFalse();
+        snapshot.RevisionId.Should().Be("rev-ready");
+        snapshot.DeploymentId.Should().Be("deployment-rev-ready");
     }
 
     [Fact]

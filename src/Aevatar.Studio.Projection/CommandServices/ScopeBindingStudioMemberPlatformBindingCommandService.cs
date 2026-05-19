@@ -13,7 +13,6 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
 {
     private const string BindingRunDirectRoute = "aevatar.studio.projection.studio-member-binding-run";
     private const string ReadinessFailedFailureCode = "STUDIO_MEMBER_PLATFORM_BINDING_READINESS_FAILED";
-    private const string ReadinessTimeoutFailureCode = "STUDIO_MEMBER_PLATFORM_BINDING_READINESS_TIMEOUT";
 
     private readonly IScopeBindingCommandPort _scopeBindingCommandPort;
     private readonly IScopeBindingReadinessQueryPort _readinessQueryPort;
@@ -204,36 +203,10 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         if (!readiness.InvokeReady)
         {
             _logger.LogWarning(
-                "StudioMember platform binding commands completed, but readiness was not observed before timeout. Dispatching failure continuation. bindingRunId={BindingRunId} platformBindingCommandId={CommandId} readinessStatus={ReadinessStatus}",
+                "StudioMember platform binding commands completed, but readiness was not observed before timeout. Leaving binding run pending for watchdog recovery. bindingRunId={BindingRunId} platformBindingCommandId={CommandId} readinessStatus={ReadinessStatus}",
                 request.BindingRunId,
                 commandId,
                 readiness.Status);
-
-            try
-            {
-                await DispatchAsync(
-                    replyActorId,
-                    new StudioMemberPlatformBindingFailed
-                    {
-                        BindingRunId = request.BindingRunId,
-                        PlatformBindingCommandId = commandId,
-                        Failure = new StudioMemberBindingFailure
-                        {
-                            Code = ReadinessTimeoutFailureCode,
-                            Message = $"Scope binding readiness was not observed before timeout. Last readiness status: {readiness.Status}.",
-                            FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                        },
-                    },
-                    ct).ConfigureAwait(false);
-            }
-            catch (Exception dispatchEx)
-            {
-                _logger.LogError(
-                    dispatchEx,
-                    "StudioMember platform binding readiness-timeout continuation dispatch failed. bindingRunId={BindingRunId} platformBindingCommandId={CommandId}",
-                    request.BindingRunId,
-                    commandId);
-            }
 
             return;
         }
@@ -314,6 +287,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             StudioMemberBindingRequest.ImplementationOneofCase.Gagent => request.Request.Gagent.Endpoints
                 .Select(endpoint => endpoint.EndpointId?.Trim())
                 .Where(endpointId => !string.IsNullOrWhiteSpace(endpointId))
+                .Select(endpointId => endpointId!)
                 .Distinct(StringComparer.Ordinal)
                 .ToArray(),
             _ => ["chat"],

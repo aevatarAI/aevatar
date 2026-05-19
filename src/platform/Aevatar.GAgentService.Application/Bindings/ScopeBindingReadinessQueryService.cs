@@ -86,6 +86,21 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
                 ObservedAtUtc: observedAtUtc);
         }
 
+        if (!IsServiceCatalogTargetVisible(service, expectedEndpointIds))
+        {
+            return new ScopeBindingReadinessSnapshot(
+                normalizedScopeId,
+                normalizedServiceId,
+                ScopeBindingReadinessStatus.ServiceCatalogTargetMissing,
+                ServiceCatalogVisible: true,
+                ServingSetVisible: true,
+                EligibleServingTargetVisible: true,
+                InvokeReady: false,
+                RevisionId: eligibleTarget.RevisionId,
+                DeploymentId: eligibleTarget.DeploymentId,
+                ObservedAtUtc: observedAtUtc);
+        }
+
         var trafficView = await _serviceServingQueryPort.GetServiceTrafficViewAsync(identity, ct).ConfigureAwait(false);
         if (!IsTrafficViewTargetVisible(trafficView, serviceEndpointIds, expectedRevisionId, expectedDeploymentId))
         {
@@ -118,10 +133,22 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
     private static IReadOnlyList<string> GetServiceEndpointIds(ServiceCatalogSnapshot service) =>
         NormalizeEndpointIds(service.Endpoints.Select(endpoint => endpoint.EndpointId));
 
+    private static bool IsServiceCatalogTargetVisible(
+        ServiceCatalogSnapshot service,
+        IReadOnlyList<string> expectedEndpointIds)
+    {
+        if (expectedEndpointIds.Count == 0)
+            return true;
+
+        var catalogEndpointIds = GetServiceEndpointIds(service);
+        return expectedEndpointIds.All(expectedEndpointId => catalogEndpointIds.Contains(expectedEndpointId));
+    }
+
     private static IReadOnlyList<string> NormalizeEndpointIds(IEnumerable<string>? endpointIds) =>
         endpointIds?
             .Select(endpointId => endpointId?.Trim())
             .Where(endpointId => !string.IsNullOrWhiteSpace(endpointId))
+            .Select(endpointId => endpointId!)
             .Distinct(StringComparer.Ordinal)
             .ToArray() ?? [];
 

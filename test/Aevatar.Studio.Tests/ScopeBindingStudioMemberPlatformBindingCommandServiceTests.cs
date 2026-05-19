@@ -280,7 +280,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenReadinessTimesOut_ShouldDispatchReadinessTimeoutContinuation()
+    public async Task ExecuteAsync_WhenReadinessTimesOut_ShouldLeaveBindingRunPendingForWatchdogRecovery()
     {
         var readinessPort = new RecordingReadinessQueryPort([NotReadySnapshot()]);
         var scopeBindingPort = new RecordingScopeBindingCommandPort();
@@ -302,13 +302,9 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             "platform-bind-1",
             NewScriptStartRequest());
 
-        var dispatch = await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var failed = dispatch.Envelope.Payload.Unpack<StudioMemberPlatformBindingFailed>();
-        failed.BindingRunId.Should().Be("bind-1");
-        failed.PlatformBindingCommandId.Should().Be("platform-bind-1");
-        failed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_READINESS_TIMEOUT");
-        failed.Failure.Message.Should().Contain("ServingSetMissing");
+        await readinessPort.Observed.Task.WaitAsync(TimeSpan.FromSeconds(5));
         readinessPort.Requests.Should().HaveCount(2);
+        dispatchPort.Dispatches.Should().BeEmpty();
     }
 
     [Fact]
@@ -669,6 +665,8 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         }
 
         public List<ScopeBindingReadinessRequest> Requests { get; } = [];
+        public TaskCompletionSource<object?> Observed { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Exception? Failure { get; init; }
 
@@ -679,6 +677,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             CancellationToken ct = default)
         {
             Requests.Add(request);
+            Observed.TrySetResult(null);
             if (Failure != null)
                 throw Failure;
             if (_snapshots.Count <= 1)
