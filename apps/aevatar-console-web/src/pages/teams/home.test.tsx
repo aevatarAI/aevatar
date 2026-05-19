@@ -158,9 +158,9 @@ describe("TeamsHomePage", () => {
     expect(await screen.findByRole("button", { name: "查看团队" })).toBeTruthy();
     expect(screen.getByText("Aevatar / Teams")).toBeTruthy();
     expect(screen.getByText("我的 AI 团队")).toBeTruthy();
-    expect(screen.getByText("当前工作空间")).toBeTruthy();
-    expect(screen.getByText("真实 Team")).toBeTruthy();
-    expect(screen.getByText("Team roster")).toBeTruthy();
+    expect(screen.queryByText("当前工作空间")).toBeNull();
+    expect(screen.getByText("AI Team")).toBeTruthy();
+    expect(screen.getByText("团队列表")).toBeTruthy();
     expect(screen.getByText("运行正常")).toBeTruthy();
     expect(screen.getByText("需要处理")).toBeTruthy();
     expect(screen.getByRole("button", { name: "组建新团队" })).toBeTruthy();
@@ -168,66 +168,17 @@ describe("TeamsHomePage", () => {
     expect(screen.getByText("Team 标识：t-support")).toBeTruthy();
     expect(screen.getByText("客服运行时")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "切换到列表视图" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "更多" })).toBeNull();
   });
 
-  it("opens Studio from the team card actions", async () => {
+  it("keeps team card actions focused on the Team detail page", async () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    fireEvent.click(await screen.findByRole("button", { name: "更多" }));
-    fireEvent.click(await screen.findByText("进入 Studio"));
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/studio");
-    });
-
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("scopeId")).toBe("scope-a");
-    expect(params.get("teamId")).toBe("t-support");
-    expect(params.get("member")).toBe("member:member-alpha");
-    expect(params.get("tab")).toBe("studio");
-  });
-
-  it("opens Studio member creation with Team context from the team card actions", async () => {
-    renderWithQueryClient(React.createElement(TeamsHomePage));
-
-    fireEvent.click(await screen.findByRole("button", { name: "更多" }));
-    fireEvent.click(await screen.findByText("新增成员"));
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/studio");
-    });
-
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("scopeId")).toBe("scope-a");
-    expect(params.get("teamId")).toBe("t-support");
-    expect(params.get("tab")).toBe("studio");
-    expect(params.get("intent")).toBe("create-member");
-  });
-
-  it("labels team card runtime shortcuts as member-scoped", async () => {
-    renderWithQueryClient(React.createElement(TeamsHomePage));
-
-    fireEvent.click(await screen.findByRole("button", { name: "更多" }));
-
-    expect(await screen.findByText("查看默认成员运行")).toBeTruthy();
-    expect(screen.queryByText("查看运行")).toBeNull();
-  });
-
-  it("opens the default member run shortcut with current run context", async () => {
-    renderWithQueryClient(React.createElement(TeamsHomePage));
-
-    fireEvent.click(await screen.findByRole("button", { name: "更多" }));
-    fireEvent.click(await screen.findByText("查看默认成员运行"));
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/runtime/runs");
-    });
-
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("actorId")).toBe("actor://workflow-alpha");
-    expect(params.get("runId")).toBe("run-latest");
-    expect(params.get("scopeId")).toBe("scope-a");
-    expect(params.get("serviceOverrideId")).toBe("service-alpha");
+    await screen.findByRole("button", { name: "查看团队" });
+    expect(screen.queryByRole("button", { name: "更多" })).toBeNull();
+    expect(screen.queryByText("进入 Studio")).toBeNull();
+    expect(screen.queryByText("新增成员")).toBeNull();
+    expect(screen.queryByText("查看默认成员运行")).toBeNull();
   });
 
   it("routes Create Team to the real create-team page", async () => {
@@ -246,7 +197,7 @@ describe("TeamsHomePage", () => {
     expect(screen.queryByRole("button", { name: "切换到卡片视图" })).toBeNull();
   });
 
-  it("keeps the homepage visible when member runtime sampling partially fails", async () => {
+  it("keeps the homepage visible without warning on sampled runtime failures", async () => {
     (scopeRuntimeApi.listMemberRuns as jest.Mock).mockRejectedValueOnce(
       new Error("No stub for /api/scopes/scope-a/members/member-alpha/runs"),
     );
@@ -254,7 +205,7 @@ describe("TeamsHomePage", () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
     expect(await screen.findByRole("heading", { level: 3, name: "客服团队" })).toBeTruthy();
-    expect(screen.getByText("部分团队信号暂时不可见")).toBeTruthy();
+    expect(screen.queryByText("部分团队信号暂时不可见")).toBeNull();
     expect(
       screen.queryByText("No stub for /api/scopes/scope-a/members/member-alpha/runs"),
     ).toBeNull();
@@ -297,10 +248,10 @@ describe("TeamsHomePage", () => {
 
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    expect(await screen.findByText("当前登录态校验失败，已回退到本地工作空间")).toBeTruthy();
+    expect(await screen.findByText("当前登录态校验失败，已使用本地登录信息")).toBeTruthy();
     expect(
       screen.getByText(
-        "登录状态暂时不可用，请刷新后重试。 当前已回退到本地会话里的工作空间 ID scope-a。",
+        "登录状态暂时不可用，请刷新后重试。 已使用本地登录信息继续加载团队。",
       ),
     ).toBeTruthy();
 
@@ -375,7 +326,7 @@ describe("TeamsHomePage", () => {
     expect(screen.getAllByRole("button", { name: "查看团队" })).toHaveLength(2);
   });
 
-  it("shows unassigned members without promoting them into team cards", async () => {
+  it("hides unassigned members instead of surfacing implementation alerts", async () => {
     (studioApi.listMembers as jest.Mock).mockResolvedValueOnce({
       scopeId: "scope-a",
       members: [
@@ -398,7 +349,8 @@ describe("TeamsHomePage", () => {
 
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
-    expect(await screen.findByText("存在未归队成员")).toBeTruthy();
+    expect(await screen.findByText("团队列表")).toBeTruthy();
+    expect(screen.queryByText("存在未归队成员")).toBeNull();
     expect(screen.getByText("Team 标识：t-support")).toBeTruthy();
     expect(screen.queryByRole("heading", { level: 3, name: "未归队成员" })).toBeNull();
   });
@@ -419,7 +371,7 @@ describe("TeamsHomePage", () => {
 
     expect(
       await screen.findByText(
-        "当前工作空间还没有创建任何 Team。创建 Team 后，这里会按后端 roster 展示真实团队。",
+        "当前账号还没有创建任何 Team。创建后，这里会展示你的 AI 团队列表。",
       ),
     ).toBeTruthy();
     expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();

@@ -7,7 +7,6 @@ import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import { runtimeGAgentApi } from "@/shared/api/runtimeGAgentApi";
 import { history } from "@/shared/navigation/history";
 import { studioApi } from "@/shared/studio/api";
-import { loadDraftRunPayload } from "@/shared/runs/draftRunSession";
 import {
   createTestQueryClient,
   renderWithQueryClient,
@@ -194,7 +193,7 @@ function mockCreateTeamMembersCatalog() {
         scopeId: "scope-1",
         teamId: "t-alpha",
         displayName: "Team Alpha Operator",
-        description: "真实 Team roster 成员",
+        description: "负责处理升级工单",
         implementationKind: "workflow",
         lifecycleStage: "bind_ready",
         publishedServiceId: "alpha-service",
@@ -212,7 +211,7 @@ function mockCreateTeamSummary() {
     teamId: "t-alpha",
     scopeId: "scope-1",
     displayName: "Alpha Support Team",
-    description: "Team authority summary",
+    description: "Team summary",
     lifecycleStage: "active",
     memberCount: 3,
     createdAt: "2026-05-01T08:00:00Z",
@@ -795,42 +794,40 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("scopeId")).toBeTruthy();
     expect(screen.getByText("scope-1")).toBeTruthy();
     const currentPostureHeading = screen.getByText("当前态势");
-    const teamAuthorityHeading = screen.getByText("Team authority");
-    const trustHeading = screen.getByText("信任态势");
-    const governanceHeading = screen.getByText("治理快照");
-    const compareHeading = screen.getByText("Run Compare / Change Diff");
-    expect(screen.getByText("团队构成")).toBeTruthy();
-    expect(screen.getByText("运行摘要")).toBeTruthy();
-    expect(teamAuthorityHeading).toBeTruthy();
+    const compositionHeading = screen.getByText("团队构成");
+    const configurationHeading = screen.getByText("配置明细");
     expect(currentPostureHeading).toBeTruthy();
-    expect(trustHeading).toBeTruthy();
+    expect(compositionHeading).toBeTruthy();
+    expect(configurationHeading).toBeTruthy();
     expect(
-      await screen.findByText("Comparing run run-current against baseline run-good."),
-    ).toBeTruthy();
-    expect(screen.getByText("需要人工处理后继续")).toBeTruthy();
-    expect(screen.getByText("等待人工")).toBeTruthy();
-    expect(governanceHeading).toBeTruthy();
-    expect(compareHeading).toBeTruthy();
-    expect(
-      currentPostureHeading.compareDocumentPosition(trustHeading) &
+      currentPostureHeading.compareDocumentPosition(compositionHeading) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
-      governanceHeading.compareDocumentPosition(compareHeading) &
+      compositionHeading.compareDocumentPosition(configurationHeading) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(screen.getByText("Runtime deltas")).toBeTruthy();
-    expect(await screen.findByText("Step deltas")).toBeTruthy();
-    expect(await screen.findByText("Handoff deltas")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "处理等待 Run" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "服务映射" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "治理绑定" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "部署记录" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "高级编辑" })).toBeTruthy();
+    expect(screen.queryByText("Team authority")).toBeNull();
+    expect(screen.queryByText("信任态势")).toBeNull();
+    expect(screen.queryByText("治理快照")).toBeNull();
+    expect(screen.queryByText("Run Compare / Change Diff")).toBeNull();
+    expect(screen.queryByText("运行摘要")).toBeNull();
+    expect(screen.queryByText("连接器引用")).toBeNull();
+    expect(screen.queryByText("服务能力")).toBeNull();
+    expect(await screen.findByRole("button", { name: "Edit Team" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: "Team more actions" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "服务映射" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "高级编辑" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Archive Team" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "事件流" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "事件拓扑" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "处理等待 Run" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "治理绑定" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "部署记录" })).toBeNull();
     expect(studioApi.getTeam).toHaveBeenCalledWith("scope-1", "t-alpha");
   });
 
-  it("keeps compare honest when no successful baseline exists", async () => {
+  it("keeps compare diagnostics out of the overview when no successful baseline exists", async () => {
     (scopeRuntimeApi.listServiceRuns as jest.Mock).mockResolvedValueOnce({
       ...mockCreateRunsCatalog(),
       runs: [mockCreateRunsCatalog().runs[0]],
@@ -838,16 +835,17 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("信任态势")).toBeTruthy();
-    expect(
-      (await screen.findAllByText("No successful baseline is available yet.")).length,
-    ).toBeGreaterThan(0);
-    expect(screen.getByText("等待基线")).toBeTruthy();
-    expect(screen.getByText("无基线")).toBeTruthy();
-    expect(screen.getByText("暂无成功基线运行")).toBeTruthy();
+    expect(await screen.findByText("当前态势")).toBeTruthy();
+    expect(screen.getByText("团队构成")).toBeTruthy();
+    expect(screen.getByText("配置明细")).toBeTruthy();
+    expect(screen.queryByText("信任态势")).toBeNull();
+    expect(screen.queryByText("No successful baseline is available yet.")).toBeNull();
+    expect(screen.queryByText("等待基线")).toBeNull();
+    expect(screen.queryByText("无基线")).toBeNull();
+    expect(screen.queryByText("暂无成功基线运行")).toBeNull();
   });
 
-  it("keeps selected run facts aligned without inventing a failed baseline", async () => {
+  it("keeps selected run facts aligned without loading run audit diagnostics", async () => {
     window.history.replaceState(
       {},
       "",
@@ -856,23 +854,14 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(
-      (await screen.findAllByText("No successful baseline is available yet.")).length,
-    ).toBeGreaterThan(0);
-    expect(
-      screen.queryByText("Comparing run run-current against baseline run-good."),
-    ).toBeNull();
-
-    await waitFor(() => {
-      const auditedRunIds = (scopeRuntimeApi.getServiceRunAudit as jest.Mock).mock.calls.map(
-        (call) => call[2],
-      );
-      expect(auditedRunIds).toContain("run-good");
-      expect(auditedRunIds).not.toContain("run-current");
-    });
+    expect(await screen.findByText("当前态势")).toBeTruthy();
+    expect(screen.queryByText("No successful baseline is available yet.")).toBeNull();
+    expect(screen.queryByText("Comparing run run-current against baseline run-good.")).toBeNull();
+    expect(scopeRuntimeApi.getServiceRunAudit).not.toHaveBeenCalled();
+    expect(scopeRuntimeApi.getMemberRunAudit).not.toHaveBeenCalled();
   });
 
-  it("uses the Team authority display name for the team heading", async () => {
+  it("uses the Team display name for the team heading", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(
@@ -961,7 +950,7 @@ describe("TeamDetailPage", () => {
     ).toBeNull();
   });
 
-  it("shows full raw identifiers inside overview tooltips", async () => {
+  it("shows full raw identifiers inside overview configuration details", async () => {
     const longRevisionId =
       "rev-20260414154556-4d89bc2a3bf347f8b3bde41d716964f3";
 
@@ -980,19 +969,15 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await screen.findByText("运行摘要");
+    await screen.findByText("配置明细");
 
-    const revisionNote = await screen.findByText(/revisionId ·/);
-
-    fireEvent.mouseEnter(revisionNote);
-
-    expect(await screen.findByText(`revisionId · ${longRevisionId}`)).toBeTruthy();
+    expect(await screen.findByText(`revisionId: ${longRevisionId}`)).toBeTruthy();
   });
 
   it("returns to the teams list when clicking the breadcrumb teams link", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await screen.findByRole("button", { name: "服务映射" });
+    await screen.findByRole("button", { name: "Edit Team" });
     fireEvent.click(screen.getByRole("link", { name: "Teams" }));
 
     await waitFor(() => {
@@ -1004,7 +989,7 @@ describe("TeamDetailPage", () => {
   it("returns to the teams list when clicking the breadcrumb aevatar link", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await screen.findByRole("button", { name: "服务映射" });
+    await screen.findByRole("button", { name: "Edit Team" });
     fireEvent.click(screen.getByRole("link", { name: "Aevatar" }));
 
     await waitFor(() => {
@@ -1016,15 +1001,15 @@ describe("TeamDetailPage", () => {
   it("switches tabs inside the detail page", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await screen.findByRole("button", { name: "服务映射" });
+    await screen.findByRole("button", { name: "Edit Team" });
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
 
-    expect(await screen.findByText("真实 Team roster")).toBeTruthy();
+    expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
     expect(window.location.search).toContain("tab=members");
     expect(window.location.search).not.toContain("step=bind");
   });
 
-  it("canonicalizes legacy service deep links into member-first detail routes", async () => {
+  it("falls legacy event deep links back to the overview tab", async () => {
     window.history.replaceState(
       {},
       "",
@@ -1033,13 +1018,14 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("当前任务事件流")).toBeTruthy();
+    expect(await screen.findByText("当前态势")).toBeTruthy();
+    expect(screen.queryByText("当前任务事件流")).toBeNull();
 
     await waitFor(() => {
       const params = new URLSearchParams(window.location.search);
       expect(params.get("memberId")).toBe("member-support");
       expect(params.get("serviceId")).toBe("default");
-      expect(params.get("tab")).toBe("events");
+      expect(params.get("tab")).toBeNull();
     });
 
     await waitFor(() => {
@@ -1054,28 +1040,27 @@ describe("TeamDetailPage", () => {
   it("shows configuration details in the overview", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await screen.findByRole("button", { name: "服务映射" });
-
     expect(await screen.findByText("配置明细")).toBeTruthy();
+    expect(screen.getAllByText("团队流程").length).toBeGreaterThan(0);
     expect(screen.getAllByText("绑定方式").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("连接器引用").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("主服务入口").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("版本标识").length).toBeGreaterThan(0);
+    expect(screen.queryByText("连接器引用")).toBeNull();
+    expect(screen.queryByText("服务能力")).toBeNull();
   });
 
   it("shows a readable team members view", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await screen.findByRole("button", { name: "服务映射" });
+    await screen.findByRole("button", { name: "Edit Team" });
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
 
-    expect(await screen.findByText("参与者结构")).toBeTruthy();
-    expect(screen.getByText("运行时参与者身份")).toBeTruthy();
-    expect(screen.getByText("当前焦点")).toBeTruthy();
-    expect(screen.getByText("可见 Actor")).toBeTruthy();
-    expect(screen.getAllByText("actorId").length).toBeGreaterThan(0);
-    expect(screen.getByText("actor-intake")).toBeTruthy();
-    expect(screen.getAllByText("serviceId").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("default").length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "打开 Services" })).toBeTruthy();
+    expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
+    expect(screen.getByText("负责处理升级工单")).toBeTruthy();
+    expect(screen.getByText("member-team-alpha")).toBeTruthy();
+    expect(screen.queryByText("参与者结构")).toBeNull();
+    expect(screen.queryByText("运行时参与者身份")).toBeNull();
+    expect(screen.queryByRole("button", { name: "打开 Services" })).toBeNull();
   });
 
   it("uses the real Team roster when teamId is selected", async () => {
@@ -1087,9 +1072,9 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("真实 Team roster")).toBeTruthy();
     expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
-    expect(screen.getByText("真实 Team roster 成员")).toBeTruthy();
+    expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
+    expect(screen.getByText("负责处理升级工单")).toBeTruthy();
     expect(screen.getByText("member-team-alpha")).toBeTruthy();
     expect(screen.getByText("alph...vice")).toBeTruthy();
 
@@ -1113,11 +1098,14 @@ describe("TeamDetailPage", () => {
         name: "Alpha Support Team",
       }),
     ).toBeTruthy();
-    expect((await screen.findAllByText("Team authority summary")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("Team summary")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("3 个成员").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("来自 Team authority 更新时间").length).toBeGreaterThan(0);
-    expect(screen.getByText("Team 更新时间")).toBeTruthy();
-    expect(screen.getByText("生命周期")).toBeTruthy();
+    expect(screen.getAllByText("来自 Team 更新时间").length).toBeGreaterThan(0);
+    expect(screen.getByText("当前态势")).toBeTruthy();
+    expect(screen.getByText("团队构成")).toBeTruthy();
+    expect(screen.getByText("配置明细")).toBeTruthy();
+    expect(screen.queryByText("Team 更新时间")).toBeNull();
+    expect(screen.queryByText("生命周期")).toBeNull();
 
     await waitFor(() => {
       expect(studioApi.getTeam).toHaveBeenCalledWith("scope-1", "t-alpha");
@@ -1201,7 +1189,8 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect((await screen.findAllByRole("heading", { name: "Alpha Support Team" })).length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole("button", { name: "Archive Team" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Team more actions" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Archive Team" }));
     expect(await screen.findByText("Archive this Team?")).toBeTruthy();
     expect(
       screen.getByText(
@@ -1220,7 +1209,8 @@ describe("TeamDetailPage", () => {
     });
     expect(message.success).toHaveBeenCalledWith("Team archived.");
     expect(screen.getByRole("button", { name: "Edit Team" })).toBeEnabled();
-    expect(screen.queryByRole("button", { name: "Archive Team" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Team more actions" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Archive Team" })).toBeNull();
   });
 
   it("keeps archived Teams maintainable on first load", async () => {
@@ -1238,6 +1228,7 @@ describe("TeamDetailPage", () => {
 
     expect((await screen.findAllByRole("heading", { name: "Alpha Support Team" })).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Edit Team" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Team more actions" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Archive Team" })).toBeNull();
   });
 
@@ -1253,13 +1244,14 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect((await screen.findAllByText("Team summary 不可用")).length).toBeGreaterThan(0);
-    expect(screen.getByText("Team summary 暂不可用")).toBeTruthy();
-    expect(
-      screen.getByText("当前仍会显示运行时视图；Team authority summary 暂时无法读取。"),
-    ).toBeTruthy();
     expect(await screen.findByText("当前态势")).toBeTruthy();
-    expect(await screen.findByText("信任态势")).toBeTruthy();
+    expect(await screen.findByText("团队构成")).toBeTruthy();
+    expect(await screen.findByText("配置明细")).toBeTruthy();
+    expect(screen.queryByText("Team summary 暂不可用")).toBeNull();
+    expect(
+      screen.queryByText("当前仍会显示运行时视图；Team summary 暂时无法读取。"),
+    ).toBeNull();
+    expect(screen.queryByText("信任态势")).toBeNull();
     expect(screen.getByText("Support Escalation Triage")).toBeTruthy();
 
     await waitFor(() => {
@@ -1285,7 +1277,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage), queryClient);
 
     expect(await screen.findByText("Alpha Support Team")).toBeTruthy();
-    expect(await screen.findByText("Team roster 正在同步")).toBeTruthy();
+    expect(await screen.findByText("成员清单正在同步")).toBeTruthy();
 
     await act(async () => {
       jest.advanceTimersByTime(500);
@@ -1296,310 +1288,6 @@ describe("TeamDetailPage", () => {
     expect(studioApi.listTeamMembers).toHaveBeenCalledTimes(2);
 
     jest.useRealTimers();
-  });
-
-  it("shows a team-first event stream with member mapping", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    fireEvent.click(screen.getByRole("button", { name: "事件流" }));
-
-    expect(await screen.findByText("当前任务事件流")).toBeTruthy();
-    expect(screen.getByText("本次 Run 成员映射")).toBeTruthy();
-    expect(await screen.findByText("切换 Run")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "打开完整审计" })).toBeTruthy();
-    expect((await screen.findAllByText(/risk_review/)).length).toBeGreaterThan(0);
-  });
-
-  it("switches runs inside the event stream", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    fireEvent.click(screen.getByRole("button", { name: "事件流" }));
-    await screen.findByText("当前任务事件流");
-
-    fireEvent.click(await screen.findByRole("button", { name: "切换到 run-good" }));
-
-    await waitFor(() => {
-      expect(window.location.search).toContain("runId=run-good");
-    });
-    expect(await screen.findByText("LLM_CALL")).toBeTruthy();
-  });
-
-  it("syncs tab and run state when the route changes after mount", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-
-    act(() => {
-      history.push("/teams/scope-1/t-alpha?tab=events&runId=run-good");
-    });
-
-    expect(await screen.findByText("当前任务事件流")).toBeTruthy();
-    expect(await screen.findByText("LLM_CALL")).toBeTruthy();
-  });
-
-  it("surfaces team signal failures without leaking raw runtime errors", async () => {
-    (scopeRuntimeApi.listServiceRuns as jest.Mock).mockRejectedValueOnce(
-      new Error("No stub for /api/scopes/scope-1/services/default/runs"),
-    );
-
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    expect(await screen.findByRole("button", { name: "服务映射" })).toBeTruthy();
-    expect(screen.queryByText("部分团队信号暂不可用")).toBeNull();
-    expect(screen.queryByText("最近团队运行信号暂时无法加载。")).toBeNull();
-    expect(
-      screen.queryByText("No stub for /api/scopes/scope-1/services/default/runs"),
-    ).toBeNull();
-  });
-
-  it("opens a playback run replay with observed session context", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    fireEvent.click(screen.getByRole("button", { name: "事件流" }));
-    await screen.findAllByText(/risk_review/);
-    fireEvent.click(screen.getAllByRole("button", { name: "处理等待 Run" })[0]);
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/runtime/runs");
-    });
-    const runsParams = new URLSearchParams(window.location.search);
-    expect(runsParams.get("runId")).toBe("run-current");
-    expect(runsParams.get("scopeId")).toBe("scope-1");
-    expect(runsParams.get("serviceOverrideId")).toBe("default");
-    const draftKey = runsParams.get("draftKey");
-    expect(draftKey).toBeTruthy();
-    expect(loadDraftRunPayload(draftKey)).toMatchObject({
-      kind: "observed_run_session",
-      actorId: "actor-intake",
-      endpointId: "chat",
-      routeName: "support-triage",
-      runId: "run-current",
-      scopeId: "scope-1",
-      serviceOverrideId: "default",
-    });
-  });
-
-  it("opens runtime explorer from the service mapping action", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    fireEvent.click(screen.getByRole("button", { name: "事件拓扑" }));
-    await screen.findByText("团队事件路径");
-    fireEvent.click(screen.getAllByRole("button", { name: "服务映射" })[0]);
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/runtime/explorer/detail");
-    });
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("actorId")).toBe("actor-intake");
-    expect(params.get("runId")).toBe("run-current");
-    expect(params.get("scopeId")).toBe("scope-1");
-    expect(params.get("serviceId")).toBe("default");
-  });
-
-  it("opens Platform governance and deployments from top attention actions", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "治理绑定" })).toBeEnabled();
-      expect(screen.getByRole("button", { name: "部署记录" })).toBeEnabled();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "治理绑定" }));
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/governance");
-    });
-    let params = new URLSearchParams(window.location.search);
-    expect(params.get("tenantId")).toBe("scope-1");
-    expect(params.get("appId")).toBe("default");
-    expect(params.get("namespace")).toBe("default");
-    expect(params.get("serviceId")).toBe("default");
-    expect(params.get("revisionId")).toBe("rev-2");
-    expect(params.get("view")).toBe("bindings");
-
-    act(() => {
-      history.push("/teams/scope-1/t-alpha");
-    });
-    await screen.findByRole("button", { name: "部署记录" });
-    fireEvent.click(screen.getByRole("button", { name: "部署记录" }));
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/deployments");
-    });
-    params = new URLSearchParams(window.location.search);
-    expect(params.get("tenantId")).toBe("scope-1");
-    expect(params.get("appId")).toBe("default");
-    expect(params.get("namespace")).toBe("default");
-    expect(params.get("serviceId")).toBe("default");
-    expect(params.get("deploymentId")).toBe("dep-2");
-  });
-
-  it("opens Mission Control from the team event stream with run context", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    fireEvent.click(screen.getByRole("button", { name: "事件流" }));
-    await screen.findByText("当前任务事件流");
-    await screen.findByText(/Current playback is centered on risk_review/);
-    fireEvent.click(await screen.findByRole("button", { name: "打开 Mission Control" }));
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/runtime/mission-control");
-    });
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("actorId")).toBe("actor-intake");
-    expect(params.get("autoStream")).toBe("true");
-    expect(params.get("prompt")).toBe("hello");
-    expect(params.get("runId")).toBe("run-current");
-    expect(params.get("scopeId")).toBe("scope-1");
-    expect(params.get("serviceId")).toBe("default");
-  });
-
-  it("updates the topology depth selection when the focus member is available", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    fireEvent.click(screen.getByRole("button", { name: "事件拓扑" }));
-    await screen.findByText("团队事件路径");
-
-    const nearButton = screen.getByRole("button", { name: "近邻" });
-    const expandButton = screen.getByRole("button", { name: "扩展" });
-    const panoramaButton = screen.getByRole("button", { name: "全景" });
-
-    expect(expandButton).toHaveAttribute("aria-pressed", "true");
-    expect(nearButton).toHaveAttribute("aria-pressed", "false");
-    expect(panoramaButton).toHaveAttribute("aria-pressed", "false");
-
-    fireEvent.click(panoramaButton);
-
-    expect(panoramaButton).toHaveAttribute("aria-pressed", "true");
-    expect(expandButton).toHaveAttribute("aria-pressed", "false");
-  });
-
-  it("disables topology controls when the current team has no focus member yet", async () => {
-    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce({
-      available: false,
-      scopeId: "scope-1",
-      serviceId: "",
-      displayName: "",
-      serviceKey: "",
-      defaultServingRevisionId: "",
-      activeServingRevisionId: "",
-      deploymentId: "",
-      deploymentStatus: "",
-      primaryActorId: "",
-      updatedAt: "2026-04-09T09:00:00Z",
-      revisions: [],
-    });
-    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValueOnce([]);
-    (runtimeGAgentApi.listActors as jest.Mock).mockResolvedValueOnce([]);
-
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    fireEvent.click(screen.getByRole("button", { name: "事件拓扑" }));
-    await screen.findByText("团队事件路径");
-
-    expect(
-      screen.getByText("当前还没有可用的团队成员焦点，待成员或运行信号可见后再切换视角。"),
-    ).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "服务映射" })[0]).toBeDisabled();
-    expect(screen.getByRole("button", { name: "近邻" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "扩展" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "全景" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "打开平台拓扑" })).toBeDisabled();
-    expect(
-      screen.getByText("当前还没有可用的团队成员焦点，所以暂时没有可展开的事件拓扑关系。"),
-    ).toBeTruthy();
-  });
-
-  it("opens platform workbenches from members", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
-    await screen.findByText("运行时参与者身份");
-    fireEvent.click(screen.getByRole("button", { name: "打开 Services" }));
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/services");
-    });
-    expect(window.location.search).toContain("tenantId=scope-1");
-    expect(window.location.search).toContain("serviceId=default");
-  });
-
-  it("opens Studio in the current team context from the top actions", async () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/teams/scope-1/t-alpha?workflowId=workflow-1",
-    );
-
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    await screen.findByRole("heading", {
-      level: 1,
-      name: "Alpha Support Team",
-    });
-    await waitFor(() => {
-      expect(studioApi.listTeamMembers).toHaveBeenCalledWith("scope-1", "t-alpha");
-    });
-    await waitFor(() => {
-      expect(scopesApi.getWorkflowDetail).toHaveBeenCalledWith("scope-1", "workflow-1");
-    });
-
-    const pushSpy = jest.spyOn(history, "push").mockImplementation(() => undefined);
-    fireEvent.click(screen.getByRole("button", { name: "高级编辑" }));
-
-    expect(pushSpy).toHaveBeenCalled();
-    const pushedHref = pushSpy.mock.calls.at(-1)?.[0] ?? "";
-    const pushedUrl = new URL(pushedHref, window.location.origin);
-    expect(pushedUrl.pathname).toBe("/studio");
-    const params = pushedUrl.searchParams;
-    expect(params.get("scopeId")).toBe("scope-1");
-    expect(params.get("teamId")).toBe("t-alpha");
-    expect(params.get("member")).toBe("member:member-team-alpha");
-    expect(params.get("memberId")).toBeNull();
-    expect(params.get("focus")).toBe("workflow:workflow-1");
-    expect(params.get("tab")).toBe("studio");
-    pushSpy.mockRestore();
-  });
-
-  it("keeps an explicit Team member when opening Studio from top actions", async () => {
-    window.history.replaceState(
-      {},
-      "",
-      "/teams/scope-1/t-alpha?memberId=member-support&workflowId=workflow-1",
-    );
-
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByRole("button", { name: "服务映射" });
-    await waitFor(() => {
-      expect(studioApi.listTeamMembers).toHaveBeenCalledWith("scope-1", "t-alpha");
-    });
-
-    const pushSpy = jest.spyOn(history, "push").mockImplementation(() => undefined);
-    fireEvent.click(screen.getByRole("button", { name: "高级编辑" }));
-
-    expect(pushSpy).toHaveBeenCalled();
-    const pushedHref = pushSpy.mock.calls.at(-1)?.[0] ?? "";
-    const pushedUrl = new URL(pushedHref, window.location.origin);
-    expect(pushedUrl.pathname).toBe("/studio");
-    const params = pushedUrl.searchParams;
-    expect(params.get("scopeId")).toBe("scope-1");
-    expect(params.get("teamId")).toBe("t-alpha");
-    expect(params.get("member")).toBe("member:member-support");
-    expect(params.get("memberId")).toBeNull();
-    expect(params.get("focus")).toBe("workflow:workflow-1");
-    expect(params.get("tab")).toBe("studio");
-    pushSpy.mockRestore();
   });
 
   it("drops stale service and run hints in favor of the requested workflow truth", async () => {

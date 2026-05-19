@@ -39,9 +39,6 @@ internal static class VoicePresenceSessionDispatch
             Route = route,
         };
 
-    // Refactor (iter15/cluster-026):
-    //   Old pattern: host dispatch accepted remote PCM input as a module signal payload.
-    //   New principle: module signals route provider/control/session messages only; remote audio is not serialized through EventEnvelope.
     private static VoiceModuleSignal CreateModuleSignal(string moduleName, IMessage message)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
@@ -66,6 +63,10 @@ internal static class VoicePresenceSessionDispatch
             case VoiceRemoteSessionCloseRequested closeRequested:
                 signal.RemoteSessionCloseRequested = closeRequested.Clone();
                 break;
+            // Refactor (iter15/cluster-025-voice-host-session-state-actorization):
+            //   Old pattern: voice host resolver locks shared mutable lease state outside actor lifecycle
+            //   New principle: direct host envelopes carry setup/control only.
+            //   Raw audio chunks must never be wrapped as VoiceModuleSignal payloads.
             case VoiceRemoteControlInputReceived controlInput:
                 signal.RemoteControlInputReceived = controlInput.Clone();
                 break;

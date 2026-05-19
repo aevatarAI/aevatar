@@ -20,10 +20,10 @@ namespace Aevatar.Foundation.VoicePresence.Modules;
 /// transports without entering the grain inbox or event pipeline. Only control events
 /// (state transitions, tool calls, drain ack) are dispatched as actor events.
 /// </summary>
-// Refactor (iter15/cluster-026-voice-provider-background-state):
-//   Old pattern: realtime provider receive loop writes _responseEpochs dictionary from background thread outside actor event-loop
-//   New principle: provider emits provider-native ids; this module maps them to actor response ids.
-//   The mapping is actor-turn runtime state and never becomes a provider/background fact.
+// Refactor (iter15/cluster-025-voice-host-session-state-actorization):
+//   Old pattern: voice host resolver locks shared mutable lease state outside actor lifecycle
+//   New principle: actor owns remote session identity and lifecycle.
+//   Remote audio chunks are ignored until a non-envelope raw media transport exists.
 public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFastPath, IRouteBypassModule
 {
     private static readonly JsonFormatter PayloadJsonFormatter = new(JsonFormatter.Settings.Default);
@@ -395,9 +395,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
                 await CloseRemoteSessionAsync("provider_disconnected", ctx, ct);
                 break;
             case VoiceProviderEvent.EventOneofCase.AudioReceived:
-                // Refactor (iter15/cluster-026-voice-provider-background-state):
-                //   Old pattern: provider PCM was republished as remote output through EventEnvelope.
-                //   New principle: provider PCM stays on raw transport paths; actor events carry control only.
                 break;
             case VoiceProviderEvent.EventOneofCase.Error:
             case VoiceProviderEvent.EventOneofCase.None:

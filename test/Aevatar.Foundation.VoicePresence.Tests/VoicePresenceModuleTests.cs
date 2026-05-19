@@ -451,7 +451,7 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
-    public async Task Remote_session_signals_should_not_publish_audio_outputs()
+    public async Task Remote_session_signals_should_keep_lifecycle_but_not_forward_audio_chunks()
     {
         var provider = new RecordingVoiceProvider();
         var module = CreateModule(provider);
@@ -466,6 +466,9 @@ public class VoicePresenceModuleTests
                 SessionId = "remote-1",
             },
         }), ctx, CancellationToken.None);
+
+        module.IsTransportAttached.ShouldBeFalse();
+        provider.AudioFrames.ShouldBeEmpty();
 
         await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
         {
@@ -486,7 +489,8 @@ public class VoicePresenceModuleTests
             },
         }), ctx, CancellationToken.None);
 
-        var closedOutput = ctx.PublishedEvents.ShouldHaveSingleItem().ShouldBeOfType<VoiceRemoteTransportOutput>();
+        ctx.PublishedEvents.Count.ShouldBe(1);
+        var closedOutput = ctx.PublishedEvents[0].ShouldBeOfType<VoiceRemoteTransportOutput>();
         closedOutput.OutputCase.ShouldBe(VoiceRemoteTransportOutput.OutputOneofCase.SessionClosed);
         closedOutput.SessionClosed.Reason.ShouldBe("provider_disconnected");
     }
@@ -687,7 +691,7 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
-    public async Task Remote_session_inputs_and_close_should_ignore_mismatches_and_handle_matches()
+    public async Task Remote_session_inputs_and_close_should_ignore_audio_and_handle_control_and_close()
     {
         var provider = new RecordingVoiceProvider();
         var module = CreateModule(provider);
@@ -715,13 +719,29 @@ public class VoicePresenceModuleTests
                 },
             },
         }), ctx, CancellationToken.None);
+
+        provider.AudioFrames.ShouldBeEmpty();
+        module.StateMachine.LastDrainAckResponseId.ShouldBe(-1);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            ResponseStarted = new VoiceResponseStarted { ResponseId = 8 },
+        }), ctx, CancellationToken.None);
+
         await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
         {
             ModuleName = "voice_presence",
             RemoteControlInputReceived = new VoiceRemoteControlInputReceived
             {
                 SessionId = "remote-1",
-                ControlFrame = new VoiceControlFrame(),
+                ControlFrame = new VoiceControlFrame
+                {
+                    DrainAcknowledged = new VoiceDrainAcknowledged
+                    {
+                        ResponseId = 8,
+                        PlayoutSequence = 9,
+                    },
+                },
             },
         }), ctx, CancellationToken.None);
         await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
@@ -735,6 +755,7 @@ public class VoicePresenceModuleTests
         }), ctx, CancellationToken.None);
 
         provider.AudioFrames.ShouldBeEmpty();
+        module.StateMachine.LastDrainAckResponseId.ShouldBe(8);
         ctx.PublishedEvents.ShouldBeEmpty();
 
         await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
