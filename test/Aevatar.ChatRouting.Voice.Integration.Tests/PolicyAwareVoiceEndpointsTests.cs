@@ -120,6 +120,52 @@ public sealed class PolicyAwareVoiceEndpointsTests
     }
 
     [Fact]
+    public async Task PolicyAwareVoice_WhenPolicyForwardsToModel_ShouldReturnNotImplementedBeforeUpgrade()
+    {
+        // Fix (review round 1, F1):
+        //   Reviewer found no coverage for the v1 ForwardToModel boundary.
+        //   This asserts ForwardToModel returns HTTP 501 before accepting the WebSocket.
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(ForwardToModel("realtime-model"), []));
+        var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent"]);
+        var resolver = new RecordingVoiceSessionResolver(CreateInitializedSession());
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        using var app = CreatePolicyAwareApp(policyPort, catalog, resolver);
+        var context = CreateVoiceContext(app, "/ws/voice");
+        var wsFeature = new FakeHttpWebSocketFeature(socket);
+        context.Features.Set<IHttpWebSocketFeature>(wsFeature);
+
+        await GetEndpoint(app, "/ws/voice").RequestDelegate!(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status501NotImplemented);
+        wsFeature.AcceptCalls.Should().Be(0);
+        catalog.Requests.Should().BeEmpty();
+        resolver.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PolicyAwareVoice_WhenPolicyRejects_ShouldReturnForbiddenBeforeUpgrade()
+    {
+        // Fix (review round 1, F2):
+        //   Reviewer found no coverage for route-policy Reject decisions.
+        //   This asserts Reject returns HTTP 403 before attach checks or WebSocket accept.
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(Reject("voice denied"), []));
+        var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent"]);
+        var resolver = new RecordingVoiceSessionResolver(CreateInitializedSession());
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        using var app = CreatePolicyAwareApp(policyPort, catalog, resolver);
+        var context = CreateVoiceContext(app, "/ws/voice");
+        var wsFeature = new FakeHttpWebSocketFeature(socket);
+        context.Features.Set<IHttpWebSocketFeature>(wsFeature);
+
+        await GetEndpoint(app, "/ws/voice").RequestDelegate!(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        wsFeature.AcceptCalls.Should().Be(0);
+        catalog.Requests.Should().BeEmpty();
+        resolver.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task PolicyAwareVoice_WhenSessionMissing_ShouldReturnNotFoundBeforeUpgrade()
     {
         var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(ForwardToGAgent("voice-agent"), []));
@@ -135,6 +181,33 @@ public sealed class PolicyAwareVoiceEndpointsTests
 
         context.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
         wsFeature.AcceptCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PolicyAwareVoice_WhenSessionIsNotInitialized_ShouldReturnNotFoundBeforeUpgrade()
+    {
+        // Fix (review round 1, F3):
+        //   Reviewer found the voice-module-present-but-not-initialized 404 branch untested.
+        //   This asserts an uninitialized session returns HTTP 404 before WebSocket accept.
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(ForwardToGAgent("voice-agent"), []));
+        var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent"]);
+        var resolver = new RecordingVoiceSessionResolver(new VoicePresenceSession(
+            isInitialized: static () => false,
+            isTransportAttached: static () => false,
+            attachTransportAsync: static (_, _) => Task.CompletedTask,
+            detachTransportAsync: static (_, _) => Task.CompletedTask,
+            pcmSampleRateHz: 24000));
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        using var app = CreatePolicyAwareApp(policyPort, catalog, resolver);
+        var context = CreateVoiceContext(app, "/ws/voice");
+        var wsFeature = new FakeHttpWebSocketFeature(socket);
+        context.Features.Set<IHttpWebSocketFeature>(wsFeature);
+
+        await GetEndpoint(app, "/ws/voice").RequestDelegate!(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        wsFeature.AcceptCalls.Should().Be(0);
+        resolver.Requests.Should().ContainSingle(request => request.ActorId == "voice-agent");
     }
 
     [Fact]
@@ -166,6 +239,18 @@ public sealed class PolicyAwareVoiceEndpointsTests
                 ActorId = actorId,
                 VoiceModuleName = voiceModuleName,
             },
+        };
+
+    private static ChatRouteAction ForwardToModel(string modelName) =>
+        new()
+        {
+            ForwardToModel = new ForwardToModel { ModelName = modelName },
+        };
+
+    private static ChatRouteAction Reject(string reason) =>
+        new()
+        {
+            Reject = new Reject { Reason = reason },
         };
 
     private static WebApplication CreatePolicyAwareApp(
