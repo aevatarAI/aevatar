@@ -2,6 +2,9 @@ using Aevatar.Studio.Domain.Studio.Models;
 
 namespace Aevatar.Studio.Application.Studio.Abstractions;
 
+// Refactor (iter16/cluster-meta-studio-actor-substrate):
+//   Old: workspace mutations were coupled to the concrete local JSON workspace store.
+//   New principle: application services depend on a command port that dispatches typed workspace events to the authoritative workspace actor.
 public interface IStudioWorkspaceCommandPort
 {
     Task<StudioWorkspaceCommandReceipt> UpdateSettingsAsync(

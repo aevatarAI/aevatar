@@ -15,6 +15,9 @@ using Aevatar.Studio.Application.Studio;
 using Aevatar.Studio.Application.Studio.Services;
 namespace Aevatar.Studio.Application;
 
+// Refactor (iter16/cluster-meta-studio-actor-substrate):
+//   Old: scoped workflow drafts depended on workspace-file storage paths and local draft indexes.
+//   New principle: this app facade saves drafts through the scoped draft port and leaves workspace actor state/query projection as the Studio workspace authority.
 public sealed class AppScopedWorkflowService
 {
     private const string BackendClientName = "AppBridgeBackend";

@@ -3,6 +3,9 @@ using Aevatar.Studio.Application.Studio.Contracts;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
+// Refactor (iter16/cluster-meta-studio-actor-substrate):
+//   Old: runtime and appearance settings were read from and written to the local workspace store.
+//   New principle: workspace settings flow through workspace query/command ports while provider secrets remain in the settings store boundary.
 public sealed class SettingsService
 {
     private static readonly HttpClient RuntimeProbeClient = new()

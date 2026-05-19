@@ -3,8 +3,10 @@ namespace Aevatar.GAgents.StudioMember;
 /// <summary>
 /// Admits and executes platform-side binding work for an admitted StudioMember binding run.
 /// <see cref="StartAsync"/> returns an accepted receipt only. <see cref="ExecuteAsync"/>
-/// executes platform work and returns a typed outcome. The run actor owns and
-/// emits the terminal continuation event.
+/// only accepts the execution command; the implementation must deliver the terminal
+/// <see cref="StudioMemberPlatformBindingSucceeded"/> or
+/// <see cref="StudioMemberPlatformBindingFailed"/> continuation back to
+/// <paramref name="replyActorId"/> through the actor inbox.
 /// </summary>
 public interface IStudioMemberPlatformBindingCommandPort
 {
@@ -13,40 +15,13 @@ public interface IStudioMemberPlatformBindingCommandPort
         StudioMemberPlatformBindingStartRequested request,
         CancellationToken ct = default);
 
-    Task<StudioMemberPlatformBindingExecutionOutcome> ExecuteAsync(
+    Task<StudioMemberPlatformBindingExecutionAccepted> ExecuteAsync(
         string replyActorId,
         string platformBindingCommandId,
         StudioMemberPlatformBindingStartRequested request,
         CancellationToken ct = default);
 }
 
-public sealed record StudioMemberPlatformBindingExecutionOutcome
-{
-    private StudioMemberPlatformBindingExecutionOutcome(
-        StudioMemberPlatformBindingSucceeded? succeeded,
-        StudioMemberPlatformBindingFailed? failed)
-    {
-        Succeeded = succeeded;
-        Failed = failed;
-    }
-
-    public StudioMemberPlatformBindingSucceeded? Succeeded { get; }
-
-    public StudioMemberPlatformBindingFailed? Failed { get; }
-
-    public bool IsSucceeded => Succeeded is not null;
-
-    public static StudioMemberPlatformBindingExecutionOutcome FromSucceeded(
-        StudioMemberPlatformBindingSucceeded succeeded)
-    {
-        ArgumentNullException.ThrowIfNull(succeeded);
-        return new StudioMemberPlatformBindingExecutionOutcome(succeeded, null);
-    }
-
-    public static StudioMemberPlatformBindingExecutionOutcome FromFailed(
-        StudioMemberPlatformBindingFailed failed)
-    {
-        ArgumentNullException.ThrowIfNull(failed);
-        return new StudioMemberPlatformBindingExecutionOutcome(null, failed);
-    }
-}
+public sealed record StudioMemberPlatformBindingExecutionAccepted(
+    string BindingRunId,
+    string PlatformBindingCommandId);

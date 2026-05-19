@@ -359,6 +359,27 @@ public sealed class StudioMemberBindingRunGAgentStateTests
     }
 
     [Fact]
+    public async Task HandlePlatformBindingExecuteRequested_ShouldOnlyStartExecutionAndWaitForInboxContinuation()
+    {
+        var state = NewPlatformPendingState();
+        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var platformPort = new RecordingPlatformBindingCommandPort();
+        var agent = NewHandlerAgent(state, publisher, scheduler, platformPort);
+
+        await agent.HandlePlatformBindingExecuteRequested(new StudioMemberPlatformBindingExecuteRequested
+        {
+            BindingRunId = "bind-1",
+            PlatformBindingCommandId = "platform-1",
+        });
+
+        platformPort.ExecuteRequests.Should().ContainSingle();
+        publisher.SentMessages.Should().BeEmpty();
+        scheduler.Timeouts.Should().ContainSingle(request =>
+            request.CallbackId == "studio-member-binding-watchdog:bind-1:platform-1");
+    }
+
+    [Fact]
     public async Task ActivateAsync_WhenInFlightIsFresh_ShouldOnlyRestoreWatchdog()
     {
         var state = NewInFlightState(DateTimeOffset.UtcNow.AddSeconds(-10));
@@ -662,21 +683,16 @@ public sealed class StudioMemberBindingRunGAgentStateTests
             });
         }
 
-        public Task<StudioMemberPlatformBindingExecutionOutcome> ExecuteAsync(
+        public Task<StudioMemberPlatformBindingExecutionAccepted> ExecuteAsync(
             string replyActorId,
             string platformBindingCommandId,
             StudioMemberPlatformBindingStartRequested request,
             CancellationToken ct = default)
         {
             ExecuteRequests.Add(request.Clone());
-            return Task.FromResult(StudioMemberPlatformBindingExecutionOutcome.FromSucceeded(
-                new StudioMemberPlatformBindingSucceeded
-                {
-                    BindingRunId = request.BindingRunId,
-                    PlatformBindingCommandId = platformBindingCommandId,
-                    Result = new StudioMemberPlatformBindingResult(),
-                    CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                }));
+            return Task.FromResult(new StudioMemberPlatformBindingExecutionAccepted(
+                request.BindingRunId,
+                platformBindingCommandId));
         }
     }
 

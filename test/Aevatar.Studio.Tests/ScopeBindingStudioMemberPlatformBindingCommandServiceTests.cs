@@ -1,8 +1,10 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgents.StudioMember;
 using Aevatar.Studio.Projection.CommandServices;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -42,18 +44,19 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_ShouldRunPlatformBindingAndReturnSucceededOutcome()
+    public async Task ExecuteAsync_ShouldRunPlatformBindingAndDispatchSucceededContinuation()
     {
         var scopeBindingPort = new RecordingScopeBindingCommandPort();
-        var service = CreateService(scopeBindingPort);
+        var dispatchPort = new RecordingActorDispatchPort();
+        var service = CreateService(scopeBindingPort, dispatchPort);
 
-        var outcome = await service.ExecuteAsync(
+        var accepted = await service.ExecuteAsync(
             "studio-member-binding-run:bind-1",
             "platform-bind-1",
             NewScriptStartRequest());
 
-        outcome.Succeeded.Should().NotBeNull();
-        var succeeded = outcome.Succeeded!;
+        accepted.Should().Be(new StudioMemberPlatformBindingExecutionAccepted("bind-1", "platform-bind-1"));
+        var succeeded = await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingSucceeded>();
         succeeded.BindingRunId.Should().Be("bind-1");
         succeeded.PlatformBindingCommandId.Should().Be("platform-bind-1");
         succeeded.Result.PublishedServiceId.Should().Be("member-m-1");
@@ -75,18 +78,18 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_ShouldBuildWorkflowBindingRequestAndReturnWorkflowResult()
+    public async Task ExecuteAsync_ShouldBuildWorkflowBindingRequestAndDispatchWorkflowResult()
     {
         var scopeBindingPort = new RecordingScopeBindingCommandPort();
-        var service = CreateService(scopeBindingPort);
+        var dispatchPort = new RecordingActorDispatchPort();
+        var service = CreateService(scopeBindingPort, dispatchPort);
 
-        var outcome = await service.ExecuteAsync(
+        await service.ExecuteAsync(
             "studio-member-binding-run:bind-1",
             "platform-bind-1",
             NewWorkflowStartRequest());
 
-        outcome.Succeeded.Should().NotBeNull();
-        var succeeded = outcome.Succeeded!;
+        var succeeded = await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingSucceeded>();
         succeeded.Result.ImplementationKind.Should().Be(StudioMemberImplementationKind.Workflow);
         succeeded.Result.ImplementationRef.Workflow.WorkflowId.Should().Be("workflow-main");
         succeeded.Result.ImplementationRef.Workflow.WorkflowRevision.Should().Be("rev-platform-bind-1");
@@ -100,18 +103,18 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_ShouldBuildGAgentBindingRequestAndReturnGAgentResult()
+    public async Task ExecuteAsync_ShouldBuildGAgentBindingRequestAndDispatchGAgentResult()
     {
         var scopeBindingPort = new RecordingScopeBindingCommandPort();
-        var service = CreateService(scopeBindingPort);
+        var dispatchPort = new RecordingActorDispatchPort();
+        var service = CreateService(scopeBindingPort, dispatchPort);
 
-        var outcome = await service.ExecuteAsync(
+        await service.ExecuteAsync(
             "studio-member-binding-run:bind-1",
             "platform-bind-1",
             NewGAgentStartRequest());
 
-        outcome.Succeeded.Should().NotBeNull();
-        var succeeded = outcome.Succeeded!;
+        var succeeded = await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingSucceeded>();
         succeeded.Result.ImplementationKind.Should().Be(StudioMemberImplementationKind.Gagent);
         succeeded.Result.ImplementationRef.Gagent.ActorTypeName.Should().Be("Tests.JokerGAgent");
 
@@ -124,27 +127,29 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_ShouldWaitForPlatformOutcomeInsteadOfDispatchingDetachedContinuation()
+    public async Task ExecuteAsync_ShouldAckBeforePlatformOutcomeAndDispatchContinuation()
     {
         var releaseUpsert = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var scopeBindingPort = new RecordingScopeBindingCommandPort
         {
             ReleaseUpsert = releaseUpsert,
         };
-        var service = CreateService(scopeBindingPort);
+        var dispatchPort = new RecordingActorDispatchPort();
+        var service = CreateService(scopeBindingPort, dispatchPort);
 
-        var executeTask = service.ExecuteAsync(
+        var accepted = await service.ExecuteAsync(
             "studio-member-binding-run:bind-1",
             "platform-bind-1",
             NewScriptStartRequest());
 
         var request = await scopeBindingPort.UpsertStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         request.RevisionId.Should().Be("rev-platform-bind-1");
-        executeTask.IsCompleted.Should().BeFalse();
+        accepted.PlatformBindingCommandId.Should().Be("platform-bind-1");
+        dispatchPort.Dispatched.Should().BeEmpty();
 
         releaseUpsert.SetResult(null);
-        var outcome = await executeTask;
-        outcome.Succeeded.Should().NotBeNull();
+        var succeeded = await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingSucceeded>();
+        succeeded.PlatformBindingCommandId.Should().Be("platform-bind-1");
     }
 
     [Fact]
@@ -165,21 +170,21 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenScopeBindingFails_ShouldReturnFailedOutcome()
+    public async Task ExecuteAsync_WhenScopeBindingFails_ShouldDispatchFailedContinuation()
     {
         var scopeBindingPort = new RecordingScopeBindingCommandPort
         {
             Failure = new InvalidOperationException("platform rejected"),
         };
-        var service = CreateService(scopeBindingPort);
+        var dispatchPort = new RecordingActorDispatchPort();
+        var service = CreateService(scopeBindingPort, dispatchPort);
 
-        var outcome = await service.ExecuteAsync(
+        await service.ExecuteAsync(
             "studio-member-binding-run:bind-1",
             "platform-bind-1",
             NewScriptStartRequest());
 
-        outcome.Failed.Should().NotBeNull();
-        var failed = outcome.Failed!;
+        var failed = await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingFailed>();
         failed.BindingRunId.Should().Be("bind-1");
         failed.PlatformBindingCommandId.Should().Be("platform-bind-1");
         failed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_FAILED");
@@ -190,17 +195,17 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
     public async Task ExecuteAsync_WhenImplementationPayloadMissing_ShouldReturnFailedOutcome()
     {
         var scopeBindingPort = new RecordingScopeBindingCommandPort();
-        var service = CreateService(scopeBindingPort);
         var request = NewScriptStartRequest();
         request.Request.Script = null;
 
-        var outcome = await service.ExecuteAsync(
+        var dispatchPort = new RecordingActorDispatchPort();
+        var service = CreateService(scopeBindingPort, dispatchPort);
+        await service.ExecuteAsync(
             "studio-member-binding-run:bind-1",
             "platform-bind-1",
             request);
 
-        outcome.Failed.Should().NotBeNull();
-        var failed = outcome.Failed!;
+        var failed = await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingFailed>();
         failed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_FAILED");
         failed.Failure.Message.Should().Contain("binding request must carry exactly one implementation payload");
         scopeBindingPort.Requests.Should().BeEmpty();
@@ -210,26 +215,56 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
     public async Task ExecuteAsync_WhenGAgentEndpointKindUnsupported_ShouldReturnFailedOutcome()
     {
         var scopeBindingPort = new RecordingScopeBindingCommandPort();
-        var service = CreateService(scopeBindingPort);
         var request = NewGAgentStartRequest();
         request.Request.Gagent.Endpoints[0].Kind = StudioMemberGAgentEndpointKind.Unspecified;
 
-        var outcome = await service.ExecuteAsync(
+        var dispatchPort = new RecordingActorDispatchPort();
+        var service = CreateService(scopeBindingPort, dispatchPort);
+        await service.ExecuteAsync(
             "studio-member-binding-run:bind-1",
             "platform-bind-1",
             request);
 
-        outcome.Failed.Should().NotBeNull();
-        var failed = outcome.Failed!;
+        var failed = await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingFailed>();
         failed.Failure.Message.Should().Contain("Unsupported gagent endpoint kind");
         scopeBindingPort.Requests.Should().BeEmpty();
     }
 
     private static ScopeBindingStudioMemberPlatformBindingCommandService CreateService(
-        RecordingScopeBindingCommandPort scopeBindingPort) =>
+        RecordingScopeBindingCommandPort scopeBindingPort,
+        RecordingActorDispatchPort? dispatchPort = null) =>
         new(
             scopeBindingPort,
+            dispatchPort ?? new RecordingActorDispatchPort(),
             NullLogger<ScopeBindingStudioMemberPlatformBindingCommandService>.Instance);
+
+    private sealed class RecordingActorDispatchPort : IActorDispatchPort
+    {
+        private readonly List<(string ActorId, EventEnvelope Envelope)> _dispatched = [];
+        private readonly TaskCompletionSource<(string ActorId, EventEnvelope Envelope)> _firstDispatch = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public IReadOnlyList<(string ActorId, EventEnvelope Envelope)> Dispatched => _dispatched;
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            _dispatched.Add((actorId, envelope));
+            _firstDispatch.TrySetResult((actorId, envelope));
+            return Task.CompletedTask;
+        }
+
+        public async Task<TPayload> WaitForPayloadAsync<TPayload>()
+            where TPayload : class, IMessage<TPayload>, new()
+        {
+            var (_, envelope) = _dispatched.Count == 0
+                ? await _firstDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5))
+                : _dispatched[^1];
+
+            var payload = new TPayload();
+            envelope.Payload.Is(payload.Descriptor).Should().BeTrue();
+            return envelope.Payload.Unpack<TPayload>();
+        }
+    }
 
     private static StudioMemberPlatformBindingStartRequested NewScriptStartRequest(string? revisionId = null)
     {

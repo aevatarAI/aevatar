@@ -12,6 +12,9 @@ using ProtoWorkspaceSettings = Aevatar.Studio.Workspace.StudioWorkspaceSettings;
 
 namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
+// Refactor (iter16/cluster-meta-studio-actor-substrate):
+//   Old: workspace services wrote directly to a file store and treated that file as authoritative state.
+//   New principle: this adapter is only the dispatch boundary; it ensures the workspace actor exists and sends typed commands into its inbox.
 internal sealed class ActorDispatchStudioWorkspaceCommandPort : IStudioWorkspaceCommandPort
 {
     private readonly IStudioActorBootstrap _bootstrap;

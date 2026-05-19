@@ -9,6 +9,9 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Studio.Projection.Projectors;
 
+// Refactor (iter16/cluster-meta-studio-actor-substrate):
+//   Old: workspace current state was assembled from a local file-backed store outside the unified projection path.
+//   New principle: this projector consumes committed workspace actor state and materializes the single query replica.
 public sealed class StudioWorkspaceCurrentStateProjector
     : ICurrentStateProjectionMaterializer<StudioMaterializationContext>
 {

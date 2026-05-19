@@ -6,6 +6,9 @@ using Aevatar.Studio.Domain.Studio.Models;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
+// Refactor (iter16/cluster-meta-studio-actor-substrate):
+//   Old: workspace operations mutated local JSON files and returned those files as current state.
+//   New principle: workspace writes are actor commands and reads are projected current-state snapshots.
 public sealed class WorkspaceService
 {
     private static readonly Regex FileNameCleaner = new("[^a-zA-Z0-9._-]+", RegexOptions.Compiled);
