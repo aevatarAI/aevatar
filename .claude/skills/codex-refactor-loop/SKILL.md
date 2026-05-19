@@ -627,6 +627,36 @@ Escalation action:
 - Each fix round must reduce total reject count OR change which reviewer rejects. If neither → escalate.
 - Cumulative PR diff size grows by ≤ +30% per round; if a fix round adds more code than the original PR → controller flags scope-runaway and escalates.
 
+### GitHub traceability (mandatory — every Phase 8 action posts to the PR)
+
+All review/fix/consensus/escalation behavior MUST be observable on GitHub so the whole loop is traceable without reading local `.refactor-loop/` artifacts. Bilingual EN+ZH per hard rule #8.
+
+Required PR comments (controller posts via `gh pr comment <PR> --body-file <file>`):
+
+| Phase 8 event | PR comment content |
+|---|---|
+| Reviewer round N complete | Bilingual table of 3 verdicts + reject demands per role + "next action" (fix-retry dispatched OR auto-merge OR escalation). Link to commit SHA reviewed. |
+| Fix codex round N complete (FIX_DONE) | Bilingual FIX_REPORT excerpt: applied / rejected-as-false-positive / blocked counts, build+test status, files changed. Link to fix commit SHA. |
+| Fix codex blocked (FIX_BLOCKED) | Bilingual: which reason category (conflict / human-decision / build-broken), reviewer demand text, controller's escalation decision. |
+| Consensus reached (unanimous approve) | Bilingual: round count, final reviewer outputs, "auto-merging now". Then merge + a second "merged at <commit>" comment. |
+| Escalation triggered | Add `needs-human-review` label. Comment includes: full round history, latest verdicts, why escalation criteria hit, what controller tried. PushNotification mirrors the headline. |
+| Reviewer crash | Bilingual: which reviewer, log path, re-dispatch attempt. Second crash → escalate per above. |
+
+Required GitHub labels (controller applies/removes):
+- `phase8-reviewing`: a reviewer round is in flight
+- `phase8-fixing`: a fix codex round is in flight
+- `phase8-consensus-pending`: consensus computation in progress
+- `needs-human-review`: escalated
+- `phase8-merged`: auto-merged after consensus (removed by merge action)
+
+Local-only files (logs, raw codex output, internal state) stay in `.refactor-loop/` and are NOT posted (would spam the PR). The PR comment must summarize enough that a reader can decide whether to read the local artifact, and link the exact local path.
+
+Forbidden:
+- Posting the same content twice in the same round.
+- Posting reviewer/fix output without the bilingual sections.
+- Auto-merging without first posting the "consensus reached" comment.
+- Escalating without first posting the escalation rationale comment.
+
 ### State tracking
 
 ```json
