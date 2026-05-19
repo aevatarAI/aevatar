@@ -21,14 +21,14 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class ChannelCallbackEndpointsTests
 {
     [Fact]
-    public void MapChannelCallbackEndpoints_ShouldRequireAuthorization_ForDiagnosticErrors()
+    public async Task MapChannelCallbackEndpoints_ShouldRequireAuthorization_ForDiagnosticErrors()
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
             EnvironmentName = "Development",
         });
 
-        var app = builder.Build();
+        await using var app = builder.Build();
         var routeBuilder = (IEndpointRouteBuilder)app;
         app.MapChannelCallbackEndpoints();
 
@@ -41,14 +41,14 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
-    public void MapChannelCallbackEndpoints_ShouldNotRegisterRetiredDirectPlatformCallback()
+    public async Task MapChannelCallbackEndpoints_ShouldNotRegisterRetiredDirectPlatformCallback()
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
             EnvironmentName = "Development",
         });
 
-        var app = builder.Build();
+        await using var app = builder.Build();
         var routeBuilder = (IEndpointRouteBuilder)app;
         app.MapChannelCallbackEndpoints();
 
