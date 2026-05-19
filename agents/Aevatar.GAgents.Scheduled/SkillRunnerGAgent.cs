@@ -20,6 +20,9 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Scheduled;
 
+// Refactor (iter1/cluster-001):
+//   Old pattern: SkillRunnerGAgent pushed execution summaries into the well-known catalog actor.
+//   New principle: Runner-owned committed events are the execution fact source for catalog projection.
 public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 {
     private readonly NyxIdApiClient? _nyxIdApiClient;
@@ -183,7 +186,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         await PersistDomainEventAsync(initialized);
 
         await Scheduler.ScheduleNextRunAsync(DateTimeOffset.UtcNow, CancellationToken.None);
-        await UpsertRegistryAsync(State.Enabled ? SkillRunnerDefaults.StatusRunning : SkillRunnerDefaults.StatusDisabled, CancellationToken.None);
+        await UpsertRegistryAsync(CancellationToken.None);
     }
 
     [EventHandler(AllowSelfHandling = true)]
@@ -213,13 +216,6 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
             await CancelRetryLeaseAsync(CancellationToken.None);
             await Scheduler.ScheduleNextRunAsync(now, CancellationToken.None);
-            await UpdateRegistryExecutionAsync(
-                SkillRunnerDefaults.StatusRunning,
-                Timestamp.FromDateTimeOffset(now),
-                State.NextRunAt,
-                0,
-                string.Empty,
-                CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -243,7 +239,6 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
             await TrySendFailureAsync(ex.Message, CancellationToken.None);
             await Scheduler.ScheduleNextRunAsync(now, CancellationToken.None);
-            await UpdateRegistryExecutionAsync(SkillRunnerDefaults.StatusError, State.LastRunAt, State.NextRunAt, State.ErrorCount, State.LastError, CancellationToken.None);
         }
     }
 
@@ -278,8 +273,6 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         {
             Reason = command.Reason?.Trim() ?? string.Empty,
         });
-
-        await UpdateRegistryExecutionAsync(SkillRunnerDefaults.StatusDisabled, State.LastRunAt, null, State.ErrorCount, State.LastError, CancellationToken.None);
     }
 
     [EventHandler]
@@ -294,9 +287,6 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         }
 
         await Scheduler.ScheduleNextRunAsync(DateTimeOffset.UtcNow, CancellationToken.None);
-        await UpdateRegistryExecutionAsync(
-            SkillRunnerDefaults.StatusRunning, State.LastRunAt, State.NextRunAt,
-            State.ErrorCount, State.LastError, CancellationToken.None);
     }
 
     private async Task<string> ExecuteSkillAsync(DateTimeOffset now, string? reason, CancellationToken ct)
@@ -783,7 +773,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         return $"{prompt}\nCurrent UTC time: {now:O}\nTrigger reason: {(string.IsNullOrWhiteSpace(reason) ? "manual" : reason)}";
     }
 
-    private async Task UpsertRegistryAsync(string status, CancellationToken ct)
+    private async Task UpsertRegistryAsync(CancellationToken ct)
     {
 #pragma warning disable CS0612 // legacy field reads/writes during owner_scope migration
         var legacyOwnerNyxUserId = State.OutboundConfig?.OwnerNyxUserId ?? string.Empty;
@@ -805,7 +795,6 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             ApiKeyId = State.OutboundConfig?.ApiKeyId ?? string.Empty,
             ScheduleCron = State.ScheduleCron ?? string.Empty,
             ScheduleTimezone = State.ScheduleTimezone ?? string.Empty,
-            Status = status,
             LarkReceiveId = State.OutboundConfig?.LarkReceiveId ?? string.Empty,
             LarkReceiveIdType = State.OutboundConfig?.LarkReceiveIdType ?? string.Empty,
             LarkReceiveIdFallback = State.OutboundConfig?.LarkReceiveIdFallback ?? string.Empty,
@@ -817,20 +806,6 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             command.OwnerScope = ownerScope;
 
         await UserAgentCatalogStoreCommands.DispatchUpsertAsync(Services, Id, command, ct);
-        await UpdateRegistryExecutionAsync(status, State.LastRunAt, State.NextRunAt, State.ErrorCount, State.LastError, ct);
-    }
-
-    private async Task UpdateRegistryExecutionAsync(
-        string status, Timestamp? lastRunAt, Timestamp? nextRunAt,
-        int errorCount, string? lastError, CancellationToken ct)
-    {
-        var command = new UserAgentCatalogExecutionUpdateCommand
-        {
-            AgentId = Id, Status = status,
-            LastRunAt = lastRunAt, NextRunAt = nextRunAt,
-            ErrorCount = errorCount, LastError = lastError ?? string.Empty,
-        };
-        await UserAgentCatalogStoreCommands.DispatchExecutionUpdateAsync(Services, Id, command, ct);
     }
 
     private static SkillRunnerState ApplyInitialized(SkillRunnerState current, SkillRunnerInitializedEvent evt)

@@ -14,30 +14,15 @@ public class StreamingToolExecutorTests
     {
         var concurrentCount = 0;
         var maxConcurrent = 0;
-        var lockObj = new object();
+        var gate = new ToolExecutionGate(expectedEntrants: 3);
 
         var tools = new ToolManager();
-        tools.Register(new ConcurrencyTrackingTool("read1", isReadOnly: true, () =>
-        {
-            lock (lockObj) { concurrentCount++; maxConcurrent = Math.Max(maxConcurrent, concurrentCount); }
-            Thread.Sleep(100);
-            lock (lockObj) { concurrentCount--; }
-            return "r1";
-        }));
-        tools.Register(new ConcurrencyTrackingTool("read2", isReadOnly: true, () =>
-        {
-            lock (lockObj) { concurrentCount++; maxConcurrent = Math.Max(maxConcurrent, concurrentCount); }
-            Thread.Sleep(100);
-            lock (lockObj) { concurrentCount--; }
-            return "r2";
-        }));
-        tools.Register(new ConcurrencyTrackingTool("read3", isReadOnly: true, () =>
-        {
-            lock (lockObj) { concurrentCount++; maxConcurrent = Math.Max(maxConcurrent, concurrentCount); }
-            Thread.Sleep(100);
-            lock (lockObj) { concurrentCount--; }
-            return "r3";
-        }));
+        tools.Register(new ConcurrencyTrackingTool("read1", isReadOnly: true, async ct =>
+            await TrackConcurrencyAsync("r1", gate, ct)));
+        tools.Register(new ConcurrencyTrackingTool("read2", isReadOnly: true, async ct =>
+            await TrackConcurrencyAsync("r2", gate, ct)));
+        tools.Register(new ConcurrencyTrackingTool("read3", isReadOnly: true, async ct =>
+            await TrackConcurrencyAsync("r3", gate, ct)));
 
         using var executor = new StreamingToolExecutor(tools);
 
@@ -45,12 +30,26 @@ public class StreamingToolExecutorTests
         executor.AddTool(new ToolCall { Id = "tc-2", Name = "read2", ArgumentsJson = "{}" });
         executor.AddTool(new ToolCall { Id = "tc-3", Name = "read3", ArgumentsJson = "{}" });
 
+        await gate.WaitForEntrantsAsync(CancellationToken.None);
+        gate.Release();
+
         var results = new List<ToolExecutionResult>();
         await foreach (var result in executor.GetRemainingResultsAsync(CancellationToken.None))
             results.Add(result);
 
         maxConcurrent.Should().BeGreaterThan(1, "read-only tools should execute concurrently");
         results.Should().HaveCount(3);
+        return;
+
+        async Task<string> TrackConcurrencyAsync(string result, ToolExecutionGate executionGate, CancellationToken ct)
+        {
+            var current = Interlocked.Increment(ref concurrentCount);
+            UpdateMaxConcurrent(ref maxConcurrent, current);
+            executionGate.SignalEntered();
+            await executionGate.WaitForReleaseAsync(ct);
+            Interlocked.Decrement(ref concurrentCount);
+            return result;
+        }
     }
 
     [Fact]
@@ -58,28 +57,22 @@ public class StreamingToolExecutorTests
     {
         var concurrentCount = 0;
         var maxConcurrent = 0;
-        var lockObj = new object();
+        var gate = new ToolExecutionGate(expectedEntrants: 1);
 
         var tools = new ToolManager();
-        tools.Register(new ConcurrencyTrackingTool("write1", isReadOnly: false, () =>
-        {
-            lock (lockObj) { concurrentCount++; maxConcurrent = Math.Max(maxConcurrent, concurrentCount); }
-            Thread.Sleep(50);
-            lock (lockObj) { concurrentCount--; }
-            return "w1";
-        }));
-        tools.Register(new ConcurrencyTrackingTool("write2", isReadOnly: false, () =>
-        {
-            lock (lockObj) { concurrentCount++; maxConcurrent = Math.Max(maxConcurrent, concurrentCount); }
-            Thread.Sleep(50);
-            lock (lockObj) { concurrentCount--; }
-            return "w2";
-        }));
+        tools.Register(new ConcurrencyTrackingTool("write1", isReadOnly: false, async ct =>
+            await TrackConcurrencyAsync("w1", ct)));
+        tools.Register(new ConcurrencyTrackingTool("write2", isReadOnly: false, async ct =>
+            await TrackConcurrencyAsync("w2", ct)));
 
         using var executor = new StreamingToolExecutor(tools);
 
         executor.AddTool(new ToolCall { Id = "tc-1", Name = "write1", ArgumentsJson = "{}" });
         executor.AddTool(new ToolCall { Id = "tc-2", Name = "write2", ArgumentsJson = "{}" });
+
+        await gate.WaitForEntrantsAsync(CancellationToken.None);
+        executor.GetCompletedResults().Should().BeEmpty();
+        gate.Release();
 
         var results = new List<ToolExecutionResult>();
         await foreach (var result in executor.GetRemainingResultsAsync(CancellationToken.None))
@@ -87,20 +80,38 @@ public class StreamingToolExecutorTests
 
         maxConcurrent.Should().Be(1, "non-read-only tools should execute serially");
         results.Should().HaveCount(2);
+        return;
+
+        async Task<string> TrackConcurrencyAsync(string result, CancellationToken ct)
+        {
+            var current = Interlocked.Increment(ref concurrentCount);
+            UpdateMaxConcurrent(ref maxConcurrent, current);
+            if (result == "w1")
+            {
+                gate.SignalEntered();
+                await gate.WaitForReleaseAsync(ct);
+            }
+            Interlocked.Decrement(ref concurrentCount);
+            return result;
+        }
     }
 
     [Fact]
     public async Task Results_ShouldBeYieldedInCallOrder_NotCompletionOrder()
     {
         var tools = new ToolManager();
+        var slowGate = new ToolExecutionGate(expectedEntrants: 1);
+        var fastCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         // First tool is slow, second is fast — results must still come in call order
-        tools.Register(new ConcurrencyTrackingTool("slow", isReadOnly: true, () =>
+        tools.Register(new ConcurrencyTrackingTool("slow", isReadOnly: true, async ct =>
         {
-            Thread.Sleep(200);
+            slowGate.SignalEntered();
+            await slowGate.WaitForReleaseAsync(ct);
             return "slow-result";
         }));
-        tools.Register(new ConcurrencyTrackingTool("fast", isReadOnly: true, () =>
+        tools.Register(new ConcurrencyTrackingTool("fast", isReadOnly: true, _ =>
         {
+            fastCompleted.TrySetResult();
             return "fast-result";
         }));
 
@@ -108,6 +119,10 @@ public class StreamingToolExecutorTests
 
         executor.AddTool(new ToolCall { Id = "tc-slow", Name = "slow", ArgumentsJson = "{}" });
         executor.AddTool(new ToolCall { Id = "tc-fast", Name = "fast", ArgumentsJson = "{}" });
+
+        await fastCompleted.Task;
+        executor.GetCompletedResults().Should().BeEmpty();
+        slowGate.Release();
 
         var results = new List<ToolExecutionResult>();
         await foreach (var result in executor.GetRemainingResultsAsync(CancellationToken.None))
@@ -122,28 +137,31 @@ public class StreamingToolExecutorTests
     public async Task MixedTools_ShouldRespectConcurrencyBoundaries()
     {
         var executionLog = new List<string>();
-        var lockObj = new object();
+        var readsGate = new ToolExecutionGate(expectedEntrants: 2);
+        var writeStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var tools = new ToolManager();
-        tools.Register(new ConcurrencyTrackingTool("read1", isReadOnly: true, () =>
+        tools.Register(new ConcurrencyTrackingTool("read1", isReadOnly: true, async ct =>
         {
-            lock (lockObj) executionLog.Add("read1-start");
-            Thread.Sleep(50);
-            lock (lockObj) executionLog.Add("read1-end");
+            executionLog.Add("read1-start");
+            readsGate.SignalEntered();
+            await readsGate.WaitForReleaseAsync(ct);
+            executionLog.Add("read1-end");
             return "r1";
         }));
-        tools.Register(new ConcurrencyTrackingTool("read2", isReadOnly: true, () =>
+        tools.Register(new ConcurrencyTrackingTool("read2", isReadOnly: true, async ct =>
         {
-            lock (lockObj) executionLog.Add("read2-start");
-            Thread.Sleep(50);
-            lock (lockObj) executionLog.Add("read2-end");
+            executionLog.Add("read2-start");
+            readsGate.SignalEntered();
+            await readsGate.WaitForReleaseAsync(ct);
+            executionLog.Add("read2-end");
             return "r2";
         }));
-        tools.Register(new ConcurrencyTrackingTool("write1", isReadOnly: false, () =>
+        tools.Register(new ConcurrencyTrackingTool("write1", isReadOnly: false, _ =>
         {
-            lock (lockObj) executionLog.Add("write1-start");
-            Thread.Sleep(50);
-            lock (lockObj) executionLog.Add("write1-end");
+            executionLog.Add("write1-start");
+            writeStarted.TrySetResult();
+            executionLog.Add("write1-end");
             return "w1";
         }));
 
@@ -152,6 +170,11 @@ public class StreamingToolExecutorTests
         executor.AddTool(new ToolCall { Id = "tc-1", Name = "read1", ArgumentsJson = "{}" });
         executor.AddTool(new ToolCall { Id = "tc-2", Name = "read2", ArgumentsJson = "{}" });
         executor.AddTool(new ToolCall { Id = "tc-3", Name = "write1", ArgumentsJson = "{}" });
+
+        await readsGate.WaitForEntrantsAsync(CancellationToken.None);
+        executionLog.Should().NotContain("write1-start");
+        readsGate.Release();
+        await writeStarted.Task;
 
         var results = new List<ToolExecutionResult>();
         await foreach (var result in executor.GetRemainingResultsAsync(CancellationToken.None))
@@ -176,8 +199,8 @@ public class StreamingToolExecutorTests
         // Use middleware to simulate an exception that escapes past ToolManager's catch.
         // ToolManager itself catches exceptions, so we need middleware to throw instead.
         var tools = new ToolManager();
-        tools.Register(new ConcurrencyTrackingTool("failing", isReadOnly: false, () => "ok"));
-        tools.Register(new ConcurrencyTrackingTool("skipped", isReadOnly: false, () => "should-not-run"));
+        tools.Register(new ConcurrencyTrackingTool("failing", isReadOnly: false, _ => "ok"));
+        tools.Register(new ConcurrencyTrackingTool("skipped", isReadOnly: false, _ => "should-not-run"));
 
         var throwOnFirst = true;
         var middleware = new DelegateToolCallMiddleware(async (ctx, next) =>
@@ -212,21 +235,23 @@ public class StreamingToolExecutorTests
     public async Task Discard_ShouldCancelQueuedTools()
     {
         var tools = new ToolManager();
-        tools.Register(new ConcurrencyTrackingTool("slow", isReadOnly: false, () =>
+        var slowGate = new ToolExecutionGate(expectedEntrants: 1);
+        tools.Register(new ConcurrencyTrackingTool("slow", isReadOnly: false, async ct =>
         {
-            Thread.Sleep(500);
+            slowGate.SignalEntered();
+            await slowGate.WaitForReleaseAsync(ct);
             return "done";
         }));
-        tools.Register(new ConcurrencyTrackingTool("queued", isReadOnly: false, () => "q"));
+        tools.Register(new ConcurrencyTrackingTool("queued", isReadOnly: false, _ => "q"));
 
         using var executor = new StreamingToolExecutor(tools);
 
         executor.AddTool(new ToolCall { Id = "tc-1", Name = "slow", ArgumentsJson = "{}" });
         executor.AddTool(new ToolCall { Id = "tc-2", Name = "queued", ArgumentsJson = "{}" });
 
-        // Give first tool a moment to start
-        await Task.Delay(50);
+        await slowGate.WaitForEntrantsAsync(CancellationToken.None);
         executor.Discard();
+        slowGate.Release();
 
         var results = new List<ToolExecutionResult>();
         await foreach (var result in executor.GetRemainingResultsAsync(CancellationToken.None))
@@ -240,7 +265,7 @@ public class StreamingToolExecutorTests
     public async Task AddTool_AfterDiscard_ShouldReturnImmediateError()
     {
         var tools = new ToolManager();
-        tools.Register(new ConcurrencyTrackingTool("echo", isReadOnly: true, () => "ok"));
+        tools.Register(new ConcurrencyTrackingTool("echo", isReadOnly: true, _ => "ok"));
 
         using var executor = new StreamingToolExecutor(tools);
         executor.Discard();
@@ -289,7 +314,7 @@ public class StreamingToolExecutorTests
     public async Task GetCompletedResults_ShouldReturnNonBlocking()
     {
         var tools = new ToolManager();
-        tools.Register(new ConcurrencyTrackingTool("echo", isReadOnly: true, () => "ok"));
+        tools.Register(new ConcurrencyTrackingTool("echo", isReadOnly: true, _ => "ok"));
 
         using var executor = new StreamingToolExecutor(tools);
 
@@ -298,13 +323,15 @@ public class StreamingToolExecutorTests
 
         executor.AddTool(new ToolCall { Id = "tc-1", Name = "echo", ArgumentsJson = "{}" });
 
-        // Wait for completion
-        await Task.Delay(100);
+        await foreach (var result in executor.GetRemainingResultsAsync(CancellationToken.None))
+        {
+            result.CallId.Should().Be("tc-1");
+            result.Result.Should().Be("ok");
+            break;
+        }
 
         var results = executor.GetCompletedResults().ToList();
-        results.Should().HaveCount(1);
-        results[0].CallId.Should().Be("tc-1");
-        results[0].Result.Should().Be("ok");
+        results.Should().BeEmpty();
 
         // Should not yield again (already yielded)
         executor.GetCompletedResults().Should().BeEmpty();
@@ -314,7 +341,7 @@ public class StreamingToolExecutorTests
     public async Task HooksAndMiddleware_ShouldFirePerTool()
     {
         var tools = new ToolManager();
-        tools.Register(new ConcurrencyTrackingTool("echo", isReadOnly: true, () => "result"));
+        tools.Register(new ConcurrencyTrackingTool("echo", isReadOnly: true, _ => "result"));
 
         var hook = new CountingHook();
         var hooks = new AgentHookPipeline([hook]);
@@ -362,13 +389,18 @@ public class StreamingToolExecutorTests
 
     private sealed class ConcurrencyTrackingTool : IAgentTool
     {
-        private readonly Func<string> _execute;
+        private readonly Func<CancellationToken, Task<string>> _execute;
 
-        public ConcurrencyTrackingTool(string name, bool isReadOnly, Func<string> execute)
+        public ConcurrencyTrackingTool(string name, bool isReadOnly, Func<CancellationToken, Task<string>> execute)
         {
             Name = name;
             IsReadOnly = isReadOnly;
             _execute = execute;
+        }
+
+        public ConcurrencyTrackingTool(string name, bool isReadOnly, Func<CancellationToken, string> execute)
+            : this(name, isReadOnly, ct => Task.FromResult(execute(ct)))
+        {
         }
 
         public string Name { get; }
@@ -376,11 +408,7 @@ public class StreamingToolExecutorTests
         public string ParametersSchema => "{}";
         public bool IsReadOnly { get; }
 
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.Run(() => _execute(), ct);
-        }
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) => _execute(ct);
     }
 
     private sealed class DelegateAgentTool(string name, Func<string, string> execute) : IAgentTool
@@ -418,6 +446,38 @@ public class StreamingToolExecutorTests
         {
             Interlocked.Increment(ref ToolEndCount);
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ToolExecutionGate(int expectedEntrants)
+    {
+        private readonly TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _entrants;
+
+        public void SignalEntered()
+        {
+            if (Interlocked.Increment(ref _entrants) >= expectedEntrants)
+                _entered.TrySetResult();
+        }
+
+        public Task WaitForEntrantsAsync(CancellationToken ct) => _entered.Task.WaitAsync(ct);
+
+        public Task WaitForReleaseAsync(CancellationToken ct) => _release.Task.WaitAsync(ct);
+
+        public void Release() => _release.TrySetResult();
+    }
+
+    private static void UpdateMaxConcurrent(ref int target, int value)
+    {
+        while (true)
+        {
+            var current = Volatile.Read(ref target);
+            if (value <= current)
+                return;
+
+            if (Interlocked.CompareExchange(ref target, value, current) == current)
+                return;
         }
     }
 }

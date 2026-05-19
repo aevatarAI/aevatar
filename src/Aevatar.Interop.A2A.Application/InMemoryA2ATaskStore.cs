@@ -5,7 +5,7 @@ using Aevatar.Interop.A2A.Abstractions.Models;
 
 namespace Aevatar.Interop.A2A.Application;
 
-/// <summary>In-memory implementation of the A2A Task store. For development/testing use only.</summary>
+/// <summary>Process-local A2A task store for development/testing use only.</summary>
 public sealed class InMemoryA2ATaskStore : IA2ATaskStore
 {
     private readonly ConcurrentDictionary<string, A2ATask> _tasks = new();

@@ -32,7 +32,7 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
     }
 
-    public async Task<UserAgentCatalogEntry?> GetForCallerAsync(string agentId, OwnerScope caller, CancellationToken ct = default)
+    public async Task<UserAgentCatalogReadModelEntry?> GetForCallerAsync(string agentId, OwnerScope caller, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(agentId)) return null;
         ArgumentNullException.ThrowIfNull(caller);
@@ -58,7 +58,7 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
     /// </summary>
     private const int MaxCallerCatalogEntries = 5000;
 
-    public async Task<IReadOnlyList<UserAgentCatalogEntry>> QueryByCallerAsync(OwnerScope caller, CancellationToken ct = default)
+    public async Task<IReadOnlyList<UserAgentCatalogReadModelEntry>> QueryByCallerAsync(OwnerScope caller, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(caller);
 
@@ -70,7 +70,7 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
         // truncates the back of the index for users with more than N agents (issue
         // #466 review nit on commit 3b8500e).
         var filters = BuildOwnerScopeFilters(caller);
-        var entries = new List<UserAgentCatalogEntry>();
+        var entries = new List<UserAgentCatalogReadModelEntry>();
         string? cursor = null;
         do
         {
@@ -176,20 +176,16 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
     /// after the credential drop). Internal callers that still need the credential go
     /// through <see cref="IUserAgentDeliveryTargetReader"/>.
     /// </summary>
-    internal static UserAgentCatalogEntry ToEntry(UserAgentCatalogDocument document)
+    internal static UserAgentCatalogReadModelEntry ToEntry(UserAgentCatalogDocument document)
     {
         var documentScope = document.OwnerScope ?? OwnerScope.FromLegacyFields(
 #pragma warning disable CS0612 // legacy field read for backfill only
             document.OwnerNyxUserId,
             document.Platform);
 #pragma warning restore CS0612
-        var entry = new UserAgentCatalogEntry
+        return new UserAgentCatalogReadModelEntry
         {
             AgentId = document.Id ?? string.Empty,
-            // Deprecated proto fields intentionally left at default ("") on the public DTO.
-            // OwnerScope is the canonical surface; serializing the entry must not double-
-            // expose ownership through both NyxApiKey/OwnerNyxUserId/Platform AND OwnerScope
-            // (issue #466 §A: "do not extend the existing fragmented field set").
             ConversationId = document.ConversationId ?? string.Empty,
             NyxProviderSlug = document.NyxProviderSlug ?? string.Empty,
             AgentType = document.AgentType ?? string.Empty,
@@ -210,11 +206,7 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
             LarkReceiveIdType = document.LarkReceiveIdType ?? string.Empty,
             LarkReceiveIdFallback = document.LarkReceiveIdFallback ?? string.Empty,
             LarkReceiveIdTypeFallback = document.LarkReceiveIdTypeFallback ?? string.Empty,
+            OwnerScope = documentScope,
         };
-
-        if (documentScope is not null)
-            entry.OwnerScope = documentScope;
-
-        return entry;
     }
 }

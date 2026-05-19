@@ -59,6 +59,8 @@ public sealed record ScopeBindingUpsertResult(
     string RevisionId,
     ScopeBindingImplementationKind ImplementationKind,
     string ExpectedActorId,
+    string AcceptanceStage = "accepted",
+    string PropagationStage = "readmodel_propagating",
     string WorkflowName = "",
     string DefinitionActorIdPrefix = "",
     ScopeBindingWorkflowResult? Workflow = null,

@@ -62,6 +62,11 @@ public sealed class ScopeServiceEndpointsTests
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<ScopeBindingUpsertResult>();
+        body.Should().NotBeNull();
+        body!.AcceptanceStage.Should().Be("accepted");
+        body.PropagationStage.Should().Be("readmodel_propagating");
+        body.ExpectedActorId.Should().Be("scope-binding:expected-actor");
         host.ScopeBindingPort.LastRequest.Should().NotBeNull();
         host.ScopeBindingPort.LastRequest!.ScopeId.Should().Be("scope-a");
         host.ScopeBindingPort.LastRequest.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Workflow);
@@ -85,6 +90,10 @@ public sealed class ScopeServiceEndpointsTests
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<ScopeBindingUpsertResult>();
+        body.Should().NotBeNull();
+        body!.AcceptanceStage.Should().Be("accepted");
+        body.PropagationStage.Should().Be("readmodel_propagating");
         host.ScopeBindingPort.LastRequest.Should().NotBeNull();
         host.ScopeBindingPort.LastRequest!.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Scripting);
         host.ScopeBindingPort.LastRequest.Script.Should().NotBeNull();
@@ -197,6 +206,10 @@ public sealed class ScopeServiceEndpointsTests
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<ScopeBindingUpsertResult>();
+        body.Should().NotBeNull();
+        body!.AcceptanceStage.Should().Be("accepted");
+        body.PropagationStage.Should().Be("readmodel_propagating");
         host.ScopeBindingPort.LastRequest.Should().NotBeNull();
         host.ScopeBindingPort.LastRequest!.ImplementationKind.Should().Be(ScopeBindingImplementationKind.GAgent);
         host.ScopeBindingPort.LastRequest.GAgent.Should().NotBeNull();
@@ -1794,7 +1807,7 @@ public sealed class ScopeServiceEndpointsTests
                 "default",
                 new Dictionary<string, string>(),
                 new NoOpScriptRuntimeCommandPort(),
-                new NoOpScriptExecutionProjectionPort(),
+                new NoOpScriptServiceAguiProjectionPort(),
                 new ServiceInvocationRequest(),
                 new NoOpServiceRunRegistrationPort(),
                 CancellationToken.None))
@@ -1858,7 +1871,7 @@ public sealed class ScopeServiceEndpointsTests
                 "default",
                 new Dictionary<string, string>(),
                 new ThrowingScriptRuntimeCommandPort(new InvalidOperationException("Script runtime actor 'script-runtime-1' could not be resolved. The service may not be activated.")),
-                new NoOpScriptExecutionProjectionPort(),
+                new NoOpScriptServiceAguiProjectionPort(),
                 new ServiceInvocationRequest(),
                 new NoOpServiceRunRegistrationPort(),
                 CancellationToken.None))
@@ -4212,7 +4225,7 @@ public sealed class ScopeServiceEndpointsTests
             var interactionService = new FakeCommandInteractionService();
             var gagentDraftRunInteractionService = new FakeGAgentDraftRunInteractionService();
             var scriptRuntimeCommandPort = new NoOpScriptRuntimeCommandPort();
-            var scriptExecutionProjectionPort = new NoOpScriptExecutionProjectionPort();
+            var scriptServiceAguiProjectionPort = new NoOpScriptServiceAguiProjectionPort();
             var workflowQueryService = new FakeWorkflowExecutionQueryApplicationService();
             var runBindingReader = new FakeWorkflowRunBindingReader();
             var resumeDispatchService = new RecordingResumeDispatchService();
@@ -4250,7 +4263,7 @@ public sealed class ScopeServiceEndpointsTests
             builder.Services.AddSingleton<ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>(interactionService);
             builder.Services.AddSingleton<ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus>>(gagentDraftRunInteractionService);
             builder.Services.AddSingleton<IScriptRuntimeCommandPort>(scriptRuntimeCommandPort);
-            builder.Services.AddSingleton<IScriptExecutionProjectionPort>(scriptExecutionProjectionPort);
+            builder.Services.AddSingleton<IScriptServiceAguiProjectionPort>(scriptServiceAguiProjectionPort);
             builder.Services.AddSingleton<IWorkflowExecutionQueryApplicationService>(workflowQueryService);
             builder.Services.AddSingleton<IWorkflowRunBindingReader>(runBindingReader);
             builder.Services.AddSingleton<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(resumeDispatchService);
@@ -5031,21 +5044,22 @@ public sealed class ScopeServiceEndpointsTests
         }
     }
 
-    private sealed class NoOpScriptExecutionProjectionPort : IScriptExecutionProjectionPort
+    private sealed class NoOpScriptServiceAguiProjectionPort : IScriptServiceAguiProjectionPort
     {
         public bool ProjectionEnabled => true;
 
-        public Task<IScriptExecutionProjectionLease?> EnsureActorProjectionAsync(
+        public Task<IScriptServiceAguiProjectionLease?> EnsureRunProjectionAsync(
             string actorId,
+            string runId,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IScriptExecutionProjectionLease?>(new NoOpScriptExecutionProjectionLease(actorId));
+            return Task.FromResult<IScriptServiceAguiProjectionLease?>(new NoOpScriptServiceAguiProjectionLease(actorId, runId));
         }
 
         public Task AttachLiveSinkAsync(
-            IScriptExecutionProjectionLease lease,
-            IEventSink<EventEnvelope> sink,
+            IScriptServiceAguiProjectionLease lease,
+            IEventSink<AGUIEvent> sink,
             CancellationToken ct = default)
         {
             _ = lease;
@@ -5055,8 +5069,8 @@ public sealed class ScopeServiceEndpointsTests
         }
 
         public Task DetachLiveSinkAsync(
-            IScriptExecutionProjectionLease lease,
-            IEventSink<EventEnvelope> sink,
+            IScriptServiceAguiProjectionLease lease,
+            IEventSink<AGUIEvent> sink,
             CancellationToken ct = default)
         {
             _ = lease;
@@ -5066,7 +5080,7 @@ public sealed class ScopeServiceEndpointsTests
         }
 
         public Task ReleaseActorProjectionAsync(
-            IScriptExecutionProjectionLease lease,
+            IScriptServiceAguiProjectionLease lease,
             CancellationToken ct = default)
         {
             _ = lease;
@@ -5075,7 +5089,7 @@ public sealed class ScopeServiceEndpointsTests
         }
     }
 
-    private sealed record NoOpScriptExecutionProjectionLease(string ActorId) : IScriptExecutionProjectionLease;
+    private sealed record NoOpScriptServiceAguiProjectionLease(string ActorId, string RunId) : IScriptServiceAguiProjectionLease;
 
     private sealed class AllowAllInvokeAdmissionAuthorizer : IInvokeAdmissionAuthorizer
     {

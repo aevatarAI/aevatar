@@ -49,6 +49,9 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         _options = options.Value ?? throw new InvalidOperationException("Scope workflow capability options are required.");
     }
 
+    // Refactor (iter2/cluster-006):
+    //   Old pattern: Upsert dispatched lifecycle commands then polled service catalog and serving readmodels before ACK.
+    //   New principle: Upsert returns accepted lifecycle ids; readmodel freshness is observed through explicit read paths.
     public async Task<ScopeBindingUpsertResult> UpsertAsync(
         ScopeBindingUpsertRequest request,
         CancellationToken ct = default)
@@ -117,6 +120,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         }, ct);
 
         var expectedDeploymentId = $"{ServiceActorIds.Deployment(identity)}:{revisionId}";
+        // TODO(iter2/cluster-006): If callers need "invoke safe now", add an explicit read/projection
+        // observation path in a separate PR rather than blocking this command path on readmodels.
         return desiredBinding.BuildResult(normalizedScopeId, identity.ServiceId, revisionId, expectedDeploymentId);
     }
 

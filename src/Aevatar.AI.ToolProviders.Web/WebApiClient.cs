@@ -6,11 +6,12 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.AI.ToolProviders.Web;
 
 /// <summary>HTTP client for web search and fetch operations.</summary>
-public sealed class WebApiClient : IWebApiClient
+public sealed class WebApiClient : IWebApiClient, IDisposable
 {
     private readonly HttpClient _http;
     private readonly WebToolOptions _options;
     private readonly ILogger _logger;
+    private readonly bool _ownsHttpClient;
 
     public WebApiClient(
         WebToolOptions options,
@@ -18,7 +19,11 @@ public sealed class WebApiClient : IWebApiClient
         ILogger<WebApiClient>? logger = null)
     {
         _options = options;
+        // Refactor (iter10/cluster-019):
+        // Old: singleton DI registration could self-create and pin a raw HttpClient.
+        // New: DI registers this as an AddHttpClient<T> typed client; only manual construction owns this fallback.
         _http = httpClient ?? CreateDefaultHttpClient();
+        _ownsHttpClient = httpClient is null;
         _logger = logger ?? NullLogger<WebApiClient>.Instance;
     }
 
@@ -184,6 +189,12 @@ public sealed class WebApiClient : IWebApiClient
             _logger.LogWarning(ex, "Web API request failed: {Url}", url);
             return System.Text.Json.JsonSerializer.Serialize(new { error = ex.Message });
         }
+    }
+
+    public void Dispose()
+    {
+        if (_ownsHttpClient)
+            _http.Dispose();
     }
 }
 

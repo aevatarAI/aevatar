@@ -2,6 +2,8 @@ using System.Net;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
@@ -129,29 +131,12 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleInitializeAsync_ShouldAwaitUpsertDispatchBeforeFiringExecutionUpdate()
+    public async Task HandleInitializeAsync_DispatchesMembershipOnly_AndRunnerCommittedStateFeedsExecutionProjection()
     {
-        // Issue #440 regression: pre-PR #451 the SkillRunner reached the catalog via
-        // OrleansActor.HandleEventAsync, which produced to a stream (fire-and-forget).
-        // Two dispatches from the same SkillRunner turn (post-init Upsert + post-trigger
-        // ExecutionUpdate) could arrive at the catalog grain out of order; the
-        // ExecutionUpdate would land first, hit the missing-entry guard, and be silently
-        // dropped — leaving /agent-status reporting Last run / Next run as n/a.
-        //
-        // PR #451 wired dispatch through IActorDispatchPort.DispatchAsync, which awaits
-        // grain.HandleEnvelopeAsync. The contract that protects the catalog is: the
-        // SkillRunner must AWAIT each dispatch before firing the next so the catalog
-        // observes Upsert before ExecutionUpdate. To guard the contract (not the
-        // synchronous shortcut a fake might enable), this test hangs the Upsert dispatch
-        // on a TaskCompletionSource and asserts ExecutionUpdate is not even dispatched
-        // until the gate releases. A regression that drops the await — or anything that
-        // returns control before the catalog observes Upsert — would let ExecutionUpdate
-        // race ahead while Upsert is still hanging, and the assertion catches it.
-
-        var upsertGate = new TaskCompletionSource();
-        var upsertDispatchStarted = new TaskCompletionSource();
-        var executionDispatchStarted = new TaskCompletionSource();
-
+        // Refactor (iter1/cluster-001):
+        //   Old pattern: the runner dispatched UserAgentCatalogExecutionUpdateCommand after membership upsert.
+        //   New principle: runner committed state is sufficient for the catalog projector to materialize execution fields.
+        var captured = new List<EventEnvelope>();
         var scheduler = Substitute.For<Foundation.Abstractions.Runtime.Callbacks.IActorRuntimeCallbackScheduler>();
         scheduler
             .ScheduleTimeoutAsync(
@@ -161,32 +146,20 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             {
                 var req = call.Arg<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackTimeoutRequest>();
                 return Task.FromResult(new Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease(
-                    req.ActorId, req.CallbackId, 1L,
+                    req.ActorId,
+                    req.CallbackId,
+                    1L,
                     Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackBackend.InMemory));
             });
-        scheduler.CancelAsync(
-                Arg.Any<Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease>(),
-                Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
-
-        var catalogProxy = Substitute.For<IActor>();
         var runtime = Substitute.For<IActorRuntime>();
         runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(catalogProxy));
-
-        UserAgentCatalogGAgent? catalog = null;
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
         var dispatch = Substitute.For<IActorDispatchPort>();
         dispatch.DispatchAsync(
                 UserAgentCatalogGAgent.WellKnownId,
-                Arg.Any<EventEnvelope>(),
+                Arg.Do<EventEnvelope>(captured.Add),
                 Arg.Any<CancellationToken>())
-            .Returns(call => DispatchGated(
-                call.Arg<EventEnvelope>(),
-                call.Arg<CancellationToken>(),
-                catalog!,
-                upsertGate,
-                upsertDispatchStarted,
-                executionDispatchStarted));
+            .Returns(Task.CompletedTask);
 
         using var provider = BuildServiceProvider(
             new InMemoryEventStore(),
@@ -196,71 +169,52 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
                 services.AddSingleton(dispatch);
                 services.AddSingleton(scheduler);
             });
-
-        catalog = new UserAgentCatalogGAgent
-        {
-            Services = provider,
-            EventSourcingBehaviorFactory =
-                provider.GetRequiredService<IEventSourcingBehaviorFactory<UserAgentCatalogState>>(),
-        };
-        AssignActorId(catalog, UserAgentCatalogGAgent.WellKnownId);
-        await catalog.ActivateAsync();
-
-        var agent = CreateAgent("skill-runner-440-regression", provider);
+        var agent = CreateAgent("skill-runner-projection-regression", provider);
         await agent.ActivateAsync();
-
         var init = CreateInitializeCommand();
         init.ScheduleCron = "0 9 * * *";
         init.ScheduleTimezone = "UTC";
 
-        // Kick off init in the background. Upsert will hit the gate and yield; control
-        // returns to the test before ExecutionUpdate has a chance to dispatch.
-        var initTask = agent.HandleInitializeAsync(init);
-        await upsertDispatchStarted.Task;
+        await agent.HandleInitializeAsync(init);
 
-        // Critical assertion: while Upsert is hanging at the gate, ExecutionUpdate must
-        // not have been dispatched. If the SkillRunner regressed to fire-and-forget
-        // (`_ = DispatchAsync(...)` instead of `await DispatchAsync(...)`),
-        // executionDispatchStarted would already be completed here.
-        executionDispatchStarted.Task.IsCompleted.Should().BeFalse(
-            "the SkillRunner must await Upsert's dispatch task before firing ExecutionUpdate; "
-            + "regressing to fire-and-forget would let ExecutionUpdate race ahead of Upsert "
-            + "and be dropped by the missing-entry guard in HandleExecutionUpdateAsync");
+        captured.Should().ContainSingle();
+        captured[0].Payload.Is(UserAgentCatalogUpsertCommand.Descriptor).Should().BeTrue();
+        var persisted = await provider.GetRequiredService<IEventStore>().GetEventsAsync("skill-runner-projection-regression");
+        persisted.Should().HaveCount(2);
 
-        // Release Upsert; ExecutionUpdate must now fire and the catalog must observe both.
-        upsertGate.SetResult();
-        await initTask;
+        var runnerState = agent.State.Clone();
+        var writeDispatcher = new RecordingCatalogWriteDispatcher();
+        var projector = new UserAgentCatalogProjector(
+            writeDispatcher,
+            new EmptyCatalogDocumentReader(),
+            new FixedProjectionClock(new DateTimeOffset(2026, 4, 14, 10, 0, 0, TimeSpan.Zero)));
 
-        executionDispatchStarted.Task.IsCompleted.Should().BeTrue(
-            "ExecutionUpdate must dispatch after Upsert completes so /agent-status shows Next run");
-        catalog.State.Entries.Should().ContainSingle();
-        var entry = catalog.State.Entries[0];
-        entry.AgentId.Should().Be("skill-runner-440-regression");
-        entry.Status.Should().Be(SkillRunnerDefaults.StatusRunning);
-        entry.ScheduleCron.Should().Be("0 9 * * *");
-        entry.NextRunAt.Should().NotBeNull(
-            "init's post-Upsert ExecutionUpdate must land at the catalog so /agent-status shows Next run");
-    }
+        await projector.ProjectAsync(
+            new UserAgentCatalogMaterializationContext
+            {
+                RootActorId = "skill-runner-projection-regression",
+                ProjectionKind = UserAgentCatalogProjectionPort.ProjectionKind,
+            },
+            new EventEnvelope
+            {
+                Id = "runner-state-2",
+                Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                    new DateTimeOffset(2026, 4, 14, 10, 0, 0, TimeSpan.Zero)),
+                Route = EnvelopeRouteSemantics.CreateObserverPublication("skill-runner-projection-regression"),
+                Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new CommittedStateEventPublished
+                {
+                    StateEvent = persisted[^1],
+                    StateRoot = Google.Protobuf.WellKnownTypes.Any.Pack(runnerState),
+                }),
+            },
+            CancellationToken.None);
 
-    private static async Task DispatchGated(
-        EventEnvelope envelope,
-        CancellationToken ct,
-        UserAgentCatalogGAgent catalog,
-        TaskCompletionSource upsertGate,
-        TaskCompletionSource upsertDispatchStarted,
-        TaskCompletionSource executionDispatchStarted)
-    {
-        if (envelope.Payload.Is(UserAgentCatalogUpsertCommand.Descriptor))
-        {
-            upsertDispatchStarted.TrySetResult();
-            await upsertGate.Task;
-        }
-        else if (envelope.Payload.Is(UserAgentCatalogExecutionUpdateCommand.Descriptor))
-        {
-            executionDispatchStarted.TrySetResult();
-        }
-
-        await catalog.HandleEventAsync(envelope, ct);
+        writeDispatcher.Upserts.Should().ContainSingle();
+        var doc = writeDispatcher.Upserts[0];
+        doc.Id.Should().Be("skill-runner-projection-regression");
+        doc.Status.Should().Be(SkillRunnerDefaults.StatusRunning);
+        doc.NextRunAtUtc.Should().NotBeNull();
+        doc.RunnerSourceVersion.Should().Be(2);
     }
 
     [Fact]
@@ -291,9 +245,8 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
 
         await agent.HandleInitializeAsync(CreateInitializeCommand());
 
-        captured.Should().HaveCount(2);
+        captured.Should().ContainSingle();
         captured[0].Payload.Is(UserAgentCatalogUpsertCommand.Descriptor).Should().BeTrue();
-        captured[1].Payload.Is(UserAgentCatalogExecutionUpdateCommand.Descriptor).Should().BeTrue();
         captured.Should().OnlyContain(envelope =>
             envelope.Route.PublisherActorId == "skill-runner-dispatch-test" &&
             envelope.Route.Direct.TargetActorId == UserAgentCatalogGAgent.WellKnownId);
@@ -939,6 +892,38 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
                 Content = new StringContent(responseBody, Encoding.UTF8, "application/json"),
             };
         }
+    }
+
+    private sealed class RecordingCatalogWriteDispatcher : IProjectionWriteDispatcher<UserAgentCatalogDocument>
+    {
+        public List<UserAgentCatalogDocument> Upserts { get; } = [];
+
+        public Task<ProjectionWriteResult> UpsertAsync(
+            UserAgentCatalogDocument readModel,
+            CancellationToken ct = default)
+        {
+            Upserts.Add(readModel.Clone());
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
+            Task.FromResult(ProjectionWriteResult.Applied());
+    }
+
+    private sealed class EmptyCatalogDocumentReader : IProjectionDocumentReader<UserAgentCatalogDocument, string>
+    {
+        public Task<UserAgentCatalogDocument?> GetAsync(string key, CancellationToken ct = default) =>
+            Task.FromResult<UserAgentCatalogDocument?>(null);
+
+        public Task<ProjectionDocumentQueryResult<UserAgentCatalogDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default) =>
+            Task.FromResult(new ProjectionDocumentQueryResult<UserAgentCatalogDocument>());
+    }
+
+    private sealed class FixedProjectionClock(DateTimeOffset now) : Aevatar.CQRS.Projection.Core.Abstractions.IProjectionClock
+    {
+        public DateTimeOffset UtcNow => now;
     }
 
     /// <summary>

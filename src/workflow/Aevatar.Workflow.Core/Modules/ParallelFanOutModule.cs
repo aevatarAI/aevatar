@@ -13,6 +13,8 @@ namespace Aevatar.Workflow.Core.Modules;
 
 /// <summary>
 /// 并行扇出模块。处理 parallel 类型步骤：拆分 N 个子步骤并行下发，收齐后合并结果并发布 StepCompletedEvent。
+/// Refactor (iter11/cluster-021): Old backpressure reporting read raw Queue.Count after head removals.
+/// Refactor (iter11/cluster-021): New reporting uses cursor-aware queued count while helper preserves FIFO.
 /// </summary>
 public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContext>
 {
@@ -126,7 +128,7 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                     {
                         StepId = evt.StepId,
                         RunId = runId,
-                        QueuedCount = state.Backpressure.Queue.Count,
+                        QueuedCount = BackpressureHelper.QueuedCount(state.Backpressure),
                         ActiveCount = state.Backpressure.ActiveWorkers,
                         MaxConcurrent = state.Backpressure.MaxConcurrentWorkers,
                     }, TopologyAudience.Self, ct);

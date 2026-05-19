@@ -47,8 +47,8 @@ dotnet run --project src/Aevatar.Mainnet.Host.Api
 
 ### 3. 发一次 Chat 请求
 
-- 查看可用工作流：`GET http://localhost:5000/api/workflows`
-- 发起对话：`POST http://localhost:5000/api/chat`，请求体示例：
+- 查看可用工作流：`GET http://localhost:5100/api/workflows`
+- 发起对话：`POST http://localhost:5100/api/chat`，请求体示例：
 
 ```json
 { "prompt": "你的问题或长文本", "workflow": "simple_qa" }
@@ -58,7 +58,7 @@ dotnet run --project src/Aevatar.Mainnet.Host.Api
 示例（命令行）：
 
 ```bash
-curl -X POST http://localhost:5000/api/chat \
+curl -X POST http://localhost:5100/api/chat \
   -H "Content-Type: application/json" \
   -H "Accept: text/event-stream" \
   -d '{"prompt": "什么是 MAKER 模式？", "workflow": "simple_qa"}'

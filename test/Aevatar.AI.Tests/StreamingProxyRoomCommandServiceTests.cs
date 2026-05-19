@@ -15,9 +15,11 @@ public sealed class StreamingProxyRoomCommandServiceTests
         var operations = new List<string>();
         var actor = new RecordingActor("room-created", operations);
         var runtime = new RecordingActorRuntime(operations, actor);
+        var dispatchPort = new RecordingActorDispatchPort(operations, runtime);
         var registry = new RecordingGAgentActorRegistryCommandPort(operations);
         var service = new StreamingProxyRoomCommandService(
             runtime,
+            dispatchPort,
             registry,
             NullLogger<StreamingProxyRoomCommandService>.Instance);
 
@@ -34,6 +36,8 @@ public sealed class StreamingProxyRoomCommandServiceTests
             StreamingProxyDefaults.GAgentTypeName,
             result.RoomId!));
         runtime.LastCreatedActor.Should().NotBeNull();
+        dispatchPort.Dispatches.Should().ContainSingle();
+        dispatchPort.Dispatches[0].ActorId.Should().Be(result.RoomId);
         runtime.LastCreatedActor!.ReceivedEnvelopes.Should().ContainSingle();
         var envelope = runtime.LastCreatedActor.ReceivedEnvelopes[0];
         envelope.Route.Direct.TargetActorId.Should().Be(result.RoomId);
@@ -45,6 +49,7 @@ public sealed class StreamingProxyRoomCommandServiceTests
             .Be("Daily Standup");
         operations.Should().ContainInOrder(
             $"runtime:create:{result.RoomId}",
+            $"dispatch:{result.RoomId}",
             $"actor:init:{result.RoomId}",
             $"registry:register:{result.RoomId}");
     }
@@ -54,9 +59,11 @@ public sealed class StreamingProxyRoomCommandServiceTests
     {
         var operations = new List<string>();
         var runtime = new RecordingActorRuntime(operations, new RecordingActor("room-created", operations));
+        var dispatchPort = new RecordingActorDispatchPort(operations, runtime);
         var registry = new RecordingGAgentActorRegistryCommandPort(operations);
         var service = new StreamingProxyRoomCommandService(
             runtime,
+            dispatchPort,
             registry,
             NullLogger<StreamingProxyRoomCommandService>.Instance);
 
@@ -77,9 +84,11 @@ public sealed class StreamingProxyRoomCommandServiceTests
     {
         var operations = new List<string>();
         var runtime = new RecordingActorRuntime(operations, new RecordingActor("room-created", operations));
+        var dispatchPort = new RecordingActorDispatchPort(operations, runtime);
         var registry = new RecordingGAgentActorRegistryCommandPort(operations);
         var service = new StreamingProxyRoomCommandService(
             runtime,
+            dispatchPort,
             registry,
             NullLogger<StreamingProxyRoomCommandService>.Instance);
 
@@ -102,12 +111,14 @@ public sealed class StreamingProxyRoomCommandServiceTests
     {
         var operations = new List<string>();
         var runtime = new RecordingActorRuntime(operations, new RecordingActor("room-created", operations));
+        var dispatchPort = new RecordingActorDispatchPort(operations, runtime);
         var registry = new RecordingGAgentActorRegistryCommandPort(operations)
         {
             RegisterStage = GAgentActorRegistryCommandStage.AcceptedForDispatch,
         };
         var service = new StreamingProxyRoomCommandService(
             runtime,
+            dispatchPort,
             registry,
             NullLogger<StreamingProxyRoomCommandService>.Instance);
 
@@ -120,6 +131,7 @@ public sealed class StreamingProxyRoomCommandServiceTests
         runtime.DestroyedActorIds.Should().ContainSingle(result.RoomId);
         operations.Should().ContainInOrder(
             $"runtime:create:{result.RoomId}",
+            $"dispatch:{result.RoomId}",
             $"actor:init:{result.RoomId}",
             $"registry:register:{result.RoomId}",
             $"registry:unregister:{result.RoomId}",
@@ -131,6 +143,7 @@ public sealed class StreamingProxyRoomCommandServiceTests
     {
         var operations = new List<string>();
         var runtime = new RecordingActorRuntime(operations, new RecordingActor("room-created", operations));
+        var dispatchPort = new RecordingActorDispatchPort(operations, runtime);
         var registry = new RecordingGAgentActorRegistryCommandPort(operations)
         {
             ThrowOnRegister = new InvalidOperationException("registry unavailable"),
@@ -138,6 +151,7 @@ public sealed class StreamingProxyRoomCommandServiceTests
         };
         var service = new StreamingProxyRoomCommandService(
             runtime,
+            dispatchPort,
             registry,
             NullLogger<StreamingProxyRoomCommandService>.Instance);
 
@@ -150,6 +164,7 @@ public sealed class StreamingProxyRoomCommandServiceTests
         runtime.DestroyedActorIds.Should().BeEmpty();
         operations.Should().ContainInOrder(
             $"runtime:create:{result.RoomId}",
+            $"dispatch:{result.RoomId}",
             $"actor:init:{result.RoomId}",
             $"registry:register:{result.RoomId}",
             $"registry:unregister:{result.RoomId}");
@@ -160,12 +175,14 @@ public sealed class StreamingProxyRoomCommandServiceTests
     {
         var operations = new List<string>();
         var runtime = new RecordingActorRuntime(operations, new RecordingActor("room-created", operations));
+        var dispatchPort = new RecordingActorDispatchPort(operations, runtime);
         var registry = new RecordingGAgentActorRegistryCommandPort(operations)
         {
             ThrowOnRegister = new OperationCanceledException("client disconnected"),
         };
         var service = new StreamingProxyRoomCommandService(
             runtime,
+            dispatchPort,
             registry,
             NullLogger<StreamingProxyRoomCommandService>.Instance);
 
@@ -222,6 +239,8 @@ public sealed class StreamingProxyRoomCommandServiceTests
 
     private sealed class RecordingActorRuntime(List<string> operations, IActor actor) : IActorRuntime
     {
+        private readonly Dictionary<string, IActor> _actors = new(StringComparer.OrdinalIgnoreCase);
+
         public List<string> DestroyedActorIds { get; } = [];
         public RecordingActor? LastCreatedActor { get; private set; }
 
@@ -238,6 +257,7 @@ public sealed class StreamingProxyRoomCommandServiceTests
             LastCreatedActor = actor is RecordingActor recordingActor && recordingActor.Id == actorId
                 ? recordingActor
                 : new RecordingActor(actorId, operations);
+            _actors[actorId] = LastCreatedActor;
             return Task.FromResult<IActor>(LastCreatedActor);
         }
 
@@ -250,8 +270,8 @@ public sealed class StreamingProxyRoomCommandServiceTests
 
         public Task<IActor?> GetAsync(string id)
         {
-            _ = id;
-            return Task.FromResult<IActor?>(null);
+            _actors.TryGetValue(id, out var actor);
+            return Task.FromResult<IActor?>(actor);
         }
 
         public Task<bool> ExistsAsync(string id)
@@ -271,6 +291,21 @@ public sealed class StreamingProxyRoomCommandServiceTests
         {
             _ = childId;
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingActorDispatchPort(List<string> operations, IActorRuntime runtime)
+        : IActorDispatchPort
+    {
+        public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
+
+        public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            operations.Add($"dispatch:{actorId}");
+            Dispatches.Add((actorId, envelope));
+            var actor = await runtime.GetAsync(actorId);
+            if (actor is not null)
+                await actor.HandleEventAsync(envelope, ct);
         }
     }
 
