@@ -435,7 +435,10 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     Script: new ScopeBindingScriptResult(
                         scriptSummary.ScriptId,
                         scriptSummary.ActiveRevision,
-                        scriptSummary.DefinitionActorId),
+                        scriptSummary.DefinitionActorId)
+                    {
+                        EndpointIds = endpointSpecs.Select(endpoint => endpoint.EndpointId).ToArray(),
+                    },
                     ExpectedDeploymentId: expectedDeploymentId));
     }
 

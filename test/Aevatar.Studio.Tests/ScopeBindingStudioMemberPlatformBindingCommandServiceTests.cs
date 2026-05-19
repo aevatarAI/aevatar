@@ -87,7 +87,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             ServiceId: "member-m-1",
             ExpectedRevisionId: "rev-platform-bind-1",
             ExpectedDeploymentId: "deployment-1",
-            ExpectedEndpointIds: ["chat"]));
+            ExpectedEndpointIds: ["script.command"]));
     }
 
     [Fact]
@@ -634,7 +634,10 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
                 RevisionId: revisionId,
                 ImplementationKind: request.ImplementationKind,
                 ExpectedActorId: "scope-script:scope-1:script-1",
-                Script: new ScopeBindingScriptResult("script-1", revisionId, "scope-script:scope-1:script-1"),
+                Script: new ScopeBindingScriptResult("script-1", revisionId, "scope-script:scope-1:script-1")
+                {
+                    EndpointIds = ["script.command"],
+                },
                 ExpectedDeploymentId: "deployment-1");
         }
 

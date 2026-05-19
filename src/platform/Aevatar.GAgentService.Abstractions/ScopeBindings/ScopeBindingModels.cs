@@ -47,7 +47,10 @@ public sealed record ScopeBindingWorkflowResult(
 public sealed record ScopeBindingScriptResult(
     string ScriptId,
     string ScriptRevision,
-    string DefinitionActorId);
+    string DefinitionActorId)
+{
+    public IReadOnlyList<string> EndpointIds { get; init; } = [];
+}
 
 public sealed record ScopeBindingGAgentResult(
     string ActorTypeName);

@@ -260,7 +260,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             result.ServiceId,
             ExpectedRevisionId: expectedRevisionId,
             ExpectedDeploymentId: expectedDeploymentId,
-            ExpectedEndpointIds: BuildExpectedEndpointIds(bindingRequest));
+            ExpectedEndpointIds: BuildExpectedEndpointIds(result, bindingRequest));
 
         while (true)
         {
@@ -281,17 +281,24 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         }
     }
 
-    private static IReadOnlyList<string> BuildExpectedEndpointIds(StudioMemberPlatformBindingStartRequested request) =>
+    private static IReadOnlyList<string> BuildExpectedEndpointIds(
+        ScopeBindingUpsertResult result,
+        StudioMemberPlatformBindingStartRequested request) =>
         request.Request.ImplementationCase switch
         {
-            StudioMemberBindingRequest.ImplementationOneofCase.Gagent => request.Request.Gagent.Endpoints
-                .Select(endpoint => endpoint.EndpointId?.Trim())
-                .Where(endpointId => !string.IsNullOrWhiteSpace(endpointId))
-                .Select(endpointId => endpointId!)
-                .Distinct(StringComparer.Ordinal)
-                .ToArray(),
+            StudioMemberBindingRequest.ImplementationOneofCase.Script => NormalizeEndpointIds(result.Script?.EndpointIds),
+            StudioMemberBindingRequest.ImplementationOneofCase.Gagent => NormalizeEndpointIds(
+                request.Request.Gagent.Endpoints.Select(endpoint => endpoint.EndpointId)),
             _ => ["chat"],
         };
+
+    private static IReadOnlyList<string> NormalizeEndpointIds(IEnumerable<string>? endpointIds) =>
+        endpointIds?
+            .Select(endpointId => endpointId?.Trim())
+            .Where(endpointId => !string.IsNullOrWhiteSpace(endpointId))
+            .Select(endpointId => endpointId!)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray() ?? [];
 
     private static StudioMemberPlatformBindingOptions NormalizeOptions(StudioMemberPlatformBindingOptions options)
     {
