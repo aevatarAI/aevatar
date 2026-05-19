@@ -699,6 +699,135 @@ A single reviewer codex would weigh all dimensions and might trade tests for arc
 
 ---
 
+## Phase 9 — Multi-solver design consensus (alternative to manual maintainer decisions)
+
+Runs when a `state.design_pending[i]` cluster has been open for one full Phase 7 sweep with no maintainer answer, OR when the operator manually sets `design_pending[i].auto_solve = true`. Goal: 3 independent solver codexes propose framings from different biases; a 4th meta-judge codex arbitrates; **3/3 unanimous → auto-dispatch implement** (skip maintainer decision); split or philosophy-touching → escalate to maintainer.
+
+Per Auric's policy (2026-05-19): **3/3 unanimous required** — "早暴露问题比晚暴露问题好" — anything less goes through convergence (max 2 rounds) or escalation.
+
+### Default solver roles
+
+| Solver | Bias | Prompt |
+|---|---|---|
+| **minimal** | smallest viable change; documented rule exception OK if scope is genuinely narrow | `prompts/solver-minimal.md` |
+| **structural** | CLAUDE-philosophy-aligned; new abstraction allowed if justified; never proposes rule exception | `prompts/solver-structural.md` |
+| **delete** | question necessity; propose delete / defer / collapse-and-redirect; abstain if feature genuinely needed | `prompts/solver-delete.md` |
+
+A 4th **meta-judge** codex arbitrates (`prompts/meta-judge.md`).
+
+### Dispatch (parallel)
+
+For each cluster needing Phase 9:
+
+```bash
+for role in minimal structural delete; do
+  envsubst < .claude/skills/codex-refactor-loop/prompts/solver-${role}.md \
+    > .refactor-loop/prompts/phase9/solve-issue${ISSUE_NUMBER}-r${ROUND}-${role}.md
+  .claude/skills/codex-refactor-loop/scripts/spawn-codex.sh \
+    --cd "$REPO_ROOT" \
+    --prompt .refactor-loop/prompts/phase9/solve-issue${ISSUE_NUMBER}-r${ROUND}-${role}.md \
+    --log .refactor-loop/logs/phase9-issue${ISSUE_NUMBER}-r${ROUND}-${role}.log \
+    --timeout 3600 &
+done
+```
+
+All 3 solvers in parallel; each emits `SOLVER_DONE:<role>:<verdict>:<summary>`. When all 3 done, dispatch meta-judge:
+
+```bash
+envsubst < .claude/skills/codex-refactor-loop/prompts/meta-judge.md \
+  > .refactor-loop/prompts/phase9/judge-issue${ISSUE_NUMBER}-r${ROUND}.md
+.claude/skills/codex-refactor-loop/scripts/spawn-codex.sh \
+  --cd "$REPO_ROOT" \
+  --prompt .refactor-loop/prompts/phase9/judge-issue${ISSUE_NUMBER}-r${ROUND}.md \
+  --log .refactor-loop/logs/phase9-issue${ISSUE_NUMBER}-r${ROUND}-judge.log \
+  --timeout 3600
+```
+
+Meta-judge emits `META_JUDGE_DONE:<decision>:<...>`:
+- `consensus:<framing>:<summary>` → controller auto-applies (see "Consensus action" below)
+- `converge:round-N:<question>` → controller re-runs Phase 9 with the convergence question prepended (max `MAX_CONVERGENCE_ROUNDS=2`)
+- `escalate:<category>:<short>` → controller adds `auto-loop-stuck` label + PushNotification
+
+### Consensus action (3/3 unanimous + meta-judge consensus)
+
+1. Read the winning solver's "Concrete plan" section from the meta-judge output.
+2. Materialize `prompts/implement-<cluster-id>.md` prepending:
+   ```markdown
+   ## Design decision (from Phase 9 consensus, issue #${ISSUE_NUMBER})
+   <winning solver's framing verbatim>
+   <winning solver's concrete plan verbatim>
+   ```
+3. Add `auto-loop-resume` label to the issue (mirrors maintainer-decision flow).
+4. Move cluster from `design_pending` to `clusters_active`.
+5. Dispatch implement codex per Phase 2 (worktree + 5400s timeout).
+6. Post bilingual comment on issue: "Phase 9 reached 3/3 consensus on <framing>; implement codex dispatched. Tracking PR will appear shortly. / Phase 9 达成 3/3 共识 <framing>;implement codex 已派,PR 即将打开。"
+
+### Escalation criteria (hardcoded — always escalate)
+
+These trigger escalation regardless of solver consensus. Meta-judge MUST flag them:
+
+1. **Top-level CLAUDE.md clause change** — any solver proposes editing CLAUDE.md "## 顶级架构约束" / "## 架构哲学" / Phase rules
+2. **New core abstraction** — any solver proposes new actor type, new envelope kind, new pipeline phase, new Layer
+3. **`docs/canon/*` change** — repo architecture vocabulary change
+4. **Rule exception that escapes scope** — proposed exception is broader than "this one transient sink"; the exception would apply to multiple code paths
+5. **Cross-cluster coupling** — solver's plan requires touching another in-flight cluster's PR
+6. **Performance constraint unverifiable** — solver claims latency/memory bound but only prod can verify
+7. **Issue body's `human_brief.why_needs_design`** contains: `rule-boundary` / `architecture-change` / `philosophy` / `CLAUDE.md` / `canon-vocabulary`
+
+### GitHub traceability (mandatory per SKILL.md "GitHub traceability" — same standard as Phase 8)
+
+Every Phase 9 action posts a bilingual comment to the issue:
+
+| Phase 9 event | Issue comment content |
+|---|---|
+| 3 solvers dispatched | Bilingual: "Phase 9 multi-solver dispatched — minimal/structural/delete codex in flight. Round N of max convergence ${MAX_CONVERGENCE_ROUNDS}." |
+| All 3 solvers done | Bilingual summary table: role / verdict / one-line framing summary per solver |
+| Meta-judge done (consensus) | Bilingual: chosen framing + plan link + "auto-loop-resume label added; implement codex dispatched" |
+| Meta-judge done (converge) | Bilingual: convergence question + "re-running 3 solvers with this narrowed scope" |
+| Meta-judge done (escalate) | Bilingual: trigger category + what needs human input + add `auto-loop-stuck` label + PushNotification |
+| Convergence cap reached | Bilingual: full round history + escalation rationale |
+
+Required labels (additions to Phase 8 set):
+- `phase9-solving`: 3 solver codexes in flight
+- `phase9-judging`: meta-judge in flight
+- `phase9-converging`: convergence round in progress
+- (re-used) `auto-loop-resume` on consensus dispatch
+- (re-used) `auto-loop-stuck` on escalation
+
+### State tracking
+
+```json
+"design_pending": [{
+  "cluster_id": "...",
+  "issue_number": 684,
+  "auto_solve": true,
+  "phase9": {
+    "rounds": [
+      {"round": 1, "solvers": {"minimal": "propose", "structural": "propose", "delete": "abstain"},
+       "judge": "converge", "convergence_question": "..."},
+      {"round": 2, "solvers": {...}, "judge": "consensus", "chosen_framing": "structural"}
+    ],
+    "final_decision": "consensus:structural" | "escalate:philosophy" | null,
+    "implement_dispatched": true | false
+  }
+}]
+```
+
+### Anti-spiral safeguards
+
+- `MAX_CONVERGENCE_ROUNDS = 2`. Round 2 still not unanimous → escalate.
+- Solver may not propose a framing that any prior round's meta-judge ruled out (track in `phase9.rounds[].ruled_out_framings`).
+- Cumulative solver runtime across all rounds capped at 6h per issue; over → escalate.
+- If maintainer comments on the issue mid-Phase-9 (Monitor fires) → halt Phase 9, switch back to Phase 7 maintainer-conversation flow (maintainer's input always takes precedence over Phase 9 automation).
+
+### When to trigger Phase 9 (operator policy)
+
+- **Default OFF** per design pending. Operator opts in by setting `state.design_pending[i].auto_solve = true` OR by adding the `phase9-auto-solve` label on the issue.
+- Rationale: Phase 9 is best for design issues where the answer is mostly mechanical (proto field name, file location, naming) but maintainer is offline / busy. Hard architectural calls should still go through Phase 7 maintainer dialog.
+- The cluster spec's `requires_design: true` + `human_brief.why_needs_design` content informs the decision; if `why_needs_design` contains philosophy keywords, Phase 9 trigger is silently no-op'd and Phase 7 maintainer flow continues.
+
+---
+
 ## Loop control
 
 - **Stop conditions**: all planned clusters done OR every remaining cluster failed twice.
@@ -776,5 +905,9 @@ If any check fails, regenerate. Do not post.
 - [prompts/reviewer-tests.md](prompts/reviewer-tests.md) — Phase 8 tests reviewer (coverage/quality angle)
 - [prompts/reviewer-quality.md](prompts/reviewer-quality.md) — Phase 8 code quality reviewer (readability/simplicity angle)
 - [prompts/review-fix.md](prompts/review-fix.md) — Phase 8 fix-codex: addresses reject demands without escalating to human
+- [prompts/solver-minimal.md](prompts/solver-minimal.md) — Phase 9 solver A: minimal-change framing
+- [prompts/solver-structural.md](prompts/solver-structural.md) — Phase 9 solver B: CLAUDE-aligned structural framing
+- [prompts/solver-delete.md](prompts/solver-delete.md) — Phase 9 solver C: question necessity / delete-or-defer framing
+- [prompts/meta-judge.md](prompts/meta-judge.md) — Phase 9 meta-judge: arbitrate 3 solver outputs (3/3 unanimous required)
 - [scripts/spawn-codex.sh](scripts/spawn-codex.sh) — standardized `codex exec` wrapper (enforces 3600s minimum timeout)
 - [REFERENCE.md](REFERENCE.md) — state schema, batching heuristics, recovery playbook
