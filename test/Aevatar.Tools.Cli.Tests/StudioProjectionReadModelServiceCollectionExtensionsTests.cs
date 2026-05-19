@@ -31,6 +31,7 @@ public sealed class StudioProjectionReadModelServiceCollectionExtensionsTests
         typeof(UserMemoryCurrentStateDocument),
         typeof(StreamingProxyParticipantCurrentStateDocument),
         typeof(UserConfigCurrentStateDocument),
+        typeof(StudioWorkspaceCurrentStateDocument),
     ];
 
     [Fact]
