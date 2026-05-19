@@ -19,6 +19,8 @@ message ConversationGAgentState {
   // single field by design (multi-turn history reconstructable from event
   // log). See ADR-0021 chain.delivered phase.
   ReplyDeliveryStatus last_reply_delivery = 8;
+  repeated RelayReplayClaim relay_replay_claims = 9;
+  repeated PendingRelayAdmission pending_relay_admissions = 10;
 }
 
 // Channel-sink ack tracking for the most recent reply turn. Carries either
@@ -63,4 +65,21 @@ message PendingInboundTurn {
   int32 retry_count = 3;
   int64 first_failed_unix_ms = 4;
   int64 next_retry_unix_ms = 5;
+}
+
+// Refactor (iter17/cluster-038): Old pattern: relay replay claims lived in process-local guard dictionaries. New principle: callback_jti replay authority is bounded, typed, actor-owned state.
+message RelayReplayClaim {
+  string relay_api_key_id = 1;
+  string callback_jti = 2;
+  string activity_id = 3;
+  int64 expires_at_unix_ms = 4;
+}
+
+// Refactor (iter17/cluster-038): Old pattern: admitted callback work relied on transient endpoint/guard context. New principle: pending relay admissions are durable actor state until the self-continuation consumes them.
+message PendingRelayAdmission {
+  string activity_id = 1;
+  string relay_api_key_id = 2;
+  string callback_jti = 3;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 4;
+  int64 admitted_at_unix_ms = 5;
 }

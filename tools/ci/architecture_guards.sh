@@ -1175,6 +1175,9 @@ bash tools/ci/runtime_callback_guards.sh
 echo "Running channel card literal guard..."
 bash tools/ci/channel_card_literal_guard.sh
 
+echo "Running Nyx relay replay authority guard..."
+python3 tools/ci/guards/nyx_relay_replay_authority_guard.py
+
 echo "Running docs lint guard..."
 bash tools/docs/lint.sh
 

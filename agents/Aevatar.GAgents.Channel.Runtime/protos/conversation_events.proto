@@ -52,6 +52,28 @@ message NyxRelayInboundActivity {
   string reply_token = 2;
   int64 reply_token_expires_at_unix_ms = 3;
   string correlation_id = 4;
+  string relay_api_key_id = 5;
+  string callback_jti = 6;
+  int64 callback_observed_at_unix_ms = 7;
+  int64 callback_replay_expires_at_unix_ms = 8;
+}
+
+// Refactor (iter17/cluster-038): Old pattern: callback_jti replay claims were process-local guard entries. New principle: admission is a persisted typed actor event before any business turn work.
+message NyxRelayCallbackAdmittedEvent {
+  string activity_id = 1;
+  string relay_api_key_id = 2;
+  string callback_jti = 3;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 4;
+  int64 admitted_at_unix_ms = 5;
+  int64 claim_expires_at_unix_ms = 6;
+}
+
+// Refactor (iter17/cluster-038): Old pattern: relay callback execution depended on inline endpoint/guard flow. New principle: admitted callbacks continue through an explicit actor self-message.
+message NyxRelayCallbackTurnRequestedEvent {
+  string activity_id = 1;
+  string relay_api_key_id = 2;
+  string callback_jti = 3;
+  int64 requested_at_unix_ms = 4;
 }
 
 enum LlmReplyTerminalState {

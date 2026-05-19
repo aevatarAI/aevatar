@@ -128,7 +128,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (await TryHandleLlmSelectionCardActionAsync(activity, inbound, registration, runtimeContext, senderBinding?.BindingId, ct).ConfigureAwait(false) is { } llmSelectionResult)
             return llmSelectionResult;
 
-        var inboundEvent = ToInboundEvent(activity, registration, inbound, ResolveUserAccessToken(activity));
+        var inboundEvent = ToInboundEvent(activity, registration, inbound, ResolveUserAccessToken(activity, runtimeContext));
 
         if (await TryHandleAgentBuilderAsync(activity, inboundEvent, registration, runtimeContext, typingReactionTask, ct) is { } agentBuilderResult)
             return agentBuilderResult;
@@ -968,7 +968,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 AgentToolRequestContext.CurrentMetadata = await BuildAgentBuilderMetadataAsync(
                     activity,
                     inboundEvent,
-                    ResolveUserAccessToken(activity),
+                    ResolveUserAccessToken(activity, runtimeContext),
                     ct);
                 var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
                 var toolResult = await tool.ExecuteAsync(decision.ToolArgumentsJson!, ct);
@@ -1687,8 +1687,14 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         return NormalizeOptional(tokenContext.ReplyToken);
     }
 
-    private static string? ResolveUserAccessToken(ChatActivity activity) =>
-        NormalizeOptional(activity.TransportExtras?.NyxUserAccessToken);
+    // Refactor (iter17/cluster-038):
+    //   Old pattern: channel runner resolved the Nyx user token only from ChatActivity.TransportExtras, forcing secrets into persisted activity clones.
+    //   New principle: sanitized activities may omit the token; same-activation relay turns read it from ConversationTurnRuntimeContext.
+    private static string? ResolveUserAccessToken(
+        ChatActivity activity,
+        ConversationTurnRuntimeContext runtimeContext) =>
+        NormalizeOptional(activity.TransportExtras?.NyxUserAccessToken) ??
+        NormalizeOptional(runtimeContext.NyxUserAccessToken);
 
     private static string? NormalizeOptional(string? value)
     {

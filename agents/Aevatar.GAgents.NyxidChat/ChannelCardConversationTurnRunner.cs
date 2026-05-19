@@ -44,7 +44,7 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
         if (chunk.Activity is null)
             return ConversationCardCreateResult.Failed("activity_required", "Stream chunk event is missing the source activity.");
 
-        var token = ResolveToken(chunk.Activity);
+        var token = ResolveToken(chunk.Activity, runtimeContext);
         if (token is null)
             return ConversationCardCreateResult.Failed("token_missing", "NyxID user access token is missing on the activity's TransportExtras.");
 
@@ -182,7 +182,7 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
         if (chunk.Activity is null)
             return ConversationCardStreamResult.Failed("activity_required", "Stream chunk event is missing the source activity.");
 
-        var token = ResolveToken(chunk.Activity);
+        var token = ResolveToken(chunk.Activity, runtimeContext);
         if (token is null)
             return ConversationCardStreamResult.Failed("token_missing", "NyxID user access token is missing on the activity's TransportExtras.");
 
@@ -223,7 +223,7 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
     {
         ArgumentNullException.ThrowIfNull(referenceActivity);
 
-        var token = ResolveToken(referenceActivity);
+        var token = ResolveToken(referenceActivity, runtimeContext);
         if (token is null)
             return ConversationCardFinalizeResult.Failed("token_missing", "NyxID user access token is missing on the reference activity's TransportExtras.");
 
@@ -281,9 +281,16 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
         return ConversationCardFinalizeResult.Succeeded();
     }
 
-    private static string? ResolveToken(ChatActivity activity)
+    // Refactor (iter17/cluster-038):
+    //   Old pattern: CardKit calls required the Nyx user token to remain on persisted activity/reference activity transport extras.
+    //   New principle: CardKit create/stream/finalize accept sanitized activities and resolve the token from per-turn runtime context.
+    private static string? ResolveToken(
+        ChatActivity activity,
+        ConversationTurnRuntimeContext runtimeContext)
     {
         var token = activity.TransportExtras?.NyxUserAccessToken?.Trim();
+        if (string.IsNullOrWhiteSpace(token))
+            token = runtimeContext.NyxUserAccessToken?.Trim();
         return string.IsNullOrWhiteSpace(token) ? null : token;
     }
 

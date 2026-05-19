@@ -357,6 +357,272 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task HandleNyxRelayInboundActivityAsync_WithCallbackJti_PersistsAdmissionBeforeRunner()
+    {
+        var observedAtMs = DateTimeOffset.UtcNow.AddSeconds(-17).ToUnixTimeMilliseconds();
+        const string sentinelUserAccessToken = "sentinel-user-access-token-must-not-persist";
+        var publisher = new RecordingEventPublisher();
+        var runner = new RecordingTurnRunner();
+        var (agent, store) = CreateAgent(runner, "conv-relay-admit-first", eventPublisher: publisher);
+
+        var relay = CreateRelayInbound(
+            "act-admit",
+            "conv:slack:C1",
+            "api-key-1",
+            "jti-1",
+            sentinelUserAccessToken,
+            observedAtMs);
+        await agent.HandleNyxRelayInboundActivityAsync(relay);
+
+        runner.InboundCount.ShouldBe(0);
+        agent.State.ProcessedMessageIds.ShouldBeEmpty();
+        agent.State.RelayReplayClaims.ShouldContain(claim =>
+            claim.RelayApiKeyId == "api-key-1" && claim.CallbackJti == "jti-1");
+        var pendingAdmission = agent.State.PendingRelayAdmissions.Single(admission => admission.ActivityId == "act-admit");
+        pendingAdmission.AdmittedAtUnixMs.ShouldBe(observedAtMs);
+        pendingAdmission.Activity.TransportExtras.NyxUserAccessToken.ShouldBeEmpty();
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Count.ShouldBe(1);
+        events[0].EventType.ShouldContain(nameof(NyxRelayCallbackAdmittedEvent));
+        var admitted = NyxRelayCallbackAdmittedEvent.Parser.ParseFrom(events[0].EventData.Value);
+        admitted.AdmittedAtUnixMs.ShouldBe(observedAtMs);
+        admitted.Activity.TransportExtras.NyxUserAccessToken.ShouldBeEmpty();
+        ContainsSubsequence(events[0].EventData.Value.ToByteArray(), Encoding.UTF8.GetBytes(sentinelUserAccessToken))
+            .ShouldBeFalse("relay user access token must stay out of persisted admission event bytes");
+        publisher.Sent.ShouldContain(message => message is NyxRelayCallbackTurnRequestedEvent);
+    }
+
+    [Fact]
+    public async Task HandleNyxRelayCallbackTurnRequestedAsync_WithSanitizedAdmission_RestoresRuntimeTokenOnlyForTurn()
+    {
+        const string sentinelUserAccessToken = "sentinel-user-access-token-runtime-only";
+        var runner = new RecordingTurnRunner();
+        var (agent, store) = CreateAgent(runner, "conv-relay-runtime-token");
+        var relay = CreateRelayInbound(
+            "act-runtime-token",
+            "conv:lark:C1",
+            "api-key-1",
+            "jti-runtime-token",
+            sentinelUserAccessToken);
+
+        await agent.HandleNyxRelayInboundActivityAsync(relay);
+        await agent.HandleNyxRelayCallbackTurnRequestedAsync(new NyxRelayCallbackTurnRequestedEvent
+        {
+            ActivityId = "act-runtime-token",
+            RelayApiKeyId = "api-key-1",
+            CallbackJti = "jti-runtime-token",
+            RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        runner.InboundCount.ShouldBe(1);
+        runner.LastInboundActivity?.TransportExtras?.NyxUserAccessToken.ShouldBe(sentinelUserAccessToken);
+        runner.LastInboundRuntimeContext?.NyxUserAccessToken.ShouldBe(sentinelUserAccessToken);
+        agent.State.PendingRelayAdmissions.ShouldBeEmpty();
+
+        var events = await store.GetEventsAsync(agent.Id);
+        var sentinelBytes = Encoding.UTF8.GetBytes(sentinelUserAccessToken);
+        foreach (var record in events)
+        {
+            ContainsSubsequence(record.EventData.Value.ToByteArray(), sentinelBytes)
+                .ShouldBeFalse($"persisted event {record.EventType} must not contain Nyx user access token bytes");
+        }
+    }
+
+    [Fact]
+    public async Task HandleNyxRelayInboundActivityAsync_DuplicateCallbackJti_NoopsBeforeProcessedMessageIds()
+    {
+        var runner = new RecordingTurnRunner();
+        var (agent, store) = CreateAgent(runner, "conv-relay-duplicate-admission");
+        var relay = CreateRelayInbound("act-dup", "conv:slack:C1", "api-key-1", "jti-dup");
+
+        await agent.HandleNyxRelayInboundActivityAsync(relay);
+        await agent.HandleNyxRelayInboundActivityAsync(relay.Clone());
+
+        runner.InboundCount.ShouldBe(0);
+        agent.State.ProcessedMessageIds.ShouldBeEmpty();
+        agent.State.RelayReplayClaims.Count.ShouldBe(1);
+        agent.State.PendingRelayAdmissions.Count.ShouldBe(1);
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Count.ShouldBe(1);
+        events[0].EventType.ShouldContain(nameof(NyxRelayCallbackAdmittedEvent));
+    }
+
+    [Fact]
+    public async Task HandleNyxRelayInboundActivityAsync_ExpiredCallbackClaim_AllowsFreshAdmission()
+    {
+        var store = new InMemoryEventStore();
+        var expiredAt = DateTimeOffset.UtcNow.AddMinutes(-1).ToUnixTimeMilliseconds();
+        var originalActivity = CreateActivity("act-expired-original", "conv:slack:C1");
+        await AppendStateEventAsync(
+            store,
+            "conv-relay-expired-claim",
+            new NyxRelayCallbackAdmittedEvent
+            {
+                ActivityId = originalActivity.Id,
+                RelayApiKeyId = "api-key-expired",
+                CallbackJti = "jti-expired",
+                Activity = originalActivity,
+                AdmittedAtUnixMs = expiredAt - 1000,
+                ClaimExpiresAtUnixMs = expiredAt,
+            },
+            version: 1);
+
+        var publisher = new RecordingEventPublisher();
+        var (agent, _) = CreateAgent(
+            new RecordingTurnRunner(),
+            "conv-relay-expired-claim",
+            store: store,
+            eventPublisher: publisher);
+        agent.State.RelayReplayClaims.ShouldContain(claim =>
+            claim.RelayApiKeyId == "api-key-expired" &&
+            claim.CallbackJti == "jti-expired" &&
+            claim.ActivityId == "act-expired-original");
+
+        await agent.HandleNyxRelayInboundActivityAsync(
+            CreateRelayInbound("act-expired-fresh", "conv:slack:C1", "api-key-expired", "jti-expired"));
+
+        agent.State.RelayReplayClaims.ShouldContain(claim =>
+            claim.RelayApiKeyId == "api-key-expired" &&
+            claim.CallbackJti == "jti-expired" &&
+            claim.ActivityId == "act-expired-fresh" &&
+            claim.ExpiresAtUnixMs > DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        agent.State.RelayReplayClaims.ShouldNotContain(claim => claim.ActivityId == "act-expired-original");
+        agent.State.PendingRelayAdmissions.ShouldContain(admission => admission.ActivityId == "act-expired-fresh");
+        publisher.Sent
+            .OfType<NyxRelayCallbackTurnRequestedEvent>()
+            .ShouldContain(request => request.ActivityId == "act-expired-fresh");
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Count(e => e.EventType.Contains(nameof(NyxRelayCallbackAdmittedEvent), StringComparison.Ordinal))
+            .ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task HandleNyxRelayCallbackTurnRequestedAsync_TransientFailure_ExactReplayCallsRunnerOnceAndSchedulesOneRetry()
+    {
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = _ => ConversationTurnResult.TransientFailure("rate_limited", "retry later"),
+        };
+        var (agent, store) = CreateAgent(runner, "conv-relay-transient-replay");
+        var relay = CreateRelayInbound("act-transient-replay", "conv:slack:C1", "api-key-1", "jti-transient");
+
+        await agent.HandleNyxRelayInboundActivityAsync(relay);
+        await agent.HandleNyxRelayCallbackTurnRequestedAsync(new NyxRelayCallbackTurnRequestedEvent
+        {
+            ActivityId = "act-transient-replay",
+            RelayApiKeyId = "api-key-1",
+            CallbackJti = "jti-transient",
+            RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+        await agent.HandleNyxRelayInboundActivityAsync(relay.Clone());
+
+        runner.InboundCount.ShouldBe(1);
+        agent.State.PendingRelayAdmissions.ShouldBeEmpty();
+        agent.State.PendingInboundTurns.ShouldContain(entry => entry.ActivityId == "act-transient-replay");
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Count(e => e.EventType.Contains(nameof(NyxRelayCallbackAdmittedEvent), StringComparison.Ordinal)).ShouldBe(1);
+        events.Count(e => e.EventType.Contains(nameof(InboundTurnRetryScheduledEvent), StringComparison.Ordinal)).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task HandleNyxRelayCallbackTurnRequestedAsync_TerminalFailure_ExactReplayEmitsOneFailure()
+    {
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = _ => ConversationTurnResult.PermanentFailure("bad_payload", "rejected"),
+        };
+        var (agent, store) = CreateAgent(runner, "conv-relay-terminal-replay");
+        var relay = CreateRelayInbound("act-terminal-replay", "conv:slack:C1", "api-key-1", "jti-terminal");
+
+        await agent.HandleNyxRelayInboundActivityAsync(relay);
+        await agent.HandleNyxRelayCallbackTurnRequestedAsync(new NyxRelayCallbackTurnRequestedEvent
+        {
+            ActivityId = "act-terminal-replay",
+            RelayApiKeyId = "api-key-1",
+            CallbackJti = "jti-terminal",
+            RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+        await agent.HandleNyxRelayInboundActivityAsync(relay.Clone());
+
+        runner.InboundCount.ShouldBe(1);
+        agent.State.PendingRelayAdmissions.ShouldBeEmpty();
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Count(e => e.EventType.Contains(nameof(ConversationContinueFailedEvent), StringComparison.Ordinal)).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task HandleNyxRelayCallbackTurnRequestedAsync_SuccessAndLlmHandoff_ReapPendingAdmission()
+    {
+        var runner = new RecordingTurnRunner();
+        var (successAgent, _) = CreateAgent(runner, "conv-relay-success-reap");
+        var successRelay = CreateRelayInbound("act-success-reap", "conv:slack:C1", "api-key-1", "jti-success");
+        await successAgent.HandleNyxRelayInboundActivityAsync(successRelay);
+        await successAgent.HandleNyxRelayCallbackTurnRequestedAsync(new NyxRelayCallbackTurnRequestedEvent
+        {
+            ActivityId = "act-success-reap",
+            RelayApiKeyId = "api-key-1",
+            CallbackJti = "jti-success",
+            RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+        successAgent.State.PendingRelayAdmissions.ShouldBeEmpty();
+
+        var llmRunner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(new NeedsLlmReplyEvent
+            {
+                CorrelationId = activity.Id,
+                TargetActorId = "conversation:actor",
+                RegistrationId = "reg-1",
+                Activity = activity.Clone(),
+                RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            }),
+        };
+        var (llmAgent, _) = CreateAgent(llmRunner, "conv-relay-llm-reap");
+        var llmRelay = CreateRelayInbound("act-llm-reap", "conv:slack:C1", "api-key-1", "jti-llm");
+        await llmAgent.HandleNyxRelayInboundActivityAsync(llmRelay);
+        await llmAgent.HandleNyxRelayCallbackTurnRequestedAsync(new NyxRelayCallbackTurnRequestedEvent
+        {
+            ActivityId = "act-llm-reap",
+            RelayApiKeyId = "api-key-1",
+            CallbackJti = "jti-llm",
+            RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+        llmAgent.State.PendingRelayAdmissions.ShouldBeEmpty();
+        llmAgent.State.PendingLlmReplyRequests.ShouldContain(request => request.CorrelationId == "act-llm-reap");
+    }
+
+    [Fact]
+    public async Task ActivateAsync_WithPendingRelayAdmission_RedispatchesSelfContinuation()
+    {
+        var store = new InMemoryEventStore();
+        var firstPublisher = new RecordingEventPublisher();
+        var (firstAgent, _) = CreateAgent(
+            new RecordingTurnRunner(),
+            "conv-relay-rehydrate",
+            store: store,
+            eventPublisher: firstPublisher);
+
+        await firstAgent.HandleNyxRelayInboundActivityAsync(
+            CreateRelayInbound("act-rehydrate", "conv:slack:C1", "api-key-1", "jti-rehydrate"));
+
+        var secondPublisher = new RecordingEventPublisher();
+        var (rehydrated, _) = CreateAgent(
+            new RecordingTurnRunner(),
+            "conv-relay-rehydrate",
+            store: store,
+            eventPublisher: secondPublisher);
+
+        rehydrated.State.PendingRelayAdmissions.ShouldContain(admission => admission.ActivityId == "act-rehydrate");
+        secondPublisher.Sent
+            .OfType<NyxRelayCallbackTurnRequestedEvent>()
+            .ShouldContain(requested =>
+                requested.ActivityId == "act-rehydrate" &&
+                requested.CallbackJti == "jti-rehydrate");
+    }
+
+    [Fact]
     public async Task HandleInboundActivityAsync_WhenRunDispatcherAcceptsRequest_ShouldNotPersistCompletedReplyUntilReadyArrives()
     {
         // Accepted-for-run is weaker than committed/user-visible reply. The actor may persist
@@ -1508,13 +1774,68 @@ public sealed class ConversationGAgentDedupTests
             DateTimeOffset.UtcNow.AddMinutes(5));
     }
 
+    private static NyxRelayInboundActivity CreateRelayInbound(
+        string activityId,
+        string canonicalKey,
+        string relayApiKeyId,
+        string callbackJti,
+        string? nyxUserAccessToken = null,
+        long callbackObservedAtUnixMs = 0)
+    {
+        var activity = CreateActivity(activityId, canonicalKey);
+        activity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = activityId,
+            CorrelationId = callbackJti,
+        };
+        activity.TransportExtras = new TransportExtras
+        {
+            NyxUserAccessToken = nyxUserAccessToken ?? string.Empty,
+        };
+        return new NyxRelayInboundActivity
+        {
+            Activity = activity,
+            ReplyToken = "reply-token-" + callbackJti,
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeMilliseconds(),
+            CorrelationId = callbackJti,
+            RelayApiKeyId = relayApiKeyId,
+            CallbackJti = callbackJti,
+            CallbackObservedAtUnixMs = callbackObservedAtUnixMs > 0
+                ? callbackObservedAtUnixMs
+                : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            CallbackReplayExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+        };
+    }
+
+    private static Task AppendStateEventAsync(
+        IEventStore store,
+        string agentId,
+        IMessage evt,
+        long version) =>
+        store.AppendAsync(
+            agentId,
+            [
+                new StateEvent
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    Version = version,
+                    EventType = evt.Descriptor.FullName,
+                    EventData = Google.Protobuf.WellKnownTypes.Any.Pack(evt),
+                    AgentId = agentId,
+                },
+            ],
+            expectedVersion: version - 1);
+
     private static (ConversationGAgent agent, IEventStore store) CreateAgent(
         RecordingTurnRunner runner,
         string agentId,
         IChannelLlmReplyRunDispatcher? dispatcher = null,
-        IConversationCardTurnRunner? cardRunner = null)
+        IConversationCardTurnRunner? cardRunner = null,
+        IEventStore? store = null,
+        IEventPublisher? eventPublisher = null)
     {
-        var store = new InMemoryEventStore();
+        store ??= new InMemoryEventStore();
         var services = new ServiceCollection();
         services.AddSingleton<IEventStore>(store);
         services.AddSingleton<IActorRuntimeCallbackScheduler, RecordingCallbackScheduler>();
@@ -1530,6 +1851,7 @@ public sealed class ConversationGAgentDedupTests
         var agent = new ConversationGAgent
         {
             Services = sp,
+            EventPublisher = eventPublisher ?? new RecordingEventPublisher(),
             EventSourcingBehaviorFactory =
                 sp.GetRequiredService<IEventSourcingBehaviorFactory<ConversationGAgentState>>(),
         };
@@ -1619,6 +1941,8 @@ public sealed class ConversationGAgentDedupTests
         public Func<LlmReplyReadyEvent, ConversationTurnResult>? LlmReplyResultFactory { get; set; }
         public Action<ConversationTurnRuntimeContext>? LlmReplyContextObserver { get; set; }
         public Func<ConversationContinueRequestedEvent, ConversationTurnResult>? ContinueResultFactory { get; set; }
+        public ChatActivity? LastInboundActivity { get; private set; }
+        public ConversationTurnRuntimeContext? LastInboundRuntimeContext { get; private set; }
 
         public Task<ConversationTurnResult> RunInboundAsync(
             ChatActivity activity,
@@ -1626,6 +1950,8 @@ public sealed class ConversationGAgentDedupTests
             CancellationToken ct)
         {
             Interlocked.Increment(ref InboundCount);
+            LastInboundActivity = activity.Clone();
+            LastInboundRuntimeContext = runtimeContext;
             var result = InboundResultFactory is null
                 ? ConversationTurnResult.Sent("sent:" + activity.Id, new MessageContent { Text = "ack" }, "bot")
                 : InboundResultFactory(activity);
@@ -1700,6 +2026,36 @@ public sealed class ConversationGAgentDedupTests
                 CommandId: request.CorrelationId ?? string.Empty,
                 RunActorId: null,
                 AcceptedAtUnixMs: 0));
+        }
+    }
+
+    private sealed class RecordingEventPublisher : IEventPublisher
+    {
+        public List<IMessage> Published { get; } = [];
+        public List<IMessage> Sent { get; } = [];
+
+        public Task PublishAsync<T>(
+            T evt,
+            TopologyAudience audience = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where T : IMessage
+        {
+            Published.Add(evt);
+            return Task.CompletedTask;
+        }
+
+        public Task SendToAsync<T>(
+            string targetActorId,
+            T evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where T : IMessage
+        {
+            Sent.Add(evt);
+            return Task.CompletedTask;
         }
     }
 

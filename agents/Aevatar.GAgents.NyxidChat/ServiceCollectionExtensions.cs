@@ -22,6 +22,9 @@ namespace Aevatar.GAgents.NyxidChat;
 
 public static class ServiceCollectionExtensions
 {
+    // Refactor (iter17/cluster-038):
+    //   Old pattern: Nyx relay replay/idempotency 和 reply 累积在 process-local ConcurrentDictionary/lock(NyxRelayBridgeIdempotencyGuard / NyxIdRelayReplayGuard / NyxIdRelayReplyAccumulator)。
+    //   New principle: ConversationGAgent persist callback_jti admission 为 typed event 优先于 business work;删除 process-local replay guards + dead accumulator。
     public static IServiceCollection AddNyxIdChat(this IServiceCollection services, IConfiguration? configuration = null)
     {
         ArgumentNullException.ThrowIfNull(services);
@@ -32,13 +35,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(provider => BindRelayOptions(configuration));
         services.TryAddSingleton<Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions>(
             provider => provider.GetRequiredService<NyxIdRelayOptions>());
-        services.TryAddSingleton<INyxIdRelayReplayGuard>(provider =>
-        {
-            var options = provider.GetRequiredService<Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions>();
-            return new NyxIdRelayReplayGuard(
-                TimeSpan.FromSeconds(Math.Max(1, options.CallbackReplayWindowSeconds)),
-                TimeProvider.System);
-        });
         services.TryAddSingleton<NyxIdRelayTransport>();
         services.TryAddSingleton<NyxIdRelayAuthValidator>();
 
