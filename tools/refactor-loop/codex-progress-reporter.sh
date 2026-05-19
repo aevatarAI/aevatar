@@ -11,7 +11,7 @@
 # 启动: bash tools/refactor-loop/codex-progress-reporter.sh &
 # 停止: kill <pid>
 
-set -euo pipefail
+set -u  # 不用 -e/pipefail — daemon 必须存活,subshell 偶发 non-zero 不应导致整个 daemon 死
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT"
