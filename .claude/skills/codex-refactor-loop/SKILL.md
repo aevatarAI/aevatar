@@ -666,7 +666,7 @@ Loop:
 
 Escalate to human ONLY when:
 
-- `fix_round > max_fix_rounds` (default 6) and still not unanimous.
+- `fix_round > max_fix_rounds` (default 6) and still not unanimous → **不要直接升 human,先升 meta-layer**(see "## Meta-layer escalation" 下文)。Meta-layer 也无法解 OR 命中 architecture-philosophy 硬条件 → 才升 human。
 - Fix codex emits `FIX_BLOCKED:<PR>:round-<N>:human-decision:<...>` (e.g. reviewer demands deleting a feature, splitting into 3 PRs, renaming a cross-cluster type).
 - Fix codex emits `FIX_BLOCKED:<PR>:round-<N>:conflict:<...>` (reviewers' demands contradict each other and codex cannot resolve).
 - Two consecutive rounds produce IDENTICAL reject text for the same reviewer (the fix didn't address the demand and codex isn't making progress).
@@ -1060,6 +1060,69 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 - ❌ banner 把过程 recap 一遍 → 噪音叠加噪音
 - ❌ banner 用 `## 🤖 controller` 第一行(comment-monitor 已经把 `## 🤖` 当 codex post 跳过,但 banner 应该是 controller 自己,用 `## 📊` 区分)
 - ❌ "需要人介入"用模糊措辞 → 人类还是不知道要不要看
+
+## Meta-layer escalation — 强制(per Auric 2026-05-19 "6 轮还解决不掉,则考虑是否应该把问题升级,再更元层进行考虑解决问题")
+
+**问题**:Phase 8 fix r6 仍 reject,或 CI same-check 6 次仍 fail,**第一反应不是喊 human**,而是**反思上一层是否本身错了**。喊 human 是最后的手段。
+
+**层级**(由小到大):
+1. **fix(r1..r6)**:针对 reviewer evidence 直接补丁
+2. **Meta-layer reflect**:反思 design / cluster / audit 框定是否本身错位
+3. **Phase 9 re-design**:重派 3 solver + meta-judge,prompt 带 "previous design caused 6 round non-converge"
+4. **Cluster re-split**:audit 阶段 re-evaluate,把当前 cluster 拆 / 合 / 撤回
+5. **Drop / wontfix**:确认任务本身价值不足,关 PR + close issue with wontfix
+6. **Human escalation**:`🆘 human:卡死` + PushNotification(只在 meta-layer 也无法解时)
+
+### 触发 meta-layer 反思
+
+- Phase 8 `fix_round > 6` 仍 reject(所有 reviewer 同一组 / 同一 reviewer 反复 reject)
+- CI same-check 失败 6 次(同 test 6 次 fix 仍红)
+- Cumulative PR diff size > 原 PR 200%(scope-runaway 信号)
+- Reviewer 同一类 evidence(test coverage / dead surface / self-doc)在 3 round 内反复出现 → meta-reflect "为什么 evidence 总是同类"
+
+### 派出 reflector codex
+
+```bash
+# 内容(prompt 摘要)
+你是 reflector codex,不写代码,只反思。Input:
+- 当前 PR diff
+- 所有 review round 的 reject evidence(verbatim)
+- 当前 Phase 9 共识 / audit cluster 框定
+你的任务:回答 4 问 + 给 1 决议:
+1. Reviewer 反复 reject 的根本原因是 design 错位 / cluster scope 错位 / audit framing 错位 / 还是仅"reviewer 在做完整审查正常 surfacing 小 gap"?
+2. 当前 PR scope 是否爆炸(原 cluster 范围 vs 现 diff)?
+3. 当前 design 共识(Phase 9)是否本身有漏洞(reviewer 抓到 design 没考虑的角落)?
+4. Audit cluster 框定是否过大 / 过小 / 错混?
+
+决议(选一):
+- `META_RESOLVED:retry-fix`: 是 reviewer 正常审查,继续 fix r7+ 仍可收敛(给 reviewer 一个 "approve if r7 仍 narrow valid" 的窗口)
+- `META_RESOLVED:re-design`: design 错位,关 PR / 撤回当前 implement,re-Phase 9 with reflector prompt
+- `META_RESOLVED:re-cluster`: cluster scope 错位,关 PR + audit 阶段 re-split(拆为 2-3 个小 cluster)
+- `META_RESOLVED:drop`: 任务价值不足或代价 > 收益,关 PR + close issue wontfix
+- `META_RESOLVED:escalate-human`: meta-layer 也无法解,真的需要 maintainer 决策
+
+```bash
+.claude/skills/codex-refactor-loop/scripts/spawn-codex.sh \
+  --cd /Users/auric/aevatar \
+  --prompt .refactor-loop/prompts/meta-reflect-pr<N>.md \
+  --log .refactor-loop/logs/meta-reflect-pr<N>.log \
+  --timeout 3600
+```
+
+Controller 读 marker 后路由:
+- `retry-fix` → 派 fix r7 + 提高 max_fix_rounds 临时到 8(只本 PR)+ 同时 narrow reviewer 关注新 evidence only(不再 surface 旧 evidence)
+- `re-design` → 关 PR / 撤回 commits / re-Phase 9 with constraint = reject evidence pattern
+- `re-cluster` → 关 PR / audit re-split(产新 cluster 在 next iter)
+- `drop` → close PR + close issue with `wontfix` label + 转 phase merged-no-op
+- `escalate-human` → label `🆘 human:卡死` + PushNotification(只 meta-layer 也无路时)
+
+### 反面(❌ 禁止)
+
+- ❌ fix r7 直接派出而不 reflect → 可能在错的层级死循环
+- ❌ 6 轮卡死直接升 human → 没把 AI 自身的反思能力用足
+- ❌ reflector 也写代码 → 它的职责是 question framing,不是 propose fix
+- ❌ reflector 决议 `re-design` 但 controller 继续派 fix → 框架失效
+- ❌ 临时 `max_fix_rounds = 8` 滥用 → 仅 reflector 明确 `retry-fix` 时允许,且不超过 8
 
 ## CI 监控即时推进 — 强制(per Auric 2026-05-19 "ci 监控,应该红了就及时推进")
 
