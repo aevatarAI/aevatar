@@ -1,4 +1,6 @@
 using Aevatar.AI.ToolProviders.Channel;
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
@@ -32,6 +34,13 @@ public sealed class ServiceCollectionExtensionsTests
         result.Should().BeSameAs(services);
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ProjectionScopeStatusDocument>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionDocumentReader<ProjectionScopeStatusDocument, string>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionScopeWatermarkQueryPort) &&
+            descriptor.ImplementationType == typeof(ProjectionScopeStatusQueryPort));
         services.Should().NotContain(descriptor =>
             descriptor.ServiceType.Name.Contains("AevatarSecretsStore", StringComparison.Ordinal));
         services.Should().Contain(descriptor =>
@@ -98,6 +107,13 @@ public sealed class ServiceCollectionExtensionsTests
         result.Should().BeSameAs(services);
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ProjectionScopeStatusDocument>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionDocumentReader<ProjectionScopeStatusDocument, string>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionScopeWatermarkQueryPort) &&
+            descriptor.ImplementationType == typeof(ProjectionScopeStatusQueryPort));
         services.Should().NotContain(descriptor =>
             descriptor.ServiceType.Name.Contains("AevatarSecretsStore", StringComparison.Ordinal));
         services.Should().Contain(descriptor =>

@@ -1202,7 +1202,7 @@ public enum ProjectionVerdict { Project, Skip, Tombstone }
 
 硬契约：
 
-- **每个 projector 维护自己的 watermark**：已成功对哪些 state event sequence number 执行过 Project/Tombstone verdict。watermark 写在 projector 自己的 state（grain persistence）里，和 projection dispatcher 的 `UpsertAsync`/`DeleteAsync` 在**同一个 atomic commit** 里推进——保证"projection 已更新"和"watermark 已推进"不会漂移
+- **每个 projector 维护自己的 watermark**：已成功对哪些 state event sequence number 执行过 Project/Tombstone verdict。watermark 由 projection scope actor 提交后物化到 `ProjectionScopeStatusDocument` readmodel；compaction 只读这个状态 readmodel，不在查询路径读取或重放 event store。
 - **Housekeeping 只清 `min(所有 projector watermarks)` 之前的 tombstoned entries**：如果系统里有 N 个 projector 订阅同一 state，housekeeping 取它们 watermark 的最小值作为安全清理边界。一个 projector lag 2 天，housekeeping 就停在 2 天前；一个 projector 坏死不推进，housekeeping 停——触发告警，不静默继续
 - **全量 replay 场景**：新加一个 projector（或现有 projector 重建），watermark 从 0 开始。Housekeeping 此时的 min watermark 也退到 0 → 不清任何 tombstone → 新 projector replay 时能看到所有 tombstoned entries、广播完 DeleteAsync。replay 完成后 watermark 追上，housekeeping 恢复正常
 - **Projector 永久坏死**：operator 显式从 "active projector set" 移除它，housekeeping 的 min 计算就不再等它。这是 **人工决策**——不能让代码自动"等太久就忽略"（会变成静默丢一致性）
@@ -2305,7 +2305,7 @@ v1 cutover step 2 细化为：
 1. ~~`IProjectionWriteDispatcher<T>` + `IProjectionWriteSink<T>` 加 `DeleteAsync`~~ — **已完成**（Codex v11 校对）
 2. Per-entry current-state base class **继承已有 `ICurrentStateProjectionMaterializer<TContext>`**（不另起 `TState→TDocument` 宇宙——那会脱离 projection runtime，违背"贴已有抽象"原则）
 3. Read model 继续用 `IProjectionReadModel`（`src/Aevatar.CQRS.Projection.Stores.Abstractions/.../IProjectionReadModel.cs:5-15`，带 `Id / ActorId / StateVersion`）
-4. **Tombstone 清理不引入新 watermark**——复用 `ProjectionScopeWatermarkAdvancedEvent` + `last_observed_version` / `last_successful_version`（`src/Aevatar.CQRS.Projection.Core/projection_scope_messages.proto:14-26,71-79` + `ProjectionScopeGAgentBase.cs:168-174`）。物理清理条件：scope watermark **跨过 state 版本** AND **超过 projector lag + safety margin**
+4. **Tombstone 清理不引入新 watermark**——复用 `ProjectionScopeWatermarkAdvancedEvent` + `last_observed_version` / `last_successful_version`，并通过 `ProjectionScopeStatusDocument` readmodel 提供 compaction 查询入口。物理清理条件：scope status readmodel 的 watermark **跨过 state 版本** AND **超过 projector lag + safety margin**；查询端口不得回读或重放 event store。
 
 **Phase 0 前置（修正）**：`DeleteAsync` 已合入，Phase 0 实际 delta = **§7.1 `PerEntryDocumentProjector` 基类抽取 + 3 个 existing projector（ChannelBotRegistration / DeviceRegistration / UserAgentCatalog）refactor 到基类**。预估 ~150 行（比原 200 行估值下调，因接口改动已不在范围内），**不再是独立 PR 前置**，可随本 RFC §7.1 实现一起落地。
 
