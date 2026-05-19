@@ -302,6 +302,9 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         var content = new StringBuilder();
 
         var sink = TryCreateStreamingSink();
+        var streamingState = sink is null
+            ? null
+            : new SkillRunnerStreamingRunState(sink, SkillRunnerDefaults.StreamingEditThrottle, TimeProvider.System);
         try
         {
             await foreach (var chunk in ChatStreamAsync(prompt, requestId, metadata, ct))
@@ -309,15 +312,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 if (string.IsNullOrEmpty(chunk.DeltaContent))
                     continue;
                 content.Append(chunk.DeltaContent);
-                if (sink is not null)
+                if (streamingState is not null)
                     // Per-delta `content.ToString()` is O(n) per call → O(n²) for the whole
                     // turn. Acceptable for daily-sized output (≤30 KB capped, and the
-                    // sink dedupes against `_lastEmittedText` so most allocations don't even
+                    // actor-owned streaming state dedupes against `_lastEmittedText` so most allocations don't even
                     // make it onto the wire). If a future skill produces materially longer
                     // output, switch the sink contract to `(StringBuilder, Range)` snapshots
                     // or a `ReadOnlyMemory<char>` view so the accumulator isn't re-stringified
                     // every delta.
-                    await sink.OnDeltaAsync(content.ToString(), ct);
+                    await streamingState.OnDeltaAsync(content.ToString(), ct);
             }
 
             var output = content.ToString().Trim();
@@ -351,7 +354,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             // lands as a sequence of "[part k/N]" messages instead of being silently truncated
             // at the cap.
             var chunks = SkillRunnerOutputChunker.Split(output);
-            await DispatchOutputChunksAsync(sink, chunks, ct);
+            await DispatchOutputChunksAsync(streamingState, chunks, ct);
 
             return output;
         }
@@ -377,15 +380,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     /// streaming-edit UX), neither of which is worth the complexity here.
     /// </remarks>
     private async Task DispatchOutputChunksAsync(
-        SkillRunnerStreamingReplySink? sink,
+        SkillRunnerStreamingRunState? streamingState,
         IReadOnlyList<string> chunks,
         CancellationToken ct)
     {
         if (chunks.Count == 0)
             return;
 
-        if (sink is not null)
-            await sink.FinalizeAsync(chunks[0], ct);
+        if (streamingState is not null)
+            await streamingState.FinalizeAsync(chunks[0], ct);
         else
             // No streaming sink (no NyxID client, missing outbound config, or tests injecting
             // a null client). Fall back to a one-shot send so the user still receives the
@@ -461,9 +464,66 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             primary,
             fallback,
             BuildLarkRejectionMessage,
-            SkillRunnerDefaults.StreamingEditThrottle,
-            TimeProvider.System,
             Logger);
+    }
+
+    /// <summary>
+    /// Actor-owned coalescing state for one scheduled output stream.
+    /// </summary>
+    /// <remarks>
+    /// Refactor (iter15/cluster-027-streaming-reply-timer-business-dispatch):
+    ///   Old pattern: timer callback directly inspects/mutates pending business output and dispatches actor command from callback thread
+    ///   New principle: ExecuteSkillAsync owns throttle state, emitted text, and final dispatch ordering before Lark POST/PUT.
+    /// </remarks>
+    private sealed class SkillRunnerStreamingRunState
+    {
+        private readonly SkillRunnerStreamingReplySink _sink;
+        private readonly TimeSpan _throttle;
+        private readonly TimeProvider _timeProvider;
+        private string _lastEmittedText = string.Empty;
+        private DateTimeOffset _lastEmitAt = DateTimeOffset.MinValue;
+        private int _chunksEmitted;
+
+        public SkillRunnerStreamingRunState(
+            SkillRunnerStreamingReplySink sink,
+            TimeSpan throttle,
+            TimeProvider timeProvider)
+        {
+            _sink = sink;
+            _throttle = throttle < TimeSpan.Zero ? TimeSpan.Zero : throttle;
+            _timeProvider = timeProvider;
+        }
+
+        public Task OnDeltaAsync(string accumulatedText, CancellationToken ct) =>
+            TryDispatchAsync(accumulatedText, isFinal: false, ct);
+
+        public Task FinalizeAsync(string finalText, CancellationToken ct) =>
+            TryDispatchAsync(finalText, isFinal: true, ct);
+
+        private async Task TryDispatchAsync(string text, bool isFinal, CancellationToken ct)
+        {
+            var capped = SkillRunnerStreamingReplySink.TruncateForLark(text);
+            if (string.IsNullOrWhiteSpace(capped))
+                return;
+
+            if (string.Equals(capped, _lastEmittedText, StringComparison.Ordinal))
+                return;
+
+            if (!isFinal)
+            {
+                var elapsed = _timeProvider.GetUtcNow() - _lastEmitAt;
+                if (elapsed < _throttle)
+                    await Task.Delay(_throttle - elapsed, _timeProvider, ct).ConfigureAwait(false);
+            }
+
+            await _sink.DispatchAsync(capped, isFinal, ct).ConfigureAwait(false);
+            if (_sink.ChunksEmitted > _chunksEmitted)
+            {
+                _lastEmittedText = capped;
+                _lastEmitAt = _timeProvider.GetUtcNow();
+                _chunksEmitted = _sink.ChunksEmitted;
+            }
+        }
     }
 
     /// <summary>

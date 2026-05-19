@@ -283,6 +283,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var errorCode = string.Empty;
         var errorSummary = string.Empty;
         using TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, request.TargetActorId);
+        var streamingState = TryBuildStreamingReplyState(streamingSink, request);
 
         IReadOnlyDictionary<string, string> effectiveMetadata;
         using (var metadataCts = new CancellationTokenSource(MetadataBuildBudget))
@@ -303,7 +304,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 terminalState = LlmReplyTerminalState.Failed;
                 errorCode = "llm_reply_metadata_timeout";
                 errorSummary = $"Metadata enrichment exceeded {(int)MetadataBuildBudget.TotalSeconds}s budget.";
-                await FinalizeFailureStreamingSinkAsync(streamingSink, replyText, outboundIntent);
+                await FinalizeFailureStreamingSinkAsync(streamingState, replyText, outboundIntent);
                 await ProduceAndDispatchAsync(request, runId, replyText, outboundIntent, terminalState, errorCode, errorSummary);
                 return;
             }
@@ -329,7 +330,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 var replyResult = await _replyGenerator.GenerateReplyAsync(
                     request.Activity,
                     effectiveMetadata,
-                    streamingSink,
+                    streamingState,
                     timeoutCts.Token);
                 replyText = replyResult.Text ?? string.Empty;
                 if (replyResult.Usage is not null || !string.IsNullOrEmpty(replyResult.FinishReason))
@@ -350,11 +351,11 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 interactiveReplyScope?.Dispose();
             }
 
-            if (streamingSink is not null &&
+            if (streamingState is not null &&
                 outboundIntent is null &&
                 !string.IsNullOrWhiteSpace(replyText))
             {
-                await streamingSink.FinalizeAsync(replyText, CancellationToken.None);
+                await streamingState.FinalizeAsync(replyText, CancellationToken.None);
             }
 
             if (outboundIntent is null && string.IsNullOrWhiteSpace(replyText))
@@ -398,7 +399,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             // text (timeout / classifier / empty reply), surface that text on the live
             // streaming card/edit message before the LlmReplyReadyEvent lands. Carried over
             // from feature/lark-bot's dispatch hardening.
-            await FinalizeFailureStreamingSinkAsync(streamingSink, replyText, outboundIntent);
+            await FinalizeFailureStreamingSinkAsync(streamingState, replyText, outboundIntent);
         }
 
         await ProduceAndDispatchAsync(
@@ -412,17 +413,17 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     }
 
     private async Task FinalizeFailureStreamingSinkAsync(
-        TurnStreamingReplySink? streamingSink,
+        StreamingReplyRunState? streamingState,
         string replyText,
         MessageContent? outboundIntent)
     {
-        if (streamingSink is not null &&
+        if (streamingState is not null &&
             outboundIntent is null &&
             !string.IsNullOrWhiteSpace(replyText))
         {
             try
             {
-                await streamingSink.FinalizeAsync(replyText, CancellationToken.None);
+                await streamingState.FinalizeAsync(replyText, CancellationToken.None);
             }
             catch (Exception ex)
             {
@@ -704,23 +705,95 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             return null;
 
         var cardMode = _relayOptions.StreamingCardKitEnabled;
-        var throttle = TimeSpan.FromMilliseconds(Math.Max(0, cardMode
-            ? _relayOptions.StreamingCardKitFlushIntervalMs
-            : _relayOptions.StreamingFlushIntervalMs));
-        var maxInterimChunks = cardMode
-            ? int.MaxValue
-            : Math.Max(0, _relayOptions.StreamingMaxInterimChunks);
         return new TurnStreamingReplySink(
             _actorDispatchPort,
             targetActorId,
             request.CorrelationId,
             request.RegistrationId,
             request.Activity.Clone(),
-            throttle,
             _timeProvider,
             _logger,
-            maxInterimChunks,
             cardMode);
+    }
+
+    private StreamingReplyRunState? TryBuildStreamingReplyState(TurnStreamingReplySink? sink, NeedsLlmReplyEvent request)
+    {
+        if (sink is null || _relayOptions is null)
+            return null;
+
+        var cardMode = _relayOptions.StreamingCardKitEnabled;
+        var throttle = TimeSpan.FromMilliseconds(Math.Max(0, cardMode
+            ? _relayOptions.StreamingCardKitFlushIntervalMs
+            : _relayOptions.StreamingFlushIntervalMs));
+        var maxInterimChunks = cardMode
+            ? int.MaxValue
+            : Math.Max(0, _relayOptions.StreamingMaxInterimChunks);
+
+        return new StreamingReplyRunState(sink, throttle, maxInterimChunks, _timeProvider);
+    }
+
+    /// <summary>
+    /// Actor-owned coalescing state for one generated reply stream.
+    /// </summary>
+    /// <remarks>
+    /// Refactor (iter15/cluster-027-streaming-reply-timer-business-dispatch):
+    ///   Old pattern: timer callback directly inspects/mutates pending business output and dispatches actor command from callback thread
+    ///   New principle: this run flow owns throttling, duplicate suppression, interim caps, and final flush ordering before dispatch.
+    /// </remarks>
+    private sealed class StreamingReplyRunState : IStreamingReplySink
+    {
+        private readonly TurnStreamingReplySink _sink;
+        private readonly TimeSpan _throttle;
+        private readonly int _maxInterimChunks;
+        private readonly TimeProvider _timeProvider;
+        private string _lastEmittedText = string.Empty;
+        private DateTimeOffset _lastEmitAt = DateTimeOffset.MinValue;
+        private int _chunksEmitted;
+
+        public StreamingReplyRunState(
+            TurnStreamingReplySink sink,
+            TimeSpan throttle,
+            int maxInterimChunks,
+            TimeProvider timeProvider)
+        {
+            _sink = sink;
+            _throttle = throttle < TimeSpan.Zero ? TimeSpan.Zero : throttle;
+            _maxInterimChunks = maxInterimChunks < 0 ? 0 : maxInterimChunks;
+            _timeProvider = timeProvider;
+        }
+
+        public Task OnDeltaAsync(string accumulatedText, CancellationToken ct) =>
+            TryDispatchAsync(accumulatedText, isFinal: false, ct);
+
+        public Task FinalizeAsync(string finalText, CancellationToken ct) =>
+            TryDispatchAsync(finalText, isFinal: true, ct);
+
+        private async Task TryDispatchAsync(string text, bool isFinal, CancellationToken ct)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return;
+
+            if (string.Equals(text, _lastEmittedText, StringComparison.Ordinal))
+                return;
+
+            if (!isFinal && _chunksEmitted >= _maxInterimChunks)
+                return;
+
+            if (!isFinal)
+            {
+                var elapsed = _timeProvider.GetUtcNow() - _lastEmitAt;
+                if (elapsed < _throttle)
+                    await Task.Delay(_throttle - elapsed, _timeProvider, ct).ConfigureAwait(false);
+            }
+
+            await _sink.DispatchAsync(text, ct).ConfigureAwait(false);
+            if (_sink.ChunksEmitted > _chunksEmitted)
+            {
+                _lastEmittedText = text;
+                _lastEmitAt = _timeProvider.GetUtcNow();
+                _chunksEmitted = _sink.ChunksEmitted;
+            }
+        }
     }
 
     private async Task<IReadOnlyDictionary<string, string>> BuildEffectiveMetadataAsync(
