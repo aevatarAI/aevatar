@@ -137,6 +137,9 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
             "MiniCPM-o demo protocol does not support structured external event injection.");
     }
 
+    // Refactor (iter15/cluster-026-voice-provider-background-state):
+    //   Old pattern: cancel mutated active/suppressed response epoch state and emitted synthetic cancel events.
+    //   New principle: cancel only sends provider stop; VoicePresenceModule owns actor cancellation state.
     public async Task CancelResponseAsync(CancellationToken ct)
     {
         using var message = new HttpRequestMessage(HttpMethod.Post, BuildUri(_options.StopPath));
@@ -251,6 +254,9 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
         }
     }
 
+    // Refactor (iter15/cluster-026-voice-provider-background-state):
+    //   Old pattern: completion stream allocated actor response ids and suppressed stale audio in provider state.
+    //   New principle: stream parsing emits provider-native response ids; module actor turn maps and suppresses.
     private async Task ReadCompletionStreamAsync(
         Stream stream,
         ChannelWriter<VoiceProviderEvent> writer,

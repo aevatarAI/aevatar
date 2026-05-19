@@ -214,6 +214,9 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
         }
     }
 
+    // Refactor (iter15/cluster-026-voice-provider-background-state):
+    //   Old pattern: MapSessionEvent allocated actor response epochs and mutated provider-owned response dictionaries.
+    //   New principle: OpenAI events carry provider-native response ids; VoicePresenceModule maps them in actor turn.
     private VoiceProviderEvent? MapSessionEvent(OpenAIRealtimeSessionEvent sessionEvent) =>
         sessionEvent switch
         {

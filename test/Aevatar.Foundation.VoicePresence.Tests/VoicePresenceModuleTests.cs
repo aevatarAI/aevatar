@@ -392,6 +392,37 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
+    public void Provider_adapters_should_not_own_response_epoch_state()
+    {
+        var repoRoot = FindRepositoryRoot();
+        var providerSources = new[]
+        {
+            Path.Combine(repoRoot, "src/Aevatar.Foundation.VoicePresence.OpenAI/OpenAIRealtimeProvider.cs"),
+            Path.Combine(repoRoot, "src/Aevatar.Foundation.VoicePresence.MiniCPM/MiniCPMRealtimeProvider.cs"),
+        };
+        var forbiddenTokens = new[]
+        {
+            "_responseEpochs",
+            "_nextResponseId",
+            "_activeResponseId",
+            "_suppressedResponseId",
+            "Interlocked.Increment",
+        };
+
+        foreach (var sourcePath in providerSources)
+        {
+            File.Exists(sourcePath).ShouldBeTrue(sourcePath);
+            var source = StripLineComments(File.ReadAllLines(sourcePath));
+            foreach (var token in forbiddenTokens)
+                source.ShouldNotContain(token, Case.Sensitive, $"{Path.GetFileName(sourcePath)} must emit provider-native ids only");
+        }
+
+        var moduleSourcePath = Path.Combine(repoRoot, "src/Aevatar.Foundation.VoicePresence/Modules/VoicePresenceModule.cs");
+        var moduleSource = File.ReadAllText(moduleSourcePath);
+        moduleSource.ShouldContain("_providerResponseIds");
+    }
+
+    [Fact]
     public async Task Remote_session_signals_should_not_forward_audio_or_publish_audio_outputs()
     {
         var provider = new RecordingVoiceProvider();
@@ -898,6 +929,23 @@ public class VoicePresenceModuleTests
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("voice-agent", TopologyAudience.Self),
         };
     }
+
+    private static string FindRepositoryRoot()
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current != null)
+        {
+            if (File.Exists(Path.Combine(current.FullName, "aevatar.slnx")))
+                return current.FullName;
+
+            current = current.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Could not find repository root containing aevatar.slnx.");
+    }
+
+    private static string StripLineComments(IEnumerable<string> lines) =>
+        string.Join(Environment.NewLine, lines.Where(static line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal)));
 
     private sealed class RecordingVoiceProvider : IRealtimeVoiceProvider
     {

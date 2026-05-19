@@ -151,6 +151,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
                 await HandleRemoteSessionCloseRequestedAsync(signal.RemoteSessionCloseRequested, ctx, ct);
                 break;
             case VoiceModuleSignal.SignalOneofCase.RemoteAudioInputReceived:
+                // Remote PCM stays off EventEnvelope until a raw transport path exists for host-origin audio.
                 break;
             case VoiceModuleSignal.SignalOneofCase.RemoteControlInputReceived:
                 await HandleRemoteControlInputReceivedAsync(signal.RemoteControlInputReceived, ct);
@@ -334,6 +335,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
 
     // ── State machine dispatch (used by both event pipeline and relay) ──
 
+    // Refactor (iter15/cluster-026-voice-provider-background-state):
+    //   Old pattern: provider callbacks arrived with actor response epochs already assigned in background loops.
+    //   New principle: provider events are normalized to actor response ids inside this actor turn.
     internal async Task HandleProviderEventAsync(
         VoiceProviderEvent providerEvent,
         IEventHandlerContext ctx,
@@ -402,6 +406,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         }
     }
 
+    // Refactor (iter15/cluster-026-voice-provider-background-state):
+    //   Old pattern: provider-specific receive loops suppressed and completed response epochs directly.
+    //   New principle: this actor-turn normalizer owns cancellation suppression and response-id materialization.
     private bool TryNormalizeProviderEvent(
         VoiceProviderEvent providerEvent,
         out VoiceProviderEvent normalizedEvent)
@@ -482,6 +489,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         }
     }
 
+    // Refactor (iter15/cluster-026-voice-provider-background-state):
+    //   Old pattern: providers allocated fallback response epochs when provider ids were missing.
+    //   New principle: fallback actor response ids are allocated only by the module state machine turn.
     private bool TryNormalizeResponseIdentity(string providerResponseId, int suppliedResponseId, out int responseId)
     {
         if (!string.IsNullOrWhiteSpace(providerResponseId))
@@ -506,6 +516,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         return true;
     }
 
+    // Refactor (iter15/cluster-026-voice-provider-background-state):
+    //   Old pattern: OpenAI/MiniCPM adapters owned provider-id to actor-epoch dictionaries and counters.
+    //   New principle: provider-id to actor response-id mapping is actor runtime state owned by this module.
     private int GetOrCreateProviderResponse(string providerResponseId, int suppliedResponseId)
     {
         if (_providerResponseIds.TryGetValue(providerResponseId, out var existing))
@@ -520,6 +533,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
     private bool TryGetProviderResponse(string providerResponseId, out int responseId) =>
         _providerResponseIds.TryGetValue(providerResponseId, out responseId);
 
+    // Refactor (iter15/cluster-026-voice-provider-background-state):
+    //   Old pattern: providers retired response epochs from background completion/cancel callbacks.
+    //   New principle: the actor turn retires provider response mappings when committed lifecycle events arrive.
     private void RetireProviderResponse(string providerResponseId)
     {
         if (string.IsNullOrWhiteSpace(providerResponseId))
