@@ -471,12 +471,18 @@ Classify:
 
 - **No new comments AND state==open**: nothing to do; bump `last_checked` only.
 - **State==closed without `auto-loop-resume` label**: maintainer closed without resume signal. Move to `clusters_failed` with reason `design-rejected:closed`. PushNotification: "cluster-<id> design issue #<num> closed without auto-resume; cluster permanently deferred."
-- **New comment(s) AND no `auto-loop-resume` label**: maintainer is discussing. PushNotification: "cluster-<id> design issue #<num> has N new comment(s) — manual review recommended" (only the first time a new comment appears; do not re-notify each sweep).
+- **New comment(s) AND no `auto-loop-resume` label**: maintainer is in technical conversation. **Do not just notify and wait** — that's how controller looks unresponsive. Instead:
+  - Materialize `prompts/design-issue-reply.md` with `${ISSUE_NUMBER} / ${CLUSTER_ID} / ${COMMENT_AUTHOR} / ${COMMENT_BODY}` filled.
+  - Dispatch a fresh codex (separate from implement / verify; this is a technical analyst codex) via `spawn-codex.sh --timeout 3600`.
+  - Codex writes a bilingual reply to `.refactor-loop/runs/design-issue-<num>-reply-<ts>.md` and prints `DESIGN_REPLY_READY:<num>:<summary>` marker.
+  - On marker, controller reads the file, runs bilingual equivalence test (per SKILL.md "Bilingual rule"), then `gh issue comment <num> --body-file <file>`.
+  - PushNotification (operator): "cluster-<id> design issue #<num>: new comment from <author>; analyst codex replied (see <url>)".
+  - Increment `state.design_pending[i].reply_count`; cap auto-replies at **3 per issue** to avoid infinite back-and-forth. After cap, fall back to PushNotification-only mode for further comments (operator takes over).
 - **Label `auto-loop-resume` is set** (maintainer's explicit green light): controller resumes:
   - Extract the latest comment body (assumed to contain the design decision: chosen pattern, proto schema, scope adjustments).
   - Materialize a new `prompts/implement-<cluster-id>.md` that prepends the design decision verbatim under a `## Design decision (from issue #<num>)` heading, then proceeds with the regular implement instructions.
   - Move cluster from `design_pending` into `clusters_active` and dispatch as a normal Phase 2 implement.
-  - Post a comment back on the issue: "auto-loop resumed; implement codex dispatched. Will close after PR opens."
+  - Post a comment back on the issue (bilingual): "auto-loop resumed; implement codex dispatched. Will close after PR opens. / auto-loop 已恢复；implement codex 已派发，PR 开后自动关闭本 issue。"
 
 Update `state.design_pending[i].last_comment_count` and `last_checked` after every sweep, regardless of outcome.
 
@@ -605,5 +611,6 @@ If any check fails, regenerate. Do not post.
 - [prompts/remote-ci-fix.md](prompts/remote-ci-fix.md) — Phase 5 remote-CI fix template
 - [prompts/test-add.md](prompts/test-add.md) — Phase 5 codecov-driven test-add template (per cluster)
 - [prompts/design-issue-body.md](prompts/design-issue-body.md) — Phase 1/6 GitHub issue body for `requires_design: true` clusters
+- [prompts/design-issue-reply.md](prompts/design-issue-reply.md) — Phase 7 analyst codex template for substantively replying to maintainer comments on design issues
 - [scripts/spawn-codex.sh](scripts/spawn-codex.sh) — standardized `codex exec` wrapper (enforces 3600s minimum timeout)
 - [REFERENCE.md](REFERENCE.md) — state schema, batching heuristics, recovery playbook
