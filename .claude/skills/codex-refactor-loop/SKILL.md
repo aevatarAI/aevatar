@@ -829,6 +829,29 @@ Meta-judge emits `META_JUDGE_DONE:<decision>:<...>`:
 - `converge:round-N:<question>` → controller re-runs Phase 9 with the convergence question prepended. **No hard convergence cap** — loop iterates until 3/3 unanimous OR a hardcoded architecture-philosophy trigger fires OR maintainer comments. Anti-spiral safeguards (below) still apply.
 - `escalate:<category>:<short>` → controller adds `auto-loop-stuck` label + PushNotification. Only fires on hardcoded architecture-philosophy triggers (see "Escalation criteria" below).
 
+### 任何 concrete-plan 都必须走 multi-solver consensus(per Auric 2026-05-19 "核心流程是都需要达成共识")
+
+**铁律**:任何"具体怎么改代码"级别的 plan(file:line / 新 type 列表 / 删除清单 / migration 步骤)只能由 **3 solver + meta-judge consensus** 产出,**不能**由单 codex(包括 writer-codex / investigator codex / analyst codex)直接给出。
+
+具体禁止:
+- ❌ writer-codex 把 maintainer 文字指令 "translate" 成 concrete impl 计划(即使指令很明确)→ 必须走 r(N+1) solver round
+- ❌ analyst codex 在 design issue 评论里给具体方案(它只能澄清/反推/列选项,不能落地)
+- ❌ controller 自己 inline 写 impl plan(controller 只能写 status / 链接 / label,不写计划)
+
+允许:
+- ✅ writer-codex 翻译已经达成共识的 solver/judge 输出 → 中文 GitHub post(consensus 已在前)
+- ✅ investigator codex 收集证据(grep / dep chain / git log)→ 数据回答事实问题(不给 plan)
+- ✅ writer-codex 起草 PR body / consensus 公告(基于已 consensus 的 plan)
+
+当 maintainer 给出方向性指令(例如 #711 c8 "全删走 actor state"):
+1. controller 把指令记入 `state.design_pending[i].maintainer_directive`
+2. 立刻派一轮 fresh 3 solver(把指令 verbatim 作为 narrowing constraint)
+3. solver 们各自把指令具体化成 impl 计划(可能 minimal 给一套、structural 给另一套、delete 给第三套)
+4. meta-judge 仲裁 → 3/3 unanimous → 才能进 implement
+5. 不允许跳过 3 solver round 直接 implement(哪怕 maintainer 觉得方向很明显)
+
+理由:maintainer 直觉常常对,但 concrete 落地的细节(新 actor 边界 / proto 字段 / 命名 / 迁移路径)需要 3 个独立角度验证,避免单 codex 把 "明显方向" 误读成 "明显方案"。consensus 这步就是 catch 误读用的。
+
 ### Maintainer-reply-resets-the-round (mandatory)
 
 Per Auric (2026-05-19): "凡是新回复都要完整重新让多个solver分析, 必须达成共识才可以."
