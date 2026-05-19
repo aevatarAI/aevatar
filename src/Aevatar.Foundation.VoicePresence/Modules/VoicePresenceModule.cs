@@ -422,49 +422,37 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         switch (providerEvent.EventCase)
         {
             case VoiceProviderEvent.EventOneofCase.ResponseStarted:
-            {
-                var responseStarted = providerEvent.ResponseStarted.Clone();
-                if (!TryNormalizeResponseIdentity(responseStarted.ProviderResponseId, responseStarted.ResponseId,
-                        out var responseId))
-                    return false;
-
-                responseStarted.ResponseId = responseId;
-                normalizedEvent = new VoiceProviderEvent { ResponseStarted = responseStarted };
-                return true;
-            }
+                return TryNormalizeResponseEvent(
+                    providerEvent.ResponseStarted,
+                    static message => message.ProviderResponseId,
+                    static message => message.ResponseId,
+                    static (message, responseId) => message.ResponseId = responseId,
+                    static message => new VoiceProviderEvent { ResponseStarted = message },
+                    out normalizedEvent);
             case VoiceProviderEvent.EventOneofCase.ResponseDone:
-            {
-                var responseDone = providerEvent.ResponseDone.Clone();
-                if (!TryNormalizeResponseIdentity(responseDone.ProviderResponseId, responseDone.ResponseId,
-                        out var responseId))
-                    return false;
-
-                responseDone.ResponseId = responseId;
-                normalizedEvent = new VoiceProviderEvent { ResponseDone = responseDone };
-                return true;
-            }
+                return TryNormalizeResponseEvent(
+                    providerEvent.ResponseDone,
+                    static message => message.ProviderResponseId,
+                    static message => message.ResponseId,
+                    static (message, responseId) => message.ResponseId = responseId,
+                    static message => new VoiceProviderEvent { ResponseDone = message },
+                    out normalizedEvent);
             case VoiceProviderEvent.EventOneofCase.ResponseCancelled:
-            {
-                var responseCancelled = providerEvent.ResponseCancelled.Clone();
-                if (!TryNormalizeResponseIdentity(responseCancelled.ProviderResponseId, responseCancelled.ResponseId,
-                        out var responseId))
-                    return false;
-
-                responseCancelled.ResponseId = responseId;
-                normalizedEvent = new VoiceProviderEvent { ResponseCancelled = responseCancelled };
-                return true;
-            }
+                return TryNormalizeResponseEvent(
+                    providerEvent.ResponseCancelled,
+                    static message => message.ProviderResponseId,
+                    static message => message.ResponseId,
+                    static (message, responseId) => message.ResponseId = responseId,
+                    static message => new VoiceProviderEvent { ResponseCancelled = message },
+                    out normalizedEvent);
             case VoiceProviderEvent.EventOneofCase.FunctionCall:
-            {
-                var functionCall = providerEvent.FunctionCall.Clone();
-                if (!TryNormalizeResponseIdentity(functionCall.ProviderResponseId, functionCall.ResponseId,
-                        out var responseId))
-                    return false;
-
-                functionCall.ResponseId = responseId;
-                normalizedEvent = new VoiceProviderEvent { FunctionCall = functionCall };
-                return true;
-            }
+                return TryNormalizeResponseEvent(
+                    providerEvent.FunctionCall,
+                    static message => message.ProviderResponseId,
+                    static message => message.ResponseId,
+                    static (message, responseId) => message.ResponseId = responseId,
+                    static message => new VoiceProviderEvent { FunctionCall = message },
+                    out normalizedEvent);
             case VoiceProviderEvent.EventOneofCase.AudioReceived:
             {
                 var audioReceived = providerEvent.AudioReceived;
@@ -484,6 +472,30 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             default:
                 return true;
         }
+    }
+
+    // Refactor (iter15/cluster-026-voice-provider-background-state):
+    //   Old pattern: each response-shaped provider event repeated identity normalization inline.
+    //   New principle: message-specific switch arms only select fields and wrappers; actor-turn mapping stays centralized.
+    private bool TryNormalizeResponseEvent<TMessage>(
+        TMessage source,
+        Func<TMessage, string> getProviderResponseId,
+        Func<TMessage, int> getResponseId,
+        Action<TMessage, int> setResponseId,
+        Func<TMessage, VoiceProviderEvent> buildEvent,
+        out VoiceProviderEvent normalizedEvent)
+        where TMessage : IMessage<TMessage>
+    {
+        var message = source.Clone();
+        if (!TryNormalizeResponseIdentity(getProviderResponseId(message), getResponseId(message), out var responseId))
+        {
+            normalizedEvent = default!;
+            return false;
+        }
+
+        setResponseId(message, responseId);
+        normalizedEvent = buildEvent(message);
+        return true;
     }
 
     // Refactor (iter15/cluster-026-voice-provider-background-state):

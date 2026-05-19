@@ -367,6 +367,34 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
+    public async Task Provider_response_cancellation_should_use_module_mapped_response_id_and_retire_mapping()
+    {
+        var provider = new RecordingVoiceProvider();
+        var module = CreateModule(provider);
+        var ctx = new StubEventHandlerContext();
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            ResponseStarted = new VoiceResponseStarted { ProviderResponseId = "provider-r1" },
+        }), ctx, CancellationToken.None);
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            ResponseCancelled = new VoiceResponseCancelled { ProviderResponseId = "provider-r1" },
+        }), ctx, CancellationToken.None);
+
+        module.StateMachine.CurrentResponseId.ShouldBe(1);
+        module.StateMachine.State.ShouldBe(VoicePresenceState.Idle);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            ResponseStarted = new VoiceResponseStarted { ProviderResponseId = "provider-r2" },
+        }), ctx, CancellationToken.None);
+
+        module.StateMachine.CurrentResponseId.ShouldBe(2);
+        module.StateMachine.State.ShouldBe(VoicePresenceState.ResponseInProgress);
+    }
+
+    [Fact]
     public async Task Speech_started_should_cancel_active_provider_response_inside_module_turn()
     {
         var provider = new RecordingVoiceProvider();
