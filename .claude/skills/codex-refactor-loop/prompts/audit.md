@@ -83,26 +83,21 @@ new_pattern: <one-liner>
 
 ```yaml
 human_brief:
-  problem_title_en: "<short imperative sentence, e.g. 'Voice host bridge owns session facts that should be actor-state'>"
-  problem_title_zh: "<对应中文短句>"
-  problem_statement_en: |
-    <3-5 sentences plain prose. NO audit jargon, NO file:line refs, NO clause IDs.
-    Answer: what is broken / where / why a developer should care.>
-  problem_statement_zh: |
-    <对应 3-5 句中文白话。同样禁用 audit 行话和 file:line 引用。>
+  problem_title: "<中文短句,例如 'Voice host bridge 持有应该归 actor-state 的会话事实'>"
+  problem_statement: |
+    <3-5 句中文白话。禁用 audit 行话、file:line 引用、clause id。
+    回答:哪里坏了 / 为什么开发者应该关心。>
   problem_example_file_path: "<single representative file:line range>"
   problem_example_code: |
     <10-30 line code snippet copied verbatim from the file, with
     `// ← problem: <one-line annotation>` comments on the offending lines.
-    Reader should see the violation at a glance without opening other files.>
-  why_needs_design_en: |
-    <2-3 sentences: what specifically can't be decided mechanically.
-    E.g. "The fix requires choosing between actor-owned lease and projection-owned session
-    contract; this is a public API change with backward-compat tradeoffs.">
-  why_needs_design_zh: |
-    <对应 2-3 句中文。说明哪些是机械重构无法决定的、需要 trade-off。>
-  design_question_pattern_en: "<one specific question the maintainer must answer about the chosen fix shape>"
-  design_question_pattern_zh: "<对应中文问题>"
+    Reader should see the violation at a glance without opening other files.
+    Code stays original language; only the annotation is 中文.>
+  why_needs_design: |
+    <2-3 句中文。哪些是机械重构无法决定的、需要 trade-off。
+    例:"修复要在 actor-owned lease 和 projection-owned session contract 之间选;
+    这是公共 API 改动,有 backward-compat 取舍。">
+  design_question: "<给 maintainer 的一个具体问题,中文>"
   original_authors:
     # Top 1-3 commit authors across the evidence files (most lines blamed to them).
     # Use `git blame --line-porcelain <file> | grep "^author " | sort | uniq -c | sort -rn | head -3`.
@@ -112,6 +107,8 @@ human_brief:
     - "@<handle>"  # e.g. @eanzhao (authored <N>% of evidence lines)
     - "@<handle>"
 ```
+
+**Per Auric (2026-05-19) "默认工作语言中文吧, 不双语了"**: human_brief 不再要求 `_en` + `_zh` 双字段。`problem_title` / `problem_statement` / `why_needs_design` / `design_question` 直接用中文。Code snippet + file path + GitHub handle 等技术内容保留原英文。
 
 **红线**：
 

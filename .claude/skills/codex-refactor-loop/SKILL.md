@@ -942,48 +942,47 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 5. **No `Task.Delay`-based test pacing** — tests must use deterministic awaiters.
 6. **No `[Skip]` / disabled tests** as a way to make CI green.
 7. **No scope creep** — codex must print `SCOPE_EXTEND: <file> <reason>` before touching anything outside `scope_paths`.
-8. **All user-facing output is fully-equivalent bilingual (中英文双语完整对照)** — every GitHub issue body, PR description, design notification, and any natural-language artifact the loop posts publicly must contain both English AND 中文 sections, each **independently complete**. See "Bilingual rule" below for the full constraint.
+8. **All user-facing output is in 中文 by default** (per Auric 2026-05-19 "默认工作语言中文吧, 不双语了"). Every GitHub issue body, PR description, design notification, and any natural-language artifact uses 中文 as the working language. Code identifiers, file paths, log markers, CLI commands, and proto/yaml structure stay original (English). English may appear inline when quoting (a) a CLAUDE.md / AGENTS.md clause, (b) error messages, (c) test names — quote verbatim, do not translate. No mandatory parallel English section.
 
-## Bilingual rule (双语规则) — applies to ALL user-facing artifacts
+## 工作语言规则(默认中文)
 
-User-facing artifacts include: GitHub issue body, PR description, PR comments, design issue auto-loop comments, scorecard docs in `docs/audit-scorecard/`, PushNotification messages (English only OK due to mobile char limit, but the underlying issue/PR they reference must be bilingual). Internal artifacts (audit/implement/verify/test-add codex log summaries, state.json, `.refactor-loop/runs/*.md`) are exempt and remain English-only by default.
+Per Auric (2026-05-19) "默认工作语言中文吧, 不双语了": **所有 user-facing artifact 默认 中文**。
 
-### Required structure
+适用对象:GitHub issue body、PR description、PR comments、design issue auto-loop 评论、scorecard docs (`docs/audit-scorecard/`)、escalation 文案、cross-post 通知。Internal artifact(`.refactor-loop/runs/*.md`、log、state.json)仍是英文(只要 grep / 调试用)。
 
-Every user-facing artifact has TWO independent prose sections:
+### 规则
 
-- `## English` (or equivalent heading) — full meaning, no cross-reference to 中文.
-- `## 中文` (or equivalent heading) — full meaning, no cross-reference to English.
+Per Auric (2026-05-19) 二次确认 "github上的也都中文,除了注释英文其他的都中文":
 
-Plus optionally:
+| 内容类型 | 语言 |
+|---|---|
+| GitHub issue title / body / 评论 | **中文** |
+| GitHub PR title / body / 评论 | **中文** |
+| Git commit message | **中文**(包括 controller 写的 fix/merge/squash 等) |
+| Push notification | **中文** |
+| Skill 文档 / docs/canon /audit 报告 | 维持现状(中英混排已存在) |
+| **代码内 `// Refactor (iterN/cluster-XXX):` 注释** | **英文**(production code 跨团队读) |
+| **代码内 doc comment / xmldoc / 其他注释** | **英文** |
+| 代码 identifier / 类名 / 方法名 / 字段 | 英文(原 .NET / 项目惯例) |
+| proto / yaml 结构 | 英文 |
+| CLI 命令 / 文件路径 / SHA / URL | 英文 |
+| CLAUDE/AGENTS 条款 verbatim 引用 / error message / test name / 第三方英文 quote | 引用原文,不翻译 |
 
-- A **language-neutral** section for code blocks, YAML, file paths, command snippets, and tables that contain no translatable prose. Put it ONCE between (or before) the two language sections to avoid duplicating code. Its heading should itself be bilingual (e.g. `## Technical Context / 技术上下文`).
+具体红线:
+1. 不再生成平行 `## English` section。
+2. 不再要求 `_en` + `_zh` 对。`prompts/audit.md` `human_brief` 块只保留中文字段(去掉 `_zh` 后缀)。
+3. TL;DR 也是中文。
+4. Controller 自己写的 `git commit -m "..."` 用中文。fix codex / writer codex prompt 里要求写中文 commit message。
+5. PR title 中文(但分支名仍 `refactor/iter15-cluster-XXX-...` 英文以维持 ID 惯例)。
+6. **已发布的 EN+ZH 历史 artifact 保留原样**:不回头删 / 重译。新发的按本规则走。
 
-### Equivalence test (must pass before posting)
+### 历史 bilingual 规则的位置
 
-For every user-facing artifact, the controller MUST verify:
+本节之前的"Bilingual rule (双语规则)"硬要求双语 + equivalence test 已废止。`prompts/audit.md`、`prompts/solver-*.md`、`prompts/meta-judge.md`、`prompts/review-fix.md`、`prompts/design-issue-reply.md`、`prompts/github-post-writer.md` 等所有 codex prompt 在引用本 skill 时,把"bilingual EN+ZH" 一律读作"中文(允许英文引用)"。Prompt 文件后续会随用随改;过渡期 prompt 里旧的 bilingual 措辞按本节理解,不强制双语生成。
 
-1. **Each language section is independently complete**: a reader of only one section can act on the issue/PR without reading the other.
-2. **No back-references**: forbidden phrases like "见英文部分", "see Chinese section", "as described above in 中文", "details in English". If you need a shared block, put it in the language-neutral section.
-3. **No "TL;DR in EN, full version in ZH"**: both sections carry the SAME depth and content. Don't drop "Decision checklist" from one side.
-4. **No machine-translation-feel imbalance**: if EN is 5 paragraphs and ZH is 1 paragraph, fail.
-5. **Code blocks are not duplicated** in both language sections — they belong in the language-neutral section.
+### 例外
 
-If any check fails, regenerate. Do not post.
-
-### Templates emit bilingual by construction
-
-- `prompts/design-issue-body.md` is bilingual-by-construction; the audit's `human_brief:` block must provide both `_en` and `_zh` fields per piece of prose.
-- `prompts/audit.md` Step 4b mandates the `_en` / `_zh` pair for `problem_title`, `problem_statement`, `why_needs_design`, `design_question_pattern`. Missing the `_zh` half → `AUDIT_INCOMPLETE: human_brief_missing_zh`.
-- Phase 4 PR body (`gh pr create --body`) must be assembled with both English and 中文 sections describing: what the PR changes (Old/New pattern), why it matters, scope summary, verification result, link to the cluster spec. The controller assembles this from the cluster's `human_brief` when available; falls back to translating the cluster YAML's `old_pattern` / `new_pattern` lines into 中文 when no `human_brief` exists (legacy clusters before Phase 4 bilingual rule).
-- Phase 6 auto-resume comment on the design issue (when label `auto-loop-resume` triggers implement) must also be bilingual: "Implement codex dispatched; PR will open shortly / Implement codex 已派发；PR 即将打开。"
-- Phase 5 PushNotification messages may stay English-only (mobile char limit; they reference a bilingual artifact for full context).
-
-### Why this is mandatory
-
-- Project docs use both languages (CLAUDE.md, AGENTS.md mixed). Reviewers self-select language; an English-only or 中文-only issue loses half the audience.
-- A back-reference like "见英文" makes the 中文 section a placeholder, not actual content — defeats the purpose.
-- The controller cannot rely on the maintainer to translate or follow a link before responding; the artifact must be self-contained on first read.
+`docs/canon/*.md` 与 `docs/adr/*.md` 在仓库内的文档仍按 [docs/canon/architecture-vocabulary.md](docs/canon/architecture-vocabulary.md) 既有惯例(混排,不归本规则管辖)。CLAUDE.md / AGENTS.md 仍是中英混排,不动。
 
 ---
 
