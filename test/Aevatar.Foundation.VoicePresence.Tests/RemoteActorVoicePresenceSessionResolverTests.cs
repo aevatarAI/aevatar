@@ -14,6 +14,41 @@ namespace Aevatar.Foundation.VoicePresence.Tests;
 public class RemoteActorVoicePresenceSessionResolverTests
 {
     [Fact]
+    public void Remote_voice_host_bridge_sources_should_not_reintroduce_host_owned_attachment_state()
+    {
+        var resolverSource = File.ReadAllText(Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..",
+            "..",
+            "..",
+            "..",
+            "..",
+            "src",
+            "Aevatar.Foundation.VoicePresence",
+            "Hosting",
+            "RemoteActorVoicePresenceSessionResolver.cs")));
+        var dispatchSource = File.ReadAllText(Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..",
+            "..",
+            "..",
+            "..",
+            "..",
+            "src",
+            "Aevatar.Foundation.VoicePresence",
+            "Hosting",
+            "VoicePresenceSessionDispatch.cs")));
+
+        resolverSource.ShouldNotContain("IActorEventSubscriptionProvider");
+        resolverSource.ShouldNotContain("AttachmentState");
+        resolverSource.ShouldNotContain("_gate");
+        resolverSource.ShouldNotContain("_state");
+        resolverSource.ShouldNotContain("ReceiveFramesAsync");
+        resolverSource.ShouldNotContain("VoiceRemoteAudioInputReceived");
+        dispatchSource.ShouldNotContain("case VoiceRemoteAudioInputReceived");
+    }
+
+    [Fact]
     public async Task AttachTransportAsync_should_dispatch_open_then_close_and_fail_remote_audio_transport()
     {
         var runtime = new StubActorRuntime(new StubActor("agent-1", new PlainAgent("agent-1")));

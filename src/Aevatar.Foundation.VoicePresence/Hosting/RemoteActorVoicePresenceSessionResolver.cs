@@ -145,6 +145,9 @@ public sealed class RemoteActorVoicePresenceSessionResolver : IVoicePresenceSess
             throw new VoiceRemoteAudioTransportUnavailableException();
         }
 
+        // Refactor (iter15/cluster-025-voice-host-session-state-actorization):
+        //   Old pattern: detach released host-held attachment state, subscription, and relay task.
+        //   New principle: host has no attachment fact to release; detach only sends best-effort actor close.
         private async Task DetachTransportAsync(IVoiceTransport? expectedTransport, CancellationToken ct)
         {
             _ = expectedTransport;
