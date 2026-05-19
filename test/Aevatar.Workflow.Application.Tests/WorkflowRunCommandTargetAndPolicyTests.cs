@@ -12,6 +12,9 @@ using System.Runtime.CompilerServices;
 
 namespace Aevatar.Workflow.Application.Tests;
 
+// Test-add (test-coverage/cluster-036):
+//   Covers refactor-introduced behavior in WorkflowRunCommandTarget.cs:116-122,286-290,293-309.
+//   Cluster intent: workflow target owns detached durable fallback and cleanup decisions.
 public sealed class WorkflowRunCommandTargetAndPolicyTests
 {
     [Fact]
@@ -23,6 +26,23 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*live sink is not bound*");
+    }
+
+    [Fact]
+    public void Constructor_ShouldRejectMissingDurableCompletionResolver()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var act = () => new WorkflowRunCommandTarget(
+            new FakeActor("run-1"),
+            "direct",
+            [],
+            projectionPort,
+            projectionPort,
+            new FakeWorkflowRunActorPort(),
+            durableCompletionResolver: null!);
+
+        act.Should().Throw<ArgumentNullException>()
+            .WithParameterName("durableCompletionResolver");
     }
 
     [Fact]
@@ -162,6 +182,34 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
         projectionPort.Events.Should().Equal("detach:run-1", "release:run-1");
         actorPort.DestroyCalls.Should().Equal("run-1", "definition-1");
         queryPort.ActorIds.Should().Equal("run-1");
+        target.ProjectionLease.Should().BeNull();
+        target.LiveSink.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PublishDetachedCommandSignalAsync_WhenUnknownDetachedSignal_ShouldUseUnknownAndDurableFallback()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var queryPort = new FakeCurrentStateQueryPort
+        {
+            Snapshot = new WorkflowActorSnapshot { CompletionStatus = WorkflowRunCompletionStatus.Stopped },
+        };
+        var target = CreateTarget(
+            projectionPort: projectionPort,
+            actorPort: actorPort,
+            currentStateQueryPort: queryPort,
+            createdActorIds: ["definition-1", "run-1"]);
+        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeEventSink());
+        var receipt = new WorkflowChatRunAcceptedReceipt("run-1", "direct", "cmd-1", "corr-1");
+
+        await target.PublishDetachedCommandSignalAsync(
+            new UnknownDetachedSignal(receipt),
+            CancellationToken.None);
+
+        queryPort.ActorIds.Should().Equal("run-1");
+        projectionPort.Events.Should().Equal("detach:run-1", "release:run-1");
+        actorPort.DestroyCalls.Should().Equal("run-1", "definition-1");
         target.ProjectionLease.Should().BeNull();
         target.LiveSink.Should().BeNull();
     }
@@ -410,6 +458,9 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
             throw new NotSupportedException();
     }
+
+    private sealed record UnknownDetachedSignal(WorkflowChatRunAcceptedReceipt Receipt)
+        : DetachedCommandSignal<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>(Receipt);
 
     private sealed class FakeCurrentStateQueryPort : IWorkflowExecutionCurrentStateQueryPort
     {

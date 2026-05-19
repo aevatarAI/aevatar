@@ -1,12 +1,17 @@
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Runs;
 using FluentAssertions;
 
 namespace Aevatar.Workflow.Application.Tests;
 
+// Test-add (test-coverage/cluster-036):
+//   Covers refactor-introduced behavior in WorkflowRunCommandTargetResolver.cs:14,20-27,51-52.
+//   Cluster intent: resolver wires the target-owned detached continuation dependencies into workflow command targets.
 public sealed class WorkflowRunOrchestrationComponentTests
 {
     [Fact]
@@ -47,6 +52,51 @@ public sealed class WorkflowRunOrchestrationComponentTests
         result.Target!.ActorId.Should().Be("actor-1");
         result.Target.WorkflowName.Should().Be("auto");
         result.Target.CreatedActorIds.Should().Equal("definition-1", "actor-1");
+    }
+
+    [Fact]
+    public void WorkflowRunCommandTargetResolver_ShouldRejectMissingDurableCompletionResolver()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var act = () => new WorkflowRunCommandTargetResolver(
+            new FakeWorkflowRunActorResolver(
+                new WorkflowActorResolutionResult(new FakeActor("actor-1"), "direct", WorkflowChatRunStartError.None)),
+            projectionPort,
+            projectionPort,
+            new FakeWorkflowRunActorPort(),
+            durableCompletionResolver: null!);
+
+        act.Should().Throw<ArgumentNullException>()
+            .WithParameterName("durableCompletionResolver");
+    }
+
+    [Fact]
+    public async Task WorkflowRunCommandTargetResolver_ShouldWireDurableCompletionResolverIntoResolvedTarget()
+    {
+        var actor = new FakeActor("actor-1");
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var queryPort = new CompletingCurrentStateQueryPort();
+        var resolver = new WorkflowRunCommandTargetResolver(
+            new FakeWorkflowRunActorResolver(
+                new WorkflowActorResolutionResult(actor, "direct", WorkflowChatRunStartError.None, ["definition-1", "actor-1"])),
+            projectionPort,
+            projectionPort,
+            actorPort,
+            new WorkflowRunDurableCompletionResolver(queryPort));
+
+        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", "direct", null), CancellationToken.None);
+        result.Target.Should().NotBeNull();
+        result.Target!.BindLiveObservation(new FakeProjectionLease("actor-1", "cmd-1"), new EventChannel<WorkflowRunEventEnvelope>());
+
+        await result.Target.PublishDetachedCommandSignalAsync(
+            new DetachedCommandTimeout<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>(
+                new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1"),
+                WorkflowProjectionCompletionStatus.Unknown),
+            CancellationToken.None);
+
+        queryPort.ActorIds.Should().Equal("actor-1");
+        actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
     }
 
     [Fact]
@@ -274,6 +324,26 @@ public sealed class WorkflowRunOrchestrationComponentTests
 
         public string ActorId { get; }
         public string CommandId { get; }
+    }
+
+    private sealed class CompletingCurrentStateQueryPort : IWorkflowExecutionCurrentStateQueryPort
+    {
+        public bool EnableActorQueryEndpoints => true;
+        public List<string> ActorIds { get; } = [];
+
+        public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ActorIds.Add(actorId);
+            return Task.FromResult<WorkflowActorSnapshot?>(
+                new WorkflowActorSnapshot { CompletionStatus = WorkflowRunCompletionStatus.Completed });
+        }
+
+        public Task<IReadOnlyList<WorkflowActorSnapshot>> ListActorSnapshotsAsync(int take = 200, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<WorkflowActorProjectionState?> GetActorProjectionStateAsync(string actorId, CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class FakeActor : IActor
