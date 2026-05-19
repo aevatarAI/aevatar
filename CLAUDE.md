@@ -206,6 +206,8 @@
 - 拒绝 timeout < 3600（exit 2 + 提示文档）
 - 用 `-` stdin 把 prompt 喂进去
 - 末尾追加 `EXIT=<code>` 和 `DONE_AT=<ISO8601>` 到 log
+- 启动时 stderr 打印 `SPAWN: prompt=<path> log=<path>` + 完成时打印 `DONE: log=<path> exit=<N>`
+- 支持 `--prompt-text "..."` (自动 mktemp `/tmp/codex-prompt-XXXXXXXX.md`,免去调用方先手工写文件)
 - 不 commit、不 push、不 checkout —— 这些由 controller 负责
 
 ### 后台调度
@@ -223,6 +225,17 @@
 - 必须输出明确的终止 marker（如 `IMPLEMENT_DONE:<id>:<status>`、`VERIFY_DONE:<id>:<verdict>`、`AUDIT_DONE:<path>:<N>` 或 `AUDIT_INCOMPLETE:<reason>`）—— controller 用这些路由下一步。
 - 越界 scope 时打印 `SCOPE_EXTEND: <file> <reason>` 再改，便于审计。
 
+### Prompt + 输出必须双 file（强制,debug 友好）
+
+每次 codex 调用 **prompt 是文件,输出是文件**。两者都可在事后被 `cat`/`grep`/`tail` 检查;debug 时一一对应:`cat <prompt-path>` 看 codex 看到什么,`cat <log-path>` 看 codex 做了什么。
+
+具体规则:
+- **Prompt → 文件**。要么调用方先把 prompt 写到具名文件(`.refactor-loop/prompts/...md`),再用 `--prompt <file>`;要么用 `--prompt-text "..."` 让 wrapper 自动 mktemp 一个 `/tmp/codex-prompt-XXXXXXXX.md`。**禁止 inline-string-to-stdin** 或 argv-prompt 调用 codex,这两者都让 debug 时找不到原始 prompt。
+- **输出 → 文件**。`--log <path>` 必填,wrapper 把 codex 的 stdout+stderr+`EXIT=...`+`DONE_AT=...` 全写进该文件。**禁止 `> /dev/null`** 或纯 stdout(失去 debug 痕迹)。
+- **路径透明**。wrapper 在 stderr 上先打印 `SPAWN: prompt=<path> log=<path> cd=<dir> timeout=<s>`,完成后打印 `DONE: log=<path> exit=<N> prompt=<path>`。调用方 / `tail` 立即看到两个路径,无需事后猜文件名。
+
+教训:2026-05-19 Auric 明确 "提示词直接写到一个临时文件就可以, 输出也输出到一个临时文件, 方便debug"。任何"为了图省事"绕开此规范的调用方式均不再允许。
+
 ### 反模式（禁止）
 
 - 用裸 `codex` 进 TUI 在无人值守流程里
@@ -231,6 +244,8 @@
 - 不带 `-C` 让 codex 用当前 cwd（worktree cwd-leak 会污染）
 - codex prompt 让 codex 自己 commit/push（git 拓扑应由 controller 集中管理）
 - 把 codex 输出当真相不验证 —— controller 必须读 log 末尾 marker 后再推进
+- **inline-string prompt**(失去 debug 文件):必须 `--prompt <file>` 或 `--prompt-text` 让 wrapper mktemp
+- **不带 `--log`**(输出散在 stdout):必须显式 log 文件路径
 
 ## 编码风格
 - 遵循 `.editorconfig`：UTF-8、LF、4 空格缩进、去除行尾空白。
