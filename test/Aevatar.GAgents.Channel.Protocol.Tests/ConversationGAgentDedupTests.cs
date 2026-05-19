@@ -4,6 +4,8 @@ using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Persistence;
+using Aevatar.ChatRouting.Abstractions;
+using Aevatar.ChatRouting.Core;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Google.Protobuf;
@@ -567,6 +569,84 @@ public sealed class ConversationGAgentDedupTests
         dispatcher.Dispatched.Count.ShouldBe(1);
         dispatcher.Dispatched[0].CorrelationId.ShouldBe("act-direct");
         dispatcher.Dispatched[0].TargetActorId.ShouldBe(agent.Id);
+    }
+
+    [Fact]
+    public async Task HandleNyxRelayInboundActivityAsync_WhenRouteForwardsToGAgent_CarriesTargetRefToDispatcher()
+    {
+        var dispatcher = new RecordingRunDispatcher();
+        var runner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity => ConversationTurnResult.LlmReplyRequested(
+                new NeedsLlmReplyEvent
+                {
+                    CorrelationId = activity.OutboundDelivery?.CorrelationId ?? activity.Id,
+                    TargetActorId = "conversation:actor",
+                    RegistrationId = "reg-1",
+                    Activity = activity.Clone(),
+                    RequestedAtUnixMs = 42,
+                }),
+        };
+        var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
+            ForwardToModelAction("fallback-model"),
+            [
+                new ChatRouteRule
+                {
+                    RuleId = "daily",
+                    Priority = 100,
+                    Match = new ChatRouteMatch
+                    {
+                        SourceKind = ChatSourceKind.NyxRelay,
+                        Channel = "lark",
+                        CommandName = "/daily",
+                    },
+                    Action = new ChatRouteAction
+                    {
+                        ForwardToGagent = new ForwardToGAgent { ActorId = "target-gagent-1" },
+                    },
+                },
+            ]));
+        var resolver = new ChatRouteResolver(new StaticChatRouteFallbackProvider("fallback-model"));
+        var (agent, store) = CreateAgent(
+            runner,
+            "channel-conversation:conv:lark:C1:scope:owner",
+            dispatcher,
+            queryPort: queryPort,
+            chatRouteResolver: resolver);
+
+        var inboundActivity = CreateActivity("act-route", "conv:lark:C1");
+        inboundActivity.ChannelId = new ChannelId { Value = "lark" };
+        inboundActivity.Bot = new BotInstanceId { Value = "owner-scope" };
+        inboundActivity.From = new ParticipantRef { CanonicalId = "sender-1" };
+        inboundActivity.Content = new MessageContent { Text = "/daily status" };
+        inboundActivity.TransportExtras = new TransportExtras
+        {
+            NyxPlatform = "lark",
+            NyxRegistrationScopeId = "owner-scope",
+        };
+        inboundActivity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "relay-msg-route",
+            CorrelationId = "corr-route",
+        };
+
+        await agent.HandleNyxRelayInboundActivityAsync(new NyxRelayInboundActivity
+        {
+            Activity = inboundActivity,
+            ReplyToken = "runtime-only-token",
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+            CorrelationId = "corr-route",
+        });
+
+        dispatcher.Dispatched.ShouldHaveSingleItem();
+        dispatcher.Dispatched[0].TargetRef.ForwardToGagent.ActorId.ShouldBe("target-gagent-1");
+        dispatcher.Dispatched[0].ReplyToken.ShouldBe("runtime-only-token");
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events.ShouldHaveSingleItem();
+        var parsed = NeedsLlmReplyEvent.Parser.ParseFrom(events[0].EventData.Value);
+        parsed.TargetRef.ForwardToGagent.ActorId.ShouldBe("target-gagent-1");
+        parsed.ReplyToken.ShouldBeEmpty();
     }
 
     [Fact]
@@ -1512,7 +1592,9 @@ public sealed class ConversationGAgentDedupTests
         RecordingTurnRunner runner,
         string agentId,
         IChannelLlmReplyRunDispatcher? dispatcher = null,
-        IConversationCardTurnRunner? cardRunner = null)
+        IConversationCardTurnRunner? cardRunner = null,
+        IChatRoutePolicyQueryPort? queryPort = null,
+        ChatRouteResolver? chatRouteResolver = null)
     {
         var store = new InMemoryEventStore();
         var services = new ServiceCollection();
@@ -1524,6 +1606,10 @@ public sealed class ConversationGAgentDedupTests
             services.AddSingleton(cardRunner);
         if (dispatcher is not null)
             services.AddSingleton(dispatcher);
+        if (queryPort is not null)
+            services.AddSingleton(queryPort);
+        if (chatRouteResolver is not null)
+            services.AddSingleton(chatRouteResolver);
         services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
 
         var sp = services.BuildServiceProvider();
@@ -1702,6 +1788,32 @@ public sealed class ConversationGAgentDedupTests
                 AcceptedAtUnixMs: 0));
         }
     }
+
+    private sealed class StaticChatRoutePolicyQueryPort(ChatRoutePolicySnapshot? snapshot) : IChatRoutePolicyQueryPort
+    {
+        public static StaticChatRoutePolicyQueryPort ForSnapshot(ChatRoutePolicySnapshot? snapshot) => new(snapshot);
+
+        public Task<ChatRoutePolicySnapshot?> LookupForCallerAsync(
+            OwnerScope callerScope,
+            CancellationToken ct = default) =>
+            Task.FromResult(snapshot);
+    }
+
+    private sealed class StaticChatRouteFallbackProvider(string modelName) : IChatRouteFallbackProvider
+    {
+        public ChatRouteDecision GetFallbackDecision() => new()
+        {
+            Action = ForwardToModelAction(modelName),
+            UsedFallback = true,
+            MatchedRuleId = string.Empty,
+            ResolvedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+    }
+
+    private static ChatRouteAction ForwardToModelAction(string modelName) => new()
+    {
+        ForwardToModel = new ForwardToModel { ModelName = modelName },
+    };
 
     private sealed class RecordingCallbackScheduler : IActorRuntimeCallbackScheduler
     {

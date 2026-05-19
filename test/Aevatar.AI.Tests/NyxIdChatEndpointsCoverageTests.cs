@@ -10,6 +10,8 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Authentication.Abstractions;
+using Aevatar.ChatRouting.Abstractions;
+using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
@@ -186,6 +188,63 @@ public class NyxIdChatEndpointsCoverageTests
         runtime.CreateCalls.Should().ContainSingle(call =>
             call.Type == typeof(NyxIdChatGAgent) &&
             call.Id == createdActorId);
+    }
+
+    [Fact]
+    public async Task HandleCreateConversationAsync_WhenChatRouteForwardsToGAgent_ShouldUseTargetActorWithoutCreatingDefaultActor()
+    {
+        var actorStore = new StubGAgentActorStore();
+        var runtime = new StubActorRuntime();
+        var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
+            new ChatRouteAction { ForwardToGagent = new ForwardToGAgent { ActorId = "existing-agent-1" } },
+            []));
+
+        var result = await InvokeResultAsync(
+            "HandleCreateConversationAsync",
+            new DefaultHttpContext(),
+            "scope-a",
+            actorStore,
+            runtime,
+            queryPort,
+            NewChatRouteResolver(),
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        using var doc = JsonDocument.Parse(response.Body);
+        doc.RootElement.GetProperty("actorId").GetString().Should().Be("existing-agent-1");
+        actorStore.AddedActors.Should().ContainSingle(entry =>
+            entry.ScopeId == "scope-a" &&
+            entry.GAgentType == NyxIdChatServiceDefaults.GAgentTypeName &&
+            entry.ActorId == "existing-agent-1");
+        runtime.CreateCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleCreateConversationAsync_WhenChatRouteRejects_ShouldReturnForbiddenBeforeCreatingActor()
+    {
+        var actorStore = new StubGAgentActorStore();
+        var runtime = new StubActorRuntime();
+        var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
+            new ChatRouteAction { Reject = new Reject { Reason = "blocked by policy" } },
+            []));
+
+        var result = await InvokeResultAsync(
+            "HandleCreateConversationAsync",
+            new DefaultHttpContext(),
+            "scope-a",
+            actorStore,
+            runtime,
+            queryPort,
+            NewChatRouteResolver(),
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        response.Body.Should().Contain("chat_route_rejected");
+        response.Body.Should().Contain("blocked by policy");
+        actorStore.AddedActors.Should().BeEmpty();
+        runtime.CreateCalls.Should().BeEmpty();
     }
 
     [Fact]
@@ -1862,38 +1921,54 @@ public class NyxIdChatEndpointsCoverageTests
     private static object[] NormalizeEndpointArgs(MethodInfo method, object[] args)
     {
         var parameters = method.GetParameters();
-        if (parameters.Length == args.Length)
-            return args;
+        var normalized = args.ToList();
 
-        if (parameters.Length == args.Length + 1 && args.All(arg => arg is not IActorDispatchPort))
+        if (parameters.Any(parameter => parameter.ParameterType == typeof(IActorDispatchPort)) &&
+            normalized.All(arg => arg is not IActorDispatchPort))
         {
             var dispatchPortIndex = Array.FindIndex(
                 parameters,
                 parameter => parameter.ParameterType == typeof(IActorDispatchPort));
             if (dispatchPortIndex >= 0)
             {
-                var actorRuntime = args.OfType<IActorRuntime>().FirstOrDefault()
+                var actorRuntime = normalized.OfType<IActorRuntime>().FirstOrDefault()
                     ?? throw new InvalidOperationException("Endpoint test invocation needs IActorRuntime before IActorDispatchPort can be inferred.");
-                var normalized = args.ToList();
                 normalized.Insert(dispatchPortIndex, new StubActorDispatchPort(actorRuntime));
-                return normalized.ToArray();
             }
         }
 
-        if (parameters.Length == args.Length + 1 && args.All(arg => arg is not INyxIdChatSessionProjectionPort))
+        if (parameters.Any(parameter => parameter.ParameterType == typeof(INyxIdChatSessionProjectionPort)) &&
+            normalized.All(arg => arg is not INyxIdChatSessionProjectionPort))
         {
             var projectionPortIndex = Array.FindIndex(
                 parameters,
                 parameter => parameter.ParameterType == typeof(INyxIdChatSessionProjectionPort));
             if (projectionPortIndex >= 0)
             {
-                var normalized = args.ToList();
                 normalized.Insert(projectionPortIndex, new StubNyxIdChatSessionProjectionPort());
-                return normalized.ToArray();
             }
         }
 
-        return args;
+        if (parameters.Any(parameter => parameter.ParameterType == typeof(IChatRoutePolicyQueryPort)) &&
+            normalized.All(arg => arg is not IChatRoutePolicyQueryPort))
+        {
+            var index = Array.FindIndex(
+                parameters,
+                parameter => parameter.ParameterType == typeof(IChatRoutePolicyQueryPort));
+            normalized.Insert(index, StaticChatRoutePolicyQueryPort.ForSnapshot(
+                new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
+        }
+
+        if (parameters.Any(parameter => parameter.ParameterType == typeof(ChatRouteResolver)) &&
+            normalized.All(arg => arg is not ChatRouteResolver))
+        {
+            var index = Array.FindIndex(
+                parameters,
+                parameter => parameter.ParameterType == typeof(ChatRouteResolver));
+            normalized.Insert(index, NewChatRouteResolver());
+        }
+
+        return normalized.ToArray();
     }
 
     private static void EnsureEndpointContextServices(IEnumerable<object> args)
@@ -1936,6 +2011,35 @@ public class NyxIdChatEndpointsCoverageTests
                 EnvironmentName = authenticationEnabled ? Environments.Production : Environments.Development,
             })
             .BuildServiceProvider();
+
+    private static ChatRouteResolver NewChatRouteResolver() =>
+        new(new StaticChatRouteFallbackProvider(string.Empty));
+
+    private static ChatRouteAction ForwardToModelAction(string modelName) => new()
+    {
+        ForwardToModel = new ForwardToModel { ModelName = modelName },
+    };
+
+    private sealed class StaticChatRoutePolicyQueryPort(ChatRoutePolicySnapshot? snapshot) : IChatRoutePolicyQueryPort
+    {
+        public static StaticChatRoutePolicyQueryPort ForSnapshot(ChatRoutePolicySnapshot? snapshot) => new(snapshot);
+
+        public Task<ChatRoutePolicySnapshot?> LookupForCallerAsync(
+            OwnerScope callerScope,
+            CancellationToken ct = default) =>
+            Task.FromResult(snapshot);
+    }
+
+    private sealed class StaticChatRouteFallbackProvider(string modelName) : IChatRouteFallbackProvider
+    {
+        public ChatRouteDecision GetFallbackDecision() => new()
+        {
+            Action = ForwardToModelAction(modelName),
+            MatchedRuleId = string.Empty,
+            UsedFallback = true,
+            ResolvedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+    }
 
     private sealed class FallbackServiceProvider(
         IServiceProvider primary,

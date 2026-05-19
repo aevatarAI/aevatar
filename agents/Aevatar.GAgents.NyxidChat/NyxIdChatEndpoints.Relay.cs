@@ -115,6 +115,7 @@ public static partial class NyxIdChatEndpoints
             activity.OutboundDelivery ??= new OutboundDeliveryContext();
             activity.TransportExtras ??= new TransportExtras();
             activity.TransportExtras.NyxUserAccessToken = validation.UserAccessToken ?? string.Empty;
+            activity.TransportExtras.NyxRegistrationScopeId = scopeId.Trim();
             var relayInbound = new NyxRelayInboundActivity
             {
                 Activity = activity,

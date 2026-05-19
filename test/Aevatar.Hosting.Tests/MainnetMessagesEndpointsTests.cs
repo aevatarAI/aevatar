@@ -5,6 +5,8 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.ChatRouting.Abstractions;
+using Aevatar.ChatRouting.Core;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -434,13 +436,82 @@ public sealed class MainnetMessagesEndpointsTests
         toolNames.Should().NotContain(["use_skill", "ornn_search_skills", "WebSearch"]);
     }
 
+    [Fact]
+    public async Task PostMessages_WhenChatRouteForwardsToModel_RewritesModelBeforeCompletionService()
+    {
+        var provider = new MessagesRecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk { DeltaContent = "Hi", IsLast = true, Usage = new TokenUsage(1, 1, 2) },
+            ],
+        };
+        var queryPort = MessagesStaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
+            ForwardToModelAction("routed-claude"),
+            []));
+        await using var app = await CreateAppAsync(provider, chatRoutePolicyQueryPort: queryPort);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
+        {
+            Content = JsonContent("""
+            {
+              "model": "original-claude",
+              "max_tokens": 32,
+              "messages": [{"role": "user", "content": "ping"}]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "anthropic-bearer");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.Model.Should().Be("routed-claude");
+    }
+
+    [Fact]
+    public async Task PostMessages_WhenChatRouteRejects_ReturnsForbiddenWithoutLlmCall()
+    {
+        var provider = new MessagesRecordingLLMProvider();
+        var queryPort = MessagesStaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
+            RejectAction("policy_denied", "blocked by policy"),
+            []));
+        await using var app = await CreateAppAsync(provider, chatRoutePolicyQueryPort: queryPort);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
+        {
+            Content = JsonContent("""
+            {
+              "model": "original-claude",
+              "max_tokens": 32,
+              "messages": [{"role": "user", "content": "ping"}]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "anthropic-bearer");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden, body);
+        using var doc = JsonDocument.Parse(body);
+        doc.RootElement.GetProperty("error").GetProperty("type").GetString().Should().Be("chat_route_rejected");
+        doc.RootElement.GetProperty("error").GetProperty("message").GetString().Should().Be("blocked by policy");
+        provider.LastRequest.Should().BeNull();
+    }
+
     // ----- Test fixtures -------------------------------------------------------
 
     private static async Task<WebApplication> CreateAppAsync(
         MessagesRecordingLLMProvider provider,
         MessagesRecordingSessionStore? sessions = null,
         IResponsesCallerScopeResolver? callerScopeResolver = null,
-        IResponsesToolProvider? responsesToolProvider = null)
+        IResponsesToolProvider? responsesToolProvider = null,
+        IChatRoutePolicyQueryPort? chatRoutePolicyQueryPort = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -454,6 +525,9 @@ public sealed class MainnetMessagesEndpointsTests
         builder.Services.AddSingleton<ILlmSessionQueryPort>(sessions);
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         builder.Services.AddSingleton(callerScopeResolver ?? new MessagesStubCallerScopeResolver());
+        builder.Services.AddSingleton(chatRoutePolicyQueryPort ?? MessagesStaticChatRoutePolicyQueryPort.ForSnapshot(
+            new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
+        builder.Services.AddSingleton(new ChatRouteResolver(new MessagesStaticChatRouteFallbackProvider(string.Empty)));
         builder.Services.AddSingleton<IResponsesRouteResolver>(new MessagesNoopRouteResolver());
         if (responsesToolProvider != null)
             builder.Services.AddSingleton(responsesToolProvider);
@@ -518,6 +592,39 @@ public sealed class MainnetMessagesEndpointsTests
         public Task<string?> ResolveRouteValueAsync(string slug, string bearerToken, CancellationToken ct) =>
             Task.FromResult<string?>(null);
     }
+
+    private sealed class MessagesStaticChatRoutePolicyQueryPort(ChatRoutePolicySnapshot? snapshot)
+        : IChatRoutePolicyQueryPort
+    {
+        public static MessagesStaticChatRoutePolicyQueryPort ForSnapshot(ChatRoutePolicySnapshot? snapshot) =>
+            new(snapshot);
+
+        public Task<ChatRoutePolicySnapshot?> LookupForCallerAsync(
+            OwnerScope callerScope,
+            CancellationToken ct = default) =>
+            Task.FromResult(snapshot);
+    }
+
+    private sealed class MessagesStaticChatRouteFallbackProvider(string modelName) : IChatRouteFallbackProvider
+    {
+        public ChatRouteDecision GetFallbackDecision() => new()
+        {
+            Action = ForwardToModelAction(modelName),
+            UsedFallback = true,
+            MatchedRuleId = string.Empty,
+            ResolvedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+    }
+
+    private static ChatRouteAction ForwardToModelAction(string modelName) => new()
+    {
+        ForwardToModel = new ForwardToModel { ModelName = modelName },
+    };
+
+    private static ChatRouteAction RejectAction(string code, string message) => new()
+    {
+        Reject = new Reject { Reason = message },
+    };
 
     private sealed class MessagesRecordingSessionStore :
         ILlmSessionRegistrationPort,

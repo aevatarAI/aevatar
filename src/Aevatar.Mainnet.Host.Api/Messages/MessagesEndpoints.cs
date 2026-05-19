@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.ChatRouting.Core;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -43,6 +44,8 @@ internal static class MessagesApiEndpoints
         MessagesCreateRequest request,
         [FromServices] ILLMProviderFactory providerFactory,
         [FromServices] IResponsesCallerScopeResolver callerScopeResolver,
+        [FromServices] IChatRoutePolicyQueryPort chatRoutePolicyQueryPort,
+        [FromServices] ChatRouteResolver chatRouteResolver,
         [FromServices] IResponsesRouteResolver routeResolver,
         [FromServices] ILlmSessionRegistrationPort sessionRegistrationPort,
         [FromServices] IResponsesCompletionApplicationService completionService,
@@ -52,6 +55,8 @@ internal static class MessagesApiEndpoints
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(providerFactory);
         ArgumentNullException.ThrowIfNull(callerScopeResolver);
+        ArgumentNullException.ThrowIfNull(chatRoutePolicyQueryPort);
+        ArgumentNullException.ThrowIfNull(chatRouteResolver);
         ArgumentNullException.ThrowIfNull(routeResolver);
         ArgumentNullException.ThrowIfNull(sessionRegistrationPort);
         ArgumentNullException.ThrowIfNull(completionService);
@@ -81,6 +86,36 @@ internal static class MessagesApiEndpoints
         catch (ResponsesCallerScopeUnavailableException ex)
         {
             return ToErrorResult(StatusCodes.Status401Unauthorized, "authentication_error", ex.Message);
+        }
+
+        // Implement (issue #694):
+        //   Behavior: Anthropic Messages facade applies the same chat-route model override as Responses.
+        //   Why this shape: Messages shares the LlmSession/LLMRequest path, so routing stays protocol-neutral.
+        var routedModel = normalized.Model;
+        var routeDecision = await ResponsesApiEndpoints.ResolveResponsesChatRouteAsync(
+            chatRoutePolicyQueryPort,
+            chatRouteResolver,
+            callerScope,
+            normalized.Model,
+            ct);
+        if (routeDecision.Action.Reject is not null)
+            return ToErrorResult(
+                StatusCodes.Status403Forbidden,
+                "chat_route_rejected",
+                string.IsNullOrWhiteSpace(routeDecision.Action.Reject.Reason)
+                    ? "The chat route policy rejected this request."
+                    : routeDecision.Action.Reject.Reason);
+        if (!string.IsNullOrWhiteSpace(routeDecision.Action.ForwardToModel?.ModelName))
+        {
+            routedModel = routeDecision.Action.ForwardToModel.ModelName.Trim();
+        }
+        else if (routeDecision.Action.ForwardToGagent is not null)
+        {
+            logger.LogInformation(
+                "Chat route resolved ForwardToGAgent for /v1/messages but v1 falls back to model dispatch: actor={ActorId} usedFallback={UsedFallback} matchedRule={MatchedRuleId}",
+                routeDecision.Action.ForwardToGagent.ActorId,
+                routeDecision.UsedFallback,
+                routeDecision.MatchedRuleId);
         }
 
         // Path B is stateless: register a new LlmSession per request, no
@@ -126,8 +161,8 @@ internal static class MessagesApiEndpoints
         // OpenRouter-style vendor prefix routing (same as Path A). If the
         // model is `vendor/name`, resolve the route value through the catalog;
         // unknown slugs fall through to gateway default.
-        var modelRoute = ResponsesModelRouteParser.Parse(normalized.Model);
-        var effectiveModel = normalized.Model;
+        var modelRoute = ResponsesModelRouteParser.Parse(routedModel);
+        var effectiveModel = routedModel;
         string? resolvedRouteValue = null;
         if (modelRoute.RouteSlug is not null)
         {

@@ -297,6 +297,10 @@ message TransportExtras {
   // chat can address it via `receive_id_type=chat_id`). For p2p DMs the chat_id is bot-specific
   // and not cross-app safe; downstream senders prefer `nyx_lark_union_id` for p2p targets.
   string nyx_lark_chat_id = 8;
+  // The Aevatar registration scope resolved at the relay ingress boundary. This typed field
+  // lets ConversationGAgent build the chat-routing caller scope before any turn runner metadata
+  // exists, without falling back to a generic metadata bag.
+  string nyx_registration_scope_id = 9;
 }
 
 // Represents one normalized activity flowing through the channel pipeline.
