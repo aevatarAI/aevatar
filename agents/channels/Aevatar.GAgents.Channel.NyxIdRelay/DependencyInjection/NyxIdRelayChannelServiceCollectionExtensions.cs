@@ -14,8 +14,11 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
     /// <summary>
     /// Registers the NyxID relay channel: API client, provisioning services (Lark + Telegram),
     /// API-key ownership verifier, scope resolver, channel reply service, outbound port,
-    /// replay guard, and interactive reply dispatcher.
+    /// and interactive reply dispatcher.
     /// </summary>
+    // Refactor (iter17/cluster-038):
+    //   Old pattern: Nyx relay replay/idempotency 和 reply 累积在 process-local ConcurrentDictionary/lock(NyxRelayBridgeIdempotencyGuard / NyxIdRelayReplayGuard / NyxIdRelayReplyAccumulator)。
+    //   New principle: ConversationGAgent persist callback_jti admission 为 typed event 优先于 business work;删除 process-local replay guards + dead accumulator。
     public static IServiceCollection AddNyxIdRelayChannel(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
@@ -32,13 +35,6 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
 
         services.TryAddSingleton<ChannelPlatformReplyService>();
         services.TryAddSingleton<NyxIdRelayOutboundPort>();
-        services.TryAddSingleton<INyxIdRelayReplayGuard>(sp =>
-        {
-            var relayOptions = sp.GetService<NyxIdRelayOptions>() ?? new NyxIdRelayOptions();
-            return new NyxIdRelayReplayGuard(
-                TimeSpan.FromSeconds(Math.Max(1, relayOptions.CallbackReplayWindowSeconds)),
-                TimeProvider.System);
-        });
         services.TryAddSingleton<IInteractiveReplyDispatcher, NyxIdRelayInteractiveReplyDispatcher>();
 
         return services;

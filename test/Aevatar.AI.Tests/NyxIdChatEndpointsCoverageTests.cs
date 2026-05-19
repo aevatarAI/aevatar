@@ -1292,6 +1292,10 @@ public class NyxIdChatEndpointsCoverageTests
         var relayInbound = actor.HandledEnvelopes.Single().Payload.Unpack<NyxRelayInboundActivity>();
         relayInbound.ReplyToken.Should().Be("reply-token-1");
         relayInbound.CorrelationId.Should().Be("corr-1");
+        relayInbound.RelayApiKeyId.Should().Be(relay.RelayApiKeyId);
+        relayInbound.CallbackJti.Should().Be("corr-1");
+        relayInbound.CallbackObservedAtUnixMs.Should().BeGreaterThan(0);
+        relayInbound.CallbackReplayExpiresAtUnixMs.Should().BeGreaterThan(relayInbound.CallbackObservedAtUnixMs);
         var activity = relayInbound.Activity;
         activity.Id.Should().Be("msg-1");
         activity.Content.Text.Should().Be("hello");
@@ -1362,6 +1366,10 @@ public class NyxIdChatEndpointsCoverageTests
         var relayInbound = actor.HandledEnvelopes.Single().Payload.Unpack<NyxRelayInboundActivity>();
         relayInbound.ReplyToken.Should().Be("reply-token-daily-1");
         relayInbound.CorrelationId.Should().Be("corr-daily-1");
+        relayInbound.RelayApiKeyId.Should().Be(relay.RelayApiKeyId);
+        relayInbound.CallbackJti.Should().Be("corr-daily-1");
+        relayInbound.CallbackObservedAtUnixMs.Should().BeGreaterThan(0);
+        relayInbound.CallbackReplayExpiresAtUnixMs.Should().BeGreaterThan(relayInbound.CallbackObservedAtUnixMs);
         var activity = relayInbound.Activity;
         activity.Id.Should().Be("msg-daily-1");
         activity.Content.Text.Should().Be("/daily alice");
@@ -2048,8 +2056,7 @@ public class NyxIdChatEndpointsCoverageTests
             new NyxRelayTestHttpClientFactory(new HttpClient(new NyxRelayOidcDocumentHandler(discoveryJson, jwksJson))),
             new NyxIdToolOptions { BaseUrl = baseUrl },
             options,
-            NullLogger<NyxIdRelayAuthValidator>.Instance,
-            new NyxIdRelayReplayGuard());
+            NullLogger<NyxIdRelayAuthValidator>.Instance);
 
         return new RelayInvocationDependencies(
             new NyxIdRelayTransport(),

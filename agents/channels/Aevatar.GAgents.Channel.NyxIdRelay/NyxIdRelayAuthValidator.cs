@@ -14,6 +14,9 @@ public sealed record NyxIdRelayAuthenticationResult(
     bool Succeeded,
     ClaimsPrincipal? Principal = null,
     string? RelayApiKeyId = null,
+    string? CallbackJti = null,
+    long CallbackObservedAtUnixMs = 0,
+    long CallbackReplayExpiresAtUnixMs = 0,
     string? UserAccessToken = null,
     string? ScopeId = null,
     string? ErrorCode = null,
@@ -21,6 +24,9 @@ public sealed record NyxIdRelayAuthenticationResult(
 
 public sealed class NyxIdRelayAuthValidator
 {
+    // Refactor (iter17/cluster-038):
+    //   Old pattern: Nyx relay replay/idempotency 和 reply 累积在 process-local ConcurrentDictionary/lock(NyxRelayBridgeIdempotencyGuard / NyxIdRelayReplayGuard / NyxIdRelayReplyAccumulator)。
+    //   New principle: ConversationGAgent persist callback_jti admission 为 typed event 优先于 business work;删除 process-local replay guards + dead accumulator。
     private const string RelayCallbackTokenType = "relay_callback";
 
     private sealed record CachedOidcConfiguration(
@@ -37,6 +43,7 @@ public sealed class NyxIdRelayAuthValidator
         string? MessageId = null,
         string? Platform = null,
         string? Jti = null,
+        long TokenExpiresAtUnixMs = 0,
         string? BodySha256 = null,
         string? ErrorCode = null,
         string? ErrorSummary = null);
@@ -44,7 +51,6 @@ public sealed class NyxIdRelayAuthValidator
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly NyxIdToolOptions _nyxOptions;
     private readonly NyxIdRelayOptions _relayOptions;
-    private readonly INyxIdRelayReplayGuard? _replayGuard;
     private readonly ILogger<NyxIdRelayAuthValidator> _logger;
     private readonly SemaphoreSlim _refreshLock = new(1, 1);
     private CachedOidcConfiguration? _cachedConfiguration;
@@ -54,13 +60,11 @@ public sealed class NyxIdRelayAuthValidator
         IHttpClientFactory httpClientFactory,
         NyxIdToolOptions nyxOptions,
         NyxIdRelayOptions relayOptions,
-        ILogger<NyxIdRelayAuthValidator>? logger = null,
-        INyxIdRelayReplayGuard? replayGuard = null)
+        ILogger<NyxIdRelayAuthValidator>? logger = null)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _nyxOptions = nyxOptions ?? throw new ArgumentNullException(nameof(nyxOptions));
         _relayOptions = relayOptions ?? throw new ArgumentNullException(nameof(relayOptions));
-        _replayGuard = replayGuard;
         _logger = logger ?? NullLogger<NyxIdRelayAuthValidator>.Instance;
     }
 
@@ -134,23 +138,25 @@ public sealed class NyxIdRelayAuthValidator
                 "Relay callback raw body hash does not match callback JWT.");
         }
 
-        if (_replayGuard is not null)
-        {
-            var observedAtUtc = DateTimeOffset.UtcNow;
-            if (!_replayGuard.TryClaim($"jti:{jwtValidation.Jti}", observedAtUtc))
-            {
-                return Fail("callback_jwt_replay_detected", "Relay callback replay was rejected.");
-            }
-        }
-
+        var observedAtUtc = DateTimeOffset.UtcNow;
+        var replayWindowExpiresAtUnixMs = observedAtUtc
+            .AddSeconds(Math.Max(1, _relayOptions.CallbackReplayWindowSeconds))
+            .ToUnixTimeMilliseconds();
+        var replayExpiresAtUnixMs = jwtValidation.TokenExpiresAtUnixMs > 0
+            ? Math.Min(jwtValidation.TokenExpiresAtUnixMs, replayWindowExpiresAtUnixMs)
+            : replayWindowExpiresAtUnixMs;
+        var principal = jwtValidation.Principal!;
         var userToken = NormalizeOptional(http.Request.Headers["X-NyxID-User-Token"].FirstOrDefault());
-        var scopeId = NormalizeOptional(jwtValidation.Principal.FindFirstValue("scope_id")) ??
-                      NormalizeOptional(jwtValidation.Principal.FindFirstValue(JwtRegisteredClaimNames.Sub)) ??
-                      NormalizeOptional(jwtValidation.Principal.FindFirstValue(ClaimTypes.NameIdentifier));
+        var scopeId = NormalizeOptional(principal.FindFirstValue("scope_id")) ??
+                      NormalizeOptional(principal.FindFirstValue(JwtRegisteredClaimNames.Sub)) ??
+                      NormalizeOptional(principal.FindFirstValue(ClaimTypes.NameIdentifier));
         return new NyxIdRelayAuthenticationResult(
             true,
-            Principal: jwtValidation.Principal,
+            Principal: principal,
             RelayApiKeyId: jwtValidation.RelayApiKeyId,
+            CallbackJti: jwtValidation.Jti,
+            CallbackObservedAtUnixMs: observedAtUtc.ToUnixTimeMilliseconds(),
+            CallbackReplayExpiresAtUnixMs: replayExpiresAtUnixMs,
             UserAccessToken: userToken,
             ScopeId: scopeId);
     }
@@ -202,7 +208,7 @@ public sealed class NyxIdRelayAuthValidator
 
         try
         {
-            var principal = handler.ValidateToken(token, parameters, out _);
+            var principal = handler.ValidateToken(token, parameters, out var validatedToken);
             var relayApiKeyId = principal.FindFirstValue("api_key_id")?.Trim();
             var messageId = principal.FindFirstValue("message_id")?.Trim();
             var platform = principal.FindFirstValue("platform")?.Trim();
@@ -272,6 +278,7 @@ public sealed class NyxIdRelayAuthValidator
                 MessageId: messageId,
                 Platform: platform,
                 Jti: jti,
+                TokenExpiresAtUnixMs: GetTokenExpiresAtUnixMs(validatedToken),
                 BodySha256: bodySha256);
         }
         catch (SecurityTokenSignatureKeyNotFoundException ex)
@@ -329,6 +336,15 @@ public sealed class NyxIdRelayAuthValidator
             _logger.LogError(ex, "Nyx relay callback JWT validation failed unexpectedly");
             return new CallbackJwtValidationResult(false, ErrorCode: "callback_jwt_invalid", ErrorSummary: ex.Message);
         }
+    }
+
+    private static long GetTokenExpiresAtUnixMs(SecurityToken token)
+    {
+        if (token is not JwtSecurityToken jwt || jwt.ValidTo == DateTime.MinValue)
+            return 0;
+
+        return new DateTimeOffset(DateTime.SpecifyKind(jwt.ValidTo, DateTimeKind.Utc))
+            .ToUnixTimeMilliseconds();
     }
 
     private static void EnsureCanonicalScopeClaim(ClaimsPrincipal principal, string scopeId)

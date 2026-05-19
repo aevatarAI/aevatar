@@ -25,6 +25,9 @@ public static partial class NyxIdChatEndpoints
     /// (slash commands, agent-builder cards, workflow resume cards) is the responsibility of
     /// <c>ChannelConversationTurnRunner</c> so the webhook stays a thin adapter.
     /// </summary>
+    // Refactor (iter17/cluster-038):
+    //   Old pattern: Nyx relay replay/idempotency 和 reply 累积在 process-local ConcurrentDictionary/lock(NyxRelayBridgeIdempotencyGuard / NyxIdRelayReplayGuard / NyxIdRelayReplyAccumulator)。
+    //   New principle: ConversationGAgent persist callback_jti admission 为 typed event 优先于 business work;删除 process-local replay guards + dead accumulator。
     private static async Task<IResult> HandleRelayWebhookAsync(
         HttpContext http,
         [FromServices] IActorRuntime actorRuntime,
@@ -121,6 +124,10 @@ public static partial class NyxIdChatEndpoints
                 ReplyToken = payload.ReplyToken?.Trim() ?? string.Empty,
                 ReplyTokenExpiresAtUnixMs = ResolveReplyTokenExpiresAtUnixMs(payload.ReplyToken, relayOptions),
                 CorrelationId = activity.OutboundDelivery.CorrelationId,
+                RelayApiKeyId = validation.RelayApiKeyId ?? string.Empty,
+                CallbackJti = validation.CallbackJti ?? string.Empty,
+                CallbackObservedAtUnixMs = validation.CallbackObservedAtUnixMs,
+                CallbackReplayExpiresAtUnixMs = validation.CallbackReplayExpiresAtUnixMs,
             };
 
             var actorId = BuildScopedRelayConversationActorId(scopeId, activity.Conversation.CanonicalKey);

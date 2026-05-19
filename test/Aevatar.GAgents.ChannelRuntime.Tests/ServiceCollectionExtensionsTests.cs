@@ -40,8 +40,10 @@ public sealed class ServiceCollectionExtensionsTests
             descriptor.ServiceType == typeof(IChannelBotRegistrationQueryByNyxIdentityPort));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(INyxIdRelayScopeResolver));
-        services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(INyxIdRelayReplayGuard));
+        services.Any(descriptor =>
+                descriptor.ServiceType.FullName is { } name &&
+                name.Contains("NyxIdRelayReplayGuard", StringComparison.Ordinal))
+            .Should().BeFalse();
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(ChannelBotRegistrationStartupService));
@@ -106,8 +108,10 @@ public sealed class ServiceCollectionExtensionsTests
             descriptor.ServiceType == typeof(IChannelBotRegistrationQueryByNyxIdentityPort));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(INyxIdRelayScopeResolver));
-        services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(INyxIdRelayReplayGuard));
+        services.Any(descriptor =>
+                descriptor.ServiceType.FullName is { } name &&
+                name.Contains("NyxIdRelayReplayGuard", StringComparison.Ordinal))
+            .Should().BeFalse();
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(ChannelBotRegistrationStartupService));
