@@ -168,14 +168,35 @@ public sealed class ExecutionService
         StopExecutionRequest request,
         CancellationToken cancellationToken = default)
     {
-        var detail = await GetAsync(executionId, cancellationToken);
-        if (detail is null)
+        var scope = GetScopeFilter();
+        if (scope.FailClosed || string.IsNullOrWhiteSpace(scope.ScopeId))
             return null;
+
+        var normalizedExecutionId = NormalizeRequired(executionId, nameof(executionId));
+        var run = await _serviceRunQueryPort.GetByCommandIdAsync(
+            scope.ScopeId,
+            serviceId: string.Empty,
+            normalizedExecutionId,
+            cancellationToken);
+        if (run is null)
+        {
+            var runs = await _serviceRunQueryPort.ListAsync(
+                new ServiceRunQuery(scope.ScopeId, ServiceId: string.Empty, Take: 100),
+                cancellationToken);
+            run = runs.FirstOrDefault(item =>
+                string.Equals(item.RunId, normalizedExecutionId, StringComparison.Ordinal) ||
+                string.Equals(item.CommandId, normalizedExecutionId, StringComparison.Ordinal));
+        }
+
+        if (run is null)
+            return null;
+
+        var detail = await ToDetailAsync(run, cancellationToken);
         if (IsTerminalExecutionStatus(detail.Status))
             return detail;
 
         var actorId = NormalizeRequired(detail.ActorId ?? string.Empty, nameof(detail.ActorId));
-        var runId = NormalizeRequired(executionId, nameof(executionId));
+        var runId = NormalizeRequired(run.RunId, nameof(run.RunId));
         var result = await _stopDispatchService.DispatchAsync(
             new WorkflowStopCommand(
                 actorId,

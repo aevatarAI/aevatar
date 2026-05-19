@@ -124,6 +124,7 @@ public sealed class ExecutionServiceTests
         detail!.Status.Should().Be("stopped");
         stopDispatch.LastCommand.Should().NotBeNull();
         stopDispatch.LastCommand!.ActorId.Should().Be("run-actor-1");
+        stopDispatch.LastCommand.RunId.Should().Be("run-a");
         stopDispatch.LastCommand.Reason.Should().Be("manual");
     }
 
