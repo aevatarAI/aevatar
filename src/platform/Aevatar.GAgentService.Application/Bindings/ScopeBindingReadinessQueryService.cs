@@ -33,6 +33,7 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
         var normalizedServiceId = ScopeWorkflowCapabilityOptions.NormalizeRequired(request.ServiceId, nameof(request.ServiceId));
         var expectedRevisionId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.ExpectedRevisionId);
         var expectedDeploymentId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.ExpectedDeploymentId);
+        var expectedEndpointIds = NormalizeEndpointIds(request.ExpectedEndpointIds);
         var identity = ScopeWorkflowCapabilityConventions.BuildServiceIdentity(
             _options,
             normalizedScopeId,
@@ -68,7 +69,9 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
                 ObservedAtUtc: observedAtUtc);
         }
 
-        var serviceEndpointIds = GetServiceEndpointIds(service);
+        var serviceEndpointIds = expectedEndpointIds.Count > 0
+            ? expectedEndpointIds
+            : GetServiceEndpointIds(service);
         var eligibleTarget = FindEligibleServingTarget(servingSet, serviceEndpointIds, expectedRevisionId, expectedDeploymentId);
         if (eligibleTarget == null)
         {
@@ -113,11 +116,14 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
     }
 
     private static IReadOnlyList<string> GetServiceEndpointIds(ServiceCatalogSnapshot service) =>
-        service.Endpoints
-            .Select(endpoint => endpoint.EndpointId)
+        NormalizeEndpointIds(service.Endpoints.Select(endpoint => endpoint.EndpointId));
+
+    private static IReadOnlyList<string> NormalizeEndpointIds(IEnumerable<string>? endpointIds) =>
+        endpointIds?
+            .Select(endpointId => endpointId?.Trim())
             .Where(endpointId => !string.IsNullOrWhiteSpace(endpointId))
             .Distinct(StringComparer.Ordinal)
-            .ToArray();
+            .ToArray() ?? [];
 
     private static ServiceServingTargetSnapshot? FindEligibleServingTarget(
         ServiceServingSetSnapshot servingSet,

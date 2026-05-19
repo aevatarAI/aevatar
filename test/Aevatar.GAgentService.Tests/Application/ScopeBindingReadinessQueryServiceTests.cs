@@ -137,6 +137,30 @@ public sealed class ScopeBindingReadinessQueryServiceTests
     }
 
     [Fact]
+    public async Task GetReadinessAsync_WhenExpectedEndpointMissingFromStaleCatalog_ShouldReturnEligibleServingTargetMissing()
+    {
+        var lifecyclePort = new FakeServiceLifecycleQueryPort
+        {
+            Service = CreateServiceSnapshot("service-a", endpoints: [CreateServiceEndpoint("old")]),
+        };
+        var servingPort = new FakeServiceServingQueryPort
+        {
+            ServingSet = CreateServingSet([
+                CreateTarget("rev-ready", ServiceServingState.Active, allocationWeight: 100, enabledEndpointIds: ["old"]),
+            ]),
+        };
+        var service = CreateService(lifecyclePort, servingPort);
+
+        var snapshot = await service.GetReadinessAsync(new ScopeBindingReadinessRequest(
+            "scope-a",
+            "service-a",
+            ExpectedEndpointIds: ["chat"]));
+
+        snapshot.Status.Should().Be(ScopeBindingReadinessStatus.EligibleServingTargetMissing);
+        snapshot.InvokeReady.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task GetReadinessAsync_WhenServingSetHasActiveZeroWeightTarget_ShouldReturnEligibleServingTargetMissing()
     {
         var lifecyclePort = new FakeServiceLifecycleQueryPort

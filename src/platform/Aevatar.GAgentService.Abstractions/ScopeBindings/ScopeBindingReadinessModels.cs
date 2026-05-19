@@ -16,7 +16,8 @@ public sealed record ScopeBindingReadinessRequest(
     string ServiceId,
     string? AppId = null,
     string? ExpectedRevisionId = null,
-    string? ExpectedDeploymentId = null);
+    string? ExpectedDeploymentId = null,
+    IReadOnlyList<string>? ExpectedEndpointIds = null);
 
 public sealed record ScopeBindingReadinessSnapshot(
     string ScopeId,

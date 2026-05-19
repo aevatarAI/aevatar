@@ -162,7 +162,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         ScopeBindingReadinessSnapshot readiness;
         try
         {
-            readiness = await WaitForBindingReadyAsync(result, ct).ConfigureAwait(false);
+            readiness = await WaitForBindingReadyAsync(result, request, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -270,6 +270,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
 
     private async Task<ScopeBindingReadinessSnapshot> WaitForBindingReadyAsync(
         ScopeBindingUpsertResult result,
+        StudioMemberPlatformBindingStartRequested bindingRequest,
         CancellationToken ct)
     {
         var deadline = _utcNow() + _options.BindingReadinessTimeout;
@@ -285,7 +286,8 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             result.ScopeId,
             result.ServiceId,
             ExpectedRevisionId: expectedRevisionId,
-            ExpectedDeploymentId: expectedDeploymentId);
+            ExpectedDeploymentId: expectedDeploymentId,
+            ExpectedEndpointIds: BuildExpectedEndpointIds(bindingRequest));
 
         while (true)
         {
@@ -305,6 +307,17 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             await _delayAsync(delay, ct).ConfigureAwait(false);
         }
     }
+
+    private static IReadOnlyList<string> BuildExpectedEndpointIds(StudioMemberPlatformBindingStartRequested request) =>
+        request.Request.ImplementationCase switch
+        {
+            StudioMemberBindingRequest.ImplementationOneofCase.Gagent => request.Request.Gagent.Endpoints
+                .Select(endpoint => endpoint.EndpointId?.Trim())
+                .Where(endpointId => !string.IsNullOrWhiteSpace(endpointId))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray(),
+            _ => ["chat"],
+        };
 
     private static StudioMemberPlatformBindingOptions NormalizeOptions(StudioMemberPlatformBindingOptions options)
     {

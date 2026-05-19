@@ -81,11 +81,13 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         scopeBindingPort.Requests[0].RevisionId.Should().Be("rev-platform-bind-1");
         scopeBindingPort.Requests[0].AllowExistingRevisionReplay.Should().BeTrue();
         scopeBindingPort.Requests[0].ReplayRevisionId.Should().Be("rev-platform-bind-1");
-        readinessPort.Requests.Should().ContainSingle().Which.Should().Be(new ScopeBindingReadinessRequest(
+        var readinessRequest = readinessPort.Requests.Should().ContainSingle().Subject;
+        readinessRequest.Should().BeEquivalentTo(new ScopeBindingReadinessRequest(
             ScopeId: "scope-1",
             ServiceId: "member-m-1",
             ExpectedRevisionId: "rev-platform-bind-1",
-            ExpectedDeploymentId: "deployment-1"));
+            ExpectedDeploymentId: "deployment-1",
+            ExpectedEndpointIds: ["chat"]));
     }
 
     [Fact]
@@ -117,8 +119,9 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
     public async Task ExecuteAsync_ShouldBuildGAgentBindingRequestAndDispatchGAgentResult()
     {
         var scopeBindingPort = new RecordingScopeBindingCommandPort();
+        var readinessPort = RecordingReadinessQueryPort.Ready();
         var dispatchPort = new RecordingDispatchPort();
-        var service = CreateService(scopeBindingPort, dispatchPort);
+        var service = CreateService(scopeBindingPort, dispatchPort, readinessPort);
 
         await service.ExecuteAsync(
             "studio-member-binding-run:bind-1",
@@ -135,6 +138,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         request.GAgent!.ActorTypeName.Should().Be("Tests.JokerGAgent");
         request.GAgent.Endpoints.Should().ContainSingle().Which.Kind.Should().Be(ServiceEndpointKind.Chat);
         request.GAgent.Endpoints[0].EndpointId.Should().Be("chat");
+        readinessPort.Requests.Should().ContainSingle().Which.ExpectedEndpointIds.Should().BeEquivalentTo(["chat"]);
     }
 
     [Fact]
