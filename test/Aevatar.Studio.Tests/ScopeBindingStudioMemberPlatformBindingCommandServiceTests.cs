@@ -183,7 +183,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenExplicitWorkflowRevisionId_ShouldAllowReplayForWatchdogRetry()
+    public async Task ExecuteAsync_WhenExplicitWorkflowRevisionId_ShouldKeepReplayDisabled()
     {
         var scopeBindingPort = new RecordingScopeBindingCommandPort();
         var dispatchPort = new RecordingDispatchPort();
@@ -199,12 +199,12 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var upsert = scopeBindingPort.Requests.Should().ContainSingle().Subject;
         upsert.RevisionId.Should().Be("rev-explicit");
-        upsert.AllowExistingRevisionReplay.Should().BeTrue();
-        upsert.ReplayRevisionId.Should().Be("rev-explicit");
+        upsert.AllowExistingRevisionReplay.Should().BeFalse();
+        upsert.ReplayRevisionId.Should().BeNull();
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenExplicitGAgentRevisionId_ShouldAllowReplayForWatchdogRetry()
+    public async Task ExecuteAsync_WhenExplicitGAgentRevisionId_ShouldKeepReplayDisabled()
     {
         var scopeBindingPort = new RecordingScopeBindingCommandPort();
         var dispatchPort = new RecordingDispatchPort();
@@ -220,8 +220,8 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var upsert = scopeBindingPort.Requests.Should().ContainSingle().Subject;
         upsert.RevisionId.Should().Be("rev-explicit");
-        upsert.AllowExistingRevisionReplay.Should().BeTrue();
-        upsert.ReplayRevisionId.Should().Be("rev-explicit");
+        upsert.AllowExistingRevisionReplay.Should().BeFalse();
+        upsert.ReplayRevisionId.Should().BeNull();
     }
 
     [Fact]
