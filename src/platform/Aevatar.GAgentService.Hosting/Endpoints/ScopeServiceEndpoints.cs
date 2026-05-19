@@ -575,7 +575,7 @@ public static class ScopeServiceEndpoints
         [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
         [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> gagentDraftRunService,
         [FromServices] IScriptRuntimeCommandPort scriptRuntimeCommandPort,
-        [FromServices] IScriptExecutionProjectionPort scriptExecutionProjectionPort,
+        [FromServices] IScriptServiceAguiProjectionPort scriptServiceAguiProjectionPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
@@ -600,7 +600,7 @@ public static class ScopeServiceEndpoints
                 chatRunService,
                 gagentDraftRunService,
                 scriptRuntimeCommandPort,
-                scriptExecutionProjectionPort,
+                scriptServiceAguiProjectionPort,
                 options,
                 ct);
             return;
@@ -699,7 +699,7 @@ public static class ScopeServiceEndpoints
         [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
         [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> gagentDraftRunService,
         [FromServices] IScriptRuntimeCommandPort scriptRuntimeCommandPort,
-        [FromServices] IScriptExecutionProjectionPort scriptExecutionProjectionPort,
+        [FromServices] IScriptServiceAguiProjectionPort scriptServiceAguiProjectionPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
@@ -727,7 +727,7 @@ public static class ScopeServiceEndpoints
                 chatRunService,
                 gagentDraftRunService,
                 scriptRuntimeCommandPort,
-                scriptExecutionProjectionPort,
+                scriptServiceAguiProjectionPort,
                 options,
                 ct);
         }
@@ -1452,7 +1452,7 @@ public static class ScopeServiceEndpoints
         [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
         [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> gagentDraftRunService,
         [FromServices] IScriptRuntimeCommandPort scriptRuntimeCommandPort,
-        [FromServices] IScriptExecutionProjectionPort scriptExecutionProjectionPort,
+        [FromServices] IScriptServiceAguiProjectionPort scriptServiceAguiProjectionPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
@@ -1539,7 +1539,7 @@ public static class ScopeServiceEndpoints
                         serviceId,
                         scopedHeaders,
                         scriptRuntimeCommandPort,
-                        scriptExecutionProjectionPort,
+                        scriptServiceAguiProjectionPort,
                         invocationRequest,
                         serviceRunRegistrationPort,
                         ct);
@@ -1705,9 +1705,6 @@ public static class ScopeServiceEndpoints
         }
     }
 
-    internal static bool ShouldEmitSyntheticRunFinished(AGUIEvent.EventOneofCase terminalEventCase) =>
-        terminalEventCase == AGUIEvent.EventOneofCase.TextMessageEnd;
-
     private static async Task HandleScriptingServiceChatStreamAsync(
         HttpContext http,
         ServiceInvocationResolvedTarget target,
@@ -1717,7 +1714,7 @@ public static class ScopeServiceEndpoints
         string serviceId,
         IReadOnlyDictionary<string, string>? headers,
         IScriptRuntimeCommandPort scriptRuntimeCommandPort,
-        IScriptExecutionProjectionPort scriptExecutionProjectionPort,
+        IScriptServiceAguiProjectionPort scriptServiceAguiProjectionPort,
         ServiceInvocationRequest invocationRequest,
         IServiceRunRegistrationPort serviceRunRegistrationPort,
         CancellationToken ct)
@@ -1727,6 +1724,9 @@ public static class ScopeServiceEndpoints
             throw new InvalidOperationException(
                 "Script runtime actor is not available. The service may not be activated.");
 
+        // Refactor (iter1/cluster-003):
+        //   Old pattern: Host pumped raw script EventEnvelope frames, mapped AGUI, and synthesized completion locally.
+        //   New principle: Host attaches the projection AGUI session stream and writes protocol frames only.
         var runId = Guid.NewGuid().ToString("N");
         // Register the service run with the same id the SSE RunStarted frame will carry.
         await RegisterStreamServiceRunAsync(
@@ -1748,28 +1748,16 @@ public static class ScopeServiceEndpoints
         };
         CopyHeaders(headers, chatRequest.Metadata);
         var inputPayload = Any.Pack(chatRequest);
-        var eventChannel = new EventChannel<EventEnvelope>();
-        var projectionLease = await scriptExecutionProjectionPort.EnsureAndAttachAsync(
-            token => scriptExecutionProjectionPort.EnsureRunProjectionAsync(actorId, runId, token),
+        var eventChannel = new EventChannel<AGUIEvent>();
+        var projectionLease = await scriptServiceAguiProjectionPort.EnsureAndAttachAsync(
+            token => scriptServiceAguiProjectionPort.EnsureRunProjectionAsync(actorId, runId, token),
             eventChannel,
             ct);
         if (projectionLease == null)
             throw new InvalidOperationException("Script execution projection pipeline is unavailable.");
 
-        Task? pumpTask = null;
-
         try
         {
-            await scriptRuntimeCommandPort.RunRuntimeAsync(
-                actorId,
-                runId,
-                inputPayload,
-                target.Artifact.DeploymentPlan.ScriptingPlan.Revision,
-                target.Artifact.DeploymentPlan.ScriptingPlan.DefinitionActorId,
-                inputPayload.TypeUrl,
-                scopeId,
-                ct);
-
             var writer = new AGUISseWriter(http.Response);
             http.Response.StatusCode = StatusCodes.Status200OK;
             http.Response.Headers.ContentType = "text/event-stream; charset=utf-8";
@@ -1781,80 +1769,45 @@ public static class ScopeServiceEndpoints
                 RunStarted = new RunStartedEvent { ThreadId = actorId, RunId = runId },
             }, ct);
 
-            var tcs = new TaskCompletionSource<AGUIEvent.EventOneofCase>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using var ctr = ct.Register(() => tcs.TrySetCanceled(ct));
-            pumpTask = PumpScriptEventsAsync(eventChannel, writer, tcs);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromMinutes(2));
 
-            var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(120_000, CancellationToken.None));
-            if (completedTask != tcs.Task)
-            {
-                await writer.WriteAsync(new AGUIEvent
-                {
-                    RunError = new RunErrorEvent { Message = "Script service chat stream timed out." },
-                }, CancellationToken.None);
-                return;
-            }
+            await scriptRuntimeCommandPort.RunRuntimeAsync(
+                actorId,
+                runId,
+                inputPayload,
+                target.Artifact.DeploymentPlan.ScriptingPlan.Revision,
+                target.Artifact.DeploymentPlan.ScriptingPlan.DefinitionActorId,
+                inputPayload.TypeUrl,
+                scopeId,
+                timeoutCts.Token);
 
-            var terminalEventCase = await tcs.Task;
-            if (ShouldEmitSyntheticRunFinished(terminalEventCase))
+            await foreach (var aguiEvent in eventChannel.ReadAllAsync(timeoutCts.Token))
             {
-                await writer.WriteAsync(new AGUIEvent
+                await writer.WriteAsync(aguiEvent, timeoutCts.Token);
+
+                if (aguiEvent.EventCase is AGUIEvent.EventOneofCase.RunFinished
+                    or AGUIEvent.EventOneofCase.RunError)
                 {
-                    RunFinished = new RunFinishedEvent { ThreadId = actorId, RunId = runId },
-                }, CancellationToken.None);
+                    break;
+                }
             }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            var writer = new AGUISseWriter(http.Response);
+            await writer.WriteAsync(new AGUIEvent
+            {
+                RunError = new RunErrorEvent { Message = "Script service chat stream timed out." },
+            }, CancellationToken.None);
         }
         finally
         {
-            await scriptExecutionProjectionPort.DetachReleaseAndDisposeAsync(
+            await scriptServiceAguiProjectionPort.DetachReleaseAndDisposeAsync(
                 projectionLease,
                 eventChannel,
                 null,
                 CancellationToken.None);
-
-            if (pumpTask != null)
-            {
-                try
-                {
-                    await pumpTask;
-                }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                {
-                    // Client disconnected.
-                }
-            }
-        }
-    }
-
-    private static async Task PumpScriptEventsAsync(
-        IEventSink<EventEnvelope> eventSink,
-        AGUISseWriter writer,
-        TaskCompletionSource<AGUIEvent.EventOneofCase> completionSource)
-    {
-        ArgumentNullException.ThrowIfNull(eventSink);
-        ArgumentNullException.ThrowIfNull(writer);
-        ArgumentNullException.ThrowIfNull(completionSource);
-
-        try
-        {
-            await foreach (var envelope in eventSink.ReadAllAsync(CancellationToken.None))
-            {
-                var aguiEvent = ScopeGAgentEndpoints.TryMapEnvelopeToAguiEvent(envelope);
-                if (aguiEvent is null)
-                    continue;
-
-                await writer.WriteAsync(aguiEvent, CancellationToken.None);
-                if (aguiEvent.EventCase is AGUIEvent.EventOneofCase.RunFinished
-                    or AGUIEvent.EventOneofCase.RunError
-                    or AGUIEvent.EventOneofCase.TextMessageEnd)
-                {
-                    completionSource.TrySetResult(aguiEvent.EventCase);
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            completionSource.TrySetException(ex);
         }
     }
 

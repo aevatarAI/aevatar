@@ -607,14 +607,13 @@ public sealed class ChannelRegistrationToolTests
     public async Task ExecuteAsync_Delete_WithConfirm_DispatchesUnregisterCommand()
     {
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        var registration = new ChannelBotRegistrationEntry
+        {
+            Id = "reg-1",
+            Platform = "lark",
+        };
         queryPort.GetAsync("reg-1", Arg.Any<CancellationToken>())
-            .Returns(
-                Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-                {
-                    Id = "reg-1",
-                    Platform = "lark",
-                }),
-                Task.FromResult<ChannelBotRegistrationEntry?>(null));
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(registration));
 
         EventEnvelope? capturedEnvelope = null;
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
@@ -637,46 +636,26 @@ public sealed class ChannelRegistrationToolTests
         var json = await tool.ExecuteAsync("""{"action":"delete","registration_id":"reg-1","confirm":true}""");
         using var doc = JsonDocument.Parse(json);
 
-        doc.RootElement.GetProperty("status").GetString().Should().Be("deleted");
+        doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+        doc.RootElement.GetProperty("registration_id").GetString().Should().Be("reg-1");
+        doc.RootElement.GetProperty("note").GetString().Should().Contain("Unregister accepted");
         capturedEnvelope.Should().NotBeNull();
         capturedEnvelope!.Payload.Unpack<ChannelBotUnregisterCommand>().RegistrationId.Should().Be("reg-1");
+        await queryPort.Received(1).GetAsync("reg-1", Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task ExecuteAsync_Delete_WithConfirm_ReturnsAccepted_WhenProjectionStillShowsRegistration()
+    public void DeleteSource_ShouldNotPollReadModelAfterDispatchUnregister()
     {
-        var registration = new ChannelBotRegistrationEntry
-        {
-            Id = "reg-1",
-            Platform = "lark",
-        };
+        var source = File.ReadAllText(GetChannelRegistrationToolSourcePath());
+        var dispatchIndex = source.IndexOf("DispatchUnregisterAsync", StringComparison.Ordinal);
+        dispatchIndex.Should().BeGreaterThanOrEqualTo(0);
+        var afterDispatch = source[dispatchIndex..];
 
-        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        queryPort.GetAsync("reg-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(registration));
-
-        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
-        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
-        ((IActorDispatchPort)actorRuntime).DispatchAsync(
-                ChannelBotRegistrationGAgent.WellKnownId,
-                Arg.Any<EventEnvelope>(),
-                Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
-
-        using var serviceProvider = new ServiceCollection()
-            .AddSingleton(queryPort)
-            .AddSingleton(actorRuntime)
-            .AddSingleton((IActorDispatchPort)actorRuntime)
-            .BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(serviceProvider);
-
-        using var scope = PushNyxToken();
-        var json = await tool.ExecuteAsync("""{"action":"delete","registration_id":"reg-1","confirm":true}""");
-        using var doc = JsonDocument.Parse(json);
-
-        doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-        doc.RootElement.GetProperty("note").GetString().Should().Contain("projection not yet confirmed");
+        afterDispatch.Should().NotContain("for (var attempt = 0; attempt < 10; attempt++)");
+        afterDispatch.Should().NotContain("for (var i = 0; i < 10; i++)");
+        afterDispatch.Should().NotContain(string.Concat("Task", ".Delay(500"));
+        afterDispatch.Should().NotContain("status = confirmed ? \"deleted\" : \"accepted\"");
     }
 
     private static IDisposable PushNyxToken(string? scopeId = "scope-1")
@@ -712,5 +691,24 @@ public sealed class ChannelRegistrationToolTests
     private sealed class ResetMetadataScope(IReadOnlyDictionary<string, string>? previous) : IDisposable
     {
         public void Dispose() => AgentToolRequestContext.CurrentMetadata = previous;
+    }
+
+    private static string GetChannelRegistrationToolSourcePath()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(
+                directory.FullName,
+                "src",
+                "Aevatar.AI.ToolProviders.ChannelAdmin",
+                "ChannelRegistrationTool.cs");
+            if (File.Exists(candidate))
+                return candidate;
+
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException("Could not locate ChannelRegistrationTool.cs from test output directory.");
     }
 }

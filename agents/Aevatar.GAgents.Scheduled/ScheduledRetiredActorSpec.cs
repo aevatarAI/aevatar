@@ -228,10 +228,6 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
                 AddCatalogAgentId(agentIds, upserted!.Entry);
             else if (ProtobufContractCompatibility.TryUnpack<UserAgentCatalogTombstonedEvent>(evt.EventData, out var tombstoned))
                 AddCatalogAgentId(agentIds, tombstoned!.AgentId);
-            else if (ProtobufContractCompatibility.TryUnpack<UserAgentCatalogExecutionUpdatedEvent>(
-                         evt.EventData,
-                         out var executionUpdated))
-                AddCatalogAgentId(agentIds, executionUpdated!.AgentId);
             else if (ProtobufContractCompatibility.TryUnpack<UserAgentCatalogTombstonesCompactedEvent>(
                          evt.EventData,
                          out var compacted))

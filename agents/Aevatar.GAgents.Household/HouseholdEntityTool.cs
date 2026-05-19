@@ -2,7 +2,6 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
@@ -14,16 +13,20 @@ namespace Aevatar.GAgents.Household;
 /// </summary>
 public sealed class HouseholdEntityTool : IAgentTool
 {
+    private const string PublisherActorId = "household.tool";
     private readonly IActorRuntime _runtime;
+    private readonly IActorDispatchPort _dispatchPort;
     private readonly HouseholdEntityToolOptions _options;
     private readonly ILogger _logger;
 
     public HouseholdEntityTool(
         IActorRuntime runtime,
+        IActorDispatchPort dispatchPort,
         HouseholdEntityToolOptions options,
         ILogger logger)
     {
         _runtime = runtime;
+        _dispatchPort = dispatchPort;
         _options = options;
         _logger = logger;
     }
@@ -86,13 +89,14 @@ public sealed class HouseholdEntityTool : IAgentTool
         _logger.LogInformation("[household-tool] Dispatching to actor={ActorId}, message={Message}",
             actorId, message.Length > 100 ? message[..100] + "..." : message);
 
-        // 4. Get or create HouseholdEntity actor
+        // Refactor (iter2/cluster-007):
+        //   Old pattern: the tool directly invoked the actor and read its live state.
+        //   New principle: the tool only ensures lifecycle and dispatches an accepted command envelope.
         try
         {
             var actor = await _runtime.GetAsync(actorId)
                         ?? await _runtime.CreateAsync<HouseholdEntity>(actorId, ct);
 
-            // 5. Build and dispatch HouseholdChatEvent
             var chatEvent = new HouseholdChatEvent { Prompt = message };
             if (metadata != null)
             {
@@ -100,52 +104,23 @@ public sealed class HouseholdEntityTool : IAgentTool
                     chatEvent.Metadata[kv.Key] = kv.Value;
             }
 
+            var messageId = Guid.NewGuid().ToString("N");
             var envelope = new EventEnvelope
             {
-                Id = Guid.NewGuid().ToString("N"),
+                Id = messageId,
                 Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                 Payload = Any.Pack(chatEvent),
-                Route = new EnvelopeRoute
-                {
-                    Direct = new DirectRoute { TargetActorId = actor.Id },
-                },
+                Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, actor.Id),
             };
 
-            await actor.HandleEventAsync(envelope, ct);
-
-            // 6. Read result from actor state
-            var state = ((IAgent<HouseholdEntityState>)actor.Agent).State;
-            var lastAction = state.RecentActions.Count > 0
-                ? state.RecentActions[^1]
-                : null;
+            await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
 
             var result = new
             {
-                status = "ok",
+                status = "accepted",
                 actor_id = actorId,
-                mode = state.CurrentMode ?? "active",
-                reasoning_count_today = state.ReasoningCountToday,
-                last_reasoning_ts = state.LastReasoningTs,
-                environment = state.Environment != null
-                    ? new
-                    {
-                        temperature = state.Environment.Temperature,
-                        humidity = state.Environment.Humidity,
-                        light_level = state.Environment.LightLevel,
-                        motion_detected = state.Environment.MotionDetected,
-                        scene_description = state.Environment.SceneDescription,
-                        time_of_day = state.Environment.TimeOfDay,
-                    }
-                    : null,
-                last_action = lastAction != null
-                    ? new
-                    {
-                        agent = lastAction.Agent,
-                        action = lastAction.Action,
-                        detail = lastAction.Detail,
-                        reasoning = lastAction.Reasoning,
-                    }
-                    : null,
+                message_id = messageId,
+                propagation = "accepted_for_dispatch; observe household read model or event stream for committed state",
             };
 
             return JsonSerializer.Serialize(result,

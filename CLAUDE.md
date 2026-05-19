@@ -165,6 +165,73 @@
 | CLI playground / Demo Web 静态资源 | `tools/ci/playground_asset_drift_guard.sh` |
 | 测试新增/修改 | `tools/ci/test_stability_guards.sh` |
 
+## Codex CLI 调用规范（强制）
+
+无人值守编排（如 `codex-refactor-loop` skill）调用 codex CLI 时统一遵循下列规则。手工调用 codex 也建议遵守，避免行为漂移。
+
+### 调用接口
+
+- **非交互**：始终用 `codex exec`，不要用裸 `codex`（裸 codex 进入 TUI，无人值守会 hang）。
+- **stdin 喂 prompt**：用 `-` 占位符 + shell stdin 重定向；不要把长 prompt 塞 argv，长度上限会截断。
+- **权限**：`--dangerously-bypass-approvals-and-sandbox`（要求 codex 不弹任何确认；调用方自己负责沙箱）。
+- **工作目录**：`-C <dir>` 显式指定；如在 git worktree 内工作，加 `--add-dir <repo-root>` 让 codex 也能读主仓库（CLAUDE.md、tools/ci/、docs/canon/ 等）。
+- **可选 git-repo check**：`--skip-git-repo-check`（防御性；worktree 也算 repo，但版本差异不要踩）。
+
+### Timeout 强制下限：3600s（1 小时）
+
+- **任何 codex exec 调用 timeout < 3600s 视为配置错误**。`spawn-codex.sh` 包装器主动拒绝 `--timeout < 3600`（exit 2）。
+- 理由：codex 在深扫 / 多文件重构 / coverage manifest 这类任务上需要时间；短 timeout 会让 codex 输出截断的"已完成"标记，调用方误以为成功，再实际验证时发现半截工作 → controller 重派 → 总耗时反而更长。
+- 推荐档：
+  - audit / 诊断类：3600-7200s（深扫覆盖完整 ≥60 文件 + 6 个 analyzer 命令）
+  - implement 类（per cluster）：5400-7200s（90-120 分钟）
+  - verify 类：3600-5400s
+  - rework / 1-line 类小修：3600s（仍是下限；小任务也别压时间）
+- 即使任务确定能快速跑完，也用 3600s 上限 —— `timeout` 是上限不是承诺时长，codex 完成会立刻退出。
+
+### 标准包装
+
+`./.claude/skills/codex-refactor-loop/scripts/spawn-codex.sh` 是标准入口，所有 phase prompt 通过它跑：
+
+```bash
+.claude/skills/codex-refactor-loop/scripts/spawn-codex.sh \
+  --cd <working-dir> \
+  --prompt <prompt-file> \
+  --log <log-file> \
+  --timeout 3600        # >= 3600 强制
+  [--add-dir <repo-root>]   # 当 cd 是 worktree 时
+  [--model <model-name>]    # 可选
+```
+
+包装器自动：
+- 拒绝 timeout < 3600（exit 2 + 提示文档）
+- 用 `-` stdin 把 prompt 喂进去
+- 末尾追加 `EXIT=<code>` 和 `DONE_AT=<ISO8601>` 到 log
+- 不 commit、不 push、不 checkout —— 这些由 controller 负责
+
+### 后台调度
+
+- 通过 Bash 工具 `run_in_background: true` 启动，harness 会在 codex 退出时发 `<task-notification>`；不要前台阻塞等待 codex 完成。
+- 同时启动多个 codex（并行 cluster）时，每个独立背景 task；用 worktree 隔离写入。
+- 兜底 wakeup 1500-1800s（用 `ScheduleWakeup`），primary 信号是 task notification。
+
+### Prompt 内容硬约束（传递给每个 codex）
+
+- 禁止 commit / push / checkout —— 这些由 controller 处理。
+- 禁止安装新依赖 —— 失败比偷装包好诊断。
+- 禁止 disable / skip 测试让 CI 绿。
+- 禁止 `Task.Delay` 做测试节奏；用确定性 awaiter。
+- 必须输出明确的终止 marker（如 `IMPLEMENT_DONE:<id>:<status>`、`VERIFY_DONE:<id>:<verdict>`、`AUDIT_DONE:<path>:<N>` 或 `AUDIT_INCOMPLETE:<reason>`）—— controller 用这些路由下一步。
+- 越界 scope 时打印 `SCOPE_EXTEND: <file> <reason>` 再改，便于审计。
+
+### 反模式（禁止）
+
+- 用裸 `codex` 进 TUI 在无人值守流程里
+- timeout < 3600
+- 把 prompt 塞 argv（长 prompt 截断）
+- 不带 `-C` 让 codex 用当前 cwd（worktree cwd-leak 会污染）
+- codex prompt 让 codex 自己 commit/push（git 拓扑应由 controller 集中管理）
+- 把 codex 输出当真相不验证 —— controller 必须读 log 末尾 marker 后再推进
+
 ## 编码风格
 - 遵循 `.editorconfig`：UTF-8、LF、4 空格缩进、去除行尾空白。
 - 推荐模式：`Aevatar.<Layer>.<Feature>`。

@@ -35,6 +35,11 @@ public sealed class SkillRunnerCommandPortTests
                 r.RootActorId == UserAgentCatalogGAgent.WellKnownId &&
                 r.ProjectionKind == UserAgentCatalogProjectionPort.ProjectionKind),
             Arg.Any<CancellationToken>());
+        await fixture.Activation.Received(1).EnsureAsync(
+            Arg.Is<ProjectionScopeStartRequest>(r =>
+                r.RootActorId == AgentId &&
+                r.ProjectionKind == UserAgentCatalogProjectionPort.ProjectionKind),
+            Arg.Any<CancellationToken>());
 
         fixture.Captured.Should().HaveCount(1);
         var envelope = fixture.Captured[0];
@@ -52,6 +57,9 @@ public sealed class SkillRunnerCommandPortTests
         var command = new InitializeSkillRunnerCommand { SkillName = "demo" };
         await fixture.Port.InitializeAsync(AgentId, command, runImmediately: true, CancellationToken.None);
 
+        await fixture.Activation.Received(1).EnsureAsync(
+            Arg.Is<ProjectionScopeStartRequest>(r => r.RootActorId == AgentId),
+            Arg.Any<CancellationToken>());
         fixture.Captured.Should().HaveCount(2);
         fixture.Captured[0].Payload.Is(InitializeSkillRunnerCommand.Descriptor).Should().BeTrue();
         fixture.Captured[1].Payload.Is(TriggerSkillRunnerExecutionCommand.Descriptor).Should().BeTrue();
@@ -71,6 +79,9 @@ public sealed class SkillRunnerCommandPortTests
 
         await fixture.Port.TriggerAsync(AgentId, "manual_run", CancellationToken.None);
 
+        await fixture.Activation.Received(1).EnsureAsync(
+            Arg.Is<ProjectionScopeStartRequest>(r => r.RootActorId == AgentId),
+            Arg.Any<CancellationToken>());
         fixture.Captured.Should().ContainSingle();
         var env = fixture.Captured[0];
         env.Payload.Is(TriggerSkillRunnerExecutionCommand.Descriptor).Should().BeTrue();
@@ -99,6 +110,9 @@ public sealed class SkillRunnerCommandPortTests
 
         await fixture.Port.DisableAsync(AgentId, "operator_off", CancellationToken.None);
 
+        await fixture.Activation.Received(1).EnsureAsync(
+            Arg.Is<ProjectionScopeStartRequest>(r => r.RootActorId == AgentId),
+            Arg.Any<CancellationToken>());
         fixture.Captured.Should().ContainSingle();
         var env = fixture.Captured[0];
         env.Payload.Is(DisableSkillRunnerCommand.Descriptor).Should().BeTrue();
@@ -115,6 +129,9 @@ public sealed class SkillRunnerCommandPortTests
 
         await fixture.Port.EnableAsync(AgentId, "operator_on", CancellationToken.None);
 
+        await fixture.Activation.Received(1).EnsureAsync(
+            Arg.Is<ProjectionScopeStartRequest>(r => r.RootActorId == AgentId),
+            Arg.Any<CancellationToken>());
         fixture.Captured.Should().ContainSingle();
         var env = fixture.Captured[0];
         env.Payload.Is(EnableSkillRunnerCommand.Descriptor).Should().BeTrue();

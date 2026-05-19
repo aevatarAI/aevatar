@@ -13,7 +13,11 @@
     <!-- ABP Framework (excludes LeptonXLite Theme & Studio.Client) -->
     <AbpVersion>10.0.3</AbpVersion>
     <!-- OpenTelemetry -->
-    <OpenTelemetryVersion>1.15.0</OpenTelemetryVersion>
+    <!-- Refactor (iter13/cluster-023):
+         Old: 1.15.0 triggered NU1902 vulnerable-package warnings on production hosts
+         (GHSA-g94r-2vxg-569j, GHSA-4625-4j76-fww9, GHSA-mr8r-92fq-pj8p, GHSA-q834-8qmm-v933).
+         New: bump to same-line patch 1.15.3 (no API change) to clear advisories. -->
+    <OpenTelemetryVersion>1.15.1</OpenTelemetryVersion>
     <!-- MassTransit (pinned to v8.x; do not upgrade to v9 without explicit architecture decision) -->
     <MassTransitVersion>8.5.7</MassTransitVersion>
     <!-- Wolverine -->
@@ -137,13 +141,18 @@
     <!-- ════════════════════════════════════════════════════════════ -->
     <!-- OpenTelemetry                                               -->
     <!-- ════════════════════════════════════════════════════════════ -->
-    <PackageVersion Include="OpenTelemetry" Version="$(OpenTelemetryVersion)" />
-    <PackageVersion Include="OpenTelemetry.Exporter.Console" Version="$(OpenTelemetryVersion)" />
-    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="$(OpenTelemetryVersion)" />
+    <!-- Refactor (iter13/cluster-023):
+         OpenTelemetry packages do not all ship the same patch line. Pin core/exporter
+         to 1.15.3 (clears GHSA-g94r-2vxg-569j on OpenTelemetry.Api and GHSA-4625/mr8r/q834
+         on OpenTelemetry.Exporter.OpenTelemetryProtocol). Instrumentation.Runtime stops at
+         1.15.1; keep it at $(OpenTelemetryVersion) until a higher patch ships. -->
+    <PackageVersion Include="OpenTelemetry" Version="1.15.3" />
+    <PackageVersion Include="OpenTelemetry.Exporter.Console" Version="1.15.3" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3" />
     <PackageVersion Include="OpenTelemetry.Exporter.Prometheus.AspNetCore" Version="$(OpenTelemetryVersion)-beta.1" />
-    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="$(OpenTelemetryVersion)" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="$(OpenTelemetryVersion)" />
-    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="$(OpenTelemetryVersion)" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.15.3" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.15.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.15.0" />
     <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="$(OpenTelemetryVersion)" />
     <!-- ════════════════════════════════════════════════════════════ -->
     <!-- .NET Aspire                                                 -->

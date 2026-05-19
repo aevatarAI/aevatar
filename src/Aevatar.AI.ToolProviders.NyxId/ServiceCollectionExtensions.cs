@@ -18,18 +18,23 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services,
         Action<NyxIdToolOptions> configure)
     {
+        // Refactor (iter10/cluster-019):
+        // Old: singleton tool clients constructed or pinned raw HttpClient instances.
+        // New: stateless API calls use AddHttpClient<T>; stateful caches use named clients through IHttpClientFactory.
         var options = new NyxIdToolOptions();
         configure(options);
         services.TryAddSingleton(options);
-        services.TryAddSingleton<NyxIdApiClient>();
+        services.AddHttpClient<NyxIdApiClient>();
+        services.AddHttpClient(NyxIdSpecCatalog.HttpClientName, _ => { });
+        services.AddHttpClient(ConnectedServiceSpecCache.HttpClientName, _ => { });
         services.TryAddSingleton<NyxIdSpecCatalog>();
         services.TryAddSingleton<IConnectedServiceSpecSource, ConnectedServiceSpecCache>();
         services.TryAddSingleton<IServiceDiscoveryCache, InMemoryServiceDiscoveryCache>();
         services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IAgentToolSource, NyxIdAgentToolSource>());
+            ServiceDescriptor.Transient<IAgentToolSource, NyxIdAgentToolSource>());
 
         // Remote approval handler for timeout escalation (NyxID Telegram/app push).
-        services.TryAddSingleton<IToolApprovalHandler>(sp =>
+        services.TryAddTransient<IToolApprovalHandler>(sp =>
             new NyxIdToolApprovalHandler(sp.GetRequiredService<NyxIdApiClient>()));
 
         return services;

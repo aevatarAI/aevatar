@@ -274,15 +274,24 @@ public class HouseholdEntity : AIGAgentBase<HouseholdEntityState>
 
         try
         {
-            var response = await ChatAsync(prompt, requestId: null, metadata);
+            // Refactor (iter2/cluster-007):
+            //   Old pattern: household reasoning used the non-streaming chat shortcut as the main chain.
+            //   New principle: household reasoning consumes the streaming chain and commits only its final text.
+            var responseBuilder = new StringBuilder();
+            await foreach (var chunk in ChatStreamAsync(prompt, requestId: null, metadata))
+            {
+                if (!string.IsNullOrEmpty(chunk.DeltaContent))
+                    responseBuilder.Append(chunk.DeltaContent);
+            }
 
-            var isNoAction = response != null &&
-                             response.Contains("NO_ACTION", StringComparison.OrdinalIgnoreCase);
+            var response = responseBuilder.ToString();
+
+            var isNoAction = response.Contains("NO_ACTION", StringComparison.OrdinalIgnoreCase);
 
             await PersistDomainEventAsync(new ReasoningCompletedEvent
             {
                 Decision = isNoAction ? "NO_ACTION" : "ACTION",
-                Reasoning = response ?? "",
+                Reasoning = response,
                 Timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
             });
 

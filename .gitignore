@@ -507,3 +507,6 @@ entities.json
 
 # Paseo agent run-continuation state
 .sisyphus/
+
+# codex-refactor-loop runtime state (worktrees, logs, per-iter prompts, state.json)
+.refactor-loop/

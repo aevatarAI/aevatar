@@ -5,7 +5,6 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Scheduled;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -16,19 +15,16 @@ public sealed class AgentBuilderTool : IAgentTool
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<AgentBuilderTool>? _logger;
-    private readonly int _projectionWaitAttempts;
-    private readonly int _projectionWaitDelayMilliseconds;
 
+    // Refactor (iter1/cluster-002):
+    //   Old pattern: Tool construction carried readmodel polling budget for lifecycle command paths.
+    //   New principle: Lifecycle commands return accepted; freshness is observed by follow-up query or push event.
     public AgentBuilderTool(
         IServiceProvider serviceProvider,
-        ILogger<AgentBuilderTool>? logger = null,
-        int projectionWaitAttempts = ProjectionWaitDefaults.Attempts,
-        int projectionWaitDelayMilliseconds = ProjectionWaitDefaults.DelayMilliseconds)
+        ILogger<AgentBuilderTool>? logger = null)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
-        _projectionWaitAttempts = projectionWaitAttempts;
-        _projectionWaitDelayMilliseconds = projectionWaitDelayMilliseconds;
     }
 
     public string Name => "agent_builder";
@@ -184,23 +180,15 @@ public sealed class AgentBuilderTool : IAgentTool
         if (!string.IsNullOrWhiteSpace(entry.ApiKeyId))
             await nyxClient.DeleteApiKeyAsync(token, entry.ApiKeyId, ct);
 
-        var tombstoneResult = await catalogCommandPort.TombstoneAsync(entry.AgentId, ct);
-        var deleted = tombstoneResult.Outcome == CatalogCommandOutcome.Observed;
+        // Refactor (iter4/cluster-009):
+        //   Old pattern: Delete mapped command-port Observed to a synchronous deleted status.
+        //   New principle: Tombstone ACK is accepted-only; deletion visibility is confirmed by the catalog query path.
+        // Refactor (iter5/cluster-012):
+        //   Old pattern: Delete awaited a tombstone result object that carried only accepted.
+        //   New principle: Delete awaits command completion; accepted status is emitted by this tool boundary.
+        await catalogCommandPort.TombstoneAsync(entry.AgentId, ct);
 
         var agents = await QueryAgentsForCallerAsync(queryPort, caller, ct);
-
-        if (deleted)
-        {
-            return JsonSerializer.Serialize(new
-            {
-                status = "deleted",
-                agent_id = entry.AgentId,
-                revoked_api_key_id = entry.ApiKeyId,
-                delete_notice = $"Deleted agent `{entry.AgentId}`. Revoked API key: `{entry.ApiKeyId ?? "n/a"}`.",
-                agents,
-                total = agents.Length,
-            });
-        }
 
         return JsonSerializer.Serialize(new
         {
@@ -265,22 +253,14 @@ public sealed class AgentBuilderTool : IAgentTool
         if (string.Equals(entry.value!.Status, SkillRunnerDefaults.StatusDisabled, StringComparison.Ordinal))
             return SerializeAgentStatus(entry.value, "Agent is already disabled.");
 
-        // Capture baseline version BEFORE dispatch so the wait can distinguish
-        // "projection has materialized this disable" from "stale read replica
-        // happens to surface a historical disabled status". Capture must
-        // precede dispatch — capturing inside the wait helper would race
-        // against a fast projection that already advanced the version.
-        var versionBefore = await queryPort.GetStateVersionForCallerAsync(entry.value.AgentId, caller, ct) ?? -1;
-
+        // Refactor (iter1/cluster-002):
+        //   Old pattern: Captured readmodel version, dispatched lifecycle, then delayed-looped for projected status.
+        //   New principle: Lifecycle commands return accepted; freshness is observed by follow-up query or push event.
         var dispatch = await TryDispatchLifecycleAsync(entry.value, "disable_agent", LifecycleAction.Disable, null, skillRunnerPort, ct);
         if (dispatch.error != null)
             return dispatch.error;
 
-        var observation = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, caller, versionBefore, SkillRunnerDefaults.StatusDisabled, ct);
-        if (observation.Confirmed)
-            return SerializeAgentStatus(observation.Entry!, "Agent disabled. Scheduling paused.");
-
-        return SerializeAgentStatus(entry.value, "Disable submitted. Run /agent-status in a few seconds to confirm the agent is paused.");
+        return SerializeAgentStatus(entry.value, "Disable accepted. Status update is propagating; run /agent-status to confirm the agent is paused.");
     }
 
     private async Task<string> EnableAgentAsync(
@@ -297,20 +277,17 @@ public sealed class AgentBuilderTool : IAgentTool
         if (string.Equals(entry.value!.Status, SkillRunnerDefaults.StatusRunning, StringComparison.Ordinal))
             return SerializeAgentStatus(entry.value, "Agent is already enabled.");
 
-        var versionBefore = await queryPort.GetStateVersionForCallerAsync(entry.value.AgentId, caller, ct) ?? -1;
-
+        // Refactor (iter1/cluster-002):
+        //   Old pattern: Captured readmodel version, dispatched lifecycle, then delayed-looped for projected status.
+        //   New principle: Lifecycle commands return accepted; freshness is observed by follow-up query or push event.
         var dispatch = await TryDispatchLifecycleAsync(entry.value, "enable_agent", LifecycleAction.Enable, null, skillRunnerPort, ct);
         if (dispatch.error != null)
             return dispatch.error;
 
-        var observation = await WaitForAgentStatusAsync(queryPort, entry.value.AgentId, caller, versionBefore, SkillRunnerDefaults.StatusRunning, ct);
-        if (observation.Confirmed)
-            return SerializeAgentStatus(observation.Entry!, "Agent enabled. Scheduling resumed.");
-
-        return SerializeAgentStatus(entry.value, "Enable submitted. Run /agent-status in a few seconds to confirm the agent is running.");
+        return SerializeAgentStatus(entry.value, "Enable accepted. Status update is propagating; run /agent-status to confirm the agent is running.");
     }
 
-    private static string SerializeAgentStatus(UserAgentCatalogEntry entry, string? note = null)
+    private static string SerializeAgentStatus(UserAgentCatalogReadModelEntry entry, string? note = null)
     {
         return JsonSerializer.Serialize(new
         {
@@ -353,7 +330,7 @@ public sealed class AgentBuilderTool : IAgentTool
             .ToArray();
     }
 
-    private async Task<(UserAgentCatalogEntry? value, string? error)> RequireManagedAgentAsync(
+    private async Task<(UserAgentCatalogReadModelEntry? value, string? error)> RequireManagedAgentAsync(
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
         OwnerScope caller,
@@ -374,41 +351,8 @@ public sealed class AgentBuilderTool : IAgentTool
         return (entry, null);
     }
 
-    private async Task<(bool Confirmed, UserAgentCatalogEntry? Entry)> WaitForAgentStatusAsync(
-        IUserAgentCatalogQueryPort queryPort,
-        string agentId,
-        OwnerScope caller,
-        long versionBefore,
-        string expectedStatus,
-        CancellationToken ct)
-    {
-        // Status + version dual-condition: wait until the read model both advances past the
-        // caller-captured baseline AND surfaces the expected status. Status alone is not
-        // enough — a stale replica can hold an expected-looking historical status (e.g., a
-        // previous disable→enable→disable cycle) and pass a status-only check while the
-        // actor has not yet processed *this* dispatch. Conversely, version alone is not
-        // enough either — an unrelated state event could advance the version without
-        // changing status. Both conditions together pin "this specific lifecycle event has
-        // materialized in the read model".
-        for (var attempt = 0; attempt < _projectionWaitAttempts; attempt++)
-        {
-            if (attempt > 0)
-                await Task.Delay(_projectionWaitDelayMilliseconds, ct);
-
-            var versionAfter = await queryPort.GetStateVersionForCallerAsync(agentId, caller, ct) ?? -1;
-            if (versionAfter <= versionBefore)
-                continue;
-
-            var entry = await queryPort.GetForCallerAsync(agentId, caller, ct);
-            if (entry != null && string.Equals(entry.Status, expectedStatus, StringComparison.Ordinal))
-                return (Confirmed: true, Entry: entry);
-        }
-
-        return (Confirmed: false, Entry: null);
-    }
-
     private static async Task<(bool success, string? error)> TryDispatchLifecycleAsync(
-        UserAgentCatalogEntry entry,
+        UserAgentCatalogReadModelEntry entry,
         string reason,
         LifecycleAction action,
         string? revisionFeedback,

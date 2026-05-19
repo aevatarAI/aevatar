@@ -254,13 +254,15 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
             })
             .Build();
 
+        var actor = new RecordingActor("room-1");
         var coordinator = new StreamingProxyNyxParticipantCoordinator(
+            new RecordingActorDispatchPort(actor),
             llmFactory,
             configuration,
             httpClientFactory,
             NullLogger<StreamingProxyNyxParticipantCoordinator>.Instance);
 
-        return (coordinator, new RecordingActor("room-1"), new RecordingParticipantStore(), provider);
+        return (coordinator, actor, new RecordingParticipantStore(), provider);
     }
 
     private sealed class StreamingProxyHttpHandler(bool servicesNotFound = false) : HttpMessageHandler
@@ -463,6 +465,27 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
         public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
 
         public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private sealed class RecordingActorDispatchPort : IActorDispatchPort
+    {
+        private readonly Dictionary<string, RecordingActor> _actors;
+
+        public RecordingActorDispatchPort(params RecordingActor[] actors)
+        {
+            _actors = actors.ToDictionary(actor => actor.Id, StringComparer.OrdinalIgnoreCase);
+        }
+
+        public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            Dispatches.Add((actorId, envelope));
+            if (_actors.TryGetValue(actorId, out var actor))
+                actor.Events.Add(envelope);
+
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecordingParticipantStore : IStreamingProxyParticipantStore

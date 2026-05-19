@@ -216,10 +216,10 @@ echo $DEEPSEEK_API_KEY
 
 ### 内存模式
 ```bash
-# Workflow API（默认端口5000，可自定义）
+# Workflow API（默认端口5100，可自定义）
 ASPNETCORE_URLS=http://0.0.0.0:5100 dotnet run --project src/workflow/Aevatar.Workflow.Host.Api
 
-# Mainnet API（默认端口5000，可自定义）
+# Mainnet API（默认端口5100，可自定义）
 ASPNETCORE_URLS=http://0.0.0.0:5100 dotnet run --project src/Aevatar.Mainnet.Host.Api
 ```
 

@@ -115,6 +115,18 @@ public static class ServiceCollectionExtensions
                 ProjectionKind = scopeKey.ProjectionKind,
             },
             static context => new GAgentDraftRunRuntimeLease(context));
+        services.AddEventSinkProjectionRuntimeCore<
+            ScriptServiceAguiProjectionContext,
+            ScriptServiceAguiRuntimeLease,
+            AGUIEvent,
+            ProjectionSessionScopeGAgent<ScriptServiceAguiProjectionContext>>(
+            static scopeKey => new ScriptServiceAguiProjectionContext
+            {
+                SessionId = scopeKey.SessionId,
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new ScriptServiceAguiRuntimeLease(context));
 
         services.TryAddSingleton<IServiceCatalogProjectionPort, ServiceCatalogProjectionPort>();
         services.TryAddSingleton<IServiceDeploymentCatalogProjectionPort, ServiceDeploymentCatalogProjectionPort>();
@@ -129,6 +141,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionSessionEventCodec<AGUIEvent>, GAgentDraftRunSessionEventCodec>();
         services.TryAddSingleton<IProjectionSessionEventHub<AGUIEvent>, ProjectionSessionEventHub<AGUIEvent>>();
         services.TryAddSingleton<IGAgentDraftRunProjectionPort, GAgentDraftRunProjectionPort>();
+        services.TryAddSingleton<IScriptServiceAguiProjectionPort, ScriptServiceAguiProjectionPort>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceCatalogReadModel>, ServiceCatalogReadModelMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceDeploymentCatalogReadModel>, ServiceDeploymentCatalogReadModelMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceServingSetReadModel>, ServiceServingSetReadModelMetadataProvider>();
@@ -187,6 +200,9 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<GAgentDraftRunProjectionContext>,
             GAgentDraftRunSessionEventProjector>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<ScriptServiceAguiProjectionContext>,
+            ScriptServiceAguiSessionEventProjector>());
 
         return services;
     }
