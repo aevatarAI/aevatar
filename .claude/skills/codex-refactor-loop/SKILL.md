@@ -42,8 +42,8 @@ Write initial `state.json`:
 ```json
 {
   "schema_version": 1,
-  "trunk_branch": "<current branch>",
-  "integration_branch": "<current branch>",
+  "trunk_branch": "auto-refact-dev",
+  "integration_branch": "auto-refact-dev",
   "review_base_branch": "dev",
   "pr_mode": "stacked",
   "max_parallel_clusters": 3,
@@ -55,6 +55,18 @@ Write initial `state.json`:
   "clusters_failed": []
 }
 ```
+
+**Default integration branch**: `auto-refact-dev`. This is the long-lived branch where all auto-refactor cluster PRs land before rolling up to `dev`. On a fresh loop:
+
+```bash
+# Idempotent setup — safe to re-run
+git fetch origin
+git checkout -B auto-refact-dev origin/auto-refact-dev 2>/dev/null \
+  || git checkout -b auto-refact-dev origin/dev
+git push -u origin auto-refact-dev 2>/dev/null || true
+```
+
+Override only when the user explicitly names a different integration branch (e.g., to test a new audit prompt without polluting the canonical one). Existing loops on a different branch can keep their name; the default applies to **new** Phase 0 bootstraps only.
 
 **`pr_mode` choice (set in Phase 0; do not change mid-loop)**:
 
