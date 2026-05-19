@@ -58,6 +58,11 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     /// <summary>Role name.</summary>
     public string RoleName { get; private set; } = "";
 
+    // Refactor (iter15/cluster-028):
+    //   Old pattern: workflow artifact facts derived role identity by parsing child actor id prefixes.
+    //   New principle: role identity is a typed actor-owned fact persisted on RoleGAgent state.
+    public string RoleId { get; private set; } = "";
+
     [EventHandler]
     public async Task HandleInitializeRoleAgent(InitializeRoleAgentEvent evt)
     {
@@ -407,6 +412,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     protected override Task OnStateChangedAfterConfigAppliedAsync(RoleGAgentState state, CancellationToken ct)
     {
         _ = ct;
+        // Refactor (iter15/cluster-028):
+        //   Old pattern: replay exposed only RoleName and left role identity recoverable only from actor id shape.
+        //   New principle: replay restores the typed RoleId from committed RoleGAgent state.
+        RoleId = state.RoleId ?? string.Empty;
         RoleName = state.RoleName ?? string.Empty;
         ApplyModuleExtensionsFromStateIfNeeded(state);
         return Task.CompletedTask;
@@ -708,6 +717,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
 
         return PersistDomainEventAsync(new RoleChatSessionCompletedEvent
         {
+            // Refactor (iter15/cluster-028):
+            //   Old pattern: consumers inferred workflow role id from PublisherActorId string prefixes.
+            //   New principle: completion events publish RoleId as a typed business fact.
+            RoleId = RoleId,
             SessionId = request.SessionId,
             Content = replayRecord.Content,
             ReasoningContent = replayRecord.ReasoningContent,
@@ -777,6 +790,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             : reasonMessage.Trim();
         return PersistDomainEventAsync(new RoleChatSessionCompletedEvent
         {
+            // Refactor (iter15/cluster-028):
+            //   Old pattern: terminal failure facts omitted role identity and forced downstream actor-id parsing.
+            //   New principle: every role completion fact carries the typed RoleId.
+            RoleId = RoleId,
             SessionId = pending.SessionId,
             Content = BuildLlmFailureContent($"{reasonCode}: {safeReason}"),
             Prompt = BuildContinuationPrompt(pending, safeReason),
@@ -876,6 +893,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     {
         var next = current.Clone();
         var overrides = EnsureConfigOverrides(next);
+        // Refactor (iter15/cluster-028):
+        //   Old pattern: role initialization persisted presentation/config fields but not typed workflow role identity.
+        //   New principle: RoleId is a first-class protobuf state field owned by the role actor.
+        next.RoleId = evt.RoleId ?? string.Empty;
         next.RoleName = evt.RoleName ?? string.Empty;
         next.EventModules = NormalizeModuleExtensionText(evt.EventModules);
         next.EventRoutes = NormalizeModuleExtensionText(evt.EventRoutes);

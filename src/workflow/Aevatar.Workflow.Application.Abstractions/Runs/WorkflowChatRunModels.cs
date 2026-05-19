@@ -28,6 +28,9 @@ public sealed record WorkflowChatRunRequest(
     // Inline workflow YAML bundle; first item is the entry workflow.
     IReadOnlyList<string>? WorkflowYamls = null,
     IReadOnlyDictionary<string, string>? Metadata = null,
+    // Refactor (iter15/cluster-029):
+    //   Old pattern: scope id / channel facts fell back to metadata bag string keys.
+    //   New principle: stable business semantics use typed proto field; metadata bag only for genuine open extension.
     string? ScopeId = null);
 
 public enum WorkflowChatRunStartError
@@ -42,7 +45,6 @@ public enum WorkflowChatRunStartError
     InvalidWorkflowYaml = 7,
     WorkflowNameMismatch = 8,
     PromptRequired = 9,
-    ConflictingScopeId = 10,
 }
 
 public enum WorkflowProjectionCompletionStatus
