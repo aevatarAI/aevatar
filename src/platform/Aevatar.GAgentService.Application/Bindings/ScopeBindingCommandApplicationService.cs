@@ -174,6 +174,9 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                 $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}'.");
         }
 
+        if (string.IsNullOrWhiteSpace(existingRevision.ArtifactHash))
+            return false;
+
         var expectedArtifactHash = ComputeNonScriptingArtifactHash(revisionSpec);
         if (!string.Equals(existingRevision.ArtifactHash, expectedArtifactHash, StringComparison.Ordinal))
         {

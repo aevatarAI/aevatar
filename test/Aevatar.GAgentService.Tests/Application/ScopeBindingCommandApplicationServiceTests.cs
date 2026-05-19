@@ -857,6 +857,71 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     }
 
     [Fact]
+    public async Task UpsertAsync_ShouldReplayExistingWorkflowRevision_WhenRevisionIsUnprepared()
+    {
+        const string revisionId = "rev-platform-bind-1";
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(
+            new ServiceCatalogSnapshot(
+                "scope-a:default:default:default",
+                ScopeId,
+                DefaultOptions.ServiceAppId,
+                DefaultOptions.ServiceNamespace,
+                DefaultOptions.DefaultServiceId,
+                "main",
+                revisionId,
+                revisionId,
+                "dep-1",
+                "actor-1",
+                "Active",
+                [
+                    new ServiceEndpointSnapshot(
+                        "chat",
+                        "chat",
+                        ServiceEndpointKind.Chat.ToString(),
+                        GetTypeUrl(ChatRequestEvent.Descriptor),
+                        GetTypeUrl(ChatResponseEvent.Descriptor),
+                        "Workflow chat endpoint."),
+                ],
+                [],
+                DateTimeOffset.UtcNow),
+            new ServiceRevisionCatalogSnapshot(
+                "scope-a:default:default:default",
+                [
+                    new ServiceRevisionSnapshot(
+                        revisionId,
+                        ServiceImplementationKind.Workflow.ToString(),
+                        ServiceRevisionStatus.Created.ToString(),
+                        string.Empty,
+                        string.Empty,
+                        [],
+                        DateTimeOffset.UtcNow.AddHours(-1),
+                        null,
+                        null,
+                        null),
+                ],
+                DateTimeOffset.UtcNow));
+        var scopeScriptQueryPort = new FakeScopeScriptQueryPort();
+        var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
+
+        var result = await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec([
+                "name: main\nsteps:\n  - run: echo hello",
+            ]),
+            RevisionId: revisionId,
+            AllowExistingRevisionReplay: true,
+            ReplayRevisionId: revisionId));
+
+        result.RevisionId.Should().Be(revisionId);
+        commandPort.Calls.Should().NotContain(call => call.Method == "CreateRevisionAsync");
+        commandPort.Calls.Should().Contain(call => call.Method == "PrepareRevisionAsync");
+    }
+
+    [Fact]
     public async Task UpsertAsync_ShouldRejectExistingWorkflowRevision_WhenReplayArtifactHashDoesNotMatch()
     {
         const string revisionId = "rev-platform-bind-1";
