@@ -11,7 +11,7 @@ Detailed specifications, edge cases, and recovery playbook. The main workflow is
   "trunk_branch": "<branch the loop integrates into>",
   "max_parallel_clusters": 3,
   "iteration": 1,
-  "phase": "audit | implement-batch-X | verify-batch-X | merge | done",
+  "phase": "audit | implement-batch-X | verify-batch-X | merge | remote-ci-watch | remote-ci-fix | done",
   "audit": {
     "status": "running | done | failed",
     "log": "<relative path>",
@@ -35,8 +35,20 @@ Detailed specifications, edge cases, and recovery playbook. The main workflow is
     {"id": "cluster-001", "merged_at": "<ISO8601>", "commit": "<sha>"}
   ],
   "clusters_failed": [
-    {"id": "cluster-001", "phase": "implement|verify|merge", "reason": "<short>"}
-  ]
+    {"id": "cluster-001", "phase": "implement|verify|merge|remote-ci", "reason": "<short>"}
+  ],
+  "remote_ci": {
+    "pr_number": <int|null>,
+    "last_watched_sha": "<sha>",
+    "monitor_task_id": "<harness monitor id>",
+    "check_attempts": {
+      "<check_name>": {
+        "attempts": <int>,
+        "last_classification": "real|flaky|infra|preexisting|info-only",
+        "last_fix_codex_log": "<relative path>"
+      }
+    }
+  }
 }
 ```
 
@@ -82,6 +94,28 @@ If a cluster cannot fit in any new batch ≤ `max_parallel_clusters`, start a ne
 - `git merge --abort` first.
 - Treat as `rework` with conflict diff appended to the prompt.
 - Re-dispatch implement codex with explicit instruction: "rebase your changes onto trunk HEAD, resolve listed conflicts".
+
+### cwd leak in Phase 4 ("Already up to date.")
+
+Symptom: `git merge` after a `cd .refactor-loop/worktrees/<id>` chain prints `Already up to date.` instead of merging the branch into trunk.
+
+Cause: the harness persists Bash cwd across invocations, so an earlier `cd` into the worktree leaks into the merge call. The merge then runs from inside the worktree (which is already at the branch's tip), so git correctly reports no-op.
+
+Fix:
+- Always prefix the merge call with `cd "$REPO_ROOT" &&` when chained, OR
+- Run the worktree-scoped commit in one Bash call, then run `cd $REPO_ROOT && git merge ...` in a separate call.
+
+Detection: after every merge, verify `git log --oneline -1` shows the new merge commit (not the prior trunk head). If not, redo from `$REPO_ROOT`.
+
+### Phase 5 remote-ci check stuck
+
+- Cap fix attempts per check at 2 (configurable via `state.remote_ci.check_attempts.<name>.max`).
+- After cap: mark `clusters_failed` reason `remote-ci-stuck:<check>`, push PushNotification with run url, stop the loop.
+- Common stuck causes: real environmental gap (docker service missing on runner), test contract change needing human design call, flake masking a real issue. Each is a stop-and-escalate signal, not auto-retry.
+
+### Phase 5 long-running bash
+
+The Phase 5 Monitor polls `gh pr checks` every 60s for up to ~30 minutes. If the harness backgrounds the merge+CI+push chain command and it hangs at architecture_guards.sh (observed in practice — appears stuck after the merge section), `TaskStop` it and run the remaining steps in separate foreground Bash calls. Do not assume the chain completed.
 
 ### Trunk branch moved while batch was in flight
 
