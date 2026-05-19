@@ -149,6 +149,90 @@ public sealed class StudioWorkspaceGAgentTests
     }
 
     [Fact]
+    public async Task BuiltInDirectoryRemoval_ShouldKeepDirectoryAndBumpVersion()
+    {
+        var services = CreateServices();
+        var agent = CreateAgent("studio-workspace-scope-4", services);
+
+        await agent.ActivateAsync();
+        await agent.HandleEventAsync(Envelope(new StudioWorkspaceDirectoryAdded
+        {
+            WorkspaceId = "studio-workspace-scope-4",
+            ScopeId = "scope-4",
+            Directory = new StudioWorkspaceDirectory
+            {
+                DirectoryId = "dir-built-in",
+                Label = "Built-in",
+                Path = "/tmp/built-in",
+                IsBuiltIn = true,
+            },
+            AddedAtUtc = Now(),
+        }));
+
+        await agent.HandleEventAsync(Envelope(new StudioWorkspaceDirectoryRemoved
+        {
+            WorkspaceId = "studio-workspace-scope-4",
+            ScopeId = "scope-4",
+            DirectoryId = "dir-built-in",
+            RemovedAtUtc = Now(),
+        }));
+
+        agent.State.Directories.Should().ContainSingle(directory =>
+            directory.DirectoryId == "dir-built-in" &&
+            directory.IsBuiltIn);
+        agent.State.LastAppliedEventVersion.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task DraftSave_WhenDraftExists_ShouldAdvanceVersionAndPreserveCreatedAt()
+    {
+        var services = CreateServices();
+        var agent = CreateAgent("studio-workspace-scope-6", services);
+        var createdAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(-5));
+
+        await agent.ActivateAsync();
+        await agent.HandleEventAsync(Envelope(new StudioWorkflowDraftSaved
+        {
+            WorkspaceId = "studio-workspace-scope-6",
+            ScopeId = "scope-6",
+            Draft = new StudioWorkflowDraft
+            {
+                WorkflowId = "workflow-6",
+                Name = "workflow-six",
+                FileName = "workflow-six.yaml",
+                DirectoryId = "dir-1",
+                DirectoryLabel = "Drafts",
+                Yaml = "name: workflow-six\nsteps: []\n",
+                CreatedAtUtc = createdAtUtc,
+            },
+            SavedAtUtc = Now(),
+        }));
+
+        await agent.HandleEventAsync(Envelope(new StudioWorkflowDraftSaved
+        {
+            WorkspaceId = "studio-workspace-scope-6",
+            ScopeId = "scope-6",
+            Draft = new StudioWorkflowDraft
+            {
+                WorkflowId = "workflow-6",
+                Name = "workflow-six-renamed",
+                FileName = "workflow-six-renamed.yaml",
+                DirectoryId = "dir-1",
+                DirectoryLabel = "Drafts",
+                Yaml = "name: workflow-six-renamed\nsteps: []\n",
+            },
+            SavedAtUtc = Now(),
+        }));
+
+        agent.State.Drafts.Should().ContainKey("workflow-6");
+        var draft = agent.State.Drafts["workflow-6"];
+        draft.Name.Should().Be("workflow-six-renamed");
+        draft.Version.Should().Be(2);
+        draft.CreatedAtUtc.Should().Be(createdAtUtc);
+        agent.State.LastAppliedEventVersion.Should().Be(2);
+    }
+
+    [Fact]
     public async Task Commands_WhenExpectedVersionIsStale_ShouldRejectMutation()
     {
         var services = CreateServices();

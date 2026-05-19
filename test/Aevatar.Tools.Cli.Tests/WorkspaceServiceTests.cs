@@ -69,6 +69,56 @@ public class WorkspaceServiceTests
     }
 
     [Fact]
+    public async Task Mutations_ShouldDispatchCurrentWorkspaceStateVersionToCommandPort()
+    {
+        var store = new InMemoryStudioWorkspaceStore();
+        var primaryDirectory = CreateDirectory();
+        var removableDirectory = new StudioWorkspaceDirectory(
+            DirectoryId: "dir-remove",
+            Label: "Remove",
+            Path: Path.Combine(Path.GetTempPath(), $"studio-workflows-remove-{Guid.NewGuid():N}"),
+            IsBuiltIn: false);
+        var addedPath = Path.Combine(Path.GetTempPath(), $"studio-workflows-added-{Guid.NewGuid():N}");
+        store.SeedStateVersion(17);
+        await store.SaveSettingsAsync(new StudioWorkspaceSettings(
+            RuntimeBaseUrl: "http://127.0.0.1:5100",
+            Directories: [primaryDirectory, removableDirectory],
+            AppearanceTheme: "blue",
+            ColorMode: "light"));
+
+        var service = new WorkspaceService(store, store, new StubWorkflowYamlDocumentService());
+
+        try
+        {
+            await service.UpdateSettingsAsync(new UpdateWorkspaceSettingsRequest("http://127.0.0.1:5101"));
+            await service.AddDirectoryAsync(new AddWorkflowDirectoryRequest(addedPath, "Added"));
+            await service.RemoveDirectoryAsync(removableDirectory.DirectoryId);
+            var draft = await service.CreateDraftAsync(new SaveWorkflowDraftRequest(
+                DirectoryId: primaryDirectory.DirectoryId,
+                WorkflowName: "versioned-workflow",
+                FileName: "versioned-workflow.yaml",
+                Yaml: "name: versioned-workflow\nsteps: []\n"));
+            await service.DeleteDraftAsync(draft.WorkflowId);
+
+            store.CommandPortCalls.Should().Equal(
+            [
+                new CommandPortCall("UpdateSettings", 17),
+                new CommandPortCall("AddDirectory", 18),
+                new CommandPortCall("RemoveDirectory", 19),
+                new CommandPortCall("SaveDraft", 20),
+                new CommandPortCall("DeleteDraft", 21),
+            ]);
+        }
+        finally
+        {
+            if (Directory.Exists(addedPath))
+            {
+                Directory.Delete(addedPath, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task UpdateSettingsAsync_ShouldTrimTrailingSlash()
     {
         var store = new InMemoryStudioWorkspaceStore();
@@ -295,6 +345,10 @@ public class WorkspaceServiceTests
 
         public List<StudioWorkflowDraftRecord> Drafts { get; } = [];
 
+        public List<CommandPortCall> CommandPortCalls { get; } = [];
+
+        public void SeedStateVersion(long stateVersion) => _stateVersion = stateVersion;
+
         public Task<StudioWorkspaceSnapshot> GetAsync(CancellationToken ct = default) =>
             Task.FromResult(new StudioWorkspaceSnapshot(
                 "workspace-test",
@@ -319,6 +373,7 @@ public class WorkspaceServiceTests
             long? expectedVersion = null,
             CancellationToken ct = default)
         {
+            CommandPortCalls.Add(new CommandPortCall("UpdateSettings", expectedVersion));
             _settings = settings;
             _stateVersion++;
             return Task.FromResult(Receipt(expectedVersion));
@@ -329,6 +384,7 @@ public class WorkspaceServiceTests
             long? expectedVersion = null,
             CancellationToken ct = default)
         {
+            CommandPortCalls.Add(new CommandPortCall("AddDirectory", expectedVersion));
             _settings = _settings with { Directories = _settings.Directories.Append(directory).ToList() };
             _stateVersion++;
             return Task.FromResult(Receipt(expectedVersion));
@@ -339,6 +395,7 @@ public class WorkspaceServiceTests
             long? expectedVersion = null,
             CancellationToken ct = default)
         {
+            CommandPortCalls.Add(new CommandPortCall("RemoveDirectory", expectedVersion));
             _settings = _settings with
             {
                 Directories = _settings.Directories
@@ -354,6 +411,7 @@ public class WorkspaceServiceTests
             long? expectedVersion = null,
             CancellationToken ct = default)
         {
+            CommandPortCalls.Add(new CommandPortCall("SaveDraft", expectedVersion));
             LastSavedDraft = draft;
             var existingIndex = Drafts.FindIndex(file =>
                 string.Equals(file.WorkflowId, draft.WorkflowId, StringComparison.Ordinal));
@@ -375,6 +433,7 @@ public class WorkspaceServiceTests
             long? expectedVersion = null,
             CancellationToken ct = default)
         {
+            CommandPortCalls.Add(new CommandPortCall("DeleteDraft", expectedVersion));
             Drafts.RemoveAll(file => string.Equals(file.WorkflowId, workflowId, StringComparison.Ordinal));
             _stateVersion++;
             return Task.FromResult(Receipt(expectedVersion));
@@ -383,4 +442,6 @@ public class WorkspaceServiceTests
         private static StudioWorkspaceCommandReceipt Receipt(long? expectedVersion) =>
             new("workspace-test", "workspace-test", Guid.NewGuid().ToString("N"), expectedVersion);
     }
+
+    private sealed record CommandPortCall(string Command, long? ExpectedVersion);
 }
