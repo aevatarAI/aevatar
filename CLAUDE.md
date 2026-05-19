@@ -135,6 +135,25 @@
 - 根目录允许的 `.md` 文件：`CLAUDE.md`、`README.md`、`CHANGELOG.md`、`LICENSE`、`AGENTS.md`。`src/` 下各项目允许自身 `README.md`。
 - `docs/README.md` 由 `tools/docs/build-index.sh` 自动生成，不手动编辑。
 
+### 不保留历史记录,但保留反面示例(强制)
+
+Per Auric (2026-05-19) "不要保留历史记录,历史记录都在git里面有" + "可以保留反面,保障harness":
+
+**文件层面**:
+- 废弃 / 重命名 / 替换的文件直接 `git rm`,不创建 `*.deprecated` / `*.bak` / `*.old` / `*.archived` / `*-superseded.md` 等历史保留版本。历史在 `git log` / `git show <sha>:<path>` 里。
+- `sed -i.bak` 用完立刻 `rm *.bak`。
+- 不要"先 mv 到 .deprecated 等下个 iter 再删":今天废止今天就删,git revert 比恢复 working tree 更干净。
+
+**spec / prompt / skill 文件内容层面**:
+- **不写历史叙述**: 不要在 skill / prompt / spec 里写 "Per Auric YYYY-MM-DD" 出处引用、"旧规则曾经是 X,现在改为 Y"、"supersede 了 Z"、"## History" / "## Legacy" / "## Why we changed" 等。这些都在 commit message + git log 里。skill **只描述当前态**。
+- **但保留 anti-pattern 反面示例**: "❌ 禁止 X" / "反模式: 如果你 X 就会 Y" 这种**防护性反面**是有价值的(它告诉 codex / future-self 不要踩坑,而不是叙述历史)。规则:**反面要描述"会发生什么坏事"而不是"以前我们这么干过"**。
+  - ✅ 好的反面:`❌ 第一行不是 ## 🤖 → comment-monitor 会把它当 maintainer 评论 react,造成自循环`
+  - ❌ 坏的历史叙述:`旧版 skill 没要求 ## 🤖,导致 monitor false-positive,Auric 2026-05-19 让我们加这条`
+
+**例外**:`docs/adr/` 与 `docs/history/` 是被显式设计为归档的目录,这里的规则不覆盖它们(它们本来就是归档)。
+
+**Memory 文件**(`/.claude/projects/.../memory/*.md`)允许写"trigger 事件"(行为反思需要),但 skill 本身不写。
+
 ## 项目结构
 - `src/`：生产代码（`Aevatar.Foundation.*`、`Aevatar.AI.*`、`Aevatar.CQRS.Projection.Core.Abstractions/Runtime/Stores.Abstractions`、`src/workflow/Aevatar.Workflow.*`、`Aevatar.Host.*`）。
 - `test/`：对应测试项目（单元、集成、API）。
