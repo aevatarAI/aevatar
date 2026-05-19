@@ -480,11 +480,52 @@ Classify:
 
 Update `state.design_pending[i].last_comment_count` and `last_checked` after every sweep, regardless of outcome.
 
-### Sweep cadence
+### Sweep cadence — two modes
 
-- Every controller wakeup runs the sweep (cheap: `gh issue view` per pending cluster, typically ≤5 pending).
-- If there are pending design issues and no other active phase work, set ScheduleWakeup to **3600s** (1h) as the design-poll cadence — issues don't usually get responses minute-to-minute.
-- Stop the loop entirely (omit ScheduleWakeup, PushNotification stop) only when **no design_pending AND no clusters_active AND no rollup_pr awaiting CI**. Otherwise the loop must keep heartbeating to catch design responses.
+**Mode A: passive sweep (default when other phase work is active).** Every controller wakeup runs the sweep before any other phase. Cheap: one `gh issue view` per pending cluster. ScheduleWakeup cadence is dominated by other in-flight work; design issues piggyback on those wakeups.
+
+**Mode B: active 60s Monitor (when design_pending is the ONLY remaining work).** Instead of sleeping 1h between checks, arm a persistent Monitor that polls all design issues at 60s cadence and emits an event line the **first** time any issue's `(state, labels, comment_count)` tuple changes. The conversation wakes <60s after the maintainer adds the `auto-loop-resume` label / closes the issue / comments. Use:
+
+```bash
+# Single Monitor watches all pending issues; emits one line per detected change.
+# 60s cadence × 3 issues = 180 gh API calls/hr — well under rate limit.
+prev=""
+while true; do
+  cur=$(
+    for issue in "${PENDING_ISSUES[@]}"; do
+      gh issue view "$issue" --json state,labels,comments 2>/dev/null \
+        | jq -r --arg n "$issue" '
+            "\($n)\t\(.state)\t\([.labels[].name] | sort | join(","))\t\(.comments | length)"
+          '
+    done | sort
+  )
+  if [[ -n "$prev" && "$cur" != "$prev" ]]; then
+    diff <(printf '%s\n' "$prev") <(printf '%s\n' "$cur") \
+      | grep '^>' | sed 's/^> /design-issue-event: /'
+    # Exit immediately on resume / close so controller can act
+    if echo "$cur" | grep -qE "auto-loop-resume|CLOSED"; then
+      echo "DESIGN_EVENT_DONE: state change requires controller wakeup"
+      break
+    fi
+  fi
+  prev="$cur"
+  sleep 60
+done
+```
+
+Arm via Monitor tool with `persistent: true` and `timeout_ms: 3600000` (1h ceiling). At 1h ceiling the Monitor exits; the controller's next ScheduleWakeup (3600s) re-arms it. If Monitor crashes early, ScheduleWakeup still catches it.
+
+**Mode transition**:
+- Mode A → B: when active work drains to only design_pending (no `clusters_active`, no `rollup_pr` awaiting CI) → arm Mode B Monitor and set ScheduleWakeup 3600s as fallback.
+- Mode B → A: when Monitor emits `DESIGN_EVENT_DONE` and the resumption flow starts a new Phase 2/3/4 cycle → TaskStop the design Monitor (avoid double-armed monitors).
+
+**Stop the loop entirely** (omit ScheduleWakeup, no Monitor, send final PushNotification with summary) only when **no design_pending AND no clusters_active AND no rollup_pr awaiting CI**. Otherwise the loop must keep heartbeating to catch design responses.
+
+### Why two modes
+
+- Mode A is correct when batch implements/verifies are running; the controller already wakes frequently on task-notifications, so 1h sweep cadence is fine — design issues piggyback.
+- Mode B avoids 1h detection latency without burning conversation cache: the 60s poll runs inside the Monitor's persistent process, not in the conversation. The conversation only wakes when the Monitor emits a meaningful event line.
+- Manual override always works: user typing `/loop` wakes controller immediately regardless of Mode.
 
 ### Manual override
 
