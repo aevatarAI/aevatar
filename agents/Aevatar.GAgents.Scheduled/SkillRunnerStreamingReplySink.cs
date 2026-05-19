@@ -11,7 +11,7 @@ namespace Aevatar.GAgents.Scheduled;
 /// </summary>
 /// <remarks>
 /// Refactor (iter15/cluster-027-streaming-reply-timer-business-dispatch):
-///   Old pattern: timer callback directly inspects/mutates pending business output and dispatches actor command from callback thread
+///   Old pattern: timer callback directly inspected/mutated pending output and performed Lark POST/PUT from callback timing
 ///   New principle: SkillRunnerGAgent owns pending output/throttle/finalization and calls this sink only for a decided send.
 /// </remarks>
 internal sealed class SkillRunnerStreamingReplySink : IDisposable

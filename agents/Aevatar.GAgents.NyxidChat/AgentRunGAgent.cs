@@ -738,7 +738,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     /// <remarks>
     /// Refactor (iter15/cluster-027-streaming-reply-timer-business-dispatch):
     ///   Old pattern: timer callback directly inspects/mutates pending business output and dispatches actor command from callback thread
-    ///   New principle: this run flow owns throttling, duplicate suppression, interim caps, and final flush ordering before dispatch.
+    ///   New principle: this run flow owns throttling, duplicate suppression, interim caps, and final flush ordering before dispatch; throttled deltas never block the actor turn.
     /// </remarks>
     private sealed class StreamingReplyRunState : IStreamingReplySink
     {
@@ -749,6 +749,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         private string _lastEmittedText = string.Empty;
         private DateTimeOffset _lastEmitAt = DateTimeOffset.MinValue;
         private int _chunksEmitted;
+        private string _pendingText = string.Empty;
 
         public StreamingReplyRunState(
             TurnStreamingReplySink sink,
@@ -774,16 +775,26 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 return;
 
             if (string.Equals(text, _lastEmittedText, StringComparison.Ordinal))
+            {
+                if (isFinal || string.Equals(text, _pendingText, StringComparison.Ordinal))
+                    ClearPending();
                 return;
+            }
 
             if (!isFinal && _chunksEmitted >= _maxInterimChunks)
+            {
+                StashPending(text);
                 return;
+            }
 
             if (!isFinal)
             {
                 var elapsed = _timeProvider.GetUtcNow() - _lastEmitAt;
                 if (elapsed < _throttle)
-                    await Task.Delay(_throttle - elapsed, _timeProvider, ct).ConfigureAwait(false);
+                {
+                    StashPending(text);
+                    return;
+                }
             }
 
             await _sink.DispatchAsync(text, ct).ConfigureAwait(false);
@@ -792,7 +803,19 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 _lastEmittedText = text;
                 _lastEmitAt = _timeProvider.GetUtcNow();
                 _chunksEmitted = _sink.ChunksEmitted;
+                if (isFinal || string.Equals(_pendingText, text, StringComparison.Ordinal))
+                    ClearPending();
             }
+        }
+
+        private void StashPending(string text)
+        {
+            _pendingText = text;
+        }
+
+        private void ClearPending()
+        {
+            _pendingText = string.Empty;
         }
     }
 

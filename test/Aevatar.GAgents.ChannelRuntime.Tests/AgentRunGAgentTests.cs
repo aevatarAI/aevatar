@@ -1346,6 +1346,98 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleStartAsync_StreamingEnabled_CoalescesDuplicateAndThrottledSnapshotsUntilFinal()
+    {
+        var collector = new AsyncLocalInteractiveReplyCollector();
+        var replyGenerator = new RecordingReplyGenerator(() => false)
+        {
+            ReplyText = "abc",
+            StreamingSnapshots = ["a", "a", "ab", "abc"],
+        };
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("channel-conversation:lark:group:oc_group_chat_stream_coalesce");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            collector,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = false,
+                StreamingRepliesEnabled = true,
+                StreamingFlushIntervalMs = 750,
+                StreamingMaxInterimChunks = 10,
+                StreamingCardKitEnabled = false,
+            });
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-stream-coalesce",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-stream-coalesce",
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+        });
+
+        var chunks = handled
+            .Where(e => e.Payload.Is(LlmReplyStreamChunkEvent.Descriptor))
+            .Select(e => e.Payload.Unpack<LlmReplyStreamChunkEvent>().AccumulatedText)
+            .ToList();
+        chunks.Should().Equal("a", "abc");
+        handled.Last().Payload.Is(LlmReplyReadyEvent.Descriptor).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_StreamingEnabled_InterimCapDoesNotSuppressFinalChunk()
+    {
+        var collector = new AsyncLocalInteractiveReplyCollector();
+        var replyGenerator = new RecordingReplyGenerator(() => false)
+        {
+            ReplyText = "first second final",
+            StreamingSnapshots = ["first", "first second", "first second final"],
+        };
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("channel-conversation:lark:group:oc_group_chat_stream_cap");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            collector,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = false,
+                StreamingRepliesEnabled = true,
+                StreamingFlushIntervalMs = 0,
+                StreamingMaxInterimChunks = 1,
+                StreamingCardKitEnabled = false,
+            });
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-stream-cap",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-stream-cap",
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+        });
+
+        var chunks = handled
+            .Where(e => e.Payload.Is(LlmReplyStreamChunkEvent.Descriptor))
+            .Select(e => e.Payload.Unpack<LlmReplyStreamChunkEvent>().AccumulatedText)
+            .ToList();
+        chunks.Should().Equal("first", "first second final");
+        handled.Last().Payload.Is(LlmReplyReadyEvent.Descriptor).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task HandleStartAsync_StreamingEnabledWithDefaultCardMode_DispatchesCardChunkEvent()
     {
         // Pinning the new default: StreamingCardKitEnabled=true causes the sink to emit
@@ -2042,6 +2134,8 @@ public sealed class AgentRunGAgentTests
 
         public Action<IReadOnlyDictionary<string, string>>? MetadataObserver { get; init; }
 
+        public IReadOnlyList<string>? StreamingSnapshots { get; init; }
+
         public async Task<ConversationReplyResult> GenerateReplyAsync(
             ChatActivity activity,
             IReadOnlyDictionary<string, string> metadata,
@@ -2051,8 +2145,18 @@ public sealed class AgentRunGAgentTests
             CallCount++;
             CaptureSucceeded = captureAction();
             MetadataObserver?.Invoke(metadata);
-            if (streamingSink is not null && !string.IsNullOrEmpty(ReplyText))
-                await streamingSink.OnDeltaAsync(ReplyText, ct);
+            if (streamingSink is not null)
+            {
+                if (StreamingSnapshots is { Count: > 0 })
+                {
+                    foreach (var snapshot in StreamingSnapshots)
+                        await streamingSink.OnDeltaAsync(snapshot, ct);
+                }
+                else if (!string.IsNullOrEmpty(ReplyText))
+                {
+                    await streamingSink.OnDeltaAsync(ReplyText, ct);
+                }
+            }
             return new ConversationReplyResult(ReplyText, Usage: null, FinishReason: null);
         }
     }

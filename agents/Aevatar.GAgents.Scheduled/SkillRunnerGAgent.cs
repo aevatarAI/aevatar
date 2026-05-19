@@ -472,8 +472,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     /// </summary>
     /// <remarks>
     /// Refactor (iter15/cluster-027-streaming-reply-timer-business-dispatch):
-    ///   Old pattern: timer callback directly inspects/mutates pending business output and dispatches actor command from callback thread
-    ///   New principle: ExecuteSkillAsync owns throttle state, emitted text, and final dispatch ordering before Lark POST/PUT.
+    ///   Old pattern: timer callback directly inspected/mutated pending output and performed Lark POST/PUT from callback timing
+    ///   New principle: ExecuteSkillAsync owns throttle state, emitted text, and final dispatch ordering before calling the Lark transport sink.
     /// </remarks>
     private sealed class SkillRunnerStreamingRunState
     {
@@ -483,6 +483,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         private string _lastEmittedText = string.Empty;
         private DateTimeOffset _lastEmitAt = DateTimeOffset.MinValue;
         private int _chunksEmitted;
+        private string _pendingText = string.Empty;
 
         public SkillRunnerStreamingRunState(
             SkillRunnerStreamingReplySink sink,
@@ -507,13 +508,20 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 return;
 
             if (string.Equals(capped, _lastEmittedText, StringComparison.Ordinal))
+            {
+                if (isFinal || string.Equals(capped, _pendingText, StringComparison.Ordinal))
+                    ClearPending();
                 return;
+            }
 
             if (!isFinal)
             {
                 var elapsed = _timeProvider.GetUtcNow() - _lastEmitAt;
                 if (elapsed < _throttle)
-                    await Task.Delay(_throttle - elapsed, _timeProvider, ct).ConfigureAwait(false);
+                {
+                    StashPending(capped);
+                    return;
+                }
             }
 
             await _sink.DispatchAsync(capped, isFinal, ct).ConfigureAwait(false);
@@ -522,7 +530,19 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 _lastEmittedText = capped;
                 _lastEmitAt = _timeProvider.GetUtcNow();
                 _chunksEmitted = _sink.ChunksEmitted;
+                if (isFinal || string.Equals(_pendingText, capped, StringComparison.Ordinal))
+                    ClearPending();
             }
+        }
+
+        private void StashPending(string text)
+        {
+            _pendingText = text;
+        }
+
+        private void ClearPending()
+        {
+            _pendingText = string.Empty;
         }
     }
 
