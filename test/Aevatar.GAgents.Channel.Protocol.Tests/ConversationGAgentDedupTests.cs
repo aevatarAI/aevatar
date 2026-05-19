@@ -359,23 +359,74 @@ public sealed class ConversationGAgentDedupTests
     [Fact]
     public async Task HandleNyxRelayInboundActivityAsync_WithCallbackJti_PersistsAdmissionBeforeRunner()
     {
+        var observedAtMs = DateTimeOffset.UtcNow.AddSeconds(-17).ToUnixTimeMilliseconds();
+        const string sentinelUserAccessToken = "sentinel-user-access-token-must-not-persist";
         var publisher = new RecordingEventPublisher();
         var runner = new RecordingTurnRunner();
         var (agent, store) = CreateAgent(runner, "conv-relay-admit-first", eventPublisher: publisher);
 
-        var relay = CreateRelayInbound("act-admit", "conv:slack:C1", "api-key-1", "jti-1");
+        var relay = CreateRelayInbound(
+            "act-admit",
+            "conv:slack:C1",
+            "api-key-1",
+            "jti-1",
+            sentinelUserAccessToken,
+            observedAtMs);
         await agent.HandleNyxRelayInboundActivityAsync(relay);
 
         runner.InboundCount.ShouldBe(0);
         agent.State.ProcessedMessageIds.ShouldBeEmpty();
         agent.State.RelayReplayClaims.ShouldContain(claim =>
             claim.RelayApiKeyId == "api-key-1" && claim.CallbackJti == "jti-1");
-        agent.State.PendingRelayAdmissions.ShouldContain(admission => admission.ActivityId == "act-admit");
+        var pendingAdmission = agent.State.PendingRelayAdmissions.Single(admission => admission.ActivityId == "act-admit");
+        pendingAdmission.AdmittedAtUnixMs.ShouldBe(observedAtMs);
+        pendingAdmission.Activity.TransportExtras.NyxUserAccessToken.ShouldBeEmpty();
 
         var events = await store.GetEventsAsync(agent.Id);
         events.Count.ShouldBe(1);
         events[0].EventType.ShouldContain(nameof(NyxRelayCallbackAdmittedEvent));
+        var admitted = NyxRelayCallbackAdmittedEvent.Parser.ParseFrom(events[0].EventData.Value);
+        admitted.AdmittedAtUnixMs.ShouldBe(observedAtMs);
+        admitted.Activity.TransportExtras.NyxUserAccessToken.ShouldBeEmpty();
+        ContainsSubsequence(events[0].EventData.Value.ToByteArray(), Encoding.UTF8.GetBytes(sentinelUserAccessToken))
+            .ShouldBeFalse("relay user access token must stay out of persisted admission event bytes");
         publisher.Sent.ShouldContain(message => message is NyxRelayCallbackTurnRequestedEvent);
+    }
+
+    [Fact]
+    public async Task HandleNyxRelayCallbackTurnRequestedAsync_WithSanitizedAdmission_RestoresRuntimeTokenOnlyForTurn()
+    {
+        const string sentinelUserAccessToken = "sentinel-user-access-token-runtime-only";
+        var runner = new RecordingTurnRunner();
+        var (agent, store) = CreateAgent(runner, "conv-relay-runtime-token");
+        var relay = CreateRelayInbound(
+            "act-runtime-token",
+            "conv:lark:C1",
+            "api-key-1",
+            "jti-runtime-token",
+            sentinelUserAccessToken);
+
+        await agent.HandleNyxRelayInboundActivityAsync(relay);
+        await agent.HandleNyxRelayCallbackTurnRequestedAsync(new NyxRelayCallbackTurnRequestedEvent
+        {
+            ActivityId = "act-runtime-token",
+            RelayApiKeyId = "api-key-1",
+            CallbackJti = "jti-runtime-token",
+            RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        runner.InboundCount.ShouldBe(1);
+        runner.LastInboundActivity?.TransportExtras?.NyxUserAccessToken.ShouldBe(sentinelUserAccessToken);
+        runner.LastInboundRuntimeContext?.NyxUserAccessToken.ShouldBe(sentinelUserAccessToken);
+        agent.State.PendingRelayAdmissions.ShouldBeEmpty();
+
+        var events = await store.GetEventsAsync(agent.Id);
+        var sentinelBytes = Encoding.UTF8.GetBytes(sentinelUserAccessToken);
+        foreach (var record in events)
+        {
+            ContainsSubsequence(record.EventData.Value.ToByteArray(), sentinelBytes)
+                .ShouldBeFalse($"persisted event {record.EventType} must not contain Nyx user access token bytes");
+        }
     }
 
     [Fact]
@@ -1727,13 +1778,19 @@ public sealed class ConversationGAgentDedupTests
         string activityId,
         string canonicalKey,
         string relayApiKeyId,
-        string callbackJti)
+        string callbackJti,
+        string? nyxUserAccessToken = null,
+        long callbackObservedAtUnixMs = 0)
     {
         var activity = CreateActivity(activityId, canonicalKey);
         activity.OutboundDelivery = new OutboundDeliveryContext
         {
             ReplyMessageId = activityId,
             CorrelationId = callbackJti,
+        };
+        activity.TransportExtras = new TransportExtras
+        {
+            NyxUserAccessToken = nyxUserAccessToken ?? string.Empty,
         };
         return new NyxRelayInboundActivity
         {
@@ -1743,7 +1800,9 @@ public sealed class ConversationGAgentDedupTests
             CorrelationId = callbackJti,
             RelayApiKeyId = relayApiKeyId,
             CallbackJti = callbackJti,
-            CallbackObservedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            CallbackObservedAtUnixMs = callbackObservedAtUnixMs > 0
+                ? callbackObservedAtUnixMs
+                : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             CallbackReplayExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
         };
     }
@@ -1882,6 +1941,8 @@ public sealed class ConversationGAgentDedupTests
         public Func<LlmReplyReadyEvent, ConversationTurnResult>? LlmReplyResultFactory { get; set; }
         public Action<ConversationTurnRuntimeContext>? LlmReplyContextObserver { get; set; }
         public Func<ConversationContinueRequestedEvent, ConversationTurnResult>? ContinueResultFactory { get; set; }
+        public ChatActivity? LastInboundActivity { get; private set; }
+        public ConversationTurnRuntimeContext? LastInboundRuntimeContext { get; private set; }
 
         public Task<ConversationTurnResult> RunInboundAsync(
             ChatActivity activity,
@@ -1889,6 +1950,8 @@ public sealed class ConversationGAgentDedupTests
             CancellationToken ct)
         {
             Interlocked.Increment(ref InboundCount);
+            LastInboundActivity = activity.Clone();
+            LastInboundRuntimeContext = runtimeContext;
             var result = InboundResultFactory is null
                 ? ConversationTurnResult.Sent("sent:" + activity.Id, new MessageContent { Text = "ack" }, "bot")
                 : InboundResultFactory(activity);

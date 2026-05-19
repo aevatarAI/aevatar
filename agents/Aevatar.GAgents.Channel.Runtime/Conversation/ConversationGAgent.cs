@@ -117,13 +117,15 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
 
         if (relayApiKeyId is not null && callbackJti is not null)
         {
-            var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var nowMs = relayActivity.CallbackObservedAtUnixMs > 0
+                ? relayActivity.CallbackObservedAtUnixMs
+                : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             var admitted = new NyxRelayCallbackAdmittedEvent
             {
                 ActivityId = activity.Id ?? string.Empty,
                 RelayApiKeyId = relayApiKeyId,
                 CallbackJti = callbackJti,
-                Activity = activity.Clone(),
+                Activity = CloneForDurableState(activity),
                 AdmittedAtUnixMs = nowMs,
                 ClaimExpiresAtUnixMs = relayActivity.CallbackReplayExpiresAtUnixMs > nowMs
                     ? relayActivity.CallbackReplayExpiresAtUnixMs
@@ -170,7 +172,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             return;
         }
 
-        var activity = admission.Activity;
+        var activity = admission.Activity.Clone();
+        RestoreRuntimeTransportCredentials(activity, evt.CallbackJti);
         var runtimeContext = BuildNyxRelayRuntimeContext(
             NormalizeOptional(activity.OutboundDelivery?.CorrelationId) ??
             NormalizeOptional(admission.ActivityId),
@@ -212,9 +215,11 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             // those credentials into the event store / projection / read model.
             var runCopy = result.LlmReplyRequest.Clone();
             runCopy.TargetActorId = Id;
+            RestoreRuntimeTransportCredentials(runCopy.Activity, runtimeContext);
             var persistedCopy = runCopy.Clone();
             persistedCopy.ReplyToken = string.Empty;
             persistedCopy.ReplyTokenExpiresAtUnixMs = 0;
+            persistedCopy.Activity = CloneForDurableState(persistedCopy.Activity);
             LlmReplyCredentialMetadataKeys.StripFrom(persistedCopy.Metadata);
             await PersistDomainEventAsync(persistedCopy);
             await DispatchPendingLlmReplyAsync(runCopy, CancellationToken.None);
@@ -327,7 +332,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         var scheduled = new InboundTurnRetryScheduledEvent
         {
             ActivityId = activity.Id,
-            Activity = activity.Clone(),
+            Activity = CloneForDurableState(activity),
             RetryCount = nextRetryCount,
             FirstFailedUnixMs = firstFailedUnixMs,
             NextRetryUnixMs = nextRetryUnixMs,
@@ -438,7 +443,9 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             pending.Activity.OutboundDelivery?.CorrelationId,
             pending.Activity);
 
-        await HandleInboundActivityCoreAsync(pending.Activity.Clone(), runtimeContext);
+        var activity = pending.Activity.Clone();
+        RestoreRuntimeTransportCredentials(activity, runtimeContext);
+        await HandleInboundActivityCoreAsync(activity, runtimeContext);
     }
 
     private async Task DispatchPendingLlmReplyAsync(NeedsLlmReplyEvent request, CancellationToken ct)
@@ -1312,9 +1319,12 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             correlationId,
             replyToken,
             replyMessageId,
-            expiresAt);
+            expiresAt,
+            NormalizeOptional(activity.TransportExtras?.NyxUserAccessToken));
         _nyxRelayReplyTokens[correlationId] = tokenContext;
-        return new ConversationTurnRuntimeContext(tokenContext);
+        return new ConversationTurnRuntimeContext(
+            tokenContext,
+            tokenContext.NyxUserAccessToken);
     }
 
     private ConversationTurnRuntimeContext BuildNyxRelayRuntimeContext(
@@ -1337,7 +1347,9 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             return ConversationTurnRuntimeContext.Empty;
         }
 
-        return new ConversationTurnRuntimeContext(tokenContext);
+        return new ConversationTurnRuntimeContext(
+            tokenContext,
+            tokenContext.NyxUserAccessToken);
     }
 
     private ConversationTurnRuntimeContext BuildNyxRelayRuntimeContextForReply(
@@ -1363,11 +1375,52 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                                     string.Empty;
                 var replyMessageId = NormalizeOptional(activity?.OutboundDelivery?.ReplyMessageId) ?? string.Empty;
                 return new ConversationTurnRuntimeContext(
-                    new NyxRelayReplyTokenContext(correlationId, inlineToken, replyMessageId, expiresAt));
+                    new NyxRelayReplyTokenContext(correlationId, inlineToken, replyMessageId, expiresAt),
+                    NormalizeOptional(activity?.TransportExtras?.NyxUserAccessToken));
             }
         }
 
         return BuildNyxRelayRuntimeContext(evt.CorrelationId, activity);
+    }
+
+    // Refactor (iter17/cluster-038): Old pattern: transient relay credentials could ride inside persisted ChatActivity clones. New principle: durable admission/retry/LLM state stores only non-secret relay facts; same-activation credentials stay in runtime context.
+    private static ChatActivity? CloneForDurableState(ChatActivity? activity)
+    {
+        if (activity is null)
+            return null;
+
+        var durable = activity.Clone();
+        if (durable.TransportExtras is not null)
+            durable.TransportExtras.NyxUserAccessToken = string.Empty;
+        return durable;
+    }
+
+    private void RestoreRuntimeTransportCredentials(
+        ChatActivity? activity,
+        string? callbackJti)
+    {
+        // `PendingRelayAdmission.activity` is the durable sanitized copy. This method is
+        // intentionally called only on a clone created for the current actor turn.
+        if (activity is null)
+            return;
+
+        var runtimeContext = BuildNyxRelayRuntimeContext(
+            NormalizeOptional(activity.OutboundDelivery?.CorrelationId) ??
+            NormalizeOptional(callbackJti),
+            activity);
+        RestoreRuntimeTransportCredentials(activity, runtimeContext);
+    }
+
+    private static void RestoreRuntimeTransportCredentials(
+        ChatActivity? activity,
+        ConversationTurnRuntimeContext runtimeContext)
+    {
+        var accessToken = NormalizeOptional(runtimeContext.NyxUserAccessToken);
+        if (activity is null || accessToken is null)
+            return;
+
+        activity.TransportExtras ??= new TransportExtras();
+        activity.TransportExtras.NyxUserAccessToken = accessToken;
     }
 
     private string DescribeReplyTokenSource(LlmReplyReadyEvent evt, ConversationTurnRuntimeContext runtimeContext)

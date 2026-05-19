@@ -84,9 +84,12 @@ public sealed record NyxRelayReplyTokenContext(
     string CorrelationId,
     string ReplyToken,
     string ReplyMessageId,
-    DateTimeOffset ExpiresAtUtc);
+    DateTimeOffset ExpiresAtUtc,
+    string? NyxUserAccessToken = null);
 
-public sealed record ConversationTurnRuntimeContext(NyxRelayReplyTokenContext? NyxRelayReplyToken)
+public sealed record ConversationTurnRuntimeContext(
+    NyxRelayReplyTokenContext? NyxRelayReplyToken,
+    string? NyxUserAccessToken = null)
 {
     public static ConversationTurnRuntimeContext Empty { get; } = new(NyxRelayReplyToken: null);
 }
