@@ -67,6 +67,7 @@ message PendingInboundTurn {
   int64 next_retry_unix_ms = 5;
 }
 
+// Refactor (iter17/cluster-038): Old pattern: relay replay claims lived in process-local guard dictionaries. New principle: callback_jti replay authority is bounded, typed, actor-owned state.
 message RelayReplayClaim {
   string relay_api_key_id = 1;
   string callback_jti = 2;
@@ -74,6 +75,7 @@ message RelayReplayClaim {
   int64 expires_at_unix_ms = 4;
 }
 
+// Refactor (iter17/cluster-038): Old pattern: admitted callback work relied on transient endpoint/guard context. New principle: pending relay admissions are durable actor state until the self-continuation consumes them.
 message PendingRelayAdmission {
   string activity_id = 1;
   string relay_api_key_id = 2;

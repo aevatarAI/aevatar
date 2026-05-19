@@ -22,32 +22,44 @@ FORBIDDEN_TYPE_NAMES = (
 CONCURRENT_DICTIONARY = re.compile(r"\bConcurrentDictionary\s*<")
 
 
-def is_ignored(path: Path) -> bool:
+def is_ignored(path: Path, explicit: bool) -> bool:
     parts = set(path.parts)
-    return "bin" in parts or "obj" in parts or path.suffix != ".cs"
+    if path.suffix != ".cs":
+        return True
+    return not explicit and ("bin" in parts or "obj" in parts)
+
+
+def iter_scan_files() -> list[Path]:
+    if len(sys.argv) > 1:
+        return [Path(arg).resolve() for arg in sys.argv[1:]]
+
+    files: list[Path] = []
+    for root in SCAN_ROOTS:
+        if not root.exists():
+            continue
+        files.extend(root.rglob("*.cs"))
+    return files
 
 
 def main() -> int:
     violations: list[str] = []
-    for root in SCAN_ROOTS:
-        if not root.exists():
+    explicit = len(sys.argv) > 1
+    for path in iter_scan_files():
+        if is_ignored(path, explicit):
             continue
-        for path in root.rglob("*.cs"):
-            if is_ignored(path):
+        relative = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
+        text = path.read_text(encoding="utf-8")
+        for line_no, line in enumerate(text.splitlines(), start=1):
+            stripped = line.strip()
+            if stripped.startswith("//") and "Old pattern:" in stripped:
                 continue
-            relative = path.relative_to(ROOT)
-            text = path.read_text(encoding="utf-8")
-            for line_no, line in enumerate(text.splitlines(), start=1):
-                stripped = line.strip()
-                if stripped.startswith("//") and "Old pattern:" in stripped:
-                    continue
-                if CONCURRENT_DICTIONARY.search(line) and re.search(
-                    r"replay|idempot|claim|callback", line, re.IGNORECASE
-                ):
+            if CONCURRENT_DICTIONARY.search(line) and re.search(
+                r"replay|idempot|claim|callback", line, re.IGNORECASE
+            ):
+                violations.append(f"{relative}:{line_no}:{line}")
+            for name in FORBIDDEN_TYPE_NAMES:
+                if name in line and "Old pattern:" not in line:
                     violations.append(f"{relative}:{line_no}:{line}")
-                for name in FORBIDDEN_TYPE_NAMES:
-                    if name in line and "Old pattern:" not in line:
-                        violations.append(f"{relative}:{line_no}:{line}")
 
     if violations:
         print("\n".join(violations))

@@ -128,9 +128,6 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
                 ClaimExpiresAtUnixMs = relayActivity.CallbackReplayExpiresAtUnixMs > nowMs
                     ? relayActivity.CallbackReplayExpiresAtUnixMs
                     : nowMs + (long)TimeSpan.FromMinutes(5).TotalMilliseconds,
-                CorrelationId = NormalizeOptional(relayActivity.CorrelationId)
-                                ?? NormalizeOptional(activity.OutboundDelivery?.CorrelationId)
-                                ?? string.Empty,
             };
             await PersistDomainEventAsync(admitted);
             await SendToAsync(
@@ -1197,6 +1194,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         }
     }
 
+    // Refactor (iter17/cluster-038): Old pattern: relay callback continuation lived behind process-local replay/idempotency guards. New principle: pending callback admissions are actor-owned state and are re-dispatched through the actor inbox after activation.
     private async Task DispatchPendingRelayAdmissionTurnsAsync(CancellationToken ct)
     {
         var pending = State.PendingRelayAdmissions.ToArray();
@@ -1394,12 +1392,14 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         }
     }
 
+    // Refactor (iter17/cluster-038): Old pattern: active callback_jti claims were checked in singleton ConcurrentDictionary guards. New principle: replay admission checks read only ConversationGAgent typed state.
     private bool HasActiveRelayReplayClaim(string relayApiKeyId, string callbackJti, long nowMs) =>
         State.RelayReplayClaims.Any(claim =>
             string.Equals(claim.RelayApiKeyId, relayApiKeyId, StringComparison.Ordinal) &&
             string.Equals(claim.CallbackJti, callbackJti, StringComparison.Ordinal) &&
             (claim.ExpiresAtUnixMs <= 0 || claim.ExpiresAtUnixMs > nowMs));
 
+    // Refactor (iter17/cluster-038): Old pattern: callback work was recovered from process-local callback context. New principle: callback continuation resolves the admitted activity from persisted actor-owned pending admission state.
     private PendingRelayAdmission? FindPendingRelayAdmission(
         string? relayApiKeyId,
         string? callbackJti,
@@ -1486,6 +1486,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         return next;
     }
 
+    // Refactor (iter17/cluster-038): Old pattern: relay replay/idempotency facts were mutated outside the actor. New principle: admission, replay claim, and pending continuation state mutate together through the event-sourced actor state transition.
     private static ConversationGAgentState ApplyNyxRelayCallbackAdmitted(
         ConversationGAgentState current,
         NyxRelayCallbackAdmittedEvent evt)
@@ -1707,6 +1708,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         }
     }
 
+    // Refactor (iter17/cluster-038): Old pattern: replay claim maps were process-local and lost on deactivation. New principle: bounded callback_jti claims are persisted as typed actor state and swept by actor transitions.
     private static void UpsertRelayReplayClaim(
         Google.Protobuf.Collections.RepeatedField<RelayReplayClaim> field,
         RelayReplayClaim entry)

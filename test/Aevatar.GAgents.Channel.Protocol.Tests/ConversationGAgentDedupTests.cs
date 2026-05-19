@@ -398,6 +398,56 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task HandleNyxRelayInboundActivityAsync_ExpiredCallbackClaim_AllowsFreshAdmission()
+    {
+        var store = new InMemoryEventStore();
+        var expiredAt = DateTimeOffset.UtcNow.AddMinutes(-1).ToUnixTimeMilliseconds();
+        var originalActivity = CreateActivity("act-expired-original", "conv:slack:C1");
+        await AppendStateEventAsync(
+            store,
+            "conv-relay-expired-claim",
+            new NyxRelayCallbackAdmittedEvent
+            {
+                ActivityId = originalActivity.Id,
+                RelayApiKeyId = "api-key-expired",
+                CallbackJti = "jti-expired",
+                Activity = originalActivity,
+                AdmittedAtUnixMs = expiredAt - 1000,
+                ClaimExpiresAtUnixMs = expiredAt,
+            },
+            version: 1);
+
+        var publisher = new RecordingEventPublisher();
+        var (agent, _) = CreateAgent(
+            new RecordingTurnRunner(),
+            "conv-relay-expired-claim",
+            store: store,
+            eventPublisher: publisher);
+        agent.State.RelayReplayClaims.ShouldContain(claim =>
+            claim.RelayApiKeyId == "api-key-expired" &&
+            claim.CallbackJti == "jti-expired" &&
+            claim.ActivityId == "act-expired-original");
+
+        await agent.HandleNyxRelayInboundActivityAsync(
+            CreateRelayInbound("act-expired-fresh", "conv:slack:C1", "api-key-expired", "jti-expired"));
+
+        agent.State.RelayReplayClaims.ShouldContain(claim =>
+            claim.RelayApiKeyId == "api-key-expired" &&
+            claim.CallbackJti == "jti-expired" &&
+            claim.ActivityId == "act-expired-fresh" &&
+            claim.ExpiresAtUnixMs > DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        agent.State.RelayReplayClaims.ShouldNotContain(claim => claim.ActivityId == "act-expired-original");
+        agent.State.PendingRelayAdmissions.ShouldContain(admission => admission.ActivityId == "act-expired-fresh");
+        publisher.Sent
+            .OfType<NyxRelayCallbackTurnRequestedEvent>()
+            .ShouldContain(request => request.ActivityId == "act-expired-fresh");
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Count(e => e.EventType.Contains(nameof(NyxRelayCallbackAdmittedEvent), StringComparison.Ordinal))
+            .ShouldBe(2);
+    }
+
+    [Fact]
     public async Task HandleNyxRelayCallbackTurnRequestedAsync_TransientFailure_ExactReplayCallsRunnerOnceAndSchedulesOneRetry()
     {
         var runner = new RecordingTurnRunner
@@ -1697,6 +1747,26 @@ public sealed class ConversationGAgentDedupTests
             CallbackReplayExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
         };
     }
+
+    private static Task AppendStateEventAsync(
+        IEventStore store,
+        string agentId,
+        IMessage evt,
+        long version) =>
+        store.AppendAsync(
+            agentId,
+            [
+                new StateEvent
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    Version = version,
+                    EventType = evt.Descriptor.FullName,
+                    EventData = Google.Protobuf.WellKnownTypes.Any.Pack(evt),
+                    AgentId = agentId,
+                },
+            ],
+            expectedVersion: version - 1);
 
     private static (ConversationGAgent agent, IEventStore store) CreateAgent(
         RecordingTurnRunner runner,
