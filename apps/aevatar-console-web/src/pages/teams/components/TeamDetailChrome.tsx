@@ -1,4 +1,5 @@
-import { Button, Space, Typography, theme } from "antd";
+import { MoreOutlined } from "@ant-design/icons";
+import { Button, Dropdown, Space, Typography, theme } from "antd";
 import React from "react";
 import type { TeamDetailTab } from "@/shared/navigation/teamRoutes";
 import {
@@ -17,27 +18,11 @@ type TeamActionRailProps = {
   readonly archiveTeamActionLabel?: string;
   readonly archiveTeamDisabled?: boolean;
   readonly archiveTeamHint?: string;
-  readonly conversationActionLabel: string;
-  readonly deploymentsActionLabel?: string;
-  readonly deploymentsDisabled?: boolean;
-  readonly deploymentsHint?: string;
   readonly editTeamDisabled?: boolean;
   readonly editTeamLabel: string;
   readonly editTeamHint?: string;
-  readonly governanceActionLabel?: string;
-  readonly governanceDisabled?: boolean;
-  readonly governanceHint?: string;
   readonly onArchiveTeam?: () => void;
-  readonly onOpenConversation: () => void;
-  readonly onOpenDeployments?: () => void;
-  readonly onOpenGovernance?: () => void;
-  readonly onOpenServiceMapping: () => void;
   readonly onOpenTeamEditor: () => void;
-  readonly onOpenTeamBuilder: () => void;
-  readonly serviceMappingDisabled?: boolean;
-  readonly serviceMappingHint?: string;
-  readonly serviceMappingActionLabel: string;
-  readonly teamBuilderActionLabel: string;
 };
 
 type TeamTabBarProps = {
@@ -79,85 +64,61 @@ export const TeamActionRail: React.FC<TeamActionRailProps> = ({
   archiveTeamActionLabel,
   archiveTeamDisabled = false,
   archiveTeamHint,
-  conversationActionLabel,
-  deploymentsActionLabel,
-  deploymentsDisabled = false,
-  deploymentsHint,
   editTeamDisabled = false,
   editTeamLabel,
   editTeamHint,
-  governanceActionLabel,
-  governanceDisabled = false,
-  governanceHint,
   onArchiveTeam,
-  onOpenConversation,
-  onOpenDeployments,
-  onOpenGovernance,
-  onOpenServiceMapping,
   onOpenTeamEditor,
-  onOpenTeamBuilder,
-  serviceMappingDisabled = false,
-  serviceMappingHint,
-  serviceMappingActionLabel,
-  teamBuilderActionLabel,
-}) => (
-  <Space key="team-detail-actions" wrap>
-    <Button
-      disabled={serviceMappingDisabled}
-      onClick={onOpenServiceMapping}
-      style={topActionButtonStyle}
-      title={serviceMappingDisabled ? serviceMappingHint : undefined}
-      type="primary"
-    >
-      {serviceMappingActionLabel}
-    </Button>
-    <Button
-      disabled={editTeamDisabled}
-      onClick={onOpenTeamEditor}
-      style={topActionButtonStyle}
-      title={editTeamDisabled ? editTeamHint : undefined}
-    >
-      {editTeamLabel}
-    </Button>
-    <Button onClick={onOpenConversation} style={topActionButtonStyle}>
-      {conversationActionLabel}
-    </Button>
-    {governanceActionLabel && onOpenGovernance ? (
+}) => {
+  const archiveMenuItems =
+    archiveTeamActionLabel && onArchiveTeam
+      ? [
+          {
+            danger: true,
+            disabled: archiveTeamDisabled,
+            key: "archive-team",
+            label: archiveTeamActionLabel,
+          },
+        ]
+      : [];
+
+  return (
+    <Space key="team-detail-actions" wrap>
       <Button
-        disabled={governanceDisabled}
-        onClick={onOpenGovernance}
+        disabled={editTeamDisabled}
+        onClick={onOpenTeamEditor}
         style={topActionButtonStyle}
-        title={governanceDisabled ? governanceHint : undefined}
+        title={editTeamDisabled ? editTeamHint : undefined}
+        type="primary"
       >
-        {governanceActionLabel}
+        {editTeamLabel}
       </Button>
-    ) : null}
-    {deploymentsActionLabel && onOpenDeployments ? (
-      <Button
-        disabled={deploymentsDisabled}
-        onClick={onOpenDeployments}
-        style={topActionButtonStyle}
-        title={deploymentsDisabled ? deploymentsHint : undefined}
-      >
-        {deploymentsActionLabel}
-      </Button>
-    ) : null}
-    <Button onClick={onOpenTeamBuilder} style={topActionButtonStyle}>
-      {teamBuilderActionLabel}
-    </Button>
-    {archiveTeamActionLabel && onArchiveTeam ? (
-      <Button
-        danger
-        disabled={archiveTeamDisabled}
-        onClick={onArchiveTeam}
-        style={topActionButtonStyle}
-        title={archiveTeamDisabled ? archiveTeamHint : undefined}
-      >
-        {archiveTeamActionLabel}
-      </Button>
-    ) : null}
-  </Space>
-);
+      {archiveMenuItems.length > 0 ? (
+        <Dropdown
+          menu={{
+            items: archiveMenuItems,
+            onClick: ({ key }) => {
+              if (key === "archive-team" && !archiveTeamDisabled) {
+                onArchiveTeam?.();
+              }
+            },
+          }}
+          trigger={["click"]}
+        >
+          <span title={archiveTeamDisabled ? archiveTeamHint : undefined}>
+            <Button
+              aria-label="Team more actions"
+              disabled={archiveTeamDisabled}
+              icon={<MoreOutlined />}
+              style={{ ...topActionButtonStyle, paddingInline: 14 }}
+              title="More actions"
+            />
+          </span>
+        </Dropdown>
+      ) : null}
+    </Space>
+  );
+};
 
 export const TeamTabBar: React.FC<TeamTabBarProps> = ({
   activeTab,

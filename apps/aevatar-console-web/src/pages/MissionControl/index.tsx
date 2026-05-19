@@ -319,7 +319,7 @@ function MissionHeaderBar({
                   history.push(
                     buildTeamDetailHref({
                       scopeId: routeContext.scopeId ?? '',
-                      tab: 'events',
+                      tab: 'overview',
                     }),
                   )
                 }
