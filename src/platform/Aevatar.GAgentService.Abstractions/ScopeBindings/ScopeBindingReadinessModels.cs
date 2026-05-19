@@ -8,6 +8,7 @@ public enum ScopeBindingReadinessStatus
     EligibleServingTargetMissing = 3,
     ServiceCatalogTargetMissing = 4,
     Ready = 5,
+    TrafficViewTargetMissing = 6,
 }
 
 public sealed record ScopeBindingReadinessRequest(

@@ -144,6 +144,9 @@ public sealed class ScopeBindingReadinessQueryServiceTests
                 CreateTarget("rev-zero", ServiceServingState.Active, allocationWeight: 0),
                 CreateTarget("rev-ready", ServiceServingState.Active, allocationWeight: 100),
             ]),
+            TrafficView = CreateTrafficView([
+                CreateTrafficEndpoint("chat", [CreateTrafficTarget("rev-ready", ServiceServingState.Active, allocationWeight: 100)]),
+            ]),
         };
         var service = CreateService(lifecyclePort, servingPort);
 
@@ -156,6 +159,60 @@ public sealed class ScopeBindingReadinessQueryServiceTests
         snapshot.InvokeReady.Should().BeTrue();
         snapshot.RevisionId.Should().Be("rev-ready");
         snapshot.DeploymentId.Should().Be("deployment-rev-ready");
+    }
+
+    [Fact]
+    public async Task GetReadinessAsync_WhenTrafficViewHasStaleTargets_ShouldReturnTrafficViewTargetMissing()
+    {
+        var lifecyclePort = new FakeServiceLifecycleQueryPort
+        {
+            Service = CreateServiceSnapshot("service-a", activeRevisionId: "rev-ready"),
+        };
+        var servingPort = new FakeServiceServingQueryPort
+        {
+            ServingSet = CreateServingSet([
+                CreateTarget("rev-ready", ServiceServingState.Active, allocationWeight: 100),
+            ]),
+            TrafficView = CreateTrafficView([
+                CreateTrafficEndpoint("chat", [CreateTrafficTarget("rev-old", ServiceServingState.Active, allocationWeight: 100)]),
+            ]),
+        };
+        var service = CreateService(lifecyclePort, servingPort);
+
+        var snapshot = await service.GetReadinessAsync(new ScopeBindingReadinessRequest(
+            "scope-a",
+            "service-a",
+            ExpectedRevisionId: "rev-ready"));
+
+        snapshot.Status.Should().Be(ScopeBindingReadinessStatus.TrafficViewTargetMissing);
+        snapshot.ServiceCatalogVisible.Should().BeTrue();
+        snapshot.ServingSetVisible.Should().BeTrue();
+        snapshot.EligibleServingTargetVisible.Should().BeTrue();
+        snapshot.InvokeReady.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GetReadinessAsync_WhenTrafficViewIsMissing_ShouldAllowInvokeFallbackToServingSet()
+    {
+        var lifecyclePort = new FakeServiceLifecycleQueryPort
+        {
+            Service = CreateServiceSnapshot("service-a", activeRevisionId: "rev-ready"),
+        };
+        var servingPort = new FakeServiceServingQueryPort
+        {
+            ServingSet = CreateServingSet([
+                CreateTarget("rev-ready", ServiceServingState.Active, allocationWeight: 100),
+            ]),
+        };
+        var service = CreateService(lifecyclePort, servingPort);
+
+        var snapshot = await service.GetReadinessAsync(new ScopeBindingReadinessRequest(
+            "scope-a",
+            "service-a",
+            ExpectedRevisionId: "rev-ready"));
+
+        snapshot.Status.Should().Be(ScopeBindingReadinessStatus.Ready);
+        snapshot.InvokeReady.Should().BeTrue();
     }
 
     [Fact]
@@ -282,6 +339,31 @@ public sealed class ScopeBindingReadinessQueryServiceTests
             ServingState: state.ToString(),
             EnabledEndpointIds: []);
 
+    private static ServiceTrafficViewSnapshot CreateTrafficView(IReadOnlyList<ServiceTrafficEndpointSnapshot> endpoints) =>
+        new(
+            ServiceKey: "scope-a:default:default:service-a",
+            Generation: 1,
+            ActiveRolloutId: "",
+            Endpoints: endpoints,
+            UpdatedAt: DateTimeOffset.UtcNow);
+
+    private static ServiceTrafficEndpointSnapshot CreateTrafficEndpoint(
+        string endpointId,
+        IReadOnlyList<ServiceTrafficTargetSnapshot> targets) =>
+        new(endpointId, targets);
+
+    private static ServiceTrafficTargetSnapshot CreateTrafficTarget(
+        string revisionId,
+        ServiceServingState state,
+        int allocationWeight,
+        string? deploymentId = null) =>
+        new(
+            DeploymentId: deploymentId ?? $"deployment-{revisionId}",
+            RevisionId: revisionId,
+            PrimaryActorId: $"actor-{revisionId}",
+            AllocationWeight: allocationWeight,
+            ServingState: state.ToString());
+
     private sealed class FakeServiceLifecycleQueryPort : IServiceLifecycleQueryPort
     {
         public ServiceCatalogSnapshot? Service { get; init; }
@@ -315,6 +397,7 @@ public sealed class ScopeBindingReadinessQueryServiceTests
     private sealed class FakeServiceServingQueryPort : IServiceServingQueryPort
     {
         public ServiceServingSetSnapshot? ServingSet { get; init; }
+        public ServiceTrafficViewSnapshot? TrafficView { get; init; }
         public ServiceIdentity? LastIdentity { get; private set; }
         public int GetServingSetCallCount { get; private set; }
 
@@ -341,6 +424,6 @@ public sealed class ScopeBindingReadinessQueryServiceTests
         public Task<ServiceTrafficViewSnapshot?> GetServiceTrafficViewAsync(
             ServiceIdentity identity,
             CancellationToken ct = default) =>
-            Task.FromResult<ServiceTrafficViewSnapshot?>(null);
+            Task.FromResult(TrafficView);
     }
 }

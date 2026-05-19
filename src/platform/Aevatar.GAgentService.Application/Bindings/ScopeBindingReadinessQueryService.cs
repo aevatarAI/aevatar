@@ -96,6 +96,22 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
                 ObservedAtUtc: observedAtUtc);
         }
 
+        var trafficView = await _serviceServingQueryPort.GetServiceTrafficViewAsync(identity, ct).ConfigureAwait(false);
+        if (!IsTrafficViewTargetVisible(trafficView, service, expectedRevisionId, expectedDeploymentId))
+        {
+            return new ScopeBindingReadinessSnapshot(
+                normalizedScopeId,
+                normalizedServiceId,
+                ScopeBindingReadinessStatus.TrafficViewTargetMissing,
+                ServiceCatalogVisible: true,
+                ServingSetVisible: true,
+                EligibleServingTargetVisible: true,
+                InvokeReady: false,
+                RevisionId: eligibleTarget.RevisionId,
+                DeploymentId: eligibleTarget.DeploymentId,
+                ObservedAtUtc: observedAtUtc);
+        }
+
         return new ScopeBindingReadinessSnapshot(
             normalizedScopeId,
             normalizedServiceId,
@@ -118,8 +134,39 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
         && (string.IsNullOrWhiteSpace(expectedDeploymentId) ||
             string.Equals(service.DeploymentId, expectedDeploymentId, StringComparison.Ordinal));
 
+    private static bool IsTrafficViewTargetVisible(
+        ServiceTrafficViewSnapshot? trafficView,
+        ServiceCatalogSnapshot service,
+        string? expectedRevisionId,
+        string? expectedDeploymentId)
+    {
+        if (trafficView == null)
+            return true;
+
+        var serviceEndpointIds = service.Endpoints
+            .Select(endpoint => endpoint.EndpointId)
+            .Where(endpointId => !string.IsNullOrWhiteSpace(endpointId))
+            .ToHashSet(StringComparer.Ordinal);
+        var observedEndpointViews = trafficView.Endpoints
+            .Where(endpoint => endpoint.Targets.Count > 0)
+            .Where(endpoint => serviceEndpointIds.Count == 0 || serviceEndpointIds.Contains(endpoint.EndpointId))
+            .ToList();
+        return observedEndpointViews.Count == 0 || observedEndpointViews.All(endpoint => endpoint.Targets.Any(target =>
+            IsEligibleTrafficTarget(target, expectedRevisionId, expectedDeploymentId)));
+    }
+
     private static bool IsEligibleServingTarget(
         ServiceServingTargetSnapshot target,
+        string? expectedRevisionId,
+        string? expectedDeploymentId) =>
+        Enum.TryParse<ServiceServingState>(target.ServingState, ignoreCase: true, out var state)
+        && state == ServiceServingState.Active
+        && target.AllocationWeight > 0
+        && (string.IsNullOrWhiteSpace(expectedRevisionId) || string.Equals(target.RevisionId, expectedRevisionId, StringComparison.Ordinal))
+        && (string.IsNullOrWhiteSpace(expectedDeploymentId) || string.Equals(target.DeploymentId, expectedDeploymentId, StringComparison.Ordinal));
+
+    private static bool IsEligibleTrafficTarget(
+        ServiceTrafficTargetSnapshot target,
         string? expectedRevisionId,
         string? expectedDeploymentId) =>
         Enum.TryParse<ServiceServingState>(target.ServingState, ignoreCase: true, out var state)
