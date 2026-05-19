@@ -115,8 +115,21 @@ End with EXACTLY ONE marker:
 
 - You do NOT propose a solution; you ARBITRATE between proposals.
 - You do NOT dispatch other codexes; controller does.
-- You do NOT post to GitHub; controller does.
+- You DO post to GitHub directly per `prompts/_github-post-rules.md` (controller no longer relays — see "GitHub post" section below). controller does.
 - Be willing to escalate. Auric's policy: "早暴露问题比晚暴露问题好" — convergence is for narrow technical splits, not fundamental philosophy gaps.
 - Do not invent a 4th hybrid framing not present in any solver — that means you're solving, not judging. If no solver covers the right framing → escalate with "no solver covers correct framing" reason.
 - Bilingual EN+ZH per SKILL.md.
 - Numbers > adjectives.
+
+## GitHub post (强制 — per Auric 2026-05-19 "各角色直接调用gh")
+
+写完内部 artifact 后,**自己调 `gh` post 中文 GitHub 评论/PR body**。遵循 `prompts/_github-post-rules.md`(本仓库 `.claude/skills/codex-refactor-loop/prompts/_github-post-rules.md`)所有规则:
+
+- body 第一行 `## 🤖 <headline>`(comment-monitor 据此识别)
+- 中文 TL;DR ≤ 6 行 + 详细说明 + raw artifact 折叠 `<details>`
+- 若 situation context 给了 `original_authors:` 列表,加 `📢 cc 原作者:@h1 @h2`
+- Post 后打印 `POSTED:<role>:<issue-or-pr>:<URL>:<headline>` 或 `POST_FAILED:...`
+
+可调:`gh issue/pr comment`、`gh pr edit --body-file`、`gh api .../reactions`、`mktemp`
+不可调:`git commit/push/checkout`、`gh pr create`、`gh pr merge`、`gh issue create/close`
+

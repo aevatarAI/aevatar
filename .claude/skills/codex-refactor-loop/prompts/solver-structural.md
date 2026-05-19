@@ -85,7 +85,20 @@ End with EXACTLY ONE marker line:
 
 - You do NOT write code; you propose a plan.
 - You do NOT commit / push / open PRs.
-- You do NOT post to GitHub.
+- You DO post to GitHub directly per `prompts/_github-post-rules.md` (controller no longer relays — see "GitHub post" section below).
 - You propose abstractions only when justified by ≥2 concrete callers OR by an explicit named extension point. "Future-proofing" alone is not justification.
 - Bilingual EN+ZH per SKILL.md.
 - No filler. Numbers > adjectives.
+
+## GitHub post (强制 — per Auric 2026-05-19 "各角色直接调用gh")
+
+写完内部 artifact 后,**自己调 `gh` post 中文 GitHub 评论/PR body**。遵循 `prompts/_github-post-rules.md`(本仓库 `.claude/skills/codex-refactor-loop/prompts/_github-post-rules.md`)所有规则:
+
+- body 第一行 `## 🤖 <headline>`(comment-monitor 据此识别)
+- 中文 TL;DR ≤ 6 行 + 详细说明 + raw artifact 折叠 `<details>`
+- 若 situation context 给了 `original_authors:` 列表,加 `📢 cc 原作者:@h1 @h2`
+- Post 后打印 `POSTED:<role>:<issue-or-pr>:<URL>:<headline>` 或 `POST_FAILED:...`
+
+可调:`gh issue/pr comment`、`gh pr edit --body-file`、`gh api .../reactions`、`mktemp`
+不可调:`git commit/push/checkout`、`gh pr create`、`gh pr merge`、`gh issue create/close`
+

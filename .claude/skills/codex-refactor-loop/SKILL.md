@@ -695,13 +695,18 @@ The controller's only inline composition allowed for GitHub:
 - Mechanical link / SHA / cluster id mentions.
 - Programmatic label edits + merge actions.
 
-EVERYTHING ELSE (reviewer verdict surfacing, fix-done body, consensus celebration, escalation rationale, design issue body, cross-post unblock notices, PR descriptions including rollup PR) 走 writer-codex,且 writer-codex **直接调 `gh`,不再经 controller 中转**(per Auric 2026-05-19 "我感觉你都没必要转一遍, 直接让 codex 调用 gh"):
+EVERYTHING ELSE(reviewer verdict、fix-done body、consensus 公告、escalation rationale、design issue body、cross-post 通知、PR description 包括 rollup PR)由**正在跑的那个 codex 自己 post**,**不需要专门的 writer-codex 中介**(per Auric 2026-05-19 "没必要设置专门发github的角色,让各角色直接调用gh就好了"):
 
-1. Controller 把 raw codex artifact 路径 + 一段 bullet situation context 写到本地文件。
-2. spawn-codex 跑 `prompts/github-post-writer.md`(3600s)。Codex 自己:读 raw + situation → 写 body 到 mktemp → 调 `gh issue comment`/`gh pr comment`/`gh pr edit --body-file` post → 末尾打 `POSTED:<type>:<N>:<URL>:<headline>` 或 `POST_FAILED:<type>:<N>:<gh-stderr>`。
-3. Controller 只读 log 末尾 marker,不读 body。
+- solver / meta-judge / fix / reviewer / clarifier / investigator / analyst / implement codex 各自跑完内部 artifact 后,自己 `gh issue comment` 或 `gh pr comment` post 中文 user-facing 摘要
+- 所有 prompts 末尾都有 `## GitHub post (强制)` 块引用 `prompts/_github-post-rules.md` 共享规则
+- body 必须 `## 🤖 <headline>` 开头(comment-monitor.sh 据此识别 controller-post 跳 react)
+- 中文 only / TL;DR ≤ 6 行 / raw artifact 折叠 `<details>` / 若 situation 给 `original_authors:` 加 `📢 cc`
+- codex 自己抓 gh 输出的 URL,打 `POSTED:<role>:<N>:<URL>:<headline>` 或 `POST_FAILED:...`
+- controller 只读 log 末尾 marker,**不读 body**
 
-Rationale: 减少 controller 上下文负担;writer-codex 是 fresh session 写出来质量更高;直接调 gh 减少一跳。controller 边界仍是 git topology(commit/push/checkout)+ PR/issue 创建/merge/close 决策,这些 writer-codex 不动。
+历史曾用过的 `prompts/github-post-writer.md` 专职 writer-codex 已 deprecated(文件保留为 `*.deprecated` 仅作历史参考)。
+
+Rationale: 减少一跳 + 减少 controller 上下文负担 + 写 post 的 codex 本身就是最了解 artifact 的人,质量比 "翻译者" 更高。controller 边界仍是 git topology(commit/push/checkout)+ PR/issue 创建/merge/close lifecycle 决策,这些 codex 不动(per `_github-post-rules.md` "你不能调的" 列表)。
 
 **@-mention rule (per Auric 2026-05-19 "找到违反原则的地方,请直接at那个违反原则的人进来讨论"):**
 
