@@ -11,6 +11,7 @@ import { AevatarPanel } from '@/shared/ui/aevatarPageShells';
 import ConsoleMetricCard from '@/shared/ui/ConsoleMetricCard';
 import ConsoleMenuPageShell from '@/shared/ui/ConsoleMenuPageShell';
 import ScopeQueryCard from '../scopes/components/ScopeQueryCard';
+import { rememberPendingTeamRosterSummary } from './pendingTeamRoster';
 import { resolveStudioScopeContext } from '../scopes/components/resolvedScope';
 import {
   buildScopeHref,
@@ -206,6 +207,7 @@ const TeamCreatePage: React.FC = () => {
         ['teams', 'team-summary', team.scopeId, team.teamId],
         team,
       );
+      rememberPendingTeamRosterSummary(team);
       await queryClient.invalidateQueries({
         queryKey: ['teams', 'roster', team.scopeId],
       });

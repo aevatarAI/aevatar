@@ -3165,6 +3165,15 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
   );
 };
 
+export type StudioGAgentBuildState = {
+  readonly actorTypeName: string;
+  readonly displayName: string;
+  readonly initialPrompt: string;
+  readonly persistenceMode: 'grain' | 'ephemeral';
+  readonly role: string;
+  readonly tools: readonly string[];
+};
+
 export type StudioGAgentBuildPanelProps = {
   readonly scopeId?: string;
   readonly currentMemberLabel: string;
@@ -3173,7 +3182,8 @@ export type StudioGAgentBuildPanelProps = {
   readonly gAgentTypesError: unknown;
   readonly selectedGAgentTypeName: string;
   readonly onSelectGAgentTypeName: (value: string) => void;
-  readonly onContinueToBind: () => void;
+  readonly onBuildStateChange?: (state: StudioGAgentBuildState) => void;
+  readonly onContinueToBind: (state: StudioGAgentBuildState) => void;
 };
 
 export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
@@ -3184,6 +3194,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
   gAgentTypesError,
   selectedGAgentTypeName,
   onSelectGAgentTypeName,
+  onBuildStateChange,
   onContinueToBind,
 }) => {
   const [displayName, setDisplayName] = React.useState(currentMemberLabel || 'Member GAgent');
@@ -3218,6 +3229,17 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
         .filter(Boolean),
     [toolsDraft],
   );
+  const currentBuildState = React.useMemo<StudioGAgentBuildState>(
+    () => ({
+      actorTypeName: selectedTypeName,
+      displayName: displayName.trim(),
+      initialPrompt: initialPrompt.trim(),
+      persistenceMode,
+      role: role.trim(),
+      tools: toolTags,
+    }),
+    [displayName, initialPrompt, persistenceMode, role, selectedTypeName, toolTags],
+  );
 
   React.useEffect(() => {
     if (!selectedGAgentTypeName && selectedTypeName) {
@@ -3228,6 +3250,10 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
   React.useEffect(() => {
     setDisplayName((current) => current || currentMemberLabel || 'Member GAgent');
   }, [currentMemberLabel]);
+
+  React.useEffect(() => {
+    onBuildStateChange?.(currentBuildState);
+  }, [currentBuildState, onBuildStateChange]);
 
   React.useEffect(
     () => () => {
@@ -3393,8 +3419,9 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
           </Typography.Text>
           <Button
             className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
+            disabled={!selectedTypeName}
             type="primary"
-            onClick={onContinueToBind}
+            onClick={() => onContinueToBind(currentBuildState)}
           >
             Continue to Bind
           </Button>

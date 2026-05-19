@@ -49,6 +49,10 @@ import {
   WORKFLOW_RUNTIME_GUARDRAIL,
   type WorkflowOperationalAttention,
 } from "./workflowOperationalUnits";
+import {
+  clearSyncedPendingTeamRosterSummaries,
+  mergePendingTeamRosterSummaries,
+} from "./pendingTeamRoster";
 
 const scopeServiceAppId = "default";
 const compactTeamRosterThreshold = 6;
@@ -1072,9 +1076,23 @@ const TeamsHomePage: React.FC = () => {
     () => [...(membersQuery.data?.members ?? [])].sort(compareMembers),
     [membersQuery.data?.members],
   );
+  React.useEffect(() => {
+    if (teamsQuery.isSuccess) {
+      clearSyncedPendingTeamRosterSummaries(
+        scopeId,
+        teamsQuery.data?.teams ?? [],
+      );
+    }
+  }, [scopeId, teamsQuery.data?.teams, teamsQuery.isSuccess]);
   const studioTeams = React.useMemo(
-    () => [...(teamsQuery.data?.teams ?? [])].sort(compareTeams),
-    [teamsQuery.data?.teams],
+    () =>
+      [
+        ...mergePendingTeamRosterSummaries(
+          scopeId,
+          teamsQuery.data?.teams ?? [],
+        ),
+      ].sort(compareTeams),
+    [scopeId, teamsQuery.data?.teams],
   );
   const membersByTeamId = React.useMemo(
     () => groupMembersByTeamId(studioMembers),
