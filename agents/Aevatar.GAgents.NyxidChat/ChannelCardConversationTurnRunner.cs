@@ -281,6 +281,9 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
         return ConversationCardFinalizeResult.Succeeded();
     }
 
+    // Refactor (iter17/cluster-038):
+    //   Old pattern: CardKit calls required the Nyx user token to remain on persisted activity/reference activity transport extras.
+    //   New principle: CardKit create/stream/finalize accept sanitized activities and resolve the token from per-turn runtime context.
     private static string? ResolveToken(
         ChatActivity activity,
         ConversationTurnRuntimeContext runtimeContext)

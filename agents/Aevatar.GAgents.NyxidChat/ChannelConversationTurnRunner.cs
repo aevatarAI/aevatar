@@ -1687,6 +1687,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         return NormalizeOptional(tokenContext.ReplyToken);
     }
 
+    // Refactor (iter17/cluster-038):
+    //   Old pattern: channel runner resolved the Nyx user token only from ChatActivity.TransportExtras, forcing secrets into persisted activity clones.
+    //   New principle: sanitized activities may omit the token; same-activation relay turns read it from ConversationTurnRuntimeContext.
     private static string? ResolveUserAccessToken(
         ChatActivity activity,
         ConversationTurnRuntimeContext runtimeContext) =>
