@@ -20,6 +20,10 @@ namespace Aevatar.Foundation.VoicePresence.Modules;
 /// transports without entering the grain inbox or event pipeline. Only control events
 /// (state transitions, tool calls, drain ack) are dispatched as actor events.
 /// </summary>
+// Refactor (iter15/cluster-025-voice-host-session-state-actorization):
+//   Old pattern: voice host resolver locks shared mutable lease state outside actor lifecycle
+//   New principle: actor owns remote session identity and lifecycle.
+//   Remote audio chunks are ignored until a non-envelope raw media transport exists.
 public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFastPath, IRouteBypassModule
 {
     private static readonly JsonFormatter PayloadJsonFormatter = new(JsonFormatter.Settings.Default);
@@ -144,7 +148,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
                 await HandleRemoteSessionCloseRequestedAsync(signal.RemoteSessionCloseRequested, ctx, ct);
                 break;
             case VoiceModuleSignal.SignalOneofCase.RemoteAudioInputReceived:
-                await HandleRemoteAudioInputReceivedAsync(signal.RemoteAudioInputReceived, ct);
+                HandleRemoteAudioInputReceived(signal.RemoteAudioInputReceived);
                 break;
             case VoiceModuleSignal.SignalOneofCase.RemoteControlInputReceived:
                 await HandleRemoteControlInputReceivedAsync(signal.RemoteControlInputReceived, ct);
@@ -366,19 +370,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
                 await CloseRemoteSessionAsync("provider_disconnected", ctx, ct);
                 break;
             case VoiceProviderEvent.EventOneofCase.AudioReceived:
-                if (!string.IsNullOrWhiteSpace(_remoteSessionId))
-                {
-                    await PublishRemoteOutputAsync(
-                        new VoiceRemoteTransportOutput
-                        {
-                            ModuleName = Name,
-                            SessionId = _remoteSessionId,
-                            AudioOutput = providerEvent.AudioReceived.Clone(),
-                        },
-                        ctx,
-                        ct);
-                }
-
                 break;
             case VoiceProviderEvent.EventOneofCase.Error:
             case VoiceProviderEvent.EventOneofCase.None:
@@ -492,18 +483,13 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             ct);
     }
 
-    private async Task HandleRemoteAudioInputReceivedAsync(
-        VoiceRemoteAudioInputReceived request,
-        CancellationToken ct)
+    // Refactor (iter15/cluster-025-voice-host-session-state-actorization):
+    //   Old pattern: voice host resolver locks shared mutable lease state outside actor lifecycle
+    //   New principle: remote setup/control may use envelopes; PCM chunks may not.
+    //   The actor keeps the stale proto arm inert for compatibility.
+    private void HandleRemoteAudioInputReceived(VoiceRemoteAudioInputReceived request)
     {
-        if (string.IsNullOrWhiteSpace(_remoteSessionId) ||
-            !string.Equals(_remoteSessionId, request.SessionId, StringComparison.Ordinal) ||
-            request.Pcm16.IsEmpty)
-        {
-            return;
-        }
-
-        await _provider.SendAudioAsync(request.Pcm16.Memory, ct);
+        _ = request;
     }
 
     private async Task HandleRemoteControlInputReceivedAsync(
