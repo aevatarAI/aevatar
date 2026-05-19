@@ -436,11 +436,11 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
         var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort();
 
-        var actOnActor = () => new WorkflowRunCommandTarget(null!, "workflow-1", [], projectionPort, projectionPort, actorPort);
-        var actOnWorkflowName = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), " ", [], projectionPort, projectionPort, actorPort);
-        var actOnProjectionPort = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], null!, projectionPort, actorPort);
-        var actOnMaterializationActivationPort = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], projectionPort, null!, actorPort);
-        var actOnActorPort = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], projectionPort, projectionPort, null!);
+        var actOnActor = () => new WorkflowRunCommandTarget(null!, "workflow-1", [], projectionPort, projectionPort, actorPort, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
+        var actOnWorkflowName = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), " ", [], projectionPort, projectionPort, actorPort, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
+        var actOnProjectionPort = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], null!, projectionPort, actorPort, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
+        var actOnMaterializationActivationPort = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], projectionPort, null!, actorPort, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
+        var actOnActorPort = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], projectionPort, projectionPort, null!, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
 
         actOnActor.Should().Throw<ArgumentNullException>();
         actOnWorkflowName.Should().Throw<ArgumentException>();
@@ -448,7 +448,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
         actOnMaterializationActivationPort.Should().Throw<ArgumentNullException>();
         actOnActorPort.Should().Throw<ArgumentNullException>();
 
-        var target = new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], projectionPort, projectionPort, actorPort);
+        var target = new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], projectionPort, projectionPort, actorPort, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         var lease = new FakeProjectionLease("actor-1", "cmd-1");
         var sink = new FakeEventSink();
 
@@ -476,7 +476,8 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             ["definition-1", "run-1"],
             projectionPort,
             projectionPort,
-            actorPort);
+            actorPort,
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         target.BindLiveObservation(new FakeProjectionLease("actor-1", "cmd-1"), new FakeEventSink());
 
         await target.ReleaseAfterInteractionAsync(
@@ -506,7 +507,8 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             [],
             new FakeProjectionPort(),
             new FakeProjectionPort(),
-            new FakeWorkflowRunActorPort());
+            new FakeWorkflowRunActorPort(),
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
 
         var actOnReceipt = async () => await target.ReleaseAfterInteractionAsync(
             null!,
@@ -576,7 +578,8 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
                 new WorkflowActorResolutionResult(null, "auto", WorkflowChatRunStartError.AgentNotFound)),
             new FakeProjectionPort(),
             new FakeProjectionPort(),
-            new FakeWorkflowRunActorPort());
+            new FakeWorkflowRunActorPort(),
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
 
         var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", "auto", null), CancellationToken.None);
 
@@ -603,7 +606,8 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             ["actor-1"],
             projectionPort,
             projectionPort,
-            actorPort);
+            actorPort,
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
 
         var act = async () => await binder.BindAsync(
             new WorkflowChatRunRequest("hello", "workflow-1", null),
@@ -630,7 +634,8 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             ["definition-1", "run-1"],
             projectionPort,
             projectionPort,
-            actorPort);
+            actorPort,
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         target.BindLiveObservation(new FakeProjectionLease("actor-1", "cmd-1"), sink);
         return target;
     }

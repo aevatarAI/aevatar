@@ -64,7 +64,8 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
             createdActorIds: [],
             projectionPort,
             projectionPort,
-            new NoOpWorkflowRunActorPort());
+            new NoOpWorkflowRunActorPort(),
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
             "actor-1",
             "cmd-1",
