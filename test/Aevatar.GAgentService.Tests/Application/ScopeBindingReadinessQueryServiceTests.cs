@@ -57,7 +57,7 @@ public sealed class ScopeBindingReadinessQueryServiceTests
     }
 
     [Fact]
-    public async Task GetReadinessAsync_WhenServiceCatalogHasDifferentExpectedTarget_ShouldReturnServiceCatalogTargetMissing()
+    public async Task GetReadinessAsync_WhenServiceCatalogHasDifferentExpectedTargetButServingSetMatches_ShouldReturnReady()
     {
         var lifecyclePort = new FakeServiceLifecycleQueryPort
         {
@@ -77,11 +77,14 @@ public sealed class ScopeBindingReadinessQueryServiceTests
             ExpectedRevisionId: "rev-new",
             ExpectedDeploymentId: "deployment-rev-new"));
 
-        snapshot.Status.Should().Be(ScopeBindingReadinessStatus.ServiceCatalogTargetMissing);
+        snapshot.Status.Should().Be(ScopeBindingReadinessStatus.Ready);
         snapshot.ServiceCatalogVisible.Should().BeTrue();
-        snapshot.ServingSetVisible.Should().BeFalse();
-        snapshot.InvokeReady.Should().BeFalse();
-        servingPort.GetServingSetCallCount.Should().Be(0);
+        snapshot.ServingSetVisible.Should().BeTrue();
+        snapshot.EligibleServingTargetVisible.Should().BeTrue();
+        snapshot.InvokeReady.Should().BeTrue();
+        snapshot.RevisionId.Should().Be("rev-new");
+        snapshot.DeploymentId.Should().Be("deployment-rev-new");
+        servingPort.GetServingSetCallCount.Should().Be(1);
     }
 
     [Fact]

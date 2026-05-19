@@ -54,19 +54,6 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
                 ObservedAtUtc: observedAtUtc);
         }
 
-        if (!IsServiceCatalogTargetVisible(service, expectedRevisionId, expectedDeploymentId))
-        {
-            return new ScopeBindingReadinessSnapshot(
-                normalizedScopeId,
-                normalizedServiceId,
-                ScopeBindingReadinessStatus.ServiceCatalogTargetMissing,
-                ServiceCatalogVisible: true,
-                ServingSetVisible: false,
-                EligibleServingTargetVisible: false,
-                InvokeReady: false,
-                ObservedAtUtc: observedAtUtc);
-        }
-
         var servingSet = await _serviceServingQueryPort.GetServiceServingSetAsync(identity, ct).ConfigureAwait(false);
         if (servingSet == null)
         {
@@ -124,15 +111,6 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
             DeploymentId: eligibleTarget.DeploymentId,
             ObservedAtUtc: observedAtUtc);
     }
-
-    private static bool IsServiceCatalogTargetVisible(
-        ServiceCatalogSnapshot service,
-        string? expectedRevisionId,
-        string? expectedDeploymentId) =>
-        (string.IsNullOrWhiteSpace(expectedRevisionId) ||
-            string.Equals(service.ActiveServingRevisionId, expectedRevisionId, StringComparison.Ordinal))
-        && (string.IsNullOrWhiteSpace(expectedDeploymentId) ||
-            string.Equals(service.DeploymentId, expectedDeploymentId, StringComparison.Ordinal));
 
     private static bool IsTrafficViewTargetVisible(
         ServiceTrafficViewSnapshot? trafficView,
