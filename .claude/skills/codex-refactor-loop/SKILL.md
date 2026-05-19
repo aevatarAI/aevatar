@@ -472,6 +472,7 @@ Classify:
 - **No new comments AND state==open**: nothing to do; bump `last_checked` only.
 - **State==closed without `auto-loop-resume` label**: maintainer closed without resume signal. Move to `clusters_failed` with reason `design-rejected:closed`. PushNotification: "cluster-<id> design issue #<num> closed without auto-resume; cluster permanently deferred."
 - **New comment(s) AND no `auto-loop-resume` label**: maintainer is (presumed) in technical conversation. **Do not just notify and wait** — that's how controller looks unresponsive. But also do not blindly reply to anyone — see security gate below. Instead:
+  - **首先(任何 sanity check 之前)立刻 👀 react 在新评论上**(per Auric 2026-05-19 "发现后请发个表情表示已经在准备回复"):`gh api repos/aevatarAI/aevatar/issues/comments/<comment-id>/reactions -X POST -f content=eyes`。这是"已看见,正在准备回复"的即时信号,让 maintainer 不会以为 controller 没看到/睡着了。controller 即使后面要 dispatch codex / 等 monitor / 跨多 turn 才回复,**eyes react 必须在 detect 同 turn 内贴上**,不能 batch / 不能延后。
   - **Security gate (mandatory, before dispatching analyst codex)** — verify the new comment's author is a team member; reject random outsiders. Check in order, accept on first match:
     1. `gh api repos/aevatarAI/aevatar/collaborators/<author>` returns 204 → collaborator → OK.
     2. `gh api orgs/aevatarAI/members/<author>` returns 204 → org member → OK.
