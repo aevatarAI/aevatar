@@ -78,10 +78,10 @@ Create top-level TaskCreate items: audit / dispatch / merge.
      --cd "$REPO_ROOT" \
      --prompt .refactor-loop/prompts/audit-iter-N.md \
      --log .refactor-loop/logs/audit-iter-N.log \
-     --timeout 2400
+     --timeout 3600
    ```
 
-   Use Bash with `run_in_background: true`. 2400s (40 min) accommodates the mandatory coverage manifest + opened-file requirements.
+   Use Bash with `run_in_background: true`. 3600s (60 min) is the project-wide minimum for codex jobs (see CLAUDE.md "Codex CLI 调用规范"); audit may legitimately need most of it to complete the coverage manifest.
 
 4. Schedule wakeup 1500–1800s as safety net (task notification is primary wake).
 5. **End turn.**
@@ -291,7 +291,12 @@ For each `bucket: fail` check:
    - **Real failure tied to merged work**: dispatch a `prompts/remote-ci-fix.md` codex (see template) with the failure log + last 10 cluster commits as input. Treat the resulting fix as a mini-cluster: implement → controller verify (re-run local guards + the specific failing test) → commit → push → Phase 5 again.
    - **Pre-existing failure unrelated to merged work** (failure exists on `dev` base too): document, do not fix in this PR; surface via PushNotification.
 
-3. `codecov/patch` specifically: this is a coverage delta check, not a test failure. Treat as **info-only** by default unless the user has explicitly required coverage gates on this branch. Document in scorecard, don't auto-fix.
+3. `codecov/patch` specifically: this measures coverage on **lines added by this PR**, i.e. the refactor's own new/modified production lines. A refactor-induced patch-coverage drop is the loop's own responsibility — the loop just shipped new code without tests, that is exactly what the loop must close before merge. Treat as a **real failure**:
+   - Pull the codecov patch detail via API (`https://api.codecov.io/api/v2/github/<owner>/repos/<repo>/pulls/<num>`) to identify `patch.misses` + `patch.partials` line ranges per file.
+   - Cross-reference with the cluster ledger: each uncovered patch line belongs to a known cluster.
+   - Dispatch `prompts/test-add.md` codex per cluster with the uncovered file:line list, target threshold (default 80% patch coverage), and "tests must exercise behavior the cluster introduced (e.g., IHttpClientFactory typed-client path, head-index cursor compaction trigger, compiled-delegate exception path, projection session lease lifecycle)".
+   - Test-add codex output joins the cluster's branch and re-pushes; codecov re-evaluates.
+   - **Exception** (info-only ack): if `head_totals.coverage - base_totals.coverage > -0.5%` (i.e. project coverage barely moved) AND the cluster summary explicitly declared deletion-heavy refactor, you may ack the codecov failure with a PushNotification explaining the math; do not silently dismiss.
 
 ### Loop control under Phase 5
 
@@ -328,5 +333,6 @@ For each `bucket: fail` check:
 - [prompts/implement.md](prompts/implement.md) — implement phase template (per cluster)
 - [prompts/verify.md](prompts/verify.md) — verify phase template (per cluster)
 - [prompts/remote-ci-fix.md](prompts/remote-ci-fix.md) — Phase 5 remote-CI fix template
-- [scripts/spawn-codex.sh](scripts/spawn-codex.sh) — standardized `codex exec` wrapper
+- [prompts/test-add.md](prompts/test-add.md) — Phase 5 codecov-driven test-add template (per cluster)
+- [scripts/spawn-codex.sh](scripts/spawn-codex.sh) — standardized `codex exec` wrapper (enforces 3600s minimum timeout)
 - [REFERENCE.md](REFERENCE.md) — state schema, batching heuristics, recovery playbook

@@ -43,6 +43,17 @@ if [[ ! -f "$PROMPT" ]]; then
   exit 2
 fi
 
+# Project-wide minimum codex timeout: 3600s (1 hour). See CLAUDE.md
+# "Codex CLI 调用规范". Shorter timeouts cause codex to truncate
+# deep-scan / multi-file refactor work and inflate the controller's
+# rework rate. Override only by passing --allow-short-timeout (none
+# of the built-in phase prompts do).
+if (( TIMEOUT < 3600 )); then
+  echo "codex timeout ${TIMEOUT}s is below the project-wide 3600s minimum" >&2
+  echo "raise --timeout to >= 3600 (see CLAUDE.md Codex CLI 调用规范)" >&2
+  exit 2
+fi
+
 mkdir -p "$(dirname "$LOG")"
 
 # Standard args:
