@@ -92,22 +92,16 @@ build_body() {
   local elapsed_s
   elapsed_s=$(elapsed_sec "$log")
   local elapsed_min=$(( elapsed_s / 60 ))
-  local marker
-  if [ "$finished" = "true" ]; then
-    marker="✅ 已结束"
-  else
-    marker="⏳ 进行中"
-  fi
   local tail_block
   tail_block=$(extract_tail "$log")
   cat <<EOF
-## 📊 codex 进展 $base ($marker; 已跑 ${elapsed_min} min)
+## 📊 codex 进展 $base (⏳ 进行中; 已跑 ${elapsed_min} min)
 
 \`\`\`
 $tail_block
 \`\`\`
 
-> 自动更新每 10 分钟;edit-in-place,不堆评论。完成后此 comment body 切到 ✅ 状态。
+> 自动更新每 10 分钟;edit-in-place 不堆评论;**codex 完成后此 comment 自动删除**(per Auric "完成后删掉就好了 否则太占空间")。
 🤖 controller progress reporter
 EOF
 }
@@ -162,6 +156,18 @@ post_or_update() {
     return
   fi
 
+  # 状态从 in-flight → finished: 删 comment + 从 state 移除 (per Auric "完成后删掉就好了, 否则太占空间")
+  if [ "$finished" = "true" ] && [ -n "$cid" ] && [ "$cid" != "null" ] && [ "$cid" != "0" ]; then
+    if gh api -X DELETE "repos/aevatarAI/aevatar/issues/comments/$cid" >/dev/null 2>&1; then
+      log_msg "deleted progress comment for $base (finished, cid=$cid was=$kind #$target)"
+    else
+      log_msg "FAIL to delete comment $cid for $base (already gone?); marking finished anyway"
+    fi
+    # mark finished in state so we don't re-create next tick
+    state_set "$base" "$target" "$kind" "0" "$cur_md5" "true"
+    return
+  fi
+
   local body cur_md5
   body=$(build_body "$base" "$log" "$finished")
   cur_md5=$(echo "$body" | md5)
@@ -183,7 +189,7 @@ post_or_update() {
       rm -f "$body_file"
       return
     fi
-    # 创建新 comment
+    # 创建新 comment(只 in-flight)
     local url
     if [ "$kind" = "pr" ]; then
       url=$(gh pr comment "$target" --body-file "$body_file" 2>/dev/null | tail -1)

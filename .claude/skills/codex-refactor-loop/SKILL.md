@@ -1126,10 +1126,12 @@ echo "{}" > .refactor-loop/codex-progress-state.json
 
 - 第一次见 + 已 finish 的 log → 跳过(不补刷历史 "✅" banner,避免噪音)
 - 30 min 未写 mtime 且无 EXIT marker → zombie,跳过(防 monitor 误以为 in-flight 死循环 post)
-- log 文件名 → target 解析:从对应 `prompts/<base>.md` 中**最后一个** `#NNN`(meta-cluster 多 issue 时,主 issue 通常列在最后)
+- log 文件名 → target 解析:`review-pr*` / `fix-pr*` / `phase9-issue*` 用文件名权威 target;其他从 `prompts/<base>.md` 中**最后一个** `#NNN`(meta-cluster 多 issue 时,主 issue 通常列在最后)
 - 内容 hash 不变 → 不重发(避免 1 min 心跳 noise)
 - Comment 第一行 `## 📊 codex 进展` → comment-monitor 据此跳自 react
 - audit-iter-* / remote-ci-* log 不归此 reporter 上报(无关联 issue)
+- **codex 完成(in-flight→finished)→ 直接 `gh api -X DELETE` 删除该 progress comment**(per Auric 2026-05-19 "完成后删掉就好了,否则太占空间")。不留 "✅ 已结束" 状态占评论位。
+- `is_finished()` 只看 log 末 5 行 `^EXIT=`(防 codex 中途 echo "EXIT=" 内容误判)
 
 ### 反面(❌ 禁止)
 
@@ -1137,6 +1139,8 @@ echo "{}" > .refactor-loop/codex-progress-state.json
 - ❌ 把 progress comment 写到 controller post 之上 → 与 status banner 混淆
 - ❌ 上报已完成的旧 iter log → 噪音,人类困惑
 - ❌ 用 `gh issue view N --json number` 判 PR/issue(返回都有 number)→ 必须 `gh pr view N` 试错 + fallback
+- ❌ codex 完成后保留 "✅ 已结束" 进展 comment → 评论列表膨胀,人类要翻历史。**必须删**
+- ❌ `grep "^EXIT="` 全 log 判 finished → codex 中途 echo / cat 含 EXIT= 文件会误判。**必须 tail -5**
 
 ## Label 系统 — 强制(per Auric 2026-05-19 "label 也明确一下,看标题就能看明白")
 
