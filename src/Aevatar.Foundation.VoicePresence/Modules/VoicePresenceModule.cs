@@ -151,7 +151,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
                 await HandleRemoteSessionCloseRequestedAsync(signal.RemoteSessionCloseRequested, ctx, ct);
                 break;
             case VoiceModuleSignal.SignalOneofCase.RemoteAudioInputReceived:
-                // Remote PCM stays off EventEnvelope until a raw transport path exists for host-origin audio.
+                // Refactor (iter15/cluster-026-voice-provider-background-state):
+                //   Old pattern: remote host PCM was forwarded through EventEnvelope into the provider.
+                //   New principle: host-origin PCM stays off EventEnvelope until a raw transport path exists.
                 break;
             case VoiceModuleSignal.SignalOneofCase.RemoteControlInputReceived:
                 await HandleRemoteControlInputReceivedAsync(signal.RemoteControlInputReceived, ct);
@@ -398,6 +400,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
                 await CloseRemoteSessionAsync("provider_disconnected", ctx, ct);
                 break;
             case VoiceProviderEvent.EventOneofCase.AudioReceived:
+                // Refactor (iter15/cluster-026-voice-provider-background-state):
+                //   Old pattern: provider PCM was republished as remote output through EventEnvelope.
+                //   New principle: provider PCM stays on raw transport paths; actor events carry control only.
                 break;
             case VoiceProviderEvent.EventOneofCase.Error:
             case VoiceProviderEvent.EventOneofCase.None:
@@ -469,14 +474,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
                     return false;
                 }
 
-                if (!string.IsNullOrWhiteSpace(audioReceived.ProviderResponseId) &&
-                    TryGetProviderResponse(audioReceived.ProviderResponseId, out var responseId))
-                {
-                    var normalizedAudio = audioReceived.Clone();
-                    normalizedAudio.ResponseId = responseId;
-                    normalizedEvent = new VoiceProviderEvent { AudioReceived = normalizedAudio };
-                }
-
                 return true;
             }
             case VoiceProviderEvent.EventOneofCase.Disconnected:
@@ -529,9 +526,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         _activeProviderResponseId = providerResponseId;
         return responseId;
     }
-
-    private bool TryGetProviderResponse(string providerResponseId, out int responseId) =>
-        _providerResponseIds.TryGetValue(providerResponseId, out responseId);
 
     // Refactor (iter15/cluster-026-voice-provider-background-state):
     //   Old pattern: providers retired response epochs from background completion/cancel callbacks.
