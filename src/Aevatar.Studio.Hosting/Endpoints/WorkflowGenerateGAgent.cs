@@ -54,9 +54,6 @@ internal sealed class WorkflowGenerateGAgent : AIGAgentBase<Empty>
         Func<string, CancellationToken, Task>? onReasoning,
         CancellationToken ct = default)
     {
-        // Refactor (iter15/cluster-024):
-        //   Old pattern: non-streaming ChatAsync directly called provider.ChatAsync.
-        //   New principle: ChatStreamAsync is the only authoritative AI executor; offline text aggregation consumes the stream as an explicit adapter.
         var content = new StringBuilder();
         await foreach (var chunk in ChatStreamAsync(prompt, requestId, metadata, ct))
         {

@@ -387,11 +387,17 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
-    public void AiCoreSource_ShouldNotDirectlyCallProviderChatAsyncOutsideProviderBoundary()
+    public void UserFacingAiExecutorSurfaces_ShouldNotDirectlyCallProviderChatAsyncOutsideProviderBoundary()
     {
         var root = FindRepositoryRoot();
-        var aiCore = Path.Combine(root, "src", "Aevatar.AI.Core");
-        var offenders = Directory.EnumerateFiles(aiCore, "*.cs", SearchOption.AllDirectories)
+        var scannedRoots = new[]
+        {
+            Path.Combine(root, "src", "Aevatar.AI.Core"),
+            Path.Combine(root, "src", "Aevatar.Studio.Hosting"),
+            Path.Combine(root, "agents", "Aevatar.GAgents.ChatbotClassifier"),
+        };
+        var offenders = scannedRoots
+            .SelectMany(scanRoot => Directory.EnumerateFiles(scanRoot, "*.cs", SearchOption.AllDirectories))
             .SelectMany(file => File.ReadLines(file)
                 .Select((line, index) => new { file, line, index })
                 .Where(x => !x.line.TrimStart().StartsWith("//", StringComparison.Ordinal))

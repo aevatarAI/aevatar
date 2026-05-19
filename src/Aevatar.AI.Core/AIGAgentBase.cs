@@ -199,6 +199,9 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         return merged;
     }
 
+    // Refactor (iter15/cluster-024):
+    //   Old pattern: protected ChatAsync helpers let GAgents call the non-streaming executor as a formal conversation path.
+    //   New principle: GAgent subclasses use ChatStreamAsync; explicit offline aggregation is local to the caller that needs text.
     /// <summary>流式 Chat。</summary>
     protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(string userMessage, CancellationToken ct = default)
     {
