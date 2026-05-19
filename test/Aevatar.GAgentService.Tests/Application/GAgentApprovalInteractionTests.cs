@@ -12,6 +12,9 @@ using System.Runtime.CompilerServices;
 
 namespace Aevatar.GAgentService.Tests.Application;
 
+// Test-add (test-coverage/cluster-035):
+//   Covers refactor-introduced behavior in GAgentApprovalInteraction.cs:75-147.
+//   Cluster intent: approval cleanup owns typed live-sink leases and detaches without a process registry.
 public sealed class GAgentApprovalInteractionTests
 {
     [Fact]
@@ -141,6 +144,62 @@ public sealed class GAgentApprovalInteractionTests
         target.LiveSink.Should().BeNull();
         terminalPort.ReleaseCalls.Should().ContainSingle(x => ReferenceEquals(x, terminalLease));
         target.TerminalProjectionLease.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CleanupAfterDispatchFailureAsync_WhenOnlySinkIsBound_ShouldCompleteDisposeAndSkipProjectionDetach()
+    {
+        var projectionPort = new ApprovalProjectionPort();
+        var terminalPort = new ApprovalTerminalProjectionPort();
+        var target = new GAgentApprovalCommandTarget(
+            new ApprovalStubActor("actor-1", new ApprovalStubAgent()),
+            projectionPort,
+            terminalPort);
+        var sink = new RecordingAguiEventSink();
+        var terminalLease = new ApprovalTerminalProjectionLease(
+            "actor-1",
+            "corr-1",
+            GAgentRunTerminalInteractionKind.Approval);
+        target.BindTerminalProjection(terminalLease);
+        target.BindLiveObservation(new ApprovalProjectionLease("actor-1", "cmd-1"), new RecordingLiveSinkLease(), sink, "session-1");
+        SetProperty(target, nameof(GAgentApprovalCommandTarget.ProjectionLease), null);
+
+        await target.CleanupAfterDispatchFailureAsync(CancellationToken.None);
+
+        projectionPort.DetachedLiveSinkLeases.Should().BeEmpty();
+        projectionPort.ReleaseCalls.Should().BeEmpty();
+        sink.Completed.Should().BeTrue();
+        sink.DisposeCalls.Should().Be(1);
+        target.LiveSink.Should().BeNull();
+        target.LiveSinkLease.Should().BeNull();
+        terminalPort.ReleaseCalls.Should().ContainSingle(x => ReferenceEquals(x, terminalLease));
+    }
+
+    [Fact]
+    public async Task CleanupAfterDispatchFailureAsync_WhenOnlyProjectionLeaseIsBound_ShouldReleaseLeaseAndSkipProjectionDetach()
+    {
+        var projectionPort = new ApprovalProjectionPort();
+        var terminalPort = new ApprovalTerminalProjectionPort();
+        var target = new GAgentApprovalCommandTarget(
+            new ApprovalStubActor("actor-1", new ApprovalStubAgent()),
+            projectionPort,
+            terminalPort);
+        var lease = new ApprovalProjectionLease("actor-1", "cmd-1");
+        var terminalLease = new ApprovalTerminalProjectionLease(
+            "actor-1",
+            "corr-1",
+            GAgentRunTerminalInteractionKind.Approval);
+        target.BindTerminalProjection(terminalLease);
+        target.BindLiveObservation(lease, new RecordingLiveSinkLease(), new RecordingAguiEventSink(), "session-1");
+        SetProperty(target, nameof(GAgentApprovalCommandTarget.LiveSink), null);
+
+        await target.CleanupAfterDispatchFailureAsync(CancellationToken.None);
+
+        projectionPort.DetachedLiveSinkLeases.Should().BeEmpty();
+        projectionPort.ReleaseCalls.Should().ContainSingle(x => ReferenceEquals(x, lease));
+        target.ProjectionLease.Should().BeNull();
+        target.LiveSinkLease.Should().BeNull();
+        terminalPort.ReleaseCalls.Should().ContainSingle(x => ReferenceEquals(x, terminalLease));
     }
 
     [Fact]
@@ -547,5 +606,14 @@ public sealed class GAgentApprovalInteractionTests
             DisposeCalls++;
             return ValueTask.CompletedTask;
         }
+    }
+
+    private static void SetProperty(object instance, string propertyName, object? value)
+    {
+        var property = instance.GetType().GetProperty(
+            propertyName,
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+        property.Should().NotBeNull();
+        property!.SetValue(instance, value);
     }
 }
