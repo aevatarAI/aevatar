@@ -139,19 +139,24 @@ public sealed class ServiceServingProjectionInfrastructureTests
             x.ImplementationType == typeof(ServiceTrafficViewProjectionPort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(ICurrentStateProjectionMaterializer<ServiceServingSetProjectionContext>) &&
-            x.ImplementationType == typeof(ServiceServingSetProjector));
+            x.ImplementationType != null &&
+            x.ImplementationType.GenericTypeArguments.Contains(typeof(ServiceServingSetProjector)));
         services.Should().Contain(x =>
             x.ServiceType == typeof(ICurrentStateProjectionMaterializer<ServiceTrafficViewProjectionContext>) &&
-            x.ImplementationType == typeof(ServiceTrafficViewProjector));
+            x.ImplementationType != null &&
+            x.ImplementationType.GenericTypeArguments.Contains(typeof(ServiceTrafficViewProjector)));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IProjectionArtifactMaterializer<ServiceDeploymentCatalogProjectionContext>) &&
-            x.ImplementationType == typeof(ServiceDeploymentCatalogProjector));
+            x.ImplementationType != null &&
+            x.ImplementationType.GenericTypeArguments.Contains(typeof(ServiceDeploymentCatalogProjector)));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IProjectionArtifactMaterializer<ServiceRolloutProjectionContext>) &&
-            x.ImplementationType == typeof(ServiceRolloutProjector));
+            x.ImplementationType != null &&
+            x.ImplementationType.GenericTypeArguments.Contains(typeof(ServiceRolloutProjector)));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IProjectionArtifactMaterializer<ServiceRolloutProjectionContext>) &&
-            x.ImplementationType == typeof(ServiceRolloutCommandObservationProjector));
+            x.ImplementationType != null &&
+            x.ImplementationType.GenericTypeArguments.Contains(typeof(ServiceRolloutCommandObservationProjector)));
     }
 
     [Fact]

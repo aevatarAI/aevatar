@@ -78,10 +78,12 @@ public sealed class ServiceConfigurationProjectionInfrastructureTests
             x.ImplementationType == typeof(ServiceConfigurationQueryReader));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IProjectionMaterializer<ServiceConfigurationProjectionContext>) &&
-            x.ImplementationType == typeof(ServiceConfigurationProjector));
+            x.ImplementationType != null &&
+            x.ImplementationType.GenericTypeArguments.Contains(typeof(ServiceConfigurationProjector)));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IProjectionArtifactMaterializer<ServiceConfigurationProjectionContext>) &&
-            x.ImplementationType == typeof(ServiceConfigurationProjector));
+            x.ImplementationType != null &&
+            x.ImplementationType.GenericTypeArguments.Contains(typeof(ServiceConfigurationProjector)));
     }
 
     [Fact]

@@ -321,13 +321,16 @@ public sealed class ServiceProjectionInfrastructureTests
             x.ImplementationType == typeof(GAgentRunTerminalProjectionPort));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IProjectionArtifactMaterializer<ServiceCatalogProjectionContext>) &&
-            x.ImplementationType == typeof(ServiceCatalogProjector));
+            x.ImplementationType != null &&
+            x.ImplementationType.GenericTypeArguments.Contains(typeof(ServiceCatalogProjector)));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IProjectionArtifactMaterializer<ServiceRevisionCatalogProjectionContext>) &&
-            x.ImplementationType == typeof(ServiceRevisionCatalogProjector));
+            x.ImplementationType != null &&
+            x.ImplementationType.GenericTypeArguments.Contains(typeof(ServiceRevisionCatalogProjector)));
         services.Should().Contain(x =>
             x.ServiceType == typeof(ICurrentStateProjectionMaterializer<GAgentRunTerminalProjectionContext>) &&
-            x.ImplementationType == typeof(GAgentRunTerminalProjector));
+            x.ImplementationType != null &&
+            x.ImplementationType.GenericTypeArguments.Contains(typeof(GAgentRunTerminalProjector)));
     }
 
     [Fact]
