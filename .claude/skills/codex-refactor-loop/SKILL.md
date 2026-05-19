@@ -42,8 +42,8 @@ Write initial `state.json`:
 ```json
 {
   "schema_version": 1,
-  "trunk_branch": "<current branch>",
-  "integration_branch": "<current branch>",
+  "trunk_branch": "auto-refact-dev",
+  "integration_branch": "auto-refact-dev",
   "review_base_branch": "dev",
   "pr_mode": "stacked",
   "max_parallel_clusters": 3,
@@ -55,6 +55,18 @@ Write initial `state.json`:
   "clusters_failed": []
 }
 ```
+
+**Default integration branch**: `auto-refact-dev`. This is the long-lived branch where all auto-refactor cluster PRs land before rolling up to `dev`. On a fresh loop:
+
+```bash
+# Idempotent setup — safe to re-run
+git fetch origin
+git checkout -B auto-refact-dev origin/auto-refact-dev 2>/dev/null \
+  || git checkout -b auto-refact-dev origin/dev
+git push -u origin auto-refact-dev 2>/dev/null || true
+```
+
+Override only when the user explicitly names a different integration branch (e.g., to test a new audit prompt without polluting the canonical one). Existing loops on a different branch can keep their name; the default applies to **new** Phase 0 bootstraps only.
 
 **`pr_mode` choice (set in Phase 0; do not change mid-loop)**:
 
@@ -102,9 +114,31 @@ After validation: read `audit-iter-N.md`, populate `clusters_planned`, split int
 
 - Two clusters that touch the same `.csproj` or share a file path go in different batches.
 - Two clusters that touch the same proto file → different batches.
-- A cluster with `requires_design: true` (audit-marked deep violation) goes in a batch by itself; controller may also escalate it to a separate planning issue rather than auto-implement.
 
-Update state, advance to Phase 2.
+### requires_design clusters → open GitHub issue, do NOT auto-implement
+
+For every cluster with `requires_design: true`:
+
+1. Open a GitHub issue via `gh issue create`:
+   ```bash
+   gh issue create \
+     --title "[refactor-design] <cluster-id>: <one-line problem from audit>" \
+     --label "refactor-design-needed,auto-loop" \
+     --body "$(envsubst < .claude/skills/codex-refactor-loop/prompts/design-issue-body.md)"
+   ```
+   The body template at `prompts/design-issue-body.md` includes: the cluster's YAML block from audit, full evidence section, the audit's `Fix boundary` paragraph, and an explicit "decision needed" checklist (proto schema? new contract? backward-compat strategy? whether to split into multiple PRs?).
+2. Record in state.json:
+   ```json
+   "design_pending": [
+     {"cluster_id": "cluster-NNN", "issue_number": 234,
+      "opened_at": "<ISO8601>", "last_checked": "<ISO8601>",
+      "last_comment_count": 0, "status": "awaiting_design"}
+   ]
+   ```
+3. Skip the cluster in Phase 2 (do NOT batch it).
+4. PushNotification: "iter<N> opened design issue #<num> for cluster-<id>. Auto-loop paused on this cluster pending human design decision."
+
+Update state, advance to Phase 2 (with requires_design clusters excluded).
 
 ---
 
@@ -197,21 +231,59 @@ For each `pass` cluster, serially:
     - `dependencies: []` (independent, soft-dep, or batch-disjoint) → base = `integration_branch`.
     - `dependencies: ["cluster-XXX", ...]` (hard-dep — won't compile without the prerequisite) → base = the prerequisite cluster's branch (use the **first**, primary one; document others in PR description).
 
-6b. **Open PR**:
+    **All cluster PRs target the integration branch by default. Never PR directly to `review_base_branch` (dev).** The rollup PR (Phase 4b step 10b, one per iteration) is the only PR that targets `review_base_branch`. Rationale: cluster PRs stay small and reviewer-friendly; the integration branch holds the cumulative refactor state with merge-conflict resolution done once; the rollup PR is the human gate where iter-level rationale (scorecard, cluster ledger, CI guard adds) lives.
+
+    Edge case — if a maintainer accidentally retargets a cluster PR to `review_base_branch`, the next Phase 6 sweep detects the mismatch and posts a comment requesting retarget (does NOT auto-edit, to respect maintainer intent).
+
+6b. **Open PR** (**body MUST be bilingual per SKILL.md "Bilingual rule"**):
+
+    Structure the body as:
+
+    ```markdown
+    ## Summary / 摘要 (bilingual; see SKILL.md Bilingual rule)
+
+    ### English
+
+    iter<N> <cluster-id> (<severity>, <rule_ids>).
+
+    - **Old**: <old_pattern, full sentence from human_brief.problem_statement_en if present else cluster.old_pattern>
+    - **New**: <new_pattern, full sentence>
+
+    Violated: <CLAUDE.md / AGENTS.md clause one-liner>.
+
+    ### 中文
+
+    iter<N> <cluster-id>（<严重度>，<rule_ids>）。
+
+    - **Old**：<old_pattern 完整中文一句，来自 human_brief.problem_statement_zh；老 cluster 缺 zh 时由 controller 把英文 old_pattern 翻成中文>
+    - **New**：<new_pattern 完整中文一句>
+
+    违反：<对应 CLAUDE.md/AGENTS.md 条款中文摘录>。
+
+    ## Scope / 范围 (language-neutral file list)
+
+    <N files changed (+X/-Y). Targeted test pass counts. Architecture guards green.>
+
+    See [implement summary](./.refactor-loop/runs/implement-<cluster-id>.md) and [audit](./.refactor-loop/runs/audit-iter-<N>.md#<cluster-anchor>).
+
+    ## Stacked-PR
+
+    Part of iter<N> batch <X>. Base = `<base_branch>`. Rollup target = `<review_base_branch>`.
+
+    🤖 Auto-loop / codex-refactor-loop iter<N>
+    ```
+
+    Run via:
     ```bash
     cd "$REPO_ROOT" && \
     gh pr create \
       --base "<base_branch>" \
       --head "refactor/iterN-<cluster-id>" \
-      --title "<cluster id>: <short title>" \
-      --body "$(cat .refactor-loop/runs/implement-<cluster-id>.md)
----
-Auto-generated by codex-refactor-loop iter<N>.
-
-Verify report: .refactor-loop/runs/verify-<cluster-id>.md
-$(if [[ -n "<deps>" ]]; then echo "Depends on: <deps as PR links>"; fi)
-$(if [[ "<soft_deps>" ]]; then echo "Related (no merge order required): <soft-dep links>"; fi)"
+      --title "<cluster id>: <short imperative title — same English title; PR title is not bilingual since GitHub UI truncates>" \
+      --body-file <generated_body_file>
     ```
+
+    Controller must run the equivalence test (SKILL.md Bilingual rule §"Equivalence test") on the generated body before `gh pr create`. If 中文 section is missing or visibly shorter than English, regenerate or fall back to a one-paragraph machine-translation as last resort (and PushNotification flagging the legacy fallback so operator can fix).
 
 7b. Record the PR number in `state.clusters_active[i].pr_number`.
 8b. **Stack rebase on upstream merge**: when an upstream (dependency) cluster's PR merges into `integration_branch`, immediately:
@@ -305,6 +377,121 @@ For each `bucket: fail` check:
 
 ---
 
+## Phase 6 — Integration branch auto-sync with `review_base_branch` (heartbeat)
+
+Runs **first** on every controller wakeup, before Phase 7 design-issue sweep and before any new Phase 2 cluster work. Goal: keep `integration_branch` continuously up-to-date with `review_base_branch` so cluster PRs base on fresh code and the eventual rollup PR has minimal merge conflicts.
+
+### Sync procedure
+
+```bash
+cd "$REPO_ROOT" && git fetch origin
+git checkout "$INTEGRATION_BRANCH"
+git pull --ff-only origin "$INTEGRATION_BRANCH" 2>/dev/null || true
+
+# Compute divergence
+ahead=$(git rev-list --count "origin/$REVIEW_BASE_BRANCH..HEAD")
+behind=$(git rev-list --count "HEAD..origin/$REVIEW_BASE_BRANCH")
+
+if (( behind == 0 )); then
+  echo "integration is up-to-date with $REVIEW_BASE_BRANCH; no sync needed"
+  exit 0
+fi
+
+# Try fast-forward first, then no-ff merge
+if git merge --ff-only "origin/$REVIEW_BASE_BRANCH" 2>/dev/null; then
+  echo "fast-forwarded integration with $REVIEW_BASE_BRANCH (+$behind commits)"
+else
+  if git merge --no-ff -m "Sync integration with $REVIEW_BASE_BRANCH" "origin/$REVIEW_BASE_BRANCH"; then
+    echo "merge-committed $behind commits from $REVIEW_BASE_BRANCH into integration"
+  else
+    git merge --abort
+    echo "SYNC_CONFLICT: $behind commits in $REVIEW_BASE_BRANCH conflict with integration"
+    # PushNotification: "integration branch sync conflicted with dev; manual rebase needed"
+    exit 1
+  fi
+fi
+
+# Run local CI on the post-sync integration head
+bash tools/ci/architecture_guards.sh && bash tools/ci/test_stability_guards.sh
+if [[ $? -ne 0 ]]; then
+  echo "SYNC_CI_FAIL: post-merge guards failed"
+  # PushNotification + halt (do not push a broken integration)
+  exit 1
+fi
+
+git push origin "$INTEGRATION_BRANCH"
+```
+
+### Sync cadence
+
+- Every controller wakeup (cheap when `behind == 0`).
+- On conflict or post-merge CI fail → halt + PushNotification; do not push. Resume sync only after operator clears the issue.
+- After successful sync, **rebase all open cluster PRs** onto the new integration head (force-with-lease per PR branch). This keeps stacked PR semantics correct: each cluster PR's diff stays scoped to its own changes, not the dev merge.
+
+### Why this matters
+
+- Without auto-sync, the integration branch drifts from dev and the eventual rollup PR becomes one giant conflict resolution.
+- Cluster PR diffs viewed by reviewers should be just the cluster's changes; if integration is stale, the PR shows a noisy diff that mixes cluster work with "what dev added since" which is reviewer-hostile.
+- Sync conflicts are rare but real (e.g., a dev PR refactored the same area). Surfacing them as halts is better than silently posting a busted integration.
+
+### State tracking
+
+In `state.json`:
+
+```json
+"integration_sync": {
+  "last_sync_at": "<ISO8601>",
+  "last_sync_added_commits": <int>,
+  "last_sync_result": "ff | merge | up_to_date | conflict | ci_fail",
+  "consecutive_failures": <int>
+}
+```
+
+`consecutive_failures >= 3` → escalate to PushNotification with "integration sync stuck — manual review needed" and pause auto-sync until operator clears.
+
+---
+
+## Phase 7 — Design-issue watch (sweep on every wakeup)
+
+Runs **after Phase 6 sync** and **before** any new Phase 2 / 3 / 4 / 5 cluster work on every controller wakeup (whether triggered by user `/loop`, ScheduleWakeup, or task-notification). Goal: detect when a paused-for-design cluster has a maintainer response and resume it.
+
+### Sweep procedure
+
+For each `state.design_pending[i]`:
+
+```bash
+issue_json=$(gh issue view "$ISSUE_NUMBER" --json comments,state,labels)
+new_count=$(jq -r '.comments | length' <<<"$issue_json")
+prev_count=$LAST_COMMENT_COUNT   # from state
+state=$(jq -r '.state' <<<"$issue_json")
+labels=$(jq -r '[.labels[].name] | join(",")' <<<"$issue_json")
+```
+
+Classify:
+
+- **No new comments AND state==open**: nothing to do; bump `last_checked` only.
+- **State==closed without `auto-loop-resume` label**: maintainer closed without resume signal. Move to `clusters_failed` with reason `design-rejected:closed`. PushNotification: "cluster-<id> design issue #<num> closed without auto-resume; cluster permanently deferred."
+- **New comment(s) AND no `auto-loop-resume` label**: maintainer is discussing. PushNotification: "cluster-<id> design issue #<num> has N new comment(s) — manual review recommended" (only the first time a new comment appears; do not re-notify each sweep).
+- **Label `auto-loop-resume` is set** (maintainer's explicit green light): controller resumes:
+  - Extract the latest comment body (assumed to contain the design decision: chosen pattern, proto schema, scope adjustments).
+  - Materialize a new `prompts/implement-<cluster-id>.md` that prepends the design decision verbatim under a `## Design decision (from issue #<num>)` heading, then proceeds with the regular implement instructions.
+  - Move cluster from `design_pending` into `clusters_active` and dispatch as a normal Phase 2 implement.
+  - Post a comment back on the issue: "auto-loop resumed; implement codex dispatched. Will close after PR opens."
+
+Update `state.design_pending[i].last_comment_count` and `last_checked` after every sweep, regardless of outcome.
+
+### Sweep cadence
+
+- Every controller wakeup runs the sweep (cheap: `gh issue view` per pending cluster, typically ≤5 pending).
+- If there are pending design issues and no other active phase work, set ScheduleWakeup to **3600s** (1h) as the design-poll cadence — issues don't usually get responses minute-to-minute.
+- Stop the loop entirely (omit ScheduleWakeup, PushNotification stop) only when **no design_pending AND no clusters_active AND no rollup_pr awaiting CI**. Otherwise the loop must keep heartbeating to catch design responses.
+
+### Manual override
+
+If the user manually edits state.json and sets `design_pending[i].status = "resume"`, the next sweep treats it as if `auto-loop-resume` label was applied (escape hatch when label can't be set on the host).
+
+---
+
 ## Loop control
 
 - **Stop conditions**: all planned clusters done OR every remaining cluster failed twice.
@@ -324,6 +511,48 @@ For each `bucket: fail` check:
 5. **No `Task.Delay`-based test pacing** — tests must use deterministic awaiters.
 6. **No `[Skip]` / disabled tests** as a way to make CI green.
 7. **No scope creep** — codex must print `SCOPE_EXTEND: <file> <reason>` before touching anything outside `scope_paths`.
+8. **All user-facing output is fully-equivalent bilingual (中英文双语完整对照)** — every GitHub issue body, PR description, design notification, and any natural-language artifact the loop posts publicly must contain both English AND 中文 sections, each **independently complete**. See "Bilingual rule" below for the full constraint.
+
+## Bilingual rule (双语规则) — applies to ALL user-facing artifacts
+
+User-facing artifacts include: GitHub issue body, PR description, PR comments, design issue auto-loop comments, scorecard docs in `docs/audit-scorecard/`, PushNotification messages (English only OK due to mobile char limit, but the underlying issue/PR they reference must be bilingual). Internal artifacts (audit/implement/verify/test-add codex log summaries, state.json, `.refactor-loop/runs/*.md`) are exempt and remain English-only by default.
+
+### Required structure
+
+Every user-facing artifact has TWO independent prose sections:
+
+- `## English` (or equivalent heading) — full meaning, no cross-reference to 中文.
+- `## 中文` (or equivalent heading) — full meaning, no cross-reference to English.
+
+Plus optionally:
+
+- A **language-neutral** section for code blocks, YAML, file paths, command snippets, and tables that contain no translatable prose. Put it ONCE between (or before) the two language sections to avoid duplicating code. Its heading should itself be bilingual (e.g. `## Technical Context / 技术上下文`).
+
+### Equivalence test (must pass before posting)
+
+For every user-facing artifact, the controller MUST verify:
+
+1. **Each language section is independently complete**: a reader of only one section can act on the issue/PR without reading the other.
+2. **No back-references**: forbidden phrases like "见英文部分", "see Chinese section", "as described above in 中文", "details in English". If you need a shared block, put it in the language-neutral section.
+3. **No "TL;DR in EN, full version in ZH"**: both sections carry the SAME depth and content. Don't drop "Decision checklist" from one side.
+4. **No machine-translation-feel imbalance**: if EN is 5 paragraphs and ZH is 1 paragraph, fail.
+5. **Code blocks are not duplicated** in both language sections — they belong in the language-neutral section.
+
+If any check fails, regenerate. Do not post.
+
+### Templates emit bilingual by construction
+
+- `prompts/design-issue-body.md` is bilingual-by-construction; the audit's `human_brief:` block must provide both `_en` and `_zh` fields per piece of prose.
+- `prompts/audit.md` Step 4b mandates the `_en` / `_zh` pair for `problem_title`, `problem_statement`, `why_needs_design`, `design_question_pattern`. Missing the `_zh` half → `AUDIT_INCOMPLETE: human_brief_missing_zh`.
+- Phase 4 PR body (`gh pr create --body`) must be assembled with both English and 中文 sections describing: what the PR changes (Old/New pattern), why it matters, scope summary, verification result, link to the cluster spec. The controller assembles this from the cluster's `human_brief` when available; falls back to translating the cluster YAML's `old_pattern` / `new_pattern` lines into 中文 when no `human_brief` exists (legacy clusters before Phase 4 bilingual rule).
+- Phase 6 auto-resume comment on the design issue (when label `auto-loop-resume` triggers implement) must also be bilingual: "Implement codex dispatched; PR will open shortly / Implement codex 已派发；PR 即将打开。"
+- Phase 5 PushNotification messages may stay English-only (mobile char limit; they reference a bilingual artifact for full context).
+
+### Why this is mandatory
+
+- Project docs use both languages (CLAUDE.md, AGENTS.md mixed). Reviewers self-select language; an English-only or 中文-only issue loses half the audience.
+- A back-reference like "见英文" makes the 中文 section a placeholder, not actual content — defeats the purpose.
+- The controller cannot rely on the maintainer to translate or follow a link before responding; the artifact must be self-contained on first read.
 
 ---
 
@@ -334,5 +563,6 @@ For each `bucket: fail` check:
 - [prompts/verify.md](prompts/verify.md) — verify phase template (per cluster)
 - [prompts/remote-ci-fix.md](prompts/remote-ci-fix.md) — Phase 5 remote-CI fix template
 - [prompts/test-add.md](prompts/test-add.md) — Phase 5 codecov-driven test-add template (per cluster)
+- [prompts/design-issue-body.md](prompts/design-issue-body.md) — Phase 1/6 GitHub issue body for `requires_design: true` clusters
 - [scripts/spawn-codex.sh](scripts/spawn-codex.sh) — standardized `codex exec` wrapper (enforces 3600s minimum timeout)
 - [REFERENCE.md](REFERENCE.md) — state schema, batching heuristics, recovery playbook
