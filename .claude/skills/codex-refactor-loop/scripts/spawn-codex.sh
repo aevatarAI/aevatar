@@ -67,7 +67,7 @@ ARGS=(
   -C "$CD"
 )
 
-for d in "${ADD_DIRS[@]}"; do
+for d in "${ADD_DIRS[@]+"${ADD_DIRS[@]}"}"; do
   ARGS+=(--add-dir "$d")
 done
 
