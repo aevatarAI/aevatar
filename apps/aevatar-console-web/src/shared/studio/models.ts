@@ -552,6 +552,14 @@ export interface StudioTeamSummary {
   readonly updatedAt: string;
 }
 
+export interface StudioTeamCommandAcceptedResponse {
+  readonly scopeId: string;
+  readonly teamId: string;
+  readonly commandId?: string | null;
+  readonly ackStage: string;
+  readonly acceptedAtUtc: string;
+}
+
 export interface StudioTeamRoster {
   readonly scopeId: string;
   readonly teams: readonly StudioTeamSummary[];

@@ -70,7 +70,7 @@ internal sealed class ActorDispatchStudioTeamCommandService : IStudioTeamCommand
             UpdatedAt: createdAt);
     }
 
-    public async Task UpdateAsync(
+    public async Task<StudioTeamCommandAcceptedResponse> UpdateAsync(
         string scopeId,
         string teamId,
         UpdateStudioTeamRequest request,
@@ -83,7 +83,11 @@ internal sealed class ActorDispatchStudioTeamCommandService : IStudioTeamCommand
 
         // No-op if the patch payload carries no field to change.
         if (!request.DisplayName.HasValue && !request.Description.HasValue)
-            return;
+            return BuildAcceptedResponse(
+                normalizedScopeId,
+                normalizedTeamId,
+                commandId: null,
+                acceptedAtUtc: DateTimeOffset.UtcNow);
 
         var evt = new StudioTeamUpdatedEvent
         {
@@ -105,10 +109,10 @@ internal sealed class ActorDispatchStudioTeamCommandService : IStudioTeamCommand
             evt.Description = request.Description.Value ?? string.Empty;
         }
 
-        await DispatchAsync(normalizedScopeId, normalizedTeamId, evt, ct);
+        return await DispatchAsync(normalizedScopeId, normalizedTeamId, evt, ct);
     }
 
-    public async Task ArchiveAsync(
+    public async Task<StudioTeamCommandAcceptedResponse> ArchiveAsync(
         string scopeId,
         string teamId,
         CancellationToken ct = default)
@@ -123,24 +127,44 @@ internal sealed class ActorDispatchStudioTeamCommandService : IStudioTeamCommand
             ArchivedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 
-        await DispatchAsync(normalizedScopeId, normalizedTeamId, evt, ct);
+        return await DispatchAsync(normalizedScopeId, normalizedTeamId, evt, ct);
     }
 
-    private async Task DispatchAsync(string scopeId, string teamId, IMessage payload, CancellationToken ct)
+    private async Task<StudioTeamCommandAcceptedResponse> DispatchAsync(
+        string scopeId,
+        string teamId,
+        IMessage payload,
+        CancellationToken ct)
     {
         var actorId = StudioTeamConventions.BuildActorId(scopeId, teamId);
         var actor = await _bootstrap.EnsureAsync<StudioTeamGAgent>(actorId, ct);
+        var commandId = Guid.NewGuid().ToString("N");
+        var acceptedAtUtc = DateTimeOffset.UtcNow;
 
         var envelope = new EventEnvelope
         {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Id = commandId,
+            Timestamp = Timestamp.FromDateTimeOffset(acceptedAtUtc),
             Payload = Any.Pack(payload),
             Route = EnvelopeRouteSemantics.CreateDirect(DirectRoute, actor.Id),
         };
 
         await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
+
+        return BuildAcceptedResponse(scopeId, teamId, commandId, acceptedAtUtc);
     }
+
+    private static StudioTeamCommandAcceptedResponse BuildAcceptedResponse(
+        string scopeId,
+        string teamId,
+        string? commandId,
+        DateTimeOffset acceptedAtUtc) =>
+        new(
+            ScopeId: scopeId,
+            TeamId: teamId,
+            CommandId: commandId,
+            AckStage: StudioTeamCommandAckStageNames.Accepted,
+            AcceptedAtUtc: acceptedAtUtc);
 
     private static string GenerateTeamId()
     {

@@ -43,6 +43,7 @@ import type {
   StudioSerializeYamlResult,
   StudioSettings,
   StudioStartExecutionInput,
+  StudioTeamCommandAcceptedResponse,
   StudioTeamCreateInput,
   StudioTeamLifecycleStage,
   StudioTeamRoster,
@@ -1097,6 +1098,40 @@ function decodeStudioTeamSummary(value: unknown): StudioTeamSummary {
   };
 }
 
+function decodeStudioTeamCommandAcceptedResponse(
+  value: unknown
+): StudioTeamCommandAcceptedResponse {
+  const record = expectRecord(value, "StudioTeamCommandAcceptedResponse");
+  return {
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioTeamCommandAcceptedResponse.scopeId"
+    ),
+    teamId: readString(
+      record,
+      ["teamId", "TeamId"],
+      "StudioTeamCommandAcceptedResponse.teamId"
+    ),
+    commandId:
+      readNullableString(
+        record,
+        ["commandId", "CommandId"],
+        "StudioTeamCommandAcceptedResponse.commandId"
+      ) ?? null,
+    ackStage: readString(
+      record,
+      ["ackStage", "AckStage"],
+      "StudioTeamCommandAcceptedResponse.ackStage"
+    ),
+    acceptedAtUtc: readString(
+      record,
+      ["acceptedAtUtc", "AcceptedAtUtc"],
+      "StudioTeamCommandAcceptedResponse.acceptedAtUtc"
+    ),
+  };
+}
+
 function decodeStudioTeamRoster(value: unknown): StudioTeamRoster {
   const record = expectRecord(value, "StudioTeamRoster");
   return {
@@ -1431,10 +1466,10 @@ export const studioApi = {
     );
   },
 
-  updateTeam(input: StudioTeamUpdateInput): Promise<StudioTeamSummary> {
+  updateTeam(input: StudioTeamUpdateInput): Promise<StudioTeamCommandAcceptedResponse> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/teams/${encodeURIComponent(input.teamId.trim())}`,
-      decodeStudioTeamSummary,
+      decodeStudioTeamCommandAcceptedResponse,
       {
         method: "PATCH",
         headers: JSON_HEADERS,
@@ -1450,10 +1485,10 @@ export const studioApi = {
     );
   },
 
-  archiveTeam(scopeId: string, teamId: string): Promise<StudioTeamSummary> {
+  archiveTeam(scopeId: string, teamId: string): Promise<StudioTeamCommandAcceptedResponse> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams/${encodeURIComponent(teamId.trim())}/archive`,
-      decodeStudioTeamSummary,
+      decodeStudioTeamCommandAcceptedResponse,
       {
         method: "POST",
         headers: JSON_HEADERS,

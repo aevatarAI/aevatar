@@ -666,13 +666,18 @@ jest.mock("@/shared/studio/api", () => ({
     listMembers: jest.fn(async () => mockCreateMembersCatalog()),
     getTeam: jest.fn(async () => mockCreateTeamSummary()),
     updateTeam: jest.fn(async () => ({
-      ...mockCreateTeamSummary(),
-      displayName: "Alpha Ops Team",
-      description: "",
+      scopeId: "scope-1",
+      teamId: "t-alpha",
+      commandId: "cmd-update",
+      ackStage: "accepted",
+      acceptedAtUtc: "2026-05-01T08:06:00Z",
     })),
     archiveTeam: jest.fn(async () => ({
-      ...mockCreateTeamSummary(),
-      lifecycleStage: "archived",
+      scopeId: "scope-1",
+      teamId: "t-alpha",
+      commandId: "cmd-archive",
+      ackStage: "accepted",
+      acceptedAtUtc: "2026-05-01T08:07:00Z",
     })),
     listTeamMembers: jest.fn(async () => mockCreateTeamMembersCatalog()),
     parseYaml: jest.fn(async () => ({
@@ -737,14 +742,19 @@ describe("TeamDetailPage", () => {
     );
     (studioApi.updateTeam as jest.Mock).mockReset();
     (studioApi.updateTeam as jest.Mock).mockImplementation(async () => ({
-      ...mockCreateTeamSummary(),
-      displayName: "Alpha Ops Team",
-      description: "",
+      scopeId: "scope-1",
+      teamId: "t-alpha",
+      commandId: "cmd-update",
+      ackStage: "accepted",
+      acceptedAtUtc: "2026-05-01T08:06:00Z",
     }));
     (studioApi.archiveTeam as jest.Mock).mockReset();
     (studioApi.archiveTeam as jest.Mock).mockImplementation(async () => ({
-      ...mockCreateTeamSummary(),
-      lifecycleStage: "archived",
+      scopeId: "scope-1",
+      teamId: "t-alpha",
+      commandId: "cmd-archive",
+      ackStage: "accepted",
+      acceptedAtUtc: "2026-05-01T08:07:00Z",
     }));
     (studioApi.listTeamMembers as jest.Mock).mockReset();
     (studioApi.listTeamMembers as jest.Mock).mockImplementation(

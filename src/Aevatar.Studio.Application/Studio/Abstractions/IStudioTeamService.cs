@@ -25,21 +25,22 @@ public interface IStudioTeamService
         string teamId,
         CancellationToken ct = default);
 
-    Task<StudioTeamSummaryResponse> UpdateAsync(
+    Task<StudioTeamCommandAcceptedResponse> UpdateAsync(
         string scopeId,
         string teamId,
         UpdateStudioTeamRequest request,
         CancellationToken ct = default);
 
-    Task<StudioTeamSummaryResponse> ArchiveAsync(
+    Task<StudioTeamCommandAcceptedResponse> ArchiveAsync(
         string scopeId,
         string teamId,
         CancellationToken ct = default);
 }
 
 /// <summary>
-/// Thrown when a team lookup or update targets an id that has no read-model
-/// document. Mirrors <see cref="StudioMemberNotFoundException"/>.
+/// Thrown when a team readmodel lookup targets an id that has no materialized
+/// document. Update/archive paths must only surface not-found from an
+/// authoritative command contract, not from post-dispatch readmodel lag.
 /// </summary>
 public sealed class StudioTeamNotFoundException : Exception
 {

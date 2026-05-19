@@ -1226,6 +1226,20 @@ describe('studioApi host-session requests', () => {
       createdAt: '2026-05-01T08:00:00Z',
       updatedAt: '2026-05-01T08:05:00Z',
     };
+    const updateAccepted = {
+      scopeId: 'scope-1',
+      teamId: 't-alpha',
+      commandId: 'cmd-update',
+      ackStage: 'accepted',
+      acceptedAtUtc: '2026-05-01T08:06:00Z',
+    };
+    const archiveAccepted = {
+      scopeId: 'scope-1',
+      teamId: 't-alpha',
+      commandId: 'cmd-archive',
+      ackStage: 'accepted',
+      acceptedAtUtc: '2026-05-01T08:07:00Z',
+    };
     const fetchMock = jest
       .fn()
       .mockResolvedValueOnce({
@@ -1235,20 +1249,13 @@ describe('studioApi host-session requests', () => {
       } as Response)
       .mockResolvedValueOnce({
         ok: true,
-        status: 200,
-        json: async () => ({
-          ...teamResponse,
-          displayName: 'Alpha Ops',
-          description: '',
-        }),
+        status: 202,
+        json: async () => updateAccepted,
       } as Response)
       .mockResolvedValueOnce({
         ok: true,
-        status: 200,
-        json: async () => ({
-          ...teamResponse,
-          lifecycleStage: 'archived',
-        }),
+        status: 202,
+        json: async () => archiveAccepted,
       } as Response)
       .mockResolvedValueOnce({
         ok: true,
@@ -1290,15 +1297,8 @@ describe('studioApi host-session requests', () => {
         displayName: 'Alpha Ops',
         description: null,
       }),
-    ).resolves.toEqual({
-      ...teamResponse,
-      displayName: 'Alpha Ops',
-      description: '',
-    });
-    await expect(studioApi.archiveTeam('scope-1', 't-alpha')).resolves.toEqual({
-      ...teamResponse,
-      lifecycleStage: 'archived',
-    });
+    ).resolves.toEqual(updateAccepted);
+    await expect(studioApi.archiveTeam('scope-1', 't-alpha')).resolves.toEqual(archiveAccepted);
     await expect(studioApi.listTeamMembers('scope-1', 't-alpha')).resolves.toEqual({
       scopeId: 'scope-1',
       members: [

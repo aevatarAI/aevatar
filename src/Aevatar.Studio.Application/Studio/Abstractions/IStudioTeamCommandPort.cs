@@ -14,7 +14,7 @@ public interface IStudioTeamCommandPort
         CreateStudioTeamRequest request,
         CancellationToken ct = default);
 
-    Task UpdateAsync(
+    Task<StudioTeamCommandAcceptedResponse> UpdateAsync(
         string scopeId,
         string teamId,
         UpdateStudioTeamRequest request,
@@ -24,7 +24,7 @@ public interface IStudioTeamCommandPort
     /// Archives the team. Archive is irreversible (ADR-0017 §Locked Rule 5).
     /// Idempotent on already-archived teams.
     /// </summary>
-    Task ArchiveAsync(
+    Task<StudioTeamCommandAcceptedResponse> ArchiveAsync(
         string scopeId,
         string teamId,
         CancellationToken ct = default);

@@ -12,6 +12,11 @@ public static class TeamLifecycleStageNames
     public const string Archived = "archived";
 }
 
+public static class StudioTeamCommandAckStageNames
+{
+    public const string Accepted = "accepted";
+}
+
 public sealed record StudioTeamSummaryResponse(
     string TeamId,
     string ScopeId,
@@ -21,6 +26,13 @@ public sealed record StudioTeamSummaryResponse(
     int MemberCount,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
+
+public sealed record StudioTeamCommandAcceptedResponse(
+    string ScopeId,
+    string TeamId,
+    string? CommandId,
+    string AckStage,
+    DateTimeOffset AcceptedAtUtc);
 
 public sealed record StudioTeamRosterResponse(
     string ScopeId,

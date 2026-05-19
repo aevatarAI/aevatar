@@ -108,31 +108,29 @@ public sealed class StudioTeamServiceTests
     }
 
     [Fact]
-    public async Task UpdateAsync_ShouldDelegateAndReRead()
+    public async Task UpdateAsync_ShouldReturnAcceptedReceiptWithoutReReading()
     {
         var commandPort = new RecordingCommandPort();
-        var summary = NewSummary();
-        var service = new StudioTeamService(commandPort, new InMemoryQueryPort(summary));
+        var service = new StudioTeamService(commandPort, new ThrowingQueryPort());
 
         var result = await service.UpdateAsync(
             ScopeId, TeamId,
             new UpdateStudioTeamRequest(DisplayName: PatchValue<string>.Of("Beta")));
 
         commandPort.UpdateCalls.Should().Be(1);
-        result.Should().NotBeNull();
+        result.Should().Be(commandPort.UpdateReceipt);
     }
 
     [Fact]
-    public async Task ArchiveAsync_ShouldDelegateAndReRead()
+    public async Task ArchiveAsync_ShouldReturnAcceptedReceiptWithoutReReading()
     {
         var commandPort = new RecordingCommandPort();
-        var summary = NewSummary();
-        var service = new StudioTeamService(commandPort, new InMemoryQueryPort(summary));
+        var service = new StudioTeamService(commandPort, new ThrowingQueryPort());
 
         var result = await service.ArchiveAsync(ScopeId, TeamId);
 
         commandPort.ArchiveCalls.Should().Be(1);
-        result.Should().NotBeNull();
+        result.Should().Be(commandPort.ArchiveReceipt);
     }
 
     [Fact]
@@ -174,11 +172,24 @@ public sealed class StudioTeamServiceTests
             Task.FromResult(_summary);
     }
 
+    private sealed class ThrowingQueryPort : IStudioTeamQueryPort
+    {
+        public Task<StudioTeamRosterResponse> ListAsync(
+            string scopeId, StudioTeamRosterPageRequest? page = null, CancellationToken ct = default) =>
+            throw new InvalidOperationException("query port should not be called");
+
+        public Task<StudioTeamSummaryResponse?> GetAsync(
+            string scopeId, string teamId, CancellationToken ct = default) =>
+            throw new InvalidOperationException("query port should not be called");
+    }
+
     private sealed class RecordingCommandPort : IStudioTeamCommandPort
     {
         public int CreateCalls { get; private set; }
         public int UpdateCalls { get; private set; }
         public int ArchiveCalls { get; private set; }
+        public StudioTeamCommandAcceptedResponse UpdateReceipt { get; } = NewReceipt("cmd-update");
+        public StudioTeamCommandAcceptedResponse ArchiveReceipt { get; } = NewReceipt("cmd-archive");
 
         public Task<StudioTeamSummaryResponse> CreateAsync(
             string scopeId, CreateStudioTeamRequest request, CancellationToken ct = default)
@@ -195,18 +206,26 @@ public sealed class StudioTeamServiceTests
                 UpdatedAt: DateTimeOffset.UtcNow));
         }
 
-        public Task UpdateAsync(
+        public Task<StudioTeamCommandAcceptedResponse> UpdateAsync(
             string scopeId, string teamId, UpdateStudioTeamRequest request, CancellationToken ct = default)
         {
             UpdateCalls++;
-            return Task.CompletedTask;
+            return Task.FromResult(UpdateReceipt);
         }
 
-        public Task ArchiveAsync(
+        public Task<StudioTeamCommandAcceptedResponse> ArchiveAsync(
             string scopeId, string teamId, CancellationToken ct = default)
         {
             ArchiveCalls++;
-            return Task.CompletedTask;
+            return Task.FromResult(ArchiveReceipt);
         }
+
+        private static StudioTeamCommandAcceptedResponse NewReceipt(string commandId) =>
+            new(
+                ScopeId: ScopeId,
+                TeamId: TeamId,
+                CommandId: commandId,
+                AckStage: StudioTeamCommandAckStageNames.Accepted,
+                AcceptedAtUtc: DateTimeOffset.UtcNow);
     }
 }

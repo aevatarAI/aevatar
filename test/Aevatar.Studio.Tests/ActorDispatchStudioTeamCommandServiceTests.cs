@@ -71,12 +71,13 @@ public sealed class ActorDispatchStudioTeamCommandServiceTests
         var service = new ActorDispatchStudioTeamCommandService(
             new RecordingBootstrap(), dispatch);
 
-        await service.UpdateAsync(
+        var receipt = await service.UpdateAsync(
             ScopeId, "t-1",
             new UpdateStudioTeamRequest(DisplayName: PatchValue<string>.Of("New Name")),
             CancellationToken.None);
 
         dispatch.Dispatches.Should().ContainSingle();
+        AssertReceiptMatchesEnvelope(receipt, dispatch.Dispatches[0].Envelope, ScopeId, "t-1");
         var evt = dispatch.Dispatches[0].Envelope.Payload.Unpack<StudioTeamUpdatedEvent>();
         evt.HasDisplayName.Should().BeTrue();
         evt.DisplayName.Should().Be("New Name");
@@ -90,12 +91,13 @@ public sealed class ActorDispatchStudioTeamCommandServiceTests
         var service = new ActorDispatchStudioTeamCommandService(
             new RecordingBootstrap(), dispatch);
 
-        await service.UpdateAsync(
+        var receipt = await service.UpdateAsync(
             ScopeId, "t-1",
             new UpdateStudioTeamRequest(Description: PatchValue<string>.Of("new desc")),
             CancellationToken.None);
 
         dispatch.Dispatches.Should().ContainSingle();
+        receipt.CommandId.Should().Be(dispatch.Dispatches[0].Envelope.Id);
         var evt = dispatch.Dispatches[0].Envelope.Payload.Unpack<StudioTeamUpdatedEvent>();
         evt.HasDescription.Should().BeTrue();
         evt.Description.Should().Be("new desc");
@@ -109,12 +111,17 @@ public sealed class ActorDispatchStudioTeamCommandServiceTests
         var service = new ActorDispatchStudioTeamCommandService(
             new RecordingBootstrap(), dispatch);
 
-        await service.UpdateAsync(
+        var receipt = await service.UpdateAsync(
             ScopeId, "t-1",
             new UpdateStudioTeamRequest(),
             CancellationToken.None);
 
         dispatch.Dispatches.Should().BeEmpty();
+        receipt.ScopeId.Should().Be(ScopeId);
+        receipt.TeamId.Should().Be("t-1");
+        receipt.CommandId.Should().BeNull();
+        receipt.AckStage.Should().Be(StudioTeamCommandAckStageNames.Accepted);
+        receipt.AcceptedAtUtc.Should().BeCloseTo(DateTimeOffset.UtcNow, TimeSpan.FromSeconds(5));
     }
 
     [Fact]
@@ -124,7 +131,7 @@ public sealed class ActorDispatchStudioTeamCommandServiceTests
         var service = new ActorDispatchStudioTeamCommandService(
             new RecordingBootstrap(), dispatch);
 
-        await service.UpdateAsync(
+        var receipt = await service.UpdateAsync(
             ScopeId, "t-1",
             new UpdateStudioTeamRequest(
                 DisplayName: PatchValue<string>.Of("X"),
@@ -132,6 +139,7 @@ public sealed class ActorDispatchStudioTeamCommandServiceTests
             CancellationToken.None);
 
         dispatch.Dispatches.Should().ContainSingle();
+        receipt.CommandId.Should().Be(dispatch.Dispatches[0].Envelope.Id);
         var evt = dispatch.Dispatches[0].Envelope.Payload.Unpack<StudioTeamUpdatedEvent>();
         evt.HasDisplayName.Should().BeTrue();
         evt.DisplayName.Should().Be("X");
@@ -146,11 +154,12 @@ public sealed class ActorDispatchStudioTeamCommandServiceTests
         var dispatch = new RecordingDispatchPort();
         var service = new ActorDispatchStudioTeamCommandService(bootstrap, dispatch);
 
-        await service.ArchiveAsync(ScopeId, "t-1", CancellationToken.None);
+        var receipt = await service.ArchiveAsync(ScopeId, "t-1", CancellationToken.None);
 
         bootstrap.EnsuredActorIds.Should().ContainSingle()
             .Which.Should().Be("studio-team:scope-1:t-1");
         dispatch.Dispatches.Should().ContainSingle();
+        AssertReceiptMatchesEnvelope(receipt, dispatch.Dispatches[0].Envelope, ScopeId, "t-1");
 
         var evt = dispatch.Dispatches[0].Envelope.Payload.Unpack<StudioTeamArchivedEvent>();
         evt.TeamId.Should().Be("t-1");
@@ -166,6 +175,19 @@ public sealed class ActorDispatchStudioTeamCommandServiceTests
         FluentActions.Invoking(() =>
                 new ActorDispatchStudioTeamCommandService(new RecordingBootstrap(), null!))
             .Should().Throw<ArgumentNullException>();
+    }
+
+    private static void AssertReceiptMatchesEnvelope(
+        StudioTeamCommandAcceptedResponse receipt,
+        EventEnvelope envelope,
+        string scopeId,
+        string teamId)
+    {
+        receipt.ScopeId.Should().Be(scopeId);
+        receipt.TeamId.Should().Be(teamId);
+        receipt.CommandId.Should().Be(envelope.Id);
+        receipt.AckStage.Should().Be(StudioTeamCommandAckStageNames.Accepted);
+        receipt.AcceptedAtUtc.Should().Be(envelope.Timestamp.ToDateTimeOffset());
     }
 
     private sealed class RecordingBootstrap : IStudioActorBootstrap

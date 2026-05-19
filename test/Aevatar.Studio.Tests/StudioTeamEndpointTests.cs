@@ -93,7 +93,7 @@ public sealed class StudioTeamEndpointTests
     }
 
     [Fact]
-    public async Task HandlePatchAsync_ShouldReturn200_WhenUpdateSucceeds()
+    public async Task HandlePatchAsync_ShouldReturn202Accepted_WhenUpdateSucceeds()
     {
         var service = new InMemoryTeamService(NewSummary());
         var body = new StudioTeamEndpoints.StudioTeamPatchBody
@@ -109,7 +109,16 @@ public sealed class StudioTeamEndpointTests
             service,
             CancellationToken.None);
 
-        GetStatusCode(result).Should().Be(StatusCodes.Status200OK);
+        GetStatusCode(result).Should().Be(StatusCodes.Status202Accepted);
+        GetLocation(result).Should().Be($"/api/scopes/{ScopeId}/teams/{TeamId}");
+
+        var accepted = GetValue<StudioTeamCommandAcceptedResponse>(result);
+        accepted.ScopeId.Should().Be(ScopeId);
+        accepted.TeamId.Should().Be(TeamId);
+        accepted.CommandId.Should().Be("cmd-update");
+        accepted.AckStage.Should().Be(StudioTeamCommandAckStageNames.Accepted);
+        accepted.AcceptedAtUtc.Should().BeCloseTo(DateTimeOffset.UtcNow, TimeSpan.FromSeconds(5));
+        AssertDoesNotContainPostStateFields(SerializeCamelCase(accepted));
     }
 
     [Fact]
@@ -209,7 +218,7 @@ public sealed class StudioTeamEndpointTests
             service,
             CancellationToken.None);
 
-        GetStatusCode(result).Should().Be(StatusCodes.Status200OK);
+        GetStatusCode(result).Should().Be(StatusCodes.Status202Accepted);
     }
 
     [Fact]
@@ -229,11 +238,53 @@ public sealed class StudioTeamEndpointTests
             service,
             CancellationToken.None);
 
-        GetStatusCode(result).Should().Be(StatusCodes.Status200OK);
+        GetStatusCode(result).Should().Be(StatusCodes.Status202Accepted);
     }
 
     [Fact]
-    public async Task HandleArchiveAsync_ShouldReturn200_WhenSuccessful()
+    public async Task HandlePatchAsync_ShouldReturnAcceptedReceiptWithNullCommandId_WhenNoop()
+    {
+        var service = new InMemoryTeamService(NewSummary());
+        var result = await InvokeTeamHandle(
+            "HandlePatchAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            TeamId,
+            new StudioTeamEndpoints.StudioTeamPatchBody(),
+            service,
+            CancellationToken.None);
+
+        GetStatusCode(result).Should().Be(StatusCodes.Status202Accepted);
+        var accepted = GetValue<StudioTeamCommandAcceptedResponse>(result);
+        accepted.CommandId.Should().BeNull();
+        accepted.AckStage.Should().Be(StudioTeamCommandAckStageNames.Accepted);
+    }
+
+    [Fact]
+    public async Task HandlePatchAsync_ShouldUseEscapedLocationFromAcceptedReceipt()
+    {
+        var service = new InMemoryTeamService(
+            NewSummary(),
+            updateReceipt: NewAcceptedReceipt("scope with/slash", "team with/slash", "cmd-update"));
+        var body = new StudioTeamEndpoints.StudioTeamPatchBody
+        {
+            DisplayName = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>("\"Beta\""),
+        };
+        var result = await InvokeTeamHandle(
+            "HandlePatchAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            TeamId,
+            body,
+            service,
+            CancellationToken.None);
+
+        GetStatusCode(result).Should().Be(StatusCodes.Status202Accepted);
+        GetLocation(result).Should().Be("/api/scopes/scope%20with%2Fslash/teams/team%20with%2Fslash");
+    }
+
+    [Fact]
+    public async Task HandleArchiveAsync_ShouldReturn202Accepted_WhenSuccessful()
     {
         var service = new InMemoryTeamService(NewSummary());
         var result = await InvokeTeamHandle(
@@ -244,7 +295,15 @@ public sealed class StudioTeamEndpointTests
             service,
             CancellationToken.None);
 
-        GetStatusCode(result).Should().Be(StatusCodes.Status200OK);
+        GetStatusCode(result).Should().Be(StatusCodes.Status202Accepted);
+        GetLocation(result).Should().Be($"/api/scopes/{ScopeId}/teams/{TeamId}");
+
+        var accepted = GetValue<StudioTeamCommandAcceptedResponse>(result);
+        accepted.ScopeId.Should().Be(ScopeId);
+        accepted.TeamId.Should().Be(TeamId);
+        accepted.CommandId.Should().Be("cmd-archive");
+        accepted.AckStage.Should().Be(StudioTeamCommandAckStageNames.Accepted);
+        AssertDoesNotContainPostStateFields(SerializeCamelCase(accepted));
     }
 
     [Fact]
@@ -345,11 +404,52 @@ public sealed class StudioTeamEndpointTests
         return result.GetType().GetProperty("StatusCode")?.GetValue(result) as int?;
     }
 
+    private static string? GetLocation(IResult result) =>
+        result.GetType().GetProperty("Location")?.GetValue(result) as string;
+
+    private static T GetValue<T>(IResult result) where T : class =>
+        result.GetType().GetProperty("Value")?.GetValue(result) as T
+        ?? throw new InvalidOperationException($"Result does not carry {typeof(T).Name}.");
+
+    private static string SerializeCamelCase<T>(T value) =>
+        System.Text.Json.JsonSerializer.Serialize(
+            value,
+            new System.Text.Json.JsonSerializerOptions
+            {
+                PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+            });
+
+    private static void AssertDoesNotContainPostStateFields(string json)
+    {
+        foreach (var field in new[]
+        {
+            "displayName",
+            "description",
+            "lifecycleStage",
+            "memberCount",
+            "createdAt",
+            "updatedAt",
+        })
+        {
+            json.Should().NotContain(field);
+        }
+    }
+
     private sealed class InMemoryTeamService : IStudioTeamService
     {
         private readonly StudioTeamSummaryResponse _summary;
+        private readonly StudioTeamCommandAcceptedResponse _updateReceipt;
+        private readonly StudioTeamCommandAcceptedResponse _archiveReceipt;
 
-        public InMemoryTeamService(StudioTeamSummaryResponse summary) => _summary = summary;
+        public InMemoryTeamService(
+            StudioTeamSummaryResponse summary,
+            StudioTeamCommandAcceptedResponse? updateReceipt = null,
+            StudioTeamCommandAcceptedResponse? archiveReceipt = null)
+        {
+            _summary = summary;
+            _updateReceipt = updateReceipt ?? NewAcceptedReceipt(summary.ScopeId, summary.TeamId, "cmd-update");
+            _archiveReceipt = archiveReceipt ?? NewAcceptedReceipt(summary.ScopeId, summary.TeamId, "cmd-archive");
+        }
 
         public Task<StudioTeamSummaryResponse> CreateAsync(
             string scopeId, CreateStudioTeamRequest request, CancellationToken ct = default) =>
@@ -363,13 +463,17 @@ public sealed class StudioTeamEndpointTests
             string scopeId, string teamId, CancellationToken ct = default) =>
             Task.FromResult(_summary);
 
-        public Task<StudioTeamSummaryResponse> UpdateAsync(
-            string scopeId, string teamId, UpdateStudioTeamRequest request, CancellationToken ct = default) =>
-            Task.FromResult(_summary);
+        public Task<StudioTeamCommandAcceptedResponse> UpdateAsync(
+            string scopeId, string teamId, UpdateStudioTeamRequest request, CancellationToken ct = default)
+        {
+            if (!request.DisplayName.HasValue && !request.Description.HasValue)
+                return Task.FromResult(_updateReceipt with { CommandId = null });
+            return Task.FromResult(_updateReceipt);
+        }
 
-        public Task<StudioTeamSummaryResponse> ArchiveAsync(
+        public Task<StudioTeamCommandAcceptedResponse> ArchiveAsync(
             string scopeId, string teamId, CancellationToken ct = default) =>
-            Task.FromResult(_summary);
+            Task.FromResult(_archiveReceipt);
     }
 
     private sealed class ThrowingTeamService : IStudioTeamService
@@ -383,11 +487,22 @@ public sealed class StudioTeamEndpointTests
             string scopeId, StudioTeamRosterPageRequest? page = null, CancellationToken ct = default) => throw _ex;
         public Task<StudioTeamSummaryResponse> GetAsync(
             string scopeId, string teamId, CancellationToken ct = default) => throw _ex;
-        public Task<StudioTeamSummaryResponse> UpdateAsync(
+        public Task<StudioTeamCommandAcceptedResponse> UpdateAsync(
             string scopeId, string teamId, UpdateStudioTeamRequest request, CancellationToken ct = default) => throw _ex;
-        public Task<StudioTeamSummaryResponse> ArchiveAsync(
+        public Task<StudioTeamCommandAcceptedResponse> ArchiveAsync(
             string scopeId, string teamId, CancellationToken ct = default) => throw _ex;
     }
+
+    private static StudioTeamCommandAcceptedResponse NewAcceptedReceipt(
+        string scopeId,
+        string teamId,
+        string? commandId) =>
+        new(
+            ScopeId: scopeId,
+            TeamId: teamId,
+            CommandId: commandId,
+            AckStage: StudioTeamCommandAckStageNames.Accepted,
+            AcceptedAtUtc: DateTimeOffset.UtcNow);
 
     private sealed class InMemoryMemberService : IStudioMemberService
     {

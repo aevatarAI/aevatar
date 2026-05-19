@@ -188,12 +188,12 @@ internal static class StudioTeamEndpoints
 
         try
         {
-            var detail = await teamService.UpdateAsync(
+            var accepted = await teamService.UpdateAsync(
                 scopeId,
                 teamId,
                 new UpdateStudioTeamRequest(displayNamePatch, descriptionPatch),
                 ct);
-            return Results.Ok(detail);
+            return Results.Accepted(BuildTeamLocation(accepted.ScopeId, accepted.TeamId), accepted);
         }
         catch (StudioTeamNotFoundException ex)
         {
@@ -217,7 +217,8 @@ internal static class StudioTeamEndpoints
 
         try
         {
-            return Results.Ok(await teamService.ArchiveAsync(scopeId, teamId, ct));
+            var accepted = await teamService.ArchiveAsync(scopeId, teamId, ct);
+            return Results.Accepted(BuildTeamLocation(accepted.ScopeId, accepted.TeamId), accepted);
         }
         catch (StudioTeamNotFoundException ex)
         {
@@ -228,6 +229,9 @@ internal static class StudioTeamEndpoints
             return BadRequest("INVALID_STUDIO_TEAM_REQUEST", ex.Message);
         }
     }
+
+    private static string BuildTeamLocation(string scopeId, string teamId) =>
+        $"/api/scopes/{Uri.EscapeDataString(scopeId)}/teams/{Uri.EscapeDataString(teamId)}";
 
     /// <summary>
     /// Lists members assigned to a given team. Queries the member read model
