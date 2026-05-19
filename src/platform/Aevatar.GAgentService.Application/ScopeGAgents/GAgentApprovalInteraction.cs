@@ -36,6 +36,7 @@ internal sealed class GAgentApprovalCommandTarget
     public string SessionId { get; private set; } = string.Empty;
     public IGAgentDraftRunProjectionLease? ProjectionLease { get; private set; }
     public IGAgentRunTerminalProjectionLease? TerminalProjectionLease { get; private set; }
+    public IAsyncDisposable? LiveSinkLease { get; private set; }
     public IEventSink<AGUIEvent>? LiveSink { get; private set; }
 
     public void BindTerminalProjection(IGAgentRunTerminalProjectionLease? lease)
@@ -46,9 +47,17 @@ internal sealed class GAgentApprovalCommandTarget
     public void BindLiveObservation(
         IGAgentDraftRunProjectionLease lease,
         IEventSink<AGUIEvent> sink,
+        string sessionId) =>
+        BindLiveObservation(lease, null, sink, sessionId);
+
+    public void BindLiveObservation(
+        IGAgentDraftRunProjectionLease lease,
+        IAsyncDisposable? liveSinkLease,
+        IEventSink<AGUIEvent> sink,
         string sessionId)
     {
         ProjectionLease = lease ?? throw new ArgumentNullException(nameof(lease));
+        LiveSinkLease = liveSinkLease;
         LiveSink = sink ?? throw new ArgumentNullException(nameof(sink));
         SessionId = sessionId;
     }
@@ -81,10 +90,12 @@ internal sealed class GAgentApprovalCommandTarget
             {
                 await _projectionPort.DetachReleaseAndDisposeAsync(
                     projectionLease,
+                    LiveSinkLease,
                     sink,
                     null,
                     ct);
                 ProjectionLease = null;
+                LiveSinkLease = null;
                 LiveSink = null;
             }
             catch (Exception ex)
@@ -100,6 +111,7 @@ internal sealed class GAgentApprovalCommandTarget
                 {
                     sink.Complete();
                     await sink.DisposeAsync();
+                    LiveSinkLease = null;
                     LiveSink = null;
                 }
                 catch (Exception ex)
@@ -114,6 +126,7 @@ internal sealed class GAgentApprovalCommandTarget
                 {
                     await _projectionPort.ReleaseActorProjectionAsync(projectionLease, ct);
                     ProjectionLease = null;
+                    LiveSinkLease = null;
                 }
                 catch (Exception ex)
                 {
@@ -212,7 +225,7 @@ internal sealed class GAgentApprovalCommandTargetBinder
                 ct);
             target.BindTerminalProjection(terminalProjectionLease);
 
-            var projectionLease = await _projectionPort.EnsureAndAttachAsync(
+            var attachment = await _projectionPort.EnsureAndAttachLeaseAsync(
                 token => _projectionPort.EnsureActorProjectionAsync(
                     target.ActorId,
                     context.CorrelationId,
@@ -220,7 +233,7 @@ internal sealed class GAgentApprovalCommandTargetBinder
                 sink,
                 ct);
 
-            if (projectionLease == null)
+            if (attachment == null)
             {
                 sink.Complete();
                 await sink.DisposeAsync();
@@ -228,7 +241,8 @@ internal sealed class GAgentApprovalCommandTargetBinder
             }
 
             target.BindLiveObservation(
-                projectionLease,
+                attachment.ProjectionLease,
+                attachment.LiveSinkLease,
                 sink,
                 command.SessionId?.Trim() ?? string.Empty);
             return CommandTargetBindingResult<GAgentApprovalStartError>.Success();

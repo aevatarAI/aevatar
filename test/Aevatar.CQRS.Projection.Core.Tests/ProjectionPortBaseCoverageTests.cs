@@ -90,9 +90,10 @@ public sealed class EventSinkProjectionLifecyclePortBaseTests
         var lease = new TestPortRuntimeLease("actor-1", "session-1");
         var sink = new TestEventSink();
 
-        await fixture.Service.AttachSinkPublicAsync(lease, sink, CancellationToken.None);
+        var liveSinkLease = await fixture.Service.AttachSinkPublicAsync(lease, sink, CancellationToken.None);
         await fixture.SessionEventHub.PublishHandler!("evt-1");
 
+        liveSinkLease.Should().BeSameAs(fixture.SessionEventHub.LastSubscription);
         fixture.Service.ResolveRuntimeLeaseCalls.Should().Be(1);
         fixture.SessionEventHub.SubscribeCalls.Should().Be(1);
         fixture.SessionEventHub.LastScopeId.Should().Be("actor-1");
@@ -101,19 +102,29 @@ public sealed class EventSinkProjectionLifecyclePortBaseTests
     }
 
     [Fact]
-    public async Task AttachLiveSinkAsync_ShouldReplacePreviousSubscription_ForSameSink()
+    public async Task AttachLiveSinkAsync_ShouldReturnIndependentExplicitLeases_ForSameSink()
     {
         var fixture = CreateFixture(enabled: true);
         var lease = new TestPortRuntimeLease("actor-1", "session-1");
         var sink = new TestEventSink();
 
-        await fixture.Service.AttachSinkPublicAsync(lease, sink, CancellationToken.None);
+        var firstLease = await fixture.Service.AttachSinkPublicAsync(lease, sink, CancellationToken.None);
         var firstSubscription = fixture.SessionEventHub.LastSubscription!;
 
-        await fixture.Service.AttachSinkPublicAsync(lease, sink, CancellationToken.None);
+        var secondLease = await fixture.Service.AttachSinkPublicAsync(lease, sink, CancellationToken.None);
+        var secondSubscription = fixture.SessionEventHub.LastSubscription!;
+
+        firstLease.Should().BeSameAs(firstSubscription);
+        secondLease.Should().BeSameAs(secondSubscription);
+        firstSubscription.DisposeCalls.Should().Be(0);
+        secondSubscription.DisposeCalls.Should().Be(0);
+        fixture.SessionEventHub.SubscribeCalls.Should().Be(2);
+
+        await fixture.Service.DetachSinkPublicAsync(firstLease, CancellationToken.None);
+        await fixture.Service.DetachSinkPublicAsync(secondLease, CancellationToken.None);
 
         firstSubscription.DisposeCalls.Should().Be(1);
-        fixture.SessionEventHub.SubscribeCalls.Should().Be(2);
+        secondSubscription.DisposeCalls.Should().Be(1);
     }
 
     [Fact]
@@ -123,10 +134,10 @@ public sealed class EventSinkProjectionLifecyclePortBaseTests
         var lease = new TestPortRuntimeLease("actor-1", "session-1");
         var sink = new TestEventSink();
 
-        await fixture.Service.AttachSinkPublicAsync(lease, sink, CancellationToken.None);
+        var liveSinkLease = await fixture.Service.AttachSinkPublicAsync(lease, sink, CancellationToken.None);
         var subscription = fixture.SessionEventHub.LastSubscription!;
 
-        await fixture.Service.DetachSinkPublicAsync(lease, sink, CancellationToken.None);
+        await fixture.Service.DetachSinkPublicAsync(liveSinkLease, CancellationToken.None);
 
         fixture.Service.ResolveRuntimeLeaseCalls.Should().Be(1);
         subscription.DisposeCalls.Should().Be(1);
@@ -142,6 +153,20 @@ public sealed class EventSinkProjectionLifecyclePortBaseTests
 
         fixture.Release.Calls.Should().Be(1);
         fixture.Release.LastLease.Should().BeSameAs(lease);
+    }
+
+    [Fact]
+    public void EventSinkProjectionLifecyclePortBase_Source_ShouldNotKeepSinkSubscriptionRegistry()
+    {
+        var sourcePath = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "../../../../../src/Aevatar.CQRS.Projection.Core/Orchestration/EventSinkProjectionLifecyclePortBase.cs"));
+        var source = File.ReadAllText(sourcePath);
+
+        source.Should().Contain(
+            "Refactor (iter17/cluster-035): Old: ConcurrentDictionary registry. New: explicit IAsyncDisposable lease per attach.");
+        source.Should().NotContain("ConcurrentDictionary<");
+        source.Should().NotContain("_sinkSubscriptions");
     }
 
     private static Fixture CreateFixture(bool enabled)
@@ -197,17 +222,16 @@ internal sealed class TestEventSinkProjectionLifecyclePort
             },
             ct);
 
-    public Task AttachSinkPublicAsync(
+    public Task<IAsyncDisposable?> AttachSinkPublicAsync(
         TestPortRuntimeLease lease,
         IEventSink<string> sink,
         CancellationToken ct = default) =>
         AttachLiveSinkAsync(lease, sink, ct);
 
     public Task DetachSinkPublicAsync(
-        TestPortRuntimeLease lease,
-        IEventSink<string> sink,
+        IAsyncDisposable? liveSinkLease,
         CancellationToken ct = default) =>
-        DetachLiveSinkAsync(lease, sink, ct);
+        DetachLiveSinkAsync(liveSinkLease, ct);
 
     public Task ReleaseProjectionPublicAsync(
         TestPortRuntimeLease lease,

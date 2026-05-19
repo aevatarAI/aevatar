@@ -47,14 +47,22 @@ internal sealed class WorkflowRunCommandTarget
     public string TargetId => Actor.Id;
     public string ActorId => Actor.Id;
     public IWorkflowExecutionProjectionLease? ProjectionLease { get; private set; }
+    public IAsyncDisposable? LiveSinkLease { get; private set; }
     public IEventSink<WorkflowRunEventEnvelope>? LiveSink { get; private set; }
     public bool DispatchFailureCleanupCompleted { get; private set; }
 
     public void BindLiveObservation(
         IWorkflowExecutionProjectionLease lease,
+        IEventSink<WorkflowRunEventEnvelope> sink) =>
+        BindLiveObservation(lease, null, sink);
+
+    public void BindLiveObservation(
+        IWorkflowExecutionProjectionLease lease,
+        IAsyncDisposable? liveSinkLease,
         IEventSink<WorkflowRunEventEnvelope> sink)
     {
         ProjectionLease = lease ?? throw new ArgumentNullException(nameof(lease));
+        LiveSinkLease = liveSinkLease;
         LiveSink = sink ?? throw new ArgumentNullException(nameof(sink));
     }
 
@@ -85,7 +93,8 @@ internal sealed class WorkflowRunCommandTarget
         {
             try
             {
-                await _projectionPort.DetachLiveSinkAsync(ProjectionLease, sink, ct);
+                await _projectionPort.DetachLiveSinkAsync(LiveSinkLease, ct);
+                LiveSinkLease = null;
             }
             catch (Exception ex)
             {
@@ -128,6 +137,7 @@ internal sealed class WorkflowRunCommandTarget
     {
         Exception? firstException = null;
         var projectionLease = ProjectionLease;
+        var liveSinkLease = LiveSinkLease;
         var liveSink = LiveSink;
 
         if (projectionLease != null && liveSink != null)
@@ -136,10 +146,12 @@ internal sealed class WorkflowRunCommandTarget
             {
                 await _projectionPort.DetachReleaseAndDisposeAsync(
                     projectionLease,
+                    liveSinkLease,
                     liveSink,
                     onDetachedAsync,
                     ct);
                 ProjectionLease = null;
+                LiveSinkLease = null;
                 LiveSink = null;
             }
             catch (Exception ex)
@@ -154,6 +166,7 @@ internal sealed class WorkflowRunCommandTarget
                 try
                 {
                     await CompleteAndDisposeLiveSinkAsync(liveSink, ct);
+                    LiveSinkLease = null;
                     LiveSink = null;
                 }
                 catch (Exception ex)
@@ -168,6 +181,7 @@ internal sealed class WorkflowRunCommandTarget
                 {
                     await _projectionPort.ReleaseActorProjectionAsync(projectionLease, ct);
                     ProjectionLease = null;
+                    LiveSinkLease = null;
                 }
                 catch (Exception ex)
                 {

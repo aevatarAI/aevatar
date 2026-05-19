@@ -9,7 +9,25 @@ public static class EventSinkProjectionLeaseOrchestrator
 {
     public static async Task<TLease?> EnsureAndAttachAsync<TLease, TEvent>(
         Func<CancellationToken, Task<TLease?>> ensureAsync,
-        Func<TLease, IEventSink<TEvent>, CancellationToken, Task> attachAsync,
+        Func<TLease, IEventSink<TEvent>, CancellationToken, Task<IAsyncDisposable?>> attachAsync,
+        Func<TLease, CancellationToken, Task> releaseAsync,
+        IEventSink<TEvent> sink,
+        CancellationToken ct = default)
+        where TLease : class
+    {
+        var attachment = await EnsureAndAttachLeaseAsync(
+            ensureAsync,
+            attachAsync,
+            releaseAsync,
+            sink,
+            ct).ConfigureAwait(false);
+
+        return attachment?.ProjectionLease;
+    }
+
+    public static async Task<EventSinkProjectionAttachment<TLease>?> EnsureAndAttachLeaseAsync<TLease, TEvent>(
+        Func<CancellationToken, Task<TLease?>> ensureAsync,
+        Func<TLease, IEventSink<TEvent>, CancellationToken, Task<IAsyncDisposable?>> attachAsync,
         Func<TLease, CancellationToken, Task> releaseAsync,
         IEventSink<TEvent> sink,
         CancellationToken ct = default)
@@ -22,6 +40,7 @@ public static class EventSinkProjectionLeaseOrchestrator
         ct.ThrowIfCancellationRequested();
 
         TLease? lease = null;
+        IAsyncDisposable? liveSinkLease = null;
         try
         {
             lease = await ensureAsync(ct);
@@ -31,11 +50,23 @@ public static class EventSinkProjectionLeaseOrchestrator
                 return null;
             }
 
-            await attachAsync(lease, sink, ct);
-            return lease;
+            liveSinkLease = await attachAsync(lease, sink, ct);
+            return new EventSinkProjectionAttachment<TLease>(lease, liveSinkLease);
         }
         catch
         {
+            if (liveSinkLease != null)
+            {
+                try
+                {
+                    await liveSinkLease.DisposeAsync();
+                }
+                catch
+                {
+                    // Best effort cleanup path.
+                }
+            }
+
             if (lease != null)
             {
                 try
@@ -55,8 +86,9 @@ public static class EventSinkProjectionLeaseOrchestrator
 
     public static async Task DetachReleaseAndDisposeAsync<TLease, TEvent>(
         TLease? lease,
+        IAsyncDisposable? liveSinkLease,
         IEventSink<TEvent> sink,
-        Func<TLease, IEventSink<TEvent>, CancellationToken, Task> detachAsync,
+        Func<IAsyncDisposable?, CancellationToken, Task> detachAsync,
         Func<TLease, CancellationToken, Task> releaseAsync,
         Func<Task>? onDetachedAsync = null,
         CancellationToken ct = default)
@@ -73,7 +105,7 @@ public static class EventSinkProjectionLeaseOrchestrator
         {
             try
             {
-                await detachAsync(lease, sink, CancellationToken.None);
+                await detachAsync(liveSinkLease, CancellationToken.None);
             }
             catch (Exception ex)
             {

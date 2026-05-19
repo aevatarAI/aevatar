@@ -105,15 +105,14 @@ public sealed class GAgentDraftRunInteractionTests
             CancellationToken ct = default) =>
             Task.FromResult<IGAgentDraftRunProjectionLease?>(null);
 
-        public Task AttachLiveSinkAsync(
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IGAgentDraftRunProjectionLease lease,
             IEventSink<AGUIEvent> sink,
             CancellationToken ct = default) =>
-            Task.CompletedTask;
+            Task.FromResult<IAsyncDisposable?>(null);
 
         public Task DetachLiveSinkAsync(
-            IGAgentDraftRunProjectionLease lease,
-            IEventSink<AGUIEvent> sink,
+            IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default) =>
             Task.CompletedTask;
 

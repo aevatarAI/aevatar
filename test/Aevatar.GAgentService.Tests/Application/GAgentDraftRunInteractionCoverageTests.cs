@@ -500,23 +500,18 @@ public sealed class GAgentDraftRunInteractionCoverageTests
             return Task.FromResult<IGAgentDraftRunProjectionLease?>(LeaseToReturn);
         }
 
-        public Task AttachLiveSinkAsync(
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IGAgentDraftRunProjectionLease lease,
             IEventSink<AGUIEvent> sink,
             CancellationToken ct = default)
         {
             AttachCalls.Add((lease, sink));
-            return Task.CompletedTask;
+            return Task.FromResult<IAsyncDisposable?>(null);
         }
-
         public Task DetachLiveSinkAsync(
-            IGAgentDraftRunProjectionLease lease,
-            IEventSink<AGUIEvent> sink,
-            CancellationToken ct = default)
-        {
-            DetachCalls.Add((lease, sink));
-            return Task.CompletedTask;
-        }
+            IAsyncDisposable? liveSinkLease,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
 
         public Task ReleaseActorProjectionAsync(
             IGAgentDraftRunProjectionLease lease,

@@ -462,7 +462,7 @@ public sealed class WorkflowApplicationLayerTests
           IWorkflowExecutionMaterializationActivationPort
     {
         public bool ProjectionEnabled => true;
-        public List<(IWorkflowExecutionProjectionLease Lease, IEventSink<WorkflowRunEventEnvelope> Sink)> DetachCalls { get; } = [];
+        public List<IAsyncDisposable?> DetachCalls { get; } = [];
         public List<IWorkflowExecutionProjectionLease> ReleaseAttempts { get; } = [];
         public List<IWorkflowExecutionProjectionLease> ReleaseCalls { get; } = [];
         public TaskCompletionSource<bool> Released { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -485,7 +485,7 @@ public sealed class WorkflowApplicationLayerTests
             CancellationToken ct = default) =>
             Task.FromResult<IWorkflowExecutionProjectionLease?>(new FakeProjectionLease(rootActorId, commandId));
 
-        public Task AttachLiveSinkAsync(
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
             IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default)
@@ -493,24 +493,13 @@ public sealed class WorkflowApplicationLayerTests
             if (lease is FakeProjectionLease trackingLease)
                 trackingLease.LiveSinkAttached = true;
 
-            return Task.CompletedTask;
+            return Task.FromResult<IAsyncDisposable?>(null);
         }
-
         public Task DetachLiveSinkAsync(
-            IWorkflowExecutionProjectionLease lease,
-            IEventSink<WorkflowRunEventEnvelope> sink,
+            IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default)
         {
-            DetachCalls.Add((lease, sink));
-            if (DetachFailureCount > 0)
-            {
-                DetachFailureCount--;
-                throw DetachException ?? new InvalidOperationException("detach failed");
-            }
-
-            if (lease is FakeProjectionLease trackingLease)
-                trackingLease.LiveSinkAttached = false;
-
+            DetachCalls.Add(liveSinkLease);
             return Task.CompletedTask;
         }
 

@@ -1325,27 +1325,19 @@ public class RuntimeScriptInfrastructurePortsTests
         public async Task<bool> ActivateAsync(string actorId, CancellationToken ct = default) =>
             await EnsureActorProjectionAsync(actorId, actorId, ct) != null;
 
-        public Task AttachLiveSinkAsync(
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IScriptEvolutionProjectionLease lease,
             IEventSink<ScriptEvolutionSessionCompletedEvent> sink,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             _sinks[lease.ActorId] = sink;
-            return Task.CompletedTask;
+            return Task.FromResult<IAsyncDisposable?>(null);
         }
-
-        public Task DetachLiveSinkAsync(
-            IScriptEvolutionProjectionLease lease,
-            IEventSink<ScriptEvolutionSessionCompletedEvent> sink,
-            CancellationToken ct = default)
-        {
-            _ = sink;
-            ct.ThrowIfCancellationRequested();
-            DetachCount++;
-            _sinks.Remove(lease.ActorId);
-            return Task.CompletedTask;
-        }
+    public Task DetachLiveSinkAsync(
+        IAsyncDisposable? liveSinkLease,
+        CancellationToken ct = default) =>
+        Task.CompletedTask;
 
         public Task ReleaseActorProjectionAsync(
             IScriptEvolutionProjectionLease lease,
@@ -1381,23 +1373,18 @@ public class RuntimeScriptInfrastructurePortsTests
         public async Task<bool> ActivateAsync(string actorId, CancellationToken ct = default) =>
             await EnsureActorProjectionAsync(actorId, ct) != null;
 
-        public Task AttachLiveSinkAsync(
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IScriptExecutionProjectionLease lease,
             IEventSink<EventEnvelope> sink,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
+            return Task.FromResult<IAsyncDisposable?>(null);
         }
-
-        public Task DetachLiveSinkAsync(
-            IScriptExecutionProjectionLease lease,
-            IEventSink<EventEnvelope> sink,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
+    public Task DetachLiveSinkAsync(
+        IAsyncDisposable? liveSinkLease,
+        CancellationToken ct = default) =>
+        Task.CompletedTask;
 
         public Task ReleaseActorProjectionAsync(
             IScriptExecutionProjectionLease lease,

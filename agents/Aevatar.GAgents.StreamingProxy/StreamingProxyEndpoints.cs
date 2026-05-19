@@ -222,11 +222,11 @@ public static class StreamingProxyEndpoints
             var activityChannel = Channel.CreateUnbounded<StreamingProxyStreamSignal>();
             sessionId = request.SessionId ?? Guid.NewGuid().ToString("N");
             var eventChannel = new EventChannel<StreamingProxyRoomSessionEnvelope>();
-            var projectionLease = await roomSessionProjectionPort.EnsureAndAttachAsync(
+            var attachment = await roomSessionProjectionPort.EnsureAndAttachLeaseAsync(
                 token => roomSessionProjectionPort.EnsureChatProjectionAsync(actor.Id, sessionId, token),
                 eventChannel,
                 ct);
-            if (projectionLease == null)
+            if (attachment == null)
                 throw new InvalidOperationException("StreamingProxy room session projection pipeline is unavailable.");
 
             Task? pumpTask = null;
@@ -352,7 +352,8 @@ public static class StreamingProxyEndpoints
             finally
             {
                 await roomSessionProjectionPort.DetachReleaseAndDisposeAsync(
-                    projectionLease,
+                    attachment.ProjectionLease,
+                    attachment.LiveSinkLease,
                     eventChannel,
                     () =>
                     {
@@ -487,11 +488,11 @@ public static class StreamingProxyEndpoints
             await writer.StartAsync(ct);
             var sessionId = Guid.NewGuid().ToString("N");
             var eventChannel = new EventChannel<StreamingProxyRoomSessionEnvelope>();
-            var projectionLease = await roomSessionProjectionPort.EnsureAndAttachAsync(
+            var attachment = await roomSessionProjectionPort.EnsureAndAttachLeaseAsync(
                 token => roomSessionProjectionPort.EnsureSubscriptionProjectionAsync(actor.Id, sessionId, token),
                 eventChannel,
                 ct);
-            if (projectionLease == null)
+            if (attachment == null)
                 throw new InvalidOperationException("StreamingProxy room session projection pipeline is unavailable.");
 
             Task? pumpTask = null;
@@ -508,7 +509,8 @@ public static class StreamingProxyEndpoints
             finally
             {
                 await roomSessionProjectionPort.DetachReleaseAndDisposeAsync(
-                    projectionLease,
+                    attachment.ProjectionLease,
+                    attachment.LiveSinkLease,
                     eventChannel,
                     null,
                     CancellationToken.None);

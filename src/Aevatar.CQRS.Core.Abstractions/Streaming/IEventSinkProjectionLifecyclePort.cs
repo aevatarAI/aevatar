@@ -7,14 +7,13 @@ public interface IEventSinkProjectionLifecyclePort<TLease, TEvent>
 {
     bool ProjectionEnabled { get; }
 
-    Task AttachLiveSinkAsync(
+    Task<IAsyncDisposable?> AttachLiveSinkAsync(
         TLease lease,
         IEventSink<TEvent> sink,
         CancellationToken ct = default);
 
     Task DetachLiveSinkAsync(
-        TLease lease,
-        IEventSink<TEvent> sink,
+        IAsyncDisposable? liveSinkLease,
         CancellationToken ct = default);
 
     Task ReleaseActorProjectionAsync(
@@ -46,9 +45,29 @@ public static class EventSinkProjectionLifecyclePortExtensions
             ct);
     }
 
+    public static Task<EventSinkProjectionAttachment<TLease>?> EnsureAndAttachLeaseAsync<TLease, TEvent>(
+        this IEventSinkProjectionLifecyclePort<TLease, TEvent> lifecyclePort,
+        Func<CancellationToken, Task<TLease?>> ensureAsync,
+        IEventSink<TEvent> sink,
+        CancellationToken ct = default)
+        where TLease : class
+    {
+        ArgumentNullException.ThrowIfNull(lifecyclePort);
+        ArgumentNullException.ThrowIfNull(ensureAsync);
+        ArgumentNullException.ThrowIfNull(sink);
+
+        return EventSinkProjectionLeaseOrchestrator.EnsureAndAttachLeaseAsync(
+            ensureAsync,
+            (lease, eventSink, token) => lifecyclePort.AttachLiveSinkAsync(lease, eventSink, token),
+            (lease, token) => lifecyclePort.ReleaseActorProjectionAsync(lease, token),
+            sink,
+            ct);
+    }
+
     public static Task DetachReleaseAndDisposeAsync<TLease, TEvent>(
         this IEventSinkProjectionLifecyclePort<TLease, TEvent> lifecyclePort,
         TLease? lease,
+        IAsyncDisposable? liveSinkLease,
         IEventSink<TEvent> sink,
         Func<Task>? onDetachedAsync = null,
         CancellationToken ct = default)
@@ -59,10 +78,15 @@ public static class EventSinkProjectionLifecyclePortExtensions
 
         return EventSinkProjectionLeaseOrchestrator.DetachReleaseAndDisposeAsync(
             lease,
+            liveSinkLease,
             sink,
-            (runtimeLease, eventSink, token) => lifecyclePort.DetachLiveSinkAsync(runtimeLease, eventSink, token),
+            (subscriptionLease, token) => lifecyclePort.DetachLiveSinkAsync(subscriptionLease, token),
             (runtimeLease, token) => lifecyclePort.ReleaseActorProjectionAsync(runtimeLease, token),
             onDetachedAsync,
             ct);
     }
 }
+
+public sealed record EventSinkProjectionAttachment<TLease>(
+    TLease ProjectionLease,
+    IAsyncDisposable? LiveSinkLease);

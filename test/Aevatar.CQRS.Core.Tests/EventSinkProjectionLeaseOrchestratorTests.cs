@@ -13,6 +13,7 @@ public sealed class EventSinkProjectionLeaseOrchestratorTests
         var lease = new TestLease("lease-1");
         var attachCalls = 0;
 
+        var liveSinkLease = new TrackingAsyncDisposable();
         var resolved = await EventSinkProjectionLeaseOrchestrator.EnsureAndAttachAsync<TestLease, string>(
             _ => Task.FromResult<TestLease?>(lease),
             (runtimeLease, eventSink, _) =>
@@ -20,7 +21,7 @@ public sealed class EventSinkProjectionLeaseOrchestratorTests
                 runtimeLease.Id.Should().Be("lease-1");
                 eventSink.Should().BeSameAs(sink);
                 attachCalls++;
-                return Task.CompletedTask;
+                return Task.FromResult<IAsyncDisposable?>(liveSinkLease);
             },
             (_, _) => Task.CompletedTask,
             sink,
@@ -38,7 +39,7 @@ public sealed class EventSinkProjectionLeaseOrchestratorTests
 
         var resolved = await EventSinkProjectionLeaseOrchestrator.EnsureAndAttachAsync<TestLease, string>(
             _ => Task.FromResult<TestLease?>(null),
-            (_, _, _) => Task.CompletedTask,
+            (_, _, _) => Task.FromResult<IAsyncDisposable?>(null),
             (_, _) => Task.CompletedTask,
             sink,
             CancellationToken.None);
@@ -56,7 +57,7 @@ public sealed class EventSinkProjectionLeaseOrchestratorTests
 
         Func<Task> act = () => EventSinkProjectionLeaseOrchestrator.EnsureAndAttachAsync<TestLease, string>(
             _ => Task.FromResult<TestLease?>(lease),
-            (_, _, _) => throw new InvalidOperationException("attach failed"),
+            (_, _, _) => Task.FromException<IAsyncDisposable?>(new InvalidOperationException("attach failed")),
             (_, _) =>
             {
                 releaseCalls++;
@@ -79,8 +80,9 @@ public sealed class EventSinkProjectionLeaseOrchestratorTests
 
         await EventSinkProjectionLeaseOrchestrator.DetachReleaseAndDisposeAsync(
             lease,
+            new TrackingAsyncDisposable(),
             sink,
-            (_, _, _) =>
+            (_, _) =>
             {
                 sequence.Add("detach");
                 return Task.CompletedTask;
@@ -103,6 +105,11 @@ public sealed class EventSinkProjectionLeaseOrchestratorTests
     }
 
     private sealed record TestLease(string Id);
+
+    private sealed class TrackingAsyncDisposable : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
 
     private sealed class TrackingEventSink : IEventSink<string>
     {

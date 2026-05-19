@@ -982,18 +982,17 @@ internal sealed class RecordingExecutionProjectionPort
         return EnsureActorProjectionAsync(actorId, ct);
     }
 
-    public Task AttachLiveSinkAsync(IScriptExecutionProjectionLease lease, IEventSink<EventEnvelope> sink, CancellationToken ct = default)
+    public Task<IAsyncDisposable?> AttachLiveSinkAsync(IScriptExecutionProjectionLease lease, IEventSink<EventEnvelope> sink, CancellationToken ct = default)
     {
         _ = lease;
         _ = sink;
         ct.ThrowIfCancellationRequested();
-        return Task.CompletedTask;
+        return Task.FromResult<IAsyncDisposable?>(null);
     }
 
-    public Task DetachLiveSinkAsync(IScriptExecutionProjectionLease lease, IEventSink<EventEnvelope> sink, CancellationToken ct = default)
+    public Task DetachLiveSinkAsync(IAsyncDisposable? liveSinkLease, CancellationToken ct = default)
     {
-        _ = lease;
-        _ = sink;
+        _ = liveSinkLease;
         ct.ThrowIfCancellationRequested();
         return Task.CompletedTask;
     }
@@ -1175,21 +1174,21 @@ internal sealed class RecordingEvolutionProjectionPort
     public async Task<bool> ActivateAsync(string actorId, CancellationToken ct = default) =>
         await EnsureActorProjectionAsync(actorId, actorId, ct) != null;
 
-    public async Task AttachLiveSinkAsync(IScriptEvolutionProjectionLease lease, IEventSink<ScriptEvolutionSessionCompletedEvent> sink, CancellationToken ct = default)
+    public async Task<IAsyncDisposable?> AttachLiveSinkAsync(IScriptEvolutionProjectionLease lease, IEventSink<ScriptEvolutionSessionCompletedEvent> sink, CancellationToken ct = default)
     {
         _ = lease;
         _ = sink;
         await Task.CompletedTask;
         ct.ThrowIfCancellationRequested();
+        return null;
     }
 
-    public Task DetachLiveSinkAsync(IScriptEvolutionProjectionLease lease, IEventSink<ScriptEvolutionSessionCompletedEvent> sink, CancellationToken ct = default)
+    public Task DetachLiveSinkAsync(IAsyncDisposable? liveSinkLease, CancellationToken ct = default)
     {
-        _ = sink;
+        _ = liveSinkLease;
         ct.ThrowIfCancellationRequested();
         if (DetachException != null)
             throw DetachException;
-        DetachedLeases.Add(lease);
         return Task.CompletedTask;
     }
 

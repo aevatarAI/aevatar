@@ -38,7 +38,7 @@ internal sealed class WorkflowRunCommandTargetBinder
                     WorkflowChatRunStartError.ProjectionDisabled);
             }
 
-            var projectionLease = await _projectionPort.EnsureAndAttachAsync(
+            var attachment = await _projectionPort.EnsureAndAttachLeaseAsync(
                 token => _projectionPort.EnsureActorProjectionAsync(
                     target.ActorId,
                     context.CommandId,
@@ -46,14 +46,14 @@ internal sealed class WorkflowRunCommandTargetBinder
                 sink,
                 ct);
 
-            if (projectionLease == null)
+            if (attachment == null)
             {
                 await target.RollbackCreatedActorsAsync(CancellationToken.None);
                 return CommandTargetBindingResult<WorkflowChatRunStartError>.Failure(
                     WorkflowChatRunStartError.ProjectionDisabled);
             }
 
-            target.BindLiveObservation(projectionLease, sink);
+            target.BindLiveObservation(attachment.ProjectionLease, attachment.LiveSinkLease, sink);
             return CommandTargetBindingResult<WorkflowChatRunStartError>.Success();
         }
         catch (Exception ex)
