@@ -1,5 +1,4 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
@@ -7,8 +6,12 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Aevatar.Foundation.VoicePresence.Hosting;
 
 /// <summary>
-/// Resolves runtime-neutral host sessions that bridge transports through actor dispatch + actor stream observation.
+/// Resolves runtime-neutral host sessions that dispatch remote voice setup/control messages.
 /// </summary>
+// Refactor (iter15/cluster-025-voice-host-session-state-actorization):
+//   Old pattern: voice host resolver locks shared mutable lease state outside actor lifecycle
+//   New principle: actor owns remote session identity; host dispatches setup/control only.
+//   Remote media attach fails until a non-envelope raw audio transport exists.
 public sealed class RemoteActorVoicePresenceSessionResolver : IVoicePresenceSessionResolver
 {
     private const string DefaultVoiceModuleName = "voice_presence";
@@ -35,8 +38,7 @@ public sealed class RemoteActorVoicePresenceSessionResolver : IVoicePresenceSess
 
         var actorRuntime = _services.GetService<IActorRuntime>();
         var dispatchPort = _services.GetService<IActorDispatchPort>();
-        var subscriptions = _services.GetService<IActorEventSubscriptionProvider>();
-        if (actorRuntime == null || dispatchPort == null || subscriptions == null)
+        if (actorRuntime == null || dispatchPort == null)
             return null;
 
         if (!await actorRuntime.ExistsAsync(request.ActorId))
@@ -50,8 +52,7 @@ public sealed class RemoteActorVoicePresenceSessionResolver : IVoicePresenceSess
             request.ActorId,
             target.Value.ModuleName,
             target.Value.PcmSampleRateHz,
-            dispatchPort,
-            subscriptions);
+            dispatchPort);
 
         return bridge.CreateSession();
     }
@@ -93,194 +94,64 @@ public sealed class RemoteActorVoicePresenceSessionResolver : IVoicePresenceSess
         private readonly string _moduleName;
         private readonly int _pcmSampleRateHz;
         private readonly IActorDispatchPort _dispatchPort;
-        private readonly IActorEventSubscriptionProvider _subscriptions;
-        private readonly Lock _gate = new();
-        private AttachmentState? _state;
 
         public RemoteActorVoicePresenceSessionBridge(
             string actorId,
             string moduleName,
             int pcmSampleRateHz,
-            IActorDispatchPort dispatchPort,
-            IActorEventSubscriptionProvider subscriptions)
+            IActorDispatchPort dispatchPort)
         {
             _actorId = actorId;
             _moduleName = moduleName;
             _pcmSampleRateHz = pcmSampleRateHz;
             _dispatchPort = dispatchPort;
-            _subscriptions = subscriptions;
         }
 
         public VoicePresenceSession CreateSession() =>
             new(
                 isInitialized: static () => true,
-                isTransportAttached: () => TryGetState() != null,
+                isTransportAttached: static () => false,
                 attachTransportAsync: AttachTransportAsync,
                 detachTransportAsync: DetachTransportAsync,
                 pcmSampleRateHz: _pcmSampleRateHz);
 
+        // Refactor (iter15/cluster-025-voice-host-session-state-actorization):
+        //   Old pattern: voice host resolver locks shared mutable lease state outside actor lifecycle
+        //   New principle: remote attach keeps setup/control envelopes but rejects PCM transport.
+        //   Chunks never cross EventEnvelope; audio waits for a raw transport.
         private async Task AttachTransportAsync(IVoiceTransport transport, CancellationToken ct)
         {
             ArgumentNullException.ThrowIfNull(transport);
             ct.ThrowIfCancellationRequested();
 
             var sessionId = Guid.NewGuid().ToString("N");
-            var relayCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            var subscription = await _subscriptions.SubscribeAsync<VoiceRemoteTransportOutput>(
-                _actorId,
-                HandleOutputAsync,
-                ct);
-            var state = new AttachmentState(sessionId, transport, relayCts, subscription);
-
-            lock (_gate)
-            {
-                if (_state != null)
-                    throw new InvalidOperationException("A voice transport is already attached.");
-
-                _state = state;
-            }
-
             try
             {
-                state.RelayTask = RunTransportRelayAsync(state);
                 await DispatchAsync(new VoiceRemoteSessionOpenRequested
                 {
                     SessionId = sessionId,
                 }, ct);
-            }
-            catch
-            {
-                await ReleaseStateAsync(state, dispatchCloseRequest: false, awaitRelayCompletion: false);
-                throw;
-            }
-        }
 
-        private async Task DetachTransportAsync(IVoiceTransport? expectedTransport, CancellationToken ct)
-        {
-            var state = TryGetState();
-            if (state == null)
-            {
-                await DispatchCloseRequestAsync(sessionId: null, "host_detach");
-                return;
-            }
-
-            if (expectedTransport != null && !ReferenceEquals(expectedTransport, state.Transport))
-                return;
-
-            _ = ct;
-            await ReleaseStateAsync(state, dispatchCloseRequest: true, awaitRelayCompletion: true);
-        }
-
-        private async Task RunTransportRelayAsync(AttachmentState state)
-        {
-            try
-            {
-                await foreach (var frame in state.Transport.ReceiveFramesAsync(state.RelayCancellation.Token))
-                {
-                    if (frame.IsAudio)
-                    {
-                        if (frame.AudioPcm16.IsEmpty)
-                            continue;
-
-                        await DispatchAsync(new VoiceRemoteAudioInputReceived
-                        {
-                            SessionId = state.SessionId,
-                            Pcm16 = ByteString.CopyFrom(frame.AudioPcm16.Span),
-                        }, state.RelayCancellation.Token);
-                        continue;
-                    }
-
-                    if (frame.Control == null)
-                        continue;
-
-                    await DispatchAsync(new VoiceRemoteControlInputReceived
-                    {
-                        SessionId = state.SessionId,
-                        ControlFrame = frame.Control.Clone(),
-                    }, state.RelayCancellation.Token);
-                }
-            }
-            catch (OperationCanceledException) when (state.RelayCancellation.IsCancellationRequested)
-            {
-            }
-            catch
-            {
+                await DispatchCloseRequestAsync(
+                    sessionId,
+                    VoiceRemoteAudioTransportUnavailableException.Reason,
+                    ct);
             }
             finally
             {
-                await ReleaseStateAsync(state, dispatchCloseRequest: true, awaitRelayCompletion: false);
+                await transport.DisposeAsync();
             }
+
+            throw new VoiceRemoteAudioTransportUnavailableException();
         }
 
-        private async Task HandleOutputAsync(VoiceRemoteTransportOutput output)
+        // Refactor (iter15/cluster-025-voice-host-session-state-actorization):
+        //   Old pattern: detach released host-held attachment state, subscription, and relay task.
+        //   New principle: host has no attachment fact to release; detach only sends best-effort actor close.
+        private async Task DetachTransportAsync(IVoiceTransport? expectedTransport, CancellationToken ct)
         {
-            var state = TryGetState();
-            if (state == null ||
-                !string.Equals(output.ModuleName, _moduleName, StringComparison.OrdinalIgnoreCase) ||
-                !string.Equals(output.SessionId, state.SessionId, StringComparison.Ordinal))
-            {
-                return;
-            }
-
-            switch (output.OutputCase)
-            {
-                case VoiceRemoteTransportOutput.OutputOneofCase.AudioOutput:
-                    try
-                    {
-                        await state.Transport.SendAudioAsync(output.AudioOutput.Pcm16.Memory, CancellationToken.None);
-                    }
-                    catch
-                    {
-                        await ReleaseStateAsync(state, dispatchCloseRequest: true, awaitRelayCompletion: false);
-                    }
-
-                    break;
-                case VoiceRemoteTransportOutput.OutputOneofCase.SessionClosed:
-                    await ReleaseStateAsync(state, dispatchCloseRequest: false, awaitRelayCompletion: false);
-                    break;
-                case VoiceRemoteTransportOutput.OutputOneofCase.None:
-                default:
-                    break;
-            }
-        }
-
-        private async Task ReleaseStateAsync(
-            AttachmentState state,
-            bool dispatchCloseRequest,
-            bool awaitRelayCompletion)
-        {
-            var release = false;
-            lock (_gate)
-            {
-                if (ReferenceEquals(_state, state))
-                {
-                    _state = null;
-                    release = true;
-                }
-            }
-
-            if (!release)
-                return;
-
-            state.RelayCancellation.Cancel();
-
-            if (dispatchCloseRequest)
-                await DispatchCloseRequestAsync(state.SessionId, "host_detach");
-
-            if (awaitRelayCompletion && state.RelayTask != null)
-            {
-                try
-                {
-                    await state.RelayTask;
-                }
-                catch (OperationCanceledException)
-                {
-                }
-            }
-
-            await state.Subscription.DisposeAsync();
-            await state.Transport.DisposeAsync();
-            state.RelayCancellation.Dispose();
+            _ = expectedTransport;
+            await DispatchCloseRequestAsync(sessionId: null, "host_detach", ct);
         }
 
         private Task DispatchAsync(IMessage message, CancellationToken ct) =>
@@ -289,7 +160,7 @@ public sealed class RemoteActorVoicePresenceSessionResolver : IVoicePresenceSess
                 VoicePresenceSessionDispatch.BuildDirectEnvelope(_actorId, _moduleName, message),
                 ct);
 
-        private async Task DispatchCloseRequestAsync(string? sessionId, string reason)
+        private async Task DispatchCloseRequestAsync(string? sessionId, string reason, CancellationToken ct)
         {
             try
             {
@@ -299,37 +170,12 @@ public sealed class RemoteActorVoicePresenceSessionResolver : IVoicePresenceSess
                         SessionId = sessionId ?? string.Empty,
                         Reason = reason,
                     },
-                    CancellationToken.None);
+                    ct);
             }
             catch
             {
                 // cleanup is best-effort after transport shutdown
             }
-        }
-
-        private AttachmentState? TryGetState()
-        {
-            lock (_gate)
-            {
-                return _state;
-            }
-        }
-
-        private sealed class AttachmentState(
-            string sessionId,
-            IVoiceTransport transport,
-            CancellationTokenSource relayCancellation,
-            IAsyncDisposable subscription)
-        {
-            public string SessionId { get; } = sessionId;
-
-            public IVoiceTransport Transport { get; } = transport;
-
-            public CancellationTokenSource RelayCancellation { get; } = relayCancellation;
-
-            public IAsyncDisposable Subscription { get; } = subscription;
-
-            public Task? RelayTask { get; set; }
         }
     }
 }

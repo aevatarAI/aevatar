@@ -1,7 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Hosting;
@@ -15,12 +14,46 @@ namespace Aevatar.Foundation.VoicePresence.Tests;
 public class RemoteActorVoicePresenceSessionResolverTests
 {
     [Fact]
-    public async Task ResolveAsync_should_bridge_remote_voice_outputs_through_actor_stream()
+    public void Remote_voice_host_bridge_sources_should_not_reintroduce_host_owned_attachment_state()
+    {
+        var resolverSource = File.ReadAllText(Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..",
+            "..",
+            "..",
+            "..",
+            "..",
+            "src",
+            "Aevatar.Foundation.VoicePresence",
+            "Hosting",
+            "RemoteActorVoicePresenceSessionResolver.cs")));
+        var dispatchSource = File.ReadAllText(Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..",
+            "..",
+            "..",
+            "..",
+            "..",
+            "src",
+            "Aevatar.Foundation.VoicePresence",
+            "Hosting",
+            "VoicePresenceSessionDispatch.cs")));
+
+        resolverSource.ShouldNotContain("IActorEventSubscriptionProvider");
+        resolverSource.ShouldNotContain("AttachmentState");
+        resolverSource.ShouldNotContain("_gate");
+        resolverSource.ShouldNotContain("_state");
+        resolverSource.ShouldNotContain("ReceiveFramesAsync");
+        resolverSource.ShouldNotContain("VoiceRemoteAudioInputReceived");
+        dispatchSource.ShouldNotContain("case VoiceRemoteAudioInputReceived");
+    }
+
+    [Fact]
+    public async Task AttachTransportAsync_should_dispatch_open_then_close_and_fail_remote_audio_transport()
     {
         var runtime = new StubActorRuntime(new StubActor("agent-1", new PlainAgent("agent-1")));
         var dispatchPort = new RecordingDispatchPort();
-        var subscriptions = new RecordingSubscriptionProvider();
-        using var services = BuildServices(runtime, dispatchPort, subscriptions);
+        using var services = BuildServices(runtime, dispatchPort);
         var resolver = new RemoteActorVoicePresenceSessionResolver(
             services,
         [
@@ -36,43 +69,23 @@ public class RemoteActorVoicePresenceSessionResolverTests
         session.PcmSampleRateHz.ShouldBe(16000);
 
         var transport = new HoldingVoiceTransport();
-        await session.AttachTransportAsync(transport, CancellationToken.None);
+        var ex = await Should.ThrowAsync<NotSupportedException>(
+            () => session.AttachTransportAsync(transport, CancellationToken.None));
 
-        dispatchPort.Dispatches.ShouldHaveSingleItem();
+        ex.Message.ShouldBe(VoiceRemoteAudioTransportUnavailableException.Reason);
+        transport.Disposed.ShouldBeTrue();
+        session.IsTransportAttached.ShouldBeFalse();
+
+        dispatchPort.Dispatches.Count.ShouldBe(2);
         var openSignal = dispatchPort.Dispatches[0].Envelope.Payload!.Unpack<VoiceModuleSignal>();
         openSignal.ModuleName.ShouldBe("voice_presence_openai");
         openSignal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.RemoteSessionOpenRequested);
 
-        await subscriptions.PublishAsync(
-            "agent-1",
-            new VoiceRemoteTransportOutput
-            {
-                ModuleName = "voice_presence_openai",
-                SessionId = openSignal.RemoteSessionOpenRequested.SessionId,
-                AudioOutput = new VoiceAudioReceived
-                {
-                    Pcm16 = ByteString.CopyFrom([1, 2, 3]),
-                    SampleRateHz = 16000,
-                },
-            });
-
-        transport.AudioFrames.ShouldHaveSingleItem();
-        transport.AudioFrames[0].ShouldBe([1, 2, 3]);
-
-        await subscriptions.PublishAsync(
-            "agent-1",
-            new VoiceRemoteTransportOutput
-            {
-                ModuleName = "voice_presence_openai",
-                SessionId = openSignal.RemoteSessionOpenRequested.SessionId,
-                SessionClosed = new VoiceRemoteSessionClosed
-                {
-                    Reason = "provider_disconnected",
-                },
-            });
-
-        await transport.DisposedTask.Task;
-        transport.Disposed.ShouldBeTrue();
+        var closeSignal = dispatchPort.Dispatches[1].Envelope.Payload!.Unpack<VoiceModuleSignal>();
+        closeSignal.ModuleName.ShouldBe("voice_presence_openai");
+        closeSignal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.RemoteSessionCloseRequested);
+        closeSignal.RemoteSessionCloseRequested.SessionId.ShouldBe(openSignal.RemoteSessionOpenRequested.SessionId);
+        closeSignal.RemoteSessionCloseRequested.Reason.ShouldBe(VoiceRemoteAudioTransportUnavailableException.Reason);
     }
 
     [Fact]
@@ -80,8 +93,7 @@ public class RemoteActorVoicePresenceSessionResolverTests
     {
         var runtime = new StubActorRuntime(new StubActor("agent-1", new PlainAgent("agent-1")));
         var dispatchPort = new RecordingDispatchPort();
-        var subscriptions = new RecordingSubscriptionProvider();
-        using var services = BuildServices(runtime, dispatchPort, subscriptions);
+        using var services = BuildServices(runtime, dispatchPort);
         var resolver = new RemoteActorVoicePresenceSessionResolver(services);
 
         var session = await resolver.ResolveAsync(new VoicePresenceSessionRequest("agent-1", "voice_presence"));
@@ -109,8 +121,7 @@ public class RemoteActorVoicePresenceSessionResolverTests
 
         using (var actorMissingServices = BuildServices(
                    new StubActorRuntime(actor: null),
-                   new RecordingDispatchPort(),
-                   new RecordingSubscriptionProvider()))
+                   new RecordingDispatchPort()))
         {
             var resolver = new RemoteActorVoicePresenceSessionResolver(actorMissingServices);
             var session = await resolver.ResolveAsync(new VoicePresenceSessionRequest("agent-1"));
@@ -119,8 +130,7 @@ public class RemoteActorVoicePresenceSessionResolverTests
 
         using var services = BuildServices(
             new StubActorRuntime(new StubActor("agent-1", new PlainAgent("agent-1"))),
-            new RecordingDispatchPort(),
-            new RecordingSubscriptionProvider());
+            new RecordingDispatchPort());
         var unknownModuleResolver = new RemoteActorVoicePresenceSessionResolver(
             services,
         [
@@ -141,8 +151,7 @@ public class RemoteActorVoicePresenceSessionResolverTests
     {
         using var services = BuildServices(
             new StubActorRuntime(new StubActor("agent-1", new PlainAgent("agent-1"))),
-            new RecordingDispatchPort(),
-            new RecordingSubscriptionProvider());
+            new RecordingDispatchPort());
 
         var noRegistrationResolver = new RemoteActorVoicePresenceSessionResolver(services);
         var explicitSession = await noRegistrationResolver.ResolveAsync(
@@ -164,12 +173,11 @@ public class RemoteActorVoicePresenceSessionResolverTests
     }
 
     [Fact]
-    public async Task AttachTransportAsync_should_relay_input_audio_and_control_frames_and_detach_on_completion()
+    public async Task AttachTransportAsync_should_never_dispatch_remote_audio_input_for_transport_frames()
     {
         var runtime = new StubActorRuntime(new StubActor("agent-1", new PlainAgent("agent-1")));
         var dispatchPort = new RecordingDispatchPort();
-        var subscriptions = new RecordingSubscriptionProvider();
-        using var services = BuildServices(runtime, dispatchPort, subscriptions);
+        using var services = BuildServices(runtime, dispatchPort);
         var resolver = new RemoteActorVoicePresenceSessionResolver(services);
         var session = await resolver.ResolveAsync(new VoicePresenceSessionRequest("agent-1", "voice_presence"));
 
@@ -188,105 +196,91 @@ public class RemoteActorVoicePresenceSessionResolverTests
             }),
         ]);
 
-        await session.AttachTransportAsync(transport, CancellationToken.None);
-        await transport.DisposedTask.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await Should.ThrowAsync<NotSupportedException>(
+            () => session.AttachTransportAsync(transport, CancellationToken.None));
 
-        dispatchPort.Dispatches.Count.ShouldBeGreaterThanOrEqualTo(3);
         dispatchPort.Dispatches.ShouldContain(dispatch =>
             dispatch.Envelope.Payload!.Unpack<VoiceModuleSignal>().SignalCase ==
             VoiceModuleSignal.SignalOneofCase.RemoteSessionOpenRequested);
-        dispatchPort.Dispatches.ShouldContain(dispatch =>
+        dispatchPort.Dispatches.ShouldNotContain(dispatch =>
             dispatch.Envelope.Payload!.Unpack<VoiceModuleSignal>().SignalCase ==
             VoiceModuleSignal.SignalOneofCase.RemoteAudioInputReceived);
         dispatchPort.Dispatches.ShouldContain(dispatch =>
             dispatch.Envelope.Payload!.Unpack<VoiceModuleSignal>().SignalCase ==
-            VoiceModuleSignal.SignalOneofCase.RemoteControlInputReceived);
-        dispatchPort.Dispatches.ShouldContain(dispatch =>
-            dispatch.Envelope.Payload!.Unpack<VoiceModuleSignal>().SignalCase ==
             VoiceModuleSignal.SignalOneofCase.RemoteSessionCloseRequested);
+        transport.ReceiveStarted.ShouldBeFalse();
+        transport.Disposed.ShouldBeTrue();
     }
 
     [Fact]
-    public async Task DetachTransportAsync_should_ignore_mismatched_expected_transport()
+    public async Task AttachTransportAsync_should_allow_repeated_unsupported_attempts_without_host_attachment_state()
     {
         var runtime = new StubActorRuntime(new StubActor("agent-1", new PlainAgent("agent-1")));
         var dispatchPort = new RecordingDispatchPort();
-        var subscriptions = new RecordingSubscriptionProvider();
-        using var services = BuildServices(runtime, dispatchPort, subscriptions);
+        using var services = BuildServices(runtime, dispatchPort);
         var resolver = new RemoteActorVoicePresenceSessionResolver(services);
         var session = await resolver.ResolveAsync(new VoicePresenceSessionRequest("agent-1", "voice_presence"));
 
         session.ShouldNotBeNull();
-        var transport = new HoldingVoiceTransport();
-        await session.AttachTransportAsync(transport, CancellationToken.None);
+        await Should.ThrowAsync<NotSupportedException>(
+            () => session.AttachTransportAsync(new HoldingVoiceTransport(), CancellationToken.None));
+        await Should.ThrowAsync<NotSupportedException>(
+            () => session.AttachTransportAsync(new HoldingVoiceTransport(), CancellationToken.None));
 
-        await session.DetachTransportAsync(new StubVoiceTransport(), CancellationToken.None);
-
-        transport.Disposed.ShouldBeFalse();
-        session.IsTransportAttached.ShouldBeTrue();
-
-        await session.DetachTransportAsync(transport, CancellationToken.None);
-        await transport.DisposedTask.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        dispatchPort.Dispatches.Count(dispatch =>
+            dispatch.Envelope.Payload!.Unpack<VoiceModuleSignal>().SignalCase ==
+            VoiceModuleSignal.SignalOneofCase.RemoteSessionOpenRequested).ShouldBe(2);
+        dispatchPort.Dispatches.Count(dispatch =>
+            dispatch.Envelope.Payload!.Unpack<VoiceModuleSignal>().SignalCase ==
+            VoiceModuleSignal.SignalOneofCase.RemoteSessionCloseRequested).ShouldBe(2);
         session.IsTransportAttached.ShouldBeFalse();
     }
 
     [Fact]
-    public async Task Remote_output_send_failure_should_release_transport_and_issue_close()
+    public void BuildDirectEnvelope_should_reject_remote_audio_input_payloads()
     {
-        var runtime = new StubActorRuntime(new StubActor("agent-1", new PlainAgent("agent-1")));
-        var dispatchPort = new RecordingDispatchPort();
-        var subscriptions = new RecordingSubscriptionProvider();
-        using var services = BuildServices(runtime, dispatchPort, subscriptions);
-        var resolver = new RemoteActorVoicePresenceSessionResolver(services);
-        var session = await resolver.ResolveAsync(new VoicePresenceSessionRequest("agent-1", "voice_presence"));
-
-        session.ShouldNotBeNull();
-        var transport = new ThrowingSendVoiceTransport();
-        await session.AttachTransportAsync(transport, CancellationToken.None);
-
-        var openSignal = dispatchPort.Dispatches[0].Envelope.Payload!.Unpack<VoiceModuleSignal>();
-        await subscriptions.PublishAsync(
-            "agent-1",
-            new VoiceRemoteTransportOutput
-            {
-                ModuleName = "other_module",
-                SessionId = openSignal.RemoteSessionOpenRequested.SessionId,
-                AudioOutput = new VoiceAudioReceived
+        Should.Throw<InvalidOperationException>(() =>
+            VoicePresenceSessionDispatch.BuildDirectEnvelope(
+                "agent-1",
+                "voice_presence",
+                new VoiceRemoteAudioInputReceived
                 {
-                    Pcm16 = ByteString.CopyFrom([9]),
-                    SampleRateHz = 16000,
-                },
-            });
-        transport.Disposed.ShouldBeFalse();
+                    SessionId = "remote-1",
+                    Pcm16 = ByteString.CopyFrom([1, 2]),
+                }));
+    }
 
-        await subscriptions.PublishAsync(
+    [Fact]
+    public void BuildDirectEnvelope_should_keep_remote_control_payloads()
+    {
+        var envelope = VoicePresenceSessionDispatch.BuildDirectEnvelope(
             "agent-1",
-            new VoiceRemoteTransportOutput
+            "voice_presence",
+            new VoiceRemoteControlInputReceived
             {
-                ModuleName = "voice_presence",
-                SessionId = openSignal.RemoteSessionOpenRequested.SessionId,
-                AudioOutput = new VoiceAudioReceived
+                SessionId = "remote-1",
+                ControlFrame = new VoiceControlFrame
                 {
-                    Pcm16 = ByteString.CopyFrom([9]),
-                    SampleRateHz = 16000,
+                    DrainAcknowledged = new VoiceDrainAcknowledged
+                    {
+                        ResponseId = 1,
+                        PlayoutSequence = 2,
+                    },
                 },
             });
 
-        await transport.DisposedTask.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        dispatchPort.Dispatches.ShouldContain(dispatch =>
-            dispatch.Envelope.Payload!.Unpack<VoiceModuleSignal>().SignalCase ==
-            VoiceModuleSignal.SignalOneofCase.RemoteSessionCloseRequested);
+        var signal = envelope.Payload!.Unpack<VoiceModuleSignal>();
+        signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.RemoteControlInputReceived);
+        signal.RemoteControlInputReceived.SessionId.ShouldBe("remote-1");
     }
 
     private static ServiceProvider BuildServices(
         IActorRuntime runtime,
-        IActorDispatchPort dispatchPort,
-        IActorEventSubscriptionProvider subscriptions)
+        IActorDispatchPort dispatchPort)
     {
         var services = new ServiceCollection();
         services.AddSingleton(runtime);
         services.AddSingleton(dispatchPort);
-        services.AddSingleton(subscriptions);
         return services.BuildServiceProvider();
     }
 
@@ -366,65 +360,16 @@ public class RemoteActorVoicePresenceSessionResolverTests
         }
     }
 
-    private sealed class RecordingSubscriptionProvider : IActorEventSubscriptionProvider
-    {
-        private readonly Dictionary<string, List<Func<VoiceRemoteTransportOutput, Task>>> _handlers = new(StringComparer.Ordinal);
-
-        public Task<IAsyncDisposable> SubscribeAsync<TMessage>(
-            string actorId,
-            Func<TMessage, Task> handler,
-            CancellationToken ct = default)
-            where TMessage : class, IMessage, new()
-        {
-            ct.ThrowIfCancellationRequested();
-            if (typeof(TMessage) != typeof(VoiceRemoteTransportOutput))
-                throw new NotSupportedException(typeof(TMessage).Name);
-
-            if (!_handlers.TryGetValue(actorId, out var handlers))
-            {
-                handlers = [];
-                _handlers[actorId] = handlers;
-            }
-
-            var typedHandler = (Func<VoiceRemoteTransportOutput, Task>)(object)handler;
-            handlers.Add(typedHandler);
-
-            return Task.FromResult<IAsyncDisposable>(new SubscriptionLease(() => handlers.Remove(typedHandler)));
-        }
-
-        public async Task PublishAsync(string actorId, VoiceRemoteTransportOutput output)
-        {
-            if (!_handlers.TryGetValue(actorId, out var handlers))
-                return;
-
-            foreach (var handler in handlers.ToArray())
-                await handler(output);
-        }
-
-        private sealed class SubscriptionLease(Action release) : IAsyncDisposable
-        {
-            public ValueTask DisposeAsync()
-            {
-                release();
-                return ValueTask.CompletedTask;
-            }
-        }
-    }
-
     private sealed class HoldingVoiceTransport : IVoiceTransport
     {
         private readonly Channel<VoiceTransportFrame> _frames = Channel.CreateUnbounded<VoiceTransportFrame>();
 
         public bool Disposed { get; private set; }
 
-        public TaskCompletionSource DisposedTask { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public List<byte[]> AudioFrames { get; } = [];
-
         public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
         {
             _ = ct;
-            AudioFrames.Add(pcm16.ToArray());
+            _ = pcm16;
             return Task.CompletedTask;
         }
 
@@ -449,7 +394,6 @@ public class RemoteActorVoicePresenceSessionResolverTests
         {
             Disposed = true;
             _frames.Writer.TryComplete();
-            DisposedTask.TrySetResult();
             return ValueTask.CompletedTask;
         }
     }
@@ -460,7 +404,7 @@ public class RemoteActorVoicePresenceSessionResolverTests
 
         public bool Disposed { get; private set; }
 
-        public TaskCompletionSource DisposedTask { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool ReceiveStarted { get; private set; }
 
         public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
         {
@@ -479,6 +423,7 @@ public class RemoteActorVoicePresenceSessionResolverTests
         public async IAsyncEnumerable<VoiceTransportFrame> ReceiveFramesAsync(
             [EnumeratorCancellation] CancellationToken ct)
         {
+            ReceiveStarted = true;
             foreach (var frame in _frames)
             {
                 ct.ThrowIfCancellationRequested();
@@ -490,75 +435,6 @@ public class RemoteActorVoicePresenceSessionResolverTests
         public ValueTask DisposeAsync()
         {
             Disposed = true;
-            DisposedTask.TrySetResult();
-            return ValueTask.CompletedTask;
-        }
-    }
-
-    private sealed class StubVoiceTransport : IVoiceTransport
-    {
-        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
-        {
-            _ = pcm16;
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public Task SendControlAsync(VoiceControlFrame frame, CancellationToken ct)
-        {
-            _ = frame;
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public async IAsyncEnumerable<VoiceTransportFrame> ReceiveFramesAsync(
-            [EnumeratorCancellation] CancellationToken ct)
-        {
-            _ = ct;
-            await Task.CompletedTask;
-            yield break;
-        }
-
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
-
-    private sealed class ThrowingSendVoiceTransport : IVoiceTransport
-    {
-        private readonly Channel<VoiceTransportFrame> _frames = Channel.CreateUnbounded<VoiceTransportFrame>();
-
-        public bool Disposed { get; private set; }
-
-        public TaskCompletionSource DisposedTask { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
-        {
-            _ = pcm16;
-            _ = ct;
-            throw new InvalidOperationException("boom");
-        }
-
-        public Task SendControlAsync(VoiceControlFrame frame, CancellationToken ct)
-        {
-            _ = frame;
-            _ = ct;
-            return Task.CompletedTask;
-        }
-
-        public async IAsyncEnumerable<VoiceTransportFrame> ReceiveFramesAsync(
-            [EnumeratorCancellation] CancellationToken ct)
-        {
-            while (await _frames.Reader.WaitToReadAsync(ct))
-            {
-                while (_frames.Reader.TryRead(out var frame))
-                    yield return frame;
-            }
-        }
-
-        public ValueTask DisposeAsync()
-        {
-            Disposed = true;
-            _frames.Writer.TryComplete();
-            DisposedTask.TrySetResult();
             return ValueTask.CompletedTask;
         }
     }
