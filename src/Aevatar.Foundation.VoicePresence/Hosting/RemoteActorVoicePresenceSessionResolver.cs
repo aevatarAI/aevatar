@@ -171,6 +171,9 @@ public sealed class RemoteActorVoicePresenceSessionResolver : IVoicePresenceSess
             await ReleaseStateAsync(state, dispatchCloseRequest: true, awaitRelayCompletion: true);
         }
 
+        // Refactor (iter15/cluster-026):
+        //   Old pattern: remote PCM frames were wrapped as actor EventEnvelope input from the host relay.
+        //   New principle: EventEnvelope routing carries setup/close/control signals only; audio stays off the actor envelope path.
         private async Task RunTransportRelayAsync(AttachmentState state)
         {
             try

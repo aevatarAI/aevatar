@@ -139,6 +139,49 @@ public class MiniCPMRealtimeProviderTests
     }
 
     [Fact]
+    public async Task Receive_loop_should_use_stable_provider_local_id_when_response_id_is_zero()
+    {
+        await using var provider = CreateProvider(new StubHttpMessageHandler((request, ct) =>
+        {
+            _ = request;
+            _ = ct;
+            return Task.FromResult(CreateJsonResponse("{}"));
+        }));
+        var chunkAudio = Convert.ToBase64String(MiniCPMWaveCodec.EncodePcm16Mono([12, 34, 56, 78], 24000));
+        var channel = Channel.CreateUnbounded<VoiceProviderEvent>();
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(
+            $$"""
+            data: {"id":"u1","response_id":0,"choices":[{"role":"assistant","audio":"{{chunkAudio}}","text":"hello","finish_reason":"processing"}]}
+
+            data: {"id":"u1","response_id":0,"choices":[{"role":"assistant","audio":null,"text":"\n<end>","finish_reason":"done"}]}
+
+            """));
+
+        var readCompletionStreamAsync = typeof(MiniCPMRealtimeProvider)
+            .GetMethod("ReadCompletionStreamAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        await ((Task)readCompletionStreamAsync.Invoke(provider, [stream, channel.Writer, CancellationToken.None])!);
+        channel.Writer.TryComplete();
+
+        var events = new List<VoiceProviderEvent>();
+        await foreach (var evt in channel.Reader.ReadAllAsync())
+            events.Add(evt);
+
+        events.Select(static x => x.EventCase).ShouldBe(
+        [
+            VoiceProviderEvent.EventOneofCase.ResponseStarted,
+            VoiceProviderEvent.EventOneofCase.AudioReceived,
+            VoiceProviderEvent.EventOneofCase.ResponseDone,
+        ]);
+
+        var providerResponseId = events[0].ResponseStarted.ProviderResponseId;
+        providerResponseId.ShouldNotBeNullOrWhiteSpace();
+        events[0].ResponseStarted.ResponseId.ShouldBe(0);
+        events[2].ResponseDone.ResponseId.ShouldBe(0);
+        events[1].AudioReceived.ProviderResponseId.ShouldBe(providerResponseId);
+        events[2].ResponseDone.ProviderResponseId.ShouldBe(providerResponseId);
+    }
+
+    [Fact]
     public async Task CancelResponse_should_post_stop_without_synthetic_cancel()
     {
         var stopRequested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
