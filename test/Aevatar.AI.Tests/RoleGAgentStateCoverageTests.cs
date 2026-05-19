@@ -158,6 +158,11 @@ public sealed class RoleGAgentStateCoverageTests
         using var provider = BuildServiceProvider();
         var agent = CreateRoleAgent(provider, "role-approval-denied");
         await agent.ActivateAsync();
+        await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleId = "approval-role",
+            RoleName = "approval worker",
+        });
         agent.State.PendingApproval = new PendingToolApprovalState
         {
             RequestId = "req-1",
@@ -177,6 +182,15 @@ public sealed class RoleGAgentStateCoverageTests
         agent.State.PendingApproval.Should().BeNull();
         agent.State.Sessions["session-a"].Completed.Should().BeTrue();
         agent.State.Sessions["session-a"].FinalContent.Should().Contain("approval_denied: user denied");
+
+        var persistedCompletion = provider.GetRequiredService<IEventStore>() as InMemoryEventStoreForTests;
+        persistedCompletion.Should().NotBeNull();
+        var completed = (await persistedCompletion!.GetEventsAsync("role-approval-denied"))
+            .Single(x => x.EventType.Contains(nameof(RoleChatSessionCompletedEvent), StringComparison.Ordinal))
+            .EventData
+            .Unpack<RoleChatSessionCompletedEvent>();
+        completed.RoleId.Should().Be("approval-role");
+        completed.Content.Should().Contain("approval_denied: user denied");
     }
 
     [Fact]

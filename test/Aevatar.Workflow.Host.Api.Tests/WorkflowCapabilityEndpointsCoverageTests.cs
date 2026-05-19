@@ -217,14 +217,15 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     }
 
     [Fact]
-    public void ChatRunRequestNormalizer_ShouldExtractLegacyScopeIdIntoTypedField()
+    public void ChatRunRequestNormalizer_ShouldUseTypedScopeId()
     {
         var input = new ChatInput
         {
             Prompt = "hello",
+            ScopeId = " user-1 ",
             Metadata = new Dictionary<string, string>
             {
-                ["scope_id"] = "user-1",
+                ["trace"] = "trace-1",
             },
         };
 
@@ -232,49 +233,75 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
 
         result.Succeeded.Should().BeTrue();
         result.Request!.ScopeId.Should().Be("user-1");
-        result.Request.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
-        result.Request.Metadata.Should().NotContainKey("scope_id");
+        result.Request.Metadata.Should().Contain("trace", "trace-1");
     }
 
     [Fact]
-    public void ChatRunRequestNormalizer_ShouldExtractScopeIdCaseInsensitively()
+    public void ChatRunRequestNormalizer_ShouldIgnoreScopeMetadata_WhenTypedScopeIdIsSet()
     {
         var input = new ChatInput
         {
             Prompt = "hello",
+            ScopeId = "typed-scope",
             Metadata = new Dictionary<string, string>
             {
-                ["Scope_Id"] = "user-1",
-                ["WORKFLOW.SCOPE_ID"] = "user-1",
+                ["Scope_Id"] = "metadata-scope",
+                ["WORKFLOW.SCOPE_ID"] = "metadata-scope",
+                ["trace"] = "trace-1",
             },
         };
 
         var result = ChatRunRequestNormalizer.Normalize(input);
 
         result.Succeeded.Should().BeTrue();
-        result.Request!.ScopeId.Should().Be("user-1");
+        result.Request!.ScopeId.Should().Be("typed-scope");
         result.Request.Metadata.Should().NotContainKey("Scope_Id");
         result.Request.Metadata.Should().NotContainKey("WORKFLOW.SCOPE_ID");
-        result.Request.Metadata.Should().BeEmpty();
+        result.Request.Metadata.Should().Contain("trace", "trace-1");
     }
 
     [Fact]
-    public void ChatRunRequestNormalizer_ShouldRejectConflictingScopeIds()
+    public void ChatRunRequestNormalizer_ShouldNotPromoteScopeMetadata_WhenTypedScopeIdIsMissing()
     {
         var input = new ChatInput
         {
             Prompt = "hello",
-            ScopeId = "scope-a",
             Metadata = new Dictionary<string, string>
             {
-                ["Scope_Id"] = "scope-b",
+                ["scope_id"] = "metadata-scope",
+                [WorkflowRunCommandMetadataKeys.ScopeId] = "metadata-scope",
             },
         };
 
         var result = ChatRunRequestNormalizer.Normalize(input);
 
-        result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be(WorkflowChatRunStartError.ConflictingScopeId);
+        result.Succeeded.Should().BeTrue();
+        result.Request!.ScopeId.Should().BeNull();
+        result.Request.Metadata.Should().NotContainKey("scope_id");
+        result.Request.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldIgnoreScopeMetadata_FromDefaults()
+    {
+        var input = new ChatInput
+        {
+            Prompt = "hello",
+        };
+        var defaultMetadata = new Dictionary<string, string>
+        {
+            ["scope_id"] = "default-scope",
+            [WorkflowRunCommandMetadataKeys.ScopeId] = "default-scope",
+            ["trace"] = "trace-1",
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input, defaultMetadata: defaultMetadata);
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.ScopeId.Should().BeNull();
+        result.Request.Metadata.Should().NotContainKey("scope_id");
+        result.Request.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
+        result.Request.Metadata.Should().Contain("trace", "trace-1");
     }
 
     [Fact]

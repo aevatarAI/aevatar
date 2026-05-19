@@ -67,9 +67,7 @@ ARGS=(
   -C "$CD"
 )
 
-# Bash strict mode (`set -u`) treats `${empty_array[@]}` as unbound, so
-# guard with the `${array[@]+...}` parameter expansion before iterating.
-for d in "${ADD_DIRS[@]+"${ADD_DIRS[@]}"}"; do
+for d in "${ADD_DIRS[@]}"; do
   ARGS+=(--add-dir "$d")
 done
 
