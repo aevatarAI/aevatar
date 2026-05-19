@@ -67,11 +67,7 @@ ARGS=(
   -C "$CD"
 )
 
-# Refactor (iter15/cluster-024): this PR is dispatched through the
-# codex-refactor-loop wrapper, often without --add-dir. Bash strict mode
-# (`set -u`) treats `${empty_array[@]}` as unbound, so keep the wrapper
-# reliable for the cluster review/fix loop by guarding the expansion.
-for d in "${ADD_DIRS[@]+"${ADD_DIRS[@]}"}"; do
+for d in "${ADD_DIRS[@]}"; do
   ARGS+=(--add-dir "$d")
 done
 

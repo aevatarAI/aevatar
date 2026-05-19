@@ -29,6 +29,9 @@ public static class ChatStreamContentAggregator
         LLMRequest request,
         CancellationToken ct = default)
     {
+        // Refactor (iter15/cluster-024):
+        //   Old pattern: ToolCallLoop treated provider.ChatAsync as a second authoritative LLM response path.
+        //   New principle: stream-derived LLMResponse aggregation preserves content, reasoning, tool calls, usage, and finish reason from provider.ChatStreamAsync.
         var content = new StringBuilder();
         var reasoningContent = new StringBuilder();
         var toolCalls = new StreamingToolCallAccumulator();
