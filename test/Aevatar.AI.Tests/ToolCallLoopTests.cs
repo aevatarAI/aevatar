@@ -760,10 +760,29 @@ public class ToolCallLoopTests
             LLMRequest request,
             [EnumeratorCancellation] CancellationToken ct = default)
         {
-            _ = request;
             ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            var response = _responses.Count > 0 ? _responses.Dequeue() : new LLMResponse();
+
+            if (!string.IsNullOrEmpty(response.ReasoningContent))
+                yield return new LLMStreamChunk { DeltaReasoningContent = response.ReasoningContent };
+
+            if (!string.IsNullOrEmpty(response.Content))
+                yield return new LLMStreamChunk { DeltaContent = response.Content };
+
+            if (response.ToolCalls is { Count: > 0 })
+            {
+                foreach (var toolCall in response.ToolCalls)
+                    yield return new LLMStreamChunk { DeltaToolCall = toolCall };
+            }
+
+            yield return new LLMStreamChunk
+            {
+                IsLast = true,
+                Usage = response.Usage,
+                FinishReason = response.FinishReason,
+            };
             await Task.CompletedTask;
-            yield break;
         }
     }
 

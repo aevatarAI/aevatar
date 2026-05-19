@@ -31,12 +31,17 @@ internal sealed class ScriptGenerateGAgent : AIGAgentBase<Empty>
         return new AIAgentConfigStateOverrides();
     }
 
-    public Task<string?> GenerateAsync(
+    public async Task<string?> GenerateAsync(
         string prompt,
         string requestId,
         IReadOnlyDictionary<string, string>? metadata,
-        CancellationToken ct = default) =>
-        ChatAsync(prompt, requestId, metadata, ct);
+        CancellationToken ct = default)
+    {
+        // Refactor (iter15/cluster-024):
+        //   Old pattern: non-streaming ChatAsync directly called provider.ChatAsync.
+        //   New principle: ChatStreamAsync is the only authoritative AI executor; offline text aggregation consumes the stream as an explicit adapter.
+        return await GenerateWithReasoningAsync(prompt, requestId, metadata, onReasoning: null, ct);
+    }
 
     public async Task<string?> GenerateWithReasoningAsync(
         string prompt,
@@ -45,6 +50,9 @@ internal sealed class ScriptGenerateGAgent : AIGAgentBase<Empty>
         Func<string, CancellationToken, Task>? onReasoning,
         CancellationToken ct = default)
     {
+        // Refactor (iter15/cluster-024):
+        //   Old pattern: non-streaming ChatAsync directly called provider.ChatAsync.
+        //   New principle: ChatStreamAsync is the only authoritative AI executor; offline text aggregation consumes the stream as an explicit adapter.
         var content = new StringBuilder();
         await foreach (var chunk in ChatStreamAsync(prompt, requestId, metadata, ct))
         {

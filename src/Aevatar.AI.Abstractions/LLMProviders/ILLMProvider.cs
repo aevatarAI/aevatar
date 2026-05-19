@@ -15,6 +15,7 @@ public interface ILLMProvider
     LLMProviderCapabilities Capabilities => LLMProviderCapabilities.TextOnly;
 
     /// <summary>同步 Chat 调用。返回完整响应内容与 tool_calls。</summary>
+    // Provider boundary only — formal conversation entrypoints must call ChatStreamAsync.
     /// <param name="request">LLM 请求，包含消息、工具、模型参数等。</param>
     /// <param name="ct">取消令牌。</param>
     /// <returns>LLM 响应，包含文本内容、工具调用、Token 用量等。</returns>

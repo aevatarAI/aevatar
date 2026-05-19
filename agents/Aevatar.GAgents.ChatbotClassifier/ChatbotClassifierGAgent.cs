@@ -7,6 +7,7 @@ using Aevatar.AI.Core.Hooks;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Microsoft.Extensions.Logging;
+using System.Text;
 
 namespace Aevatar.GAgents.ChatbotClassifier;
 
@@ -16,7 +17,7 @@ namespace Aevatar.GAgents.ChatbotClassifier;
 /// classifies intent (FAQ / action / chitchat / unknown), generates a natural language
 /// reply, and extracts structured parameters for action intents.
 ///
-/// Uses non-streaming ChatAsync for reliable JSON output parsing.
+/// Uses authoritative ChatStreamAsync plus offline aggregation for reliable JSON output parsing.
 /// No tools — pure LLM classification with MaxToolRounds=0.
 /// </summary>
 public sealed class ChatbotClassifierGAgent : RoleGAgent
@@ -63,7 +64,17 @@ public sealed class ChatbotClassifierGAgent : RoleGAgent
         string? result;
         try
         {
-            result = await ChatAsync(request.Prompt, request.SessionId, metadata, CancellationToken.None);
+            // Refactor (iter15/cluster-024):
+            //   Old pattern: non-streaming ChatAsync directly called provider.ChatAsync.
+            //   New principle: ChatStreamAsync is the only authoritative AI executor; offline text aggregation consumes the stream as an explicit adapter.
+            var content = new StringBuilder();
+            await foreach (var chunk in ChatStreamAsync(request.Prompt, request.SessionId, metadata, CancellationToken.None))
+            {
+                if (!string.IsNullOrEmpty(chunk.DeltaContent))
+                    content.Append(chunk.DeltaContent);
+            }
+
+            result = content.Length > 0 ? content.ToString() : null;
         }
         catch (Exception ex)
         {

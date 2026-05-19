@@ -70,7 +70,7 @@ public sealed class ChatRuntime
         _compressionConfig = compressionConfig ?? new ContextCompressionConfig();
     }
 
-    /// <summary>单轮 Chat（含 Tool Calling 循环），包裹 Agent Run Middleware。</summary>
+    /// <summary>单轮 Chat（含 Tool Calling 循环），显式离线聚合 adapter。</summary>
     public Task<string?> ChatAsync(string userMessage, int maxToolRounds = DefaultMaxToolRounds, CancellationToken ct = default) =>
         ChatAsync([ContentPart.TextPart(userMessage)], maxToolRounds, requestId: null, metadata: null, ct);
 
@@ -91,64 +91,17 @@ public sealed class ChatRuntime
         IReadOnlyDictionary<string, string>? metadata,
         CancellationToken ct = default)
     {
-        var normalizedUserContent = NormalizeUserContent(userContent);
-        var runContext = new AgentRunContext
+        // Refactor (iter15/cluster-024):
+        //   Old pattern: non-streaming ChatAsync directly called provider.ChatAsync.
+        //   New principle: ChatStreamAsync is the only authoritative AI executor; offline text aggregation consumes the stream as an explicit adapter.
+        var content = new StringBuilder();
+        await foreach (var chunk in ChatStreamAsync(userContent, maxToolRounds, requestId, metadata, ct))
         {
-            UserMessage = DescribeUserContent(normalizedUserContent),
-            AgentId = _agentId,
-            AgentName = _agentName,
-            CancellationToken = ct,
-        };
-
-        try
-        {
-            await MiddlewarePipeline.RunAgentAsync(_agentMiddlewares, runContext, async () =>
-            {
-                if (runContext.Terminate) return;
-
-                _history.Add(ChatMessage.User(normalizedUserContent, runContext.UserMessage));
-                await RunCompressionIfNeededAsync(ct);
-                var baseRequest = ApplyRequestIdentity(_requestBuilder(), requestId, metadata);
-                var provider = _providerFactory();
-                runContext.Items["gen_ai.provider.name"] = provider.Name;
-                var messages = _history.BuildMessages(baseRequest.Messages.FirstOrDefault(m => m.Role == "system")?.Content);
-
-                var result = await _toolLoop.ExecuteAsync(provider, messages, baseRequest, maxToolRounds, ct);
-
-                _history.Clear();
-                foreach (var m in messages.Where(m => m.Role != "system"))
-                    _history.Add(m);
-
-                runContext.Result = result;
-            });
-
-            // ─── Hook: Stop（轮次正常完成） ───
-            if (_hooks != null)
-            {
-                var stopCtx = new AIGAgentExecutionHookContext { AgentId = _agentId };
-                stopCtx.Items["final_content"] = runContext.Result ?? "";
-                // Count tool-calling rounds by counting assistant messages that have tool calls
-                stopCtx.Items["total_rounds"] = _history.Messages
-                    .Count(m => m.Role == "assistant" && m.ToolCalls is { Count: > 0 });
-                await _hooks.RunStopAsync(stopCtx, ct);
-            }
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            // ─── Hook: StopFailure（轮次因错误终止） ───
-            if (_hooks != null)
-            {
-                var failCtx = new AIGAgentExecutionHookContext { AgentId = _agentId };
-                failCtx.Items["error"] = ex;
-                failCtx.Items["error_message"] = ex.Message;
-                failCtx.Items["error_phase"] = "llm_or_tool_execution";
-                try { await _hooks.RunStopFailureAsync(failCtx, ct); }
-                catch { /* best-effort */ }
-            }
-            throw;
+            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+                content.Append(chunk.DeltaContent);
         }
 
-        return runContext.Result;
+        return content.Length > 0 ? content.ToString() : null;
     }
 
     /// <summary>流式 Chat，包裹 LLM Call Middleware。</summary>

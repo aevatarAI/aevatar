@@ -282,6 +282,9 @@ public sealed class ToolCallLoop
         LLMRequest request,
         CancellationToken ct)
     {
+        // Refactor (iter15/cluster-024):
+        //   Old pattern: non-streaming ChatAsync directly called provider.ChatAsync.
+        //   New principle: ChatStreamAsync is the only authoritative AI executor; offline text aggregation consumes the stream as an explicit adapter.
         // ─── Hook: LLM Request Start ───
         var llmCtx = new AIGAgentExecutionHookContext { LLMRequest = request };
         if (_hooks != null) await _hooks.RunLLMRequestStartAsync(llmCtx, ct);
@@ -291,14 +294,14 @@ public sealed class ToolCallLoop
             Request = request,
             Provider = provider,
             CancellationToken = ct,
-            IsStreaming = false,
+            IsStreaming = true,
         };
         AnnotateRequestIdentity(llmCallContext);
 
         await MiddlewarePipeline.RunLLMCallAsync(_llmMiddlewares, llmCallContext, async () =>
         {
             if (llmCallContext.Terminate) return;
-            llmCallContext.Response = await provider.ChatAsync(llmCallContext.Request, ct);
+            llmCallContext.Response = await AggregateStreamResponseAsync(provider, llmCallContext.Request, ct);
         });
 
         var response = llmCallContext.Response
@@ -310,6 +313,46 @@ public sealed class ToolCallLoop
         if (_hooks != null) await _hooks.RunLLMRequestEndAsync(llmCtx, ct);
 
         return (response, llmCallContext.Terminate);
+    }
+
+    private static async Task<LLMResponse> AggregateStreamResponseAsync(
+        ILLMProvider provider,
+        LLMRequest request,
+        CancellationToken ct)
+    {
+        var content = new StringBuilder();
+        var reasoningContent = new StringBuilder();
+        var toolCalls = new StreamingToolCallAccumulator();
+        TokenUsage? usage = null;
+        string? finishReason = null;
+
+        await foreach (var chunk in provider.ChatStreamAsync(request, ct).WithCancellation(ct))
+        {
+            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+                content.Append(chunk.DeltaContent);
+
+            if (!string.IsNullOrEmpty(chunk.DeltaReasoningContent))
+                reasoningContent.Append(chunk.DeltaReasoningContent);
+
+            if (chunk.DeltaToolCall != null)
+                toolCalls.TrackDelta(chunk.DeltaToolCall);
+
+            if (chunk.Usage != null)
+                usage = chunk.Usage;
+
+            if (chunk.FinishReason != null)
+                finishReason = chunk.FinishReason;
+        }
+
+        var finalToolCalls = toolCalls.BuildToolCalls();
+        return new LLMResponse
+        {
+            Content = content.Length > 0 ? content.ToString() : null,
+            ReasoningContent = reasoningContent.Length > 0 ? reasoningContent.ToString() : null,
+            ToolCalls = finalToolCalls.Count > 0 ? finalToolCalls : null,
+            Usage = usage,
+            FinishReason = finishReason,
+        };
     }
 
     internal static IReadOnlyDictionary<string, string>? BuildPerCallMetadata(
