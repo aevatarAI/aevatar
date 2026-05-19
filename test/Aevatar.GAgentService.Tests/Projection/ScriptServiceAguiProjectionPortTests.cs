@@ -2,11 +2,18 @@ using System.Runtime.CompilerServices;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Projection.Configuration;
+using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Projection.Orchestration;
+using Aevatar.GAgentService.Projection.Projectors;
 using Aevatar.Presentation.AGUI;
 using FluentAssertions;
+using Google.Protobuf;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgentService.Tests.Projection;
 
@@ -16,6 +23,77 @@ namespace Aevatar.GAgentService.Tests.Projection;
 public sealed class ScriptServiceAguiProjectionPortTests
 {
     private const string ScriptServiceAguiProjectionKind = "script-service-agui-session";
+
+    [Fact]
+    public void SessionEventCodec_ShouldSerializeDeserializeAndValidateEventType()
+    {
+        var codec = new ScriptServiceAguiSessionEventCodec();
+        var evt = new AGUIEvent
+        {
+            RunFinished = new RunFinishedEvent
+            {
+                ThreadId = "script-actor-1",
+                RunId = "run-1",
+            },
+        };
+
+        codec.Channel.Should().Be(ScriptServiceAguiProjectionKind);
+        codec.GetEventType(evt).Should().Be(AGUIEvent.EventOneofCase.RunFinished.ToString());
+
+        var payload = codec.Serialize(evt);
+        codec.Deserialize(codec.GetEventType(evt), payload).Should().BeEquivalentTo(evt);
+        codec.Deserialize("DifferentType", payload).Should().BeNull();
+        codec.Deserialize("", payload).Should().BeNull();
+        codec.Deserialize(codec.GetEventType(evt), null!).Should().BeNull();
+        codec.Deserialize(codec.GetEventType(evt), ByteString.Empty).Should().BeNull();
+        codec.Deserialize(codec.GetEventType(evt), ByteString.CopyFromUtf8("not-a-proto")).Should().BeNull();
+        codec.GetEventType(new AGUIEvent()).Should().Be(AGUIEvent.Descriptor.FullName);
+
+        var getEventTypeWithNull = () => codec.GetEventType(null!);
+        getEventTypeWithNull.Should().Throw<ArgumentNullException>();
+        var serializeWithNull = () => codec.Serialize(null!);
+        serializeWithNull.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void AddGAgentServiceProjection_ShouldResolveChannelScopedAguiPortsAndProjectors()
+    {
+        var services = new ServiceCollection();
+
+        services.AddGAgentServiceProjection();
+        services.AddSingleton<IStreamProvider, InMemoryStreamProvider>();
+        services.AddSingleton<IProjectionScopeActivationService<GAgentDraftRunRuntimeLease>>(
+            new StaticActivationService<GAgentDraftRunRuntimeLease>(new GAgentDraftRunRuntimeLease(new GAgentDraftRunProjectionContext
+            {
+                RootActorId = "draft-actor-1",
+                ProjectionKind = "service-draft-run-session",
+                SessionId = "draft-run-1",
+            })));
+        services.AddSingleton<IProjectionScopeReleaseService<GAgentDraftRunRuntimeLease>, StaticReleaseService<GAgentDraftRunRuntimeLease>>();
+        services.AddSingleton<IProjectionScopeActivationService<ScriptServiceAguiRuntimeLease>>(
+            new StaticActivationService<ScriptServiceAguiRuntimeLease>(new ScriptServiceAguiRuntimeLease(new ScriptServiceAguiProjectionContext
+            {
+                RootActorId = "script-actor-1",
+                ProjectionKind = ScriptServiceAguiProjectionKind,
+                SessionId = "run-1",
+            })));
+        services.AddSingleton<IProjectionScopeReleaseService<ScriptServiceAguiRuntimeLease>, StaticReleaseService<ScriptServiceAguiRuntimeLease>>();
+
+        using var provider = services.BuildServiceProvider();
+
+        provider.GetRequiredService<IGAgentDraftRunProjectionPort>()
+            .Should().BeOfType<GAgentDraftRunProjectionPort>();
+        provider.GetRequiredService<IScriptServiceAguiProjectionPort>()
+            .Should().BeOfType<ScriptServiceAguiProjectionPort>();
+        provider.GetServices<IProjectionProjector<GAgentDraftRunProjectionContext>>()
+            .Should().ContainSingle(x => x is GAgentDraftRunSessionEventProjector);
+        provider.GetServices<IProjectionProjector<ScriptServiceAguiProjectionContext>>()
+            .Should().ContainSingle(x => x is ScriptServiceAguiSessionEventProjector);
+        provider.GetServices<IProjectionSessionEventCodec<AGUIEvent>>()
+            .Should().BeEmpty("AGUIEvent codecs are channel-scoped inside each pipeline factory");
+        provider.GetServices<IProjectionSessionEventHub<AGUIEvent>>()
+            .Should().BeEmpty("AGUIEvent hubs are channel-scoped inside each pipeline factory");
+    }
 
     [Fact]
     public async Task EnsureAttachDetachRelease_ShouldUseSessionProjectionLease()
@@ -192,6 +270,28 @@ public sealed class ScriptServiceAguiProjectionPortTests
         {
             onDispose();
             return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class StaticActivationService<TLease>(TLease lease) : IProjectionScopeActivationService<TLease>
+        where TLease : class, IProjectionRuntimeLease
+    {
+        public Task<TLease> EnsureAsync(ProjectionScopeStartRequest request, CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(lease);
+        }
+    }
+
+    private sealed class StaticReleaseService<TLease> : IProjectionScopeReleaseService<TLease>
+        where TLease : class, IProjectionRuntimeLease
+    {
+        public Task ReleaseIfIdleAsync(TLease lease, CancellationToken ct = default)
+        {
+            _ = lease;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
         }
     }
 }

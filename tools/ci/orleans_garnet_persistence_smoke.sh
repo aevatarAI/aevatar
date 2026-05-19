@@ -15,10 +15,15 @@ GARNET_CONTAINER_NAME="aevatar-garnet"
 GARNET_READY_LOG="Ready to accept connections"
 GARNET_WAIT_ATTEMPTS="${GARNET_WAIT_ATTEMPTS:-60}"
 GARNET_WAIT_INTERVAL_SECONDS="${GARNET_WAIT_INTERVAL_SECONDS:-2}"
+GARNET_COMPOSE_UP_ATTEMPTS="${GARNET_COMPOSE_UP_ATTEMPTS:-3}"
+GARNET_COMPOSE_UP_RETRY_SECONDS="${GARNET_COMPOSE_UP_RETRY_SECONDS:-10}"
+GARNET_STARTED_BY_SCRIPT=0
 
 cleanup() {
-  docker compose stop garnet >/dev/null 2>&1 || true
-  docker compose rm -f garnet >/dev/null 2>&1 || true
+  if [[ "${GARNET_STARTED_BY_SCRIPT}" == "1" ]]; then
+    docker compose stop garnet >/dev/null 2>&1 || true
+    docker compose rm -f garnet >/dev/null 2>&1 || true
+  fi
   release_distributed_smoke_lock
 }
 trap cleanup EXIT INT TERM
@@ -53,10 +58,30 @@ wait_garnet() {
   return 1
 }
 
+start_garnet_with_retry() {
+  local attempt
+
+  for ((attempt = 1; attempt <= GARNET_COMPOSE_UP_ATTEMPTS; attempt++)); do
+    if docker compose up -d garnet; then
+      GARNET_STARTED_BY_SCRIPT=1
+      return 0
+    fi
+
+    if (( attempt == GARNET_COMPOSE_UP_ATTEMPTS )); then
+      echo "Failed to start Garnet after ${GARNET_COMPOSE_UP_ATTEMPTS} attempts."
+      return 1
+    fi
+
+    echo "Garnet compose startup failed; retrying in ${GARNET_COMPOSE_UP_RETRY_SECONDS}s... (attempt ${attempt}/${GARNET_COMPOSE_UP_ATTEMPTS})"
+    docker compose rm -f garnet >/dev/null 2>&1 || true
+    sleep "${GARNET_COMPOSE_UP_RETRY_SECONDS}"
+  done
+}
+
 echo "Starting Garnet..."
 acquire_distributed_smoke_lock "${LOCK_OWNER}"
 ensure_local_tcp_ports_free "${LOCK_OWNER}" "${GARNET_PORT}"
-docker compose up -d garnet
+start_garnet_with_retry
 wait_garnet
 
 echo "Running Orleans + Garnet persistence integration test..."
