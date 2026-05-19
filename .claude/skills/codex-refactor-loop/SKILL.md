@@ -641,7 +641,7 @@ Each reviewer outputs `REVIEW_DONE:${PR}:${role}:<approve|comment|reject>` marke
 
 ### Fix-retry loop (AI iterates until consensus)
 
-Policy: AI keeps iterating until unanimous-approve consensus, OR until escalation criteria are hit. Default `max_fix_rounds = 3` per PR.
+Policy: AI keeps iterating until unanimous-approve consensus, OR until escalation criteria are hit. Default `max_fix_rounds = 6` per PR (per Auric 2026-05-19 "2 轮太少,改到 6 轮")。
 
 Loop:
 
@@ -666,7 +666,7 @@ Loop:
 
 Escalate to human ONLY when:
 
-- `fix_round > max_fix_rounds` (default 3) and still not unanimous.
+- `fix_round > max_fix_rounds` (default 6) and still not unanimous.
 - Fix codex emits `FIX_BLOCKED:<PR>:round-<N>:human-decision:<...>` (e.g. reviewer demands deleting a feature, splitting into 3 PRs, renaming a cross-cluster type).
 - Fix codex emits `FIX_BLOCKED:<PR>:round-<N>:conflict:<...>` (reviewers' demands contradict each other and codex cannot resolve).
 - Two consecutive rounds produce IDENTICAL reject text for the same reviewer (the fix didn't address the demand and codex isn't making progress).
@@ -1092,14 +1092,14 @@ done
    - codecov/patch → 派 `prompts/test-add.md` codex(uncovered patch lines)
 3. **label 转 `🔧 phase:fixing`** + post `## 📊` banner
 4. **fix codex 完成 → controller 立刻 commit + push + 重 watch CI**
-5. **2 次 fix 同 check 仍 fail → label 升 `🆘 human:卡死-需-rework` + PushNotification + 停 loop**
+5. **6 次 fix 同 check 仍 fail → label 升 `🆘 human:卡死-需-rework` + PushNotification + 停 loop**(per Auric 2026-05-19 "2 轮太少,改到 6 轮")
 
 ### 反面(❌ 禁止)
 
 - ❌ 拿到 push 结果就走,不 arm CI watch / sweep → 红了没人管,PR 挂尸
 - ❌ 看到 CI 红等下次 controller wakeup 才反应 → 滞后 25 min
 - ❌ pre-existing failure 不区分 → 一直 fix 改不动本 PR 的红
-- ❌ 同 check 连续 fix 3 次以上 → 卡死无 escalation
+- ❌ 同 check 连续 fix 6 次以上 → 卡死无 escalation
 - ❌ codecov/patch 红被忽略 → 重构引入的 net-new line 没测试
 
 ## Codex 进展实时上报 — 强制(per Auric 2026-05-19 "每10分钟更新一次各 codex 进展到 issue/PR")
