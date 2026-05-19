@@ -60,14 +60,18 @@ public sealed class ProjectionScopeStatusRuntimeRegistrationTests
             "channel-bot-registration",
             ProjectionRuntimeMode.DurableMaterialization);
         var statusScopeKey = new ProjectionRuntimeScopeKey(
-            "root-actor",
+            ProjectionScopeActorId.Build(mainScopeKey),
             ProjectionScopeStatusMaterializationContext.ProjectionKindValue,
             ProjectionRuntimeMode.DurableMaterialization);
         runtime.CreatedActorIds.Should().Contain(ProjectionScopeActorId.Build(mainScopeKey));
         runtime.CreatedActorIds.Should().Contain(ProjectionScopeActorId.Build(statusScopeKey));
-        dispatchPort.Dispatched.Select(x => x.command.Payload!.Unpack<EnsureProjectionScopeCommand>().ProjectionKind)
+        var dispatchedCommands = dispatchPort.Dispatched
+            .Select(x => x.command.Payload!.Unpack<EnsureProjectionScopeCommand>())
+            .ToList();
+        dispatchedCommands.Select(x => x.ProjectionKind)
             .Should()
             .Equal("channel-bot-registration", ProjectionScopeStatusMaterializationContext.ProjectionKindValue);
+        dispatchedCommands[1].RootActorId.Should().Be(ProjectionScopeActorId.Build(mainScopeKey));
     }
 
     [Fact]

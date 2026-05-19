@@ -1,8 +1,13 @@
 using System.Reflection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.CQRS.Projection.Core.Tests;
 
@@ -27,6 +32,17 @@ public sealed class ProjectionScopeStatusQueryPortTests
             .GetParameters()
             .Should()
             .NotContain(parameter => parameter.ParameterType == typeof(IEventStore));
+    }
+
+    [Fact]
+    public async Task Source_DoesNotReintroduceEventStoreReplay()
+    {
+        var source = await File.ReadAllTextAsync(FindRepoFile(
+            "src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionScopeStatusQueryPort.cs"));
+
+        source.Should().NotContain("IEventStore");
+        source.Should().NotContain("GetEventsAsync");
+        source.Should().NotContain("EventStoreProjectionScopeWatermarkQueryPort");
     }
 
     [Fact]
@@ -84,8 +100,109 @@ public sealed class ProjectionScopeStatusQueryPortTests
         watermark.Should().Be(23);
     }
 
+    [Fact]
+    public async Task GetLastSuccessfulVersionAsync_ReturnsWatermarkMaterializedFromProjectionScopeCommittedState()
+    {
+        var services = new ServiceCollection();
+        services.AddProjectionReadModelRuntime();
+        services.AddInMemoryDocumentProjectionStore<ProjectionScopeStatusDocument, string>(
+            static doc => doc.Id,
+            static key => key);
+        services.AddSingleton<IProjectionClock>(new FixedProjectionClock(
+            new DateTimeOffset(2026, 5, 20, 1, 2, 3, TimeSpan.Zero)));
+        services.AddSingleton<ProjectionScopeStatusProjector>();
+        services.AddSingleton<IProjectionScopeWatermarkQueryPort, ProjectionScopeStatusQueryPort>();
+
+        await using var provider = services.BuildServiceProvider();
+        var projector = provider.GetRequiredService<ProjectionScopeStatusProjector>();
+        var queryPort = provider.GetRequiredService<IProjectionScopeWatermarkQueryPort>();
+        var scopeKey = CreateScopeKey("root-actor");
+        var scopeActorId = ProjectionScopeActorId.Build(scopeKey);
+
+        await projector.ProjectAsync(
+            new ProjectionScopeStatusMaterializationContext { RootActorId = scopeActorId },
+            CreateProjectionScopeCommittedEnvelope(
+                scopeKey,
+                lastObservedVersion: 29,
+                lastSuccessfulVersion: 29,
+                stateVersion: 4));
+
+        var watermark = await queryPort.GetLastSuccessfulVersionAsync(scopeKey);
+
+        watermark.Should().Be(29);
+    }
+
     private static ProjectionRuntimeScopeKey CreateScopeKey(string rootActorId) =>
         new(rootActorId, "channel-bot-registration", ProjectionRuntimeMode.DurableMaterialization);
+
+    private static EventEnvelope CreateProjectionScopeCommittedEnvelope(
+        ProjectionRuntimeScopeKey scopeKey,
+        long lastObservedVersion,
+        long lastSuccessfulVersion,
+        long stateVersion)
+    {
+        var scopeActorId = ProjectionScopeActorId.Build(scopeKey);
+        var timestamp = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 5, 20, 4, 5, 6, TimeSpan.Zero));
+        return new EventEnvelope
+        {
+            Id = $"committed-{stateVersion}",
+            Timestamp = timestamp,
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    AgentId = scopeActorId,
+                    EventId = $"projection-scope-watermark-{stateVersion}",
+                    Version = stateVersion,
+                    Timestamp = timestamp,
+                    EventType = ProjectionScopeWatermarkAdvancedEvent.Descriptor.FullName,
+                    EventData = Any.Pack(new ProjectionScopeWatermarkAdvancedEvent
+                    {
+                        LastObservedVersion = lastObservedVersion,
+                        LastSuccessfulVersion = lastSuccessfulVersion,
+                        OccurredAtUtc = timestamp,
+                    }),
+                },
+                StateRoot = Any.Pack(new ProjectionScopeState
+                {
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                    Mode = ProjectionScopeMode.DurableMaterialization,
+                    Active = true,
+                    ObservationAttached = true,
+                    LastObservedVersion = lastObservedVersion,
+                    LastSuccessfulVersion = lastSuccessfulVersion,
+                }),
+            }),
+        };
+    }
+
+    private static string FindRepoFile(string relativePath)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(
+                directory.FullName,
+                relativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(candidate))
+                return candidate;
+
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException($"Could not locate {relativePath} from {AppContext.BaseDirectory}");
+    }
+
+    private sealed class FixedProjectionClock : IProjectionClock
+    {
+        public FixedProjectionClock(DateTimeOffset utcNow)
+        {
+            UtcNow = utcNow;
+        }
+
+        public DateTimeOffset UtcNow { get; }
+    }
 
     private sealed class InMemoryStatusReader
         : IProjectionDocumentReader<ProjectionScopeStatusDocument, string>

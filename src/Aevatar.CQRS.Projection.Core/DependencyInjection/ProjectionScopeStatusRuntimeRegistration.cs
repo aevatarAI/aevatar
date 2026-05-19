@@ -68,7 +68,11 @@ public static class ProjectionScopeStatusRuntimeRegistration
     internal static ProjectionScopeStartRequest BuildStatusScopeStartRequest(ProjectionScopeStartRequest sourceRequest) =>
         new()
         {
-            RootActorId = sourceRequest.RootActorId ?? string.Empty,
+            RootActorId = ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
+                sourceRequest.RootActorId ?? string.Empty,
+                sourceRequest.ProjectionKind ?? string.Empty,
+                ProjectionRuntimeMode.DurableMaterialization,
+                sourceRequest.SessionId)),
             ProjectionKind = ProjectionScopeStatusMaterializationContext.ProjectionKindValue,
             Mode = ProjectionRuntimeMode.DurableMaterialization,
         };

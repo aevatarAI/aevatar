@@ -3,8 +3,8 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
 // Refactor (iter17/cluster-034):
-//   Old pattern: Replay-based projection scope watermark query via IEventStore (EventStoreProjectionScopeWatermarkQueryPort).
-//   New principle: Materialized ProjectionScopeStatusDocument readmodel; ProjectionScopeStatusQueryPort reads document only; never replays IEventStore.
+//   Old pattern: Replay-based projection scope watermark query via event-store reads.
+//   New principle: Materialized ProjectionScopeStatusDocument readmodel; ProjectionScopeStatusQueryPort reads document only; never replays event streams.
 public sealed class ProjectionScopeStatusQueryPort : IProjectionScopeWatermarkQueryPort
 {
     private readonly IProjectionDocumentReader<ProjectionScopeStatusDocument, string> _documentReader;
@@ -19,7 +19,7 @@ public sealed class ProjectionScopeStatusQueryPort : IProjectionScopeWatermarkQu
         ProjectionRuntimeScopeKey scopeKey,
         CancellationToken ct = default)
     {
-        // Query ports read materialized projection-scope status; they never replay IEventStore.
+        // Query ports read materialized projection-scope status; they never replay event streams.
         var scopeActorId = ProjectionScopeActorId.Build(scopeKey);
         var document = await _documentReader.GetAsync(scopeActorId, ct);
         return document is { Active: true, Released: false }
