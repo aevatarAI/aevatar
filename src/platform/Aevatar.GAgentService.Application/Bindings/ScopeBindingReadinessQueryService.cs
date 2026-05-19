@@ -68,8 +68,8 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
                 ObservedAtUtc: observedAtUtc);
         }
 
-        var eligibleTarget = servingSet.Targets.FirstOrDefault(target =>
-            IsEligibleServingTarget(target, expectedRevisionId, expectedDeploymentId));
+        var serviceEndpointIds = GetServiceEndpointIds(service);
+        var eligibleTarget = FindEligibleServingTarget(servingSet, serviceEndpointIds, expectedRevisionId, expectedDeploymentId);
         if (eligibleTarget == null)
         {
             return new ScopeBindingReadinessSnapshot(
@@ -84,7 +84,7 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
         }
 
         var trafficView = await _serviceServingQueryPort.GetServiceTrafficViewAsync(identity, ct).ConfigureAwait(false);
-        if (!IsTrafficViewTargetVisible(trafficView, service, expectedRevisionId, expectedDeploymentId))
+        if (!IsTrafficViewTargetVisible(trafficView, serviceEndpointIds, expectedRevisionId, expectedDeploymentId))
         {
             return new ScopeBindingReadinessSnapshot(
                 normalizedScopeId,
@@ -112,19 +112,46 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
             ObservedAtUtc: observedAtUtc);
     }
 
+    private static IReadOnlyList<string> GetServiceEndpointIds(ServiceCatalogSnapshot service) =>
+        service.Endpoints
+            .Select(endpoint => endpoint.EndpointId)
+            .Where(endpointId => !string.IsNullOrWhiteSpace(endpointId))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+    private static ServiceServingTargetSnapshot? FindEligibleServingTarget(
+        ServiceServingSetSnapshot servingSet,
+        IReadOnlyList<string> serviceEndpointIds,
+        string? expectedRevisionId,
+        string? expectedDeploymentId)
+    {
+        if (serviceEndpointIds.Count == 0)
+        {
+            return servingSet.Targets.FirstOrDefault(target =>
+                IsEligibleServingTarget(target, expectedRevisionId, expectedDeploymentId, endpointId: null));
+        }
+
+        foreach (var endpointId in serviceEndpointIds)
+        {
+            var endpointTarget = servingSet.Targets.FirstOrDefault(target =>
+                IsEligibleServingTarget(target, expectedRevisionId, expectedDeploymentId, endpointId));
+            if (endpointTarget == null)
+                return null;
+        }
+
+        return servingSet.Targets.FirstOrDefault(target =>
+            IsEligibleServingTarget(target, expectedRevisionId, expectedDeploymentId, serviceEndpointIds[0]));
+    }
+
     private static bool IsTrafficViewTargetVisible(
         ServiceTrafficViewSnapshot? trafficView,
-        ServiceCatalogSnapshot service,
+        IReadOnlyList<string> serviceEndpointIds,
         string? expectedRevisionId,
         string? expectedDeploymentId)
     {
         if (trafficView == null)
             return true;
 
-        var serviceEndpointIds = service.Endpoints
-            .Select(endpoint => endpoint.EndpointId)
-            .Where(endpointId => !string.IsNullOrWhiteSpace(endpointId))
-            .ToHashSet(StringComparer.Ordinal);
         var observedEndpointViews = trafficView.Endpoints
             .Where(endpoint => endpoint.Targets.Count > 0)
             .Where(endpoint => serviceEndpointIds.Count == 0 || serviceEndpointIds.Contains(endpoint.EndpointId))
@@ -136,12 +163,19 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
     private static bool IsEligibleServingTarget(
         ServiceServingTargetSnapshot target,
         string? expectedRevisionId,
-        string? expectedDeploymentId) =>
+        string? expectedDeploymentId,
+        string? endpointId) =>
         Enum.TryParse<ServiceServingState>(target.ServingState, ignoreCase: true, out var state)
         && state == ServiceServingState.Active
         && target.AllocationWeight > 0
         && (string.IsNullOrWhiteSpace(expectedRevisionId) || string.Equals(target.RevisionId, expectedRevisionId, StringComparison.Ordinal))
-        && (string.IsNullOrWhiteSpace(expectedDeploymentId) || string.Equals(target.DeploymentId, expectedDeploymentId, StringComparison.Ordinal));
+        && (string.IsNullOrWhiteSpace(expectedDeploymentId) || string.Equals(target.DeploymentId, expectedDeploymentId, StringComparison.Ordinal))
+        && IsEndpointEnabled(target, endpointId);
+
+    private static bool IsEndpointEnabled(ServiceServingTargetSnapshot target, string? endpointId) =>
+        string.IsNullOrWhiteSpace(endpointId)
+        || target.EnabledEndpointIds.Count == 0
+        || target.EnabledEndpointIds.Any(x => string.Equals(x, endpointId, StringComparison.Ordinal));
 
     private static bool IsEligibleTrafficTarget(
         ServiceTrafficTargetSnapshot target,

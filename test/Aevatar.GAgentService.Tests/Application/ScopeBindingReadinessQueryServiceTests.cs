@@ -114,6 +114,29 @@ public sealed class ScopeBindingReadinessQueryServiceTests
     }
 
     [Fact]
+    public async Task GetReadinessAsync_WhenServingSetTargetDoesNotEnableServiceEndpoint_ShouldReturnEligibleServingTargetMissing()
+    {
+        var lifecyclePort = new FakeServiceLifecycleQueryPort
+        {
+            Service = CreateServiceSnapshot("service-a", endpoints: [CreateServiceEndpoint("chat")]),
+        };
+        var servingPort = new FakeServiceServingQueryPort
+        {
+            ServingSet = CreateServingSet([
+                CreateTarget("rev-ready", ServiceServingState.Active, allocationWeight: 100, enabledEndpointIds: ["command"]),
+            ]),
+        };
+        var service = CreateService(lifecyclePort, servingPort);
+
+        var snapshot = await service.GetReadinessAsync(new ScopeBindingReadinessRequest("scope-a", "service-a"));
+
+        snapshot.Status.Should().Be(ScopeBindingReadinessStatus.EligibleServingTargetMissing);
+        snapshot.InvokeReady.Should().BeFalse();
+        snapshot.RevisionId.Should().BeNull();
+        snapshot.DeploymentId.Should().BeNull();
+    }
+
+    [Fact]
     public async Task GetReadinessAsync_WhenServingSetHasActiveZeroWeightTarget_ShouldReturnEligibleServingTargetMissing()
     {
         var lifecyclePort = new FakeServiceLifecycleQueryPort
@@ -304,7 +327,8 @@ public sealed class ScopeBindingReadinessQueryServiceTests
     private static ServiceCatalogSnapshot CreateServiceSnapshot(
         string serviceId,
         string activeRevisionId = "rev-1",
-        string deploymentId = "deployment-1") =>
+        string deploymentId = "deployment-1",
+        IReadOnlyList<ServiceEndpointSnapshot>? endpoints = null) =>
         new(
             ServiceKey: $"scope-a:default:default:{serviceId}",
             TenantId: "scope-a",
@@ -317,7 +341,7 @@ public sealed class ScopeBindingReadinessQueryServiceTests
             DeploymentId: deploymentId,
             PrimaryActorId: "actor-1",
             DeploymentStatus: "Active",
-            Endpoints: [],
+            Endpoints: endpoints ?? [],
             PolicyIds: [],
             UpdatedAt: DateTimeOffset.UtcNow);
 
@@ -329,18 +353,28 @@ public sealed class ScopeBindingReadinessQueryServiceTests
             Targets: targets,
             UpdatedAt: DateTimeOffset.UtcNow);
 
+    private static ServiceEndpointSnapshot CreateServiceEndpoint(string endpointId) =>
+        new(
+            endpointId,
+            endpointId,
+            ServiceEndpointKind.Chat.ToString(),
+            "type.googleapis.com/a.Request",
+            "type.googleapis.com/a.Response",
+            endpointId);
+
     private static ServiceServingTargetSnapshot CreateTarget(
         string revisionId,
         ServiceServingState state,
         int allocationWeight,
-        string? deploymentId = null) =>
+        string? deploymentId = null,
+        IReadOnlyList<string>? enabledEndpointIds = null) =>
         new(
             DeploymentId: deploymentId ?? $"deployment-{revisionId}",
             RevisionId: revisionId,
             PrimaryActorId: $"actor-{revisionId}",
             AllocationWeight: allocationWeight,
             ServingState: state.ToString(),
-            EnabledEndpointIds: []);
+            EnabledEndpointIds: enabledEndpointIds ?? []);
 
     private static ServiceTrafficViewSnapshot CreateTrafficView(IReadOnlyList<ServiceTrafficEndpointSnapshot> endpoints) =>
         new(
