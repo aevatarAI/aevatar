@@ -5,39 +5,46 @@ namespace Aevatar.Workflow.Core.Execution;
 
 internal static class ConnectorAuthorizationRuntimeItemsAccess
 {
-    private const string ConnectorAuthorizationItemKey = ConnectorRequest.HttpAuthorizationMetadataKey;
-
+    // Refactor (iter16/cluster-031):
+    //   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
+    //                bag for request metadata, LLM overrides, authorization, secure values
+    //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
+    //                  no facts seam, no proto change
     public static void SetAuthorization(
         IWorkflowExecutionStateHost stateHost,
         string? authorization)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
-
-        if (string.IsNullOrWhiteSpace(authorization))
-        {
-            stateHost.RemoveExecutionItem(ConnectorAuthorizationItemKey);
-            return;
-        }
-
-        stateHost.SetExecutionItem(ConnectorAuthorizationItemKey, authorization.Trim());
+        stateHost.RuntimeContext.Connector.Authorization =
+            string.IsNullOrWhiteSpace(authorization) ? null : authorization.Trim();
     }
 
+    // Refactor (iter16/cluster-031):
+    //   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
+    //                bag for request metadata, LLM overrides, authorization, secure values
+    //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
+    //                  no facts seam, no proto change
     public static void RemoveAuthorization(IWorkflowExecutionStateHost stateHost)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
-        stateHost.RemoveExecutionItem(ConnectorAuthorizationItemKey);
+        stateHost.RuntimeContext.Connector.Authorization = null;
     }
 
+    // Refactor (iter16/cluster-031):
+    //   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
+    //                bag for request metadata, LLM overrides, authorization, secure values
+    //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
+    //                  no facts seam, no proto change
     public static bool TryGetAuthorization(
         IWorkflowExecutionContext ctx,
         out string authorization)
     {
         ArgumentNullException.ThrowIfNull(ctx);
 
-        if (WorkflowExecutionItemsAccess.TryGetItem(ctx, ConnectorAuthorizationItemKey, out string? existing) &&
-            !string.IsNullOrWhiteSpace(existing))
+        if (ctx is IWorkflowExecutionRuntimeContextAccessor runtimeAccessor &&
+            !string.IsNullOrWhiteSpace(runtimeAccessor.RuntimeContext.Connector.Authorization))
         {
-            authorization = existing.Trim();
+            authorization = runtimeAccessor.RuntimeContext.Connector.Authorization.Trim();
             return true;
         }
 

@@ -1,7 +1,10 @@
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Execution;
+using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -9,59 +12,80 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Workflow.Core.Tests.Execution;
 
-public sealed class WorkflowRequestMetadataItemsAccessTests
+public sealed class WorkflowExecutionRuntimeContextTests
 {
     [Fact]
-    public void SetRequestMetadata_ShouldTrimValuesAndRemoveEmptyEntries()
+    public void SetRequestMetadata_ShouldPromoteTypedRuntimeValuesAndFilterPassthrough()
     {
         var host = new RecordingStateHost();
 
         WorkflowRequestMetadataItemsAccess.SetRequestMetadata(
             host,
-            new Dictionary<string, string?>
+            new Dictionary<string, string>
             {
                 [" trace-id "] = "  abc  ",
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = " token ",
+                [LLMRequestMetadataKeys.ModelOverride] = " model ",
+                [LLMRequestMetadataKeys.NyxIdRoutePreference] = " route ",
+                [ConnectorRequest.HttpAuthorizationMetadataKey] = " Bearer secret ",
                 [" "] = "ignored",
                 ["empty"] = " ",
-            }!.ToDictionary(x => x.Key, x => x.Value!));
+            });
 
-        host.Items.Should().ContainKey("workflow.request.metadata");
-        var stored = host.Items["workflow.request.metadata"].Should().BeOfType<Dictionary<string, string>>().Subject;
-        stored.Should().ContainSingle();
-        stored["trace-id"].Should().Be("abc");
+        host.RuntimeContext.LlmOverrides.NyxIdAccessToken.Should().Be("token");
+        host.RuntimeContext.LlmOverrides.ModelOverride.Should().Be("model");
+        host.RuntimeContext.LlmOverrides.NyxIdRoutePreference.Should().Be("route");
+        host.RuntimeContext.Connector.Authorization.Should().Be("Bearer secret");
+        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().ContainSingle();
+        host.RuntimeContext.RequestPassthroughMetadata.Values["trace-id"].Should().Be("abc");
+        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
     }
 
     [Fact]
-    public void SetRequestMetadata_ShouldRemoveItemWhenMetadataIsNullEmptyOrInvalid()
+    public void SetRequestMetadata_ShouldClearRuntimeValuesWhenMetadataIsNullEmptyOrInvalid()
     {
         var host = new RecordingStateHost();
-        host.Items["workflow.request.metadata"] = new Dictionary<string, string> { ["existing"] = "value" };
+        WorkflowRequestMetadataItemsAccess.SetRequestMetadata(
+            host,
+            new Dictionary<string, string>
+            {
+                ["trace-id"] = "abc",
+                [LLMRequestMetadataKeys.ModelOverride] = "model",
+            });
 
         WorkflowRequestMetadataItemsAccess.SetRequestMetadata(host, null);
-        host.Items.Should().NotContainKey("workflow.request.metadata");
 
-        host.Items["workflow.request.metadata"] = new Dictionary<string, string> { ["existing"] = "value" };
-        WorkflowRequestMetadataItemsAccess.SetRequestMetadata(host, new Dictionary<string, string>());
-        host.Items.Should().NotContainKey("workflow.request.metadata");
+        host.RuntimeContext.LlmOverrides.ModelOverride.Should().BeNull();
+        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
 
-        host.Items["workflow.request.metadata"] = new Dictionary<string, string> { ["existing"] = "value" };
         WorkflowRequestMetadataItemsAccess.SetRequestMetadata(
             host,
             new Dictionary<string, string>
             {
                 [" "] = " ",
             });
-        host.Items.Should().NotContainKey("workflow.request.metadata");
+
+        host.RuntimeContext.LlmOverrides.ModelOverride.Should().BeNull();
+        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
     }
 
     [Fact]
-    public void RemoveRequestMetadata_ShouldValidateAndDeleteItem()
+    public void RemoveRequestMetadata_ShouldValidateAndClearRuntimeContext()
     {
         var host = new RecordingStateHost();
-        host.Items["workflow.request.metadata"] = new Dictionary<string, string> { ["trace-id"] = "abc" };
+        WorkflowRequestMetadataItemsAccess.SetRequestMetadata(
+            host,
+            new Dictionary<string, string>
+            {
+                ["trace-id"] = "abc",
+                [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer secret",
+            });
 
         WorkflowRequestMetadataItemsAccess.RemoveRequestMetadata(host);
-        host.Items.Should().NotContainKey("workflow.request.metadata");
+
+        host.RuntimeContext.Connector.Authorization.Should().BeNull();
+        host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
 
         FluentActions.Invoking(() => WorkflowRequestMetadataItemsAccess.RemoveRequestMetadata(null!))
             .Should()
@@ -69,31 +93,31 @@ public sealed class WorkflowRequestMetadataItemsAccessTests
     }
 
     [Fact]
-    public void CopyRequestMetadata_ShouldReturnZeroWhenMissingOrEmpty()
+    public void CopyRequestMetadata_ShouldReturnZeroWhenRuntimeContextIsMissingOrEmpty()
     {
         var target = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        WorkflowRequestMetadataItemsAccess.CopyRequestMetadata(new RecordingWorkflowExecutionContext(), target)
+        WorkflowRequestMetadataItemsAccess.CopyRequestMetadata(new ContextWithoutRuntimeAccessor(), target)
             .Should()
             .Be(0);
 
-        var contextWithEmptyItem = new RecordingWorkflowExecutionContext();
-        contextWithEmptyItem.Items["workflow.request.metadata"] = new Dictionary<string, string>();
-        WorkflowRequestMetadataItemsAccess.CopyRequestMetadata(contextWithEmptyItem, target)
+        WorkflowRequestMetadataItemsAccess.CopyRequestMetadata(new RecordingWorkflowExecutionContext(), target)
             .Should()
             .Be(0);
     }
 
     [Fact]
-    public void CopyRequestMetadata_ShouldCopyOnlyValidEntries()
+    public void CopyRequestMetadata_ShouldCopyOnlyPassthroughEntries()
     {
         var context = new RecordingWorkflowExecutionContext();
-        context.Items["workflow.request.metadata"] = new Dictionary<string, string>
-        {
-            ["trace-id"] = "abc",
-            [" "] = "ignored",
-            ["empty"] = " ",
-        };
+        context.RuntimeContext.ApplyRequestMetadata(
+            new Dictionary<string, string>
+            {
+                ["trace-id"] = "abc",
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "token",
+                [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer secret",
+                ["empty"] = " ",
+            });
         var target = new Dictionary<string, string>(StringComparer.Ordinal);
 
         var copied = WorkflowRequestMetadataItemsAccess.CopyRequestMetadata(context, target);
@@ -101,6 +125,8 @@ public sealed class WorkflowRequestMetadataItemsAccessTests
         copied.Should().Be(1);
         target.Should().ContainSingle();
         target["trace-id"].Should().Be("abc");
+        target.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        target.Should().NotContainKey(ConnectorRequest.HttpAuthorizationMetadataKey);
     }
 
     [Fact]
@@ -120,28 +146,53 @@ public sealed class WorkflowRequestMetadataItemsAccessTests
             .Throw<ArgumentNullException>();
     }
 
+    [Fact]
+    public void SecureInputRuntimeAccess_ShouldStoreRemoveAndClearTypedCapturedValues()
+    {
+        var context = new RecordingWorkflowExecutionContext();
+
+        SecureInputRuntimeItemsAccess.SetCapturedValue(context, " run-1 ", " api_key ", "secret");
+
+        SecureInputRuntimeItemsAccess.TryGetCapturedValue(context, "run-1", "api_key", out var value)
+            .Should()
+            .BeTrue();
+        value.Should().Be("secret");
+        context.RuntimeContext.CapturedSecureInputs.Values.Should().ContainKey(new CapturedSecureInputKey("run-1", "api_key"));
+
+        SecureInputRuntimeItemsAccess.RemoveCapturedValue(context, "run-1", "api_key").Should().BeTrue();
+        SecureInputRuntimeItemsAccess.TryGetCapturedValue(context, "run-1", "api_key", out _)
+            .Should()
+            .BeFalse();
+
+        SecureInputRuntimeItemsAccess.SetCapturedValue(context, "run-1", "api_key", "secret");
+        SecureInputRuntimeItemsAccess.SetCapturedValue(context, "run-2", "api_key", "other");
+        SecureInputRuntimeItemsAccess.RemoveRun(context, "run-1");
+
+        context.RuntimeContext.CapturedSecureInputs.Values.Should().NotContainKey(new CapturedSecureInputKey("run-1", "api_key"));
+        context.RuntimeContext.CapturedSecureInputs.Values.Should().ContainKey(new CapturedSecureInputKey("run-2", "api_key"));
+    }
+
     private sealed class RecordingStateHost : IWorkflowExecutionStateHost
     {
         public string RunId => "run-1";
 
-        public Dictionary<string, object?> Items { get; } = new(StringComparer.Ordinal);
+        public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
 
         public Any? GetExecutionState(string scopeKey) => null;
 
         public IReadOnlyList<KeyValuePair<string, Any>> GetExecutionStates() => [];
-
-        public bool TryGetExecutionItem(string itemKey, out object? value) => Items.TryGetValue(itemKey, out value);
-
-        public void SetExecutionItem(string itemKey, object? value) => Items[itemKey] = value;
-
-        public bool RemoveExecutionItem(string itemKey) => Items.Remove(itemKey);
 
         public Task UpsertExecutionStateAsync(string scopeKey, Any state, CancellationToken ct = default) => Task.CompletedTask;
 
         public Task ClearExecutionStateAsync(string scopeKey, CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class RecordingWorkflowExecutionContext : IWorkflowExecutionContext, IWorkflowExecutionItemsContext
+    private sealed class RecordingWorkflowExecutionContext : ContextWithoutRuntimeAccessor, IWorkflowExecutionRuntimeContextAccessor
+    {
+        public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
+    }
+
+    private class ContextWithoutRuntimeAccessor : IWorkflowExecutionContext
     {
         public EventEnvelope InboundEnvelope { get; } = new()
         {
@@ -156,8 +207,6 @@ public sealed class WorkflowRequestMetadataItemsAccessTests
         public Microsoft.Extensions.Logging.ILogger Logger { get; } = NullLogger.Instance;
 
         public string RunId => "run-1";
-
-        public Dictionary<string, object?> Items { get; } = new(StringComparer.Ordinal);
 
         public TState LoadState<TState>(string scopeKey)
             where TState : class, IMessage<TState>, new() => new();
@@ -200,22 +249,6 @@ public sealed class WorkflowRequestMetadataItemsAccessTests
             CancellationToken ct = default,
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage => Task.CompletedTask;
-
-        public bool TryGetItem<TItem>(string itemKey, out TItem? value)
-        {
-            if (Items.TryGetValue(itemKey, out var raw) && raw is TItem typed)
-            {
-                value = typed;
-                return true;
-            }
-
-            value = default;
-            return false;
-        }
-
-        public void SetItem(string itemKey, object? value) => Items[itemKey] = value;
-
-        public bool RemoveItem(string itemKey) => Items.Remove(itemKey);
     }
 
     private sealed class EmptyServiceProvider : IServiceProvider

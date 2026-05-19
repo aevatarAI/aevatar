@@ -330,24 +330,31 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         return true;
     }
 
-    private static readonly string[] PropagatedMetadataKeys =
-    [
-        LLMRequestMetadataKeys.NyxIdAccessToken,
-        LLMRequestMetadataKeys.ModelOverride,
-    ];
-
+    // Refactor (iter16/cluster-031):
+    //   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
+    //                bag for request metadata, LLM overrides, authorization, secure values
+    //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
+    //                  no facts seam, no proto change
     private static void CopyPropagatedMetadata(
         IWorkflowExecutionContext ctx,
         MapField<string, string> metadata)
     {
-        foreach (var key in PropagatedMetadataKeys)
-        {
-            if (WorkflowExecutionItemsAccess.TryGetItem<string>(ctx, key, out var value) &&
-                !string.IsNullOrWhiteSpace(value))
-            {
-                metadata[key] = value;
-            }
-        }
+        if (ctx is not IWorkflowExecutionRuntimeContextAccessor runtimeAccessor)
+            return;
+
+        var overrides = runtimeAccessor.RuntimeContext.LlmOverrides;
+        CopyOverride(metadata, LLMRequestMetadataKeys.NyxIdAccessToken, overrides.NyxIdAccessToken);
+        CopyOverride(metadata, LLMRequestMetadataKeys.ModelOverride, overrides.ModelOverride);
+        CopyOverride(metadata, LLMRequestMetadataKeys.NyxIdRoutePreference, overrides.NyxIdRoutePreference);
+    }
+
+    private static void CopyOverride(
+        MapField<string, string> metadata,
+        string key,
+        string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+            metadata[key] = value.Trim();
     }
 
     private static void CopyParametersToChatMetadata(

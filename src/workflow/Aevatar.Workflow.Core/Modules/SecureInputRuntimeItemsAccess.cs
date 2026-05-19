@@ -1,13 +1,15 @@
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Execution;
-using Aevatar.Workflow.Core.Primitives;
 
 namespace Aevatar.Workflow.Core.Modules;
 
 internal static class SecureInputRuntimeItemsAccess
 {
-    internal const string CapturedItemKey = "secure_input.captured";
-
+    // Refactor (iter16/cluster-031):
+    //   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
+    //                bag for request metadata, LLM overrides, authorization, secure values
+    //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
+    //                  no facts seam, no proto change
     public static void SetCapturedValue(
         IWorkflowExecutionContext ctx,
         string? runId,
@@ -15,15 +17,14 @@ internal static class SecureInputRuntimeItemsAccess
         string? value)
     {
         ArgumentNullException.ThrowIfNull(ctx);
-
-        var normalizedRunId = WorkflowRunIdNormalizer.Normalize(runId);
-        var normalizedVariable = NormalizeVariable(variable);
-        if (string.IsNullOrWhiteSpace(normalizedRunId) || string.IsNullOrWhiteSpace(normalizedVariable))
-            return;
-
-        GetOrCreateCapturedValues(ctx)[BuildCapturedKey(normalizedRunId, normalizedVariable)] = value ?? string.Empty;
+        GetRuntimeContext(ctx).CapturedSecureInputs.Set(runId, variable, value);
     }
 
+    // Refactor (iter16/cluster-031):
+    //   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
+    //                bag for request metadata, LLM overrides, authorization, secure values
+    //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
+    //                  no facts seam, no proto change
     public static bool TryGetCapturedValue(
         IWorkflowExecutionContext ctx,
         string? runId,
@@ -31,99 +32,54 @@ internal static class SecureInputRuntimeItemsAccess
         out string value)
     {
         ArgumentNullException.ThrowIfNull(ctx);
-
-        var normalizedRunId = WorkflowRunIdNormalizer.Normalize(runId);
-        var normalizedVariable = NormalizeVariable(variable);
-        if (string.IsNullOrWhiteSpace(normalizedRunId) || string.IsNullOrWhiteSpace(normalizedVariable))
+        if (ctx is not IWorkflowExecutionRuntimeContextAccessor runtimeAccessor)
         {
             value = string.Empty;
             return false;
         }
 
-        if (!TryGetCapturedValues(ctx, out var capturedValues) ||
-            !capturedValues.TryGetValue(BuildCapturedKey(normalizedRunId, normalizedVariable), out value!))
-        {
-            value = string.Empty;
-            return false;
-        }
-
-        return true;
+        return runtimeAccessor.RuntimeContext.CapturedSecureInputs.TryGet(runId, variable, out value);
     }
 
+    // Refactor (iter16/cluster-031):
+    //   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
+    //                bag for request metadata, LLM overrides, authorization, secure values
+    //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
+    //                  no facts seam, no proto change
     public static bool RemoveCapturedValue(
         IWorkflowExecutionContext ctx,
         string? runId,
         string? variable)
     {
         ArgumentNullException.ThrowIfNull(ctx);
-
-        if (!TryGetCapturedValues(ctx, out var capturedValues))
+        if (ctx is not IWorkflowExecutionRuntimeContextAccessor runtimeAccessor)
             return false;
 
-        var normalizedRunId = WorkflowRunIdNormalizer.Normalize(runId);
-        var normalizedVariable = NormalizeVariable(variable);
-        if (string.IsNullOrWhiteSpace(normalizedRunId) || string.IsNullOrWhiteSpace(normalizedVariable))
-            return false;
-
-        var removed = capturedValues.Remove(BuildCapturedKey(normalizedRunId, normalizedVariable));
-        if (removed && capturedValues.Count == 0)
-            WorkflowExecutionItemsAccess.RemoveItem(ctx, CapturedItemKey);
-
-        return removed;
+        return runtimeAccessor.RuntimeContext.CapturedSecureInputs.Remove(runId, variable);
     }
 
+    // Refactor (iter16/cluster-031):
+    //   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
+    //                bag for request metadata, LLM overrides, authorization, secure values
+    //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
+    //                  no facts seam, no proto change
     public static void RemoveRun(
         IWorkflowExecutionContext ctx,
         string? runId)
     {
         ArgumentNullException.ThrowIfNull(ctx);
-
-        if (!TryGetCapturedValues(ctx, out var capturedValues))
+        if (ctx is not IWorkflowExecutionRuntimeContextAccessor runtimeAccessor)
             return;
 
-        var normalizedRunId = WorkflowRunIdNormalizer.Normalize(runId);
-        if (string.IsNullOrWhiteSpace(normalizedRunId))
-            return;
-
-        foreach (var capturedKey in capturedValues.Keys
-                     .Where(x => x.StartsWith($"{normalizedRunId}::", StringComparison.Ordinal))
-                     .ToList())
-        {
-            capturedValues.Remove(capturedKey);
-        }
-
-        if (capturedValues.Count == 0)
-            WorkflowExecutionItemsAccess.RemoveItem(ctx, CapturedItemKey);
+        runtimeAccessor.RuntimeContext.CapturedSecureInputs.RemoveRun(runId);
     }
 
-    private static Dictionary<string, string> GetOrCreateCapturedValues(IWorkflowExecutionContext ctx)
+    private static WorkflowExecutionRuntimeContext GetRuntimeContext(IWorkflowExecutionContext ctx)
     {
-        if (TryGetCapturedValues(ctx, out var capturedValues))
-            return capturedValues;
+        if (ctx is IWorkflowExecutionRuntimeContextAccessor runtimeAccessor)
+            return runtimeAccessor.RuntimeContext;
 
-        capturedValues = new Dictionary<string, string>(StringComparer.Ordinal);
-        WorkflowExecutionItemsAccess.SetItem(ctx, CapturedItemKey, capturedValues);
-        return capturedValues;
+        throw new InvalidOperationException(
+            $"Workflow execution context `{ctx.GetType().FullName}` does not support actor-owned runtime context.");
     }
-
-    private static bool TryGetCapturedValues(
-        IWorkflowExecutionContext ctx,
-        out Dictionary<string, string> capturedValues)
-    {
-        if (WorkflowExecutionItemsAccess.TryGetItem(ctx, CapturedItemKey, out Dictionary<string, string>? existing) &&
-            existing != null)
-        {
-            capturedValues = existing;
-            return true;
-        }
-
-        capturedValues = null!;
-        return false;
-    }
-
-    private static string BuildCapturedKey(string runId, string variable) =>
-        $"{runId}::{variable}";
-
-    private static string NormalizeVariable(string? variable) =>
-        string.IsNullOrWhiteSpace(variable) ? string.Empty : variable.Trim();
 }

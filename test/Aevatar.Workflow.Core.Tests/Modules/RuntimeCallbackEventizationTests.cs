@@ -1415,6 +1415,8 @@ public class RuntimeCallbackEventizationTests
 
         public string RunId { get; } = runId;
 
+        public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
+
         public Any? GetExecutionState(string scopeKey) =>
             _executionStates.TryGetValue(scopeKey, out var state) ? state : null;
 

@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Google.Protobuf;
@@ -1053,8 +1054,10 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         var resumedState = resumedCtx.LoadState<SecureInputModuleState>(SecureInputStateAccess.ModuleStateKey);
         resumedState.Pending.Should().BeEmpty();
         resumedState.Captured.Should().BeEmpty();
-        agent.TryGetExecutionItem(SecureInputRuntimeItemsAccess.CapturedItemKey, out var capturedItems).Should().BeTrue();
-        ((Dictionary<string, string>)capturedItems!).Should().Contain(new KeyValuePair<string, string>("run-secure::api_key", "top-secret-value"));
+        agent.RuntimeContext.CapturedSecureInputs.Values.Should().Contain(
+            new KeyValuePair<CapturedSecureInputKey, string>(
+                new CapturedSecureInputKey("run-secure", "api_key"),
+                "top-secret-value"));
 
         await resumedModule.HandleAsync(
             Envelope(new WorkflowCompletedEvent
@@ -1065,7 +1068,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
 
         agent.GetExecutionState(SecureInputStateAccess.ModuleStateKey).Should().BeNull();
-        agent.TryGetExecutionItem(SecureInputRuntimeItemsAccess.CapturedItemKey, out _).Should().BeFalse();
+        agent.RuntimeContext.CapturedSecureInputs.Values.Should().BeEmpty();
     }
 
     [Fact]
@@ -1102,9 +1105,10 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             ctx,
             CancellationToken.None);
 
-        agent.TryGetExecutionItem(SecureInputRuntimeItemsAccess.CapturedItemKey, out var capturedItems).Should().BeTrue();
-        ((Dictionary<string, string>)capturedItems!).Should().Contain(
-            new KeyValuePair<string, string>("run-secure-recapture::api_key", "old-secret"));
+        agent.RuntimeContext.CapturedSecureInputs.Values.Should().Contain(
+            new KeyValuePair<CapturedSecureInputKey, string>(
+                new CapturedSecureInputKey("run-secure-recapture", "api_key"),
+                "old-secret"));
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -1121,7 +1125,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             ctx,
             CancellationToken.None);
 
-        agent.TryGetExecutionItem(SecureInputRuntimeItemsAccess.CapturedItemKey, out _).Should().BeFalse();
+        agent.RuntimeContext.CapturedSecureInputs.Values.Should().BeEmpty();
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -1137,7 +1141,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         var failed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
         failed.Success.Should().BeFalse();
         failed.Error.Should().Contain("timed out");
-        agent.TryGetExecutionItem(SecureInputRuntimeItemsAccess.CapturedItemKey, out _).Should().BeFalse();
+        agent.RuntimeContext.CapturedSecureInputs.Values.Should().BeEmpty();
     }
 
     [Fact]
