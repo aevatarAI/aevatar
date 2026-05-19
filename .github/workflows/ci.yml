@@ -123,8 +123,8 @@ jobs:
 
   fast-gates:
     # Refactor (iter16/cluster-ci-systemic-refactor):
-    #   Old pattern: fast-gates ran unconditionally on every PR, including doc-only changes
-    #   New principle: gate on changes.outputs.docs_only per Phase 9 #716 r3 consensus A
+    #   Old pattern: fast-gates skipped scheduled CI and ran for workflow_dispatch or core_code changes
+    #   New principle: skip scheduled/doc-only CI while keeping workflow_dispatch active
     if: github.event_name != 'schedule' && needs.changes.outputs.docs_only == 'false'
     needs: changes
     runs-on: ubuntu-latest
@@ -163,7 +163,7 @@ jobs:
 
   console-web:
     # Refactor (iter16/cluster-ci-systemic-refactor):
-    #   Old pattern: console-web ran unconditionally on every PR, including doc-only changes
+    #   Old pattern: console-web skipped scheduled CI and ran for every PR, workflow_dispatch, main/dev push, or console_web changes
     #   New principle: gate on changes.outputs.console_web per Phase 9 #716 r3 consensus A
     if: needs.changes.outputs.docs_only == 'false' && needs.changes.outputs.console_web == 'true'
     needs: changes
@@ -201,12 +201,13 @@ jobs:
     needs: changes
     # Refactor (iter16/cluster-ci-systemic-refactor):
     #   Old pattern: split-test-guards ran unconditionally on scheduled/manual CI, including doc-only changes
-    #   New principle: gate on changes.outputs.core_code per Phase 9 #716 r3 consensus A
+    #   New principle: preserve scheduled/manual health checks; gate PR and non-health-check paths on core_code
     if: |
-      needs.changes.outputs.docs_only == 'false' &&
-      needs.changes.outputs.core_code == 'true' && (
-        github.event_name == 'workflow_dispatch' ||
-        github.event_name == 'schedule'
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (
+        needs.changes.outputs.docs_only == 'false' &&
+        needs.changes.outputs.core_code == 'true'
       )
     runs-on: ubuntu-latest
     timeout-minutes: 35
@@ -239,13 +240,14 @@ jobs:
     needs: changes
     # Refactor (iter16/cluster-ci-systemic-refactor):
     #   Old pattern: slow-test-guards ran unconditionally on scheduled/manual/push CI, including doc-only changes
-    #   New principle: gate on changes.outputs.core_code per Phase 9 #716 r3 consensus A
+    #   New principle: preserve scheduled/manual/main-dev push health checks; gate PR and non-health-check paths on core_code
     if: |
-      needs.changes.outputs.docs_only == 'false' &&
-      needs.changes.outputs.core_code == 'true' && (
-        github.event_name == 'workflow_dispatch' ||
-        github.event_name == 'schedule' ||
-        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
+      (
+        needs.changes.outputs.docs_only == 'false' &&
+        needs.changes.outputs.core_code == 'true'
       )
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -260,7 +262,7 @@ jobs:
 
   projection-provider-e2e:
     # Refactor (iter16/cluster-ci-systemic-refactor):
-    #   Old pattern: projection-provider-e2e ran unconditionally on every PR, including doc-only changes
+    #   Old pattern: projection-provider-e2e skipped scheduled CI and ran for every PR, workflow_dispatch, main/dev push, or projection_provider changes
     #   New principle: gate on changes.outputs.projection_provider per Phase 9 #716 r3 consensus A
     if: needs.changes.outputs.docs_only == 'false' && needs.changes.outputs.projection_provider == 'true'
     needs:
@@ -280,7 +282,7 @@ jobs:
 
   kafka-transport-integration:
     # Refactor (iter16/cluster-ci-systemic-refactor):
-    #   Old pattern: kafka-transport-integration ran unconditionally on every PR, including doc-only changes
+    #   Old pattern: kafka-transport-integration skipped scheduled CI and ran for every PR, workflow_dispatch, main/dev push, or kafka_runtime changes
     #   New principle: gate on changes.outputs.kafka_runtime per Phase 9 #716 r3 consensus A
     if: needs.changes.outputs.docs_only == 'false' && needs.changes.outputs.kafka_runtime == 'true'
     needs:
@@ -298,7 +300,7 @@ jobs:
 
   event-sourcing-regression:
     # Refactor (iter16/cluster-ci-systemic-refactor):
-    #   Old pattern: event-sourcing-regression ran unconditionally on every PR, including doc-only changes
+    #   Old pattern: event-sourcing-regression skipped scheduled CI and ran for every PR, workflow_dispatch, main/dev push, or event_sourcing changes
     #   New principle: gate on changes.outputs.event_sourcing per Phase 9 #716 r3 consensus A
     if: needs.changes.outputs.docs_only == 'false' && needs.changes.outputs.event_sourcing == 'true'
     needs:
@@ -320,7 +322,7 @@ jobs:
   host-composition-smoke:
     needs: changes
     # Refactor (iter16/cluster-ci-systemic-refactor):
-    #   Old pattern: host-composition-smoke ran unconditionally on every PR, including doc-only changes
+    #   Old pattern: host-composition-smoke skipped scheduled CI and ran for every PR, workflow_dispatch, or main/dev push
     #   New principle: gate on changes.outputs.host_composition per Phase 9 #716 r3 consensus A
     if: needs.changes.outputs.docs_only == 'false' && needs.changes.outputs.host_composition == 'true'
     runs-on: ubuntu-latest
@@ -337,9 +339,13 @@ jobs:
   coverage-quality:
     needs: changes
     # Refactor (iter16/cluster-ci-systemic-refactor):
-    #   Old pattern: coverage-quality ran unconditionally on every PR, including doc-only changes
-    #   New principle: gate on changes.outputs.docs_only per Phase 9 #716 r3 consensus A
-    if: needs.changes.outputs.docs_only == 'false'
+    #   Old pattern: coverage-quality ran unconditionally on every PR, scheduled/manual CI, and main/dev push
+    #   New principle: preserve scheduled/manual/main-dev push health checks; skip only doc-only PR/non-health-check paths
+    if: |
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
+      needs.changes.outputs.docs_only == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -397,12 +403,10 @@ jobs:
     needs: changes
     # Refactor (iter16/cluster-ci-systemic-refactor):
     #   Old pattern: distributed-mixed-version-smoke ran unconditionally on scheduled/manual CI, including doc-only changes
-    #   New principle: gate on changes.outputs.docs_only per Phase 9 #716 r3 consensus A
+    #   New principle: preserve scheduled/manual health checks
     if: |
-      needs.changes.outputs.docs_only == 'false' && (
-        github.event_name == 'schedule' ||
-        github.event_name == 'workflow_dispatch'
-      )
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
