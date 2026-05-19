@@ -999,6 +999,184 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 
 ---
 
+## 状态横幅(status banner)— 强制(per Auric 2026-05-19 "人类角度看不到最终状态")
+
+**问题**:design issue / PR 一旦进入 multi-codex loop,会堆积几十条 audit / solver / judge / reviewer / fix 评论。人类站维护者角度打开 issue 一眼看不出"现在到了哪步、是否需要我介入"。100 条 AI 评论自治不等于 transparent。
+
+**规则**:**controller** 在每次 phase transition 时**必发** status banner 评论。Codex 不发 banner(它们各发各的角色 artifact 评论)。Banner 是 controller-owned 集中状态指示器。
+
+### Banner 触发时刻(每个均强制 post)
+
+| 触发 | banner 内容要点 |
+|---|---|
+| 共识达成(Phase 9 meta-judge `consensus`) | "✅ 共识达成,implement 派出" + chosen framing |
+| implement 完成(任何 cluster) | "实施完成,即将开 PR" + LOC delta + 文件清单 |
+| PR open | "PR open + reviewer 派出" + PR # + base branch |
+| Phase 8 r1 reviewer 完成 | "评审 r1: <N approve / N comment / N reject>" + next step |
+| Phase 8 fix 派出 | "fix r<N> 派出,目标修 reject" |
+| Phase 8 consensus 达成 | "Phase 8 共识达成,等 CI 绿后 merge" |
+| CI 全绿 | "CI 全绿,合并中" |
+| CI red | "CI 红,fix codex 派出" |
+| merge 完成 | "🎉 已合并到 <branch>" |
+| escalation | "🚨 需要人介入: <reason>" + label `auto-loop-stuck` |
+| blocked-on(被其他 issue 拖) | "blocked-on #<num>: 待其完成自动推进" |
+
+### Banner 模板(controller 直接 gh issue/pr comment,不走 codex)
+
+第一行**必须** `## 📊 当前状态 — <短 phase 名>(<介入与否>)`。然后表格 + 下一步 + 何时介入。
+
+```markdown
+## 📊 当前状态 — <phase>(<不需要人介入 | ✅ 需要人介入>)
+
+| 维度 | 值 |
+|---|---|
+| 阶段 | **<phase 名>** |
+| 共识 | ✅/❌ <link 到 meta-judge 评论> |
+| 关联 issue | #N #M |
+| 关联 PR | #K(若有) |
+| codex 任务 | <task-id>(<已跑 min> / <上限 min>) |
+| **是否需要人介入** | **❌ 否** / **✅ 是: <原因>** |
+
+**下一步自动会做**:<具体动作>
+
+**何时需要人介入**:
+- <具体条件 1>
+- <具体条件 2>
+
+🤖 controller status banner
+```
+
+### 硬约束
+
+- **第一行必须是 `## 📊 当前状态 — ...`**(comment-monitor 据此识别 controller-post 跳过自 react)。
+- 每条 banner 末尾必须 `🤖 controller status banner`(双重防护)。
+- **不写过程**(谁讨论了什么)。只写"当前 phase + 下一步 + 何时介入"。讨论详情在前面 codex 评论里,banner 是 *index*,不是 *recap*。
+- 不要发废 banner(同 phase 连续两次没变化 → 不要重发)。
+- escalation banner 必须**显式**说"✅ 需要人介入"并列出 maintainer 需要做的具体决策(不是"看一下"这种 vague 描述)。
+
+### 反面(❌ 禁止)
+
+- ❌ 一堆 codex artifact 评论之后无 status banner → 人类不知道当前 phase
+- ❌ banner 把过程 recap 一遍 → 噪音叠加噪音
+- ❌ banner 用 `## 🤖 controller` 第一行(comment-monitor 已经把 `## 🤖` 当 codex post 跳过,但 banner 应该是 controller 自己,用 `## 📊` 区分)
+- ❌ "需要人介入"用模糊措辞 → 人类还是不知道要不要看
+
+## Codex 进展实时上报 — 强制(per Auric 2026-05-19 "每10分钟更新一次各 codex 进展到 issue/PR")
+
+**问题**:codex 单 task 可能跑 30–120 分钟。期间人类打开 issue/PR 只看到"派出"banner,看不到中间进展(它在分析哪个文件 / 在写什么 / 跑到第几步)。等结果 banner 时已经 1–2 小时过去。
+
+**规则**:`tools/refactor-loop/codex-progress-reporter.sh` 作为**长跑 daemon**每 600s 扫所有 in-flight codex log,对每个 codex **edit-in-place** 一条 progress comment 到关联 issue/PR(不堆评论)。Comment body 包含:已跑时长 + log tail 25 行。完成时把 ⏳ 改 ✅。
+
+### 启动 / 运维
+
+```bash
+# 启动(放后台,长跑直到 loop 停)
+INTERVAL=600 bash tools/refactor-loop/codex-progress-reporter.sh &
+# 停止
+pkill -f codex-progress-reporter.sh
+# 重置(误 post 后清理)
+jq -r '.[].comment_id' .refactor-loop/codex-progress-state.json | while read cid; do
+  [ "$cid" != null ] && [ "$cid" != 0 ] && gh api -X DELETE repos/aevatarAI/aevatar/issues/comments/$cid
+done
+echo "{}" > .refactor-loop/codex-progress-state.json
+```
+
+### 行为契约
+
+- 第一次见 + 已 finish 的 log → 跳过(不补刷历史 "✅" banner,避免噪音)
+- 30 min 未写 mtime 且无 EXIT marker → zombie,跳过(防 monitor 误以为 in-flight 死循环 post)
+- log 文件名 → target 解析:从对应 `prompts/<base>.md` 中**最后一个** `#NNN`(meta-cluster 多 issue 时,主 issue 通常列在最后)
+- 内容 hash 不变 → 不重发(避免 1 min 心跳 noise)
+- Comment 第一行 `## 📊 codex 进展` → comment-monitor 据此跳自 react
+- audit-iter-* / remote-ci-* log 不归此 reporter 上报(无关联 issue)
+
+### 反面(❌ 禁止)
+
+- ❌ 每 tick 重新 `gh issue comment` 创建新评论 → 评论膨胀
+- ❌ 把 progress comment 写到 controller post 之上 → 与 status banner 混淆
+- ❌ 上报已完成的旧 iter log → 噪音,人类困惑
+- ❌ 用 `gh issue view N --json number` 判 PR/issue(返回都有 number)→ 必须 `gh pr view N` 试错 + fallback
+
+## Label 系统 — 强制(per Auric 2026-05-19 "label 也明确一下,看标题就能看明白")
+
+**问题**:人类在 issue 列表页只看 title + label,banner 评论再清晰也得点进去才看见。Label 是封面信息,必须一眼传达"当前 phase + 是否需要人"。
+
+**规则**:每次 phase transition,**controller** 在 post banner 的同时**必同步** label。每个 issue / PR **恰好**带一组 label:
+
+### Label 组 1 — Phase(任意时刻**恰好一个**)
+
+| Label | 含义 | 触发 |
+|---|---|---|
+| `🔍 phase:design-solving` | Phase 9 多 solver 跑 | 派 r1/r2 三 solver 后 |
+| `✅ phase:consensus-reached` | meta-judge 共识达成 | meta-judge `consensus:...` 后 |
+| `🛠️ phase:implementing` | implement codex 跑 | implement dispatch 后 |
+| `🚀 phase:pr-open` | PR 已开 | gh pr create 后 |
+| `👀 phase:reviewing` | Phase 8 reviewer 跑 | reviewer dispatch 后 |
+| `🔧 phase:fixing` | fix codex 跑(reject 后修) | fix dispatch 后 |
+| `⚙️ phase:ci-running` | CI watch 中 | push 后 CI 启动 |
+| `🎉 phase:merged` | 已 merge | gh pr merge 后(也 close issue) |
+| `⏸️ phase:blocked` | blocked-on(等其他 issue) | dependency 链上游未完成 |
+
+### Label 组 2 — Human(任意时刻**恰好一个**)
+
+| Label | 含义 | 触发 |
+|---|---|---|
+| `🤖 human:auto-推进` | 完全自动,**不需要人介入** | 默认 |
+| `👤 human:需-maintainer-决策` | escalation 触发,需要 maintainer 拍板 | Phase 9 escalate / hardcoded trigger |
+| `🆘 human:卡死-需-rework` | 2 次 fix 仍失败 | fix r2 仍 reject / CI 2 次 fail |
+
+### Bootstrap(一次性 - controller 在首次跑 loop 时确保 label 存在)
+
+```bash
+# 创建所有 phase label
+for l in "🔍 phase:design-solving" "✅ phase:consensus-reached" "🛠️ phase:implementing" \
+         "🚀 phase:pr-open" "👀 phase:reviewing" "🔧 phase:fixing" "⚙️ phase:ci-running" \
+         "🎉 phase:merged" "⏸️ phase:blocked"; do
+  gh label create "$l" --color "5319e7" 2>/dev/null || true
+done
+# 创建所有 human label
+gh label create "🤖 human:auto-推进" --color "0e8a16" 2>/dev/null || true
+gh label create "👤 human:需-maintainer-决策" --color "d93f0b" 2>/dev/null || true
+gh label create "🆘 human:卡死-需-rework" --color "b60205" 2>/dev/null || true
+```
+
+### 转移时刻代码模板
+
+每次 phase transition,controller 用同一 helper 改 label + post banner:
+
+```bash
+# helper(写在脚本里): 移除所有 phase:* label, 加新 phase:* label
+set_phase() {
+  local issue=$1 new_phase=$2
+  # 先删所有 phase:* / human:* label 再加新
+  current=$(gh issue view "$issue" --json labels --jq '.labels[].name' | grep -E '^(🔍|✅|🛠️|🚀|👀|🔧|⚙️|🎉|⏸️) phase:')
+  for old in $current; do gh issue edit "$issue" --remove-label "$old" 2>/dev/null; done
+  gh issue edit "$issue" --add-label "$new_phase"
+}
+set_human() {
+  local issue=$1 new_human=$2
+  current=$(gh issue view "$issue" --json labels --jq '.labels[].name' | grep -E '^(🤖|👤|🆘) human:')
+  for old in $current; do gh issue edit "$issue" --remove-label "$old" 2>/dev/null; done
+  gh issue edit "$issue" --add-label "$new_human"
+}
+```
+
+PR 同理(`gh pr edit` instead of `gh issue edit`)。
+
+### 硬约束
+
+- **Label 与 banner 同步发**:不允许 label 转移但不发 banner,或发 banner 但 label 没改。
+- **同一组只允许一个**:不能同时有 `🛠️ phase:implementing` 和 `🚀 phase:pr-open`(实施完成 → 立刻改 pr-open)。
+- **`👤` 与 `🆘` 出现 = 需要人**:其他 label(`🤖`) = 完全自动。人类只 watch `👤` / `🆘` issue 即可。
+- **escalation 永远配 `👤` 或 `🆘`**:Phase 9 escalate / Phase 8 卡死必须明确标 human label。
+
+### 反面(❌ 禁止)
+
+- ❌ label 不更新就发 banner → 列表页看到的还是旧 phase
+- ❌ 同时挂多个 phase label → 人类困惑
+- ❌ 用纯文字 label(无 emoji)→ 列表页一眼看不出 phase / human 类别
+- ❌ blocked-on 不打 `⏸️ phase:blocked` → 人类以为还在主动跑
+
 ## Hard rules (controller-level, propagated into every codex prompt)
 
 1. **No new features** — only clean violations of CLAUDE.md philosophy.

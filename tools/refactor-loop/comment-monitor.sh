@@ -31,7 +31,8 @@ is_team_member() {
 
 # Skip controller / writer-codex own posts. body first line check.
 # 包括:
-# - "## 🤖" (controller status marker)
+# - "## 🤖" (codex artifact)
+# - "## 📊" (controller status banner per SKILL.md status-banner)
 # - "## 📢 cc" (cc 原作者)
 # - "## 📎" (attachment / raw)
 # - "## ✅" (consensus reached / merged)
@@ -43,7 +44,7 @@ is_team_member() {
 # - 任何 body 内含 "POSTED:phase" 标记的(writer-codex 自身 marker 不会出现在 body,但若误传则 skip)
 is_controller_post() {
   case "$1" in
-    "## 🤖"*|"## 📢 cc"*|"## 📎"*|"## ✅"*|"## 🎉"*|"## 🔄"*|"## Phase "*|"## Studio "*|"## Workflow "*|"## iter"*) return 0 ;;
+    "## 🤖"*|"## 📊"*|"## 📢 cc"*|"## 📎"*|"## ✅"*|"## 🎉"*|"## 🔄"*|"## Phase "*|"## Studio "*|"## Workflow "*|"## iter"*) return 0 ;;
     *) ;;
   esac
   # 兜底:body 任意位置含 "Generated with Claude Code" 也 skip
