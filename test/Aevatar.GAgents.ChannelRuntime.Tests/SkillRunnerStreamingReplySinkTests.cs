@@ -276,6 +276,23 @@ public sealed class SkillRunnerStreamingReplySinkTests
         handler.Requests.Should().HaveCount(2, "final duplicate suppression belongs to SkillRunnerGAgent's actor-owned run state");
     }
 
+    [Fact]
+    public void Source_ShouldNotContainSinkOwnedTimerOrPendingDispatchState()
+    {
+        // Refactor (iter15/cluster-027-streaming-reply-timer-business-dispatch):
+        //   Old pattern: sink owned timer callbacks, pending output, and callback-timed Lark dispatch loops.
+        //   New principle: SkillRunnerGAgent owns coalescing and calls the sink only with approved snapshots.
+        var source = File.ReadAllText(GetProductionSourcePath());
+
+        source.Should().NotContain("_flushTimer");
+        source.Should().NotContain("CreateTimer");
+        source.Should().NotContain("_pendingText");
+        source.Should().NotContain("_dispatchInProgress");
+        source.Should().NotContain(string.Concat("Task", ".Run"));
+        source.Should().NotContain("_ = DispatchAsync");
+        source.Should().NotContain("_ = DispatchLoopAsync");
+    }
+
     private static SkillRunnerStreamingReplySink CreateSink(HttpMessageHandler handler) =>
         CreateSink(
             handler,
@@ -349,5 +366,24 @@ public sealed class SkillRunnerStreamingReplySinkTests
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),
             };
         }
+    }
+
+    private static string GetProductionSourcePath()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(
+                directory.FullName,
+                "agents",
+                "Aevatar.GAgents.Scheduled",
+                "SkillRunnerStreamingReplySink.cs");
+            if (File.Exists(candidate))
+                return candidate;
+
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException("Could not locate SkillRunnerStreamingReplySink.cs from test output directory.");
     }
 }

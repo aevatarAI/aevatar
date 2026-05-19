@@ -87,6 +87,23 @@ public sealed class TurnStreamingReplySinkTests
         envelopes.Should().BeEmpty();
     }
 
+    [Fact]
+    public void Source_ShouldNotContainSinkOwnedTimerOrPendingDispatchState()
+    {
+        // Refactor (iter15/cluster-027-streaming-reply-timer-business-dispatch):
+        //   Old pattern: sink owned timer callbacks, pending business text, and in-flight dispatch loops.
+        //   New principle: actor/run state owns coalescing and calls the sink only with approved snapshots.
+        var source = File.ReadAllText(GetProductionSourcePath());
+
+        source.Should().NotContain("_flushTimer");
+        source.Should().NotContain("CreateTimer");
+        source.Should().NotContain("_pendingText");
+        source.Should().NotContain("_dispatchInProgress");
+        source.Should().NotContain(string.Concat("Task", ".Run"));
+        source.Should().NotContain("_ = DispatchAsync");
+        source.Should().NotContain("_ = DispatchLoopAsync");
+    }
+
     private static TurnStreamingReplySink CreateSink(
         IActorDispatchPort dispatchPort,
         out FakeTimeProvider timeProvider,
@@ -130,5 +147,24 @@ public sealed class TurnStreamingReplySinkTests
         dispatchPort.When(x => x.DispatchAsync("target-actor", Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => envelopes.Add(call.Arg<EventEnvelope>()));
         return (dispatchPort, envelopes);
+    }
+
+    private static string GetProductionSourcePath()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(
+                directory.FullName,
+                "agents",
+                "Aevatar.GAgents.Channel.Runtime",
+                "TurnStreamingReplySink.cs");
+            if (File.Exists(candidate))
+                return candidate;
+
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException("Could not locate TurnStreamingReplySink.cs from test output directory.");
     }
 }
