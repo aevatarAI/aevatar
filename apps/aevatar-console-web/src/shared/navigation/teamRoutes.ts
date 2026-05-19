@@ -1,7 +1,5 @@
 type TeamDetailTab =
   | 'overview'
-  | 'topology'
-  | 'events'
   | 'members';
 
 type QueryValue = string | undefined;
@@ -33,8 +31,6 @@ function parseTeamTab(
 ): TeamDetailTab {
   switch (trimOptional(value).toLowerCase()) {
     case 'overview':
-    case 'topology':
-    case 'events':
     case 'members':
       return trimOptional(value).toLowerCase() as TeamDetailTab;
     default:
