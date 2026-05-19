@@ -25,8 +25,10 @@
 
 ### Structure (mandatory)
 
+**Body 第一行必须以 `## 🤖 ` 开头**(`🤖` 是 controller-post 标识,comment-monitor 据此识别 controller 自己的 post 跳过 👀 react,避免误把 writer-codex 自己的 post 当 maintainer reply 处理)。
+
 ```markdown
-## <一行问题/状态摘要>
+## 🤖 <一行问题/状态摘要>
 
 ### TL;DR
 - 这是什么:1 句话说 cluster 在干什么 / 这是 PR 在改什么。
