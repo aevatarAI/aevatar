@@ -662,13 +662,21 @@ public sealed class StudioMemberBindingRunGAgentStateTests
             });
         }
 
-        public Task ExecuteAsync(
+        public Task<StudioMemberPlatformBindingExecutionOutcome> ExecuteAsync(
             string replyActorId,
             string platformBindingCommandId,
-            StudioMemberPlatformBindingStartRequested request)
+            StudioMemberPlatformBindingStartRequested request,
+            CancellationToken ct = default)
         {
             ExecuteRequests.Add(request.Clone());
-            return Task.CompletedTask;
+            return Task.FromResult(StudioMemberPlatformBindingExecutionOutcome.FromSucceeded(
+                new StudioMemberPlatformBindingSucceeded
+                {
+                    BindingRunId = request.BindingRunId,
+                    PlatformBindingCommandId = platformBindingCommandId,
+                    Result = new StudioMemberPlatformBindingResult(),
+                    CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                }));
         }
     }
 

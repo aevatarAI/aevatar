@@ -1,5 +1,7 @@
-using System.Text;
+using Aevatar.Studio.Application.Protos;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Domain.Studio.Models;
+using Google.Protobuf;
 
 namespace Aevatar.Studio.Infrastructure.Storage;
 
@@ -15,16 +17,27 @@ internal sealed class ChronoStorageWorkflowDraftStore : IWorkflowDraftStore
         _blobClient = blobClient ?? throw new ArgumentNullException(nameof(blobClient));
     }
 
-    public async Task SaveDraftAsync(string scopeId, string workflowId, string workflowName, string yaml, CancellationToken ct)
+    public async Task SaveDraftAsync(
+        string scopeId,
+        string workflowId,
+        string workflowName,
+        string yaml,
+        WorkflowLayoutDocument? layout,
+        CancellationToken ct)
     {
-        _ = workflowName;
-        var yamlBytes = Encoding.UTF8.GetBytes(yaml);
         var normalizedWorkflowId = NormalizeRequired(workflowId, nameof(workflowId));
         var context = ResolveWorkflowContext(scopeId, $"{WorkflowDirectory}/{normalizedWorkflowId}.yaml");
         if (context == null)
             throw new InvalidOperationException("Scoped workflow draft storage is not enabled.");
 
-        await _blobClient.UploadAsync(context, yamlBytes, "text/yaml", ct);
+        var fact = new ScopedWorkflowDraftFact
+        {
+            WorkflowId = normalizedWorkflowId,
+            WorkflowName = workflowName,
+            Yaml = yaml,
+            Layout = layout is null ? null : ToProtoLayout(layout),
+        };
+        await _blobClient.UploadAsync(context, fact.ToByteArray(), "application/x-protobuf", ct);
     }
 
     public async Task<IReadOnlyList<WorkflowDraft>> ListDraftsAsync(string scopeId, CancellationToken ct)
@@ -69,12 +82,13 @@ internal sealed class ChronoStorageWorkflowDraftStore : IWorkflowDraftStore
         if (payload == null || payload.Length == 0)
             return null;
 
-        var yaml = Encoding.UTF8.GetString(payload);
+        var fact = ScopedWorkflowDraftFact.Parser.ParseFrom(payload);
         return new WorkflowDraft(
             normalizedWorkflowId,
-            normalizedWorkflowId,
-            yaml,
-            UpdatedAtUtc: null);
+            string.IsNullOrWhiteSpace(fact.WorkflowName) ? normalizedWorkflowId : fact.WorkflowName,
+            fact.Yaml,
+            UpdatedAtUtc: null,
+            Layout: fact.Layout is null ? null : ToApplicationLayout(fact.Layout));
     }
 
     public async Task DeleteDraftAsync(string scopeId, string workflowId, CancellationToken ct)
@@ -123,6 +137,54 @@ internal sealed class ChronoStorageWorkflowDraftStore : IWorkflowDraftStore
             return null;
 
         return DateTimeOffset.TryParse(raw, out var parsed) ? parsed : null;
+    }
+
+    private static ScopedWorkflowLayoutFact ToProtoLayout(WorkflowLayoutDocument layout)
+    {
+        var fact = new ScopedWorkflowLayoutFact
+        {
+            Viewport = new ScopedWorkflowViewportFact
+            {
+                X = layout.Viewport.X,
+                Y = layout.Viewport.Y,
+                Zoom = layout.Viewport.Zoom,
+            },
+            EntryWorkflow = layout.EntryWorkflow ?? string.Empty,
+        };
+        fact.Nodes.AddRange(layout.NodePositions.Select(item => new ScopedWorkflowNodeLayoutFact
+        {
+            NodeId = item.Key,
+            X = item.Value.X,
+            Y = item.Value.Y,
+        }));
+        fact.Groups.AddRange(layout.Groups.Select(item =>
+        {
+            var group = new ScopedWorkflowLayoutGroupFact { GroupId = item.Key };
+            group.NodeIds.AddRange(item.Value);
+            return group;
+        }));
+        fact.Collapsed.AddRange(layout.Collapsed);
+        return fact;
+    }
+
+    private static WorkflowLayoutDocument ToApplicationLayout(ScopedWorkflowLayoutFact layout)
+    {
+        return new WorkflowLayoutDocument
+        {
+            NodePositions = layout.Nodes.ToDictionary(
+                node => node.NodeId,
+                node => new WorkflowNodeLayout(node.X, node.Y),
+                StringComparer.Ordinal),
+            Groups = layout.Groups.ToDictionary(
+                group => group.GroupId,
+                group => group.NodeIds.ToList(),
+                StringComparer.Ordinal),
+            Collapsed = layout.Collapsed.ToList(),
+            Viewport = layout.Viewport is null
+                ? new WorkflowViewport()
+                : new WorkflowViewport(layout.Viewport.X, layout.Viewport.Y, layout.Viewport.Zoom),
+            EntryWorkflow = string.IsNullOrWhiteSpace(layout.EntryWorkflow) ? null : layout.EntryWorkflow,
+        };
     }
 
     private static string NormalizeRequired(string? value, string paramName)

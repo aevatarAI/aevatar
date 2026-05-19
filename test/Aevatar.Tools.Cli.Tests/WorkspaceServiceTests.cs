@@ -13,7 +13,7 @@ public class WorkspaceServiceTests
     public async Task AddDirectoryAsync_ShouldExpandTildePath()
     {
         var store = new InMemoryStudioWorkspaceStore();
-        var service = new WorkspaceService(store, new StubWorkflowYamlDocumentService());
+        var service = new WorkspaceService(store, store, new StubWorkflowYamlDocumentService());
         var relativePath = $".aevatar-workflow-studio-tests/{Guid.NewGuid():N}";
         var rawPath = $"~/{relativePath}";
         var expectedPath = Path.GetFullPath(Path.Combine(
@@ -54,7 +54,7 @@ public class WorkspaceServiceTests
             AppearanceTheme: "blue",
             ColorMode: "light"));
 
-        var service = new WorkspaceService(store, new StubWorkflowYamlDocumentService());
+        var service = new WorkspaceService(store, store, new StubWorkflowYamlDocumentService());
 
         var response = await service.CreateDraftAsync(new SaveWorkflowDraftRequest(
             DirectoryId: directory.DirectoryId,
@@ -62,8 +62,8 @@ public class WorkspaceServiceTests
             FileName: null,
             Yaml: "name: draft\nsteps: []\n"));
 
-        store.LastSavedWorkflowFile.Should().NotBeNull();
-        store.LastSavedWorkflowFile!.Yaml.Should().StartWith("name: renamed-workflow");
+        store.LastSavedDraft.Should().NotBeNull();
+        store.LastSavedDraft!.Yaml.Should().StartWith("name: renamed-workflow");
         response.Name.Should().Be("renamed-workflow");
         response.Yaml.Should().StartWith("name: renamed-workflow");
     }
@@ -72,7 +72,7 @@ public class WorkspaceServiceTests
     public async Task UpdateSettingsAsync_ShouldTrimTrailingSlash()
     {
         var store = new InMemoryStudioWorkspaceStore();
-        var service = new WorkspaceService(store, new StubWorkflowYamlDocumentService());
+        var service = new WorkspaceService(store, store, new StubWorkflowYamlDocumentService());
 
         var response = await service.UpdateSettingsAsync(new UpdateWorkspaceSettingsRequest("http://127.0.0.1:5100/"));
 
@@ -92,7 +92,7 @@ public class WorkspaceServiceTests
             ],
             AppearanceTheme: "blue",
             ColorMode: "light"));
-        var service = new WorkspaceService(store, new StubWorkflowYamlDocumentService());
+        var service = new WorkspaceService(store, store, new StubWorkflowYamlDocumentService());
 
         var response = await service.RemoveDirectoryAsync("dir-2");
 
@@ -109,7 +109,7 @@ public class WorkspaceServiceTests
             Directories: [directory],
             AppearanceTheme: "blue",
             ColorMode: "light"));
-        store.WorkflowFiles.Add(new StoredWorkflowFile(
+        store.Drafts.Add(new StudioWorkflowDraftRecord(
             WorkflowId: "existing-workflow",
             Name: "existing-workflow",
             FileName: "shared.yaml",
@@ -118,8 +118,10 @@ public class WorkspaceServiceTests
             DirectoryLabel: directory.Label,
             Yaml: "name: existing-workflow\nsteps: []\n",
             Layout: null,
-            UpdatedAtUtc: DateTimeOffset.UtcNow));
-        var service = new WorkspaceService(store, new StubWorkflowYamlDocumentService());
+            UpdatedAtUtc: DateTimeOffset.UtcNow,
+            CreatedAtUtc: DateTimeOffset.UtcNow,
+            Version: 1));
+        var service = new WorkspaceService(store, store, new StubWorkflowYamlDocumentService());
 
         var act = () => service.CreateDraftAsync(new SaveWorkflowDraftRequest(
             DirectoryId: directory.DirectoryId,
@@ -142,7 +144,7 @@ public class WorkspaceServiceTests
             Directories: [directory],
             AppearanceTheme: "blue",
             ColorMode: "light"));
-        var service = new WorkspaceService(store, new StubWorkflowYamlDocumentService());
+        var service = new WorkspaceService(store, store, new StubWorkflowYamlDocumentService());
 
         var act = () => service.UpdateDraftAsync(
             "missing-workflow",
@@ -166,7 +168,7 @@ public class WorkspaceServiceTests
             Directories: [directory],
             AppearanceTheme: "blue",
             ColorMode: "light"));
-        store.WorkflowFiles.Add(new StoredWorkflowFile(
+        store.Drafts.Add(new StudioWorkflowDraftRecord(
             WorkflowId: "workflow-1",
             Name: "workflow-1",
             FileName: "workflow-1.yaml",
@@ -175,8 +177,10 @@ public class WorkspaceServiceTests
             DirectoryLabel: directory.Label,
             Yaml: "name: workflow-1\nsteps: []\n",
             Layout: null,
-            UpdatedAtUtc: DateTimeOffset.UtcNow));
-        var service = new WorkspaceService(store, new StubWorkflowYamlDocumentService());
+            UpdatedAtUtc: DateTimeOffset.UtcNow,
+            CreatedAtUtc: DateTimeOffset.UtcNow,
+            Version: 1));
+        var service = new WorkspaceService(store, store, new StubWorkflowYamlDocumentService());
 
         var response = await service.SaveWorkflowAsync(new SaveWorkflowFileRequest(
             WorkflowId: "workflow-1",
@@ -187,8 +191,8 @@ public class WorkspaceServiceTests
 
         response.WorkflowId.Should().Be("workflow-1");
         response.FileName.Should().Be("workflow-1-renamed.yaml");
-        store.LastSavedWorkflowFile.Should().NotBeNull();
-        store.LastSavedWorkflowFile!.WorkflowId.Should().Be("workflow-1");
+        store.LastSavedDraft.Should().NotBeNull();
+        store.LastSavedDraft!.WorkflowId.Should().Be("workflow-1");
     }
 
     [Fact]
@@ -201,7 +205,7 @@ public class WorkspaceServiceTests
             Directories: [directory],
             AppearanceTheme: "blue",
             ColorMode: "light"));
-        store.WorkflowFiles.Add(new StoredWorkflowFile(
+        store.Drafts.Add(new StudioWorkflowDraftRecord(
             WorkflowId: "workflow-1",
             Name: "workflow-1",
             FileName: "workflow-1.yaml",
@@ -210,8 +214,10 @@ public class WorkspaceServiceTests
             DirectoryLabel: directory.Label,
             Yaml: "name: workflow-1\nsteps: []\n",
             Layout: null,
-            UpdatedAtUtc: DateTimeOffset.UtcNow));
-        var service = new WorkspaceService(store, new StubWorkflowYamlDocumentService());
+            UpdatedAtUtc: DateTimeOffset.UtcNow,
+            CreatedAtUtc: DateTimeOffset.UtcNow,
+            Version: 1));
+        var service = new WorkspaceService(store, store, new StubWorkflowYamlDocumentService());
 
         var response = await service.GetWorkflowAsync("workflow-1");
 
@@ -231,7 +237,7 @@ public class WorkspaceServiceTests
             Directories: [directory],
             AppearanceTheme: "blue",
             ColorMode: "light"));
-        store.WorkflowFiles.Add(new StoredWorkflowFile(
+        store.Drafts.Add(new StudioWorkflowDraftRecord(
             WorkflowId: "workflow-1",
             Name: "workflow-1",
             FileName: "workflow-1.yaml",
@@ -240,8 +246,10 @@ public class WorkspaceServiceTests
             DirectoryLabel: directory.Label,
             Yaml: "name: workflow-1\nsteps: []\n",
             Layout: null,
-            UpdatedAtUtc: DateTimeOffset.UtcNow));
-        var service = new WorkspaceService(store, new StubWorkflowYamlDocumentService());
+            UpdatedAtUtc: DateTimeOffset.UtcNow,
+            CreatedAtUtc: DateTimeOffset.UtcNow,
+            Version: 1));
+        var service = new WorkspaceService(store, store, new StubWorkflowYamlDocumentService());
 
         var response = await service.ListWorkflowsAsync();
 
@@ -273,7 +281,7 @@ public class WorkspaceServiceTests
         public string Serialize(WorkflowDocument document) => $"name: {document.Name}\nsteps: []\n";
     }
 
-    private sealed class InMemoryStudioWorkspaceStore : IStudioWorkspaceStore
+    private sealed class InMemoryStudioWorkspaceStore : IStudioWorkspaceQueryPort, IStudioWorkspaceCommandPort
     {
         private StudioWorkspaceSettings _settings = new(
             RuntimeBaseUrl: "http://127.0.0.1:5100",
@@ -281,9 +289,21 @@ public class WorkspaceServiceTests
             AppearanceTheme: "blue",
             ColorMode: "light");
 
-        public StoredWorkflowFile? LastSavedWorkflowFile { get; private set; }
+        private long _stateVersion;
 
-        public List<StoredWorkflowFile> WorkflowFiles { get; } = [];
+        public StudioWorkflowDraftRecord? LastSavedDraft { get; private set; }
+
+        public List<StudioWorkflowDraftRecord> Drafts { get; } = [];
+
+        public Task<StudioWorkspaceSnapshot> GetAsync(CancellationToken ct = default) =>
+            Task.FromResult(new StudioWorkspaceSnapshot(
+                "workspace-test",
+                "scope-test",
+                _settings,
+                _settings.Directories,
+                Drafts.ToList(),
+                _stateVersion,
+                DateTimeOffset.UtcNow));
 
         public Task<StudioWorkspaceSettings> GetSettingsAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(_settings);
@@ -294,70 +314,86 @@ public class WorkspaceServiceTests
             return Task.CompletedTask;
         }
 
-        public Task<IReadOnlyList<StoredWorkflowFile>> ListWorkflowFilesAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<StoredWorkflowFile>>(WorkflowFiles.ToList());
-
-        public Task<StoredWorkflowFile?> GetWorkflowFileAsync(string workflowId, CancellationToken cancellationToken = default) =>
-            Task.FromResult<StoredWorkflowFile?>(WorkflowFiles.FirstOrDefault(file =>
-                string.Equals(file.WorkflowId, workflowId, StringComparison.Ordinal)));
-
-        public Task<StoredWorkflowFile> SaveWorkflowFileAsync(StoredWorkflowFile workflowFile, CancellationToken cancellationToken = default)
+        public Task<StudioWorkspaceCommandReceipt> UpdateSettingsAsync(
+            StudioWorkspaceSettings settings,
+            long? expectedVersion = null,
+            CancellationToken ct = default)
         {
-            LastSavedWorkflowFile = workflowFile;
-            var existingIndex = WorkflowFiles.FindIndex(file =>
-                string.Equals(file.WorkflowId, workflowFile.WorkflowId, StringComparison.Ordinal));
+            _settings = settings;
+            _stateVersion++;
+            return Task.FromResult(Receipt(expectedVersion));
+        }
+
+        public Task<StudioWorkspaceCommandReceipt> AddDirectoryAsync(
+            StudioWorkspaceDirectory directory,
+            long? expectedVersion = null,
+            CancellationToken ct = default)
+        {
+            _settings = _settings with { Directories = _settings.Directories.Append(directory).ToList() };
+            _stateVersion++;
+            return Task.FromResult(Receipt(expectedVersion));
+        }
+
+        public Task<StudioWorkspaceCommandReceipt> RemoveDirectoryAsync(
+            string directoryId,
+            long? expectedVersion = null,
+            CancellationToken ct = default)
+        {
+            _settings = _settings with
+            {
+                Directories = _settings.Directories
+                    .Where(directory => directory.IsBuiltIn || !string.Equals(directory.DirectoryId, directoryId, StringComparison.Ordinal))
+                    .ToList(),
+            };
+            _stateVersion++;
+            return Task.FromResult(Receipt(expectedVersion));
+        }
+
+        public Task<StudioWorkspaceCommandReceipt> SaveDraftAsync(
+            StudioWorkflowDraftRecord draft,
+            long? expectedVersion = null,
+            CancellationToken ct = default)
+        {
+            LastSavedDraft = draft;
+            var existingIndex = Drafts.FindIndex(file =>
+                string.Equals(file.WorkflowId, draft.WorkflowId, StringComparison.Ordinal));
             if (existingIndex >= 0)
             {
-                WorkflowFiles[existingIndex] = workflowFile;
+                Drafts[existingIndex] = draft;
             }
             else
             {
-                WorkflowFiles.Add(workflowFile);
+                Drafts.Add(draft);
             }
 
-            return Task.FromResult(workflowFile);
+            _stateVersion++;
+            return Task.FromResult(Receipt(expectedVersion));
         }
 
-        public Task DeleteWorkflowFileAsync(string workflowId, CancellationToken cancellationToken = default) =>
-            Task.CompletedTask;
+        public Task<StudioWorkspaceCommandReceipt> DeleteDraftAsync(
+            string workflowId,
+            long? expectedVersion = null,
+            CancellationToken ct = default)
+        {
+            Drafts.RemoveAll(file => string.Equals(file.WorkflowId, workflowId, StringComparison.Ordinal));
+            _stateVersion++;
+            return Task.FromResult(Receipt(expectedVersion));
+        }
 
-        public Task<IReadOnlyList<StoredExecutionRecord>> ListExecutionsAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<StoredExecutionRecord>>([]);
+        public Task<StudioWorkspaceCommandReceipt> SaveDraftLayoutAsync(
+            string workflowId,
+            WorkflowLayoutDocument layout,
+            long? expectedVersion = null,
+            CancellationToken ct = default)
+        {
+            var index = Drafts.FindIndex(file => string.Equals(file.WorkflowId, workflowId, StringComparison.Ordinal));
+            if (index >= 0)
+                Drafts[index] = Drafts[index] with { Layout = layout };
+            _stateVersion++;
+            return Task.FromResult(Receipt(expectedVersion));
+        }
 
-        public Task<StoredExecutionRecord?> GetExecutionAsync(string executionId, CancellationToken cancellationToken = default) =>
-            Task.FromResult<StoredExecutionRecord?>(null);
-
-        public Task<StoredExecutionRecord> SaveExecutionAsync(StoredExecutionRecord execution, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<StoredConnectorCatalog> GetConnectorCatalogAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<StoredConnectorCatalog> SaveConnectorCatalogAsync(StoredConnectorCatalog catalog, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<StoredConnectorDraft> GetConnectorDraftAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<StoredConnectorDraft> SaveConnectorDraftAsync(StoredConnectorDraft draft, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task DeleteConnectorDraftAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<StoredRoleCatalog> GetRoleCatalogAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<StoredRoleCatalog> SaveRoleCatalogAsync(StoredRoleCatalog catalog, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<StoredRoleDraft> GetRoleDraftAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<StoredRoleDraft> SaveRoleDraftAsync(StoredRoleDraft draft, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task DeleteRoleDraftAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+        private static StudioWorkspaceCommandReceipt Receipt(long? expectedVersion) =>
+            new("workspace-test", "workspace-test", Guid.NewGuid().ToString("N"), expectedVersion);
     }
 }

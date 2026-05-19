@@ -163,7 +163,7 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
             return;
         }
 
-        await _platformBindingPort.ExecuteAsync(
+        var outcome = await _platformBindingPort.ExecuteAsync(
             Id,
             evt.PlatformBindingCommandId,
             new StudioMemberPlatformBindingStartRequested
@@ -174,6 +174,11 @@ public sealed class StudioMemberBindingRunGAgent : GAgentBase<StudioMemberBindin
                 Admitted = State.Admitted.Clone(),
                 RequestedAtUtc = State.UpdatedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             });
+
+        if (outcome.Succeeded != null)
+            await SendToAsync(Id, outcome.Succeeded);
+        else if (outcome.Failed != null)
+            await SendToAsync(Id, outcome.Failed);
 
         await SchedulePlatformBindingWatchdogAsync();
     }

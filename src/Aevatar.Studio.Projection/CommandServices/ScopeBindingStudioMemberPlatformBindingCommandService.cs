@@ -2,27 +2,24 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgents.StudioMember;
-using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Studio.Projection.CommandServices;
 
+// Refactor (iter16/cluster-meta-studio-actor-substrate):
+//   Old: FileStudioWorkspaceStore was a shadow store reading/writing JSON files in workspace dir, with no clear actor ownership of workspace facts
+//   New principle: workspace facts authoritatively owned by StudioWorkspaceGAgent (per CLAUDE.md "权威状态" + Auric 2026-05-19 "架构级清晰")
 internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IStudioMemberPlatformBindingCommandPort
 {
-    private const string BindingRunDirectRoute = "aevatar.studio.projection.studio-member-binding-run";
-
     private readonly IScopeBindingCommandPort _scopeBindingCommandPort;
-    private readonly IActorDispatchPort _dispatchPort;
     private readonly ILogger<ScopeBindingStudioMemberPlatformBindingCommandService> _logger;
 
     public ScopeBindingStudioMemberPlatformBindingCommandService(
         IScopeBindingCommandPort scopeBindingCommandPort,
-        IActorDispatchPort dispatchPort,
         ILogger<ScopeBindingStudioMemberPlatformBindingCommandService> logger)
     {
         _scopeBindingCommandPort = scopeBindingCommandPort ?? throw new ArgumentNullException(nameof(scopeBindingCommandPort));
-        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -46,10 +43,11 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         });
     }
 
-    public Task ExecuteAsync(
+    public Task<StudioMemberPlatformBindingExecutionOutcome> ExecuteAsync(
         string replyActorId,
         string platformBindingCommandId,
-        StudioMemberPlatformBindingStartRequested request)
+        StudioMemberPlatformBindingStartRequested request,
+        CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(replyActorId);
         ArgumentException.ThrowIfNullOrWhiteSpace(platformBindingCommandId);
@@ -57,34 +55,10 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
 
         var executionRequest = request.Clone();
         executionRequest.PlatformBindingCommandId = platformBindingCommandId;
-        _ = Task.Run(
-            () => RunBindingFireAndForgetAsync(replyActorId, platformBindingCommandId, executionRequest),
-            CancellationToken.None);
-        return Task.CompletedTask;
+        return RunBindingAsync(platformBindingCommandId, executionRequest, ct);
     }
 
-    private async Task RunBindingFireAndForgetAsync(
-        string replyActorId,
-        string commandId,
-        StudioMemberPlatformBindingStartRequested request)
-    {
-        try
-        {
-            await RunBindingAsync(replyActorId, commandId, request, CancellationToken.None)
-                .ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(
-                ex,
-                "StudioMember platform binding detached execution failed unexpectedly. bindingRunId={BindingRunId} platformBindingCommandId={CommandId}",
-                request.BindingRunId,
-                commandId);
-        }
-    }
-
-    private async Task RunBindingAsync(
-        string replyActorId,
+    private async Task<StudioMemberPlatformBindingExecutionOutcome> RunBindingAsync(
         string commandId,
         StudioMemberPlatformBindingStartRequested request,
         CancellationToken ct)
@@ -104,76 +78,35 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                 request.BindingRunId,
                 commandId);
 
-            try
-            {
-                await DispatchAsync(
-                    replyActorId,
-                    new StudioMemberPlatformBindingFailed
-                    {
-                        BindingRunId = request.BindingRunId,
-                        PlatformBindingCommandId = commandId,
-                        Failure = new StudioMemberBindingFailure
-                        {
-                            Code = "STUDIO_MEMBER_PLATFORM_BINDING_FAILED",
-                            Message = ex.Message,
-                            FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                        },
-                    },
-                    ct).ConfigureAwait(false);
-            }
-            catch (Exception dispatchEx)
-            {
-                _logger.LogError(
-                    dispatchEx,
-                    "StudioMember platform binding failure continuation dispatch failed. bindingRunId={BindingRunId} platformBindingCommandId={CommandId}",
-                    request.BindingRunId,
-                    commandId);
-            }
-
-            return;
-        }
-
-        try
-        {
-            await DispatchAsync(
-                replyActorId,
-                new StudioMemberPlatformBindingSucceeded
+            return StudioMemberPlatformBindingExecutionOutcome.FromFailed(
+                new StudioMemberPlatformBindingFailed
                 {
                     BindingRunId = request.BindingRunId,
                     PlatformBindingCommandId = commandId,
-                    CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                    Result = new StudioMemberPlatformBindingResult
+                    Failure = new StudioMemberBindingFailure
                     {
-                        PublishedServiceId = result.ServiceId,
-                        RevisionId = result.RevisionId,
-                        ImplementationKind = ToStudioKind(result.ImplementationKind),
-                        ExpectedActorId = result.ExpectedActorId,
-                        ImplementationRef = BuildImplementationRef(result),
+                        Code = "STUDIO_MEMBER_PLATFORM_BINDING_FAILED",
+                        Message = ex.Message,
+                        FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                     },
+                });
+        }
+
+        return StudioMemberPlatformBindingExecutionOutcome.FromSucceeded(
+            new StudioMemberPlatformBindingSucceeded
+            {
+                BindingRunId = request.BindingRunId,
+                PlatformBindingCommandId = commandId,
+                CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                Result = new StudioMemberPlatformBindingResult
+                {
+                    PublishedServiceId = result.ServiceId,
+                    RevisionId = result.RevisionId,
+                    ImplementationKind = ToStudioKind(result.ImplementationKind),
+                    ExpectedActorId = result.ExpectedActorId,
+                    ImplementationRef = BuildImplementationRef(result),
                 },
-                ct).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(
-                ex,
-                "StudioMember platform binding succeeded but success continuation dispatch failed. bindingRunId={BindingRunId} platformBindingCommandId={CommandId}",
-                request.BindingRunId,
-                commandId);
-        }
-    }
-
-    private Task DispatchAsync(string actorId, IMessage payload, CancellationToken ct)
-    {
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(payload),
-            Route = EnvelopeRouteSemantics.CreateDirect(BindingRunDirectRoute, actorId),
-        };
-
-        return _dispatchPort.DispatchAsync(actorId, envelope, ct);
+            });
     }
 
     private static ScopeBindingUpsertRequest BuildScopeBindingRequest(
