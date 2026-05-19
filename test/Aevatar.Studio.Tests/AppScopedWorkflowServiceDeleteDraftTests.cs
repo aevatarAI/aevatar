@@ -92,7 +92,7 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
     }
 
     [Fact]
-    public async Task ListDraftsAsync_WhenLayoutSidecarExists_ShouldMarkWorkflowSummaryAsHavingLayout()
+    public async Task ListDraftsAsync_WhenDraftHasTypedLayout_ShouldMarkWorkflowSummaryAsHavingLayout()
     {
         using var environment = new ScopedWorkflowEnvironment();
         var runtimePorts = new RuntimePortSpies();
@@ -106,12 +106,15 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
                         "workflow-1",
                         "workflow-1",
                         "name: workflow-1\nsteps: []\n",
-                        DateTimeOffset.UtcNow)),
+                        DateTimeOffset.UtcNow,
+                        new WorkflowLayoutDocument
+                        {
+                            NodePositions =
+                            {
+                                ["start"] = new WorkflowNodeLayout(10, 20),
+                            },
+                        })),
             }));
-        var layoutPath = environment.BuildLayoutPath("scope-1", "workflow-1");
-
-        Directory.CreateDirectory(Path.GetDirectoryName(layoutPath)!);
-        await File.WriteAllTextAsync(layoutPath, "{}");
 
         var summaries = await service.ListDraftsAsync("scope-1");
 
@@ -121,10 +124,10 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
     }
 
     [Fact]
-    public async Task DeleteDraftAsync_ShouldRemoveLocalLayoutSidecarWhenPresent()
+    public async Task DeleteDraftAsync_ShouldDeleteTypedDraftWithoutTouchingLayoutSidecar()
     {
         using var environment = new ScopedWorkflowEnvironment();
-        var service = environment.CreateService(workflowDraftStore: new RecordingWorkflowDraftStore(new[]
+        var storagePort = new RecordingWorkflowDraftStore(new[]
         {
             new ScopedDraft(
                 "scope-1",
@@ -132,17 +135,21 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
                     "workflow-1",
                     "workflow-1",
                     "name: workflow-1\nsteps: []\n",
-                    DateTimeOffset.UtcNow)),
-        }));
-        var layoutPath = environment.BuildLayoutPath("scope-1", "workflow-1");
-
-        Directory.CreateDirectory(Path.GetDirectoryName(layoutPath)!);
-        await File.WriteAllTextAsync(layoutPath, "{}");
-        File.Exists(layoutPath).Should().BeTrue();
+                    DateTimeOffset.UtcNow,
+                    new WorkflowLayoutDocument
+                    {
+                        NodePositions =
+                        {
+                            ["start"] = new WorkflowNodeLayout(10, 20),
+                        },
+                    })),
+        });
+        var service = environment.CreateService(workflowDraftStore: storagePort);
 
         await service.DeleteDraftAsync("scope-1", "workflow-1");
 
-        File.Exists(layoutPath).Should().BeFalse();
+        storagePort.DeletedWorkflowIds.Should().Equal("workflow-1");
+        (await storagePort.GetDraftAsync("scope-1", "workflow-1", CancellationToken.None)).Should().BeNull();
     }
 
     [Fact]
@@ -296,14 +303,21 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
             }
         }
 
-        public Task SaveDraftAsync(string scopeId, string workflowId, string workflowName, string yaml, CancellationToken ct)
+        public Task SaveDraftAsync(
+            string scopeId,
+            string workflowId,
+            string workflowName,
+            string yaml,
+            WorkflowLayoutDocument? layout,
+            CancellationToken ct)
         {
             Uploads.Add(new ScopedWorkflowUpload(scopeId, workflowId, workflowName, yaml));
             GetOrCreateScopeStore(scopeId)[workflowId] = new WorkflowDraft(
                 workflowId,
                 workflowName,
                 yaml,
-                DateTimeOffset.UtcNow);
+                DateTimeOffset.UtcNow,
+                layout);
             return Task.CompletedTask;
         }
 
@@ -359,7 +373,13 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
             _exception = exception;
         }
 
-        public Task SaveDraftAsync(string scopeId, string workflowId, string workflowName, string yaml, CancellationToken ct) =>
+        public Task SaveDraftAsync(
+            string scopeId,
+            string workflowId,
+            string workflowName,
+            string yaml,
+            WorkflowLayoutDocument? layout,
+            CancellationToken ct) =>
             Task.FromException(_exception);
 
         public Task<IReadOnlyList<WorkflowDraft>> ListDraftsAsync(string scopeId, CancellationToken ct) =>

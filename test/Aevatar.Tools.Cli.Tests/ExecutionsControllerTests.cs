@@ -1,7 +1,11 @@
+using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
-using Aevatar.Studio.Domain.Studio.Models;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Studio.Hosting.Controllers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
@@ -70,16 +74,11 @@ public sealed class ExecutionsControllerTests
 
     private static ExecutionsController CreateController(IAppScopeResolver? scopeResolver)
     {
-        var handler = new NoHttpMessageHandler();
-        var httpClient = new HttpClient(handler)
-        {
-            BaseAddress = new Uri("https://backend.example"),
-        };
         var service = new ExecutionService(
-            new NoOpWorkspaceStore(),
-            new StubHttpClientFactory(httpClient),
-            authSnapshotProvider: null,
-            userConfigStore: null,
+            new NoOpServiceInvocationPort(),
+            new NoOpServiceRunQueryPort(),
+            new NoOpResumeDispatchService(),
+            new NoOpStopDispatchService(),
             scopeResolver: scopeResolver);
         return new ExecutionsController(service);
     }
@@ -111,80 +110,51 @@ public sealed class ExecutionsControllerTests
             => _authenticatedWithoutScope;
     }
 
-    private sealed class StubHttpClientFactory : IHttpClientFactory
+    private sealed class NoOpServiceInvocationPort : IServiceInvocationPort
     {
-        private readonly HttpClient _httpClient;
-
-        public StubHttpClientFactory(HttpClient httpClient)
-            => _httpClient = httpClient;
-
-        public HttpClient CreateClient(string name) => _httpClient;
+        public Task<ServiceInvocationAcceptedReceipt> InvokeAsync(
+            ServiceInvocationRequest request,
+            CancellationToken ct = default)
+            => throw new InvalidOperationException("Controller test must fail before invoking a service.");
     }
 
-    private sealed class NoHttpMessageHandler : HttpMessageHandler
+    private sealed class NoOpServiceRunQueryPort : IServiceRunQueryPort
     {
-        protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken)
-            => throw new InvalidOperationException(
-                $"Controller test must fail before issuing an HTTP call. Unexpected request: {request.RequestUri}");
+        public Task<IReadOnlyList<ServiceRunSnapshot>> ListAsync(
+            ServiceRunQuery query,
+            CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<ServiceRunSnapshot>>([]);
+
+        public Task<ServiceRunSnapshot?> GetByRunIdAsync(
+            string scopeId,
+            string serviceId,
+            string runId,
+            CancellationToken ct = default)
+            => Task.FromResult<ServiceRunSnapshot?>(null);
+
+        public Task<ServiceRunSnapshot?> GetByCommandIdAsync(
+            string scopeId,
+            string serviceId,
+            string commandId,
+            CancellationToken ct = default)
+            => Task.FromResult<ServiceRunSnapshot?>(null);
     }
 
-    private sealed class NoOpWorkspaceStore : IStudioWorkspaceStore
+    private sealed class NoOpResumeDispatchService
+        : ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
     {
-        public Task<StudioWorkspaceSettings> GetSettingsAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(new StudioWorkspaceSettings("http://127.0.0.1:5100", [], "blue", "light"));
+        public Task<CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>> DispatchAsync(
+            WorkflowResumeCommand command,
+            CancellationToken ct = default)
+            => throw new InvalidOperationException("Controller test must fail before dispatching resume.");
+    }
 
-        public Task SaveSettingsAsync(StudioWorkspaceSettings settings, CancellationToken cancellationToken = default) =>
-            Task.CompletedTask;
-
-        public Task<IReadOnlyList<StoredWorkflowFile>> ListWorkflowFilesAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<StoredWorkflowFile>>([]);
-
-        public Task<StoredWorkflowFile?> GetWorkflowFileAsync(string workflowId, CancellationToken cancellationToken = default) =>
-            Task.FromResult<StoredWorkflowFile?>(null);
-
-        public Task<StoredWorkflowFile> SaveWorkflowFileAsync(StoredWorkflowFile workflowFile, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task DeleteWorkflowFileAsync(string workflowId, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<IReadOnlyList<StoredExecutionRecord>> ListExecutionsAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<StoredExecutionRecord>>([]);
-
-        public Task<StoredExecutionRecord?> GetExecutionAsync(string executionId, CancellationToken cancellationToken = default) =>
-            Task.FromResult<StoredExecutionRecord?>(null);
-
-        public Task<StoredExecutionRecord> SaveExecutionAsync(StoredExecutionRecord execution, CancellationToken cancellationToken = default) =>
-            Task.FromResult(execution);
-
-        public Task<StoredConnectorCatalog> GetConnectorCatalogAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(new StoredConnectorCatalog("", "", false, []));
-
-        public Task<StoredConnectorCatalog> SaveConnectorCatalogAsync(StoredConnectorCatalog catalog, CancellationToken cancellationToken = default) =>
-            Task.FromResult(catalog);
-
-        public Task<StoredConnectorDraft> GetConnectorDraftAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(new StoredConnectorDraft("", "", false, null, null));
-
-        public Task<StoredConnectorDraft> SaveConnectorDraftAsync(StoredConnectorDraft draft, CancellationToken cancellationToken = default) =>
-            Task.FromResult(draft);
-
-        public Task DeleteConnectorDraftAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
-
-        public Task<StoredRoleCatalog> GetRoleCatalogAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(new StoredRoleCatalog("", "", false, []));
-
-        public Task<StoredRoleCatalog> SaveRoleCatalogAsync(StoredRoleCatalog catalog, CancellationToken cancellationToken = default) =>
-            Task.FromResult(catalog);
-
-        public Task<StoredRoleDraft> GetRoleDraftAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(new StoredRoleDraft("", "", false, null, null));
-
-        public Task<StoredRoleDraft> SaveRoleDraftAsync(StoredRoleDraft draft, CancellationToken cancellationToken = default) =>
-            Task.FromResult(draft);
-
-        public Task DeleteRoleDraftAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+    private sealed class NoOpStopDispatchService
+        : ICommandDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
+    {
+        public Task<CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>> DispatchAsync(
+            WorkflowStopCommand command,
+            CancellationToken ct = default)
+            => throw new InvalidOperationException("Controller test must fail before dispatching stop.");
     }
 }

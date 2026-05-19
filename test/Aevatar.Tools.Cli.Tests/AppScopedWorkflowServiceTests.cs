@@ -525,12 +525,18 @@ public sealed class AppScopedWorkflowServiceTests
             }
         }
 
-        public Task SaveDraftAsync(string scopeId, string workflowId, string workflowName, string yaml, CancellationToken ct)
+        public Task SaveDraftAsync(
+            string scopeId,
+            string workflowId,
+            string workflowName,
+            string yaml,
+            WorkflowLayoutDocument? layout,
+            CancellationToken ct)
         {
             var uploadedAt = DateTimeOffset.UtcNow;
             var normalizedScopeId = scopeId.Trim();
             LastUpload = new UploadedWorkflowYaml(normalizedScopeId, workflowId, workflowName, yaml, uploadedAt);
-            GetOrCreateScopeStore(normalizedScopeId)[workflowId] = new WorkflowDraft(workflowId, workflowName, yaml, uploadedAt);
+            GetOrCreateScopeStore(normalizedScopeId)[workflowId] = new WorkflowDraft(workflowId, workflowName, yaml, uploadedAt, layout);
             return Task.CompletedTask;
         }
 

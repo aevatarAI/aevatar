@@ -11,6 +11,7 @@ using Aevatar.Studio.Projection.Projectors;
 using Aevatar.Studio.Projection.QueryPorts;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.GAgents.StudioMember;
+using Aevatar.Studio.Workspace;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -91,6 +92,10 @@ public static class ServiceCollectionExtensions
             StudioMaterializationContext,
             StudioTeamCurrentStateProjector>();
 
+        services.AddCurrentStateProjectionMaterializer<
+            StudioMaterializationContext,
+            StudioWorkspaceCurrentStateProjector>();
+
         // ── Document metadata providers (for index creation in Elasticsearch) ──
 
         services.TryAddSingleton<
@@ -137,6 +142,10 @@ public static class ServiceCollectionExtensions
             IProjectionDocumentMetadataProvider<StudioTeamCurrentStateDocument>,
             StudioTeamCurrentStateDocumentMetadataProvider>();
 
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<StudioWorkspaceCurrentStateDocument>,
+            StudioWorkspaceCurrentStateDocumentMetadataProvider>();
+
         // Projection scope activation port — required so Studio projectors
         // actually subscribe to their actor streams and materialize events.
         services.TryAddSingleton<StudioProjectionPort>();
@@ -152,6 +161,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IStudioMemberQueryPort, ProjectionStudioMemberQueryPort>();
         services.TryAddSingleton<IStudioMemberBindingRunQueryPort, ProjectionStudioMemberBindingRunQueryPort>();
         services.TryAddSingleton<IStudioTeamQueryPort, ProjectionStudioTeamQueryPort>();
+        services.TryAddSingleton<IStudioWorkspaceQueryPort, ProjectionStudioWorkspaceQueryPort>();
 
         // Command services (write side)
         services.TryAddSingleton<IUserConfigCommandService, ActorDispatchUserConfigCommandService>();

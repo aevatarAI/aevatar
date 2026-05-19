@@ -25,11 +25,16 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<WorkflowDocumentNormalizer>();
         services.AddSingleton<WorkflowValidator>();
         services.AddSingleton<IWorkflowYamlDocumentService, YamlWorkflowDocumentService>();
-        services.AddSingleton<FileStudioWorkspaceStore>();
-        services.AddSingleton<IStudioWorkspaceStore>(sp => sp.GetRequiredService<FileStudioWorkspaceStore>());
+        // Refactor (iter16/cluster-meta-studio-actor-substrate):
+        //   Old: FileStudioWorkspaceStore was a shadow store reading/writing JSON files in workspace dir, with no clear actor ownership of workspace facts
+        //   New principle: workspace facts authoritatively owned by StudioWorkspaceGAgent (per CLAUDE.md "权威状态" + Auric 2026-05-19 "架构级清晰")
+        services.AddSingleton<IStudioWorkspaceCommandPort, ActorDispatchStudioWorkspaceCommandPort>();
         services.AddSingleton<IUserConfigDefaults, ConfiguredUserConfigDefaults>();
         services.AddSingleton<IConnectorCatalogImportParser, ConnectorCatalogImportParser>();
         services.AddSingleton<IRoleCatalogImportParser, RoleCatalogImportParser>();
+        services.AddSingleton<StudioLocalCatalogImportReader>();
+        services.AddSingleton<IStudioLocalConnectorCatalogImportReader>(sp => sp.GetRequiredService<StudioLocalCatalogImportReader>());
+        services.AddSingleton<IStudioLocalRoleCatalogImportReader>(sp => sp.GetRequiredService<StudioLocalCatalogImportReader>());
         // chrono-storage blob client retained for media file uploads (ExplorerEndpoints)
         services.AddSingleton<ChronoStorageCatalogBlobClient>();
         // ── Actor-backed stores (replacing ChronoStorage* implementations) ──
