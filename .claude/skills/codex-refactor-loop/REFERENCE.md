@@ -49,6 +49,12 @@ Detailed specifications, edge cases, and recovery playbook. The main workflow is
     "base": "<review_base_branch>",
     "head": "<integration_branch>"
   },
+  "integration_sync": {
+    "last_sync_at": "<ISO8601>",
+    "last_sync_added_commits": <int>,
+    "last_sync_result": "ff | merge | up_to_date | conflict | ci_fail",
+    "consecutive_failures": <int>
+  },
   "design_pending": [
     {
       "cluster_id": "cluster-NNN",
