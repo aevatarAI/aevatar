@@ -6,7 +6,7 @@ You are **one of N independent reviewers**; you do not see other reviewers' verd
 
 ## Inputs
 
-1. PR diff: `cd /Users/auric/aevatar && git diff origin/${BASE_BRANCH}..origin/${HEAD_BRANCH}`
+1. PR diff: `cd /Users/auric/aevatar && git diff origin/${BASE_BRANCH}...origin/${HEAD_BRANCH}` **(three dots — symmetric-from-merge-base; two dots would mis-flag dev's new commits as PR deletions)**
 2. Each touched `src/` or `agents/` production file → look for matching `test/.../<TypeName>Tests.cs`.
 3. Implement summary if present: `${IMPLEMENT_SUMMARY_PATH}`.
 4. `/Users/auric/aevatar/tools/ci/test_stability_guards.sh` — for the polling allowlist + stability rules.

@@ -6,7 +6,7 @@ You are **one of N independent reviewers**.
 
 ## Inputs
 
-1. PR diff: `cd /Users/auric/aevatar && git diff origin/${BASE_BRANCH}..origin/${HEAD_BRANCH}`
+1. PR diff: `cd /Users/auric/aevatar && git diff origin/${BASE_BRANCH}...origin/${HEAD_BRANCH}` **(three dots — symmetric-from-merge-base; two dots would mis-flag dev's new commits as PR deletions)**
 2. Surrounding context: open each touched file fully (not just the hunks) when needed to judge naming / scope.
 3. Implement summary if present.
 

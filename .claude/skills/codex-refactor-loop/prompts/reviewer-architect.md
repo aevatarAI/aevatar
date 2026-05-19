@@ -8,7 +8,7 @@ You are **one of N independent reviewers**; you do not see the other reviewers' 
 
 1. `/Users/auric/aevatar/CLAUDE.md` — full text. The PR must not regress any clause.
 2. `/Users/auric/aevatar/AGENTS.md` — supporting rules.
-3. PR diff: `cd /Users/auric/aevatar && git diff origin/${BASE_BRANCH}..origin/${HEAD_BRANCH} -- '*.cs' '*.proto' 'docs/canon/*.md'`
+3. PR diff: `cd /Users/auric/aevatar && git diff origin/${BASE_BRANCH}...origin/${HEAD_BRANCH} -- '*.cs' '*.proto' 'docs/canon/*.md'` **(three dots — symmetric-from-merge-base; two dots would mis-flag dev's new commits as PR deletions)**
 4. Cluster source (audit + implement summary): `${AUDIT_PATH}` and `${IMPLEMENT_SUMMARY_PATH}` if they exist (skip if not — some PRs are out-of-loop).
 
 ## Your checklist (architect angle only — other reviewers cover other angles)
