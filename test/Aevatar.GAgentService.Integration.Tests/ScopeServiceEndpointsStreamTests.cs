@@ -39,17 +39,16 @@ public sealed class ScopeServiceEndpointsStreamTests
         .GetMethod("HandleScriptingServiceChatStreamAsync", BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new InvalidOperationException("HandleScriptingServiceChatStreamAsync not found.");
 
-    [Theory]
-    [InlineData(AGUIEvent.EventOneofCase.TextMessageEnd, true)]
-    [InlineData(AGUIEvent.EventOneofCase.RunError, false)]
-    [InlineData(AGUIEvent.EventOneofCase.RunFinished, false)]
-    public void ShouldEmitSyntheticRunFinished_ShouldRespectTerminalEvent(
-        AGUIEvent.EventOneofCase terminalEventCase,
-        bool expected)
+    [Fact]
+    public void ScopeServiceEndpoints_ShouldNotContainHostAguiMappingPump()
     {
-        ScopeServiceEndpoints.ShouldEmitSyntheticRunFinished(terminalEventCase)
-            .Should()
-            .Be(expected);
+        var methods = typeof(ScopeServiceEndpoints)
+            .GetMethods(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static)
+            .Select(method => method.Name)
+            .ToArray();
+
+        methods.Should().NotContain("PumpScriptEventsAsync");
+        methods.Should().NotContain("ShouldEmitSyntheticRunFinished");
     }
 
     [Fact]
@@ -175,8 +174,9 @@ public sealed class ScopeServiceEndpointsStreamTests
 
         runtime.CreateCalls.Should().ContainSingle(call => call.Id == null);
         var actor = runtime.Actors.Values.Should().ContainSingle().Subject.Should().BeOfType<StubActor>().Subject;
-        var request = actor.HandledEnvelopes.Should().ContainSingle().Subject.Payload.Unpack<ChatRequestEvent>();
-        request.SessionId.Should().BeEmpty();
+        var envelope = actor.HandledEnvelopes.Should().ContainSingle().Subject;
+        var request = envelope.Payload.Unpack<ChatRequestEvent>();
+        request.SessionId.Should().Be(envelope.Propagation.CorrelationId);
         request.InputParts.Select(part => part.Kind).Should().Equal(
             ChatContentPartKind.Image,
             ChatContentPartKind.Audio,
@@ -297,11 +297,11 @@ public sealed class ScopeServiceEndpointsStreamTests
     }
 
     [Fact]
-    public async Task ScriptExecutionSessionEventProjector_ShouldRouteOnlyMatchingRunSession()
+    public async Task ScriptServiceAguiSessionEventProjector_ShouldPublishMappedAguiEvent_ToMatchingRunSession()
     {
         var sessionHub = new RecordingScriptExecutionSessionEventHub();
-        var projector = new ScriptExecutionSessionEventProjector(sessionHub);
-        var context = new ScriptExecutionProjectionContext
+        var projector = new ScriptServiceAguiSessionEventProjector(sessionHub);
+        var context = new ScriptServiceAguiProjectionContext
         {
             RootActorId = "runtime-1",
             SessionId = "run-1",
@@ -341,7 +341,42 @@ public sealed class ScopeServiceEndpointsStreamTests
         var published = sessionHub.Published.Should().ContainSingle().Subject;
         published.ScopeId.Should().Be("runtime-1");
         published.SessionId.Should().Be("run-1");
-        published.Event.Id.Should().Be("evt-1");
+        published.Event.TextMessageContent.MessageId.Should().Be("msg-1");
+        published.Event.TextMessageContent.Delta.Should().Be("hello");
+    }
+
+    [Fact]
+    public async Task ScriptServiceAguiSessionEventProjector_ShouldPublishTerminalRunFinished_ForTextCompletion()
+    {
+        var sessionHub = new RecordingScriptExecutionSessionEventHub();
+        var projector = new ScriptServiceAguiSessionEventProjector(sessionHub);
+        var context = new ScriptServiceAguiProjectionContext
+        {
+            RootActorId = "runtime-1",
+            SessionId = "run-1",
+            ProjectionKind = "script-execution-session",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            new EventEnvelope
+            {
+                Propagation = new EnvelopePropagation
+                {
+                    CorrelationId = "run-1",
+                },
+                Payload = Any.Pack(new AiTextEndEvent
+                {
+                    SessionId = "msg-1",
+                    Content = "done",
+                }),
+            },
+            CancellationToken.None);
+
+        sessionHub.Published.Should().HaveCount(2);
+        sessionHub.Published[0].Event.TextMessageEnd.MessageId.Should().Be("msg-1");
+        sessionHub.Published[1].Event.RunFinished.ThreadId.Should().Be("runtime-1");
+        sessionHub.Published[1].Event.RunFinished.RunId.Should().Be("run-1");
     }
 
     [Fact]
@@ -374,7 +409,7 @@ public sealed class ScopeServiceEndpointsStreamTests
             "scope-a",
             null,
             new StubScriptRuntimeCommandPort(),
-            new StubScriptExecutionProjectionPort(),
+            new StubScriptServiceAguiProjectionPort(),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -392,7 +427,7 @@ public sealed class ScopeServiceEndpointsStreamTests
             "scope-a",
             null,
             new ThrowingScriptRuntimeCommandPort(new InvalidOperationException("Script runtime actor 'actor-1' could not be resolved. The service may not be activated.")),
-            new StubScriptExecutionProjectionPort(),
+            new StubScriptServiceAguiProjectionPort(),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -400,17 +435,21 @@ public sealed class ScopeServiceEndpointsStreamTests
     }
 
     [Fact]
-    public async Task HandleScriptingServiceChatStreamAsync_ShouldEmitSyntheticFinish()
+    public async Task HandleScriptingServiceChatStreamAsync_ShouldWriteProjectionTerminalFrame()
     {
         var http = CreateHttpContext();
         var commandPort = new StubScriptRuntimeCommandPort();
-        var projectionPort = new StubScriptExecutionProjectionPort
+        var projectionPort = new StubScriptServiceAguiProjectionPort
         {
             Messages =
             {
-                new EventEnvelope
+                new AGUIEvent
                 {
-                    Payload = Any.Pack(new AiTextEndEvent { Content = "done" }),
+                    TextMessageEnd = new Aevatar.Presentation.AGUI.TextMessageEndEvent { MessageId = "msg-1" },
+                },
+                new AGUIEvent
+                {
+                    RunFinished = new RunFinishedEvent { ThreadId = "actor-1", RunId = "run-1" },
                 },
             },
         };
@@ -445,19 +484,16 @@ public sealed class ScopeServiceEndpointsStreamTests
     {
         var http = CreateHttpContext();
         var commandPort = new StubScriptRuntimeCommandPort();
-        var projectionPort = new StubScriptExecutionProjectionPort
+        var projectionPort = new StubScriptServiceAguiProjectionPort
         {
             Messages =
             {
-                new EventEnvelope
+                new AGUIEvent
                 {
-                    Payload = Any.Pack(new AGUIEvent
+                    RunError = new RunErrorEvent
                     {
-                        RunError = new RunErrorEvent
-                        {
-                            Message = "failed",
-                        },
-                    }),
+                        Message = "failed",
+                    },
                 },
             },
         };
@@ -483,20 +519,17 @@ public sealed class ScopeServiceEndpointsStreamTests
     {
         var http = CreateHttpContext();
         var commandPort = new StubScriptRuntimeCommandPort();
-        var projectionPort = new StubScriptExecutionProjectionPort
+        var projectionPort = new StubScriptServiceAguiProjectionPort
         {
             Messages =
             {
-                new EventEnvelope
+                new AGUIEvent
                 {
-                    Payload = Any.Pack(new AGUIEvent
+                    RunFinished = new RunFinishedEvent
                     {
-                        RunFinished = new RunFinishedEvent
-                        {
-                            ThreadId = "actor-1",
-                            RunId = "run-1",
-                        },
-                    }),
+                        ThreadId = "actor-1",
+                        RunId = "run-1",
+                    },
                 },
             },
         };
@@ -646,7 +679,7 @@ public sealed class ScopeServiceEndpointsStreamTests
         string scopeId,
         IReadOnlyDictionary<string, string>? headers,
         IScriptRuntimeCommandPort scriptRuntimeCommandPort,
-        IScriptExecutionProjectionPort scriptExecutionProjectionPort,
+        IScriptServiceAguiProjectionPort scriptServiceAguiProjectionPort,
         CancellationToken ct) =>
         InvokePrivateTaskAsync(
             HandleScriptingStreamMethod,
@@ -658,7 +691,7 @@ public sealed class ScopeServiceEndpointsStreamTests
             "svc-default",
             headers,
             scriptRuntimeCommandPort,
-            scriptExecutionProjectionPort,
+            scriptServiceAguiProjectionPort,
             new ServiceInvocationRequest(),
             new NoOpServiceRunRegistrationPort(),
             ct);
@@ -701,9 +734,12 @@ public sealed class ScopeServiceEndpointsStreamTests
         var pipeline = new DefaultCommandDispatchPipeline<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError>(
             new GAgentDraftRunCommandTargetResolver(
                 runtime,
-                projectionPort),
+                projectionPort,
+                new StubGAgentRunTerminalProjectionPort()),
             new DefaultCommandContextPolicy(),
-            new GAgentDraftRunCommandTargetBinder(projectionPort),
+            new GAgentDraftRunCommandTargetBinder(
+                projectionPort,
+                new StubGAgentRunTerminalProjectionPort()),
             new GAgentDraftRunCommandEnvelopeFactory(),
             new ActorCommandTargetDispatcher<GAgentDraftRunCommandTarget>(new InlineActorDispatchPort(runtime)),
             new GAgentDraftRunAcceptedReceiptFactory());
@@ -713,7 +749,7 @@ public sealed class ScopeServiceEndpointsStreamTests
             new DefaultEventOutputStream<AGUIEvent, AGUIEvent>(new IdentityEventFrameMapper<AGUIEvent>()),
             new GAgentDraftRunCompletionPolicy(),
             new GAgentDraftRunFinalizeEmitter(),
-            new GAgentDraftRunDurableCompletionResolver(),
+            new GAgentDraftRunDurableCompletionResolver(new StubGAgentRunTerminalQueryPort()),
             NullLogger<DefaultCommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, AGUIEvent, GAgentDraftRunCompletionStatus>>.Instance);
     }
 
@@ -835,33 +871,79 @@ public sealed class ScopeServiceEndpointsStreamTests
 
     private sealed record StubDraftRunProjectionLease(string ActorId, string CommandId) : IGAgentDraftRunProjectionLease;
 
-    private sealed class StubScriptExecutionProjectionPort : IScriptExecutionProjectionPort
+    private sealed class StubGAgentRunTerminalProjectionPort : IGAgentRunTerminalProjectionPort
     {
-        public List<EventEnvelope> Messages { get; } = [];
+        public Task<IGAgentRunTerminalProjectionLease?> EnsureProjectionAsync(
+            string actorId,
+            string correlationId,
+            GAgentRunTerminalInteractionKind interactionKind,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            return Task.FromResult<IGAgentRunTerminalProjectionLease?>(
+                new StubGAgentRunTerminalProjectionLease(actorId, correlationId, interactionKind));
+        }
+
+        public Task ReleaseProjectionAsync(
+            IGAgentRunTerminalProjectionLease lease,
+            CancellationToken ct = default)
+        {
+            _ = lease;
+            _ = ct;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed record StubGAgentRunTerminalProjectionLease(
+        string ActorId,
+        string CorrelationId,
+        GAgentRunTerminalInteractionKind InteractionKind) : IGAgentRunTerminalProjectionLease;
+
+    private sealed class StubGAgentRunTerminalQueryPort : IGAgentRunTerminalQueryPort
+    {
+        public Task<GAgentRunTerminalSnapshot?> GetByCorrelationIdAsync(
+            string actorId,
+            string correlationId,
+            CancellationToken ct = default)
+        {
+            _ = actorId;
+            _ = correlationId;
+            _ = ct;
+            return Task.FromResult<GAgentRunTerminalSnapshot?>(null);
+        }
+
+        public Task<GAgentRunTerminalSnapshot?> GetBySessionIdAsync(
+            string actorId,
+            string sessionId,
+            CancellationToken ct = default)
+        {
+            _ = actorId;
+            _ = sessionId;
+            _ = ct;
+            return Task.FromResult<GAgentRunTerminalSnapshot?>(null);
+        }
+    }
+
+    private sealed class StubScriptServiceAguiProjectionPort : IScriptServiceAguiProjectionPort
+    {
+        public List<AGUIEvent> Messages { get; } = [];
         public List<(string ActorId, string RunId)> EnsureCalls { get; } = [];
 
         public bool ProjectionEnabled => true;
 
-        public Task<IScriptExecutionProjectionLease?> EnsureActorProjectionAsync(
-            string actorId,
-            CancellationToken ct = default)
-        {
-            return EnsureRunProjectionAsync(actorId, actorId, ct);
-        }
-
-        public Task<IScriptExecutionProjectionLease?> EnsureRunProjectionAsync(
+        public Task<IScriptServiceAguiProjectionLease?> EnsureRunProjectionAsync(
             string actorId,
             string runId,
             CancellationToken ct = default)
         {
             _ = ct;
             EnsureCalls.Add((actorId, runId));
-            return Task.FromResult<IScriptExecutionProjectionLease?>(new StubScriptExecutionProjectionLease(actorId, runId));
+            return Task.FromResult<IScriptServiceAguiProjectionLease?>(new StubScriptServiceAguiProjectionLease(actorId, runId));
         }
 
         public async Task AttachLiveSinkAsync(
-            IScriptExecutionProjectionLease lease,
-            IEventSink<EventEnvelope> sink,
+            IScriptServiceAguiProjectionLease lease,
+            IEventSink<AGUIEvent> sink,
             CancellationToken ct = default)
         {
             _ = lease;
@@ -881,8 +963,8 @@ public sealed class ScopeServiceEndpointsStreamTests
         }
 
         public Task DetachLiveSinkAsync(
-            IScriptExecutionProjectionLease lease,
-            IEventSink<EventEnvelope> sink,
+            IScriptServiceAguiProjectionLease lease,
+            IEventSink<AGUIEvent> sink,
             CancellationToken ct = default)
         {
             _ = lease;
@@ -892,7 +974,7 @@ public sealed class ScopeServiceEndpointsStreamTests
         }
 
         public Task ReleaseActorProjectionAsync(
-            IScriptExecutionProjectionLease lease,
+            IScriptServiceAguiProjectionLease lease,
             CancellationToken ct = default)
         {
             _ = lease;
@@ -901,7 +983,7 @@ public sealed class ScopeServiceEndpointsStreamTests
         }
     }
 
-    private sealed record StubScriptExecutionProjectionLease(string ActorId, string RunId) : IScriptExecutionProjectionLease;
+    private sealed record StubScriptServiceAguiProjectionLease(string ActorId, string RunId) : IScriptServiceAguiProjectionLease;
 
     private sealed class StubScriptRuntimeCommandPort : IScriptRuntimeCommandPort
     {
@@ -1003,18 +1085,18 @@ public sealed class ScopeServiceEndpointsStreamTests
     }
 
     private sealed class RecordingScriptExecutionSessionEventHub
-        : Aevatar.CQRS.Projection.Core.Abstractions.IProjectionSessionEventHub<EventEnvelope>
+        : Aevatar.CQRS.Projection.Core.Abstractions.IProjectionSessionEventHub<AGUIEvent>
     {
-        public List<(string ScopeId, string SessionId, EventEnvelope Event)> Published { get; } = [];
+        public List<(string ScopeId, string SessionId, AGUIEvent Event)> Published { get; } = [];
 
-        public Task PublishAsync(string scopeId, string sessionId, EventEnvelope evt, CancellationToken ct = default)
+        public Task PublishAsync(string scopeId, string sessionId, AGUIEvent evt, CancellationToken ct = default)
         {
             _ = ct;
             Published.Add((scopeId, sessionId, evt));
             return Task.CompletedTask;
         }
 
-        public Task<IAsyncDisposable> SubscribeAsync(string scopeId, string sessionId, Func<EventEnvelope, ValueTask> handler, CancellationToken ct = default)
+        public Task<IAsyncDisposable> SubscribeAsync(string scopeId, string sessionId, Func<AGUIEvent, ValueTask> handler, CancellationToken ct = default)
         {
             _ = scopeId;
             _ = sessionId;

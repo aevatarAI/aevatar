@@ -78,6 +78,204 @@ if rg -n "IGAgentActorStore|ActorBackedGAgentActorStore" src agents; then
   exit 1
 fi
 
+# Refactor (iter7/cluster-016):
+#   Old: Direct actor.HandleEventAsync calls and raw SubscribeAsync<EventEnvelope>
+#   subscriptions were guarded only by capability-local source assertions, so new
+#   Host/Application endpoints could reintroduce the same dispatch/projection
+#   boundary bypasses outside those tests.
+#   New: Keep the runtime-owned transport internals as a short exact allowlist;
+#   every other production path must use dispatch/projection ports instead of
+#   directly invoking actor handlers or subscribing to raw event-envelope streams.
+set +e
+dispatch_projection_boundary_report="$(
+  rg -n "actor\.HandleEventAsync|\.HandleEventAsync\(|SubscribeAsync<EventEnvelope>" \
+    src agents tools \
+    -g '*.cs' \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' \
+    -g '!**/wwwroot/**' \
+    -g '!*.g.cs' \
+    -g '!*.Designer.cs' \
+    | awk -F: '
+BEGIN {
+  allowed["src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActorDispatchPort.cs"] = 1;
+  allowed["src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActor.cs"] = 1;
+  allowed["src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/RuntimeActorGrain.cs"] = 1;
+}
+
+{
+  file = $1;
+  line_no = $2;
+  text = substr($0, length(file) + length(line_no) + 3);
+
+  if (file in allowed)
+    next;
+  if (file ~ /(^|\/)test\// || file ~ /Tests\.cs$/ || file ~ /(^|\/)[^\/]*\.Tests\//)
+    next;
+  if (file ~ /\.g\.cs$/ || file ~ /\.Designer\.cs$/)
+    next;
+  if (text ~ /^[[:space:]]*\/\/\/?/)
+    next;
+  if (text ~ /^[[:space:]]*Task[[:space:]]+HandleEventAsync[[:space:]]*\(/)
+    next;
+
+  print $0;
+}'
+)"
+dispatch_projection_boundary_status=$?
+set -e
+
+if [[ ${dispatch_projection_boundary_status} -ne 0 && ${dispatch_projection_boundary_status} -ne 1 ]]; then
+  echo "Dispatch/projection source-regression guard execution failed."
+  exit "${dispatch_projection_boundary_status}"
+fi
+
+if [ -n "${dispatch_projection_boundary_report}" ]; then
+  echo "${dispatch_projection_boundary_report}"
+  echo "Direct actor HandleEventAsync dispatch and raw SubscribeAsync<EventEnvelope> subscriptions are forbidden outside runtime transport internals."
+  exit 1
+fi
+
+# Refactor (iter8/cluster-018):
+#   Old: Web/API examples and SDK/test default-port values could reintroduce
+#   forbidden local API port tokens without any CI enforcement.
+#   New: Scan only URL/defaultPort-shaped port semantics for the forbidden
+#   Web/API ports, while leaving generic numeric values such as timeouts,
+#   page sizes, and histogram buckets outside the match surface.
+forbidden_web_api_port_scan_roots=()
+for scan_root in README*.md LOCAL_DEV_SETUP.md src test tools docs demos apps; do
+  if [ -e "${scan_root}" ]; then
+    forbidden_web_api_port_scan_roots+=("${scan_root}")
+  fi
+done
+
+set +e
+forbidden_web_api_port_report="$(
+  rg -n "localhost:50(00|50)|127\.0\.0\.1:50(00|50)|defaultPort:\s*50(00|50)|defaultPort\s*=\s*50(00|50)" \
+    "${forbidden_web_api_port_scan_roots[@]}" \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' \
+    -g '!**/node_modules/**' \
+    -g '!docs/audit-scorecard/**' \
+    -g '!docs/history/**' \
+    -g '!tools/ci/README.md' \
+    | awk -F: '
+{
+  file = $1;
+  line_no = $2;
+  text = substr($0, length(file) + length(line_no) + 3);
+
+  # Allow self-references inside this guard script (the regex literal).
+  if (file == "tools/ci/architecture_guards.sh" && text ~ /^[[:space:]]*#/)
+    next;
+
+  print $0;
+}'
+)"
+forbidden_web_api_port_status=$?
+set -e
+
+if [[ ${forbidden_web_api_port_status} -ne 0 && ${forbidden_web_api_port_status} -ne 1 ]]; then
+  echo "Forbidden Web/API port guard execution failed."
+  exit "${forbidden_web_api_port_status}"
+fi
+
+if [ -n "${forbidden_web_api_port_report}" ]; then
+  echo "${forbidden_web_api_port_report}"
+  echo "Forbidden Web/API port tokens found. Use repo-approved local API defaults such as 5100 instead of 5000 or 5050."
+  exit 1
+fi
+
+# Refactor (iter12/cluster-022):
+#   Old: actor query endpoints could be mapped without auth, exposing readmodel
+#   by raw actor id.
+#   New: CI guard requires explicit .RequireAuthorization() or
+#   security-allowlist comment per endpoint.
+#   TODO: Once a caller-scope query contract exists, extend this guard to require
+#   AI workflow tools to reference that scoped query port.
+workflow_actor_query_endpoint_files=()
+while IFS= read -r endpoint_file; do
+  workflow_actor_query_endpoint_files+=("${endpoint_file}")
+done < <(
+  find src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi \
+    -type f \
+    -name '*Endpoint*.cs' \
+    | sort
+)
+
+if [ "${#workflow_actor_query_endpoint_files[@]}" -gt 0 ]; then
+  set +e
+  workflow_actor_query_authz_report="$(
+    awk '
+function trim(value) {
+  sub(/^[[:space:]]+/, "", value);
+  sub(/[[:space:]]+$/, "", value);
+  return value;
+}
+
+function record_if_unprotected() {
+  if (in_endpoint == 0)
+    return;
+  if (requires_authorization == 0 && has_allowlist == 0)
+    print endpoint_file ":" endpoint_line ":" endpoint_text;
+}
+
+BEGIN {
+  in_endpoint = 0;
+}
+
+FNR == 1 {
+  record_if_unprotected();
+  in_endpoint = 0;
+}
+
+{
+  line = $0;
+
+  if (line ~ /MapGet[[:space:]]*\([[:space:]]*"\/(api\/)?agents"/ ||
+      line ~ /MapGet[[:space:]]*\([[:space:]]*"\/(api\/)?actors\/\{[^}]+}/) {
+    record_if_unprotected();
+    in_endpoint = 1;
+    endpoint_file = FILENAME;
+    endpoint_line = FNR;
+    endpoint_text = trim(line);
+    requires_authorization = line ~ /\.RequireAuthorization[[:space:]]*\(/;
+    has_allowlist = line ~ /security-allowlist:/;
+    next;
+  }
+
+  if (in_endpoint == 1) {
+    if (line ~ /\.RequireAuthorization[[:space:]]*\(/)
+      requires_authorization = 1;
+    if (line ~ /security-allowlist:/)
+      has_allowlist = 1;
+    if (line ~ /;[[:space:]]*$/) {
+      record_if_unprotected();
+      in_endpoint = 0;
+    }
+  }
+}
+
+END {
+  record_if_unprotected();
+}
+' "${workflow_actor_query_endpoint_files[@]}"
+  )"
+  workflow_actor_query_authz_status=$?
+  set -e
+
+  if [[ ${workflow_actor_query_authz_status} -ne 0 ]]; then
+    echo "Workflow actor query authorization guard execution failed."
+    exit "${workflow_actor_query_authz_status}"
+  fi
+
+  if [ -n "${workflow_actor_query_authz_report}" ]; then
+    echo "${workflow_actor_query_authz_report}"
+    echo "Workflow actor query endpoints must call .RequireAuthorization() or carry a per-endpoint security-allowlist comment."
+    exit 1
+  fi
+fi
+
 bash "${SCRIPT_DIR}/query_projection_priming_guard.sh"
 bash "${SCRIPT_DIR}/scripting_write_path_cqrs_guard.sh"
 bash "${SCRIPT_DIR}/projection_state_version_guard.sh"

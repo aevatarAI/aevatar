@@ -1529,7 +1529,7 @@ export function ChatToolsMenu({
     {
       actionLabel: advancedOpen ? "Hide panel" : "Open panel",
       description:
-        "Inspect scope state, launch endpoints, and review runtime evidence.",
+        "Inspect workspace state, launch endpoints, and review runtime evidence.",
       label: "Advanced Console",
       onClick: onToggleAdvanced,
       open: advancedOpen,
@@ -2537,7 +2537,7 @@ export function ChatMetaStrip({
     modelLabel ? { label: "Model", value: modelLabel } : null,
   ].filter(Boolean) as Array<{ label: string; value: string }>;
   const detailItems = [
-    scopeId ? { label: "Scope", value: scopeId } : null,
+    scopeId ? { label: "Workspace ID", value: scopeId } : null,
     runId ? { label: "Run", value: runId } : null,
     actorId ? { label: "Actor", value: actorId } : null,
     commandId ? { label: "Command", value: commandId } : null,

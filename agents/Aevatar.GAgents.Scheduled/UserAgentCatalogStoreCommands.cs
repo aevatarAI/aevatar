@@ -7,17 +7,13 @@ namespace Aevatar.GAgents.Scheduled;
 
 internal static class UserAgentCatalogStoreCommands
 {
+    // Refactor (iter1/cluster-001):
+    //   Old pattern: Catalog store commands accepted runner execution updates as catalog writes.
+    //   New principle: This helper only dispatches catalog-owned membership commands.
     public static Task DispatchUpsertAsync(
         IServiceProvider services,
         string publisherActorId,
         UserAgentCatalogUpsertCommand command,
-        CancellationToken ct = default) =>
-        DispatchAsync(services, publisherActorId, command, ct);
-
-    public static Task DispatchExecutionUpdateAsync(
-        IServiceProvider services,
-        string publisherActorId,
-        UserAgentCatalogExecutionUpdateCommand command,
         CancellationToken ct = default) =>
         DispatchAsync(services, publisherActorId, command, ct);
 

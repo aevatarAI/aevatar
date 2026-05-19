@@ -157,7 +157,7 @@ public sealed class LocalActor : IActor
                 return;
             }
 
-            scope = EventHandleScope.Begin(_logger, Id, envelope);
+            scope = EventHandleScope.Begin(_logger, Id, envelope, Agent.GetType().FullName ?? Agent.GetType().Name);
             scopeCreated = true;
             await Agent.HandleEventAsync(envelope);
         }

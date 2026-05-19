@@ -3,7 +3,6 @@ using System.Reflection;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
-using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
@@ -14,7 +13,6 @@ using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Presentation.AGUI;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 using Type = System.Type;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -23,13 +21,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Hosting;
-
-using AiTextEnd = Aevatar.AI.Abstractions.TextMessageEndEvent;
-using AiTextContent = Aevatar.AI.Abstractions.TextMessageContentEvent;
-using AiTextReasoning = Aevatar.AI.Abstractions.TextMessageReasoningEvent;
-using AiTextStart = Aevatar.AI.Abstractions.TextMessageStartEvent;
-using AiToolCall = Aevatar.AI.Abstractions.ToolCallEvent;
-using AiToolResult = Aevatar.AI.Abstractions.ToolResultEvent;
 
 namespace Aevatar.GAgentService.Integration.Tests;
 
@@ -509,113 +500,6 @@ public sealed class ScopeGAgentEndpointsTests
     }
 
     [Fact]
-    public void TryMapEnvelopeToAguiEvent_ShouldMapAIAndToolingEvents()
-    {
-        var textStart = TryMap(BuildEventEnvelope(new AiTextStart { SessionId = "s1", AgentId = "agent-1" }));
-        textStart!.TextMessageStart.Should().NotBeNull();
-        textStart.TextMessageStart!.MessageId.Should().Be("s1");
-
-        var textContent = TryMap(BuildEventEnvelope(new AiTextContent { Delta = "d", SessionId = "s1" }));
-        textContent!.TextMessageContent.Should().NotBeNull();
-        textContent.TextMessageContent!.Delta.Should().Be("d");
-
-        var reasoning = TryMap(BuildEventEnvelope(new AiTextReasoning { Delta = "r", SessionId = "s1" }));
-        reasoning!.Custom.Should().NotBeNull();
-        reasoning.Custom!.Name.Should().Be("TEXT_MESSAGE_REASONING");
-
-        var textEnd = TryMap(BuildEventEnvelope(new AiTextEnd { Content = "done", SessionId = "s1" }));
-        textEnd!.TextMessageEnd.Should().NotBeNull();
-
-        var textEndError = TryMap(BuildEventEnvelope(new AiTextEnd { Content = "[[AEVATAR_LLM_ERROR]] boom", SessionId = "s2" }));
-        textEndError!.RunError.Should().NotBeNull();
-        textEndError.RunError!.Message.Should().Be("boom");
-
-        var textEndFailed = TryMap(BuildEventEnvelope(new AiTextEnd { Content = "LLM request failed: upstream", SessionId = "s2" }));
-        textEndFailed!.RunError.Should().NotBeNull();
-        textEndFailed.RunError!.Message.Should().Be("LLM request failed: upstream");
-
-        var toolCall = TryMap(BuildEventEnvelope(new AiToolCall
-        {
-            ToolName = "search",
-            CallId = "call-1",
-        }));
-        toolCall!.ToolCallStart.Should().NotBeNull();
-
-        var toolResult = TryMap(BuildEventEnvelope(new AiToolResult
-        {
-            CallId = "call-1",
-            ResultJson = "{\"ok\":true}",
-        }));
-        toolResult!.ToolCallEnd.Should().NotBeNull();
-
-        var approval = TryMap(BuildToolApprovalEventEnvelope(new ToolApprovalRequestEvent
-        {
-            RequestId = "req-1",
-            SessionId = "s1",
-            ToolName = "connector.run",
-            ToolCallId = "call-1",
-            ArgumentsJson = "{}",
-            IsDestructive = true,
-            TimeoutSeconds = 30,
-        }));
-        approval.Should().NotBeNull();
-        approval!.Custom.Should().NotBeNull();
-        approval.Custom!.Name.Should().Be("TOOL_APPROVAL_REQUEST");
-        approval.Custom.Payload.Should().NotBeNull();
-        var approvalStruct = approval.Custom.Payload!.Unpack<Struct>();
-        approvalStruct.Fields["toolName"].StringValue.Should().Be("connector.run");
-        approvalStruct.Fields["isDestructive"].BoolValue.Should().BeTrue();
-        approvalStruct.Fields["timeoutSeconds"].NumberValue.Should().Be(30);
-
-        var agui = TryMap(BuildEventEnvelope(new AGUIEvent
-        {
-            TextMessageEnd = new Aevatar.Presentation.AGUI.TextMessageEndEvent { MessageId = "m2" }
-        }));
-        agui.Should().NotBeNull();
-        agui!.TextMessageEnd.Should().NotBeNull();
-
-        var none = TryMap(new EventEnvelope());
-        none.Should().BeNull();
-    }
-
-    [Fact]
-    public void TryMapEnvelopeToAguiEvent_ShouldHandleUnknownPayloadAndWrappedAguiEvent()
-    {
-        TryMap(new EventEnvelope
-        {
-            Payload = Any.Pack(new StringValue { Value = "unknown" }),
-        }).Should().BeNull();
-
-        var wrapped = new AGUIEvent
-        {
-            RunFinished = new RunFinishedEvent
-            {
-                ThreadId = "thread-1",
-                RunId = "run-1",
-            },
-        };
-
-        TryMap(new EventEnvelope
-        {
-            Payload = Any.Pack(wrapped),
-        }).Should().BeEquivalentTo(wrapped);
-    }
-
-    [Fact]
-    public void BuildToolApprovalStruct_ShouldHandleDecodeFailure()
-    {
-        var invalidAny = new Any
-        {
-            TypeUrl = "type.googleapis.com/aevatar.ai.ToolApprovalRequestEvent",
-            Value = ByteString.CopyFromUtf8("broken"),
-        };
-
-        var structure = InvokeBuildToolApprovalStruct(invalidAny);
-        structure.Fields.Should().ContainKey("error");
-        structure.Fields["error"].StringValue.Should().Contain("Failed to decode approval request");
-    }
-
-    [Fact]
     public void ExtractBearerToken_ShouldParseBearerHeader()
     {
         var context = new DefaultHttpContext();
@@ -826,20 +710,17 @@ public sealed class ScopeGAgentEndpointsTests
         ((IStatusCodeHttpResult)result).StatusCode.Should().Be((int)HttpStatusCode.OK);
     }
 
-    private static AGUIEvent? TryMap(EventEnvelope envelope)
+    [Fact]
+    public void ScopeGAgentEndpointsSource_ShouldNotRetainAguiMapperWrappers()
     {
-        var method = typeof(ScopeGAgentEndpoints).GetMethod(
-            nameof(ScopeGAgentEndpoints.TryMapEnvelopeToAguiEvent),
-            BindingFlags.NonPublic | BindingFlags.Static);
-        return (AGUIEvent?)method!.Invoke(null, new object[] { envelope });
-    }
+        // Refactor (iter5/cluster-010):
+        //   Old: Endpoint tests locked Host-local EventEnvelope -> AGUI mapper wrappers via reflection.
+        //   New: Host tests assert protocol boundaries and mapper behavior is tested at ScopeGAgentAguiEventMapper.
+        var source = File.ReadAllText(GetScopeGAgentEndpointsSourcePath());
 
-    private static Struct InvokeBuildToolApprovalStruct(Any payload)
-    {
-        var method = typeof(ScopeGAgentEndpoints).GetMethod(
-            "BuildToolApprovalStruct",
-            BindingFlags.NonPublic | BindingFlags.Static);
-        return (Struct)method!.Invoke(null, new object[] { payload })!;
+        source.Should().NotContain("TryMapEnvelopeToAguiEvent");
+        source.Should().NotContain("BuildToolApprovalStruct");
+        source.Should().NotContain("ScopeGAgentAguiEventMapper.TryMap");
     }
 
     private static string? InvokeExtractBearerToken(HttpContext context)
@@ -1011,21 +892,33 @@ public sealed class ScopeGAgentEndpointsTests
         public Microsoft.Extensions.FileProviders.IFileProvider ContentRootFileProvider { get; set; } = null!;
     }
 
-    private static EventEnvelope BuildEventEnvelope(IMessage message)
-    {
-        return new EventEnvelope { Payload = Any.Pack(message) };
-    }
-
-    private static EventEnvelope BuildToolApprovalEventEnvelope(ToolApprovalRequestEvent approvalRequest)
-    {
-        return BuildEventEnvelope(approvalRequest);
-    }
-
     private static async Task<string> ReadResponseBodyAsync(HttpContext context)
     {
         context.Response.Body.Position = 0;
         using var reader = new StreamReader(context.Response.Body, Encoding.UTF8, leaveOpen: true);
         return await reader.ReadToEndAsync();
+    }
+
+    private static string GetScopeGAgentEndpointsSourcePath()
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            var candidate = Path.Combine(
+                current.FullName,
+                "src",
+                "platform",
+                "Aevatar.GAgentService.Hosting",
+                "Endpoints",
+                "ScopeGAgentEndpoints.cs");
+
+            if (File.Exists(candidate))
+                return candidate;
+
+            current = current.Parent;
+        }
+
+        throw new FileNotFoundException("Could not locate ScopeGAgentEndpoints.cs from test output directory.");
     }
 
     private static async Task<(int StatusCode, string Body)> ExecuteResultAsync(IResult result)

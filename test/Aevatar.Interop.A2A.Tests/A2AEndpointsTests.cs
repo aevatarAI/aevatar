@@ -25,17 +25,18 @@ public class A2AEndpointsTests : IDisposable
     private readonly TestServer _server;
     private readonly HttpClient _client;
     private readonly StubDispatchPort _dispatchPort = new();
-    private readonly InMemoryA2ATaskStore _taskStore = new();
+    private readonly InMemoryA2ATaskStore _taskStore;
 
     public A2AEndpointsTests()
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Services.AddSingleton<IActorDispatchPort>(_dispatchPort);
-        builder.Services.AddSingleton<IA2ATaskStore>(_taskStore);
-        builder.Services.AddScoped<IA2AAdapterService, A2AAdapterService>();
+        builder.Services.AddInMemoryA2ATaskStoreForDevelopment();
+        builder.Services.AddA2AAdapter();
 
         var app = builder.Build();
+        _taskStore = (InMemoryA2ATaskStore)app.Services.GetRequiredService<IA2ATaskStore>();
         app.MapA2AEndpoints();
         app.StartAsync().GetAwaiter().GetResult();
 
@@ -338,27 +339,98 @@ public class A2AEndpointsTests : IDisposable
     {
         var services = new ServiceCollection();
         services.AddSingleton<IActorDispatchPort>(new StubDispatchPort());
+        services.AddInMemoryA2ATaskStoreForDevelopment();
         services.AddLogging();
         services.AddA2AAdapter();
 
         var provider = services.BuildServiceProvider();
 
-        provider.GetService<IA2ATaskStore>().Should().NotBeNull();
+        provider.GetService<IA2ATaskStore>().Should().BeOfType<InMemoryA2ATaskStore>();
         provider.GetService<IA2AAdapterService>().Should().NotBeNull();
     }
 
     [Fact]
-    public void AddA2AAdapter_DoesNotOverrideExistingRegistrations()
+    public void AddA2AAdapter_DoesNotSilentlyRegisterTaskStore()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IActorDispatchPort>(new StubDispatchPort());
+        services.AddLogging();
+        services.AddA2AAdapter();
+
+        services.Should().NotContain(descriptor => descriptor.ServiceType == typeof(IA2ATaskStore));
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetService<IA2ATaskStore>().Should().BeNull();
+        var act = () => provider.GetRequiredService<IA2AAdapterService>();
+        act.Should().Throw<InvalidOperationException>().WithMessage("*IA2ATaskStore*");
+    }
+
+    [Fact]
+    public void AddInMemoryA2ATaskStoreForDevelopment_DoesNotOverrideExistingRegistrations()
     {
         var customStore = new InMemoryA2ATaskStore();
         var services = new ServiceCollection();
         services.AddSingleton<IActorDispatchPort>(new StubDispatchPort());
         services.AddSingleton<IA2ATaskStore>(customStore);
         services.AddLogging();
+        services.AddInMemoryA2ATaskStoreForDevelopment();
         services.AddA2AAdapter();
 
         var provider = services.BuildServiceProvider();
         provider.GetService<IA2ATaskStore>().Should().BeSameAs(customStore);
+    }
+
+    [Fact]
+    public void InMemoryA2ATaskStore_IsReferencedOnlyByImplementationDevelopmentRegistrationAndTests()
+    {
+        var root = FindRepositoryRoot();
+        var registrationSource = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "Aevatar.Interop.A2A.Hosting",
+            "A2AServiceCollectionExtensions.cs"));
+        registrationSource.Should().NotContain("TryAddSingleton<IA2ATaskStore, InMemoryA2ATaskStore>");
+
+        var references = Directory
+            .EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !IsBuildOutput(path))
+            .Where(path => File.ReadAllText(path).Contains(nameof(InMemoryA2ATaskStore), StringComparison.Ordinal))
+            .Select(path => Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/'))
+            .Order()
+            .ToArray();
+
+        references.Should().OnlyContain(path =>
+            path == "src/Aevatar.Interop.A2A.Application/InMemoryA2ATaskStore.cs" ||
+            path == "src/Aevatar.Interop.A2A.Hosting/A2AServiceCollectionExtensions.cs" ||
+            path.StartsWith("test/Aevatar.Interop.A2A.Tests/", StringComparison.Ordinal));
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory != null)
+        {
+            var marker = Path.Combine(
+                directory.FullName,
+                "src",
+                "Aevatar.Interop.A2A.Hosting",
+                "A2AServiceCollectionExtensions.cs");
+            if (File.Exists(marker))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Could not locate the repository root.");
+    }
+
+    private static bool IsBuildOutput(string path)
+    {
+        var normalized = path.Replace(Path.DirectorySeparatorChar, '/');
+        return normalized.Contains("/bin/", StringComparison.Ordinal) ||
+               normalized.Contains("/obj/", StringComparison.Ordinal);
     }
 
     // ─── Stub ───

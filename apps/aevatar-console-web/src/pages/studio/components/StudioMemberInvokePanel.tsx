@@ -321,7 +321,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     trimOptional(selectedService?.displayName) ||
     trimOptional(selectedService?.serviceId) ||
     '当前成员';
-  const canInvoke = Boolean(scopeId && selectedService && selectedEndpoint);
+  const canInvoke = Boolean(
+    scopeId && normalizedMemberId && selectedService && selectedEndpoint,
+  );
   const visibleRequestHistory = useMemo(() => {
     const currentServiceId =
       trimOptional(selectedService?.serviceId) || trimOptional(initialServiceId);
@@ -363,11 +365,11 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const currentRawOutput = currentRunViewModel.rawOutput;
   const currentContractStatusLabel = getContractStatusLabel({
     hasEndpoint: Boolean(selectedEndpoint),
-    hasMember: Boolean(selectedService),
+    hasMember: Boolean(normalizedMemberId),
   });
   const currentContractStatus = getContractStatus({
     hasEndpoint: Boolean(selectedEndpoint),
-    hasMember: Boolean(selectedService),
+    hasMember: Boolean(normalizedMemberId),
   });
   const consoleMinHeight = screens.xl || screens.lg ? 280 : 220;
   const runElapsedLabel = formatElapsedTime(
@@ -376,6 +378,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   );
   const runIdLabel = trimOptional(invokeResult.runId) || '尚未开始';
   const commandIdLabel = trimOptional(invokeResult.commandId) || '尚未发出';
+  const actorIdLabel =
+    trimOptional(invokeResult.actorId) || currentMemberActorId || '尚未分配';
+  const memberIdLabel = normalizedMemberId || '未选中成员';
   const endpointLabel = selectedEndpoint?.displayName || selectedEndpointId || '—';
 
   useEffect(() => {
@@ -463,7 +468,13 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   useEffect(() => {
     const endpointId = trimOptional(selectedEndpoint?.endpointId);
     const serviceId = trimOptional(selectedService?.serviceId);
-    if (!scopeId || !endpointId || !serviceId || selectedService?.kind === 'nyxid-chat') {
+    if (
+      !scopeId ||
+      !normalizedMemberId ||
+      !endpointId ||
+      !serviceId ||
+      selectedService?.kind === 'nyxid-chat'
+    ) {
       setEndpointContract(null);
       setEndpointContractError('');
       return;
@@ -473,13 +484,11 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     setEndpointContract(null);
     setEndpointContractError('');
 
-    const request = normalizedMemberId
-      ? scopeRuntimeApi.getMemberEndpointContract(
-          scopeId,
-          normalizedMemberId,
-          endpointId,
-        )
-      : scopeRuntimeApi.getServiceEndpointContract(scopeId, serviceId, endpointId);
+    const request = scopeRuntimeApi.getMemberEndpointContract(
+      scopeId,
+      normalizedMemberId,
+      endpointId,
+    );
 
     request
       .then((contract) => {
@@ -631,7 +640,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   }, []);
 
   const handleInvoke = useCallback(async () => {
-    if (!scopeId || !selectedService || !selectedEndpoint) {
+    if (!scopeId || !normalizedMemberId || !selectedService || !selectedEndpoint) {
       return;
     }
 
@@ -722,7 +731,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
           },
           controller.signal,
           {
-            memberId: normalizedMemberId || undefined,
+            memberId: normalizedMemberId,
             serviceId: selectedService.serviceId,
           },
         );
@@ -897,7 +906,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
           prompt: trimmedPrompt,
         },
         {
-          memberId: normalizedMemberId || undefined,
+          memberId: normalizedMemberId,
           serviceId: selectedService.serviceId,
         },
       );
@@ -1012,6 +1021,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   }, [
     appendRequestHistory,
     ensureNyxIdChatBound,
+    normalizedMemberId,
     payloadBase64,
     payloadTypeUrl,
     prompt,
@@ -1021,7 +1031,8 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   ]);
 
   const handleOpenRuns = useCallback(() => {
-    if (!scopeId || !selectedEndpoint) {
+    const currentRunId = trimOptional(invokeResult.runId);
+    if (!scopeId || !normalizedMemberId || !selectedEndpoint || !currentRunId) {
       return;
     }
 
@@ -1059,6 +1070,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         payloadTypeUrl: currentPayloadTypeUrl || undefined,
         prompt: currentPrompt || undefined,
         returnTo: returnTo || undefined,
+        runId: currentRunId,
         scopeId,
         serviceId: selectedService?.serviceId,
       }),
@@ -1072,6 +1084,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     invokeResult.endpointId,
     invokeResult.events,
     invokeResult.runId,
+    normalizedMemberId,
     payloadBase64,
     payloadTypeUrl,
     prompt,
@@ -1148,6 +1161,18 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                   </div>
                 </div>
                 <div style={runSummaryCardStyle}>
+                  <div style={runSummaryLabelStyle}>Actor ID</div>
+                  <div title={actorIdLabel} style={runSummaryValueStyle}>
+                    {actorIdLabel}
+                  </div>
+                </div>
+                <div style={runSummaryCardStyle}>
+                  <div style={runSummaryLabelStyle}>Member ID</div>
+                  <div title={memberIdLabel} style={runSummaryValueStyle}>
+                    {memberIdLabel}
+                  </div>
+                </div>
+                <div style={runSummaryCardStyle}>
                   <div style={runSummaryLabelStyle}>Elapsed</div>
                   <div style={runSummaryValueStyle}>{runElapsedLabel}</div>
                 </div>
@@ -1177,7 +1202,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                 effectiveResponseTypeUrl={effectiveResponseTypeUrl}
                 endpointKind={selectedEndpoint?.kind || 'command'}
                 formError={formError}
-                hasOpenRunsTarget={Boolean(scopeId && selectedEndpoint)}
+                hasOpenRunsTarget={Boolean(trimOptional(invokeResult.runId))}
                 invokeStatus={invokeResult.status}
                 isChatEndpoint={isChatEndpoint}
                 layout="dock"

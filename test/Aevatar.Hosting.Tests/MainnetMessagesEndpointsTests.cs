@@ -1,0 +1,618 @@
+using System.Net;
+using System.Net.Http.Headers;
+using System.Runtime.CompilerServices;
+using System.Text;
+using System.Text.Json;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Responses;
+using Aevatar.GAgentService.Application.Responses;
+using Aevatar.Mainnet.Host.Api.Messages;
+using Aevatar.Mainnet.Host.Api.Responses;
+using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+
+namespace Aevatar.Hosting.Tests;
+
+/// <summary>
+/// Path B (Anthropic Messages, <c>/v1/messages</c>) smoke tests. Path B is a stateless
+/// facade — it shares the LlmSessionGAgent / NyxIdLLMProvider / completion service
+/// pipeline with /v1/responses, so we only assert the contract pieces unique to the
+/// Anthropic surface here (request shape, response shape, SSE frame schedule).
+/// </summary>
+public sealed class MainnetMessagesEndpointsTests
+{
+    [Fact]
+    public async Task PostMessages_NonStreaming_ShouldReturnAnthropicMessageEnvelope()
+    {
+        var provider = new MessagesRecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "Hi there",
+                    IsLast = true,
+                    Usage = new TokenUsage(5, 3, 8),
+                },
+            ],
+        };
+        var sessions = new MessagesRecordingSessionStore();
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
+        {
+            Content = JsonContent("""
+            {
+              "model": "claude-haiku-4-5",
+              "max_tokens": 256,
+              "system": "You are concise.",
+              "messages": [
+                {"role": "user", "content": "Hello"}
+              ]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "anthropic-bearer");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        body.Should().NotContain("anthropic-bearer");
+
+        using var doc = JsonDocument.Parse(body);
+        var root = doc.RootElement;
+        root.GetProperty("id").GetString().Should().StartWith("msg_");
+        root.GetProperty("type").GetString().Should().Be("message");
+        root.GetProperty("role").GetString().Should().Be("assistant");
+        root.GetProperty("model").GetString().Should().Be("claude-haiku-4-5");
+        root.GetProperty("stop_reason").GetString().Should().Be("end_turn");
+        var content = root.GetProperty("content");
+        content.GetArrayLength().Should().Be(1);
+        content[0].GetProperty("type").GetString().Should().Be("text");
+        content[0].GetProperty("text").GetString().Should().Be("Hi there");
+        root.GetProperty("usage").GetProperty("input_tokens").GetInt32().Should().Be(5);
+        root.GetProperty("usage").GetProperty("output_tokens").GetInt32().Should().Be(3);
+
+        // Path B reuses the same LlmSession actor as Path A (no MessagesSessionGAgent).
+        sessions.Registered.Should().ContainSingle();
+        sessions.Registered[0].ScopeId.Should().Be("user-1");
+        sessions.StatusUpdates.Should().Contain(u => u.Status == LlmSessionStatus.Completed);
+
+        // System message + user message both flow into the intermediate ChatMessage list.
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.Messages.Should().HaveCount(2);
+        provider.LastRequest.Messages[0].Role.Should().Be("system");
+        provider.LastRequest.Messages[0].Content.Should().Be("You are concise.");
+        provider.LastRequest.Messages[1].Role.Should().Be("user");
+        provider.LastRequest.Messages[1].Content.Should().Be("Hello");
+        provider.LastRequest.MaxTokens.Should().Be(256);
+        // Bearer goes on the typed CallerContext, not Metadata, per PR #625 round-2 fix.
+        provider.LastRequest.CallerContext!.Credentials!.NyxIdBearer.Should().Be("anthropic-bearer");
+        provider.LastRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+    }
+
+    [Fact]
+    public async Task PostMessages_Streaming_ShouldEmitAnthropicSseFrames()
+    {
+        var provider = new MessagesRecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk { DeltaContent = "Hel" },
+                new LLMStreamChunk
+                {
+                    DeltaContent = "lo",
+                    IsLast = true,
+                    Usage = new TokenUsage(4, 2, 6),
+                },
+            ],
+        };
+        var sessions = new MessagesRecordingSessionStore();
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
+        {
+            Content = JsonContent("""
+            {
+              "model": "claude-haiku-4-5",
+              "max_tokens": 64,
+              "messages": [{"role": "user", "content": "ping"}],
+              "stream": true
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "stream-bearer");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        response.Content.Headers.ContentType!.MediaType.Should().Be("text/event-stream");
+        body.Should().Contain("event: message_start");
+        body.Should().Contain("\"type\":\"message_start\"");
+        body.Should().Contain("event: content_block_start");
+        body.Should().Contain("\"content_block\":{\"type\":\"text\"");
+        body.Should().Contain("event: content_block_delta");
+        body.Should().Contain("\"text\":\"Hel\"");
+        body.Should().Contain("\"text\":\"lo\"");
+        body.Should().Contain("event: content_block_stop");
+        body.Should().Contain("event: message_delta");
+        body.Should().Contain("\"stop_reason\":\"end_turn\"");
+        body.Should().Contain("event: message_stop");
+        body.Should().NotContain("stream-bearer");
+
+        sessions.StatusUpdates.Should().Contain(u => u.Status == LlmSessionStatus.Completed);
+    }
+
+    [Fact]
+    public async Task PostMessages_WithToolCall_ShouldEmitToolUseContentBlock()
+    {
+        var provider = new MessagesRecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "toolu_abc",
+                        Name = "get_weather",
+                        ArgumentsJson = """{"city":"SF"}""",
+                    },
+                    IsLast = true,
+                },
+            ],
+        };
+        var sessions = new MessagesRecordingSessionStore();
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
+        {
+            Content = JsonContent("""
+            {
+              "model": "claude-haiku-4-5",
+              "max_tokens": 256,
+              "messages": [{"role": "user", "content": "weather in SF"}],
+              "tools": [
+                {
+                  "name": "get_weather",
+                  "description": "Look up the weather.",
+                  "input_schema": {"type":"object","properties":{"city":{"type":"string"}}}
+                }
+              ]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "tool-bearer");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        using var doc = JsonDocument.Parse(body);
+        var root = doc.RootElement;
+        root.GetProperty("stop_reason").GetString().Should().Be("tool_use");
+        var content = root.GetProperty("content");
+        content.GetArrayLength().Should().Be(1);
+        content[0].GetProperty("type").GetString().Should().Be("tool_use");
+        content[0].GetProperty("id").GetString().Should().Be("toolu_abc");
+        content[0].GetProperty("name").GetString().Should().Be("get_weather");
+        content[0].GetProperty("input").GetProperty("city").GetString().Should().Be("SF");
+
+        provider.LastRequest.Should().NotBeNull();
+        var tool = provider.LastRequest!.Tools.Should().ContainSingle().Subject;
+        tool.Name.Should().Be("get_weather");
+        tool.Description.Should().Be("Look up the weather.");
+        tool.ParametersSchema.Should().Contain("\"city\"");
+        tool.IsReadOnly.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task PostMessages_WithoutBearer_ShouldReturn401WithAnthropicErrorEnvelope()
+    {
+        var provider = new MessagesRecordingLLMProvider();
+        await using var app = await CreateAppAsync(provider);
+        var client = app.GetTestClient();
+
+        var response = await client.PostAsync(
+            "/v1/messages",
+            JsonContent("""{"model":"claude-haiku-4-5","max_tokens":1,"messages":[{"role":"user","content":"x"}]}"""));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        var body = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(body);
+        doc.RootElement.GetProperty("type").GetString().Should().Be("error");
+        doc.RootElement.GetProperty("error").GetProperty("type").GetString().Should().Be("authentication_error");
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostMessages_WithNonBearerAuthorization_ShouldReturn401()
+    {
+        var provider = new MessagesRecordingLLMProvider();
+        await using var app = await CreateAppAsync(provider);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
+        {
+            Content = JsonContent("""{"model":"claude-haiku-4-5","max_tokens":1,"messages":[{"role":"user","content":"x"}]}"""),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Basic", "not-a-bearer");
+
+        var response = await client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostMessages_WithToolResultBlockInUserContent_ShouldFlattenIntoToolRoleMessage()
+    {
+        // Anthropic Messages multi-turn tool flow: the *next* user message carries a
+        // tool_result content block with the prior tool's output. Path B must replay
+        // that as a role=tool ChatMessage so the OpenAI-shaped intermediate doesn't
+        // drop the tool result.
+        var provider = new MessagesRecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk { DeltaContent = "OK", IsLast = true, Usage = new TokenUsage(2, 1, 3) },
+            ],
+        };
+        var sessions = new MessagesRecordingSessionStore();
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
+        {
+            Content = JsonContent("""
+            {
+              "model": "claude-haiku-4-5",
+              "max_tokens": 64,
+              "messages": [
+                {"role": "user", "content": "weather?"},
+                {"role": "assistant", "content": [
+                  {"type": "tool_use", "id": "toolu_x", "name": "get_weather", "input": {"city":"SF"}}
+                ]},
+                {"role": "user", "content": [
+                  {"type": "tool_result", "tool_use_id": "toolu_x", "content": "sunny"}
+                ]}
+              ]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "multi-turn-bearer");
+
+        var response = await client.SendAsync(request);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        provider.LastRequest.Should().NotBeNull();
+        var messages = provider.LastRequest!.Messages;
+        messages.Should().HaveCount(3);
+        messages[0].Role.Should().Be("user");
+        messages[1].Role.Should().Be("assistant");
+        messages[1].ToolCalls.Should().ContainSingle().Which.Name.Should().Be("get_weather");
+        messages[2].Role.Should().Be("tool");
+        messages[2].ToolCallId.Should().Be("toolu_x");
+        messages[2].Content.Should().Be("sunny");
+    }
+
+    [Fact]
+    public async Task PostMessages_WithThinkingBlock_ShouldPreserveAssistantReasoning()
+    {
+        var provider = new MessagesRecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk { DeltaContent = "OK", IsLast = true },
+            ],
+        };
+        await using var app = await CreateAppAsync(provider);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
+        {
+            Content = JsonContent("""
+            {
+              "model": "claude-haiku-4-5",
+              "max_tokens": 64,
+              "messages": [
+                {"role": "user", "content": "2+2?"},
+                {"role": "assistant", "content": [
+                  {"type": "thinking", "thinking": "Need simple arithmetic."},
+                  {"type": "text", "text": "4"}
+                ]},
+                {"role": "user", "content": "thanks"}
+              ]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "thinking-bearer");
+
+        var response = await client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        provider.LastRequest.Should().NotBeNull();
+        var assistant = provider.LastRequest!.Messages.Should().Contain(m => m.Role == "assistant").Subject;
+        assistant.Content.Should().Be("4");
+        assistant.ReasoningContent.Should().Be("Need simple arithmetic.");
+    }
+
+    [Theory]
+    [InlineData("""{"top_p":0.5}""")]
+    [InlineData("""{"top_k":10}""")]
+    [InlineData("""{"stop_sequences":["END"]}""")]
+    [InlineData("""{"tool_choice":{"type":"any"}}""")]
+    public async Task PostMessages_WithUnsupportedControlParameter_ShouldReturn400(string extraJson)
+    {
+        var provider = new MessagesRecordingLLMProvider();
+        await using var app = await CreateAppAsync(provider);
+        var client = app.GetTestClient();
+        var extra = JsonDocument.Parse(extraJson).RootElement.EnumerateObject().Single();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
+        {
+            Content = JsonContent($$"""
+            {
+              "model": "claude-haiku-4-5",
+              "max_tokens": 64,
+              "messages": [{"role": "user", "content": "ping"}],
+              "{{extra.Name}}": {{extra.Value.GetRawText()}}
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unsupported-bearer");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        using var doc = JsonDocument.Parse(body);
+        doc.RootElement.GetProperty("type").GetString().Should().Be("error");
+        doc.RootElement.GetProperty("error").GetProperty("type").GetString().Should().Be("unsupported_parameter");
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostMessages_WhenResponsesToolProviderRegistered_ShouldNotInjectAevatarAdditiveTools()
+    {
+        // Regression: /v1/messages must explicitly pass Array.Empty<IResponsesToolProvider>()
+        // to ResponsesToolClassifier so Aevatar substitutes/additives never shadow the
+        // Anthropic client's own tool harness (Claude Code in particular). If a future
+        // refactor wires DI providers into this path, this test fails.
+        var provider = new MessagesRecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "Hi",
+                    IsLast = true,
+                    Usage = new TokenUsage(1, 1, 2),
+                },
+            ],
+        };
+        var toolProvider = new MessagesRecordingResponsesToolProvider(
+            substituteTools: [new MessagesStubAgentTool("WebSearch", "would substitute client WebSearch")],
+            additiveTools: [
+                new MessagesStubAgentTool("use_skill", "would inject skill bridge"),
+                new MessagesStubAgentTool("ornn_search_skills", "would inject ornn bridge"),
+            ]);
+        await using var app = await CreateAppAsync(provider, responsesToolProvider: toolProvider);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
+        {
+            Content = JsonContent("""
+            {
+              "model": "claude-haiku-4-5",
+              "max_tokens": 32,
+              "messages": [{"role": "user", "content": "ping"}]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "anthropic-bearer");
+
+        var response = await client.SendAsync(request);
+        response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+        provider.LastRequest.Should().NotBeNull();
+        var toolNames = provider.LastRequest!.Tools?.Select(static tool => tool.Name).ToArray() ?? [];
+        toolNames.Should().NotContain(["use_skill", "ornn_search_skills", "WebSearch"]);
+    }
+
+    // ----- Test fixtures -------------------------------------------------------
+
+    private static async Task<WebApplication> CreateAppAsync(
+        MessagesRecordingLLMProvider provider,
+        MessagesRecordingSessionStore? sessions = null,
+        IResponsesCallerScopeResolver? callerScopeResolver = null,
+        IResponsesToolProvider? responsesToolProvider = null)
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        });
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton<ILLMProviderFactory>(provider);
+        sessions ??= new MessagesRecordingSessionStore();
+        builder.Services.AddSingleton(sessions);
+        builder.Services.AddSingleton<ILlmSessionRegistrationPort>(sessions);
+        builder.Services.AddSingleton<ILlmSessionQueryPort>(sessions);
+        builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
+        builder.Services.AddSingleton(callerScopeResolver ?? new MessagesStubCallerScopeResolver());
+        builder.Services.AddSingleton<IResponsesRouteResolver>(new MessagesNoopRouteResolver());
+        if (responsesToolProvider != null)
+            builder.Services.AddSingleton(responsesToolProvider);
+
+        var app = builder.Build();
+        app.MapMessagesApiEndpoints();
+        await app.StartAsync();
+        return app;
+    }
+
+    private static StringContent JsonContent(string json) =>
+        new(json, Encoding.UTF8, "application/json");
+
+    private sealed class MessagesRecordingLLMProvider : ILLMProvider, ILLMProviderFactory
+    {
+        public string Name => "messages-recording";
+
+        public LLMRequest? LastRequest { get; private set; }
+
+        public int StreamCallCount { get; private set; }
+
+        public IReadOnlyList<LLMStreamChunk> StreamChunks { get; init; } = [];
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
+        {
+            LastRequest = request;
+            return Task.FromResult(new LLMResponse { Content = "ok" });
+        }
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            LastRequest = request;
+            StreamCallCount++;
+            foreach (var chunk in StreamChunks)
+            {
+                ct.ThrowIfCancellationRequested();
+                yield return chunk;
+                await Task.Yield();
+            }
+        }
+    }
+
+    private sealed class MessagesStubCallerScopeResolver : IResponsesCallerScopeResolver
+    {
+        public Task<ResponsesCallerScope> ResolveAsync(
+            string nyxIdAccessToken,
+            HttpContext http,
+            CancellationToken ct = default) =>
+            Task.FromResult(new ResponsesCallerScope("user-1", "user-1", LlmSessionOriginKind.ApiKey));
+    }
+
+    private sealed class MessagesNoopRouteResolver : IResponsesRouteResolver
+    {
+        public Task<string?> ResolveRouteValueAsync(string slug, string bearerToken, CancellationToken ct) =>
+            Task.FromResult<string?>(null);
+    }
+
+    private sealed class MessagesRecordingSessionStore :
+        ILlmSessionRegistrationPort,
+        ILlmSessionQueryPort
+    {
+        public List<LlmSessionRecord> Registered { get; } = [];
+        public List<(string ActorId, string ResponseId, LlmSessionStatus Status)> StatusUpdates { get; } = [];
+
+        public Task<LlmSessionRegistrationResult> RegisterAsync(
+            LlmSessionRecord record,
+            CancellationToken ct = default)
+        {
+            Registered.Add(record);
+            return Task.FromResult(new LlmSessionRegistrationResult(
+                ActorId: $"llm-session:{record.ResponseId}",
+                ResponseId: record.ResponseId));
+        }
+
+        public Task UpdateStatusAsync(
+            string actorId,
+            string responseId,
+            LlmSessionStatus status,
+            CancellationToken ct = default)
+        {
+            StatusUpdates.Add((actorId, responseId, status));
+            return Task.CompletedTask;
+        }
+
+        public Task RecordForwardedToolCallAsync(
+            string sessionActorId,
+            string responseId,
+            LlmSessionForwardedToolCall call,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task ReceiveForwardedToolResultAsync(
+            string sessionActorId,
+            string responseId,
+            string callId,
+            string schemaHash,
+            string resultJson,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task ResolveForwardedToolResultAsync(
+            string sessionActorId,
+            string responseId,
+            string callId,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<LlmSessionSnapshot?> GetByResponseIdAsync(
+            string responseId,
+            CancellationToken ct = default) =>
+            Task.FromResult<LlmSessionSnapshot?>(null);
+    }
+
+    private sealed class MessagesRecordingResponsesToolProvider : IResponsesToolProvider
+    {
+        private readonly IReadOnlyList<IAgentTool> _substituteTools;
+        private readonly IReadOnlyList<IAgentTool> _additiveTools;
+
+        public MessagesRecordingResponsesToolProvider(
+            IReadOnlyList<IAgentTool> substituteTools,
+            IReadOnlyList<IAgentTool> additiveTools)
+        {
+            _substituteTools = substituteTools;
+            _additiveTools = additiveTools;
+        }
+
+        public ValueTask<IReadOnlyList<IAgentTool>> GetSubstituteToolsAsync(
+            ResponsesToolProviderContext context,
+            CancellationToken ct = default) =>
+            ValueTask.FromResult(_substituteTools);
+
+        public ValueTask<IReadOnlyList<IAgentTool>> GetAdditiveToolsAsync(
+            ResponsesToolProviderContext context,
+            CancellationToken ct = default) =>
+            ValueTask.FromResult(_additiveTools);
+    }
+
+    private sealed class MessagesStubAgentTool : IAgentTool
+    {
+        public MessagesStubAgentTool(string name, string description)
+        {
+            Name = name;
+            Description = description;
+        }
+
+        public string Name { get; }
+
+        public string Description { get; }
+
+        public string ParametersSchema => """{"type":"object","properties":{}}""";
+
+        public bool IsReadOnly => true;
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
+    }
+}

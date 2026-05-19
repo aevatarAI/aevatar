@@ -86,7 +86,7 @@ function buildAuthDescriptor(authSession?: StudioAuthSession | null): Pick<
     return {
       authAuthenticated: false,
       authEnabled: true,
-      authHint: 'Studio is not authenticated for this scope yet.',
+      authHint: 'Studio is not authenticated for this workspace yet.',
       authLabel: 'Sign-in required',
     };
   }
@@ -110,37 +110,24 @@ export function buildStudioBindInvokePath(
   memberId?: string,
   serviceId?: string,
   endpoint?: Pick<ServiceEndpointSnapshot, 'endpointId' | 'kind'> | null,
-): string {
+): string | null {
   const encodedScopeId = encodeSegment(scopeId);
   const encodedEndpointId = encodeSegment(endpointId);
   const normalizedMemberId = trimOptional(memberId);
-  const normalizedServiceId = trimOptional(serviceId);
+
+  if (!normalizedMemberId) {
+    return null;
+  }
 
   if (isChatServiceEndpoint(endpoint)) {
-    if (normalizedMemberId) {
-      return `/api/scopes/${encodedScopeId}/members/${encodeSegment(
-        normalizedMemberId,
-      )}/invoke/chat:stream`;
-    }
-
-    return normalizedServiceId
-      ? `/api/scopes/${encodedScopeId}/services/${encodeSegment(
-          normalizedServiceId,
-        )}/invoke/chat:stream`
-      : `/api/scopes/${encodedScopeId}/invoke/chat:stream`;
-  }
-
-  if (normalizedMemberId) {
     return `/api/scopes/${encodedScopeId}/members/${encodeSegment(
       normalizedMemberId,
-    )}/invoke/${encodedEndpointId}`;
+    )}/invoke/chat:stream`;
   }
 
-  return normalizedServiceId
-    ? `/api/scopes/${encodedScopeId}/services/${encodeSegment(
-        normalizedServiceId,
-      )}/invoke/${encodedEndpointId}`
-    : `/api/scopes/${encodedScopeId}/invoke/${encodedEndpointId}`;
+  return `/api/scopes/${encodedScopeId}/members/${encodeSegment(
+    normalizedMemberId,
+  )}/invoke/${encodedEndpointId}`;
 }
 
 export function buildStudioBindInvokeUrl(
@@ -150,7 +137,7 @@ export function buildStudioBindInvokeUrl(
   serviceId?: string,
   endpoint?: Pick<ServiceEndpointSnapshot, 'endpointId' | 'kind'> | null,
   origin?: string,
-): string {
+): string | null {
   const path = buildStudioBindInvokePath(
     scopeId,
     endpointId,
@@ -158,6 +145,10 @@ export function buildStudioBindInvokeUrl(
     serviceId,
     endpoint,
   );
+  if (!path) {
+    return null;
+  }
+
   const resolvedOrigin = resolveOrigin(origin);
   return resolvedOrigin ? `${resolvedOrigin}${path}` : path;
 }
@@ -169,21 +160,30 @@ export function buildStudioBindContract(
     return null;
   }
 
+  const normalizedMemberId = trimOptional(input.memberId);
+  if (!normalizedMemberId) {
+    return null;
+  }
+
   const invokePath = buildStudioBindInvokePath(
     input.scopeId,
     input.endpoint.endpointId,
-    trimOptional(input.memberId) || undefined,
+    normalizedMemberId,
     input.service.serviceId,
     input.endpoint,
   );
   const invokeUrl = buildStudioBindInvokeUrl(
     input.scopeId,
     input.endpoint.endpointId,
-    trimOptional(input.memberId) || undefined,
+    normalizedMemberId,
     input.service.serviceId,
     input.endpoint,
     input.origin,
   );
+  if (!invokePath || !invokeUrl) {
+    return null;
+  }
+
   const isChatEndpoint = isChatServiceEndpoint(input.endpoint);
   const authDescriptor = buildAuthDescriptor(input.authSession);
   const revisionId =

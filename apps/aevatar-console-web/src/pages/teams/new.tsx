@@ -291,16 +291,16 @@ const TeamCreatePage: React.FC = () => {
         }}
       >
         <ConsoleMetricCard label="数据源" tone="green" value="StudioTeam" />
-        <ConsoleMetricCard label="Scope" value={scopeId || '待选择'} />
+        <ConsoleMetricCard label="工作空间" value={scopeId || '待选择'} />
         <ConsoleMetricCard label="创建后" value="Team detail" />
         <ConsoleMetricCard label="成员归属" value="后续分配" />
       </div>
 
-      <AevatarPanel layoutMode="document" padding={20} title="Scope context">
+      <AevatarPanel layoutMode="document" padding={20} title="工作空间上下文">
         <ScopeQueryCard
           activeScopeId={scopeId}
           draft={draft}
-          loadLabel="使用这个 Scope"
+          loadLabel="使用这个工作空间"
           onChange={setDraft}
           onLoad={() => {
             const nextDraft = normalizeScopeDraft(draft);
@@ -368,7 +368,7 @@ const TeamCreatePage: React.FC = () => {
                 gap: 8,
               }}
             >
-              {['真实 Team API', 'Scope 内归属', '成员后续分配', '运行态只作辅助'].map((item) => (
+              {['真实 Team API', '工作空间内归属', '成员后续分配', '运行态只作辅助'].map((item) => (
                 <span key={item} style={stageChipStyle}>
                   {item}
                 </span>

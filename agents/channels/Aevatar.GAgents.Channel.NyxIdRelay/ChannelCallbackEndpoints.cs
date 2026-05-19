@@ -9,7 +9,6 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Channel.NyxIdRelay;
@@ -19,11 +18,6 @@ public static class ChannelCallbackEndpoints
     public static IEndpointRouteBuilder MapChannelCallbackEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/channels").WithTags("ChannelRuntime");
-
-        // Platform callback — receives webhooks directly from platforms. These are invoked by
-        // external services (Lark, Telegram, …) without our JWT, so they must remain anonymous
-        // even after the host applies an authenticated-by-default fallback policy.
-        group.MapPost("/{platform}/callback/{registrationId}", HandleCallbackAsync).AllowAnonymous();
 
         // Registration CRUD — requires authentication
         group.MapPost("/registrations", HandleRegisterAsync).RequireAuthorization();
@@ -37,31 +31,6 @@ public static class ChannelCallbackEndpoints
         group.MapGet("/diagnostics/errors", HandleGetDiagnosticErrorsAsync).RequireAuthorization();
 
         return app;
-    }
-
-    /// <summary>
-    /// Receives a platform webhook callback directly.
-    /// 1. Handles verification challenges (returns immediately).
-    /// 2. Parses inbound message.
-    /// 3. Returns 200 OK immediately (platforms have short timeouts).
-    /// 4. Fires background task: dispatch to actor, collect response, send reply via Nyx provider.
-    /// </summary>
-    private static Task<IResult> HandleCallbackAsync(
-        HttpContext http,
-        string platform,
-        string registrationId)
-    {
-        var diagnostics = http.RequestServices.GetService<IChannelRuntimeDiagnostics>();
-        RecordDiagnostic(diagnostics, "Callback:retired", platform, registrationId, "direct_callback_retired");
-        return Task.FromResult<IResult>(Results.Json(
-            new
-            {
-                error = "Direct platform callbacks are retired. ChannelRuntime now accepts only Nyx relay ingress for supported platforms.",
-                registration_id = registrationId,
-                platform,
-                supported_ingress = "/api/webhooks/nyxid-relay",
-            },
-            statusCode: StatusCodes.Status410Gone));
     }
 
     // ─── Registration CRUD ───
@@ -537,16 +506,6 @@ public static class ChannelCallbackEndpoints
                 detail = entry.Detail,
             }),
         }));
-    }
-
-    private static void RecordDiagnostic(
-        IChannelRuntimeDiagnostics? diagnostics,
-        string stage,
-        string platform,
-        string registrationId,
-        string? detail = null)
-    {
-        diagnostics?.Record(stage, platform, registrationId, detail);
     }
 
     private static int ResolveProvisioningFailureStatusCode(string? error)

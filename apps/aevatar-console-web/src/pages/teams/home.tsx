@@ -515,7 +515,7 @@ function buildMemberRosterPreview(input: {
     input.member.lifecycleStage === "bind_ready"
   ) {
     attention = "no-bound-service";
-    attentionDetail = "当前成员已经准备好绑定，但还没有稳定的可调用入口。";
+    attentionDetail = "当前成员已经准备好绑定，但还没有稳定的成员调用入口。";
   }
 
   const detailHref = serviceId
@@ -533,6 +533,7 @@ function buildMemberRosterPreview(input: {
             latestRun?.actorId ||
             matchedService?.primaryActorId ||
             undefined,
+          runId: latestRun?.runId || undefined,
           scopeId: input.scopeId,
           serviceId,
         })
@@ -541,7 +542,7 @@ function buildMemberRosterPreview(input: {
   if (runtimeHref) {
     moreActions.push({
       key: "runtime",
-      label: "查看运行",
+      label: "查看成员运行",
       onClick: () => history.push(runtimeHref),
     });
   }
@@ -650,6 +651,7 @@ function buildTeamRosterPreview(input: {
     primaryMemberPreview?.serviceId && primaryMemberPreview.serviceId.length > 0
       ? buildRuntimeRunsHref({
           actorId: latestRun?.actorId || undefined,
+          runId: latestRun?.runId || undefined,
           scopeId: input.scopeId,
           serviceId: primaryMemberPreview.serviceId,
         })
@@ -663,7 +665,7 @@ function buildTeamRosterPreview(input: {
   if (runtimeHref) {
     moreActions.push({
       key: "runtime",
-      label: "查看运行",
+      label: "查看默认成员运行",
       onClick: () => history.push(runtimeHref),
     });
   }
@@ -1180,12 +1182,12 @@ const TeamsHomePage: React.FC = () => {
   ).length;
   const emptyRosterHint =
     scopeId.length > 0
-      ? "当前 Scope 下还没有创建任何 Team。创建 Team 后，这里会按后端 roster 展示真实团队。"
-      : "先导入一个 Scope，首页才能渲染出这组 Team roster。";
+      ? "当前工作空间还没有创建任何 Team。创建 Team 后，这里会按后端 roster 展示真实团队。"
+      : "先选择一个工作空间，首页才能渲染出这组 Team roster。";
   const partialIssues = [
     servicesQuery.isError ? "服务目录暂时不可见。" : null,
-    membersQuery.isError ? "当前 Scope 的成员清单暂时不可见。" : null,
-    teamsQuery.isError ? "当前 Scope 的 Team roster 暂时不可见。" : null,
+    membersQuery.isError ? "当前工作空间的成员清单暂时不可见。" : null,
+    teamsQuery.isError ? "当前工作空间的 Team roster 暂时不可见。" : null,
     ...memberRunQueries.map((query) =>
       query.isError ? "部分成员运行信号暂时不可见。" : null,
     ),
@@ -1256,8 +1258,8 @@ const TeamsHomePage: React.FC = () => {
                 </Button>
               ) : null
             }
-            title="Scope 上下文"
-            titleHelp="这一步只负责锁定你当前要查看的 Scope，不把它抢成首页主角。"
+            title="工作空间上下文"
+            titleHelp="这一步只负责锁定你当前要查看的工作空间。"
           >
             <ScopeQueryCard
               activeScopeId={scopeId}
@@ -1323,7 +1325,7 @@ const TeamsHomePage: React.FC = () => {
                 minWidth: 0,
               }}
             >
-              <Typography.Text type="secondary">当前 Scope</Typography.Text>
+              <Typography.Text type="secondary">当前工作空间</Typography.Text>
               <Typography.Text
                 strong
                 style={{
@@ -1334,19 +1336,19 @@ const TeamsHomePage: React.FC = () => {
                 {scopeId}
               </Typography.Text>
               <Typography.Text type="secondary">
-                首页按这个 Scope 读取后端 Team roster；成员绑定与运行状态只作为 Team 卡片的辅助信号。
+                首页按这个工作空间读取后端 Team roster；成员绑定与运行状态只作为 Team 卡片的辅助信号。
               </Typography.Text>
             </div>
           </div>
         ) : null}
 
-	{!scopeId ? (
-	  <Alert
-	    showIcon
-	    title="先导入一个 Scope，首页才能渲染出这组 Team roster。"
-	    type="info"
-	  />
-	) : null}
+        {!scopeId ? (
+          <Alert
+            showIcon
+            title="先选择一个工作空间，首页才能渲染出这组 Team roster。"
+            type="info"
+          />
+        ) : null}
 
         {partialIssues.length > 0 ? (
           <Alert
@@ -1361,13 +1363,13 @@ const TeamsHomePage: React.FC = () => {
           <Alert
             description={
               resolvedScope?.scopeId
-                ? `${authSessionIssue} 当前已回退到本地会话里的 Scope ${resolvedScope.scopeId}。`
+                ? `${authSessionIssue} 当前已回退到本地会话里的工作空间 ID ${resolvedScope.scopeId}。`
                 : authSessionIssue
             }
             showIcon
             title={
               resolvedScope?.scopeId
-                ? "当前登录态校验失败，已回退到本地 Scope"
+                ? "当前登录态校验失败，已回退到本地工作空间"
                 : "当前登录态校验失败"
             }
             type="warning"
@@ -1429,7 +1431,7 @@ const TeamsHomePage: React.FC = () => {
                     打开 Studio
                   </Button>
                 }
-                description={`其中 ${membersPendingBindingCount} 个成员还没有完成独立绑定，或还没有形成稳定的可调用入口。`}
+                description={`其中 ${membersPendingBindingCount} 个成员还没有完成独立绑定，或还没有形成稳定的成员调用入口。`}
                 showIcon
                 title="还有成员待整理"
                 type="info"
@@ -1437,11 +1439,11 @@ const TeamsHomePage: React.FC = () => {
             ) : null}
 
             {teamsQuery.isLoading ? (
-              <AevatarInspectorEmpty description="正在读取当前 Scope 的 Team roster。" />
+              <AevatarInspectorEmpty description="正在读取当前工作空间的 Team roster。" />
             ) : teamsQuery.isError ? (
               <Alert
                 showIcon
-                title="当前 Scope 的 Team roster 暂时无法加载。"
+                title="当前工作空间的 Team roster 暂时无法加载。"
                 type="error"
               />
             ) : teamPreviews.length > 0 ? (
@@ -1471,7 +1473,7 @@ const TeamsHomePage: React.FC = () => {
                       Team roster
                     </Typography.Title>
                     <Typography.Text type="secondary">
-                      当前 Scope 下已经登记的真实 Team；成员绑定和运行状态只作为辅助信号。
+                      当前工作空间下已经登记的真实 Team；成员绑定和运行状态只作为辅助信号。
                     </Typography.Text>
                   </div>
                   {visibleTeamCount > 1 ? (

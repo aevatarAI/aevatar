@@ -31,7 +31,8 @@ public sealed class ProjectionStudioMemberQueryPortTests
             implementationKind: StudioMemberImplementationKind.Workflow,
             lifecycle: StudioMemberLifecycleStage.BuildReady,
             includeImplementationRef: true,
-            includeLastBinding: true);
+            includeLastBinding: true,
+            includeBindingStatus: true);
 
         var reader = new StubDocumentReader([document]);
         var port = new ProjectionStudioMemberQueryPort(reader);
@@ -48,6 +49,9 @@ public sealed class ProjectionStudioMemberQueryPortTests
         detail.ImplementationRef.WorkflowRevision.Should().Be("v2");
         detail.LastBinding.Should().NotBeNull();
         detail.LastBinding!.RevisionId.Should().Be("rev-bind");
+        detail.CurrentBindingRun.Should().NotBeNull();
+        detail.CurrentBindingRun!.BindingRunId.Should().Be("bind-1");
+        detail.CurrentBindingRun.Status.Should().Be(StudioMemberBindingRunStatusNames.PlatformBindingPending);
     }
 
     [Fact]
@@ -91,6 +95,28 @@ public sealed class ProjectionStudioMemberQueryPortTests
         var roster = await port.ListAsync(ScopeId);
 
         roster.ScopeId.Should().Be(ScopeId);
+        roster.Members.Select(m => m.MemberId).Should().BeEquivalentTo("m-1", "m-2");
+    }
+
+    [Fact]
+    public async Task ListAsync_ShouldClampInvalidPageSizeAndForwardCursor()
+    {
+        var inScopeA = NewDocument(scopeId: ScopeId, memberId: "m-1");
+        var inScopeB = NewDocument(scopeId: ScopeId, memberId: "m-2");
+        var reader = new StubDocumentReader([inScopeA, inScopeB])
+        {
+            NextCursor = "cursor-next",
+        };
+        var port = new ProjectionStudioMemberQueryPort(reader);
+
+        var roster = await port.ListAsync(
+            ScopeId,
+            new StudioMemberRosterPageRequest(PageSize: -1, PageToken: "cursor-1"));
+
+        reader.LastQuery.Should().NotBeNull();
+        reader.LastQuery!.Take.Should().Be(ProjectionStudioMemberQueryPort.MaxRosterPageSize);
+        reader.LastQuery.Cursor.Should().Be("cursor-1");
+        roster.NextPageToken.Should().Be("cursor-next");
         roster.Members.Select(m => m.MemberId).Should().BeEquivalentTo("m-1", "m-2");
     }
 
@@ -170,13 +196,42 @@ public sealed class ProjectionStudioMemberQueryPortTests
         detail.LastBinding.Should().BeNull();
     }
 
+    [Fact]
+    public async Task GetAsync_ShouldNormalizeUnknownWireValuesToEmptyStrings()
+    {
+        var document = NewDocument(scopeId: ScopeId, memberId: "m-1");
+        document.ImplementationKind = "worker";
+        document.LifecycleStage = "archived";
+        document.LastBoundPublishedServiceId = "svc-1";
+        document.LastBoundRevisionId = "rev-1";
+        document.LastBoundImplementationKind = "worker";
+        document.BindingCurrentRunId = "bind-1";
+        document.BindingCurrentStatus = "waiting-for-magic";
+        document.BindingFailureCode = "BIND_FAILED";
+        document.BindingFailureMessage = "Nope";
+        document.BindingFailureAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-04-30T08:00:00Z"));
+
+        var port = new ProjectionStudioMemberQueryPort(new StubDocumentReader([document]));
+
+        var detail = await port.GetAsync(ScopeId, "m-1");
+
+        detail!.Summary.ImplementationKind.Should().BeEmpty();
+        detail.Summary.LifecycleStage.Should().BeEmpty();
+        detail.LastBinding!.ImplementationKind.Should().BeEmpty();
+        detail.CurrentBindingRun!.Status.Should().BeEmpty();
+        detail.CurrentBindingRun.Failure!.Code.Should().Be("BIND_FAILED");
+        detail.CurrentBindingRun.Failure.Message.Should().Be("Nope");
+        detail.CurrentBindingRun.Failure.FailedAt.Should().Be(DateTimeOffset.Parse("2026-04-30T08:00:00Z"));
+    }
+
     private static StudioMemberCurrentStateDocument NewDocument(
         string scopeId,
         string memberId,
         StudioMemberImplementationKind implementationKind = StudioMemberImplementationKind.Workflow,
         StudioMemberLifecycleStage lifecycle = StudioMemberLifecycleStage.Created,
         bool includeImplementationRef = false,
-        bool includeLastBinding = false)
+        bool includeLastBinding = false,
+        bool includeBindingStatus = false)
     {
         var actorId = StudioMemberConventions.BuildActorId(scopeId, memberId);
         var publishedServiceId = StudioMemberConventions.BuildPublishedServiceId(memberId);
@@ -211,6 +266,13 @@ public sealed class ProjectionStudioMemberQueryPortTests
             doc.LastBoundRevisionId = "rev-bind";
             doc.LastBoundImplementationKind = ToWireKind(implementationKind);
             doc.LastBoundAt = now;
+        }
+
+        if (includeBindingStatus)
+        {
+            doc.BindingCurrentRunId = "bind-1";
+            doc.BindingCurrentStatus = StudioMemberBindingRunStatusNames.PlatformBindingPending;
+            doc.BindingUpdatedAt = now;
         }
 
         return doc;
@@ -264,6 +326,8 @@ public sealed class ProjectionStudioMemberQueryPortTests
         : IProjectionDocumentReader<StudioMemberCurrentStateDocument, string>
     {
         private readonly Dictionary<string, StudioMemberCurrentStateDocument> _byId;
+        public ProjectionDocumentQuery? LastQuery { get; private set; }
+        public string? NextCursor { get; init; }
 
         public StubDocumentReader(IReadOnlyList<StudioMemberCurrentStateDocument> documents)
         {
@@ -279,6 +343,8 @@ public sealed class ProjectionStudioMemberQueryPortTests
         public Task<ProjectionDocumentQueryResult<StudioMemberCurrentStateDocument>> QueryAsync(
             ProjectionDocumentQuery query, CancellationToken ct = default)
         {
+            LastQuery = query;
+
             // Honor the scope_id filter the query port issues.
             var scopeFilter = query.Filters.FirstOrDefault(
                 f => string.Equals(f.FieldPath, "scope_id", StringComparison.Ordinal));
@@ -292,6 +358,7 @@ public sealed class ProjectionStudioMemberQueryPortTests
             return Task.FromResult(new ProjectionDocumentQueryResult<StudioMemberCurrentStateDocument>
             {
                 Items = items.Take(query.Take).ToList(),
+                NextCursor = NextCursor,
             });
         }
     }

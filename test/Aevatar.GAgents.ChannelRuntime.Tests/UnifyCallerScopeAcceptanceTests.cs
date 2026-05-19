@@ -400,10 +400,8 @@ public sealed class UnifyCallerScopeAcceptanceTests
         var entry = await port.GetForCallerAsync("agent-1", OwnerScope.ForNyxIdNative("user-1"), CancellationToken.None);
 
         entry.Should().NotBeNull();
-#pragma warning disable CS0612 // verifying the deprecated field is not populated through the public surface
-        entry!.NyxApiKey.Should().BeEmpty(
+        typeof(UserAgentCatalogReadModelEntry).GetProperty("NyxApiKey").Should().BeNull(
             "the public DTO must not carry credentials; only the internal IUserAgentDeliveryTargetReader surfaces NyxApiKey");
-#pragma warning restore CS0612
     }
 
     // ─── Pagination: QueryByCallerAsync must page until the cursor is exhausted ───
@@ -441,7 +439,10 @@ public sealed class UnifyCallerScopeAcceptanceTests
     {
         var dispatcher = new RecordingProjectionWriteDispatcher();
         var clock = new FixedProjectionClock(new DateTimeOffset(2026, 4, 28, 10, 0, 0, TimeSpan.Zero));
-        var projector = new UserAgentCatalogProjector(dispatcher, clock);
+        var projector = new UserAgentCatalogProjector(
+            dispatcher,
+            new RecordingDocumentReader(new List<UserAgentCatalogDocument>()),
+            clock);
         var context = new UserAgentCatalogMaterializationContext
         {
             RootActorId = UserAgentCatalogGAgent.WellKnownId,
@@ -462,8 +463,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
                     AgentId = "alice-agent",
                     ConversationId = "oc_chat_alice",
                     AgentType = "skill_runner",
-                    TemplateName = "daily_report",
-                    Status = "running",
+                    TemplateName = "daily",
                     OwnerScope = aliceScope,
                 },
                 new UserAgentCatalogEntry
@@ -471,8 +471,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
                     AgentId = "bob-agent",
                     ConversationId = "oc_chat_bob",
                     AgentType = "skill_runner",
-                    TemplateName = "daily_report",
-                    Status = "running",
+                    TemplateName = "daily",
                     OwnerScope = bobScope,
                 },
             },
@@ -507,7 +506,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
             ConversationId = $"conv-{agentId}",
             NyxProviderSlug = "api-lark-bot",
             AgentType = "skill_runner",
-            TemplateName = "daily_report",
+            TemplateName = "daily",
             ScopeId = scope.RegistrationScopeId,
             Status = "running",
             StateVersion = 1,
@@ -524,7 +523,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
             ConversationId = $"conv-{agentId}",
             NyxProviderSlug = "api-lark-bot",
             AgentType = "skill_runner",
-            TemplateName = "daily_report",
+            TemplateName = "daily",
             Platform = "nyxid",
             OwnerNyxUserId = nyxUserId,
             ScopeId = string.Empty,
@@ -542,7 +541,7 @@ public sealed class UnifyCallerScopeAcceptanceTests
             ConversationId = $"conv-{agentId}",
             NyxProviderSlug = "api-lark-bot",
             AgentType = "skill_runner",
-            TemplateName = "daily_report",
+            TemplateName = "daily",
             Platform = "lark",
             OwnerNyxUserId = nyxUserId,
             ScopeId = "legacy-bot-scope",

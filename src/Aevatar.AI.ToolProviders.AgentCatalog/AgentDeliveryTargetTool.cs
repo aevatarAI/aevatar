@@ -217,7 +217,13 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         }
 
 #pragma warning disable CS0612 // legacy fields written for rollback safety during owner_scope migration
-        var result = await commandPort.UpsertAsync(
+        // Refactor (iter4/cluster-009):
+        //   Old pattern: Upsert mapped command-port Observed to a synchronous upserted status.
+        //   New principle: Upsert ACK is accepted-only; projection freshness is observed by explicit list/get queries.
+        // Refactor (iter5/cluster-012):
+        //   Old pattern: Upsert awaited a result object that only repeated accepted.
+        //   New principle: Upsert awaits command completion; accepted status is emitted by this tool boundary.
+        await commandPort.UpsertAsync(
             new UserAgentCatalogUpsertCommand
             {
                 AgentId = agentId.value!,
@@ -234,16 +240,15 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             ct);
 #pragma warning restore CS0612
 
-        var confirmed = result.Outcome == CatalogCommandOutcome.Observed;
         return JsonSerializer.Serialize(new
         {
-            status = confirmed ? "upserted" : "accepted",
+            status = "accepted",
             agent_id = agentId.value,
             delivery_target_id = agentId.value,
             platform,
             conversation_id = conversationId.value,
             nyx_provider_slug = nyxProviderSlug.value,
-            note = confirmed ? "" : "Delivery target submitted but projection not yet confirmed. Try 'list' after a few seconds.",
+            note = "Delivery target accepted. Projection is propagating; try 'list' after a few seconds.",
         });
     }
 
@@ -278,20 +283,19 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             });
         }
 
-        // Tombstone via UserAgentCatalogCommandPort; port owns priming + version
-        // observation and returns an honest accepted/observed status. Caller-scope
-        // ownership was already validated via queryPort.GetForCallerAsync above.
-        var result = await commandPort.TombstoneAsync(agentId, ct);
-        if (result.Outcome == CatalogCommandOutcome.NotFound)
-            return JsonSerializer.Serialize(new { error = $"Delivery target '{agentId}' not found" });
-
-        var confirmed = result.Outcome == CatalogCommandOutcome.Observed;
+        // Refactor (iter4/cluster-009):
+        //   Old pattern: Tombstone mapped command-port Observed/NotFound to synchronous delete outcomes.
+        //   New principle: Caller-scoped pre-check owns existence; tombstone ACK is accepted-only.
+        // Refactor (iter5/cluster-012):
+        //   Old pattern: Delete awaited a tombstone result object that only repeated accepted.
+        //   New principle: Delete awaits command completion; accepted status is emitted by this tool boundary.
+        await commandPort.TombstoneAsync(agentId, ct);
         return JsonSerializer.Serialize(new
         {
-            status = confirmed ? "deleted" : "accepted",
+            status = "accepted",
             agent_id = agentId,
             delivery_target_id = agentId,
-            note = confirmed ? "" : "Tombstone is propagating. Try 'list' in a few seconds to confirm the delivery target is gone.",
+            note = "Tombstone accepted. Projection is propagating; try 'list' in a few seconds to confirm the delivery target is gone.",
         });
     }
 

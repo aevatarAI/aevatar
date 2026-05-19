@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
@@ -117,10 +118,162 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         });
 
         var searchRequest = handler.CapturedRequests.Should().ContainSingle().Subject;
-        searchRequest.Body.Should().Contain("\"actor_id.keyword\":\"actor-1\"");
+        searchRequest.Body.Should().Contain("\"actor_id\":\"actor-1\"");
         searchRequest.Body.Should().Contain("\"updated_at_utc_value\"");
         searchRequest.Body.Should().NotContain("\"ActorId\"");
         searchRequest.Body.Should().NotContain("\"UpdatedAt\"");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenTimestampDescriptorFieldIsUnmapped_ShouldInitializeItAsDate()
+    {
+        var handler = CreateSuccessfulUpsertHandler();
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = true,
+            },
+            handler);
+
+        await store.UpsertAsync(new TestStoreReadModel
+        {
+            Id = "actor-1",
+            ActorId = "actor-1",
+            UpdatedAt = DateTimeOffset.Parse("2026-05-15T00:00:00Z"),
+        });
+
+        var indexPayload = ParseJson(handler.CapturedRequests[0].Body);
+        GetMappingType(indexPayload, "updated_at_utc_value").Should().Be("date");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenStableIdentifierStringDescriptorFieldsAreUnmapped_ShouldInitializeThemAsKeyword()
+    {
+        var handler = CreateSuccessfulUpsertHandler();
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = true,
+            },
+            handler);
+
+        await store.UpsertAsync(new TestStoreReadModel
+        {
+            Id = "actor-1",
+            ActorId = "actor-1",
+            LastEventId = "event-1",
+        });
+
+        var indexPayload = ParseJson(handler.CapturedRequests[0].Body);
+        GetMappingType(indexPayload, "id").Should().Be("keyword");
+        GetMappingType(indexPayload, "actor_id").Should().Be("keyword");
+        GetMappingType(indexPayload, "last_event_id").Should().Be("keyword");
+        GetProperties(indexPayload).Should().NotContainKey("value");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenProviderDeclaresExplicitMapping_ShouldPreserveIt()
+    {
+        var handler = CreateSuccessfulUpsertHandler();
+        var options = new ElasticsearchProjectionDocumentStoreOptions
+        {
+            AutoCreateIndex = true,
+        };
+        options.Endpoints = ["http://localhost:9200"];
+
+        using var store = new ElasticsearchProjectionDocumentStore<TestStoreReadModel, string>(
+            options,
+            new DocumentIndexMetadata(
+                IndexName: "projection-core-tests",
+                Mappings: new Dictionary<string, object?>
+                {
+                    ["properties"] = new Dictionary<string, object?>
+                    {
+                        ["actor_id"] = new Dictionary<string, object?>
+                        {
+                            ["type"] = "text",
+                            ["analyzer"] = "standard",
+                        },
+                    },
+                },
+                Settings: new Dictionary<string, object?>(),
+                Aliases: new Dictionary<string, object?>()),
+            keySelector: model => model.Id,
+            keyFormatter: key => key,
+            httpMessageHandler: handler);
+
+        await store.UpsertAsync(new TestStoreReadModel
+        {
+            Id = "actor-1",
+            ActorId = "actor-1",
+        });
+
+        var indexPayload = ParseJson(handler.CapturedRequests[0].Body);
+        var actorIdMapping = GetFieldMapping(indexPayload, "actor_id");
+        actorIdMapping.GetProperty("type").GetString().Should().Be("text");
+        actorIdMapping.GetProperty("analyzer").GetString().Should().Be("standard");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenDescriptorContainsOpenFields_ShouldNotInitializeStaticMappingsForThem()
+    {
+        var handler = CreateSuccessfulUpsertHandler();
+        var options = new ElasticsearchProjectionDocumentStoreOptions
+        {
+            AutoCreateIndex = true,
+        };
+        options.Endpoints = ["http://localhost:9200"];
+
+        using var store = new ElasticsearchProjectionDocumentStore<TestRecursiveWellKnownReadModel, string>(
+            options,
+            new DocumentIndexMetadata(
+                IndexName: "projection-core-tests",
+                Mappings: new Dictionary<string, object?>(),
+                Settings: new Dictionary<string, object?>(),
+                Aliases: new Dictionary<string, object?>()),
+            keySelector: model => model.Id,
+            keyFormatter: key => key,
+            httpMessageHandler: handler);
+
+        await store.UpsertAsync(new TestRecursiveWellKnownReadModel
+        {
+            Id = "actor-1",
+            ActorId = "actor-1",
+            UpdatedAt = DateTimeOffset.Parse("2026-05-15T00:00:00Z"),
+        });
+
+        var indexPayload = ParseJson(handler.CapturedRequests[0].Body);
+        var properties = GetProperties(indexPayload);
+        properties.Should().NotContainKey("fields_value");
+        properties.Should().NotContainKey("open_payload");
+        properties.Should().NotContainKey("labels");
+        properties.Should().NotContainKey("entries");
+        properties.Should().NotContainKey("tags");
+        GetMappingType(indexPayload, "updated_at_utc_value").Should().Be("date");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenMetadataOmitsProjectionDocumentId_ShouldInitializeItAsKeyword()
+    {
+        var handler = CreateSuccessfulUpsertHandler();
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = true,
+            },
+            handler);
+
+        await store.UpsertAsync(new TestStoreReadModel
+        {
+            Id = "actor-1",
+            ActorId = "actor-1",
+        });
+
+        var indexPayload = ParseJson(handler.CapturedRequests[0].Body);
+        GetMappingType(indexPayload, "ProjectionDocumentId").Should().Be("keyword");
     }
 
     [Fact]
@@ -719,6 +872,40 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             keySelector: model => model.Id,
             keyFormatter: key => key,
             httpMessageHandler: handler);
+    }
+
+    private static ScriptedHttpMessageHandler CreateSuccessfulUpsertHandler()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{"found":false}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"result":"created"}"""));
+        return handler;
+    }
+
+    private static JsonElement ParseJson(string json)
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(json);
+        return document.RootElement.Clone();
+    }
+
+    private static IReadOnlyDictionary<string, JsonElement> GetProperties(JsonElement indexPayload)
+    {
+        return indexPayload
+            .GetProperty("mappings")
+            .GetProperty("properties")
+            .EnumerateObject()
+            .ToDictionary(x => x.Name, x => x.Value.Clone(), StringComparer.Ordinal);
+    }
+
+    private static JsonElement GetFieldMapping(JsonElement indexPayload, string fieldName)
+    {
+        return GetProperties(indexPayload)[fieldName];
+    }
+
+    private static string? GetMappingType(JsonElement indexPayload, string fieldName)
+    {
+        return GetFieldMapping(indexPayload, fieldName).GetProperty("type").GetString();
     }
 
     private static HttpResponseMessage CreateJsonResponse(HttpStatusCode statusCode, string json)

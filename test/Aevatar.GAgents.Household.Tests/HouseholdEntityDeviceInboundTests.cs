@@ -158,8 +158,8 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
             PayloadJson = """{"text": "Turn on the lights"}""",
         };
 
-        // speech_detected triggers HandleChat -> RunReasoningAsync -> ChatAsync.
-        // With the stub LLM provider, ChatAsync returns "ok" (no tool calls).
+        // speech_detected triggers HandleChat -> RunReasoningAsync -> ChatStreamAsync.
+        // With the stub LLM provider, ChatStreamAsync returns "NO_ACTION" (no tool calls).
         // The handler should complete without throwing.
         var act = () => _entity.HandleDeviceInbound(evt);
         await act.Should().NotThrowAsync();
@@ -258,7 +258,8 @@ public class HouseholdEntityDeviceInboundTests : IAsyncLifetime
         {
             ct.ThrowIfCancellationRequested();
             await Task.CompletedTask;
-            yield break;
+            yield return new LLMStreamChunk { DeltaContent = "NO_ACTION — no intervention needed." };
+            yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
         }
     }
 }

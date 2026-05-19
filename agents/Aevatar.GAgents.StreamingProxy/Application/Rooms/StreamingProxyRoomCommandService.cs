@@ -10,15 +10,18 @@ public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomComman
     private const string DefaultRoomName = "Group Chat";
 
     private readonly IActorRuntime _actorRuntime;
+    private readonly IActorDispatchPort _actorDispatchPort;
     private readonly IGAgentActorRegistryCommandPort _registryCommandPort;
     private readonly ILogger<StreamingProxyRoomCommandService> _logger;
 
     public StreamingProxyRoomCommandService(
         IActorRuntime actorRuntime,
+        IActorDispatchPort actorDispatchPort,
         IGAgentActorRegistryCommandPort registryCommandPort,
         ILogger<StreamingProxyRoomCommandService> logger)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
+        _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _registryCommandPort = registryCommandPort ?? throw new ArgumentNullException(nameof(registryCommandPort));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -40,7 +43,7 @@ public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomComman
             targetCreated = true;
 
             var envelope = BuildRoomInitializedEnvelope(actor.Id, roomName);
-            await actor.HandleEventAsync(envelope, cancellationToken);
+            await DispatchRoomEnvelopeAsync(actor.Id, envelope, cancellationToken);
 
             var receipt = await _registryCommandPort.RegisterActorAsync(
                 new GAgentActorRegistration(scopeId, StreamingProxyDefaults.GAgentTypeName, roomId),
@@ -102,6 +105,17 @@ public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomComman
             Payload = Any.Pack(initEvent),
             Route = new EnvelopeRoute { Direct = new DirectRoute { TargetActorId = actorId } },
         };
+    }
+
+    private Task DispatchRoomEnvelopeAsync(
+        string actorId,
+        EventEnvelope envelope,
+        CancellationToken cancellationToken)
+    {
+        // Refactor (iter4/cluster-008):
+        //   Old pattern: room creation invoked the actor event handler inline after actor creation.
+        //   New principle: application services deliver room commands through IActorDispatchPort.
+        return _actorDispatchPort.DispatchAsync(actorId, envelope, cancellationToken);
     }
 
     private async Task TryRollbackRoomCreationAsync(

@@ -246,7 +246,7 @@ NyxID#549 已同步追加 comment 提议 align 到 RFC 8693 token-exchange。两
 
 具体处理:
 
-- callback handler 在 commit `ExternalIdentityBoundEvent` 时**写侧预挂接 projection** —— 通过新增的 `IProjectionReadinessPort.WaitForEventAsync(eventId, readmodelId, timeout)` 同步等待该 event 在 binding readmodel 上的水位达成(actor committed version 对齐),再返回 callback HTTP 响应给浏览器
+- callback handler 在 commit `ExternalIdentityBoundEvent` 时**写侧预挂接 projection** —— 通过 `IProjectionReadinessPort.WaitForBindingStateAsync(externalSubject, expectedBindingId, timeout)` 同步等待 binding readmodel 对指定 external subject 物化出 expected binding state(actor committed version 对齐),再返回 callback HTTP 响应给浏览器
 - 等待超时(配置上限,e.g. 3s)→ callback 响应"binding 已写入,读副本仍在传播,稍后重发消息";不进 query-time priming/replay 路径
 - 此后用户回到 Lark 发任意消息,turn 路径调 `ResolveBindingAsync` 一定看得到 binding
 - turn 路径在 `ResolveBindingAsync` 返回 null 时**禁止**走 ES replay / actor state mirror / 重建 priming;只能引导 sender 重新 `/init`
@@ -257,7 +257,7 @@ NyxID#549 已同步追加 comment 提议 align 到 RFC 8693 token-exchange。两
 
 - 新增模块 `Aevatar.GAgents.Channel.Identity`(并列于 `Aevatar.GAgents.Channel.NyxIdRelay`):承载 `ExternalIdentityBindingGAgent` + projection + `IExternalIdentityBindingQueryPort` + `INyxIdCapabilityBroker`
 - 新增 OAuth callback endpoint `/api/oauth/nyxid-callback`(标准 OAuth client redirect 处理,不是 webhook),含写侧预挂接 projection 等待
-- 新增 `IProjectionReadinessPort`(write-side 端口):callback handler 在事件提交后同步等待 specific event 在指定 readmodel 上的水位达成;turn / query 路径不依赖此端口
+- 新增 `IProjectionReadinessPort`(write-side 端口):callback handler 在事件提交后同步等待指定 external subject 的 expected binding state 在 binding readmodel 上可见;turn / query 路径不依赖此端口
 - `ChannelConversationTurnRunner.RunInboundAsync` 开头加 slash-command 前置路由(`/init`、`/unbind`),`/init` 幂等,`/unbind` 同步调 NyxID revoke
 - `BuildReplyMetadata` 改成 `ResolveAsync` + `IssueShortLivedAsync`;metadata key 从 `nyxid.access_token` 改为 `nyxid.capability_handle`(诚实表达"短期、scoped、可撤销")
 - 未绑定 sender(无论 1:1 还是群聊)统一强制 `/init`,不回落 bot owner;现有 bot owner-shared 模式终止策略由 implementation PR 选 §Bot-Owner-Shared 模式终止策略 中的 A/B/C 之一,记入 runbook

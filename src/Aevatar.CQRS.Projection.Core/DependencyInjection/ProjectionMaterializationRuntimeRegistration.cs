@@ -37,7 +37,8 @@ public static class ProjectionMaterializationRuntimeRegistration
                 request => contextFactory(new ProjectionRuntimeScopeKey(
                     request.RootActorId,
                     request.ProjectionKind,
-                    ProjectionRuntimeMode.DurableMaterialization)),
+                    ProjectionRuntimeMode.DurableMaterialization,
+                    request.SessionId)),
                 (_, context) => leaseFactory(context),
                 sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>(),
                 sp.GetService<IStreamPubSubMaintenance>(),
@@ -51,7 +52,10 @@ public static class ProjectionMaterializationRuntimeRegistration
                 lease => new ProjectionRuntimeScopeKey(
                     lease.Context.RootActorId,
                     lease.Context.ProjectionKind,
-                    ProjectionRuntimeMode.DurableMaterialization),
+                    ProjectionRuntimeMode.DurableMaterialization,
+                    lease.Context is IProjectionSessionScopedMaterializationContext scopedContext
+                        ? scopedContext.SessionId
+                        : string.Empty),
                 sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
         return services;
     }

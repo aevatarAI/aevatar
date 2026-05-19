@@ -36,7 +36,9 @@ public sealed record ScopeBindingUpsertRequest(
     string? DisplayName = null,
     string? RevisionId = null,
     string? AppId = null,
-    string? ServiceId = null);
+    string? ServiceId = null,
+    bool AllowExistingRevisionReplay = false,
+    string? ReplayRevisionId = null);
 
 public sealed record ScopeBindingWorkflowResult(
     string WorkflowName,
@@ -57,6 +59,8 @@ public sealed record ScopeBindingUpsertResult(
     string RevisionId,
     ScopeBindingImplementationKind ImplementationKind,
     string ExpectedActorId,
+    string AcceptanceStage = "accepted",
+    string PropagationStage = "readmodel_propagating",
     string WorkflowName = "",
     string DefinitionActorIdPrefix = "",
     ScopeBindingWorkflowResult? Workflow = null,

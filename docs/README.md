@@ -16,8 +16,11 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [Event Sourcing 基线文档（2026-02-23）](canon/event-sourcing.md)
 - [Aevatar 前端设计基线](canon/frontend-design.md)
 - [GAgent Registry Ownership](canon/gagent-registry-ownership.md)
+- [Lark Reply Chain Completion Semantics](canon/lark-reply-completion-semantics.md)
 - [Workflow LLM 流式链路详细架构文档（2026-02-25）](canon/llm-streaming.md)
 - [NyxID LLM Provider 集成指南](canon/nyxid-llm-integration.md)
+- [NyxID Responses 直连](canon/nyxid-responses-direct.md)
+- [Aevatar Observability — OTel Semantic Conventions](canon/observability.md)
 - [Aevatar 项目架构（Maker 插件化基线）](canon/overview.md)
 - [Role 与工作流、Connector 配置指南](canon/role-model.md)
 - [Aevatar.Scripting 架构文档](canon/scripting.md)
@@ -43,6 +46,13 @@ Immutable records of architectural choices and their rationale.
 - [Channel Interactive Reply Abstraction](adr/0014-interactive-reply-abstraction.md)
 - [AGUI / SSE Projection Session Pipeline](adr/0015-agui-sse-projection-session-pipeline.md)
 - [Studio Member-First Published Service Identity](adr/0016-studio-member-first-published-service.md)
+- [Studio Team as First-Class Aggregate Under Scope](adr/0017-studio-team-first-class-aggregate.md)
+- [Per-User NyxID Binding via OAuth Broker](adr/0018-per-user-nyxid-binding-via-oauth-broker.md)
+- [0019 — Stable AgentKind identity replaces CLR-name actor identity](adr/0019-stable-agent-kind-identity.md)
+- [0020 — Actor state schema version lives on the runtime envelope](adr/0020-actor-state-version-placement.md)
+- [Lark Reply Chain Completion Semantics](adr/0021-lark-reply-chain-completion-semantics.md)
+- [0022 — OpenTelemetry semantic conventions for aevatar.* activities](adr/0022-otel-aevatar-semantic-conventions.md)
+- [0023 — Two-tier Inspector architecture (canonical readmodel vs observation OTel)](adr/0023-two-tier-inspector-architecture.md)
 
 ## History
 
@@ -61,13 +71,20 @@ Point-in-time design snapshots. Not authoritative — for context only.
 - [2026-04-17-issue-204-agui-sse-projection-session-design](history/2026-04/2026-04-17-issue-204-agui-sse-projection-session-design.md)
 - [2026-04-17-nyxid-chat-registry-lifecycle](history/2026-04/2026-04-17-nyxid-chat-registry-lifecycle.md)
 - [2026-04-27-registry-ownership-ports-design](history/2026-04/2026-04-27-registry-ownership-ports-design.md)
+- [2026-04-30-studio-member-bind-async-protocol-design](history/2026-04/2026-04-30-studio-member-bind-async-protocol-design.md)
 - [claude-code-architecture-learnings](history/2026-04/claude-code-architecture-learnings.md)
 - [nyxid-chat-console-design](history/2026-04/nyxid-chat-console-design.md)
+
+### 2026-05
+
+- [2026-05-11-aevatar-inspector-design](history/2026-05/2026-05-11-aevatar-inspector-design.md)
+- [2026-05-14-issue-370-gagent-durable-terminal-completion-design](history/2026-05/2026-05-14-issue-370-gagent-durable-terminal-completion-design.md)
 
 ## Audit Scorecard
 
 - [2026-04-08-architecture-audit-detailed.md](audit-scorecard/2026-04-08-architecture-audit-detailed.md)
 - [2026-04-27-daily-pipeline-architecture-review.md](audit-scorecard/2026-04-27-daily-pipeline-architecture-review.md)
+- [2026-05-13-lark-bot-reply-chain-test-coverage-audit.md](audit-scorecard/2026-05-13-lark-bot-reply-chain-test-coverage-audit.md)
 - [FEATURE_APP_SERVICES_AUDIT.md](audit-scorecard/FEATURE_APP_SERVICES_AUDIT.md)
 
 ## Templates

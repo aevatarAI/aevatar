@@ -288,6 +288,7 @@ public sealed class TornadoLLMProvider : ILLMProvider
         {
             Role = m.Role,
             Content = fallbackContent,
+            ReasoningContent = m.ReasoningContent,
             ContentParts = null, // Tornado doesn't use ContentParts
             ToolCallId = m.ToolCallId,
             ToolCalls = m.ToolCalls,

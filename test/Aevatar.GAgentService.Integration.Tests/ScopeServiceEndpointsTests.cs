@@ -62,6 +62,11 @@ public sealed class ScopeServiceEndpointsTests
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<ScopeBindingUpsertResult>();
+        body.Should().NotBeNull();
+        body!.AcceptanceStage.Should().Be("accepted");
+        body.PropagationStage.Should().Be("readmodel_propagating");
+        body.ExpectedActorId.Should().Be("scope-binding:expected-actor");
         host.ScopeBindingPort.LastRequest.Should().NotBeNull();
         host.ScopeBindingPort.LastRequest!.ScopeId.Should().Be("scope-a");
         host.ScopeBindingPort.LastRequest.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Workflow);
@@ -85,6 +90,10 @@ public sealed class ScopeServiceEndpointsTests
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<ScopeBindingUpsertResult>();
+        body.Should().NotBeNull();
+        body!.AcceptanceStage.Should().Be("accepted");
+        body.PropagationStage.Should().Be("readmodel_propagating");
         host.ScopeBindingPort.LastRequest.Should().NotBeNull();
         host.ScopeBindingPort.LastRequest!.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Scripting);
         host.ScopeBindingPort.LastRequest.Script.Should().NotBeNull();
@@ -197,6 +206,10 @@ public sealed class ScopeServiceEndpointsTests
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<ScopeBindingUpsertResult>();
+        body.Should().NotBeNull();
+        body!.AcceptanceStage.Should().Be("accepted");
+        body.PropagationStage.Should().Be("readmodel_propagating");
         host.ScopeBindingPort.LastRequest.Should().NotBeNull();
         host.ScopeBindingPort.LastRequest!.ImplementationKind.Should().Be(ScopeBindingImplementationKind.GAgent);
         host.ScopeBindingPort.LastRequest.GAgent.Should().NotBeNull();
@@ -462,109 +475,6 @@ public sealed class ScopeServiceEndpointsTests
         var response = await host.Client.SendAsync(request);
 
         response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
-    }
-
-    [Fact]
-    public async Task MemberBindingEndpoint_ShouldBindToMemberPublishedService()
-    {
-        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
-
-        using var request = new HttpRequestMessage(HttpMethod.Put, "/api/scopes/scope-a/members/member-a/binding")
-        {
-            Content = JsonContent.Create(new
-            {
-                implementationKind = "workflow",
-                displayName = "Member A",
-                workflowYamls = new[]
-                {
-                    "name: main\nsteps:\n  - run: echo hello",
-                },
-            }),
-        };
-        request.Headers.Add("X-Test-Role", "scope-admin");
-        var response = await host.Client.SendAsync(request);
-        var body = await response.Content.ReadFromJsonAsync<ScopeServiceEndpoints.MemberScopeBindingUpsertHttpResponse>();
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        body.Should().NotBeNull();
-        body!.MemberId.Should().Be("member-a");
-        body.PublishedServiceId.Should().Be("member-a");
-        host.ScopeBindingPort.LastRequest.Should().NotBeNull();
-        host.ScopeBindingPort.LastRequest!.ScopeId.Should().Be("scope-a");
-        host.ScopeBindingPort.LastRequest.ServiceId.Should().Be("member-a");
-        host.ScopeBindingPort.LastRequest.AppId.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task MemberBindingEndpoint_ShouldRequireScopeAdminUntilMemberCatalogIsAuthoritative()
-    {
-        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
-
-        var response = await host.Client.PutAsJsonAsync("/api/scopes/scope-a/members/member-a/binding", new
-        {
-            implementationKind = "workflow",
-            displayName = "Member A",
-            workflowYamls = new[]
-            {
-                "name: main\nsteps:\n  - run: echo hello",
-            },
-        });
-
-        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
-        host.ScopeBindingPort.LastRequest.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task GetMemberBindingEndpoint_ShouldReturnMemberBindingSummary()
-    {
-        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
-        host.LifecycleQueryPort.Service = BuildService("scope-a", "member-a", "def-member-a");
-        host.LifecycleQueryPort.Revisions = new ServiceRevisionCatalogSnapshot(
-            "scope-a:default:default:member-a",
-            [
-                new ServiceRevisionSnapshot(
-                    "rev-1",
-                    "workflow",
-                    "Published",
-                    "hash-1",
-                    string.Empty,
-                    [],
-                    DateTimeOffset.UtcNow.AddHours(-1),
-                    DateTimeOffset.UtcNow.AddHours(-1),
-                    DateTimeOffset.UtcNow.AddHours(-1),
-                    null),
-            ],
-            DateTimeOffset.UtcNow,
-            5,
-            "evt-5");
-        host.ServingQueryPort.ServingSet = new ServiceServingSetSnapshot(
-            "scope-a:default:default:member-a",
-            5,
-            string.Empty,
-            [
-                new ServiceServingTargetSnapshot(
-                    "dep-member-a",
-                    "rev-1",
-                    "def-member-a",
-                    100,
-                    ServiceServingState.Active.ToString(),
-                    []),
-            ],
-            DateTimeOffset.UtcNow);
-
-        var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.MemberScopeBindingStatusHttpResponse>(
-            "/api/scopes/scope-a/members/member-a/binding");
-
-        response.Should().NotBeNull();
-        response!.Available.Should().BeTrue();
-        response.ScopeId.Should().Be("scope-a");
-        response.MemberId.Should().Be("member-a");
-        response.PublishedServiceId.Should().Be("member-a");
-        response.PublishedServiceKey.Should().Be("scope-a:default:default:member-a");
-        response.Revisions.Should().ContainSingle();
-        response.Revisions[0].DeploymentId.Should().Be("dep-member-a");
-        response.CatalogStateVersion.Should().Be(5);
-        response.CatalogLastEventId.Should().Be("evt-5");
     }
 
     [Fact]
@@ -1897,7 +1807,7 @@ public sealed class ScopeServiceEndpointsTests
                 "default",
                 new Dictionary<string, string>(),
                 new NoOpScriptRuntimeCommandPort(),
-                new NoOpScriptExecutionProjectionPort(),
+                new NoOpScriptServiceAguiProjectionPort(),
                 new ServiceInvocationRequest(),
                 new NoOpServiceRunRegistrationPort(),
                 CancellationToken.None))
@@ -1961,7 +1871,7 @@ public sealed class ScopeServiceEndpointsTests
                 "default",
                 new Dictionary<string, string>(),
                 new ThrowingScriptRuntimeCommandPort(new InvalidOperationException("Script runtime actor 'script-runtime-1' could not be resolved. The service may not be activated.")),
-                new NoOpScriptExecutionProjectionPort(),
+                new NoOpScriptServiceAguiProjectionPort(),
                 new ServiceInvocationRequest(),
                 new NoOpServiceRunRegistrationPort(),
                 CancellationToken.None))
@@ -4315,7 +4225,7 @@ public sealed class ScopeServiceEndpointsTests
             var interactionService = new FakeCommandInteractionService();
             var gagentDraftRunInteractionService = new FakeGAgentDraftRunInteractionService();
             var scriptRuntimeCommandPort = new NoOpScriptRuntimeCommandPort();
-            var scriptExecutionProjectionPort = new NoOpScriptExecutionProjectionPort();
+            var scriptServiceAguiProjectionPort = new NoOpScriptServiceAguiProjectionPort();
             var workflowQueryService = new FakeWorkflowExecutionQueryApplicationService();
             var runBindingReader = new FakeWorkflowRunBindingReader();
             var resumeDispatchService = new RecordingResumeDispatchService();
@@ -4353,7 +4263,7 @@ public sealed class ScopeServiceEndpointsTests
             builder.Services.AddSingleton<ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>(interactionService);
             builder.Services.AddSingleton<ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus>>(gagentDraftRunInteractionService);
             builder.Services.AddSingleton<IScriptRuntimeCommandPort>(scriptRuntimeCommandPort);
-            builder.Services.AddSingleton<IScriptExecutionProjectionPort>(scriptExecutionProjectionPort);
+            builder.Services.AddSingleton<IScriptServiceAguiProjectionPort>(scriptServiceAguiProjectionPort);
             builder.Services.AddSingleton<IWorkflowExecutionQueryApplicationService>(workflowQueryService);
             builder.Services.AddSingleton<IWorkflowRunBindingReader>(runBindingReader);
             builder.Services.AddSingleton<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(resumeDispatchService);
@@ -5134,21 +5044,22 @@ public sealed class ScopeServiceEndpointsTests
         }
     }
 
-    private sealed class NoOpScriptExecutionProjectionPort : IScriptExecutionProjectionPort
+    private sealed class NoOpScriptServiceAguiProjectionPort : IScriptServiceAguiProjectionPort
     {
         public bool ProjectionEnabled => true;
 
-        public Task<IScriptExecutionProjectionLease?> EnsureActorProjectionAsync(
+        public Task<IScriptServiceAguiProjectionLease?> EnsureRunProjectionAsync(
             string actorId,
+            string runId,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IScriptExecutionProjectionLease?>(new NoOpScriptExecutionProjectionLease(actorId));
+            return Task.FromResult<IScriptServiceAguiProjectionLease?>(new NoOpScriptServiceAguiProjectionLease(actorId, runId));
         }
 
         public Task AttachLiveSinkAsync(
-            IScriptExecutionProjectionLease lease,
-            IEventSink<EventEnvelope> sink,
+            IScriptServiceAguiProjectionLease lease,
+            IEventSink<AGUIEvent> sink,
             CancellationToken ct = default)
         {
             _ = lease;
@@ -5158,8 +5069,8 @@ public sealed class ScopeServiceEndpointsTests
         }
 
         public Task DetachLiveSinkAsync(
-            IScriptExecutionProjectionLease lease,
-            IEventSink<EventEnvelope> sink,
+            IScriptServiceAguiProjectionLease lease,
+            IEventSink<AGUIEvent> sink,
             CancellationToken ct = default)
         {
             _ = lease;
@@ -5169,7 +5080,7 @@ public sealed class ScopeServiceEndpointsTests
         }
 
         public Task ReleaseActorProjectionAsync(
-            IScriptExecutionProjectionLease lease,
+            IScriptServiceAguiProjectionLease lease,
             CancellationToken ct = default)
         {
             _ = lease;
@@ -5178,7 +5089,7 @@ public sealed class ScopeServiceEndpointsTests
         }
     }
 
-    private sealed record NoOpScriptExecutionProjectionLease(string ActorId) : IScriptExecutionProjectionLease;
+    private sealed record NoOpScriptServiceAguiProjectionLease(string ActorId, string RunId) : IScriptServiceAguiProjectionLease;
 
     private sealed class AllowAllInvokeAdmissionAuthorizer : IInvokeAdmissionAuthorizer
     {

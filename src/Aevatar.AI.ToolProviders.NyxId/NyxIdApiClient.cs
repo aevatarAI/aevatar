@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -21,7 +22,7 @@ public sealed record NyxIdChannelRelayReplyResult(
     bool EditUnsupported = false);
 
 /// <summary>HTTP client for calling NyxID REST API endpoints.</summary>
-public sealed class NyxIdApiClient
+public sealed class NyxIdApiClient : IDisposable
 {
     /// <summary>
     /// Default <c>User-Agent</c> injected on every call to <see cref="ProxyRequestAsync"/>
@@ -39,6 +40,7 @@ public sealed class NyxIdApiClient
     private readonly HttpClient _http;
     private readonly NyxIdToolOptions _options;
     private readonly ILogger _logger;
+    private readonly bool _ownsHttpClient;
 
     public NyxIdApiClient(
         NyxIdToolOptions options,
@@ -46,7 +48,11 @@ public sealed class NyxIdApiClient
         ILogger<NyxIdApiClient>? logger = null)
     {
         _options = options;
+        // Refactor (iter10/cluster-019):
+        // Old: singleton DI registration could construct and permanently pin a raw HttpClient.
+        // New: DI registers this as an AddHttpClient<T> typed client; only manual construction owns this fallback.
         _http = httpClient ?? new HttpClient();
+        _ownsHttpClient = httpClient is null;
         _logger = logger ?? NullLogger<NyxIdApiClient>.Instance;
     }
 
@@ -172,6 +178,22 @@ public sealed class NyxIdApiClient
         return await SendAsync(request, ct);
     }
 
+    // ─── SSH ───
+
+    /// <summary>
+    /// Executes a shell command on a remote SSH host through NyxID's SSH gateway.
+    /// </summary>
+    /// <param name="serviceIdOrSlug">NyxID service identifier or slug for an SSH-typed service (endpoint registered as <c>ssh://host:port</c>).</param>
+    /// <param name="body">JSON body matching NyxID's <c>SshExecRequest</c>: <c>{ command, principal, timeout_secs }</c>.</param>
+    /// <remarks>
+    /// Mirrors <c>POST /api/v1/ssh/{service_id}/exec</c>. NyxID enforces a 1 MB output cap, a max 300s
+    /// timeout, an 8192-char command length, and a built-in dangerous-command filter. Non-SSH services
+    /// reject this route, so callers must filter to SSH-typed slugs before invoking (the agent tool
+    /// surfaces this in its description so the LLM does not call HTTP-typed services here).
+    /// </remarks>
+    public Task<string> SshExecAsync(string token, string serviceIdOrSlug, string body, CancellationToken ct) =>
+        PostAsync(token, $"/api/v1/ssh/{Uri.EscapeDataString(serviceIdOrSlug)}/exec", body, ct);
+
     // ─── API Keys ───
 
     public Task<string> ListApiKeysAsync(string token, CancellationToken ct) =>
@@ -245,7 +267,7 @@ public sealed class NyxIdApiClient
     // ─── Proxy (additions) ───
 
     public Task<string> DiscoverProxyServicesAsync(string token, CancellationToken ct) =>
-        GetAsync(token, "/api/v1/proxy/services?per_page=100", ct);
+        GetAsync(token, NyxIdLlmCatalogRoutes.ProxyServicesPath, ct);
 
     // ─── API Keys (additions) ───
 
@@ -736,6 +758,15 @@ public sealed class NyxIdApiClient
 
             return content;
         }
+        catch (OperationCanceledException)
+        {
+            // Cancellation is a control-flow signal, not an HTTP failure. Wrapping it as
+            // {"error":true,"message":"A task was canceled."} would swallow per-call hard
+            // timeouts that callers (e.g. NyxIdSshExecTool) install on top of the LLM run's
+            // CT. Let the exception bubble so callers can map their own cancellation source
+            // to a clearer error payload (PR #562 SSH timeout incident, 2026-05-08).
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "NyxID API request exception: {Method} {Url}", request.Method, request.RequestUri);
@@ -815,5 +846,11 @@ public sealed class NyxIdApiClient
         {
             return false;
         }
+    }
+
+    public void Dispose()
+    {
+        if (_ownsHttpClient)
+            _http.Dispose();
     }
 }

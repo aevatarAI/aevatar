@@ -1,7 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.Hosting;
@@ -21,8 +20,9 @@ public static partial class NyxIdChatEndpoints
         string actorId,
         NyxIdChatStreamRequest request,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IActorDispatchPort actorDispatchPort,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
-        [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
+        [FromServices] INyxIdChatSessionProjectionPort sessionProjectionPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -80,11 +80,13 @@ public static partial class NyxIdChatEndpoints
         await NyxIdChatStreamingRunner.RunAsync(
             http,
             actorId,
-            actor!.Id,
-            subscriptionProvider,
+            sessionProjectionPort,
             logger,
             dispatchAsync: async (messageId, runCt) =>
             {
+                // Refactor (iter1/cluster-004):
+                //   Old pattern: endpoint coupled command dispatch with raw EventEnvelope stream observation.
+                //   New principle: endpoint dispatches through IActorDispatchPort and observes typed projection events.
                 var chatRequest = new ChatRequestEvent
                 {
                     Prompt = prompt,
@@ -114,89 +116,13 @@ public static partial class NyxIdChatEndpoints
                     },
                 };
 
-                await actor.HandleEventAsync(envelope, runCt);
+                await actorDispatchPort.DispatchAsync(actor.Id, envelope, runCt);
             },
-            mapAndWriteEventAsync: MapAndWriteEventAsync,
             errorMessages: new NyxIdChatStreamingRunner.ErrorMessages(
                 "The chat request failed before completion. Please try again.",
                 "Request timed out.",
                 "The chat request failed. Please try again."),
             ct);
-    }
-
-    /// <summary>
-    /// Maps AI event envelope payloads to NyxIdChat SSE frames.
-    /// </summary>
-    private static async ValueTask<string?> MapAndWriteEventAsync(
-        EventEnvelope envelope,
-        string messageId,
-        NyxIdChatSseWriter writer)
-    {
-        var payload = envelope.Payload;
-        if (payload is null)
-            return null;
-
-        if (payload.Is(TextMessageStartEvent.Descriptor))
-        {
-            await writer.WriteTextStartAsync(messageId, CancellationToken.None);
-        }
-        else if (payload.Is(TextMessageContentEvent.Descriptor))
-        {
-            var evt = payload.Unpack<TextMessageContentEvent>();
-            if (!string.IsNullOrEmpty(evt.Delta))
-                await writer.WriteTextDeltaAsync(evt.Delta, CancellationToken.None);
-        }
-        else if (payload.Is(ToolCallEvent.Descriptor))
-        {
-            var evt = payload.Unpack<ToolCallEvent>();
-            await writer.WriteToolCallStartAsync(evt.ToolName, evt.CallId, CancellationToken.None);
-        }
-        else if (payload.Is(ToolResultEvent.Descriptor))
-        {
-            var evt = payload.Unpack<ToolResultEvent>();
-            await writer.WriteToolCallEndAsync(evt.CallId, evt.ResultJson, CancellationToken.None);
-        }
-        else if (payload.Is(ToolApprovalRequestEvent.Descriptor))
-        {
-            var evt = payload.Unpack<ToolApprovalRequestEvent>();
-            await writer.WriteToolApprovalRequestAsync(
-                evt.RequestId, evt.ToolName, evt.ToolCallId,
-                evt.ArgumentsJson, evt.IsDestructive, evt.TimeoutSeconds,
-                CancellationToken.None);
-        }
-        else if (payload.Is(MediaContentEvent.Descriptor))
-        {
-            var evt = payload.Unpack<MediaContentEvent>();
-            await writer.WriteMediaContentAsync(evt, CancellationToken.None);
-        }
-        else if (payload.Is(TextMessageEndEvent.Descriptor))
-        {
-            var evt = payload.Unpack<TextMessageEndEvent>();
-            if (!string.IsNullOrEmpty(evt.Content))
-            {
-                const string llmErrorPrefix = "[[AEVATAR_LLM_ERROR]]";
-                const string llmFailedPrefix = "LLM request failed:";
-                if (evt.Content.StartsWith(llmErrorPrefix, StringComparison.Ordinal))
-                {
-                    await writer.WriteRunErrorAsync(
-                        ClassifyError(evt.Content[llmErrorPrefix.Length..].Trim()), CancellationToken.None);
-                    return "RUN_ERROR";
-                }
-
-                if (evt.Content.StartsWith(llmFailedPrefix, StringComparison.Ordinal))
-                {
-                    await writer.WriteRunErrorAsync(
-                        ClassifyError(evt.Content.Trim()),
-                        CancellationToken.None);
-                    return "RUN_ERROR";
-                }
-            }
-
-            await writer.WriteTextEndAsync(messageId, CancellationToken.None);
-            return "TEXT_MESSAGE_END";
-        }
-
-        return null;
     }
 
     /// <summary>
@@ -209,8 +135,9 @@ public static partial class NyxIdChatEndpoints
         string actorId,
         NyxIdApprovalRequest request,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IActorDispatchPort actorDispatchPort,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
-        [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
+        [FromServices] INyxIdChatSessionProjectionPort sessionProjectionPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -265,11 +192,13 @@ public static partial class NyxIdChatEndpoints
         await NyxIdChatStreamingRunner.RunAsync(
             http,
             actorId,
-            actor!.Id,
-            subscriptionProvider,
+            sessionProjectionPort,
             logger,
             dispatchAsync: async (_, runCt) =>
             {
+                // Refactor (iter1/cluster-004):
+                //   Old pattern: approval continuation reused raw EventEnvelope stream completion detection.
+                //   New principle: approval dispatch is a command; completion arrives via typed projection session events.
                 var decisionEvent = new ToolApprovalDecisionEvent
                 {
                     RequestId = request.RequestId,
@@ -289,9 +218,8 @@ public static partial class NyxIdChatEndpoints
                     },
                 };
 
-                await actor.HandleEventAsync(envelope, runCt);
+                await actorDispatchPort.DispatchAsync(actor.Id, envelope, runCt);
             },
-            mapAndWriteEventAsync: MapAndWriteEventAsync,
             errorMessages: new NyxIdChatStreamingRunner.ErrorMessages(
                 "The approval continuation failed before completion. Please try again.",
                 "Approval continuation timed out.",

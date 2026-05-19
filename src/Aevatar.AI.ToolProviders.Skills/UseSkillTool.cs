@@ -17,6 +17,13 @@ namespace Aevatar.AI.ToolProviders.Skills;
 /// </summary>
 public sealed class UseSkillTool : IAgentTool
 {
+    /// <summary>
+    /// 远程技能缓存的最大保留时间。超过该窗口后下一次 use_skill 会重新拉取，确保 Ornn
+    /// 上的更新最多在该窗口内对 aevatar 可见。窗口太短会让常用 skill 频繁打 NyxID
+    /// proxy；太长会让 Ornn 上的更新拖很久才生效。5 分钟是当前的折中值。
+    /// </summary>
+    public static readonly TimeSpan RemoteSkillCacheTtl = TimeSpan.FromMinutes(5);
+
     private readonly SkillRegistry _registry;
     private readonly IRemoteSkillFetcher? _remoteFetcher;
 
@@ -67,11 +74,13 @@ public sealed class UseSkillTool : IAgentTool
         // ─── 查找技能 ───
         SkillDefinition? skill = null;
 
-        // 1. 从注册表查找（本地 + 已缓存的远程）
-        if (_registry.TryGet(skillName, out skill) && skill != null)
+        // 1. 从注册表查找（本地 + 缓存未过期的远程）
+        // 远程技能传 maxAge=RemoteSkillCacheTtl 触发 TTL 校验：超过窗口的缓存视为不存在，
+        // 让下面的 fetcher 路径重拉。本地技能没有 RemoteId，仍然命中（视作永远新鲜）。
+        if (_registry.TryGet(skillName, out skill, maxAge: RemoteSkillCacheTtl) && skill != null)
             return BuildSkillResponse(skill, args);
 
-        // 2. 尝试从远程拉取
+        // 2. 缓存未命中或已过期 → 从远程拉取
         if (_remoteFetcher != null)
         {
             var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
@@ -80,7 +89,7 @@ public sealed class UseSkillTool : IAgentTool
                 skill = await _remoteFetcher.FetchSkillAsync(token, skillName, ct);
                 if (skill != null)
                 {
-                    // 缓存到注册表，后续调用不再远程拉取
+                    // Register 会用当前时间刷新 FetchedAt 戳记，下次 TTL 窗口重新计时。
                     _registry.Register(skill);
                     return BuildSkillResponse(skill, args);
                 }

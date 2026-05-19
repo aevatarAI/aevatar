@@ -30,10 +30,10 @@ message NeedsLlmReplyEvent {
   aevatar.gagents.channel.abstractions.ChatActivity activity = 4;
   map<string, string> metadata = 5;
   int64 requested_at_unix_ms = 6;
-  // Transient inbox-only credential. The actor MUST clear `reply_token` and
+  // Transient run-command-only credential. The actor MUST clear `reply_token` and
   // `reply_token_expires_at_unix_ms` (set them to the empty default) on the
-  // copy passed to PersistDomainEventAsync; only the inbox-bound copy may
-  // carry them so the LLM worker can echo the credential back without the
+  // copy passed to PersistDomainEventAsync; only the run-bound copy may
+  // carry them so AgentRunGAgent can echo the credential back without the
   // actor's in-memory dict surviving deactivation. Never persist to event
   // store, projection, or read model.
   string reply_token = 7;
@@ -70,16 +70,16 @@ message LlmReplyReadyEvent {
   string error_code = 7;
   string error_summary = 8;
   int64 ready_at_unix_ms = 9;
-  // Transient inbox-echoed credential carried back from the LLM worker so the
+  // Transient run-echoed credential carried back from AgentRunGAgent so the
   // actor's outbound relay reply does not depend on its in-memory token dict
   // surviving deactivation. The actor consumes these fields directly and never
-  // persists them. The inbox subscriber copies the values from the inbound
+  // persists them. AgentRunGAgent copies the values from the inbound
   // NeedsLlmReplyEvent verbatim.
   string reply_token = 10;
   int64 reply_token_expires_at_unix_ms = 11;
 }
 
-// Per-delta streaming signal dispatched from the LLM inbox runtime to the conversation actor while
+// Per-delta streaming signal dispatched from AgentRunGAgent to the conversation actor while
 // the reply is still being generated. The actor owns the outbound reply credential and the
 // placeholder message identifier for the turn, so it must be the one issuing the relay placeholder
 // send and subsequent edit calls. This message carries only the cumulative accumulated text for
@@ -87,10 +87,36 @@ message LlmReplyReadyEvent {
 // in-memory keyed by `correlation_id`. This event must never be persisted — it is a runtime-only
 // signal.
 message LlmReplyStreamChunkEvent {
+  // Field 6 (`card_mode`) was a runtime-only routing flag that has been promoted to its own
+  // message type (`LlmReplyCardStreamChunkEvent`) so the structural contract of this domain-
+  // event-shaped envelope no longer carries any "should I re-route to a different sink?"
+  // signal. Reserved here so accidental reuse of the field number, or a stale serializer
+  // built before the split, fails loudly instead of silently flipping back to card mode.
+  reserved 6;
+  reserved "card_mode";
+
   string correlation_id = 1;
   string registration_id = 2;
   // Clone of the inbound activity so the actor/turn runner can resolve the platform, conversation,
   // and outbound delivery without re-reading from durable state.
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 3;
+  // Current accumulated reply text (not a delta slice). Each chunk supersedes the previous one.
+  string accumulated_text = 4;
+  int64 chunk_at_unix_ms = 5;
+}
+
+// Per-delta streaming signal for the Lark CardKit (card-mode) outbound path. Identical
+// payload to LlmReplyStreamChunkEvent, but a separate proto type so the routing decision is
+// structural: there is no boolean a misbehaving persistence layer can flip — the actor's
+// HandleLlmReplyCardStreamChunkAsync handler is reachable only via this type. Like its
+// edit-message sibling, this event is a runtime-only signal and must never be persisted to
+// the event store, projection, or any durable state.
+message LlmReplyCardStreamChunkEvent {
+  string correlation_id = 1;
+  string registration_id = 2;
+  // Clone of the inbound activity so the actor/runner can resolve the platform, conversation,
+  // delivery context, and TransportExtras (NyxUserAccessToken, NyxLarkChatId, NyxLarkUnionId)
+  // without re-reading from durable state.
   aevatar.gagents.channel.abstractions.ChatActivity activity = 3;
   // Current accumulated reply text (not a delta slice). Each chunk supersedes the previous one.
   string accumulated_text = 4;
@@ -128,7 +154,7 @@ message NyxRelayReplyTokenCleanupRequestedEvent {
   int64 requested_at_unix_ms = 2;
 }
 
-// Sent by ChannelLlmReplyInboxRuntime when its pre-LLM gates (stale age,
+// Sent by AgentRunGAgent when its pre-LLM gates (stale age,
 // missing relay credential, malformed payload) refuse to process a deferred
 // LLM reply. The actor consumes this to retire the matching pending entry
 // from State.PendingLlmReplyRequests via a NotRetryable
@@ -190,4 +216,33 @@ enum FailureKind {
   FAILURE_KIND_PERMANENT_ADAPTER_ERROR = 2;
   FAILURE_KIND_CREDENTIAL_RESOLUTION_FAILED = 3;
   FAILURE_KIND_PLATFORM_UNAVAILABLE = 4;
+}
+
+// Persisted by ConversationGAgent after the channel sink (e.g. Lark
+// edit_message) has ack'd the final reply chunk. Drives
+// ConversationGAgentState.last_reply_delivery into the Delivered outcome,
+// satisfying chain.delivered per ADR-0021. Single source of user-visible
+// delivery truth — downstream readers MUST NOT rely on lark API log lines
+// or other side-channel signals.
+message LlmReplyDeliveredEvent {
+  string correlation_id = 1;
+  // AgentRunGAgent run_id producing this reply (used to anchor delivery
+  // against a specific committed reply).
+  string run_id = 2;
+  int64 acked_at_unix_ms = 3;
+  // Channel-side message id from the sink ack (e.g. Lark message_id).
+  string channel_message_id = 4;
+}
+
+// Persisted by ConversationGAgent when the channel sink rejects or times
+// out on the reply send/edit. Drives
+// ConversationGAgentState.last_reply_delivery into the DeliveryFailed
+// outcome. The downstream ConversationContinueFailedEvent is the
+// chain-finalizing signal — this event captures the structured cause.
+message LlmReplyDeliveryFailedEvent {
+  string correlation_id = 1;
+  string run_id = 2;
+  int64 failed_at_unix_ms = 3;
+  string error_code = 4;
+  string error_message = 5;
 }

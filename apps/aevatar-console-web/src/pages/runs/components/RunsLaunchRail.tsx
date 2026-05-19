@@ -162,7 +162,7 @@ function renderRouteMiniCard(
       <div style={embeddedPanelStyle}>
         <Space wrap size={[6, 6]}>
           <Tag color="geekblue">Command invoke</Tag>
-          <Tag>Scope binding</Tag>
+          <Tag>Workspace binding</Tag>
         </Space>
         <Typography.Text strong style={{ display: "block", marginTop: 10 }}>
           {activeEndpointId}
@@ -593,7 +593,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                         extra={
                           draftMode
                             ? "Draft runs execute the bundled Studio draft."
-                            : "Selecting a route targets the published scope service with the same id. Leave it empty to use the scope default binding; binding override wins when provided."
+                            : "Selecting a route targets the published workspace service with the same id. Leave it empty to use the workspace default binding; binding override wins when provided."
                         }
                         disabled={draftMode}
                         options={routeOptions}
@@ -625,12 +625,12 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                     )}
                     <ProFormText
                       name="scopeId"
-                      label="Scope ID"
-                      placeholder="NyxID user / scope id"
+                      label="Workspace ID"
+                      placeholder="NyxID user / workspace id"
                       rules={[
                         {
                           required: true,
-                          message: "Scope ID is required.",
+                          message: "Workspace ID is required.",
                         },
                       ]}
                     />
@@ -653,7 +653,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                                   <ProFormText
                                     name="serviceOverrideId"
                                     label="Binding override (optional)"
-                                    placeholder="Leave empty to use the scope default binding."
+                                    placeholder="Leave empty to use the workspace default binding."
                                   />
                                 ) : null}
                                 {isChatEndpoint ? (
@@ -703,7 +703,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                           <ProFormText
                             name="serviceOverrideId"
                             label="Binding override (optional)"
-                            placeholder="Leave empty to use the scope default binding."
+                            placeholder="Leave empty to use the workspace default binding."
                           />
                         ) : null}
                         {isChatEndpoint ? (

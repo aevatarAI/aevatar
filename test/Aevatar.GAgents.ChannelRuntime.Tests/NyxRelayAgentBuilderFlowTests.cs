@@ -12,149 +12,6 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class NyxRelayAgentBuilderFlowTests
 {
     [Fact]
-    public void TryResolve_ShouldBuildDailyReportToolCall_ForDailyWithoutArguments()
-    {
-        var inbound = new ChannelInboundEvent
-        {
-            ChatType = "p2p",
-            ConversationId = "oc_default_daily",
-            Text = "/daily",
-        };
-
-        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
-
-        matched.Should().BeTrue();
-        decision.Should().NotBeNull();
-        decision!.RequiresToolExecution.Should().BeTrue();
-        decision.ToolAction.Should().Be("create_daily_report");
-
-        using var body = JsonDocument.Parse(decision.ToolArgumentsJson!);
-        body.RootElement.GetProperty("action").GetString().Should().Be("create_agent");
-        body.RootElement.GetProperty("template").GetString().Should().Be("daily_report");
-        body.RootElement.GetProperty("github_username").ValueKind.Should().Be(JsonValueKind.Null);
-        body.RootElement.GetProperty("schedule_cron").GetString().Should().Be("0 9 * * *");
-        body.RootElement.GetProperty("conversation_id").GetString().Should().Be("oc_default_daily");
-    }
-
-    [Fact]
-    public void TryResolve_ShouldAcceptPositionalGithubUsername_AndForwardConversationId()
-    {
-        var inbound = new ChannelInboundEvent
-        {
-            ChatType = "p2p",
-            ConversationId = "oc_8a70aeefbdb4340e1fa5f575b4c794eb",
-            Text = "/daily eanzhao",
-        };
-
-        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
-
-        matched.Should().BeTrue();
-        decision.Should().NotBeNull();
-        decision!.RequiresToolExecution.Should().BeTrue();
-        decision.ToolAction.Should().Be("create_daily_report");
-
-        using var body = JsonDocument.Parse(decision.ToolArgumentsJson!);
-        body.RootElement.GetProperty("action").GetString().Should().Be("create_agent");
-        body.RootElement.GetProperty("template").GetString().Should().Be("daily_report");
-        body.RootElement.GetProperty("github_username").GetString().Should().Be("eanzhao");
-        body.RootElement.GetProperty("save_github_username_preference").GetBoolean().Should().BeTrue();
-        body.RootElement.GetProperty("run_immediately").GetBoolean().Should().BeTrue();
-        body.RootElement.GetProperty("conversation_id").GetString().Should().Be("oc_8a70aeefbdb4340e1fa5f575b4c794eb");
-    }
-
-    [Fact]
-    public void TryResolve_ShouldNotRequestPreferenceSave_WhenDailyHasNoUsername()
-    {
-        var inbound = new ChannelInboundEvent
-        {
-            ChatType = "p2p",
-            ConversationId = "oc_default_daily",
-            Text = "/daily",
-        };
-
-        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
-
-        matched.Should().BeTrue();
-        decision.Should().NotBeNull();
-        decision!.RequiresToolExecution.Should().BeTrue();
-
-        using var body = JsonDocument.Parse(decision.ToolArgumentsJson!);
-        body.RootElement.GetProperty("github_username").ValueKind.Should().Be(JsonValueKind.Null);
-        body.RootElement.GetProperty("save_github_username_preference").GetBoolean().Should().BeFalse();
-    }
-
-    [Theory]
-    [InlineData("/daily =broken")]
-    [InlineData("/daily github_username=")]
-    public void TryResolve_ShouldPassThroughNullGithubUsername_WhenMissingOrEmpty(string text)
-    {
-        var inbound = new ChannelInboundEvent
-        {
-            ChatType = "p2p",
-            ConversationId = "oc_chat_xyz",
-            Text = text,
-        };
-
-        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
-
-        matched.Should().BeTrue();
-        decision.Should().NotBeNull();
-        decision!.RequiresToolExecution.Should().BeTrue();
-        decision.ToolAction.Should().Be("create_daily_report");
-
-        using var body = JsonDocument.Parse(decision.ToolArgumentsJson!);
-        body.RootElement.GetProperty("github_username").ValueKind.Should().Be(JsonValueKind.Null);
-        body.RootElement.GetProperty("schedule_cron").GetString().Should().Be("0 9 * * *");
-    }
-
-    [Fact]
-    public void TryResolve_ShouldAcceptPositionalSocialMediaTopic()
-    {
-        var inbound = new ChannelInboundEvent
-        {
-            ChatType = "p2p",
-            ConversationId = "oc_chat_abc",
-            Text = "/social-media \"Launch update\" schedule_time=10:30",
-        };
-
-        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
-
-        matched.Should().BeTrue();
-        decision.Should().NotBeNull();
-        decision!.RequiresToolExecution.Should().BeTrue();
-        decision.ToolAction.Should().Be("create_social_media");
-
-        using var body = JsonDocument.Parse(decision.ToolArgumentsJson!);
-        body.RootElement.GetProperty("topic").GetString().Should().Be("Launch update");
-        body.RootElement.GetProperty("schedule_cron").GetString().Should().Be("30 10 * * *");
-        body.RootElement.GetProperty("conversation_id").GetString().Should().Be("oc_chat_abc");
-    }
-
-    [Fact]
-    public void TryResolve_ShouldBuildCreateSocialMediaToolCall_FromTextCommand()
-    {
-        var inbound = new ChannelInboundEvent
-        {
-            ChatType = "p2p",
-            Text = "/social-media topic=\"Launch update\" schedule_time=10:30 audience=\"Developers\" style=\"Confident\"",
-        };
-
-        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
-
-        matched.Should().BeTrue();
-        decision.Should().NotBeNull();
-        decision!.RequiresToolExecution.Should().BeTrue();
-        decision.ToolAction.Should().Be("create_social_media");
-
-        using var body = JsonDocument.Parse(decision.ToolArgumentsJson!);
-        body.RootElement.GetProperty("action").GetString().Should().Be("create_agent");
-        body.RootElement.GetProperty("template").GetString().Should().Be("social_media");
-        body.RootElement.GetProperty("topic").GetString().Should().Be("Launch update");
-        body.RootElement.GetProperty("schedule_cron").GetString().Should().Be("30 10 * * *");
-        body.RootElement.GetProperty("audience").GetString().Should().Be("Developers");
-    }
-
-    [Fact]
     public void FormatToolResult_ShouldRenderListAgents_AsSingleCardWithoutPerAgentButtons()
     {
         // Issue #476: /agents used to render as one summary card + N per-agent cards + N
@@ -171,16 +28,10 @@ public sealed class NyxRelayAgentBuilderFlowTests
               "agents": [
                 {
                   "agent_id": "skill-runner-94d754dfdfbb416aa5a676cecd0d7a71",
-                  "template": "daily_report",
+                  "template": "legacy-template",
                   "status": "running",
                   "next_scheduled_run": "2026-04-23T09:00:00Z",
                   "last_run_at": "2026-04-22T09:00:00Z"
-                },
-                {
-                  "agent_id": "skill-runner-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d",
-                  "template": "social_media",
-                  "status": "disabled",
-                  "next_scheduled_run": "pending"
                 }
               ]
             }
@@ -190,13 +41,11 @@ public sealed class NyxRelayAgentBuilderFlowTests
         result.Cards.Should().ContainSingle();
         var card = result.Cards.Single();
         card.BlockId.Should().Be("agents_list");
-        card.Title.Should().Be("Your Agents (2)");
+        card.Title.Should().Be("Your Agents (1)");
         // Body lists every agent with its identifying fields in markdown.
-        card.Text.Should().Contain("daily_report");
+        card.Text.Should().Contain("legacy-template");
         card.Text.Should().Contain("skill-runner-94d754dfdfbb416aa5a676cecd0d7a71");
         card.Text.Should().Contain("running");
-        card.Text.Should().Contain("social_media");
-        card.Text.Should().Contain("disabled");
         // Per-agent commands live in the body so users do not have to remember them.
         card.Text.Should().Contain("/agent-status <id>");
         card.Text.Should().Contain("/run-agent <id>");
@@ -207,14 +56,9 @@ public sealed class NyxRelayAgentBuilderFlowTests
         result.Actions.Should().NotContain(a => a.ActionId == "agent_status");
         result.Actions.Should().NotContain(a => a.Arguments.ContainsKey("agent_id"));
 
-        // Footer keeps four global discovery / creation buttons in a single row.
-        result.Actions.Select(a => a.ActionId).Should().BeEquivalentTo(new[]
-        {
-            "list_agents",
-            "list_templates",
-            "open_daily_report_form",
-            "open_social_media_form",
-        });
+        // Footer is now just a single Refresh button — there are no in-tree creation flows;
+        // recipes for new agents come from Ornn skills (issue #598).
+        result.Actions.Select(a => a.ActionId).Should().BeEquivalentTo(new[] { "list_agents" });
     }
 
     [Fact]
@@ -224,9 +68,7 @@ public sealed class NyxRelayAgentBuilderFlowTests
         var result = NyxRelayAgentBuilderFlow.FormatToolResult(decision, """{"agents":[]}""");
 
         result.Cards.Should().ContainSingle(card => card.BlockId == "agents_empty");
-        result.Actions.Should().Contain(a => a.ActionId == "open_daily_report_form");
-        result.Actions.Should().Contain(a => a.ActionId == "open_social_media_form");
-        result.Actions.Should().Contain(a => a.ActionId == "list_templates");
+        result.Actions.Should().Contain(a => a.ActionId == "list_agents");
     }
 
     [Fact]
@@ -243,7 +85,7 @@ public sealed class NyxRelayAgentBuilderFlowTests
             """
             {
               "agent_id": "skill-runner-1",
-              "template": "daily_report",
+              "template": "daily",
               "status": "error",
               "schedule_cron": "0 9 * * *",
               "schedule_timezone": "UTC",
@@ -299,7 +141,6 @@ public sealed class NyxRelayAgentBuilderFlowTests
     }
 
     [Theory]
-    [InlineData("/daily_report alice", "Unknown command: /daily_report")]
     [InlineData("/foobar", "Unknown command: /foobar")]
     [InlineData("/", "Unknown command: /")]
     public void TryResolve_ShouldReturnUnknownCommandUsage_ForUnknownSlash(string text, string expected)
@@ -316,7 +157,25 @@ public sealed class NyxRelayAgentBuilderFlowTests
         decision.Should().NotBeNull();
         decision!.RequiresToolExecution.Should().BeFalse();
         decision.ReplyPayload.Should().Contain(expected);
-        decision.ReplyPayload.Should().Contain("/daily [github_username]");
+        decision.ReplyPayload.Should().Contain("/agents");
+    }
+
+    [Theory]
+    [InlineData("/daily")]
+    [InlineData("/daily alice")]
+    [InlineData("/DAILY alice schedule_time=09:00")]
+    public void TryResolve_ShouldFallThrough_ForDailyOrnnSkillShortcut(string text)
+    {
+        var inbound = new ChannelInboundEvent
+        {
+            ChatType = "p2p",
+            Text = text,
+        };
+
+        var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
+
+        matched.Should().BeFalse();
+        decision.Should().BeNull();
     }
 
     [Fact]
@@ -347,7 +206,7 @@ public sealed class NyxRelayAgentBuilderFlowTests
         var inbound = new ChannelInboundEvent
         {
             ChatType = "group",
-            Text = "/daily alice",
+            Text = "/agents",
         };
 
         var matched = NyxRelayAgentBuilderFlow.TryResolve(inbound, out var decision);
@@ -356,7 +215,7 @@ public sealed class NyxRelayAgentBuilderFlowTests
         decision.Should().NotBeNull();
         decision!.RequiresToolExecution.Should().BeFalse();
         decision.ReplyPayload.Should().Contain("private chat");
-        decision.ReplyPayload.Should().Contain("/daily");
+        decision.ReplyPayload.Should().Contain("/agents");
     }
 
     [Theory]
@@ -389,87 +248,6 @@ public sealed class NyxRelayAgentBuilderFlowTests
 
         matched.Should().BeFalse();
         decision.Should().BeNull();
-    }
-
-    [Fact]
-    public void FormatToolResult_ShouldReturnCardForm_WhenCredentialsRequired()
-    {
-        var decision = AgentBuilderFlowDecision.ToolCall("create_daily_report", "{}");
-        var toolResultJson = JsonSerializer.Serialize(new
-        {
-            status = "credentials_required",
-            template = "daily_report",
-            provider_id = "p-github",
-            note = "Could not resolve github_username. Provide github_username explicitly, save a default preference, or reconnect GitHub in NyxID.",
-        });
-
-        var result = NyxRelayAgentBuilderFlow.FormatToolResult(decision, toolResultJson);
-
-        result.Actions.Should().NotBeEmpty();
-        result.Actions.Any(action => action.Kind == ActionElementKind.TextInput && action.ActionId == "github_username")
-            .Should().BeTrue();
-        result.Actions.Any(action => action.Kind == ActionElementKind.FormSubmit && action.ActionId == "submit_daily_report")
-            .Should().BeTrue();
-        result.Cards.Should().HaveCount(1);
-        result.Cards[0].Title.Should().Be("Create Daily Report Agent");
-        result.Cards[0].Text.Should().Contain("GitHub credentials required");
-        result.Cards[0].Text.Should().Contain("p-github");
-        // The auth body lives in the card only — content.Text must stay empty so Lark's form-mode
-        // composer (LarkMessageComposer.BuildLeadingMarkdown) doesn't double-render the same
-        // "GitHub credentials required" block once from Text and once from the card body. The
-        // earlier assertion that Text was non-empty was codifying the bug it has since fixed.
-        result.Text.Should().BeEmpty();
-    }
-
-    [Fact]
-    public void FormatToolResult_ShouldAckImmediateRun_WithSavedPreference()
-    {
-        var decision = AgentBuilderFlowDecision.ToolCall("create_daily_report", "{}");
-        var toolResultJson = JsonSerializer.Serialize(new
-        {
-            status = "created",
-            agent_id = "skill-runner-1ba2e9f3",
-            agent_type = "skill_runner",
-            template = "daily_report",
-            github_username = "eanzhao",
-            github_username_preference_saved = true,
-            run_immediately_requested = true,
-            next_scheduled_run = "2026-04-25T09:00:00+00:00",
-            conversation_id = "oc_default_daily",
-        });
-
-        var result = NyxRelayAgentBuilderFlow.FormatToolResult(decision, toolResultJson);
-
-        result.Actions.Should().BeEmpty();
-        result.Cards.Should().BeEmpty();
-        result.Text.Should().Contain("Daily report scheduled for `eanzhao`");
-        result.Text.Should().Contain("Running first report now");
-        result.Text.Should().Contain("I'll reply with the results shortly");
-        result.Text.Should().Contain("Saved `eanzhao` as your default GitHub username");
-        result.Text.Should().Contain("Next scheduled run: 2026-04-25T09:00:00+00:00");
-        result.Text.Should().Contain("skill-runner-1ba2e9f3");
-    }
-
-    [Fact]
-    public void FormatToolResult_ShouldNotMentionSavedPreference_WhenSaveNotRequested()
-    {
-        var decision = AgentBuilderFlowDecision.ToolCall("create_daily_report", "{}");
-        var toolResultJson = JsonSerializer.Serialize(new
-        {
-            status = "created",
-            agent_id = "skill-runner-1",
-            template = "daily_report",
-            github_username = "eanzhao",
-            github_username_preference_saved = false,
-            run_immediately_requested = true,
-            next_scheduled_run = "2026-04-25T09:00:00+00:00",
-        });
-
-        var result = NyxRelayAgentBuilderFlow.FormatToolResult(decision, toolResultJson);
-
-        result.Text.Should().Contain("Daily report scheduled for `eanzhao`");
-        result.Text.Should().Contain("Running first report now");
-        result.Text.Should().NotContain("as your default GitHub username");
     }
 
     private sealed class StubSlashHandler(ChannelSlashCommandUsage usage) : IChannelSlashCommandHandler

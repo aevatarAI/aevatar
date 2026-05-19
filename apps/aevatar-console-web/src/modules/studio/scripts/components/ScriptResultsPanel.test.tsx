@@ -201,7 +201,7 @@ describe('ScriptResultsPanel', () => {
       />,
     );
 
-    expect(screen.getByText('Scope: scope-1')).toBeTruthy();
+    expect(screen.getByText('Workspace ID: scope-1')).toBeTruthy();
     expect(screen.getByText('Catalog: catalog-1')).toBeTruthy();
     expect(screen.getByText('Previous: rev-0')).toBeTruthy();
     expect(screen.getByText('History: rev-0 -> rev-1')).toBeTruthy();

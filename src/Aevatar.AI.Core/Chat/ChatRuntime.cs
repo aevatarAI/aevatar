@@ -315,7 +315,7 @@ public sealed class ChatRuntime
                         if (roundResult.Terminated)
                         {
                             streamingExecutor.Discard();
-                            AppendAssistantMessage(messages, pendingHistoryMessages, roundResult.Content, roundResult.ToolCalls);
+                            AppendAssistantMessage(messages, pendingHistoryMessages, roundResult.Content, roundResult.ReasoningContent, roundResult.ToolCalls);
                             finalContent = roundResult.Content;
                             break;
                         }
@@ -337,6 +337,7 @@ public sealed class ChatRuntime
                                             LLMResponse = new LLMResponse
                                             {
                                                 Content = parsed.CleanedContent,
+                                                ReasoningContent = roundResult.ReasoningContent,
                                                 ToolCalls = parsed.ToolCalls,
                                             },
                                         };
@@ -352,20 +353,17 @@ public sealed class ChatRuntime
 
                                     if (fallbackBlocked)
                                     {
-                                        AppendAssistantMessage(messages, pendingHistoryMessages, parsed.CleanedContent, toolCalls: null);
+                                        AppendAssistantMessage(messages, pendingHistoryMessages, parsed.CleanedContent, roundResult.ReasoningContent, toolCalls: null);
                                         finalContent = parsed.CleanedContent;
                                         break;
                                     }
 
-                                    AppendAssistantMessage(messages, pendingHistoryMessages, parsed.CleanedContent, toolCalls: null);
-
-                                    var textToolCallMsg = new ChatMessage
-                                    {
-                                        Role = "assistant",
-                                        ToolCalls = parsed.ToolCalls,
-                                    };
-                                    messages.Add(textToolCallMsg);
-                                    pendingHistoryMessages.Add(textToolCallMsg);
+                                    AppendAssistantMessage(
+                                        messages,
+                                        pendingHistoryMessages,
+                                        parsed.CleanedContent,
+                                        roundResult.ReasoningContent,
+                                        parsed.ToolCalls);
 
                                     // Execute parsed tool calls via a fresh executor
                                     using var textToolExecutor = new StreamingToolExecutor(
@@ -388,7 +386,7 @@ public sealed class ChatRuntime
                             if (ToolCallLoop.IsLengthTruncated(roundResult.FinishReason)
                                 && lengthRecoveryCount < ToolCallLoop.MaxLengthRecoveries)
                             {
-                                AppendAssistantMessage(messages, pendingHistoryMessages, roundResult.Content, toolCalls: null);
+                                AppendAssistantMessage(messages, pendingHistoryMessages, roundResult.Content, roundResult.ReasoningContent, toolCalls: null);
                                 var nudge = ChatMessage.User(ToolCallLoop.LengthRecoveryNudge);
                                 messages.Add(nudge);
                                 pendingHistoryMessages.Add(nudge);
@@ -396,7 +394,7 @@ public sealed class ChatRuntime
                                 continue;
                             }
 
-                            AppendAssistantMessage(messages, pendingHistoryMessages, roundResult.Content, toolCalls: null);
+                            AppendAssistantMessage(messages, pendingHistoryMessages, roundResult.Content, roundResult.ReasoningContent, toolCalls: null);
                             finalContent = roundResult.Content;
                             break;
                         }
@@ -412,6 +410,7 @@ public sealed class ChatRuntime
                                 LLMResponse = new LLMResponse
                                 {
                                     Content = roundResult.Content,
+                                    ReasoningContent = roundResult.ReasoningContent,
                                     ToolCalls = roundResult.ToolCalls,
                                 },
                             };
@@ -421,7 +420,7 @@ public sealed class ChatRuntime
                             if (postSamplingCtx.Items.TryGetValue("block_tool_calls", out var block)
                                 && block is true)
                             {
-                                AppendAssistantMessage(messages, pendingHistoryMessages, roundResult.Content, toolCalls: null);
+                                AppendAssistantMessage(messages, pendingHistoryMessages, roundResult.Content, roundResult.ReasoningContent, toolCalls: null);
                                 finalContent = roundResult.Content;
                                 break;
                             }
@@ -437,6 +436,8 @@ public sealed class ChatRuntime
                         var assistantToolCallMessage = new ChatMessage
                         {
                             Role = "assistant",
+                            Content = roundResult.Content,
+                            ReasoningContent = roundResult.ReasoningContent,
                             ToolCalls = roundResult.ToolCalls,
                         };
                         messages.Add(assistantToolCallMessage);
@@ -488,15 +489,12 @@ public sealed class ChatRuntime
                             : null;
                         if (finalParsed?.ToolCalls.Count > 0)
                         {
-                            AppendAssistantMessage(messages, pendingHistoryMessages, finalParsed.CleanedContent, toolCalls: null);
-
-                            var finalToolCallMsg = new ChatMessage
-                            {
-                                Role = "assistant",
-                                ToolCalls = finalParsed.ToolCalls,
-                            };
-                            messages.Add(finalToolCallMsg);
-                            pendingHistoryMessages.Add(finalToolCallMsg);
+                            AppendAssistantMessage(
+                                messages,
+                                pendingHistoryMessages,
+                                finalParsed.CleanedContent,
+                                finalRound.ReasoningContent,
+                                finalParsed.ToolCalls);
 
                             using var finalToolExecutor = new StreamingToolExecutor(
                                 _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
@@ -527,12 +525,12 @@ public sealed class ChatRuntime
                             var summaryRound = await StreamLlmRoundAsync(
                                 provider, summaryRequest, channel.Writer, runToken,
                                 () => wroteOutput = true);
-                            AppendAssistantMessage(messages, pendingHistoryMessages, summaryRound.Content, toolCalls: null);
+                            AppendAssistantMessage(messages, pendingHistoryMessages, summaryRound.Content, summaryRound.ReasoningContent, toolCalls: null);
                             finalContent = summaryRound.Content;
                         }
                         else
                         {
-                            AppendAssistantMessage(messages, pendingHistoryMessages, finalRound.Content, toolCalls: null);
+                            AppendAssistantMessage(messages, pendingHistoryMessages, finalRound.Content, finalRound.ReasoningContent, toolCalls: null);
                             finalContent = finalRound.Content;
                         }
                     }
@@ -635,6 +633,7 @@ public sealed class ChatRuntime
         AnnotateRequestIdentity(llmCallContext);
 
         string? streamedContent = null;
+        string? streamedReasoningContent = null;
         TokenUsage? streamedUsage = null;
         IReadOnlyList<ToolCall>? streamedToolCalls = null;
         string? streamedFinishReason = null;
@@ -644,6 +643,7 @@ public sealed class ChatRuntime
             if (llmCallContext.Terminate) return;
 
             var full = new StringBuilder();
+            var fullReasoning = new StringBuilder();
             TokenUsage? usage = null;
             string? finishReason = null;
             var toolCalls = onToolCallCompleted != null
@@ -652,7 +652,7 @@ public sealed class ChatRuntime
 
             await foreach (var chunk in provider.ChatStreamAsync(llmCallContext.Request, ct))
             {
-                var normalizedChunk = NormalizeStreamChunk(chunk, toolCalls, full, ref usage, ref finishReason);
+                var normalizedChunk = NormalizeStreamChunk(chunk, toolCalls, full, fullReasoning, ref usage, ref finishReason);
                 if (normalizedChunk == null)
                     continue;
 
@@ -661,6 +661,7 @@ public sealed class ChatRuntime
             }
 
             streamedContent = full.Length > 0 ? full.ToString() : null;
+            streamedReasoningContent = fullReasoning.Length > 0 ? fullReasoning.ToString() : null;
             streamedUsage = usage;
             streamedFinishReason = finishReason;
             var finalizedToolCalls = toolCalls.BuildToolCalls();
@@ -668,6 +669,7 @@ public sealed class ChatRuntime
             llmCallContext.Response = new LLMResponse
             {
                 Content = streamedContent,
+                ReasoningContent = streamedReasoningContent,
                 Usage = streamedUsage,
                 ToolCalls = streamedToolCalls,
                 FinishReason = finishReason,
@@ -677,6 +679,7 @@ public sealed class ChatRuntime
         if (llmCallContext.Terminate)
         {
             streamedContent = llmCallContext.Response?.Content;
+            streamedReasoningContent = llmCallContext.Response?.ReasoningContent;
             streamedUsage = llmCallContext.Response?.Usage;
             streamedToolCalls = llmCallContext.Response?.ToolCalls;
 
@@ -693,6 +696,7 @@ public sealed class ChatRuntime
         var response = llmCallContext.Response ?? new LLMResponse
         {
             Content = streamedContent,
+            ReasoningContent = streamedReasoningContent,
             Usage = streamedUsage,
             ToolCalls = streamedToolCalls,
         };
@@ -700,22 +704,24 @@ public sealed class ChatRuntime
         llmHookContext.LLMResponse = response;
         if (_hooks != null) await _hooks.RunLLMRequestEndAsync(llmHookContext, ct);
 
-        return new StreamingRoundResult(response.Content, response.ToolCalls, llmCallContext.Terminate, response.FinishReason ?? streamedFinishReason);
+        return new StreamingRoundResult(response.Content, response.ReasoningContent, response.ToolCalls, llmCallContext.Terminate, response.FinishReason ?? streamedFinishReason);
     }
 
     private static void AppendAssistantMessage(
         List<ChatMessage> messages,
         List<ChatMessage> pendingHistoryMessages,
         string? content,
+        string? reasoningContent,
         IReadOnlyList<ToolCall>? toolCalls)
     {
-        if (string.IsNullOrEmpty(content) && toolCalls is not { Count: > 0 })
+        if (string.IsNullOrEmpty(content) && string.IsNullOrEmpty(reasoningContent) && toolCalls is not { Count: > 0 })
             return;
 
         var assistantMessage = new ChatMessage
         {
             Role = "assistant",
             Content = content,
+            ReasoningContent = reasoningContent,
             ToolCalls = toolCalls,
         };
         messages.Add(assistantMessage);
@@ -798,6 +804,7 @@ public sealed class ChatRuntime
         LLMStreamChunk chunk,
         StreamingToolCallAccumulator toolCalls,
         StringBuilder fullContent,
+        StringBuilder fullReasoningContent,
         ref TokenUsage? usage,
         ref string? finishReason)
     {
@@ -807,6 +814,9 @@ public sealed class ChatRuntime
 
         if (!string.IsNullOrEmpty(chunk.DeltaContent))
             fullContent.Append(chunk.DeltaContent);
+
+        if (!string.IsNullOrEmpty(chunk.DeltaReasoningContent))
+            fullReasoningContent.Append(chunk.DeltaReasoningContent);
 
         if (chunk.Usage != null)
             usage = chunk.Usage;
@@ -832,12 +842,21 @@ public sealed class ChatRuntime
             DeltaToolCall = normalizedToolCall,
             Usage = chunk.Usage,
             IsLast = chunk.IsLast,
+            // Field-level patch (ADR-0021 §6 / canon §8): forward FinishReason so
+            // the actor-edge closeout in ConversationReplyGenerator can observe
+            // it. ChatRuntime itself remains transitional per aevatar#596 Phase A;
+            // the cross-round aggregation and stream-local terminal contract live
+            // at the actor edge, not here.
+            FinishReason = chunk.FinishReason,
         };
     }
 
     private static IReadOnlyList<LLMStreamChunk> BuildSyntheticChunks(LLMResponse response)
     {
         var chunks = new List<LLMStreamChunk>();
+
+        if (!string.IsNullOrEmpty(response.ReasoningContent))
+            chunks.Add(new LLMStreamChunk { DeltaReasoningContent = response.ReasoningContent });
 
         if (!string.IsNullOrEmpty(response.Content))
             chunks.Add(new LLMStreamChunk { DeltaContent = response.Content });
@@ -913,6 +932,7 @@ public sealed class ChatRuntime
 
     private sealed record StreamingRoundResult(
         string? Content,
+        string? ReasoningContent,
         IReadOnlyList<ToolCall>? ToolCalls,
         bool Terminated,
         string? FinishReason);

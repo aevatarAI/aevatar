@@ -72,16 +72,6 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
             "Feishu approval resolution delivery failed",
             cancellationToken);
 
-        if (ShouldSendApprovedContent(target, resolution))
-        {
-            await SendTextMessageAsync(
-                target,
-                resolution.ResolvedContent!,
-                "Feishu approved-content delivery returned empty response.",
-                "Feishu approved-content delivery failed",
-                cancellationToken);
-        }
-
         _logger.LogInformation(
             "Delivered human approval resolution text: target={DeliveryTargetId}, run={RunId}, step={StepId}, approved={Approved}",
             deliveryTargetId,
@@ -142,14 +132,6 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
 
         if (!string.IsNullOrWhiteSpace(resolution.Feedback))
             lines.Add($"Feedback: {resolution.Feedback}");
-
-        if (!resolution.Approved && target is not null &&
-            string.Equals(target.TemplateName, WorkflowAgentDefaults.TemplateName, StringComparison.OrdinalIgnoreCase))
-        {
-            lines.Add(string.Empty);
-            lines.Add($"Run again: /run-agent {target.AgentId}");
-            lines.Add("View agents: /agents");
-        }
 
         return string.Join('\n', lines);
     }
@@ -280,13 +262,6 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
 
         return target;
     }
-
-    private static bool ShouldSendApprovedContent(
-        UserAgentDeliveryTarget target,
-        HumanApprovalResolution resolution) =>
-        resolution.Approved &&
-        !string.IsNullOrWhiteSpace(resolution.ResolvedContent) &&
-        string.Equals(target.TemplateName, WorkflowAgentDefaults.TemplateName, StringComparison.OrdinalIgnoreCase);
 
     private async Task SendTextMessageAsync(
         UserAgentDeliveryTarget target,
@@ -436,8 +411,8 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
             // instead of the cryptic Lark `99992361 open_id cross app`.
             return
                 $"{failurePrefix} (code={larkCode}): {detail}. " +
-                "This workflow agent was created before cross-app union_id ingress existed; " +
-                "delete and recreate it (`/agents` → Delete → `/social-media`) to pick up the cross-app safe target.";
+                "This agent was created before cross-app union_id ingress existed; " +
+                "delete it (`/agents` → Delete) and recreate it to pick up the cross-app safe target.";
         }
 
         if (larkCode == LarkBotErrorCodes.UserIdCrossTenant)
@@ -449,10 +424,9 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
             return
                 $"{failurePrefix} (code={larkCode}): {detail}. " +
                 "The outbound Lark app is in a different tenant than the inbound app, so " +
-                "user-id translation is impossible. Delete and recreate the workflow agent " +
-                "(`/agents` → Delete → `/social-media`) so the new chat_id-preferred outbound " +
-                "path takes effect, or align the NyxID `s/api-lark-bot` proxy with the channel-bot " +
-                "that received the inbound event.";
+                "user-id translation is impossible. Delete the agent (`/agents` → Delete) and recreate " +
+                "it so the new chat_id-preferred outbound path takes effect, or align the NyxID " +
+                "`s/api-lark-bot` proxy with the channel-bot that received the inbound event.";
         }
 
         return larkCode is { } code

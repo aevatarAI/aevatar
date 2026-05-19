@@ -19,6 +19,7 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
     private const string GatewaySuffix = "/api/v1/llm/gateway/v1";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
+    private readonly IActorDispatchPort _actorDispatchPort;
     private readonly ILLMProviderFactory _llmProviderFactory;
     private readonly IConfiguration _configuration;
     private readonly IHttpClientFactory _httpClientFactory;
@@ -26,12 +27,14 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
     private readonly ILogger<StreamingProxyNyxParticipantCoordinator> _logger;
 
     public StreamingProxyNyxParticipantCoordinator(
+        IActorDispatchPort actorDispatchPort,
         ILLMProviderFactory llmProviderFactory,
         IConfiguration configuration,
         IHttpClientFactory httpClientFactory,
         ILogger<StreamingProxyNyxParticipantCoordinator> logger,
         INyxIdUserLlmPreferencesStore? preferencesStore = null)
     {
+        _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _llmProviderFactory = llmProviderFactory;
         _configuration = configuration;
         _httpClientFactory = httpClientFactory;
@@ -934,7 +937,7 @@ Return only {participant.DisplayName}'s reply text, with no prefixed name and no
         return string.Join('\n', lines).Trim();
     }
 
-    private static async Task MarkParticipantLeftAsync(
+    private async Task MarkParticipantLeftAsync(
         IActor actor,
         IStreamingProxyParticipantStore? participantStore,
         string? roomId,
@@ -1001,7 +1004,7 @@ Return only {participant.DisplayName}'s reply text, with no prefixed name and no
         yield return $"**{trimmed}**";
     }
 
-    private static async Task DispatchAsync(IActor actor, IMessage payload, CancellationToken ct)
+    private async Task DispatchAsync(IActor actor, IMessage payload, CancellationToken ct)
     {
         var envelope = new EventEnvelope
         {
@@ -1014,7 +1017,18 @@ Return only {participant.DisplayName}'s reply text, with no prefixed name and no
             },
         };
 
-        await actor.HandleEventAsync(envelope, ct);
+        await DispatchRoomEnvelopeAsync(actor.Id, envelope, ct);
+    }
+
+    private Task DispatchRoomEnvelopeAsync(
+        string actorId,
+        EventEnvelope envelope,
+        CancellationToken ct)
+    {
+        // Refactor (iter4/cluster-008):
+        //   Old pattern: the Nyx participant coordinator invoked room actors inline.
+        //   New principle: coordinators deliver StreamingProxy room events through IActorDispatchPort.
+        return _actorDispatchPort.DispatchAsync(actorId, envelope, ct);
     }
 }
 

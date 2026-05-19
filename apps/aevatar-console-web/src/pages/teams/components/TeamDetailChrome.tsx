@@ -14,11 +14,23 @@ export type TeamTabOption = {
 };
 
 type TeamActionRailProps = {
+  readonly archiveTeamActionLabel?: string;
+  readonly archiveTeamDisabled?: boolean;
+  readonly archiveTeamHint?: string;
   readonly conversationActionLabel: string;
+  readonly deploymentsActionLabel?: string;
+  readonly deploymentsDisabled?: boolean;
+  readonly deploymentsHint?: string;
   readonly editTeamDisabled?: boolean;
   readonly editTeamLabel: string;
   readonly editTeamHint?: string;
+  readonly governanceActionLabel?: string;
+  readonly governanceDisabled?: boolean;
+  readonly governanceHint?: string;
+  readonly onArchiveTeam?: () => void;
   readonly onOpenConversation: () => void;
+  readonly onOpenDeployments?: () => void;
+  readonly onOpenGovernance?: () => void;
   readonly onOpenServiceMapping: () => void;
   readonly onOpenTeamEditor: () => void;
   readonly onOpenTeamBuilder: () => void;
@@ -64,11 +76,23 @@ export const TeamDetailEmptyState: React.FC = () => (
 );
 
 export const TeamActionRail: React.FC<TeamActionRailProps> = ({
+  archiveTeamActionLabel,
+  archiveTeamDisabled = false,
+  archiveTeamHint,
   conversationActionLabel,
+  deploymentsActionLabel,
+  deploymentsDisabled = false,
+  deploymentsHint,
   editTeamDisabled = false,
   editTeamLabel,
   editTeamHint,
+  governanceActionLabel,
+  governanceDisabled = false,
+  governanceHint,
+  onArchiveTeam,
   onOpenConversation,
+  onOpenDeployments,
+  onOpenGovernance,
   onOpenServiceMapping,
   onOpenTeamEditor,
   onOpenTeamBuilder,
@@ -98,9 +122,40 @@ export const TeamActionRail: React.FC<TeamActionRailProps> = ({
     <Button onClick={onOpenConversation} style={topActionButtonStyle}>
       {conversationActionLabel}
     </Button>
+    {governanceActionLabel && onOpenGovernance ? (
+      <Button
+        disabled={governanceDisabled}
+        onClick={onOpenGovernance}
+        style={topActionButtonStyle}
+        title={governanceDisabled ? governanceHint : undefined}
+      >
+        {governanceActionLabel}
+      </Button>
+    ) : null}
+    {deploymentsActionLabel && onOpenDeployments ? (
+      <Button
+        disabled={deploymentsDisabled}
+        onClick={onOpenDeployments}
+        style={topActionButtonStyle}
+        title={deploymentsDisabled ? deploymentsHint : undefined}
+      >
+        {deploymentsActionLabel}
+      </Button>
+    ) : null}
     <Button onClick={onOpenTeamBuilder} style={topActionButtonStyle}>
       {teamBuilderActionLabel}
     </Button>
+    {archiveTeamActionLabel && onArchiveTeam ? (
+      <Button
+        danger
+        disabled={archiveTeamDisabled}
+        onClick={onArchiveTeam}
+        style={topActionButtonStyle}
+        title={archiveTeamDisabled ? archiveTeamHint : undefined}
+      >
+        {archiveTeamActionLabel}
+      </Button>
+    ) : null}
   </Space>
 );
 

@@ -125,7 +125,7 @@ because Aevatar never persisted the bot token.
 ## Expected Runtime Behavior
 
 - Inbound Telegram updates arrive at Aevatar through `POST /api/webhooks/nyxid-relay`
-  carrying `payload.platform == "telegram"`. There is no separate `/api/channels/telegram/callback/...` path on Aevatar.
+  carrying `payload.platform == "telegram"`. There is no separate direct Telegram callback path on Aevatar.
 - `ConversationReference.Scope` for Telegram traffic is derived by
   `NyxIdRelayConversationTypeMap`:
   `private` -> `DirectMessage`, `group` / `supergroup` -> `Group`,

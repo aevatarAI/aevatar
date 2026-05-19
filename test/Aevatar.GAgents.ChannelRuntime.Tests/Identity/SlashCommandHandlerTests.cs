@@ -83,31 +83,63 @@ public sealed class SlashCommandHandlerTests
     }
 
     [Fact]
-    public async Task Whoami_RequiresBinding_AndReturnsMaskedBindingId()
+    public async Task Whoami_BoundSender_ReturnsMaskedBindingId()
     {
         var handler = new WhoamiChannelSlashCommandHandler();
-        handler.RequiresBinding.Should().BeTrue();
 
-        var ctx = Context(bindingValue: "bnd_1234567890abcdef");
-        ctx = new ChannelSlashCommandContext
+        var ctx = new ChannelSlashCommandContext
         {
             CommandName = "whoami",
-            ArgumentText = ctx.ArgumentText,
-            Subject = ctx.Subject,
-            BindingIdValue = ctx.BindingIdValue,
-            RegistrationId = ctx.RegistrationId,
-            RegistrationScopeId = ctx.RegistrationScopeId,
-            SenderId = ctx.SenderId,
-            SenderName = ctx.SenderName,
-            IsPrivateChat = ctx.IsPrivateChat,
+            ArgumentText = string.Empty,
+            Subject = Subject(),
+            BindingIdValue = "bnd_1234567890abcdef",
+            RegistrationId = "reg-1",
+            RegistrationScopeId = "scope-1",
+            SenderId = "ou_user_y",
+            SenderName = "Eric",
+            IsPrivateChat = true,
         };
 
         var reply = await handler.HandleAsync(ctx, default);
 
         reply.Should().NotBeNull();
-        reply!.Text.Should().Contain("Eric");
+        reply!.Text.Should().Contain("已绑定");
+        reply.Text.Should().Contain("Eric");
         reply.Text.Should().Contain("bnd_…cdef");
         reply.Text.Should().NotContain("1234567890abcdef");
+    }
+
+    [Fact]
+    public async Task Whoami_DoesNotRequireBinding_AndReturnsUnboundHintForUnboundSender()
+    {
+        // Issue #513 phase 6: /whoami must reach its handler regardless of
+        // binding state so the user can introspect "am I bound?" without the
+        // turn runner short-circuiting them to the /init prompt instead.
+        var handler = new WhoamiChannelSlashCommandHandler();
+        handler.RequiresBinding.Should().BeFalse();
+
+        var ctx = new ChannelSlashCommandContext
+        {
+            CommandName = "whoami",
+            ArgumentText = string.Empty,
+            Subject = Subject(),
+            BindingIdValue = null,
+            RegistrationId = "reg-1",
+            RegistrationScopeId = "scope-1",
+            SenderId = "ou_user_y",
+            SenderName = "Eric",
+            IsPrivateChat = true,
+        };
+
+        var reply = await handler.HandleAsync(ctx, default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("未绑定");
+        reply.Text.Should().Contain("/init");
+        reply.Text.Should().Contain("Eric");
+        // Must not invent a binding-id placeholder — masked output is only
+        // for actual bindings.
+        reply.Text.Should().NotContain("Binding ID");
     }
 
     [Fact]
