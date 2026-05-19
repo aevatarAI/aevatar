@@ -11,8 +11,8 @@ using Google.Protobuf.WellKnownTypes;
 namespace Aevatar.Studio.Application.Studio.Services;
 
 // Refactor (iter16/cluster-meta-studio-actor-substrate):
-//   Old: FileStudioWorkspaceStore was a shadow store reading/writing JSON files in workspace dir, with no clear actor ownership of workspace facts
-//   New principle: workspace facts authoritatively owned by StudioWorkspaceGAgent (per CLAUDE.md "权威状态" + Auric 2026-05-19 "架构级清晰")
+//   Old: execution listing/detail/start/stop mixed local workspace reads with service-run orchestration details.
+//   New principle: executions route through service invocation/run query ports; workspace settings are read only as a fallback for runtime URL defaults.
 public sealed class ExecutionService
 {
     private readonly IServiceInvocationPort _serviceInvocationPort;

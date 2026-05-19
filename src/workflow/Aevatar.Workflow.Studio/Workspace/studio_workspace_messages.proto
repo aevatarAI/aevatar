@@ -109,12 +109,3 @@ message StudioWorkflowDraftDeleted {
   int64 expected_version = 4;
   google.protobuf.Timestamp deleted_at_utc = 5;
 }
-
-message StudioWorkflowDraftLayoutSaved {
-  string workspace_id = 1;
-  string scope_id = 2;
-  string workflow_id = 3;
-  StudioWorkflowLayout layout = 4;
-  int64 expected_version = 5;
-  google.protobuf.Timestamp saved_at_utc = 6;
-}

@@ -107,22 +107,6 @@ internal sealed class ActorDispatchStudioWorkspaceCommandPort : IStudioWorkspace
         }, expectedVersion, ct);
     }
 
-    public Task<StudioWorkspaceCommandReceipt> SaveDraftLayoutAsync(
-        string workflowId,
-        WorkflowLayoutDocument layout,
-        long? expectedVersion = null,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(layout);
-        return DispatchAsync(new StudioWorkflowDraftLayoutSaved
-        {
-            WorkflowId = NormalizeRequired(workflowId, nameof(workflowId)),
-            Layout = ToProtoLayout(layout),
-            SavedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            ExpectedVersion = expectedVersion ?? 0,
-        }, expectedVersion, ct);
-    }
-
     private async Task<StudioWorkspaceCommandReceipt> DispatchAsync<TEvent>(
         TEvent evt,
         long? expectedVersion,
@@ -158,10 +142,6 @@ internal sealed class ActorDispatchStudioWorkspaceCommandPort : IStudioWorkspace
                 typed.ScopeId = scopeId;
                 break;
             case StudioWorkflowDraftDeleted typed:
-                typed.WorkspaceId = workspaceId;
-                typed.ScopeId = scopeId;
-                break;
-            case StudioWorkflowDraftLayoutSaved typed:
                 typed.WorkspaceId = workspaceId;
                 typed.ScopeId = scopeId;
                 break;

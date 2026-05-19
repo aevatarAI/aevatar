@@ -149,63 +149,6 @@ public sealed class StudioWorkspaceGAgentTests
     }
 
     [Fact]
-    public async Task DraftLayoutCommand_ShouldUpdateTypedDraftLayoutAndVersion()
-    {
-        var services = CreateServices();
-        var agent = CreateAgent("studio-workspace-scope-4", services);
-
-        await agent.ActivateAsync();
-        await agent.HandleEventAsync(Envelope(new StudioWorkflowDraftSaved
-        {
-            WorkspaceId = "studio-workspace-scope-4",
-            ScopeId = "scope-4",
-            Draft = new StudioWorkflowDraft
-            {
-                WorkflowId = "workflow-4",
-                Name = "workflow-four",
-                FileName = "workflow-four.yaml",
-                DirectoryId = "dir-1",
-                DirectoryLabel = "Drafts",
-                Yaml = "name: workflow-four\nsteps: []\n",
-            },
-            SavedAtUtc = Now(),
-        }));
-
-        await agent.HandleEventAsync(Envelope(new StudioWorkflowDraftLayoutSaved
-        {
-            WorkspaceId = "studio-workspace-scope-4",
-            ScopeId = "scope-4",
-            WorkflowId = "workflow-4",
-            Layout = new StudioWorkflowLayout
-            {
-                EntryWorkflow = "workflow-four",
-                Viewport = new StudioWorkflowViewport
-                {
-                    X = 1,
-                    Y = 2,
-                    Zoom = 0.75,
-                },
-                Nodes =
-                {
-                    new StudioWorkflowNodeLayout
-                    {
-                        NodeId = "start",
-                        X = 10,
-                        Y = 20,
-                    },
-                },
-            },
-            SavedAtUtc = Now(),
-        }));
-
-        var draft = agent.State.Drafts["workflow-4"];
-        draft.Version.Should().Be(2);
-        draft.Layout.EntryWorkflow.Should().Be("workflow-four");
-        draft.Layout.Nodes.Should().ContainSingle().Which.NodeId.Should().Be("start");
-        draft.Layout.Viewport.Zoom.Should().Be(0.75);
-    }
-
-    [Fact]
     public async Task Commands_WhenExpectedVersionIsStale_ShouldRejectMutation()
     {
         var services = CreateServices();

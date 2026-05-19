@@ -1005,20 +1005,6 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
             return Task.FromResult(Receipt(expectedVersion));
         }
 
-        public Task<StudioWorkspaceCommandReceipt> SaveDraftLayoutAsync(
-            string workflowId,
-            WorkflowLayoutDocument layout,
-            long? expectedVersion = null,
-            CancellationToken ct = default)
-        {
-            var existingIndex = _workflowFiles.FindIndex(item =>
-                string.Equals(item.WorkflowId, workflowId, StringComparison.Ordinal));
-            if (existingIndex >= 0)
-                _workflowFiles[existingIndex] = _workflowFiles[existingIndex] with { Layout = layout };
-            _stateVersion++;
-            return Task.FromResult(Receipt(expectedVersion));
-        }
-
         public Task SaveSettingsAsync(StudioWorkspaceSettings settings, CancellationToken cancellationToken = default)
         {
             _settings = settings;

@@ -380,19 +380,6 @@ public class WorkspaceServiceTests
             return Task.FromResult(Receipt(expectedVersion));
         }
 
-        public Task<StudioWorkspaceCommandReceipt> SaveDraftLayoutAsync(
-            string workflowId,
-            WorkflowLayoutDocument layout,
-            long? expectedVersion = null,
-            CancellationToken ct = default)
-        {
-            var index = Drafts.FindIndex(file => string.Equals(file.WorkflowId, workflowId, StringComparison.Ordinal));
-            if (index >= 0)
-                Drafts[index] = Drafts[index] with { Layout = layout };
-            _stateVersion++;
-            return Task.FromResult(Receipt(expectedVersion));
-        }
-
         private static StudioWorkspaceCommandReceipt Receipt(long? expectedVersion) =>
             new("workspace-test", "workspace-test", Guid.NewGuid().ToString("N"), expectedVersion);
     }

@@ -65,16 +65,6 @@ public sealed class StudioWorkspaceGAgent : GAgentBase<StudioWorkspaceState>, IP
         return PersistDomainEventAsync(evt);
     }
 
-    [EventHandler(EndpointName = "saveWorkflowDraftLayout")]
-    public Task HandleDraftLayoutSaved(StudioWorkflowDraftLayoutSaved evt)
-    {
-        ValidateWorkspace(evt.WorkspaceId, evt.ScopeId);
-        ValidateExpectedVersion(evt.ExpectedVersion);
-        if (string.IsNullOrWhiteSpace(evt.WorkflowId))
-            throw new InvalidOperationException("workflow_id is required.");
-        return PersistDomainEventAsync(evt);
-    }
-
     protected override StudioWorkspaceState TransitionState(
         StudioWorkspaceState current,
         IMessage evt)
@@ -86,7 +76,6 @@ public sealed class StudioWorkspaceGAgent : GAgentBase<StudioWorkspaceState>, IP
             .On<StudioWorkspaceDirectoryRemoved>(ApplyDirectoryRemoved)
             .On<StudioWorkflowDraftSaved>(ApplyDraftSaved)
             .On<StudioWorkflowDraftDeleted>(ApplyDraftDeleted)
-            .On<StudioWorkflowDraftLayoutSaved>(ApplyDraftLayoutSaved)
             .OrCurrent();
     }
 
@@ -179,26 +168,6 @@ public sealed class StudioWorkspaceGAgent : GAgentBase<StudioWorkspaceState>, IP
         var next = EnsureIdentity(state, evt.WorkspaceId, evt.ScopeId);
         next.Drafts.Remove(evt.WorkflowId);
         MarkUpdated(next, evt.DeletedAtUtc);
-        return next;
-    }
-
-    private static StudioWorkspaceState ApplyDraftLayoutSaved(
-        StudioWorkspaceState state,
-        StudioWorkflowDraftLayoutSaved evt)
-    {
-        var next = EnsureIdentity(state, evt.WorkspaceId, evt.ScopeId);
-        if (!next.Drafts.TryGetValue(evt.WorkflowId, out var draft))
-        {
-            MarkUpdated(next, evt.SavedAtUtc);
-            return next;
-        }
-
-        var updated = draft.Clone();
-        updated.Layout = evt.Layout?.Clone();
-        updated.UpdatedAtUtc = evt.SavedAtUtc;
-        updated.Version++;
-        next.Drafts[evt.WorkflowId] = updated;
-        MarkUpdated(next, evt.SavedAtUtc);
         return next;
     }
 

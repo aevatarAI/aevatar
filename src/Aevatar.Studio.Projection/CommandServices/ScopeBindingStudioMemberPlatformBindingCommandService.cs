@@ -8,8 +8,8 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.Studio.Projection.CommandServices;
 
 // Refactor (iter16/cluster-meta-studio-actor-substrate):
-//   Old: FileStudioWorkspaceStore was a shadow store reading/writing JSON files in workspace dir, with no clear actor ownership of workspace facts
-//   New principle: workspace facts authoritatively owned by StudioWorkspaceGAgent (per CLAUDE.md "权威状态" + Auric 2026-05-19 "架构级清晰")
+//   Old: platform binding start flow dispatched detached continuations and did not make the command execution boundary explicit.
+//   New principle: Start only accepts the binding command; Execute performs the scope-binding upsert and returns the typed execution outcome.
 internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IStudioMemberPlatformBindingCommandPort
 {
     private readonly IScopeBindingCommandPort _scopeBindingCommandPort;

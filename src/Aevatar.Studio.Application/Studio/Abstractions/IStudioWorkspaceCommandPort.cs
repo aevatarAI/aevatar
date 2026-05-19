@@ -28,12 +28,6 @@ public interface IStudioWorkspaceCommandPort
         string workflowId,
         long? expectedVersion = null,
         CancellationToken ct = default);
-
-    Task<StudioWorkspaceCommandReceipt> SaveDraftLayoutAsync(
-        string workflowId,
-        WorkflowLayoutDocument layout,
-        long? expectedVersion = null,
-        CancellationToken ct = default);
 }
 
 public sealed record StudioWorkspaceCommandReceipt(
