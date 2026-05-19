@@ -63,6 +63,50 @@ rg -n "actorId.*StartsWith|StartsWith\([^\n]*actor|TypeUrl\.Contains|\.HandleEve
 - **明确归因**：清楚 old/new pattern，后者直接写进代码注释。
 - **设计违规允许大 cluster**：如果是"需先定协议 / actor 化 / proto 迁移"的深层违规，**不要因为 >30 文件就拒绝**，标 `requires_design` 让 controller 决定是否拆。
 
+每个 cluster 输出含：
+
+```yaml
+id: cluster-NNN-<slug>
+rule_ids: [...]
+severity: high|medium|low
+requires_design: true|false
+files_touched_estimate: N-M
+old_pattern: <one-liner>
+new_pattern: <one-liner>
+```
+
+紧跟 Evidence + Fix boundary sections（沿用现有结构）。
+
+### Step 4b — `requires_design: true` cluster 必须额外产出"人话字段"
+
+当 `requires_design: true`，cluster 节末尾**必须**追加 `human_brief:` 块给非 audit 上下文的人类 reviewer 看：
+
+```yaml
+human_brief:
+  problem_title_en: "<short imperative sentence, e.g. 'Voice host bridge owns session facts that should be actor-state'>"
+  problem_title_zh: "<对应中文短句>"
+  problem_statement_en: |
+    <3-5 sentences plain prose. NO audit jargon, NO file:line refs, NO clause IDs.
+    Answer: what is broken / where / why a developer should care.>
+  problem_statement_zh: |
+    <对应 3-5 句中文白话。同样禁用 audit 行话和 file:line 引用。>
+  problem_example_file_path: "<single representative file:line range>"
+  problem_example_code: |
+    <10-30 line code snippet copied verbatim from the file, with
+    `// ← problem: <one-line annotation>` comments on the offending lines.
+    Reader should see the violation at a glance without opening other files.>
+  why_needs_design_en: |
+    <2-3 sentences: what specifically can't be decided mechanically.
+    E.g. "The fix requires choosing between actor-owned lease and projection-owned session
+    contract; this is a public API change with backward-compat tradeoffs.">
+  why_needs_design_zh: |
+    <对应 2-3 句中文。说明哪些是机械重构无法决定的、需要 trade-off。>
+  design_question_pattern_en: "<one specific question the maintainer must answer about the chosen fix shape>"
+  design_question_pattern_zh: "<对应中文问题>"
+```
+
+**红线**：`problem_statement_*` 不能是 audit YAML 复述；必须是面向"刚来的人"的解释。`problem_example_code` 必须是真实 verbatim copy + annotation comments；禁止伪造或省略。
+
 输出格式（每 cluster 一节，frontmatter + cluster sections，沿用现有 YAML 结构）。
 
 ### Step 5 — Reject 必须证据齐全

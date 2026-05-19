@@ -1,15 +1,95 @@
-# Auto-refactor loop: design decision needed for `${CLUSTER_ID}` / 需要人类设计决策
+# ${PROBLEM_TITLE_EN} / ${PROBLEM_TITLE_ZH}
 
-> **Bilingual issue / 双语 issue**. The English and 中文 sections are fully equivalent — read either one, do not need to cross-reference. Reply in either language; the controller treats both identically.
-> 中英文章节内容完全等价，读任一即可；回复可用任一语言。
+> **Bilingual / 双语**. English and 中文 sections are fully equivalent. Read either. Reply in either.
 
 ---
 
-## Technical Context / 技术上下文
+## 1. What's broken (in plain language) / 一段话说清楚
 
-**Cluster YAML, evidence, and fix boundary below are language-neutral. The English and 中文 prose sections that follow each contain the full instructions independently.**
+### English
 
-(以下 cluster YAML / 证据 / 修复边界为语言无关，下方两个章节各自完整。)
+${PROBLEM_STATEMENT_EN}
+
+### 中文
+
+${PROBLEM_STATEMENT_ZH}
+
+---
+
+## 2. Concrete example / 具体示例
+
+The code below is the actual offending pattern in the current codebase. Each line marked `← problem` is what triggers the violation.
+
+下面是当前代码里的真实问题模式。标 `← problem` 的行就是触发违反的位置。
+
+```csharp
+${PROBLEM_EXAMPLE_CODE}
+```
+
+**File / 文件**: `${PROBLEM_EXAMPLE_FILE_PATH}`
+
+---
+
+## 3. Why this needs human design (not auto-refactor) / 为什么需要人来设计
+
+### English
+
+${WHY_NEEDS_DESIGN_EN}
+
+### 中文
+
+${WHY_NEEDS_DESIGN_ZH}
+
+---
+
+## 4. What we need from you / 需要你的回答
+
+### English
+
+Please answer the following before adding the `auto-loop-resume` label. The implement codex will read your latest comment verbatim, so be specific.
+
+- [ ] **Pattern choice / 模式选择**: ${DESIGN_QUESTION_PATTERN_EN}
+- [ ] **Proto schema impact / Proto 影响**: If new typed fields are needed, sketch them (message names + field numbers). If no proto change, say so.
+- [ ] **Backward compatibility / 向后兼容**: How to handle existing persisted state (reserved field numbers, alias, migration, accepted reset)?
+- [ ] **Scope split / 拆分**: One cluster or split into N PRs? If split, sketch the cluster ids.
+- [ ] **Test surface / 测试面**: What behavior MUST be tested beyond `verification_hints` in the cluster spec below?
+- [ ] **Out-of-scope guard rails / 越界禁地**: Anything the implement codex must NOT touch?
+
+### 中文
+
+加 `auto-loop-resume` 标签前请回答以下问题。Implement codex 会**原样**读取你的最新评论作为设计输入，所以请具体。
+
+- [ ] **Pattern choice / 模式选择**：${DESIGN_QUESTION_PATTERN_ZH}
+- [ ] **Proto schema 影响**：如需新增 typed field，列出 message 名 + field number；无 proto 改动请明确说明。
+- [ ] **向后兼容**：现有持久态如何处理？（reserved 字段号 / type alias / schema migration / 可接受的重置）
+- [ ] **Scope 拆分**：保留单 cluster 还是拆 N 个 PR？拆则给出 cluster id 草案。
+- [ ] **测试面**：除了下方 cluster spec 里 `verification_hints` 之外，**必须**被测试的行为？
+- [ ] **越界禁地**：implement codex **不应**碰的地方？
+
+---
+
+## 5. Auto-loop behavior / Auto-loop 行为（机制说明，**不影响你回答的内容**）
+
+### English
+
+- Controller polls this issue every ~1 hour when this is the only remaining work.
+- First new comment after issue opens → PushNotification to operator. Subsequent comments do NOT re-notify (anti-spam).
+- Adding `auto-loop-resume` label → controller prepends your latest comment as `## Design decision (from issue #${ISSUE_NUMBER})` to a fresh implement codex prompt and dispatches. Implement runs in an isolated worktree, opens a PR back to `auto-refact-dev`, and closes this issue on PR open.
+- Closing the issue **without** `auto-loop-resume` label → "design rejected; cluster permanently deferred", controller marks `clusters_failed[design-rejected:closed]`.
+
+### 中文
+
+- Controller 在此 issue 是仅剩工作时大约每 1 小时轮询一次。
+- Issue 打开后**首次**新评论触发 PushNotification 通知 operator；后续评论不重复推送（防打扰）。
+- 加 `auto-loop-resume` 标签 → controller 把你的最新评论作为 `## Design decision (from issue #${ISSUE_NUMBER})` 段拼到新 implement codex prompt 前面 dispatch。Implement 在独立 worktree 跑，开 PR 回到 `auto-refact-dev`，PR 一开自动关闭本 issue。
+- 不加 `auto-loop-resume` 标签直接关闭 → 判定"设计被拒绝；cluster 永久搁置"，controller 标记 `clusters_failed[design-rejected:closed]`。
+
+---
+
+## 6. Reference: full cluster spec / 技术参考（可折叠）
+
+<details>
+<summary>Click to expand cluster YAML + evidence + audit's fix boundary / 展开完整 cluster YAML / 证据 / audit 修复边界</summary>
 
 ### Cluster spec (from `.refactor-loop/runs/audit-iter-${ITERATION}.md`)
 
@@ -19,68 +99,10 @@ ${CLUSTER_YAML}
 
 ${CLUSTER_EVIDENCE}
 
-### Fix boundary (audit's initial proposal) / 修复边界（audit 初步提议）
+### Fix boundary (audit's initial proposal) / audit 初步提议
 
 ${CLUSTER_FIX_BOUNDARY}
 
----
+</details>
 
-## English (full)
-
-This issue was opened automatically by the `codex-refactor-loop` skill during iter${ITERATION}. The loop's audit codex identified a real architectural violation but flagged it `requires_design: true` because the fix is not a mechanical refactor — it needs a human design decision before any code change.
-
-The loop has **paused** on this cluster. Auto-implementation will resume only when this issue is either:
-
-- **Labelled `auto-loop-resume`** with a comment containing the design decision (signals "implement using this design"), or
-- **Closed without** `auto-loop-resume` label (signals "design rejected; do not implement this cluster").
-
-Without one of those signals, the controller polls this issue every ~1 hour and surfaces new comments via PushNotification (first new comment only — no spam on subsequent comments).
-
-### Decision checklist — please answer before adding `auto-loop-resume`
-
-- [ ] **Pattern choice**: which of the audit's proposed fix shapes (or an alternative) should the implement codex use?
-- [ ] **Proto schema impact**: if new typed fields are needed, sketch them here (proto messages + field numbers). If no proto change is needed, say so.
-- [ ] **Backward compatibility**: how should existing persisted state / wire format be handled? Options include `reserved` field numbers, type aliases, schema migrations, or accepted resets.
-- [ ] **Scope split**: should this remain a single cluster, or split into N PRs? If split, sketch the cluster ids.
-- [ ] **Test surface**: what behavior MUST be exercised by tests beyond the audit's `verification_hints`?
-- [ ] **Out-of-scope guard rails**: anything the implement codex must NOT touch (e.g., a related concern that belongs to a separate issue)?
-
-### Auto-loop behavior
-
-- Controller polls this issue on every wakeup. When pending design issues are the only remaining work, the cadence is ~1 hour.
-- The first new comment after the issue opens triggers a PushNotification to the controller operator. Subsequent comments do not re-notify; they are surfaced only via the next manual `/loop` invocation or the next sweep.
-- Adding the `auto-loop-resume` label triggers the resumption flow: controller materialises an implement prompt with this issue's latest comment prepended verbatim under `## Design decision (from issue #${ISSUE_NUMBER})`, dispatches the implement codex, posts a confirmation comment back on this issue, and closes the issue automatically once the resulting PR opens.
-- Closing the issue without the `auto-loop-resume` label is treated as "design rejected; cluster permanently deferred"; controller moves the cluster to `clusters_failed` with reason `design-rejected:closed`.
-
-cc: @loning (auto-loop operator)
-
----
-
-## 中文（完整）
-
-本 issue 由 `codex-refactor-loop` skill 在 iter${ITERATION} 自动开启。Audit codex 识别出真实的架构违反，但因为修复不是机械重构、需要人类设计决策才能动代码，所以被标记为 `requires_design: true`。
-
-Loop 在此 cluster 上**已暂停**。Auto-implementation 仅在以下任一条件下恢复：
-
-- **加 `auto-loop-resume` 标签**，并在评论里给出设计决策（信号意义："按此设计实施"），或
-- **不加 `auto-loop-resume` 标签直接关闭 issue**（信号意义："设计被拒绝；不实施此 cluster"）。
-
-如未给出上述任一信号，controller 每约 1 小时轮询本 issue，发现新评论时通过 PushNotification 推送一次提示（仅首次新评论触发推送，后续评论不再重复提示，避免打扰）。
-
-### 决策清单 — 加 `auto-loop-resume` 之前请回答
-
-- [ ] **采用的模式**：audit 提议的修复 shape 中选哪一个？或另有替代方案？
-- [ ] **Proto schema 影响**：如需新增 typed field，请列出 proto messages + field numbers；如无 proto 改动，请明确说明。
-- [ ] **向后兼容**：现有持久态 / wire format 如何处理？可选项包括 `reserved` 字段号、类型 alias、schema migration、可接受的重置等。
-- [ ] **Scope 拆分**：保持单 cluster，还是拆成 N 个 PR？若拆分，给出 cluster id 草案。
-- [ ] **测试面**：在 audit 的 `verification_hints` 之外，**必须**被测试覆盖的行为有哪些？
-- [ ] **越界禁地**：implement codex **不应**触碰的相邻关切（例如属于另一 issue 的范围）？
-
-### Auto-loop 行为
-
-- Controller 每次唤醒都会轮询本 issue。当待回复的 design issue 是仅剩的工作时，节奏约为 1 小时一次。
-- Issue 打开后首次出现的新评论会触发一次 PushNotification 通知 controller 运维者；后续评论不再重复通知，需要靠下次手动 `/loop` 调用或下次 sweep 才被处理。
-- 添加 `auto-loop-resume` 标签触发恢复流程：controller 把本 issue 最新评论原样作为 `## Design decision (from issue #${ISSUE_NUMBER})` 段拼到 implement prompt 前面，dispatch implement codex，在本 issue 上回评确认，PR 打开后自动关闭本 issue。
-- 不加 `auto-loop-resume` 标签直接关闭 issue 会被判定为"设计被拒绝；cluster 永久搁置"；controller 把该 cluster 移到 `clusters_failed`，原因记为 `design-rejected:closed`。
-
-cc: @loning（auto-loop 运维者）
+cc: @loning (auto-loop operator / 运维者)
