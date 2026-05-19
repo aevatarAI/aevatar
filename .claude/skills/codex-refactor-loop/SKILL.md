@@ -1294,6 +1294,53 @@ PR 同理(`gh pr edit` instead of `gh issue edit`)。
 - ❌ blocked-on 不打 `⏸️ phase:blocked` → 人类以为还在主动跑
 - ❌ **PR 不加 `auto-loop` label** → comment-monitor.sh 查的是 `--label auto-loop` 而非 phase:*,漏加 = monitor 完全不监控该 PR 评论 → maintainer 喊话无 react 无回复(per Auric 2026-05-19 "我发现你会掉监控")
 
+## Codex 调用方式 — 强制(per Auric 2026-05-19 "claude code 用 shell 方式调用,可以看到 shells")
+
+**问题**:用 `Bash(..., run_in_background: true)` 派 codex,进程跑在 harness task 里,不出现在 Claude Code UI 的 "shells" list,Auric 看不到几个 codex 在跑、跑多久。
+
+**规则**:**所有 codex spawn 必须用同步 Bash 调用 + `nohup ... & disown` 让 codex 进程出现在 Claude Code 的 shells 列表**(Auric 一眼能看到 "8 shells" 之类计数)。
+
+### 推荐调用 pattern
+
+```bash
+# 同步 Bash 调用(run_in_background: false / 默认),命令本身 detach
+nohup .claude/skills/codex-refactor-loop/scripts/spawn-codex.sh \
+  --cd <dir> \
+  --prompt <prompt-file> \
+  --log <log-file> \
+  --timeout 5400 \
+  </dev/null >>"<log-file>.spawn" 2>&1 & \
+  disown
+echo "SPAWNED: pid=$! log=<log-file>"
+```
+
+Bash tool **同步** 调用上面命令,命令立即返回(因 `& disown`)+ print PID。Claude Code UI shells 列表自动 +1。
+
+### 完成检测
+
+不能用 task notification(`run_in_background: true` 才有那个)。Controller 用 **wakeup heartbeat poll log tail**:
+
+- 每次 controller wakeup,扫所有 in-flight codex log 末 5 行找 `^EXIT=`
+- 找到 → 当作 "task done",路由到对应 phase 处理(verify / commit / next reviewer 等)
+- 没找到 + log mtime 在 30 min 内 → still running,继续等
+- 没找到 + log mtime > 30 min → zombie,告警
+
+### Wakeup cadence(自定步)
+
+- Controller 自己定 ScheduleWakeup 600s(10 min)heartbeat。比 task-notification 慢但更可靠 — 不靠 harness 跟踪。
+- Auric 在自己终端可 `tail -f <log>` 实时看;不用等 controller wakeup。
+
+### 反面(❌ 禁止)
+
+- ❌ `Bash(spawn-codex.sh ..., run_in_background: true)` → harness task,Auric 看不到 shells +1
+- ❌ `nohup ... &` 不 `disown` → shell exit 后 codex 被 kill
+- ❌ `nohup ... </dev/null >/dev/null` → 没 log,debug 不能
+- ❌ 用 `&` 但不 `nohup` → Claude Code Bash tool exit 时 codex 被 SIGHUP
+
+### 迁移现状
+
+`Bash run_in_background: true` 方式的 codex 已派出的:继续等其 task notification(harness 仍跟它),完成自然处理。新派 codex 用 `nohup ... & disown` pattern。
+
 ## Hard rules (controller-level, propagated into every codex prompt)
 
 1. **No new features** — only clean violations of CLAUDE.md philosophy.
