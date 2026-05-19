@@ -49,6 +49,8 @@ const studioProxyEntries = [
 }, {});
 
 const studioScopeProxyEntries = {
+  '^/api/scopes/[^/]+/gagent/draft-run$':
+    buildProxyTarget(studioApiTarget),
   '^/api/scopes/[^/]+/teams(?:/.*)?$':
     buildProxyTarget(studioApiTarget),
   '^/api/scopes/[^/]+/scripts/draft-run$':

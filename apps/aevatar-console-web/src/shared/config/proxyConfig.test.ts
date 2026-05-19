@@ -82,6 +82,23 @@ describe('proxy config', () => {
     });
   });
 
+  it('routes scope GAgent draft runs to the Studio host', () => {
+    process.env.AEVATAR_API_TARGET = 'http://127.0.0.1:5080';
+    process.env.AEVATAR_STUDIO_API_TARGET = 'http://127.0.0.1:5180';
+
+    const proxyModule = require('../../../config/proxy');
+    const devProxy = proxyModule.default.dev as Record<string, ProxyEntry>;
+
+    expect(
+      resolveProxyEntry(devProxy, '/api/scopes/scope-1/gagent/draft-run'),
+    ).toEqual({
+      target: 'http://127.0.0.1:5180',
+      changeOrigin: true,
+      secure: true,
+      ws: true,
+    });
+  });
+
   it('routes scope team endpoints to the Studio host without stealing runtime member routes', () => {
     process.env.AEVATAR_API_TARGET = 'http://127.0.0.1:5080';
     process.env.AEVATAR_STUDIO_API_TARGET = 'http://127.0.0.1:5180';

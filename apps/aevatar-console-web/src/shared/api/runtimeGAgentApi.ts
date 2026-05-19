@@ -29,6 +29,7 @@ export type RuntimeGAgentDraftRunRequest = {
   actorTypeName: string;
   prompt: string;
   preferredActorId?: string;
+  timeoutMs?: number;
 };
 
 export type RuntimeScopeGAgentBindingRequest = {
@@ -417,6 +418,7 @@ export const runtimeGAgentApi = {
           actorTypeName: request.actorTypeName.trim(),
           prompt: request.prompt.trim(),
           preferredActorId: request.preferredActorId?.trim() || undefined,
+          timeoutMs: request.timeoutMs,
         }),
         signal,
       }

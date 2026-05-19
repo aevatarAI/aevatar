@@ -483,6 +483,13 @@ const IDLE_DRAFT_RUN_STATE: DraftRunState = {
   status: 'idle',
 };
 
+const GAGENT_DRAFT_RUN_TIMEOUT_MS = 30_000;
+const GAGENT_DRAFT_RUN_CLIENT_TIMEOUT_MS = GAGENT_DRAFT_RUN_TIMEOUT_MS + 5_000;
+
+function createGAgentDraftRunTimeoutError(): Error {
+  return new Error('GAgent draft run timed out before the backend returned any event.');
+}
+
 function getRunDebugLines(state: DraftRunState): string[] {
   return [
     state.runId.trim() ? `runId: ${state.runId.trim()}` : '',
@@ -3275,6 +3282,11 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
     abortControllerRef.current?.abort();
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    const timeoutId = window.setTimeout(() => {
+      if (!controller.signal.aborted) {
+        controller.abort(createGAgentDraftRunTimeoutError());
+      }
+    }, GAGENT_DRAFT_RUN_CLIENT_TIMEOUT_MS);
     setRunState({
       ...IDLE_DRAFT_RUN_STATE,
       status: 'running',
@@ -3286,6 +3298,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
         {
           actorTypeName: selectedTypeName,
           prompt: runPrompt,
+          timeoutMs: GAGENT_DRAFT_RUN_TIMEOUT_MS,
         },
         controller.signal,
       );
@@ -3301,6 +3314,14 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
       );
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
+        const reason = controller.signal.reason;
+        if (reason instanceof Error) {
+          setRunState({
+            ...IDLE_DRAFT_RUN_STATE,
+            error: reason.message,
+            status: 'error',
+          });
+        }
         return;
       }
 
@@ -3310,6 +3331,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
         status: 'error',
       });
     } finally {
+      window.clearTimeout(timeoutId);
       if (abortControllerRef.current === controller) {
         abortControllerRef.current = null;
       }

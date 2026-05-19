@@ -61,6 +61,9 @@ import { describeError } from '@/shared/ui/errorText';
 import { resolveStudioScopeContext } from '@/pages/scopes/components/resolvedScope';
 
 type ActorReuseMode = 'new' | 'existing';
+const GAGENT_DRAFT_RUN_TIMEOUT_MS = 30_000;
+const GAGENT_DRAFT_RUN_CLIENT_TIMEOUT_MS = GAGENT_DRAFT_RUN_TIMEOUT_MS + 5_000;
+
 type NoticeState = {
   message: string;
   type: 'success' | 'error';
@@ -278,6 +281,10 @@ function readQueryValue(name: string): string {
   }
 
   return new URLSearchParams(window.location.search).get(name)?.trim() ?? '';
+}
+
+function createDraftRunTimeoutError(): Error {
+  return new Error('GAgent draft run timed out before the backend returned any event.');
 }
 
 function readEventString(event: AGUIEvent, key: string): string {
@@ -1153,6 +1160,11 @@ const GAgentsPage: React.FC = () => {
     abortControllerRef.current?.abort();
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    const timeoutId = window.setTimeout(() => {
+      if (!controller.signal.aborted) {
+        controller.abort(createDraftRunTimeoutError());
+      }
+    }, GAGENT_DRAFT_RUN_CLIENT_TIMEOUT_MS);
     setActiveWorkbenchTab('draft');
     setActiveRunOutputTab('transcript');
     setRunState({
@@ -1172,6 +1184,7 @@ const GAgentsPage: React.FC = () => {
           actorTypeName: normalizedActorTypeName,
           prompt: normalizedPrompt,
           preferredActorId: normalizedPreferredActorId || undefined,
+          timeoutMs: GAGENT_DRAFT_RUN_TIMEOUT_MS,
         },
         controller.signal,
       );
@@ -1243,6 +1256,14 @@ const GAgentsPage: React.FC = () => {
       );
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
+        const reason = controller.signal.reason;
+        if (reason instanceof Error) {
+          setRunState((current) => ({
+            ...current,
+            error: reason.message,
+            status: 'error',
+          }));
+        }
         return;
       }
 
@@ -1252,6 +1273,7 @@ const GAgentsPage: React.FC = () => {
         status: 'error',
       }));
     } finally {
+      window.clearTimeout(timeoutId);
       if (abortControllerRef.current === controller) {
         abortControllerRef.current = null;
       }
