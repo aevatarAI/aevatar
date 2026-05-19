@@ -497,6 +497,42 @@ Update `state.design_pending[i].last_comment_count` and `last_checked` after eve
 
 **Mode A: passive sweep (default when other phase work is active).** Every controller wakeup runs the sweep before any other phase. Cheap: one `gh issue view` per pending cluster. ScheduleWakeup cadence is dominated by other in-flight work; design issues piggyback on those wakeups.
 
+**独立 comment-monitor 脚本(per Auric 2026-05-19 "要写个脚本挂个循环监控")**
+
+`tools/refactor-loop/comment-monitor.sh` 是独立 bash 脚本,跑 forever,30s 轮询 GitHub:
+- 自己 `gh api .../reactions content=eyes` 给 team-member 新评论加 👀(不依赖 controller turn 时序)
+- 同时把 `new-team-comment: <issue> <author> <comment-id>` 打到 stdout
+- controller 通过 Monitor tool 包它 → 每行 stdout 变 task-notification → controller 立刻醒来处理 reply
+- state 存 `.refactor-loop/comment-monitor-state.json`(comment_id → seen),重启不重发
+
+启动方式:
+```bash
+Monitor(
+  description: "Comment monitor — auto eyes-react + signal new team comments",
+  persistent: true,
+  timeout_ms: 3600000,
+  command: "tools/refactor-loop/comment-monitor.sh"
+)
+```
+
+死则重启;controller 每次 wakeup 检查 task ID 是否存活,挂了立刻 re-arm。**eyes react 在脚本里完成**,即使 controller 跨多 turn 才回复,maintainer 也看见眼睛了。
+
+**Mode A1: 每次 controller wakeup 强制 comment sweep(per Auric 2026-05-19 "不要漏")**
+
+Monitor 任务(下面 Mode B)在 harness 里会 silent die 过几次,**不能单点信赖**。每次 controller wakeup(/loop tick 或 task-notification 唤醒)的第一件事:
+
+1. 列开 design issues:`gh issue list --state open --label "refactor-design-needed,phase9-auto-solve" --json number`
+2. 对每个 issue + 每个 open PR(`gh pr list --state open --json number`),拉所有评论 id + author + timestamp
+3. 和 `.refactor-loop/state.json` 里的 `last_seen_comment_id_per_issue` 对比,找出新评论
+4. 对每条新评论:
+   - check author 通过 [team-member security gate](#new-commentss-and-no-auto-loop-resume-label)
+   - skip 自己 controller / writer-codex 发的(`## 🤖` marker / Generated with Claude Code 后缀 / 已记的 controller comment_id)
+   - **立刻 👀 react**: `gh api repos/aevatarAI/aevatar/issues/comments/<id>/reactions -X POST -f content=eyes`
+   - 记到 `state.pending_replies[]`,后续 dispatch writer-codex 处理
+5. 更新 `state.last_seen_comment_id_per_issue`
+
+每次 wakeup 都跑这个 sweep,不管 Monitor 是死是活。即使 Monitor 没漏,sweep 再跑一次也只是 idempotent(eyes 不会重复加)。
+
 **Mode B: active 60s Monitor with auto-discovery (when design_pending is the ONLY remaining work).** Instead of sleeping 1h between checks, arm a persistent Monitor that **discovers issues by label on every tick** (never hardcoded issue numbers — new issues opened mid-session are picked up automatically), polls them at 60s cadence, and emits an event line the **first** time any issue's `(state, labels, comment_count)` tuple changes. The conversation wakes <60s after the maintainer adds the `auto-loop-resume` label / closes the issue / comments / opens a new design issue.
 
 **Hard rule — Monitor discovery is dynamic, not enumerated**: hardcoding `PENDING_ISSUES=(681 682 684)` will miss any issue opened after the Monitor arms. The required pattern queries `gh issue list --label "refactor-design-needed,phase9-auto-solve"` on every loop iteration so new issues join coverage automatically. A controller that hardcodes issue lists into Monitor commands is broken — re-arm with discovery as soon as the gap is caught.
