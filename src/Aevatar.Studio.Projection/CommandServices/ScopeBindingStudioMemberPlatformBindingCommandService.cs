@@ -5,6 +5,7 @@ using Aevatar.GAgents.StudioMember;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Projection.CommandServices;
 
@@ -12,13 +13,12 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
 {
     private const string BindingRunDirectRoute = "aevatar.studio.projection.studio-member-binding-run";
     private const string ReadinessFailedFailureCode = "STUDIO_MEMBER_PLATFORM_BINDING_READINESS_FAILED";
-    private static readonly TimeSpan BindingReadinessTimeout = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan BindingReadinessPollInterval = TimeSpan.FromMilliseconds(50);
 
     private readonly IScopeBindingCommandPort _scopeBindingCommandPort;
     private readonly IScopeBindingReadinessQueryPort _readinessQueryPort;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly ILogger<ScopeBindingStudioMemberPlatformBindingCommandService> _logger;
+    private readonly StudioMemberPlatformBindingOptions _options;
     private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
     private readonly Func<DateTimeOffset> _utcNow;
 
@@ -26,8 +26,9 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         IScopeBindingCommandPort scopeBindingCommandPort,
         IScopeBindingReadinessQueryPort readinessQueryPort,
         IActorDispatchPort dispatchPort,
-        ILogger<ScopeBindingStudioMemberPlatformBindingCommandService> logger)
-        : this(scopeBindingCommandPort, readinessQueryPort, dispatchPort, logger, Task.Delay, () => DateTimeOffset.UtcNow)
+        ILogger<ScopeBindingStudioMemberPlatformBindingCommandService> logger,
+        IOptions<StudioMemberPlatformBindingOptions> options)
+        : this(scopeBindingCommandPort, readinessQueryPort, dispatchPort, logger, options, Task.Delay, () => DateTimeOffset.UtcNow)
     {
     }
 
@@ -36,6 +37,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         IScopeBindingReadinessQueryPort readinessQueryPort,
         IActorDispatchPort dispatchPort,
         ILogger<ScopeBindingStudioMemberPlatformBindingCommandService> logger,
+        IOptions<StudioMemberPlatformBindingOptions> options,
         Func<TimeSpan, CancellationToken, Task> delayAsync,
         Func<DateTimeOffset> utcNow)
     {
@@ -43,6 +45,8 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         _readinessQueryPort = readinessQueryPort ?? throw new ArgumentNullException(nameof(readinessQueryPort));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        ArgumentNullException.ThrowIfNull(options);
+        _options = NormalizeOptions(options.Value);
         _delayAsync = delayAsync ?? throw new ArgumentNullException(nameof(delayAsync));
         _utcNow = utcNow ?? throw new ArgumentNullException(nameof(utcNow));
     }
@@ -241,7 +245,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         ScopeBindingUpsertResult result,
         CancellationToken ct)
     {
-        var deadline = _utcNow() + BindingReadinessTimeout;
+        var deadline = _utcNow() + _options.BindingReadinessTimeout;
         ScopeBindingReadinessSnapshot? lastSnapshot = null;
         var expectedRevisionId = result.RevisionId?.Trim();
         if (string.IsNullOrWhiteSpace(expectedRevisionId))
@@ -268,11 +272,22 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             if (remaining <= TimeSpan.Zero)
                 return lastSnapshot;
 
-            var delay = remaining < BindingReadinessPollInterval
+            var delay = remaining < _options.BindingReadinessPollInterval
                 ? remaining
-                : BindingReadinessPollInterval;
+                : _options.BindingReadinessPollInterval;
             await _delayAsync(delay, ct).ConfigureAwait(false);
         }
+    }
+
+    private static StudioMemberPlatformBindingOptions NormalizeOptions(StudioMemberPlatformBindingOptions options)
+    {
+        if (options.BindingReadinessTimeout <= TimeSpan.Zero)
+            throw new InvalidOperationException("Studio member platform binding readiness timeout must be positive.");
+
+        if (options.BindingReadinessPollInterval <= TimeSpan.Zero)
+            throw new InvalidOperationException("Studio member platform binding readiness poll interval must be positive.");
+
+        return options;
     }
 
     private Task DispatchAsync(string actorId, IMessage payload, CancellationToken ct)

@@ -6,6 +6,7 @@ using Aevatar.Studio.Projection.CommandServices;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Tests;
 
@@ -471,12 +472,14 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         RecordingDispatchPort dispatchPort,
         RecordingReadinessQueryPort? readinessPort = null,
         Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
-        Func<DateTimeOffset>? utcNow = null) =>
+        Func<DateTimeOffset>? utcNow = null,
+        StudioMemberPlatformBindingOptions? options = null) =>
         new(
             scopeBindingPort,
             readinessPort ?? RecordingReadinessQueryPort.Ready(),
             dispatchPort,
             NullLogger<ScopeBindingStudioMemberPlatformBindingCommandService>.Instance,
+            Options.Create(options ?? new StudioMemberPlatformBindingOptions()),
             delayAsync ?? ((_, _) => Task.CompletedTask),
             utcNow ?? (() => DateTimeOffset.UtcNow));
 

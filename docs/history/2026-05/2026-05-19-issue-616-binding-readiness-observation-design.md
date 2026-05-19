@@ -280,11 +280,15 @@ if (!readiness.InvokeReady)
 dispatch StudioMemberPlatformBindingSucceeded(...);
 ```
 
-建议 bounded wait 参数先放 adapter 内部：
+bounded wait 参数建模为 Studio platform binding typed options，默认值先保持：
 
 ```csharp
-private static readonly TimeSpan BindingReadinessTimeout = TimeSpan.FromSeconds(5);
-private static readonly TimeSpan BindingReadinessPollInterval = TimeSpan.FromMilliseconds(50);
+internal sealed class StudioMemberPlatformBindingOptions
+{
+    public const string SectionName = "Studio:MemberPlatformBinding";
+    public TimeSpan BindingReadinessTimeout { get; set; } = TimeSpan.FromSeconds(5);
+    public TimeSpan BindingReadinessPollInterval { get; set; } = TimeSpan.FromMilliseconds(50);
+}
 ```
 
 这里保留 polling 是可接受的，因为：
