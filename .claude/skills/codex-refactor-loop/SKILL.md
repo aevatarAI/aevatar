@@ -102,9 +102,31 @@ After validation: read `audit-iter-N.md`, populate `clusters_planned`, split int
 
 - Two clusters that touch the same `.csproj` or share a file path go in different batches.
 - Two clusters that touch the same proto file → different batches.
-- A cluster with `requires_design: true` (audit-marked deep violation) goes in a batch by itself; controller may also escalate it to a separate planning issue rather than auto-implement.
 
-Update state, advance to Phase 2.
+### requires_design clusters → open GitHub issue, do NOT auto-implement
+
+For every cluster with `requires_design: true`:
+
+1. Open a GitHub issue via `gh issue create`:
+   ```bash
+   gh issue create \
+     --title "[refactor-design] <cluster-id>: <one-line problem from audit>" \
+     --label "refactor-design-needed,auto-loop" \
+     --body "$(envsubst < .claude/skills/codex-refactor-loop/prompts/design-issue-body.md)"
+   ```
+   The body template at `prompts/design-issue-body.md` includes: the cluster's YAML block from audit, full evidence section, the audit's `Fix boundary` paragraph, and an explicit "decision needed" checklist (proto schema? new contract? backward-compat strategy? whether to split into multiple PRs?).
+2. Record in state.json:
+   ```json
+   "design_pending": [
+     {"cluster_id": "cluster-NNN", "issue_number": 234,
+      "opened_at": "<ISO8601>", "last_checked": "<ISO8601>",
+      "last_comment_count": 0, "status": "awaiting_design"}
+   ]
+   ```
+3. Skip the cluster in Phase 2 (do NOT batch it).
+4. PushNotification: "iter<N> opened design issue #<num> for cluster-<id>. Auto-loop paused on this cluster pending human design decision."
+
+Update state, advance to Phase 2 (with requires_design clusters excluded).
 
 ---
 
@@ -305,6 +327,47 @@ For each `bucket: fail` check:
 
 ---
 
+## Phase 6 — Design-issue watch (sweep on every wakeup)
+
+Runs **before any other phase work** on every controller wakeup (whether triggered by user `/loop`, ScheduleWakeup, or task-notification). Goal: detect when a paused-for-design cluster has a maintainer response and resume it.
+
+### Sweep procedure
+
+For each `state.design_pending[i]`:
+
+```bash
+issue_json=$(gh issue view "$ISSUE_NUMBER" --json comments,state,labels)
+new_count=$(jq -r '.comments | length' <<<"$issue_json")
+prev_count=$LAST_COMMENT_COUNT   # from state
+state=$(jq -r '.state' <<<"$issue_json")
+labels=$(jq -r '[.labels[].name] | join(",")' <<<"$issue_json")
+```
+
+Classify:
+
+- **No new comments AND state==open**: nothing to do; bump `last_checked` only.
+- **State==closed without `auto-loop-resume` label**: maintainer closed without resume signal. Move to `clusters_failed` with reason `design-rejected:closed`. PushNotification: "cluster-<id> design issue #<num> closed without auto-resume; cluster permanently deferred."
+- **New comment(s) AND no `auto-loop-resume` label**: maintainer is discussing. PushNotification: "cluster-<id> design issue #<num> has N new comment(s) — manual review recommended" (only the first time a new comment appears; do not re-notify each sweep).
+- **Label `auto-loop-resume` is set** (maintainer's explicit green light): controller resumes:
+  - Extract the latest comment body (assumed to contain the design decision: chosen pattern, proto schema, scope adjustments).
+  - Materialize a new `prompts/implement-<cluster-id>.md` that prepends the design decision verbatim under a `## Design decision (from issue #<num>)` heading, then proceeds with the regular implement instructions.
+  - Move cluster from `design_pending` into `clusters_active` and dispatch as a normal Phase 2 implement.
+  - Post a comment back on the issue: "auto-loop resumed; implement codex dispatched. Will close after PR opens."
+
+Update `state.design_pending[i].last_comment_count` and `last_checked` after every sweep, regardless of outcome.
+
+### Sweep cadence
+
+- Every controller wakeup runs the sweep (cheap: `gh issue view` per pending cluster, typically ≤5 pending).
+- If there are pending design issues and no other active phase work, set ScheduleWakeup to **3600s** (1h) as the design-poll cadence — issues don't usually get responses minute-to-minute.
+- Stop the loop entirely (omit ScheduleWakeup, PushNotification stop) only when **no design_pending AND no clusters_active AND no rollup_pr awaiting CI**. Otherwise the loop must keep heartbeating to catch design responses.
+
+### Manual override
+
+If the user manually edits state.json and sets `design_pending[i].status = "resume"`, the next sweep treats it as if `auto-loop-resume` label was applied (escape hatch when label can't be set on the host).
+
+---
+
 ## Loop control
 
 - **Stop conditions**: all planned clusters done OR every remaining cluster failed twice.
@@ -334,5 +397,6 @@ For each `bucket: fail` check:
 - [prompts/verify.md](prompts/verify.md) — verify phase template (per cluster)
 - [prompts/remote-ci-fix.md](prompts/remote-ci-fix.md) — Phase 5 remote-CI fix template
 - [prompts/test-add.md](prompts/test-add.md) — Phase 5 codecov-driven test-add template (per cluster)
+- [prompts/design-issue-body.md](prompts/design-issue-body.md) — Phase 1/6 GitHub issue body for `requires_design: true` clusters
 - [scripts/spawn-codex.sh](scripts/spawn-codex.sh) — standardized `codex exec` wrapper (enforces 3600s minimum timeout)
 - [REFERENCE.md](REFERENCE.md) — state schema, batching heuristics, recovery playbook

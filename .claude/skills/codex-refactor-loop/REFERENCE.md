@@ -49,6 +49,16 @@ Detailed specifications, edge cases, and recovery playbook. The main workflow is
     "base": "<review_base_branch>",
     "head": "<integration_branch>"
   },
+  "design_pending": [
+    {
+      "cluster_id": "cluster-NNN",
+      "issue_number": <int>,
+      "opened_at": "<ISO8601>",
+      "last_checked": "<ISO8601>",
+      "last_comment_count": <int>,
+      "status": "awaiting_design | comments_seen | resume | rejected"
+    }
+  ],
   "remote_ci": {
     "pr_number": <int|null>,
     "last_watched_sha": "<sha>",
