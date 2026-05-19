@@ -17,6 +17,7 @@ using Aevatar.GAgents.Channel.Identity.DependencyInjection;
 using Aevatar.GAgents.Channel.Identity.Endpoints;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.ChatRouting;
 using Aevatar.GAgents.ChatbotClassifier;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.NyxidChat;
@@ -90,6 +91,11 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddChannelIdentityProjectionStores(builder.Configuration);
         builder.Services.AddDeviceRegistration(builder.Configuration);
         builder.Services.AddScheduledAgents(builder.Configuration);
+        // Ingress layer v1 (issue #692, Phase 1): registers the ChatRoutePolicy
+        // current-state readmodel document store. The policy actor + projector
+        // ship in this phase; ingress entries start consulting the readmodel in
+        // a later phase.
+        builder.Services.AddChatRoutingAgents();
         builder.Services.TryAddSingleton<IResponsesCallerScopeResolver, NyxIdResponsesCallerScopeResolver>();
         builder.Services.TryAddSingleton<IResponsesModelsAggregator, NyxIdResponsesModelsAggregator>();
         builder.Services.TryAddSingleton<IResponsesRouteResolver, CachingResponsesRouteResolver>();
