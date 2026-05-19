@@ -20,7 +20,13 @@ public sealed class NyxIdSpecCatalog : IDisposable
 
     private OperationCard[] _catalog = [];
 
-    public NyxIdSpecCatalog(
+    // Fix (remote-ci/host-composition-smoke):
+    // The cluster-019 manual fallback ctor and the DI ctor both had a public 2-required-arg
+    // shape, which Microsoft.Extensions.DependencyInjection's ValidateService treats as
+    // ambiguous (it does not honor [ActivatorUtilitiesConstructor] at validation time).
+    // Solution: keep the manual fallback callable from tests via InternalsVisibleTo but
+    // hide it from DI's public-ctor reflection by making it internal.
+    internal NyxIdSpecCatalog(
         NyxIdToolOptions options,
         HttpClient? httpClient = null,
         ILogger<NyxIdSpecCatalog>? logger = null)
@@ -36,7 +42,6 @@ public sealed class NyxIdSpecCatalog : IDisposable
         _refreshLoop = StartRefreshLoopIfConfigured();
     }
 
-    [ActivatorUtilitiesConstructor]
     public NyxIdSpecCatalog(
         NyxIdToolOptions options,
         IHttpClientFactory httpClientFactory,

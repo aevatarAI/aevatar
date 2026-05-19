@@ -21,7 +21,10 @@ public sealed class ConnectedServiceSpecCache : IConnectedServiceSpecSource, IDi
     private readonly bool _ownsHttpClient;
     private int _disposed;
 
-    public ConnectedServiceSpecCache(
+    // Fix (remote-ci/host-composition-smoke): see NyxIdSpecCatalog.cs for rationale.
+    // Internal manual ctor avoids DI ambiguity while remaining callable from tests via
+    // InternalsVisibleTo("Aevatar.AI.Tests").
+    internal ConnectedServiceSpecCache(
         NyxIdToolOptions options,
         HttpClient? httpClient = null,
         ILogger<ConnectedServiceSpecCache>? logger = null)
@@ -35,7 +38,6 @@ public sealed class ConnectedServiceSpecCache : IConnectedServiceSpecSource, IDi
         _logger = logger ?? NullLogger<ConnectedServiceSpecCache>.Instance;
     }
 
-    [ActivatorUtilitiesConstructor]
     public ConnectedServiceSpecCache(
         NyxIdToolOptions options,
         IHttpClientFactory httpClientFactory,

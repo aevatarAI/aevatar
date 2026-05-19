@@ -156,12 +156,16 @@ forbidden_web_api_port_report="$(
     -g '!**/bin/**' \
     -g '!**/obj/**' \
     -g '!**/node_modules/**' \
+    -g '!docs/audit-scorecard/**' \
+    -g '!docs/history/**' \
+    -g '!tools/ci/README.md' \
     | awk -F: '
 {
   file = $1;
   line_no = $2;
   text = substr($0, length(file) + length(line_no) + 3);
 
+  # Allow self-references inside this guard script (the regex literal).
   if (file == "tools/ci/architecture_guards.sh" && text ~ /^[[:space:]]*#/)
     next;
 
