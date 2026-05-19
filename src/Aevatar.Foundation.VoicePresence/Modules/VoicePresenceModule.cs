@@ -36,6 +36,8 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
     private readonly IVoiceToolCatalog? _toolCatalog;
     private readonly ILogger _logger;
     private readonly Queue<VoiceConversationEventInjection> _pendingInjections = [];
+    private readonly Dictionary<string, int> _providerResponseIds = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _cancelledProviderResponseIds = new(StringComparer.Ordinal);
 
     private IVoiceTransport? _userTransport;
     private Func<IMessage, CancellationToken, Task>? _selfEventDispatcher;
@@ -44,6 +46,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
     private Task? _providerToUserRelay;
     private bool _awaitingInjectedResponseStart;
     private string? _remoteSessionId;
+    private string? _activeProviderResponseId;
 
     public VoicePresenceModule(
         IRealtimeVoiceProvider provider,
@@ -185,7 +188,10 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
 
         await _provider.DisposeAsync();
         _pendingInjections.Clear();
+        _providerResponseIds.Clear();
+        _cancelledProviderResponseIds.Clear();
         _awaitingInjectedResponseStart = false;
+        _activeProviderResponseId = null;
         _remoteSessionId = null;
         _selfEventDispatcher = null;
     }
@@ -326,44 +332,66 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
 
     // ── State machine dispatch (used by both event pipeline and relay) ──
 
+    // Refactor (iter15/cluster-026-voice-provider-background-state):
+    //   Old pattern: provider callbacks arrived with actor response epochs already assigned in background loops.
+    //   New principle: provider events are normalized to actor response ids inside this actor turn.
     internal async Task HandleProviderEventAsync(
         VoiceProviderEvent providerEvent,
         IEventHandlerContext ctx,
         CancellationToken ct)
     {
         EnsureSelfEventDispatcher(ctx);
+        if (!TryNormalizeProviderEvent(providerEvent, out var normalizedEvent))
+            return;
 
-        switch (providerEvent.EventCase)
+        switch (normalizedEvent.EventCase)
         {
             case VoiceProviderEvent.EventOneofCase.ResponseStarted:
                 _awaitingInjectedResponseStart = false;
-                StateMachine.OnResponseStarted(providerEvent.ResponseStarted.ResponseId);
+                StateMachine.OnResponseStarted(normalizedEvent.ResponseStarted.ResponseId);
                 break;
             case VoiceProviderEvent.EventOneofCase.ResponseDone:
-                StateMachine.OnResponseDone(providerEvent.ResponseDone.ResponseId);
+                StateMachine.OnResponseDone(normalizedEvent.ResponseDone.ResponseId);
+                RetireProviderResponse(normalizedEvent.ResponseDone.ProviderResponseId);
                 break;
             case VoiceProviderEvent.EventOneofCase.ResponseCancelled:
                 _awaitingInjectedResponseStart = false;
-                StateMachine.OnResponseCancelled(providerEvent.ResponseCancelled.ResponseId);
+                StateMachine.OnResponseCancelled(normalizedEvent.ResponseCancelled.ResponseId);
+                RetireProviderResponse(normalizedEvent.ResponseCancelled.ProviderResponseId);
                 await FlushPendingEventInjectionsAsync(ct);
                 break;
             case VoiceProviderEvent.EventOneofCase.SpeechStarted:
             {
                 var wasInProgress = StateMachine.State == VoicePresenceState.ResponseInProgress;
-                StateMachine.OnSpeechStarted();
                 if (wasInProgress)
+                {
+                    var responseId = StateMachine.CurrentResponseId;
+                    var providerResponseId = _activeProviderResponseId;
                     await _provider.CancelResponseAsync(ct);
+                    if (!string.IsNullOrWhiteSpace(providerResponseId))
+                    {
+                        _cancelledProviderResponseIds.Add(providerResponseId);
+                        RetireProviderResponse(providerResponseId);
+                    }
+
+                    StateMachine.OnResponseCancelled(responseId);
+                }
+
+                StateMachine.OnSpeechStarted();
                 break;
             }
             case VoiceProviderEvent.EventOneofCase.SpeechStopped:
                 StateMachine.OnSpeechStopped();
                 break;
             case VoiceProviderEvent.EventOneofCase.FunctionCall:
-                await ExecuteToolCallAsync(providerEvent.FunctionCall, ctx, ct);
+                await ExecuteToolCallAsync(normalizedEvent.FunctionCall, ctx, ct);
                 break;
             case VoiceProviderEvent.EventOneofCase.Disconnected:
                 _awaitingInjectedResponseStart = false;
                 StateMachine.OnProviderDisconnected();
+                _providerResponseIds.Clear();
+                _cancelledProviderResponseIds.Clear();
+                _activeProviderResponseId = null;
                 await CloseRemoteSessionAsync("provider_disconnected", ctx, ct);
                 break;
             case VoiceProviderEvent.EventOneofCase.AudioReceived:
@@ -373,6 +401,147 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             default:
                 break;
         }
+    }
+
+    // Refactor (iter15/cluster-026-voice-provider-background-state):
+    //   Old pattern: provider-specific receive loops suppressed and completed response epochs directly.
+    //   New principle: this actor-turn normalizer owns cancellation suppression and response-id materialization.
+    private bool TryNormalizeProviderEvent(
+        VoiceProviderEvent providerEvent,
+        out VoiceProviderEvent normalizedEvent)
+    {
+        normalizedEvent = providerEvent;
+        switch (providerEvent.EventCase)
+        {
+            case VoiceProviderEvent.EventOneofCase.ResponseStarted:
+                return TryNormalizeResponseEvent(
+                    providerEvent.ResponseStarted,
+                    static message => message.ProviderResponseId,
+                    static message => message.ResponseId,
+                    static (message, responseId) => message.ResponseId = responseId,
+                    static message => new VoiceProviderEvent { ResponseStarted = message },
+                    out normalizedEvent);
+            case VoiceProviderEvent.EventOneofCase.ResponseDone:
+                return TryNormalizeResponseEvent(
+                    providerEvent.ResponseDone,
+                    static message => message.ProviderResponseId,
+                    static message => message.ResponseId,
+                    static (message, responseId) => message.ResponseId = responseId,
+                    static message => new VoiceProviderEvent { ResponseDone = message },
+                    out normalizedEvent);
+            case VoiceProviderEvent.EventOneofCase.ResponseCancelled:
+                return TryNormalizeResponseEvent(
+                    providerEvent.ResponseCancelled,
+                    static message => message.ProviderResponseId,
+                    static message => message.ResponseId,
+                    static (message, responseId) => message.ResponseId = responseId,
+                    static message => new VoiceProviderEvent { ResponseCancelled = message },
+                    out normalizedEvent);
+            case VoiceProviderEvent.EventOneofCase.FunctionCall:
+                return TryNormalizeResponseEvent(
+                    providerEvent.FunctionCall,
+                    static message => message.ProviderResponseId,
+                    static message => message.ResponseId,
+                    static (message, responseId) => message.ResponseId = responseId,
+                    static message => new VoiceProviderEvent { FunctionCall = message },
+                    out normalizedEvent);
+            case VoiceProviderEvent.EventOneofCase.AudioReceived:
+            {
+                var audioReceived = providerEvent.AudioReceived;
+                if (!string.IsNullOrWhiteSpace(audioReceived.ProviderResponseId) &&
+                    _cancelledProviderResponseIds.Contains(audioReceived.ProviderResponseId))
+                {
+                    return false;
+                }
+
+                return true;
+            }
+            case VoiceProviderEvent.EventOneofCase.Disconnected:
+            case VoiceProviderEvent.EventOneofCase.Error:
+            case VoiceProviderEvent.EventOneofCase.SpeechStarted:
+            case VoiceProviderEvent.EventOneofCase.SpeechStopped:
+            case VoiceProviderEvent.EventOneofCase.None:
+            default:
+                return true;
+        }
+    }
+
+    // Refactor (iter15/cluster-026-voice-provider-background-state):
+    //   Old pattern: each response-shaped provider event repeated identity normalization inline.
+    //   New principle: message-specific switch arms only select fields and wrappers; actor-turn mapping stays centralized.
+    private bool TryNormalizeResponseEvent<TMessage>(
+        TMessage source,
+        Func<TMessage, string> getProviderResponseId,
+        Func<TMessage, int> getResponseId,
+        Action<TMessage, int> setResponseId,
+        Func<TMessage, VoiceProviderEvent> buildEvent,
+        out VoiceProviderEvent normalizedEvent)
+        where TMessage : IMessage<TMessage>
+    {
+        var message = source.Clone();
+        if (!TryNormalizeResponseIdentity(getProviderResponseId(message), getResponseId(message), out var responseId))
+        {
+            normalizedEvent = default!;
+            return false;
+        }
+
+        setResponseId(message, responseId);
+        normalizedEvent = buildEvent(message);
+        return true;
+    }
+
+    // Refactor (iter15/cluster-026-voice-provider-background-state):
+    //   Old pattern: providers allocated fallback response epochs when provider ids were missing.
+    //   New principle: fallback actor response ids are allocated only by the module state machine turn.
+    private bool TryNormalizeResponseIdentity(string providerResponseId, int suppliedResponseId, out int responseId)
+    {
+        if (!string.IsNullOrWhiteSpace(providerResponseId))
+        {
+            if (_cancelledProviderResponseIds.Contains(providerResponseId))
+            {
+                responseId = 0;
+                return false;
+            }
+
+            responseId = GetOrCreateProviderResponse(providerResponseId, suppliedResponseId);
+            return true;
+        }
+
+        if (suppliedResponseId > 0)
+        {
+            responseId = suppliedResponseId;
+            return true;
+        }
+
+        responseId = StateMachine.AllocateNextResponseId();
+        return true;
+    }
+
+    // Refactor (iter15/cluster-026-voice-provider-background-state):
+    //   Old pattern: OpenAI/MiniCPM adapters owned provider-id to actor-epoch dictionaries and counters.
+    //   New principle: provider-id to actor response-id mapping is actor runtime state owned by this module.
+    private int GetOrCreateProviderResponse(string providerResponseId, int suppliedResponseId)
+    {
+        if (_providerResponseIds.TryGetValue(providerResponseId, out var existing))
+            return existing;
+
+        var responseId = suppliedResponseId > 0 ? suppliedResponseId : StateMachine.AllocateNextResponseId();
+        _providerResponseIds[providerResponseId] = responseId;
+        _activeProviderResponseId = providerResponseId;
+        return responseId;
+    }
+
+    // Refactor (iter15/cluster-026-voice-provider-background-state):
+    //   Old pattern: providers retired response epochs from background completion/cancel callbacks.
+    //   New principle: the actor turn retires provider response mappings when committed lifecycle events arrive.
+    private void RetireProviderResponse(string providerResponseId)
+    {
+        if (string.IsNullOrWhiteSpace(providerResponseId))
+            return;
+
+        _providerResponseIds.Remove(providerResponseId);
+        if (string.Equals(_activeProviderResponseId, providerResponseId, StringComparison.Ordinal))
+            _activeProviderResponseId = null;
     }
 
     private async Task DispatchSelfEventAsync(IMessage message, CancellationToken ct)
@@ -504,6 +673,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             return;
 
         _remoteSessionId = null;
+        _providerResponseIds.Clear();
+        _cancelledProviderResponseIds.Clear();
+        _activeProviderResponseId = null;
         _provider.OnEvent = _userTransport == null ? null : OnProviderEventAsync;
         await PublishRemoteOutputAsync(
             new VoiceRemoteTransportOutput

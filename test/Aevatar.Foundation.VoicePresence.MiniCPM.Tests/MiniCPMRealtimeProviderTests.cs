@@ -129,16 +129,61 @@ public class MiniCPMRealtimeProviderTests
             VoiceProviderEvent.EventOneofCase.AudioReceived,
             VoiceProviderEvent.EventOneofCase.ResponseDone,
         ]);
-        events[0].ResponseStarted.ResponseId.ShouldBe(1);
+        events[0].ResponseStarted.ResponseId.ShouldBe(0);
+        events[0].ResponseStarted.ProviderResponseId.ShouldBe("1");
         events[1].AudioReceived.SampleRateHz.ShouldBe(24000);
         events[1].AudioReceived.Pcm16.ToByteArray().ShouldBe([10, 20, 30, 40]);
-        events[2].ResponseDone.ResponseId.ShouldBe(1);
+        events[1].AudioReceived.ProviderResponseId.ShouldBe("1");
+        events[2].ResponseDone.ResponseId.ShouldBe(0);
+        events[2].ResponseDone.ProviderResponseId.ShouldBe("1");
     }
 
     [Fact]
-    public async Task CancelResponse_should_post_stop_and_emit_synthetic_cancel()
+    public async Task Receive_loop_should_use_stable_provider_local_id_when_response_id_is_zero()
     {
-        var responseCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var provider = CreateProvider(new StubHttpMessageHandler((request, ct) =>
+        {
+            _ = request;
+            _ = ct;
+            return Task.FromResult(CreateJsonResponse("{}"));
+        }));
+        var chunkAudio = Convert.ToBase64String(MiniCPMWaveCodec.EncodePcm16Mono([12, 34, 56, 78], 24000));
+        var channel = Channel.CreateUnbounded<VoiceProviderEvent>();
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(
+            $$"""
+            data: {"id":"u1","response_id":0,"choices":[{"role":"assistant","audio":"{{chunkAudio}}","text":"hello","finish_reason":"processing"}]}
+
+            data: {"id":"u1","response_id":0,"choices":[{"role":"assistant","audio":null,"text":"\n<end>","finish_reason":"done"}]}
+
+            """));
+
+        var readCompletionStreamAsync = typeof(MiniCPMRealtimeProvider)
+            .GetMethod("ReadCompletionStreamAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        await ((Task)readCompletionStreamAsync.Invoke(provider, [stream, channel.Writer, CancellationToken.None])!);
+        channel.Writer.TryComplete();
+
+        var events = new List<VoiceProviderEvent>();
+        await foreach (var evt in channel.Reader.ReadAllAsync())
+            events.Add(evt);
+
+        events.Select(static x => x.EventCase).ShouldBe(
+        [
+            VoiceProviderEvent.EventOneofCase.ResponseStarted,
+            VoiceProviderEvent.EventOneofCase.AudioReceived,
+            VoiceProviderEvent.EventOneofCase.ResponseDone,
+        ]);
+
+        var providerResponseId = events[0].ResponseStarted.ProviderResponseId;
+        providerResponseId.ShouldNotBeNullOrWhiteSpace();
+        events[0].ResponseStarted.ResponseId.ShouldBe(0);
+        events[2].ResponseDone.ResponseId.ShouldBe(0);
+        events[1].AudioReceived.ProviderResponseId.ShouldBe(providerResponseId);
+        events[2].ResponseDone.ProviderResponseId.ShouldBe(providerResponseId);
+    }
+
+    [Fact]
+    public async Task CancelResponse_should_post_stop_without_synthetic_cancel()
+    {
         var stopRequested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var handler = new StubHttpMessageHandler(async (request, ct) =>
@@ -161,28 +206,20 @@ public class MiniCPMRealtimeProviderTests
         });
 
         await using var provider = CreateProvider(handler);
+        var events = new List<VoiceProviderEvent>();
         provider.OnEvent = (evt, ct) =>
         {
             _ = ct;
-            switch (evt.EventCase)
-            {
-                case VoiceProviderEvent.EventOneofCase.ResponseCancelled:
-                    responseCancelled.TrySetResult();
-                    break;
-            }
-
+            events.Add(evt);
             return Task.CompletedTask;
         };
 
         await provider.ConnectAsync(CreateConfig(), CancellationToken.None);
-        typeof(MiniCPMRealtimeProvider)
-            .GetField("_activeResponseId", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(provider, 7);
 
         await provider.CancelResponseAsync(CancellationToken.None);
 
         await stopRequested.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await responseCancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        events.ShouldNotContain(static evt => evt.EventCase == VoiceProviderEvent.EventOneofCase.ResponseCancelled);
     }
 
     [Fact]
@@ -315,7 +352,8 @@ public class MiniCPMRealtimeProviderTests
         ]);
         events[0].Error.ErrorCode.ShouldBe("invalid_payload");
         events[1].Error.ErrorCode.ShouldBe("provider_error");
-        events[2].ResponseStarted.ResponseId.ShouldBe(1);
+        events[2].ResponseStarted.ResponseId.ShouldBe(0);
+        events[2].ResponseStarted.ProviderResponseId.ShouldBe("3");
         events[3].Error.ErrorCode.ShouldBe("invalid_audio");
         events[4].Disconnected.Reason.ShouldContain("before response completion");
     }

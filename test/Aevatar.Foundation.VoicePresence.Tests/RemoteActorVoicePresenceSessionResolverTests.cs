@@ -204,7 +204,7 @@ public class RemoteActorVoicePresenceSessionResolverTests
             VoiceModuleSignal.SignalOneofCase.RemoteSessionOpenRequested);
         dispatchPort.Dispatches.ShouldNotContain(dispatch =>
             dispatch.Envelope.Payload!.Unpack<VoiceModuleSignal>().SignalCase ==
-            VoiceModuleSignal.SignalOneofCase.RemoteAudioInputReceived);
+            VoiceModuleSignal.SignalOneofCase.RemoteControlInputReceived);
         dispatchPort.Dispatches.ShouldContain(dispatch =>
             dispatch.Envelope.Payload!.Unpack<VoiceModuleSignal>().SignalCase ==
             VoiceModuleSignal.SignalOneofCase.RemoteSessionCloseRequested);
@@ -237,16 +237,16 @@ public class RemoteActorVoicePresenceSessionResolverTests
     }
 
     [Fact]
-    public void BuildDirectEnvelope_should_reject_remote_audio_input_payloads()
+    public void BuildDirectEnvelope_should_reject_provider_audio_payloads()
     {
         Should.Throw<InvalidOperationException>(() =>
             VoicePresenceSessionDispatch.BuildDirectEnvelope(
                 "agent-1",
                 "voice_presence",
-                new VoiceRemoteAudioInputReceived
+                new VoiceAudioReceived
                 {
-                    SessionId = "remote-1",
                     Pcm16 = ByteString.CopyFrom([1, 2]),
+                    SampleRateHz = 24000,
                 }));
     }
 
