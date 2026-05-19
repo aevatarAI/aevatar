@@ -11,10 +11,7 @@ namespace Aevatar.Studio.Projection.CommandServices;
 internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IStudioMemberPlatformBindingCommandPort
 {
     private const string BindingRunDirectRoute = "aevatar.studio.projection.studio-member-binding-run";
-    private const string ReadinessTimeoutFailureCode = "STUDIO_MEMBER_PLATFORM_BINDING_READINESS_TIMEOUT";
     private const string ReadinessFailedFailureCode = "STUDIO_MEMBER_PLATFORM_BINDING_READINESS_FAILED";
-    private const string ReadinessTimeoutFailureMessage =
-        "Scope binding commands completed, but service catalog / serving-set readiness was not observed before timeout.";
     private static readonly TimeSpan BindingReadinessTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan BindingReadinessPollInterval = TimeSpan.FromMilliseconds(50);
 
@@ -201,32 +198,11 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
 
         if (!readiness.InvokeReady)
         {
-            try
-            {
-                await DispatchAsync(
-                    replyActorId,
-                    new StudioMemberPlatformBindingFailed
-                    {
-                        BindingRunId = request.BindingRunId,
-                        PlatformBindingCommandId = commandId,
-                        Failure = new StudioMemberBindingFailure
-                        {
-                            Code = ReadinessTimeoutFailureCode,
-                            Message = ReadinessTimeoutFailureMessage,
-                            FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                        },
-                    },
-                    ct).ConfigureAwait(false);
-            }
-            catch (Exception dispatchEx)
-            {
-                _logger.LogError(
-                    dispatchEx,
-                    "StudioMember platform binding readiness-timeout continuation dispatch failed. bindingRunId={BindingRunId} platformBindingCommandId={CommandId} readinessStatus={ReadinessStatus}",
-                    request.BindingRunId,
-                    commandId,
-                    readiness.Status);
-            }
+            _logger.LogWarning(
+                "StudioMember platform binding commands completed, but readiness was not observed before timeout. Leaving binding run pending for watchdog recovery. bindingRunId={BindingRunId} platformBindingCommandId={CommandId} readinessStatus={ReadinessStatus}",
+                request.BindingRunId,
+                commandId,
+                readiness.Status);
 
             return;
         }

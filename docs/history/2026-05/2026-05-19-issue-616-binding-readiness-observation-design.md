@@ -274,8 +274,8 @@ result = await _scopeBindingCommandPort.UpsertAsync(...);
 var readiness = await WaitForBindingReadyAsync(result, ct);
 if (!readiness.InvokeReady)
 {
-    dispatch StudioMemberPlatformBindingFailed(... readiness timeout ...);
-    return;
+    log readiness timeout;
+    return; // keep binding run pending for watchdog recovery
 }
 dispatch StudioMemberPlatformBindingSucceeded(...);
 ```
@@ -292,19 +292,10 @@ private static readonly TimeSpan BindingReadinessPollInterval = TimeSpan.FromMil
 - 它不再隐藏在 command port 中。
 - 它是 Studio binding run 的显式 readiness observation 阶段。
 - 它不会阻塞 HTTP request；运行在 detached platform binding execution 中。
-- timeout 可变成明确 terminal failure。
+- timeout 不应变成 terminal binding failure；command side 已完成时，bounded observation lag 不代表绑定失败。
+- timeout 时 adapter 只记录 warning 并返回，让 binding run 保持 `PlatformBindingPending`，由现有 watchdog/recovery 机制后续重试。
 
-如果不想把 readiness timeout 视作 binding failed，可以新增中间状态。但当前 proto/status 已有 terminal `failed`，最小实现建议用 failure code：
-
-```text
-STUDIO_MEMBER_PLATFORM_BINDING_READINESS_TIMEOUT
-```
-
-failure message：
-
-```text
-Scope binding commands completed, but service catalog / serving-set readiness was not observed before timeout.
-```
+readiness query 本身异常仍可派发 terminal observation failure，因为这代表 adapter 无法完成 readiness observation，而不是正常 projection lag。
 
 ## 10. DI 注册
 
@@ -366,7 +357,7 @@ test/Aevatar.Studio.Tests/ScopeBindingStudioMemberPlatformBindingCommandServiceT
 覆盖：
 
 1. `UpsertAsync` 返回后 readiness ready -> dispatch `StudioMemberPlatformBindingSucceeded`
-2. readiness timeout -> dispatch `StudioMemberPlatformBindingFailed`，code 为 `STUDIO_MEMBER_PLATFORM_BINDING_READINESS_TIMEOUT`
+2. readiness timeout -> 不 dispatch terminal continuation，保持 binding run pending 给 watchdog/recovery 重试
 3. `UpsertAsync` exception 仍 dispatch existing failure code，不被 readiness 逻辑吞掉
 
 为了避免测试使用真实 sleep，fake readiness port 可按调用次数返回 not-ready / ready；adapter wait helper 应注入 delay/clock 或 deterministic waiter，测试中不要依赖真实短 `Task.Delay`。这也避免触发 test stability guard 对非确定性 delay 的限制。
@@ -414,9 +405,7 @@ bash tools/ci/test_stability_guards.sh
 
 ### 13.1 Readiness timeout 应该是 failed 还是 non-terminal pending？
 
-最小实现建议使用 terminal `failed`，因为当前 run status 没有 `readiness_pending_timeout` 这类状态，且 succeeded 必须对用户诚实。
-
-如果产品希望“platform binding succeeded but readiness still catching up”在 UI 中继续 pending，则需要扩展 binding-run status proto。这超出 #616 最小范围。
+采用 non-terminal pending：readiness timeout 只表示 bounded observation window 内没有看到 readmodel 追上，不表示 binding command 失败。Adapter 记录 warning 后返回，binding-run actor 保持 `PlatformBindingPending`，现有 watchdog 会在 execution stale 后重新驱动同一 command。这样既避免误报 failed，也不引入新的 proto/status。
 
 ### 13.2 是否需要 public readiness endpoint？
 
@@ -439,6 +428,7 @@ rollout command observation 是 rollout command 的状态观察；scope binding 
 - `ScopeBindingCommandApplicationService.UpsertAsync` 不再包含 readmodel polling。
 - 存在显式 `IScopeBindingReadinessQueryPort`。
 - Studio platform binding adapter 在 dispatch success 前显式 observe readiness。
-- readiness timeout 有明确 failure code / message。
+- readiness timeout 不派发 terminal failure，binding run 保持 pending 并依赖 watchdog/recovery 重试。
+- readiness query exception 有明确 failure code / message。
 - 相关 tests 覆盖 command service 不 polling、readiness 状态判断、Studio adapter success/timeout。
 - bind-run `succeeded` 对用户保持诚实：成功后 immediate invoke 不应因为 service catalog / serving-set readmodel 未 materialize 而 race。

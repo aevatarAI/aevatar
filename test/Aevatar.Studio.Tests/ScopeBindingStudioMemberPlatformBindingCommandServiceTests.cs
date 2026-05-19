@@ -233,7 +233,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenReadinessTimesOut_ShouldDispatchReadinessTimeoutFailure()
+    public async Task ExecuteAsync_WhenReadinessTimesOut_ShouldLeaveRunPendingForWatchdogRecovery()
     {
         var readinessPort = new RecordingReadinessQueryPort([NotReadySnapshot()]);
         var scopeBindingPort = new RecordingScopeBindingCommandPort();
@@ -255,13 +255,9 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             "platform-bind-1",
             NewScriptStartRequest());
 
-        var dispatch = await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var failed = dispatch.Envelope.Payload.Unpack<StudioMemberPlatformBindingFailed>();
-        failed.BindingRunId.Should().Be("bind-1");
-        failed.PlatformBindingCommandId.Should().Be("platform-bind-1");
-        failed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_READINESS_TIMEOUT");
-        failed.Failure.Message.Should().Be(
-            "Scope binding commands completed, but service catalog / serving-set readiness was not observed before timeout.");
+        Func<Task> waitForDispatch = async () => await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromMilliseconds(100));
+        await waitForDispatch.Should().ThrowAsync<TimeoutException>();
+        dispatchPort.Dispatches.Should().BeEmpty();
         readinessPort.Requests.Should().HaveCount(2);
     }
 
