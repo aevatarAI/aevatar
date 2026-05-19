@@ -87,7 +87,10 @@ public sealed class WorkflowRunOrchestrationComponentTests
 
         var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", "direct", null), CancellationToken.None);
         result.Target.Should().NotBeNull();
-        result.Target!.BindLiveObservation(new FakeProjectionLease("actor-1", "cmd-1"), new EventChannel<WorkflowRunEventEnvelope>());
+        result.Target!.BindLiveObservation(
+            new FakeProjectionLease("actor-1", "cmd-1"),
+            null,
+            new EventChannel<WorkflowRunEventEnvelope>());
 
         await result.Target.PublishDetachedCommandSignalAsync(
             new DetachedCommandTimeout<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>(
@@ -252,7 +255,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             return Task.FromResult<IWorkflowExecutionProjectionLease?>(EnsureLease);
         }
 
-        public Task AttachLiveSinkAsync(
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
             IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default)
@@ -262,12 +265,10 @@ public sealed class WorkflowRunOrchestrationComponentTests
                 throw AttachException;
 
             AttachCalls.Add((lease, sink));
-            return Task.CompletedTask;
+            return Task.FromResult<IAsyncDisposable?>(null);
         }
-
         public Task DetachLiveSinkAsync(
-            IWorkflowExecutionProjectionLease lease,
-            IEventSink<WorkflowRunEventEnvelope> sink,
+            IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default) =>
             Task.CompletedTask;
 

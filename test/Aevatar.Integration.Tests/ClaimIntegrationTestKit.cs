@@ -115,7 +115,7 @@ internal static class ClaimIntegrationTestKit
         var lease = await projectionPort.EnsureActorProjectionAsync(runtimeActorId, ct);
         lease.Should().NotBeNull();
         await using var sink = new EventChannel<EventEnvelope>(capacity: 32);
-        await projectionPort.AttachLiveSinkAsync(lease!, sink, ct);
+        var liveSinkLease = await projectionPort.AttachLiveSinkAsync(lease!, sink, ct);
 
         try
         {
@@ -137,7 +137,7 @@ internal static class ClaimIntegrationTestKit
         }
         finally
         {
-            await projectionPort.DetachLiveSinkAsync(lease!, sink, ct);
+            await projectionPort.DetachLiveSinkAsync(liveSinkLease, ct);
             await projectionPort.ReleaseActorProjectionAsync(lease!, ct);
         }
     }

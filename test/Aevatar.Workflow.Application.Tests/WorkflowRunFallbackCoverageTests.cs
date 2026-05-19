@@ -192,7 +192,10 @@ public sealed class WorkflowRunFallbackCoverageTests
             projectionPort,
             actorPort,
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
-        target.BindLiveObservation(new FakeProjectionLease(actorId, commandId), new EventChannel<WorkflowRunEventEnvelope>());
+        target.BindLiveObservation(
+            new FakeProjectionLease(actorId, commandId),
+            new FakeLiveSinkLease(),
+            new EventChannel<WorkflowRunEventEnvelope>());
         return target;
     }
 
@@ -371,15 +374,13 @@ public sealed class WorkflowRunFallbackCoverageTests
             CancellationToken ct = default) =>
             Task.FromResult<IWorkflowExecutionProjectionLease?>(new FakeProjectionLease(rootActorId, commandId));
 
-        public Task AttachLiveSinkAsync(
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
             IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default) =>
-            Task.CompletedTask;
-
+            Task.FromResult<IAsyncDisposable?>(null);
         public Task DetachLiveSinkAsync(
-            IWorkflowExecutionProjectionLease lease,
-            IEventSink<WorkflowRunEventEnvelope> sink,
+            IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default) =>
             Task.CompletedTask;
 
@@ -431,6 +432,11 @@ public sealed class WorkflowRunFallbackCoverageTests
     {
         public string ActorId { get; } = actorId;
         public string CommandId { get; } = commandId;
+    }
+
+    private sealed class FakeLiveSinkLease : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class FakeActor(string id) : IActor

@@ -2262,7 +2262,7 @@ public class NyxIdChatEndpointsCoverageTests
             return _lease;
         }
 
-        public async Task AttachLiveSinkAsync(
+        public async Task<IAsyncDisposable?> AttachLiveSinkAsync(
             INyxIdChatSessionProjectionLease lease,
             IEventSink<AGUIEvent> sink,
             CancellationToken ct = default)
@@ -2270,15 +2270,14 @@ public class NyxIdChatEndpointsCoverageTests
             _ = lease;
             _sink = sink;
             await PublishBufferedMessagesAsync(ct);
+            return null;
         }
 
         public Task DetachLiveSinkAsync(
-            INyxIdChatSessionProjectionLease lease,
-            IEventSink<AGUIEvent> sink,
+            IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default)
         {
-            _ = lease;
-            _ = sink;
+            _ = liveSinkLease;
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
@@ -2349,15 +2348,14 @@ public class NyxIdChatEndpointsCoverageTests
             throw exception;
         }
 
-        public Task AttachLiveSinkAsync(
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             INyxIdChatSessionProjectionLease lease,
             IEventSink<AGUIEvent> sink,
             CancellationToken ct = default) =>
-            Task.CompletedTask;
+            Task.FromResult<IAsyncDisposable?>(null);
 
         public Task DetachLiveSinkAsync(
-            INyxIdChatSessionProjectionLease lease,
-            IEventSink<AGUIEvent> sink,
+            IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default) =>
             Task.CompletedTask;
 

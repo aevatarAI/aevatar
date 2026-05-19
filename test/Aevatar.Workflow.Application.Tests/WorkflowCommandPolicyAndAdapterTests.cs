@@ -97,15 +97,13 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
             CancellationToken ct = default) =>
             Task.FromResult<IWorkflowExecutionProjectionLease?>(null);
 
-        public Task AttachLiveSinkAsync(
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
             Aevatar.CQRS.Core.Abstractions.Streaming.IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default) =>
-            Task.CompletedTask;
-
+            Task.FromResult<IAsyncDisposable?>(null);
         public Task DetachLiveSinkAsync(
-            IWorkflowExecutionProjectionLease lease,
-            Aevatar.CQRS.Core.Abstractions.Streaming.IEventSink<WorkflowRunEventEnvelope> sink,
+            IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default) =>
             Task.CompletedTask;
 

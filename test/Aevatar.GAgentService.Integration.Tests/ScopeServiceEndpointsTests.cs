@@ -5057,7 +5057,7 @@ public sealed class ScopeServiceEndpointsTests
             return Task.FromResult<IScriptServiceAguiProjectionLease?>(new NoOpScriptServiceAguiProjectionLease(actorId, runId));
         }
 
-        public Task AttachLiveSinkAsync(
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IScriptServiceAguiProjectionLease lease,
             IEventSink<AGUIEvent> sink,
             CancellationToken ct = default)
@@ -5065,16 +5065,14 @@ public sealed class ScopeServiceEndpointsTests
             _ = lease;
             _ = sink;
             ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
+            return Task.FromResult<IAsyncDisposable?>(null);
         }
 
         public Task DetachLiveSinkAsync(
-            IScriptServiceAguiProjectionLease lease,
-            IEventSink<AGUIEvent> sink,
+            IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default)
         {
-            _ = lease;
-            _ = sink;
+            _ = liveSinkLease;
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }

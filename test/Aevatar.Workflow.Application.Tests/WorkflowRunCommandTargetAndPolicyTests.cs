@@ -15,6 +15,9 @@ namespace Aevatar.Workflow.Application.Tests;
 // Test-add (test-coverage/cluster-036):
 //   Covers refactor-introduced behavior in WorkflowRunCommandTarget.cs:116-122,286-290,293-309.
 //   Cluster intent: workflow target owns detached durable fallback and cleanup decisions.
+// Test-add (test-coverage/cluster-035):
+//   Covers refactor-introduced behavior in WorkflowRunCommandTarget.cs:76-189.
+//   Cluster intent: workflow run targets detach explicit live-sink leases without process-local lookup state.
 public sealed class WorkflowRunCommandTargetAndPolicyTests
 {
     [Fact]
@@ -54,7 +57,7 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
             projectionPort: projectionPort,
             actorPort: actorPort,
             createdActorIds: ["definition-1", "run-1"]);
-        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeEventSink());
+        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeLiveSinkLease("run-1"), new FakeEventSink());
         var detached = false;
 
         await target.ReleaseAsync(
@@ -81,7 +84,7 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
             projectionPort: projectionPort,
             createdActorIds: ["definition-1", "run-1"]);
         var lease = new FakeProjectionLease("run-1", "cmd-1");
-        target.BindLiveObservation(lease, new FakeEventSink());
+        target.BindLiveObservation(lease, new FakeLiveSinkLease("run-1"), new FakeEventSink());
 
         await target.ReleaseAfterInteractionAsync(
             new WorkflowChatRunAcceptedReceipt("run-1", "direct", "cmd-1", "corr-1"),
@@ -110,7 +113,7 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
             actorPort: actorPort,
             currentStateQueryPort: queryPort,
             createdActorIds: ["definition-1", "run-1"]);
-        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeEventSink());
+        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeLiveSinkLease("run-1"), new FakeEventSink());
         var receipt = new WorkflowChatRunAcceptedReceipt("run-1", "direct", "cmd-1", "corr-1");
 
         await target.PublishDetachedCommandSignalAsync(
@@ -140,7 +143,7 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
             actorPort: actorPort,
             currentStateQueryPort: queryPort,
             createdActorIds: ["definition-1", "run-1"]);
-        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeEventSink());
+        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeLiveSinkLease("run-1"), new FakeEventSink());
         var receipt = new WorkflowChatRunAcceptedReceipt("run-1", "direct", "cmd-1", "corr-1");
 
         await target.PublishDetachedCommandSignalAsync(
@@ -170,7 +173,7 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
             actorPort: actorPort,
             currentStateQueryPort: queryPort,
             createdActorIds: ["definition-1", "run-1"]);
-        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeEventSink());
+        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeLiveSinkLease("run-1"), new FakeEventSink());
         var receipt = new WorkflowChatRunAcceptedReceipt("run-1", "direct", "cmd-1", "corr-1");
 
         await target.PublishDetachedCommandSignalAsync(
@@ -200,7 +203,7 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
             actorPort: actorPort,
             currentStateQueryPort: queryPort,
             createdActorIds: ["definition-1", "run-1"]);
-        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeEventSink());
+        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeLiveSinkLease("run-1"), new FakeEventSink());
         var receipt = new WorkflowChatRunAcceptedReceipt("run-1", "direct", "cmd-1", "corr-1");
 
         await target.PublishDetachedCommandSignalAsync(
@@ -221,8 +224,8 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
         var target = CreateTarget(projectionPort);
         var lease = new FakeProjectionLease("run-1", "cmd-1");
         var sink = new FakeEventSink();
-        target.BindLiveObservation(lease, sink);
-        target.BindLiveObservation(lease, sink);
+        target.BindLiveObservation(lease, new FakeLiveSinkLease("run-1"), sink);
+        target.BindLiveObservation(lease, new FakeLiveSinkLease("run-1"), sink);
 
         await target.ReleaseAsync(destroyCreatedActors: false, ct: CancellationToken.None);
 
@@ -237,11 +240,41 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
         var target = CreateTarget(projectionPort);
         var lease = new FakeProjectionLease("run-1", "cmd-1");
         var sink = new FakeEventSink();
-        target.BindLiveObservation(lease, sink);
+        target.BindLiveObservation(lease, new FakeLiveSinkLease("run-1"), sink);
 
         await target.DetachLiveObservationAsync(CancellationToken.None);
 
         projectionPort.Events.Should().Equal("detach:run-1");
+        sink.DisposeCalls.Should().Be(1);
+        target.LiveSink.Should().BeNull();
+        target.ProjectionLease.Should().BeSameAs(lease);
+    }
+
+    [Fact]
+    public async Task DetachLiveObservationAsync_WhenNoLiveSinkIsBound_ShouldNoopWithoutProjectionCalls()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var target = CreateTarget(projectionPort);
+
+        await target.DetachLiveObservationAsync(CancellationToken.None);
+
+        projectionPort.Events.Should().BeEmpty();
+        target.LiveSink.Should().BeNull();
+        target.ProjectionLease.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task DetachLiveObservationAsync_WhenLiveSinkLeaseIsNull_ShouldDetachWithExplicitNullLease()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var sink = new FakeEventSink();
+        var lease = new FakeProjectionLease("run-1", "cmd-1");
+        var target = CreateTarget(projectionPort);
+        target.BindLiveObservation(lease, null, sink);
+
+        await target.DetachLiveObservationAsync(CancellationToken.None);
+
+        projectionPort.Events.Should().Equal("detach:");
         sink.DisposeCalls.Should().Be(1);
         target.LiveSink.Should().BeNull();
         target.ProjectionLease.Should().BeSameAs(lease);
@@ -262,7 +295,7 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
             projectionPort: projectionPort,
             actorPort: actorPort,
             createdActorIds: ["definition-1"]);
-        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeEventSink());
+        target.BindLiveObservation(new FakeProjectionLease("run-1", "cmd-1"), new FakeLiveSinkLease("run-1"), new FakeEventSink());
 
         var act = async () => await target.CleanupAfterDispatchFailureAsync(CancellationToken.None);
 
@@ -375,12 +408,13 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
         public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(string rootActorId, string commandId, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task AttachLiveSinkAsync(IWorkflowExecutionProjectionLease lease, IEventSink<WorkflowRunEventEnvelope> sink, CancellationToken ct = default) =>
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(IWorkflowExecutionProjectionLease lease, IEventSink<WorkflowRunEventEnvelope> sink, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task DetachLiveSinkAsync(IWorkflowExecutionProjectionLease lease, IEventSink<WorkflowRunEventEnvelope> sink, CancellationToken ct = default)
+        public Task DetachLiveSinkAsync(IAsyncDisposable? liveSinkLease, CancellationToken ct = default)
         {
-            Events.Add($"detach:{lease.ActorId}");
+            var actorId = liveSinkLease is FakeLiveSinkLease fakeLease ? fakeLease.ActorId : string.Empty;
+            Events.Add($"detach:{actorId}");
             if (DetachException != null)
                 throw DetachException;
             return Task.CompletedTask;
@@ -424,6 +458,11 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
             DisposeCalls++;
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed record FakeLiveSinkLease(string ActorId) : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort

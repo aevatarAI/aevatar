@@ -43,6 +43,7 @@ internal sealed class GAgentDraftRunCommandTarget
     public string SessionId { get; private set; } = string.Empty;
     public IGAgentDraftRunProjectionLease? ProjectionLease { get; private set; }
     public IGAgentRunTerminalProjectionLease? TerminalProjectionLease { get; private set; }
+    public IAsyncDisposable? LiveSinkLease { get; private set; }
     public IEventSink<AGUIEvent>? LiveSink { get; private set; }
     private IEventSink<AGUIEvent>? InteractionLiveSink { get; set; }
     public bool AwaitingApprovalTerminalFact { get; private set; }
@@ -54,10 +55,12 @@ internal sealed class GAgentDraftRunCommandTarget
 
     public void BindLiveObservation(
         IGAgentDraftRunProjectionLease lease,
+        IAsyncDisposable? liveSinkLease,
         IEventSink<AGUIEvent> sink,
         string sessionId)
     {
         ProjectionLease = lease ?? throw new ArgumentNullException(nameof(lease));
+        LiveSinkLease = liveSinkLease;
         LiveSink = sink ?? throw new ArgumentNullException(nameof(sink));
         InteractionLiveSink = new ApprovalObservingEventSink(sink, MarkAwaitingApprovalTerminalFact);
         SessionId = sessionId;
@@ -105,10 +108,12 @@ internal sealed class GAgentDraftRunCommandTarget
             {
                 await _projectionPort.DetachReleaseAndDisposeAsync(
                     projectionLease,
+                    LiveSinkLease,
                     sink,
                     null,
                     ct);
                 ProjectionLease = null;
+                LiveSinkLease = null;
                 LiveSink = null;
                 InteractionLiveSink = null;
             }
@@ -125,6 +130,7 @@ internal sealed class GAgentDraftRunCommandTarget
                 {
                     sink.Complete();
                     await sink.DisposeAsync();
+                    LiveSinkLease = null;
                     LiveSink = null;
                     InteractionLiveSink = null;
                 }
@@ -140,6 +146,7 @@ internal sealed class GAgentDraftRunCommandTarget
                 {
                     await _projectionPort.ReleaseActorProjectionAsync(projectionLease, ct);
                     ProjectionLease = null;
+                    LiveSinkLease = null;
                     InteractionLiveSink = null;
                 }
                 catch (Exception ex)
@@ -314,7 +321,7 @@ internal sealed class GAgentDraftRunCommandTargetBinder
                 ct);
             target.BindTerminalProjection(terminalProjectionLease);
 
-            var projectionLease = await _projectionPort.EnsureAndAttachAsync(
+            var attachment = await _projectionPort.EnsureAndAttachLeaseAsync(
                 token => _projectionPort.EnsureActorProjectionAsync(
                     target.ActorId,
                     context.CommandId,
@@ -322,7 +329,7 @@ internal sealed class GAgentDraftRunCommandTargetBinder
                 sink,
                 ct);
 
-            if (projectionLease == null)
+            if (attachment == null)
             {
                 sink.Complete();
                 await sink.DisposeAsync();
@@ -330,7 +337,8 @@ internal sealed class GAgentDraftRunCommandTargetBinder
             }
 
             target.BindLiveObservation(
-                projectionLease,
+                attachment.ProjectionLease,
+                attachment.LiveSinkLease,
                 sink,
                 ResolveSessionId(command, context));
             return CommandTargetBindingResult<GAgentDraftRunStartError>.Success();

@@ -1440,7 +1440,7 @@ public class StreamingProxyCoverageTests
             return Task.FromResult<IStreamingProxyRoomSessionProjectionLease?>(_lease);
         }
 
-        public Task AttachLiveSinkAsync(
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IStreamingProxyRoomSessionProjectionLease lease,
             IEventSink<StreamingProxyRoomSessionEnvelope> sink,
             CancellationToken ct = default)
@@ -1449,16 +1449,14 @@ public class StreamingProxyCoverageTests
             _lease = lease;
             _sink = sink;
             Attached.TrySetResult(true);
-            return Task.CompletedTask;
+            return Task.FromResult<IAsyncDisposable?>(null);
         }
 
         public Task DetachLiveSinkAsync(
-            IStreamingProxyRoomSessionProjectionLease lease,
-            IEventSink<StreamingProxyRoomSessionEnvelope> sink,
+            IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default)
         {
-            _ = lease;
-            _ = sink;
+            _ = liveSinkLease;
             _ = ct;
             return Task.CompletedTask;
         }

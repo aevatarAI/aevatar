@@ -39,13 +39,16 @@ public sealed class ScriptEvolutionCommandTarget
     public string TargetId => Actor.Id;
     public string SessionActorId => Actor.Id;
     public IScriptEvolutionProjectionLease? ProjectionLease { get; private set; }
+    public IAsyncDisposable? LiveSinkLease { get; private set; }
     public IEventSink<ScriptEvolutionSessionCompletedEvent>? LiveSink { get; private set; }
 
     public void BindLiveObservation(
         IScriptEvolutionProjectionLease lease,
+        IAsyncDisposable? liveSinkLease,
         IEventSink<ScriptEvolutionSessionCompletedEvent> sink)
     {
         ProjectionLease = lease ?? throw new ArgumentNullException(nameof(lease));
+        LiveSinkLease = liveSinkLease;
         LiveSink = sink ?? throw new ArgumentNullException(nameof(sink));
     }
 
@@ -78,6 +81,7 @@ public sealed class ScriptEvolutionCommandTarget
             {
                 await _projectionPort.DetachReleaseAndDisposeAsync(
                     ProjectionLease,
+                    LiveSinkLease,
                     LiveSink,
                     onDetachedAsync: null,
                     ct);
@@ -88,6 +92,7 @@ public sealed class ScriptEvolutionCommandTarget
             }
 
             ProjectionLease = null;
+            LiveSinkLease = null;
             LiveSink = null;
         }
         else
@@ -97,6 +102,7 @@ public sealed class ScriptEvolutionCommandTarget
                 try
                 {
                     await LiveSink.DisposeAsync();
+                    LiveSinkLease = null;
                 }
                 catch (Exception ex)
                 {
@@ -111,6 +117,7 @@ public sealed class ScriptEvolutionCommandTarget
                 try
                 {
                     await _projectionPort.ReleaseActorProjectionAsync(ProjectionLease, ct);
+                    LiveSinkLease = null;
                 }
                 catch (Exception ex)
                 {

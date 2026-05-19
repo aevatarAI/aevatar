@@ -21,6 +21,9 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Core.Tests.Runtime;
 
+// Test-add (test-coverage/cluster-035):
+//   Covers refactor-introduced behavior in ScriptEvolutionCommandTarget.cs:74-132 and ScriptEvolutionCommandTargetBinder.cs:35-54.
+//   Cluster intent: script evolution carries explicit live-sink projection leases through target binding and cleanup.
 public class RuntimeScriptInfrastructurePortsTests
 {
     [Fact]
@@ -744,6 +747,62 @@ public class RuntimeScriptInfrastructurePortsTests
         projectionPort.ReleaseCount.Should().Be(0);
     }
 
+    [Fact]
+    public async Task ScriptEvolutionCommandTarget_ReleaseAsync_WhenOnlyProjectionLeaseIsBound_ShouldReleaseWithoutDetach()
+    {
+        var projectionPort = new TestProjectionPort();
+        var target = new ScriptEvolutionCommandTarget(
+            new TestActor("script-evolution-session:proposal-1"),
+            "proposal-1",
+            projectionPort,
+            projectionPort);
+        var lease = new TestProjectionLease("script-evolution-session:proposal-1", "proposal-1");
+        target.BindLiveObservation(lease, new TestLiveSinkLease(), new ScriptEvolutionScopedEventSink("proposal-1", new EventChannel<ScriptEvolutionSessionCompletedEvent>()));
+        SetProperty(target, nameof(ScriptEvolutionCommandTarget.LiveSink), null);
+
+        await target.ReleaseAsync(CancellationToken.None);
+
+        projectionPort.DetachCount.Should().Be(0);
+        projectionPort.ReleaseCount.Should().Be(1);
+        target.ProjectionLease.Should().BeNull();
+        target.LiveSinkLease.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ScriptEvolutionCommandTargetBinder_ShouldReturnProjectionDisabled_WhenActivationFails()
+    {
+        var projectionPort = new TestProjectionPort { ReturnNullLease = true };
+        var binder = new ScriptEvolutionCommandTargetBinder(projectionPort);
+        var target = new ScriptEvolutionCommandTarget(
+            new TestActor("script-evolution-session:proposal-disabled"),
+            "proposal-disabled",
+            projectionPort,
+            projectionPort);
+
+        var result = await binder.BindAsync(
+            new ScriptEvolutionProposal(
+                ProposalId: "proposal-disabled",
+                ScriptId: "script-1",
+                BaseRevision: "rev-1",
+                CandidateRevision: "rev-2",
+                CandidateSource: "source-rev-2",
+                CandidateSourceHash: "hash-rev-2",
+                Reason: "rollout"),
+            target,
+            new CommandContext(
+                "script-evolution-session:proposal-disabled",
+                "cmd-1",
+                "corr-1",
+                new Dictionary<string, string>()),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(ScriptEvolutionStartError.ProjectionDisabled);
+        target.ProjectionLease.Should().BeNull();
+        projectionPort.DetachCount.Should().Be(0);
+        projectionPort.ReleaseCount.Should().Be(0);
+    }
+
     private static ProjectionScriptDefinitionSnapshotPort CreateDefinitionSnapshotPort(
         TestEventStore eventStore)
     {
@@ -1325,26 +1384,26 @@ public class RuntimeScriptInfrastructurePortsTests
         public async Task<bool> ActivateAsync(string actorId, CancellationToken ct = default) =>
             await EnsureActorProjectionAsync(actorId, actorId, ct) != null;
 
-        public Task AttachLiveSinkAsync(
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IScriptEvolutionProjectionLease lease,
             IEventSink<ScriptEvolutionSessionCompletedEvent> sink,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             _sinks[lease.ActorId] = sink;
-            return Task.CompletedTask;
+            return Task.FromResult<IAsyncDisposable?>(new TestLiveSinkLease());
         }
 
-        public Task DetachLiveSinkAsync(
-            IScriptEvolutionProjectionLease lease,
-            IEventSink<ScriptEvolutionSessionCompletedEvent> sink,
+        public async Task DetachLiveSinkAsync(
+            IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default)
         {
-            _ = sink;
             ct.ThrowIfCancellationRequested();
             DetachCount++;
-            _sinks.Remove(lease.ActorId);
-            return Task.CompletedTask;
+            if (liveSinkLease != null)
+            {
+                await liveSinkLease.DisposeAsync();
+            }
         }
 
         public Task ReleaseActorProjectionAsync(
@@ -1381,22 +1440,24 @@ public class RuntimeScriptInfrastructurePortsTests
         public async Task<bool> ActivateAsync(string actorId, CancellationToken ct = default) =>
             await EnsureActorProjectionAsync(actorId, ct) != null;
 
-        public Task AttachLiveSinkAsync(
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IScriptExecutionProjectionLease lease,
             IEventSink<EventEnvelope> sink,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
+            return Task.FromResult<IAsyncDisposable?>(new TestLiveSinkLease());
         }
 
-        public Task DetachLiveSinkAsync(
-            IScriptExecutionProjectionLease lease,
-            IEventSink<EventEnvelope> sink,
+        public async Task DetachLiveSinkAsync(
+            IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
+            if (liveSinkLease != null)
+            {
+                await liveSinkLease.DisposeAsync();
+            }
         }
 
         public Task ReleaseActorProjectionAsync(
@@ -1406,7 +1467,20 @@ public class RuntimeScriptInfrastructurePortsTests
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
+        private sealed record NoOpScriptExecutionProjectionLease(string ActorId) : IScriptExecutionProjectionLease;
     }
 
-    private sealed record NoOpScriptExecutionProjectionLease(string ActorId) : IScriptExecutionProjectionLease;
+    private sealed class TestLiveSinkLease : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private static void SetProperty(object instance, string propertyName, object? value)
+    {
+        var property = instance.GetType().GetProperty(
+            propertyName,
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+        property.Should().NotBeNull();
+        property!.SetValue(instance, value);
+    }
 }

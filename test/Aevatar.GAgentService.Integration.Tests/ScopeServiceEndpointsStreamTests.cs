@@ -822,7 +822,7 @@ public sealed class ScopeServiceEndpointsStreamTests
             return Task.FromResult<IGAgentDraftRunProjectionLease?>(new StubDraftRunProjectionLease(actorId, commandId));
         }
 
-        public async Task AttachLiveSinkAsync(
+        public async Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IGAgentDraftRunProjectionLease lease,
             IEventSink<AGUIEvent> sink,
             CancellationToken ct = default)
@@ -846,15 +846,15 @@ public sealed class ScopeServiceEndpointsStreamTests
                     break;
                 }
             }
+
+            return null;
         }
 
         public Task DetachLiveSinkAsync(
-            IGAgentDraftRunProjectionLease lease,
-            IEventSink<AGUIEvent> sink,
+            IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default)
         {
-            _ = lease;
-            _ = sink;
+            _ = liveSinkLease;
             _ = ct;
             return Task.CompletedTask;
         }
@@ -941,7 +941,7 @@ public sealed class ScopeServiceEndpointsStreamTests
             return Task.FromResult<IScriptServiceAguiProjectionLease?>(new StubScriptServiceAguiProjectionLease(actorId, runId));
         }
 
-        public async Task AttachLiveSinkAsync(
+        public async Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IScriptServiceAguiProjectionLease lease,
             IEventSink<AGUIEvent> sink,
             CancellationToken ct = default)
@@ -960,15 +960,15 @@ public sealed class ScopeServiceEndpointsStreamTests
                     break;
                 }
             }
+
+            return null;
         }
 
         public Task DetachLiveSinkAsync(
-            IScriptServiceAguiProjectionLease lease,
-            IEventSink<AGUIEvent> sink,
+            IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default)
         {
-            _ = lease;
-            _ = sink;
+            _ = liveSinkLease;
             _ = ct;
             return Task.CompletedTask;
         }

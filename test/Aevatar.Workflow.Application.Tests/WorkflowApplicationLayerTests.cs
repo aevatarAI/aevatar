@@ -288,7 +288,11 @@ public sealed class WorkflowApplicationLayerTests
             readModelActivationPort,
             actorPort,
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
-        target.BindLiveObservation(new FakeProjectionLease(actorId, commandId), new EventChannel<WorkflowRunEventEnvelope>());
+        var projectionLease = new FakeProjectionLease(actorId, commandId);
+        target.BindLiveObservation(
+            projectionLease,
+            new FakeLiveSinkLease(projectionLease),
+            new EventChannel<WorkflowRunEventEnvelope>());
         return target;
     }
 
@@ -462,7 +466,7 @@ public sealed class WorkflowApplicationLayerTests
           IWorkflowExecutionMaterializationActivationPort
     {
         public bool ProjectionEnabled => true;
-        public List<(IWorkflowExecutionProjectionLease Lease, IEventSink<WorkflowRunEventEnvelope> Sink)> DetachCalls { get; } = [];
+        public List<IAsyncDisposable?> DetachCalls { get; } = [];
         public List<IWorkflowExecutionProjectionLease> ReleaseAttempts { get; } = [];
         public List<IWorkflowExecutionProjectionLease> ReleaseCalls { get; } = [];
         public TaskCompletionSource<bool> Released { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -485,31 +489,30 @@ public sealed class WorkflowApplicationLayerTests
             CancellationToken ct = default) =>
             Task.FromResult<IWorkflowExecutionProjectionLease?>(new FakeProjectionLease(rootActorId, commandId));
 
-        public Task AttachLiveSinkAsync(
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IWorkflowExecutionProjectionLease lease,
             IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default)
         {
             if (lease is FakeProjectionLease trackingLease)
+            {
                 trackingLease.LiveSinkAttached = true;
+                return Task.FromResult<IAsyncDisposable?>(new FakeLiveSinkLease(trackingLease));
+            }
 
-            return Task.CompletedTask;
+            return Task.FromResult<IAsyncDisposable?>(null);
         }
 
         public Task DetachLiveSinkAsync(
-            IWorkflowExecutionProjectionLease lease,
-            IEventSink<WorkflowRunEventEnvelope> sink,
+            IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default)
         {
-            DetachCalls.Add((lease, sink));
-            if (DetachFailureCount > 0)
+            DetachCalls.Add(liveSinkLease);
+            if (liveSinkLease is FakeLiveSinkLease fakeLease)
             {
-                DetachFailureCount--;
-                throw DetachException ?? new InvalidOperationException("detach failed");
+                fakeLease.ProjectionLease.LiveSinkAttached = false;
+                return fakeLease.DisposeAsync().AsTask();
             }
-
-            if (lease is FakeProjectionLease trackingLease)
-                trackingLease.LiveSinkAttached = false;
 
             return Task.CompletedTask;
         }
@@ -552,6 +555,13 @@ public sealed class WorkflowApplicationLayerTests
         public string CommandId { get; }
         public bool LiveSinkAttached { get; set; } = true;
         public bool Released { get; set; }
+    }
+
+    private sealed class FakeLiveSinkLease(FakeProjectionLease projectionLease) : IAsyncDisposable
+    {
+        public FakeProjectionLease ProjectionLease { get; } = projectionLease;
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort

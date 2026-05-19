@@ -7,35 +7,37 @@ namespace Aevatar.CQRS.Core.Tests;
 public sealed class EventSinkProjectionLifecyclePortExtensionsTests
 {
     [Fact]
-    public async Task EnsureAndAttachAsync_WhenLeaseResolved_ShouldAttachViaLifecyclePort()
+    public async Task EnsureAndAttachLeaseAsync_WhenLeaseResolved_ShouldAttachViaLifecyclePort()
     {
         var sink = new TrackingEventSink();
         var lifecyclePort = new TrackingLifecyclePort();
         var lease = new TestLease("lease-1");
 
-        var resolved = await lifecyclePort.EnsureAndAttachAsync(
+        var attachment = await lifecyclePort.EnsureAndAttachLeaseAsync(
             _ => Task.FromResult<TestLease?>(lease),
             sink,
             CancellationToken.None);
 
-        resolved.Should().BeSameAs(lease);
+        attachment.Should().NotBeNull();
+        attachment!.ProjectionLease.Should().BeSameAs(lease);
+        attachment.LiveSinkLease.Should().NotBeNull();
         lifecyclePort.AttachCalls.Should().Be(1);
         lifecyclePort.ReleaseCalls.Should().Be(0);
         sink.DisposeCalls.Should().Be(0);
     }
 
     [Fact]
-    public async Task EnsureAndAttachAsync_WhenLeaseIsNull_ShouldDisposeSink()
+    public async Task EnsureAndAttachLeaseAsync_WhenLeaseIsNull_ShouldDisposeSink()
     {
         var sink = new TrackingEventSink();
         var lifecyclePort = new TrackingLifecyclePort();
 
-        var resolved = await lifecyclePort.EnsureAndAttachAsync(
+        var attachment = await lifecyclePort.EnsureAndAttachLeaseAsync(
             _ => Task.FromResult<TestLease?>(null),
             sink,
             CancellationToken.None);
 
-        resolved.Should().BeNull();
+        attachment.Should().BeNull();
         lifecyclePort.AttachCalls.Should().Be(0);
         lifecyclePort.ReleaseCalls.Should().Be(0);
         sink.DisposeCalls.Should().Be(1);
@@ -51,6 +53,7 @@ public sealed class EventSinkProjectionLifecyclePortExtensionsTests
 
         await lifecyclePort.DetachReleaseAndDisposeAsync(
             lease,
+            new TrackingAsyncDisposable(),
             sink,
             () =>
             {
@@ -75,19 +78,18 @@ public sealed class EventSinkProjectionLifecyclePortExtensionsTests
         public int ReleaseCalls { get; private set; }
         public bool ProjectionEnabled => true;
 
-        public Task AttachLiveSinkAsync(TestLease lease, IEventSink<string> sink, CancellationToken ct = default)
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(TestLease lease, IEventSink<string> sink, CancellationToken ct = default)
         {
             _ = lease;
             _ = sink;
             ct.ThrowIfCancellationRequested();
             AttachCalls++;
-            return Task.CompletedTask;
+            return Task.FromResult<IAsyncDisposable?>(new TrackingAsyncDisposable());
         }
 
-        public Task DetachLiveSinkAsync(TestLease lease, IEventSink<string> sink, CancellationToken ct = default)
+        public Task DetachLiveSinkAsync(IAsyncDisposable? liveSinkLease, CancellationToken ct = default)
         {
-            _ = lease;
-            _ = sink;
+            _ = liveSinkLease;
             ct.ThrowIfCancellationRequested();
             DetachCalls++;
             return Task.CompletedTask;
@@ -100,6 +102,11 @@ public sealed class EventSinkProjectionLifecyclePortExtensionsTests
             ReleaseCalls++;
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class TrackingAsyncDisposable : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class TrackingEventSink : IEventSink<string>

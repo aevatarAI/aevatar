@@ -34,11 +34,11 @@ internal static class NyxIdChatStreamingRunner
             await writer.WriteRunStartedAsync(actorId, ct);
 
             var eventChannel = new EventChannel<AGUIEvent>();
-            var projectionLease = await projectionPort.EnsureAndAttachAsync(
+            var attachment = await projectionPort.EnsureAndAttachLeaseAsync(
                 token => projectionPort.EnsureChatProjectionAsync(actorId, messageId, token),
                 eventChannel,
                 ct);
-            if (projectionLease == null)
+            if (attachment == null)
                 throw new InvalidOperationException("NyxID chat projection pipeline is unavailable.");
 
             // Refactor (iter1/cluster-004):
@@ -71,7 +71,8 @@ internal static class NyxIdChatStreamingRunner
             finally
             {
                 await projectionPort.DetachReleaseAndDisposeAsync(
-                    projectionLease,
+                    attachment.ProjectionLease,
+                    attachment.LiveSinkLease,
                     eventChannel,
                     null,
                     CancellationToken.None);
