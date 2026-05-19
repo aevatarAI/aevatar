@@ -451,7 +451,7 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
-    public async Task Remote_session_signals_should_not_forward_audio_or_publish_audio_outputs()
+    public async Task Remote_session_signals_should_not_publish_audio_outputs()
     {
         var provider = new RecordingVoiceProvider();
         var module = CreateModule(provider);
@@ -466,18 +466,6 @@ public class VoicePresenceModuleTests
                 SessionId = "remote-1",
             },
         }), ctx, CancellationToken.None);
-
-        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
-        {
-            ModuleName = "voice_presence",
-            RemoteAudioInputReceived = new VoiceRemoteAudioInputReceived
-            {
-                SessionId = "remote-1",
-                Pcm16 = ByteString.CopyFrom([5, 6]),
-            },
-        }), ctx, CancellationToken.None);
-
-        provider.AudioFrames.ShouldBeEmpty();
 
         await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
         {
@@ -718,15 +706,6 @@ public class VoicePresenceModuleTests
         await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
         {
             ModuleName = "voice_presence",
-            RemoteAudioInputReceived = new VoiceRemoteAudioInputReceived
-            {
-                SessionId = "other",
-                Pcm16 = ByteString.CopyFrom([1, 2]),
-            },
-        }), ctx, CancellationToken.None);
-        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
-        {
-            ModuleName = "voice_presence",
             RemoteControlInputReceived = new VoiceRemoteControlInputReceived
             {
                 SessionId = "other",
@@ -734,18 +713,6 @@ public class VoicePresenceModuleTests
                 {
                     DrainAcknowledged = new VoiceDrainAcknowledged { ResponseId = 1, PlayoutSequence = 2 },
                 },
-            },
-        }), ctx, CancellationToken.None);
-
-        provider.AudioFrames.ShouldBeEmpty();
-
-        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
-        {
-            ModuleName = "voice_presence",
-            RemoteAudioInputReceived = new VoiceRemoteAudioInputReceived
-            {
-                SessionId = "remote-1",
-                Pcm16 = ByteString.CopyFrom([3, 4]),
             },
         }), ctx, CancellationToken.None);
         await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal

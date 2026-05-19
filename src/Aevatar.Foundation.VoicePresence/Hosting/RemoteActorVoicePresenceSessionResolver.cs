@@ -178,17 +178,7 @@ public sealed class RemoteActorVoicePresenceSessionResolver : IVoicePresenceSess
                 await foreach (var frame in state.Transport.ReceiveFramesAsync(state.RelayCancellation.Token))
                 {
                     if (frame.IsAudio)
-                    {
-                        if (frame.AudioPcm16.IsEmpty)
-                            continue;
-
-                        await DispatchAsync(new VoiceRemoteAudioInputReceived
-                        {
-                            SessionId = state.SessionId,
-                            Pcm16 = ByteString.CopyFrom(frame.AudioPcm16.Span),
-                        }, state.RelayCancellation.Token);
                         continue;
-                    }
 
                     if (frame.Control == null)
                         continue;
@@ -224,17 +214,6 @@ public sealed class RemoteActorVoicePresenceSessionResolver : IVoicePresenceSess
 
             switch (output.OutputCase)
             {
-                case VoiceRemoteTransportOutput.OutputOneofCase.AudioOutput:
-                    try
-                    {
-                        await state.Transport.SendAudioAsync(output.AudioOutput.Pcm16.Memory, CancellationToken.None);
-                    }
-                    catch
-                    {
-                        await ReleaseStateAsync(state, dispatchCloseRequest: true, awaitRelayCompletion: false);
-                    }
-
-                    break;
                 case VoiceRemoteTransportOutput.OutputOneofCase.SessionClosed:
                     await ReleaseStateAsync(state, dispatchCloseRequest: false, awaitRelayCompletion: false);
                     break;

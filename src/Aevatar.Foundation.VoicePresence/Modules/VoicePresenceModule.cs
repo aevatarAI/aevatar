@@ -150,11 +150,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             case VoiceModuleSignal.SignalOneofCase.RemoteSessionCloseRequested:
                 await HandleRemoteSessionCloseRequestedAsync(signal.RemoteSessionCloseRequested, ctx, ct);
                 break;
-            case VoiceModuleSignal.SignalOneofCase.RemoteAudioInputReceived:
-                // Refactor (iter15/cluster-026-voice-provider-background-state):
-                //   Old pattern: remote host PCM was forwarded through EventEnvelope into the provider.
-                //   New principle: host-origin PCM stays off EventEnvelope until a raw transport path exists.
-                break;
             case VoiceModuleSignal.SignalOneofCase.RemoteControlInputReceived:
                 await HandleRemoteControlInputReceivedAsync(signal.RemoteControlInputReceived, ct);
                 break;

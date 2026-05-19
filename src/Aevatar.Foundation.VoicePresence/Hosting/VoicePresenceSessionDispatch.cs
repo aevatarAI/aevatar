@@ -63,9 +63,6 @@ internal static class VoicePresenceSessionDispatch
             case VoiceRemoteSessionCloseRequested closeRequested:
                 signal.RemoteSessionCloseRequested = closeRequested.Clone();
                 break;
-            case VoiceRemoteAudioInputReceived audioInput:
-                signal.RemoteAudioInputReceived = audioInput.Clone();
-                break;
             case VoiceRemoteControlInputReceived controlInput:
                 signal.RemoteControlInputReceived = controlInput.Clone();
                 break;

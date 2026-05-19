@@ -457,6 +457,9 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
         !string.IsNullOrWhiteSpace(choice.Audio) &&
         string.Equals(choice.Text?.Trim(), "assistant:", StringComparison.Ordinal);
 
+    // Refactor (iter15/cluster-026-voice-provider-background-state):
+    //   Old pattern: MiniCPM fallback ids doubled as actor response epochs inside the provider loop.
+    //   New principle: provider fallback ids are provider-local correlation keys; VoicePresenceModule allocates actor response ids.
     private static string ResolveProviderResponseId(MiniCPMCompletionsFrame frame) =>
         frame.ResponseId is > 0
             ? frame.ResponseId.GetValueOrDefault().ToString(System.Globalization.CultureInfo.InvariantCulture)
