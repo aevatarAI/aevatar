@@ -5,7 +5,7 @@ PR: `{{pr_number}}`，失败 check: `{{check_name}}`，run url: `{{run_url}}`。
 
 ## 必读
 
-1. `/Users/auric/aevatar/CLAUDE.md`
+1. `$REPO_ROOT/CLAUDE.md`
 2. 失败日志：`{{failure_log_path}}` —— 完整 stderr/stdout 的最后 200-1000 行
 3. 最近 commits（可能引入失败的）：通过 `git log --oneline -10 origin/{{base_branch}}..HEAD` 查看
 4. 失败 check 对应的本地 job 脚本（如有，位于 `.github/workflows/`）
@@ -39,7 +39,7 @@ PR: `{{pr_number}}`，失败 check: `{{check_name}}`，run url: `{{run_url}}`。
    - `git add -A && git status`
    - **不 commit**（controller 处理）
 
-6. 摘要写入 `/Users/auric/aevatar/.refactor-loop/runs/remote-ci-fix-{{check_name}}-{{sha_short}}.md`：
+6. 摘要写入 `$REPO_ROOT/.refactor-loop/runs/remote-ci-fix-{{check_name}}-{{sha_short}}.md`：
    - 根因分析
    - 改动文件列表
    - 本地复现/验证命令
@@ -49,7 +49,7 @@ PR: `{{pr_number}}`，失败 check: `{{check_name}}`，run url: `{{run_url}}`。
 
 ## 红线
 
-- worktree 外**唯一可写**：`/Users/auric/aevatar/.refactor-loop/runs/remote-ci-fix-{{check_name}}-{{sha_short}}.md`
+- worktree 外**唯一可写**：`$REPO_ROOT/.refactor-loop/runs/remote-ci-fix-{{check_name}}-{{sha_short}}.md`
 - 禁止 commit/push/checkout/install
 - 禁止 disable 测试或加 `[Skip]` 让 CI 绿
 - 禁止改 worktree 外的其它 cluster 工作

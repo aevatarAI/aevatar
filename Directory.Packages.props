@@ -16,7 +16,11 @@
     <!-- Refactor (iter13/cluster-023):
          Old: 1.15.0 triggered NU1902 vulnerable-package warnings on production hosts
          (GHSA-g94r-2vxg-569j, GHSA-4625-4j76-fww9, GHSA-mr8r-92fq-pj8p, GHSA-q834-8qmm-v933).
-         New: bump to same-line patch 1.15.3 (no API change) to clear advisories. -->
+         New: the security-critical core/exporter packages are individually pinned to
+         1.15.3 in the ItemGroup below (see the OpenTelemetry comment there). This
+         variable stays at 1.15.1 — the highest patch shared by the packages that have
+         no 1.15.3 release (Instrumentation.Runtime, Exporter.Prometheus.AspNetCore);
+         it is NOT the advisory-clearing version. -->
     <OpenTelemetryVersion>1.15.1</OpenTelemetryVersion>
     <!-- MassTransit (pinned to v8.x; do not upgrade to v9 without explicit architecture decision) -->
     <MassTransitVersion>8.5.7</MassTransitVersion>

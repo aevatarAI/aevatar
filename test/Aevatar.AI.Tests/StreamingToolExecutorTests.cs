@@ -385,6 +385,32 @@ public class StreamingToolExecutorTests
         results[0].Result.Should().Contain("not found");
     }
 
+    [Fact]
+    public async Task CoordinatorFault_ShouldSurfaceToCaller_NotHang()
+    {
+        // Fix (pr678-review): the coordinator loop was started fire-and-forget, so a fault
+        // inside it left GetRemainingResultsAsync awaiting a completion that was never set.
+        // A tool whose IsReadOnly getter throws forces the coordinator loop to fault; the
+        // caller must observe that fault instead of hanging forever.
+        var tools = new ToolManager();
+        tools.Register(new FaultingTool("boom"));
+
+        using var executor = new StreamingToolExecutor(tools);
+        executor.AddTool(new ToolCall { Id = "tc-1", Name = "boom", ArgumentsJson = "{}" });
+
+        // Safety net: with the fix the fault surfaces in milliseconds; without it this
+        // await would hang indefinitely, so the linked timeout bounds a regression.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        var drain = async () =>
+        {
+            await foreach (var _ in executor.GetRemainingResultsAsync(timeout.Token)) { }
+        };
+
+        (await drain.Should().ThrowAsync<InvalidOperationException>())
+            .Which.Message.Should().Contain("injected coordinator fault");
+    }
+
     // ─── Test helpers ───
 
     private sealed class ConcurrencyTrackingTool : IAgentTool
@@ -418,6 +444,17 @@ public class StreamingToolExecutorTests
         public string ParametersSchema => "{}";
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult(execute(argumentsJson));
+    }
+
+    private sealed class FaultingTool(string name) : IAgentTool
+    {
+        public string Name => name;
+        public string Description => "faulting";
+        public string ParametersSchema => "{}";
+        // Read by the coordinator's HandleToolDiscovered — throwing here faults the loop.
+        public bool IsReadOnly => throw new InvalidOperationException("injected coordinator fault");
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("unreachable");
     }
 
     private sealed class DelegateToolCallMiddleware(

@@ -36,6 +36,10 @@ public sealed class StreamingToolExecutor : IDisposable
     private readonly Channel<ToolExecutionResult> _readyResults = Channel.CreateUnbounded<ToolExecutionResult>(
         new UnboundedChannelOptions { SingleReader = false, SingleWriter = true });
     private readonly CancellationTokenSource _discardCts = new();
+    // Fix (pr678-review): the coordinator loop was started fire-and-forget (`_ = RunCoordinatorAsync()`),
+    //   so a fault inside it was unobserved and silently stopped all tool processing — callers blocked
+    //   in GetRemainingResultsAsync would then hang forever. Keep the task so faults stay observable.
+    private readonly Task _coordinatorTask;
 
     public StreamingToolExecutor(
         ToolManager tools,
@@ -47,7 +51,7 @@ public sealed class StreamingToolExecutor : IDisposable
         _hooks = hooks;
         _toolMiddlewares = toolMiddlewares ?? [];
         _requestMetadata = requestMetadata;
-        _ = RunCoordinatorAsync();
+        _coordinatorTask = RunCoordinatorAsync();
     }
 
     /// <summary>
@@ -115,6 +119,13 @@ public sealed class StreamingToolExecutor : IDisposable
     {
         Discard();
         _signals.Writer.TryComplete();
+        // Observe a faulted coordinator task so its exception is not re-raised
+        // unobserved on the finalizer thread after the executor is disposed.
+        _coordinatorTask.ContinueWith(
+            static t => _ = t.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
         _discardCts.Dispose();
     }
 
@@ -284,7 +295,19 @@ public sealed class StreamingToolExecutor : IDisposable
         var completion = new TaskCompletionSource<ExecutorStateSnapshot>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         await _signals.Writer.WriteAsync(new StateRequestSignal(completion), ct);
-        return await completion.Task.WaitAsync(ct);
+
+        // Fix (pr678-review): if the coordinator loop has faulted or stopped, completion.Task
+        //   would never be set and this await would hang until ct fires. Race the request
+        //   against the coordinator task so a fault surfaces to the caller instead.
+        var finished = await Task.WhenAny(completion.Task, _coordinatorTask).WaitAsync(ct);
+        if (finished == _coordinatorTask)
+        {
+            await _coordinatorTask; // observe / rethrow the coordinator fault, if any
+            throw new InvalidOperationException(
+                "StreamingToolExecutor coordinator stopped before the state request was served.");
+        }
+
+        return await completion.Task;
     }
 
     private void PostSignal(CoordinatorSignal signal) => _signals.Writer.TryWrite(signal);

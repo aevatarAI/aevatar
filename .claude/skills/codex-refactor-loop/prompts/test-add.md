@@ -4,9 +4,9 @@ worktree: `{{worktree_path}}`，分支 `{{branch}}`。
 
 ## 必读
 
-1. `/Users/auric/aevatar/CLAUDE.md` 全部强制条款（含 "Codex CLI 调用规范"、"测试与质量门禁"）。
-2. `/Users/auric/aevatar/.refactor-loop/runs/audit-iter-N.md` 中 `{{cluster_id}}` 一节
-3. `/Users/auric/aevatar/.refactor-loop/runs/implement-{{cluster_id}}.md`
+1. `$REPO_ROOT/CLAUDE.md` 全部强制条款（含 "Codex CLI 调用规范"、"测试与质量门禁"）。
+2. `$REPO_ROOT/.refactor-loop/runs/audit-iter-N.md` 中 `{{cluster_id}}` 一节
+3. `$REPO_ROOT/.refactor-loop/runs/implement-{{cluster_id}}.md`
 4. **未覆盖行报告**：以下文件:行号 是 codecov 标记为 patch miss/partial 的位置：
 
 ```
@@ -56,7 +56,7 @@ worktree: `{{worktree_path}}`，分支 `{{branch}}`。
    dotnet test {{primary_test_project_csproj}} --nologo --collect:"XPlat Code Coverage" \
      --settings <coverlet.runsettings if exists> 2>&1 | tail -5
    ```
-7. 跑 `bash /Users/auric/aevatar/tools/ci/test_stability_guards.sh` —— 必须通过（禁 `Task.Delay` 等）。
+7. 跑 `bash $REPO_ROOT/tools/ci/test_stability_guards.sh` —— 必须通过（禁 `Task.Delay` 等）。
 8. `git add -A && git status`。
 9. **不 commit**。
 10. 摘要写入 `$REPO_ROOT/.refactor-loop/runs/test-add-{{cluster_id}}.md`：
