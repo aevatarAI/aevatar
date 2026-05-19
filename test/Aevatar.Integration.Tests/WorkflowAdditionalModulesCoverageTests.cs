@@ -1,7 +1,10 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Modules;
@@ -1781,6 +1784,74 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
+    public async Task LlmCallModule_ShouldForwardTypedRuntimeMetadataOverrides()
+    {
+        var module = new LLMCallModule();
+        var ctx = CreateContext();
+        WorkflowRequestMetadataItemsAccess.SetRequestMetadata(
+            (IWorkflowExecutionStateHost)ctx.Agent,
+            new Dictionary<string, string>
+            {
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = " token-123 ",
+                [LLMRequestMetadataKeys.ModelOverride] = " model-main ",
+                [LLMRequestMetadataKeys.NyxIdRoutePreference] = " route-fast ",
+                ["trace-id"] = " trace-abc ",
+            });
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "llm-runtime-metadata",
+                StepType = "llm_call",
+                RunId = "run-runtime-metadata",
+                Input = "hello metadata",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var chatRequest = ctx.Published.Select(x => x.evt).OfType<ChatRequestEvent>().Single();
+        chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("token-123");
+        chatRequest.Metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("model-main");
+        chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("route-fast");
+        chatRequest.Metadata["trace-id"].Should().Be("trace-abc");
+    }
+
+    [Fact]
+    public async Task ConnectorCallModule_ShouldForwardTypedRuntimeAuthorizationToConnectorRequest()
+    {
+        var connector = new RecordingConnector("runtime-auth");
+        var module = new ConnectorCallModule(new FixedWorkflowConnectorResolver(connector));
+        var ctx = CreateContext();
+        WorkflowRequestMetadataItemsAccess.SetRequestMetadata(
+            (IWorkflowExecutionStateHost)ctx.Agent,
+            new Dictionary<string, string>
+            {
+                [ConnectorRequest.HttpAuthorizationMetadataKey] = " Bearer token-123 ",
+            });
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "connector-runtime-auth",
+                StepType = "connector_call",
+                RunId = "run-runtime-auth",
+                Input = "payload",
+                Parameters =
+                {
+                    ["connector"] = "runtime-auth",
+                    ["operation"] = "invoke",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        connector.LastRequest.Should().NotBeNull();
+        connector.LastRequest!.Metadata.Should().Contain(
+            ConnectorRequest.HttpAuthorizationMetadataKey,
+            "Bearer token-123");
+    }
+
+    [Fact]
     public async Task EvaluateAndReflectModules_ShouldDispatchViaAgentType()
     {
         var runtime = new RecordingActorRuntimeForAgentType();
@@ -2379,6 +2450,40 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<System.Type>>([]);
         public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class FixedWorkflowConnectorResolver(IConnector connector) : IWorkflowConnectorResolver
+    {
+        public ValueTask<IConnector?> ResolveAsync(
+            IWorkflowExecutionContext context,
+            string connectorName,
+            CancellationToken ct = default)
+        {
+            _ = context;
+            _ = connectorName;
+            ct.ThrowIfCancellationRequested();
+            return ValueTask.FromResult<IConnector?>(connector);
+        }
+    }
+
+    private sealed class RecordingConnector(string name) : IConnector
+    {
+        public string Name { get; } = name;
+
+        public string Type => "test";
+
+        public ConnectorRequest? LastRequest { get; private set; }
+
+        public Task<ConnectorResponse> ExecuteAsync(ConnectorRequest request, CancellationToken ct = default)
+        {
+            _ = ct;
+            LastRequest = request;
+            return Task.FromResult(new ConnectorResponse
+            {
+                Success = true,
+                Output = "ok",
+            });
+        }
     }
 
     private static TestEventHandlerContext CreateContext(IServiceProvider? services = null)

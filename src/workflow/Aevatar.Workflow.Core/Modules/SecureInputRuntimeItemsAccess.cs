@@ -5,11 +5,6 @@ namespace Aevatar.Workflow.Core.Modules;
 
 internal static class SecureInputRuntimeItemsAccess
 {
-    // Refactor (iter16/cluster-031):
-    //   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
-    //                bag for request metadata, LLM overrides, authorization, secure values
-    //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
-    //                  no facts seam, no proto change
     public static void SetCapturedValue(
         IWorkflowExecutionContext ctx,
         string? runId,
@@ -20,11 +15,6 @@ internal static class SecureInputRuntimeItemsAccess
         GetRuntimeContext(ctx).CapturedSecureInputs.Set(runId, variable, value);
     }
 
-    // Refactor (iter16/cluster-031):
-    //   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
-    //                bag for request metadata, LLM overrides, authorization, secure values
-    //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
-    //                  no facts seam, no proto change
     public static bool TryGetCapturedValue(
         IWorkflowExecutionContext ctx,
         string? runId,
@@ -41,11 +31,6 @@ internal static class SecureInputRuntimeItemsAccess
         return runtimeAccessor.RuntimeContext.CapturedSecureInputs.TryGet(runId, variable, out value);
     }
 
-    // Refactor (iter16/cluster-031):
-    //   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
-    //                bag for request metadata, LLM overrides, authorization, secure values
-    //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
-    //                  no facts seam, no proto change
     public static bool RemoveCapturedValue(
         IWorkflowExecutionContext ctx,
         string? runId,
@@ -58,11 +43,6 @@ internal static class SecureInputRuntimeItemsAccess
         return runtimeAccessor.RuntimeContext.CapturedSecureInputs.Remove(runId, variable);
     }
 
-    // Refactor (iter16/cluster-031):
-    //   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
-    //                bag for request metadata, LLM overrides, authorization, secure values
-    //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
-    //                  no facts seam, no proto change
     public static void RemoveRun(
         IWorkflowExecutionContext ctx,
         string? runId)

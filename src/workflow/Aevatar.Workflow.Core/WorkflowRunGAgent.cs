@@ -26,7 +26,7 @@ namespace Aevatar.Workflow.Core;
 //   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
 //                bag for request metadata, LLM overrides, authorization, secure values
 //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
-//                  no facts seam, no proto change
+//                  runtime-only values stay non-durable, with no proto/state migration in this cluster.
 public sealed class WorkflowRunGAgent
     : GAgentBase<WorkflowRunState>,
       IWorkflowExecutionStateHost

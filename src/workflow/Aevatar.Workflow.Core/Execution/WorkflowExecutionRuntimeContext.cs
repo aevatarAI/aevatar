@@ -4,6 +4,11 @@ using Aevatar.Workflow.Core.Primitives;
 
 namespace Aevatar.Workflow.Core.Execution;
 
+// Refactor (iter16/cluster-031):
+//   Old pattern: helper code discovered the actor-owned Dictionary<string, object?>
+//                runtime bag through a generic items context.
+//   New principle: workflow execution code depends on a typed actor-owned
+//                  runtime context accessor instead of string-key item lookup.
 internal interface IWorkflowExecutionRuntimeContextAccessor
 {
     WorkflowExecutionRuntimeContext RuntimeContext { get; }
@@ -13,7 +18,7 @@ internal interface IWorkflowExecutionRuntimeContextAccessor
 //   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
 //                bag for request metadata, LLM overrides, authorization, secure values
 //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
-//                  no facts seam, no proto change
+//                  runtime-only values stay non-durable, with no proto/state migration in this cluster.
 internal sealed class WorkflowExecutionRuntimeContext
 {
     private static readonly HashSet<string> RuntimeControlMetadataKeys = new(StringComparer.Ordinal)
@@ -32,11 +37,6 @@ internal sealed class WorkflowExecutionRuntimeContext
 
     public CapturedSecureInputs CapturedSecureInputs { get; } = new();
 
-    // Refactor (iter16/cluster-031):
-    //   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
-    //                bag for request metadata, LLM overrides, authorization, secure values
-    //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
-    //                  no facts seam, no proto change
     public void Clear()
     {
         LlmOverrides.Clear();
@@ -45,11 +45,6 @@ internal sealed class WorkflowExecutionRuntimeContext
         CapturedSecureInputs.Clear();
     }
 
-    // Refactor (iter16/cluster-031):
-    //   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
-    //                bag for request metadata, LLM overrides, authorization, secure values
-    //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
-    //                  no facts seam, no proto change
     public void ApplyRequestMetadata(IReadOnlyDictionary<string, string>? metadata)
     {
         LlmOverrides.Clear();
@@ -99,11 +94,6 @@ internal sealed class WorkflowExecutionRuntimeContext
         string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
 }
 
-// Refactor (iter16/cluster-031):
-//   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
-//                bag for request metadata, LLM overrides, authorization, secure values
-//   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
-//                  no facts seam, no proto change
 internal sealed class WorkflowLlmRuntimeOverrides
 {
     public string? NyxIdAccessToken { get; set; }
@@ -120,11 +110,6 @@ internal sealed class WorkflowLlmRuntimeOverrides
     }
 }
 
-// Refactor (iter16/cluster-031):
-//   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
-//                bag for request metadata, LLM overrides, authorization, secure values
-//   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
-//                  no facts seam, no proto change
 internal sealed class WorkflowConnectorRuntimeContext
 {
     public string? Authorization { get; set; }
@@ -135,11 +120,6 @@ internal sealed class WorkflowConnectorRuntimeContext
     }
 }
 
-// Refactor (iter16/cluster-031):
-//   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
-//                bag for request metadata, LLM overrides, authorization, secure values
-//   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
-//                  no facts seam, no proto change
 internal sealed class WorkflowRequestPassthroughMetadata
 {
     private readonly Dictionary<string, string> _values = new(StringComparer.Ordinal);
@@ -156,11 +136,6 @@ internal sealed class WorkflowRequestPassthroughMetadata
     public void Clear() => _values.Clear();
 }
 
-// Refactor (iter16/cluster-031):
-//   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
-//                bag for request metadata, LLM overrides, authorization, secure values
-//   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
-//                  no facts seam, no proto change
 internal sealed class CapturedSecureInputs
 {
     private readonly Dictionary<CapturedSecureInputKey, string> _values = new();
@@ -228,6 +203,11 @@ internal sealed class CapturedSecureInputs
     }
 }
 
+// Refactor (iter16/cluster-031):
+//   Old pattern: captured secure input values used string-composed keys such as
+//                "{runId}::{variable}" inside the generic execution item bag.
+//   New principle: secure input capture uses a typed key in the actor-owned
+//                  non-durable runtime context.
 internal readonly record struct CapturedSecureInputKey(
     string RunId,
     string Variable);

@@ -5,11 +5,6 @@ namespace Aevatar.Workflow.Core.Execution;
 
 internal static class ConnectorAuthorizationRuntimeItemsAccess
 {
-    // Refactor (iter16/cluster-031):
-    //   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
-    //                bag for request metadata, LLM overrides, authorization, secure values
-    //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
-    //                  no facts seam, no proto change
     public static void SetAuthorization(
         IWorkflowExecutionStateHost stateHost,
         string? authorization)
@@ -19,22 +14,12 @@ internal static class ConnectorAuthorizationRuntimeItemsAccess
             string.IsNullOrWhiteSpace(authorization) ? null : authorization.Trim();
     }
 
-    // Refactor (iter16/cluster-031):
-    //   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
-    //                bag for request metadata, LLM overrides, authorization, secure values
-    //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
-    //                  no facts seam, no proto change
     public static void RemoveAuthorization(IWorkflowExecutionStateHost stateHost)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
         stateHost.RuntimeContext.Connector.Authorization = null;
     }
 
-    // Refactor (iter16/cluster-031):
-    //   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
-    //                bag for request metadata, LLM overrides, authorization, secure values
-    //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
-    //                  no facts seam, no proto change
     public static bool TryGetAuthorization(
         IWorkflowExecutionContext ctx,
         out string authorization)
