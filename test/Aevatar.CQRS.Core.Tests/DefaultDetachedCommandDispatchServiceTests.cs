@@ -14,8 +14,7 @@ public sealed class DefaultDetachedCommandDispatchServiceTests
         var service = new DefaultDetachedCommandDispatchService<string, DetachedTestTarget, DetachedReceipt, string, string, string, string>(
             new DetachedPipeline(CommandTargetResolution<CommandDispatchExecution<DetachedTestTarget, DetachedReceipt>, string>.Failure("dispatch_failed")),
             new DetachedOutputStream(),
-            new DetachedCompletionPolicy(),
-            new DetachedDurableResolver(CommandDurableCompletionObservation<string>.Incomplete));
+            new DetachedCompletionPolicy());
 
         var result = await service.DispatchAsync("command-1", CancellationToken.None);
 
@@ -24,7 +23,7 @@ public sealed class DefaultDetachedCommandDispatchServiceTests
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldDrainInBackground_AndReleaseTarget()
+    public async Task DispatchAsync_ShouldPublishCompletionSignal_WithoutReleasingTarget()
     {
         var sink = new EventChannel<string>();
         sink.Push("progress");
@@ -44,18 +43,17 @@ public sealed class DefaultDetachedCommandDispatchServiceTests
                     Receipt = receipt,
                 })),
             outputStream,
-            new DetachedCompletionPolicy(),
-            new DetachedDurableResolver(CommandDurableCompletionObservation<string>.Incomplete));
+            new DetachedCompletionPolicy());
 
         var result = await service.DispatchAsync("command-1", CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
         result.Receipt.Should().Be(receipt);
         await outputStream.PumpStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await target.ReleaseObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        target.ReleaseCalls.Should().ContainSingle();
-        target.ReleaseCalls[0].Cleanup.ObservedCompleted.Should().BeTrue();
-        target.ReleaseCalls[0].Cleanup.ObservedCompletion.Should().Be("completed");
+        await target.SignalObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        target.Signals.Should().ContainSingle();
+        target.Signals[0].Should().Be(new DetachedCommandCompleted<DetachedReceipt, string>(receipt, "completed"));
+        target.ReleaseCalls.Should().BeEmpty();
     }
 
     [Fact]
@@ -79,7 +77,6 @@ public sealed class DefaultDetachedCommandDispatchServiceTests
                 })),
             outputStream,
             new DetachedCompletionPolicy(),
-            new DetachedDurableResolver(CommandDurableCompletionObservation<string>.Incomplete),
             shutdownSignal: new TestShutdownSignal(cts.Token));
 
         await service.DispatchAsync("command-2", CancellationToken.None);
@@ -87,9 +84,10 @@ public sealed class DefaultDetachedCommandDispatchServiceTests
 
         cts.Cancel();
 
-        await target.ReleaseObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        target.ReleaseCalls.Should().ContainSingle();
-        target.ReleaseCalls[0].Cleanup.ObservedCompleted.Should().BeFalse();
+        await target.SignalObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        target.Signals.Should().ContainSingle();
+        target.Signals[0].Should().BeOfType<DetachedCommandTimeout<DetachedReceipt, string>>();
+        target.ReleaseCalls.Should().BeEmpty();
     }
 
     [Fact]
@@ -110,17 +108,29 @@ public sealed class DefaultDetachedCommandDispatchServiceTests
                     Context = new CommandContext("target-3", "cmd-3", "corr-3", new Dictionary<string, string>()),
                     Envelope = new Aevatar.Foundation.Abstractions.EventEnvelope { Id = "env-3" },
                     Receipt = receipt,
-                })),
+            })),
             new DetachedOutputStream(),
-            new DetachedCompletionPolicy(),
-            new DetachedDurableResolver(CommandDurableCompletionObservation<string>.Incomplete));
+            new DetachedCompletionPolicy());
 
         await service.DispatchAsync("command-3", CancellationToken.None);
 
         await service.DisposeAsync();
 
-        target.ReleaseCalls.Should().ContainSingle();
-        target.ReleaseCalls[0].Cleanup.ObservedCompleted.Should().BeTrue();
+        target.Signals.Should().ContainSingle();
+        target.Signals[0].Should().Be(new DetachedCommandCompleted<DetachedReceipt, string>(receipt, "ok"));
+        target.ReleaseCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Source_ShouldNotUseTaskRunForDetachedBusinessProgression()
+    {
+        var source = File.ReadAllText(
+            Path.Combine(
+                FindRepositoryRoot(),
+                "src/Aevatar.CQRS.Core/Commands/DefaultDetachedCommandDispatchService.cs"));
+
+        source.Should().NotContain("Task.Run");
+        source.Should().Contain("Refactor (iter17/cluster-036): Detached workers only publish completion signals; business cleanup via continuation contract.");
     }
 
     private sealed record TestShutdownSignal(CancellationToken ShutdownToken) : ICommandDispatchShutdownSignal;
@@ -129,12 +139,15 @@ public sealed class DefaultDetachedCommandDispatchServiceTests
 
     private sealed class DetachedTestTarget(string targetId, IEventSink<string> sink)
         : ICommandEventTarget<string>,
-          ICommandInteractionCleanupTarget<DetachedReceipt, string>
+          ICommandInteractionCleanupTarget<DetachedReceipt, string>,
+          ICommandDetachedContinuationTarget<DetachedReceipt, string>
     {
         public string TargetId { get; } = targetId;
 
         public List<(DetachedReceipt Receipt, CommandInteractionCleanupContext<string> Cleanup)> ReleaseCalls { get; } = [];
         public TaskCompletionSource<bool> ReleaseObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public List<DetachedCommandSignal<DetachedReceipt, string>> Signals { get; } = [];
+        public TaskCompletionSource<bool> SignalObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public IEventSink<string> RequireLiveSink() => sink;
 
@@ -145,6 +158,16 @@ public sealed class DefaultDetachedCommandDispatchServiceTests
         {
             ReleaseCalls.Add((receipt, cleanup));
             ReleaseObserved.TrySetResult(true);
+            return Task.CompletedTask;
+        }
+
+        public Task PublishDetachedCommandSignalAsync(
+            DetachedCommandSignal<DetachedReceipt, string> signal,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Signals.Add(signal);
+            SignalObserved.TrySetResult(true);
             return Task.CompletedTask;
         }
     }
@@ -233,17 +256,17 @@ public sealed class DefaultDetachedCommandDispatchServiceTests
         }
     }
 
-    private sealed class DetachedDurableResolver(
-        CommandDurableCompletionObservation<string> observation)
-        : ICommandDurableCompletionResolver<DetachedReceipt, string>
+    private static string FindRepositoryRoot()
     {
-        public Task<CommandDurableCompletionObservation<string>> ResolveAsync(
-            DetachedReceipt receipt,
-            CancellationToken ct = default)
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory != null)
         {
-            _ = receipt;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(observation);
+            if (File.Exists(Path.Combine(directory.FullName, "aevatar.slnx")))
+                return directory.FullName;
+
+            directory = directory.Parent;
         }
+
+        throw new InvalidOperationException("Repository root could not be found.");
     }
 }

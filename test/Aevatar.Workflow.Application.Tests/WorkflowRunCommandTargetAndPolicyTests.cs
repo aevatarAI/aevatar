@@ -211,7 +211,8 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
             createdActorIds ?? [],
             projectionPort,
             projectionPort,
-            actorPort);
+            actorPort,
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
     }
 
     private sealed class FakeProjectionPort

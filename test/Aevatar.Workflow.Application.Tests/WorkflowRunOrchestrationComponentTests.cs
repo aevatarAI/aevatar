@@ -18,7 +18,8 @@ public sealed class WorkflowRunOrchestrationComponentTests
             actorResolver,
             new FakeProjectionPort { ProjectionEnabled = false },
             new FakeProjectionPort { ProjectionEnabled = false },
-            new FakeWorkflowRunActorPort());
+            new FakeWorkflowRunActorPort(),
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
 
         var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", "auto", null));
 
@@ -36,7 +37,8 @@ public sealed class WorkflowRunOrchestrationComponentTests
                 new WorkflowActorResolutionResult(actor, "auto", WorkflowChatRunStartError.None, ["definition-1", "actor-1"])),
             new FakeProjectionPort(),
             new FakeProjectionPort(),
-            new FakeWorkflowRunActorPort());
+            new FakeWorkflowRunActorPort(),
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
 
         var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", "auto", null));
 
@@ -62,7 +64,8 @@ public sealed class WorkflowRunOrchestrationComponentTests
             [],
             projectionPort,
             projectionPort,
-            actorPort);
+            actorPort,
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
             "actor-1",
             "cmd-1",
@@ -97,7 +100,8 @@ public sealed class WorkflowRunOrchestrationComponentTests
             ["definition-1", "actor-1", "definition-1"],
             projectionPort,
             projectionPort,
-            actorPort);
+            actorPort,
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
             "actor-1",
             "cmd-1",
@@ -131,7 +135,8 @@ public sealed class WorkflowRunOrchestrationComponentTests
             ["definition-1", "actor-1"],
             projectionPort,
             projectionPort,
-            actorPort);
+            actorPort,
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
             "actor-1",
             "cmd-1",

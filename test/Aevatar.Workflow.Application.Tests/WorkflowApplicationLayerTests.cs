@@ -257,8 +257,7 @@ public sealed class WorkflowApplicationLayerTests
         new DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>(
             pipeline,
             new FakeEventOutputStream(),
-            new FakeWorkflowRunCompletionPolicy(),
-            new FakeDurableCompletionResolver());
+            new FakeWorkflowRunCompletionPolicy());
 
     private static CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError> Success(
         WorkflowRunCommandTarget target,
@@ -287,7 +286,8 @@ public sealed class WorkflowApplicationLayerTests
             createdActorIds ?? [],
             projectionPort,
             readModelActivationPort,
-            actorPort);
+            actorPort,
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         target.BindLiveObservation(new FakeProjectionLease(actorId, commandId), new EventChannel<WorkflowRunEventEnvelope>());
         return target;
     }

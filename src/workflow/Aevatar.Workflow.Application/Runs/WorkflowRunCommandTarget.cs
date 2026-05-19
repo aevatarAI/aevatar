@@ -12,11 +12,13 @@ internal sealed class WorkflowRunCommandTarget
     : IActorCommandDispatchTarget,
       ICommandEventTarget<WorkflowRunEventEnvelope>,
       ICommandInteractionCleanupTarget<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>,
+      ICommandDetachedContinuationTarget<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>,
       ICommandDispatchCleanupAware
 {
     private readonly IWorkflowExecutionProjectionPort _projectionPort;
     private readonly IWorkflowExecutionMaterializationActivationPort _materializationActivationPort;
     private readonly IWorkflowRunActorPort _actorPort;
+    private readonly WorkflowRunDurableCompletionResolver _durableCompletionResolver;
     private bool _createdActorsDestroyed;
 
     public WorkflowRunCommandTarget(
@@ -25,7 +27,8 @@ internal sealed class WorkflowRunCommandTarget
         IReadOnlyList<string>? createdActorIds,
         IWorkflowExecutionProjectionPort projectionPort,
         IWorkflowExecutionMaterializationActivationPort materializationActivationPort,
-        IWorkflowRunActorPort actorPort)
+        IWorkflowRunActorPort actorPort,
+        WorkflowRunDurableCompletionResolver durableCompletionResolver)
     {
         Actor = actor ?? throw new ArgumentNullException(nameof(actor));
         WorkflowName = string.IsNullOrWhiteSpace(workflowName)
@@ -35,6 +38,7 @@ internal sealed class WorkflowRunCommandTarget
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _materializationActivationPort = materializationActivationPort ?? throw new ArgumentNullException(nameof(materializationActivationPort));
         _actorPort = actorPort ?? throw new ArgumentNullException(nameof(actorPort));
+        _durableCompletionResolver = durableCompletionResolver ?? throw new ArgumentNullException(nameof(durableCompletionResolver));
     }
 
     public IActor Actor { get; }
@@ -108,6 +112,11 @@ internal sealed class WorkflowRunCommandTarget
         CommandInteractionCleanupContext<WorkflowProjectionCompletionStatus> cleanup,
         CancellationToken ct = default) =>
         ReleaseAfterInteractionCoreAsync(receipt, cleanup, ct);
+
+    public Task PublishDetachedCommandSignalAsync(
+        DetachedCommandSignal<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus> signal,
+        CancellationToken ct = default) =>
+        PublishDetachedCommandSignalCoreAsync(signal, ct);
 
     public async Task ReleaseAsync(
         Func<Task>? onDetachedAsync = null,
@@ -262,5 +271,38 @@ internal sealed class WorkflowRunCommandTarget
         }
 
         await ReleaseAsync(destroyCreatedActors: false, ct: ct);
+    }
+
+    private async Task PublishDetachedCommandSignalCoreAsync(
+        DetachedCommandSignal<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus> signal,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(signal);
+
+        var observedCompleted = signal is DetachedCommandCompleted<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>;
+        var observedCompletion = signal switch
+        {
+            DetachedCommandCompleted<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus> completed => completed.Completion,
+            DetachedCommandTimeout<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus> timeout => timeout.Completion,
+            _ => WorkflowProjectionCompletionStatus.Unknown,
+        };
+
+        var durableCompletion = observedCompleted
+            ? CommandDurableCompletionObservation<WorkflowProjectionCompletionStatus>.Incomplete
+            : await _durableCompletionResolver.ResolveAsync(signal.Receipt, ct);
+
+        if (!observedCompleted && durableCompletion.HasTerminalCompletion)
+        {
+            observedCompleted = true;
+            observedCompletion = durableCompletion.Completion;
+        }
+
+        await ReleaseAfterInteractionCoreAsync(
+            signal.Receipt,
+            new CommandInteractionCleanupContext<WorkflowProjectionCompletionStatus>(
+                observedCompleted,
+                observedCompletion,
+                durableCompletion),
+            ct);
     }
 }

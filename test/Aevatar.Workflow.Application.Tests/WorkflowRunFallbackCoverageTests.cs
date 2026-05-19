@@ -190,7 +190,8 @@ public sealed class WorkflowRunFallbackCoverageTests
             [actorId],
             projectionPort,
             projectionPort,
-            actorPort);
+            actorPort,
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         target.BindLiveObservation(new FakeProjectionLease(actorId, commandId), new EventChannel<WorkflowRunEventEnvelope>());
         return target;
     }
