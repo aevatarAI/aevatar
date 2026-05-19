@@ -1,5 +1,6 @@
 using System.Net;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
@@ -13,8 +14,10 @@ using Aevatar.Foundation.Core.EventSourcing;
 using FluentAssertions;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
 using Aevatar.GAgents.Scheduled;
+using Aevatar.GAgents.Platform.Lark;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -811,6 +814,68 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
     }
 
+    [Fact]
+    public async Task ExecuteSkillAsync_StreamingFinalizesBeforeCompletion()
+    {
+        var provider = new StubStreamingProviderFactory("a", "b", "c");
+        var agent = CreateAgent("skill-runner-stream-coalesce", providerFactory: provider);
+        await agent.ActivateAsync();
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig.LarkReceiveId = "oc_chat_1";
+        initialize.OutboundConfig.LarkReceiveIdType = "chat_id";
+        await agent.HandleInitializeAsync(initialize);
+        var handler = new SequencedHandler(
+            """{"code":0,"msg":"success","data":{"message_id":"om_stream"}}""",
+            """{"code":0,"msg":"success"}""");
+        AttachNyxIdApiClient(agent, handler);
+
+        var output = await InvokeExecuteSkillAsync(agent);
+
+        output.Should().Be("abc");
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests[0].Method.Method.Should().Be("POST");
+        handler.Requests[1].Method.Method.Should().Be("PUT");
+        ExtractLarkText(handler.Bodies[0]!).Should().Be("a");
+        ExtractLarkText(handler.Bodies[1]!).Should().Be("abc");
+    }
+
+    [Fact]
+    public async Task SkillRunnerStreamingRunState_CoalescesInsideThrottleAndDispatchesAfterThrottle()
+    {
+        var handler = new SequencedHandler(
+            """{"code":0,"msg":"success","data":{"message_id":"om_stream"}}""",
+            """{"code":0,"msg":"success"}""");
+        var sink = CreateStreamingSink(handler);
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 5, 19, 9, 0, 0, TimeSpan.Zero));
+        var runState = CreateStreamingRunState(sink, TimeSpan.FromMilliseconds(300), time);
+
+        await InvokeStreamingRunStateAsync(runState, "OnDeltaAsync", "a");
+        time.Advance(TimeSpan.FromMilliseconds(100));
+        await InvokeStreamingRunStateAsync(runState, "OnDeltaAsync", "ab");
+        time.Advance(TimeSpan.FromMilliseconds(250));
+        await InvokeStreamingRunStateAsync(runState, "OnDeltaAsync", "abc");
+
+        handler.Requests.Should().HaveCount(2);
+        ExtractLarkText(handler.Bodies[0]!).Should().Be("a");
+        ExtractLarkText(handler.Bodies[1]!).Should().Be("abc");
+    }
+
+    [Fact]
+    public async Task SkillRunnerStreamingRunState_TruncatesBeforeDedupeAndSuppressesDuplicateFinal()
+    {
+        var handler = new SequencedHandler("""{"code":0,"msg":"success","data":{"message_id":"om_truncated"}}""");
+        using var sink = CreateStreamingSink(handler);
+        var runState = CreateStreamingRunState(sink, TimeSpan.Zero, TimeProvider.System);
+        var longText = new string('x', SkillRunnerStreamingReplySink.MaxLarkTextLength + 100);
+
+        await InvokeStreamingRunStateAsync(runState, "OnDeltaAsync", longText);
+        await InvokeStreamingRunStateAsync(runState, "OnDeltaAsync", longText + "more");
+        await InvokeStreamingRunStateAsync(runState, "FinalizeAsync", longText + "final");
+
+        handler.Requests.Should().ContainSingle("all three snapshots cap to the same Lark body");
+        ExtractLarkText(handler.Bodies[0]!).Should().Be(SkillRunnerStreamingReplySink.TruncateForLark(longText));
+    }
+
     private static async Task<IReadOnlyDictionary<string, string>> InvokeBuildExecutionMetadataAsync(
         SkillRunnerGAgent agent)
     {
@@ -820,6 +885,63 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         method.Should().NotBeNull();
         var task = (Task<IReadOnlyDictionary<string, string>>)method!.Invoke(agent, [CancellationToken.None])!;
         return await task;
+    }
+
+    private static async Task<string> InvokeExecuteSkillAsync(SkillRunnerGAgent agent)
+    {
+        var method = typeof(SkillRunnerGAgent).GetMethod(
+            "ExecuteSkillAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        method.Should().NotBeNull();
+        var task = (Task<string>)method!.Invoke(
+            agent,
+            [new DateTimeOffset(2026, 5, 19, 9, 0, 0, TimeSpan.Zero), "test", CancellationToken.None])!;
+        return await task;
+    }
+
+    private static object CreateStreamingRunState(
+        SkillRunnerStreamingReplySink sink,
+        TimeSpan throttle,
+        TimeProvider timeProvider)
+    {
+        var type = typeof(SkillRunnerGAgent).GetNestedType(
+            "SkillRunnerStreamingRunState",
+            BindingFlags.NonPublic);
+        type.Should().NotBeNull();
+        return Activator.CreateInstance(type!, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, binder: null,
+            args: [sink, throttle, timeProvider],
+            culture: null)!;
+    }
+
+    private static SkillRunnerStreamingReplySink CreateStreamingSink(HttpMessageHandler handler)
+    {
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+        return new SkillRunnerStreamingReplySink(
+            client,
+            "nyx-api-key",
+            "api-lark-bot",
+            new LarkReceiveTarget("oc_chat_1", "chat_id", FellBackToPrefixInference: false),
+            fallbackTarget: null,
+            (_, detail) => detail,
+            logger: null);
+    }
+
+    private static Task InvokeStreamingRunStateAsync(object runState, string methodName, string text)
+    {
+        var method = runState.GetType().GetMethod(methodName, BindingFlags.Instance | BindingFlags.Public);
+        method.Should().NotBeNull();
+        return (Task)method!.Invoke(runState, [text, CancellationToken.None])!;
+    }
+
+    private static string ExtractLarkText(string body)
+    {
+        using var document = JsonDocument.Parse(body);
+        var content = document.RootElement.GetProperty("content").GetString();
+        content.Should().NotBeNull();
+        using var contentDocument = JsonDocument.Parse(content!);
+        return contentDocument.RootElement.GetProperty("text").GetString()!;
     }
 
     internal sealed class StubOwnerLlmConfigSource(OwnerLlmConfig config) : IOwnerLlmConfigSource
@@ -957,10 +1079,13 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     private SkillRunnerGAgent CreateAgent(
         string actorId,
         ServiceProvider? serviceProvider = null,
-        IOwnerLlmConfigSource? ownerLlmConfigSource = null)
+        IOwnerLlmConfigSource? ownerLlmConfigSource = null,
+        ILLMProviderFactory? providerFactory = null)
     {
         var resolvedServices = serviceProvider ?? _serviceProvider;
-        var agent = new SkillRunnerGAgent(ownerLlmConfigSource: ownerLlmConfigSource)
+        var agent = new SkillRunnerGAgent(
+            llmProviderFactory: providerFactory,
+            ownerLlmConfigSource: ownerLlmConfigSource)
         {
             Services = resolvedServices,
             EventSourcingBehaviorFactory =
@@ -1010,6 +1135,34 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             BindingFlags.Instance | BindingFlags.NonPublic);
         setIdMethod.Should().NotBeNull();
         setIdMethod!.Invoke(agent, [actorId]);
+    }
+
+    private sealed class StubStreamingProviderFactory(params string[] deltas) : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "stub";
+
+        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default) =>
+            Task.FromResult(new LLMResponse { Content = string.Concat(deltas) });
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            foreach (var delta in deltas)
+            {
+                ct.ThrowIfCancellationRequested();
+                await Task.Yield();
+                yield return new LLMStreamChunk { DeltaContent = delta };
+            }
+
+            yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
+        }
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
     }
 
     private sealed class InMemoryEventStore : IEventStore
