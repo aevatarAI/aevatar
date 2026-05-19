@@ -53,6 +53,7 @@ Immutable records of architectural choices and their rationale.
 - [Lark Reply Chain Completion Semantics](adr/0021-lark-reply-chain-completion-semantics.md)
 - [0022 — OpenTelemetry semantic conventions for aevatar.* activities](adr/0022-otel-aevatar-semantic-conventions.md)
 - [0023 — Two-tier Inspector architecture (canonical readmodel vs observation OTel)](adr/0023-two-tier-inspector-architecture.md)
+- [Chat Route Policy — Config Actor + Boundary Resolver](adr/0024-chat-route-policy.md)
 
 ## History
 
@@ -85,6 +86,8 @@ Point-in-time design snapshots. Not authoritative — for context only.
 - [2026-04-08-architecture-audit-detailed.md](audit-scorecard/2026-04-08-architecture-audit-detailed.md)
 - [2026-04-27-daily-pipeline-architecture-review.md](audit-scorecard/2026-04-27-daily-pipeline-architecture-review.md)
 - [2026-05-13-lark-bot-reply-chain-test-coverage-audit.md](audit-scorecard/2026-05-13-lark-bot-reply-chain-test-coverage-audit.md)
+- [2026-05-19-auto-refactor-loop-summary.md](audit-scorecard/2026-05-19-auto-refactor-loop-summary.md)
+- [2026-05-19-meta-audit-loop-depth-diagnosis.md](audit-scorecard/2026-05-19-meta-audit-loop-depth-diagnosis.md)
 - [FEATURE_APP_SERVICES_AUDIT.md](audit-scorecard/FEATURE_APP_SERVICES_AUDIT.md)
 
 ## Templates

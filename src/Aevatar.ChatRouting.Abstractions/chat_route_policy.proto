@@ -1,0 +1,221 @@
+syntax = "proto3";
+
+package aevatar.chat_routing.v1;
+
+option csharp_namespace = "Aevatar.ChatRouting.Abstractions";
+
+import "google/protobuf/timestamp.proto";
+
+// ─── Caller identity ───
+//
+// Mirrors Aevatar.GAgents.Scheduled OwnerScope but stays local to
+// ChatRouting.Abstractions so this project doesn't depend on the Scheduled
+// agent package. Phase 2 wires a thin mapper at the resolver boundary
+// (CompositeCallerScopeResolver output → ChatRouteCallerScope). Moving
+// OwnerScope to Foundation.Abstractions is a deferred refactor — out of
+// scope for the ingress-layer milestone.
+message ChatRouteCallerScope {
+  string nyx_user_id = 1;
+  string platform = 2;                  // "nyxid" / "lark" / "telegram"
+  string registration_scope_id = 3;
+  string sender_id = 4;
+}
+
+// ─── Source kind: which ingress entry produced this resolve call ───
+enum ChatSourceKind {
+  CHAT_SOURCE_KIND_UNSPECIFIED = 0;
+  CHAT_SOURCE_KIND_DIRECT = 1;          // NyxIdChat /api/scopes/.../nyxid-chat/...
+  CHAT_SOURCE_KIND_NYX_RELAY = 2;       // ConversationGAgent inbound (Lark/Telegram callbacks)
+  CHAT_SOURCE_KIND_NYX_RESPONSES = 3;   // /v1/responses + /v1/messages (Anthropic facade)
+  CHAT_SOURCE_KIND_VOICE = 4;           // /ws/voice (policy-aware voice WS)
+}
+
+// ─── Tool mode declared by the caller (currently informative for matching) ───
+enum ToolMode {
+  TOOL_MODE_UNSPECIFIED = 0;
+  TOOL_MODE_NONE = 1;
+  TOOL_MODE_DECLARED = 2;
+  TOOL_MODE_INLINE = 3;
+}
+
+// ─── Voice transport metadata (only valid when source_kind = VOICE) ───
+enum VoiceCodec {
+  VOICE_CODEC_UNSPECIFIED = 0;
+  VOICE_CODEC_PCM16 = 1;
+  VOICE_CODEC_OPUS = 2;
+  VOICE_CODEC_AAC = 3;
+}
+
+enum VoiceConversationMode {
+  VOICE_CONVERSATION_MODE_UNSPECIFIED = 0;
+  VOICE_CONVERSATION_MODE_PUSH_TO_TALK = 1;
+  VOICE_CONVERSATION_MODE_HALF_DUPLEX = 2;
+  VOICE_CONVERSATION_MODE_FULL_DUPLEX = 3;
+}
+
+enum VadMode {
+  VAD_MODE_UNSPECIFIED = 0;
+  VAD_MODE_SERVER = 1;
+  VAD_MODE_CLIENT = 2;
+  VAD_MODE_DISABLED = 3;
+}
+
+message VoiceInput {
+  VoiceCodec codec = 1;
+  int32 sample_rate_hz = 2;
+  VoiceConversationMode mode = 3;
+  VadMode vad_mode = 4;
+  // Optional override: pick a specific voice module on the target actor
+  // when multiple voice modules are registered (e.g. voice_presence_openai
+  // vs voice_presence_minicpm). Empty => resolver picks default (sole
+  // module or "voice_presence" alias).
+  string voice_module_name = 5;
+}
+
+// ─── Resolver input ───
+//
+// Built at the ingress boundary, consumed by ChatRouteResolver. Pure
+// computation input; MUST NOT carry transient request-bound secrets
+// (reply_token, WS connection id, raw audio frame, bearer token, etc.).
+message ChatRouteInput {
+  ChatSourceKind source_kind = 1;
+  ChatRouteCallerScope caller_scope = 2;
+  // Channel hint at ingress (lark / telegram / cli / web / etc.). For
+  // ChatSourceKind=NYX_RELAY this mirrors ChannelMetadataCallerScopeResolver
+  // output. Empty for ChatSourceKind=DIRECT / NYX_RESPONSES when caller
+  // didn't supply a hint.
+  string channel = 3;
+  // Optional command name (slash command / template name like "/daily").
+  // Empty when message is free-form.
+  string command_name = 4;
+  // Bounded content classifier output (e.g. detected intent label,
+  // first N chars). MUST NOT carry the full message body.
+  string content_hint = 5;
+  ToolMode tool_mode = 6;
+  // Only meaningful when source_kind = CHAT_SOURCE_KIND_VOICE.
+  VoiceInput voice = 7;
+}
+
+// ─── Decision actions (oneof) ───
+message ForwardToModel {
+  string model_name = 1;
+}
+
+message ForwardToGAgent {
+  string actor_id = 1;
+  // Optional voice module to attach to on the target actor. Only used
+  // when source_kind = CHAT_SOURCE_KIND_VOICE; ignored otherwise.
+  string voice_module_name = 2;
+}
+
+message ForwardToWorkflow {
+  // Reserved for v2; no implementation in v1.
+  string workflow_id = 1;
+}
+
+message Reject {
+  // Free-form reason for telemetry; rides to caller as HTTP 403 body.
+  string reason = 1;
+}
+
+message Bypass {
+  // Reserved for explicit-actor entries (/ws/voice/{actorId}). The
+  // policy-aware /ws/voice endpoint should never produce Bypass in
+  // v1 — bypass is the dev-mode endpoint's contract, not a rule action.
+  string target_actor_id = 1;
+}
+
+message ChatRouteAction {
+  oneof action {
+    ForwardToModel forward_to_model = 1;
+    ForwardToGAgent forward_to_gagent = 2;
+    ForwardToWorkflow forward_to_workflow = 3;
+    Reject reject = 4;
+    Bypass bypass = 5;
+  }
+}
+
+// ─── Rule + Match ───
+message ChatRouteMatch {
+  // Non-default fields are AND-ed; an unspecified value means "match any".
+  // For string fields, empty string == "match anything".
+  ChatSourceKind source_kind = 1;
+  string channel = 2;
+  string command_name = 3;
+  string content_hint = 4;
+  ToolMode tool_mode = 5;
+}
+
+message ChatRouteRule {
+  string rule_id = 1;
+  // Higher priority evaluated first. Ties broken by rule_id lexical
+  // order for determinism.
+  int32 priority = 2;
+  ChatRouteMatch match = 3;
+  ChatRouteAction action = 4;
+  // Human-readable description for observability.
+  string description = 5;
+}
+
+// ─── Persistent state (owned by ChatRoutePolicyGAgent) ───
+//
+// committed event store + actor state is the only source of truth.
+// readmodel ChatRoutePolicyCurrentStateDocument is a query-side replica
+// projected from ChatRoutePolicyUpdated events.
+message ChatRoutePolicyState {
+  string policy_id = 1;
+  ChatRouteCallerScope owner_scope = 2;
+  // REQUIRED. Resolver falls back to this when no rule matches. Phase 2
+  // additionally provides an env-driven hardcoded fallback for the
+  // case where the policy actor itself doesn't exist yet (cold start).
+  ChatRouteAction default_target = 3;
+  repeated ChatRouteRule rules = 4;
+  // Monotonic version owned by the actor; readmodel mirrors this.
+  int64 version = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+// ─── Commands (write side, dispatched to ChatRoutePolicyGAgent) ───
+message UpsertChatRoutePolicyRequested {
+  ChatRouteCallerScope owner_scope = 1;
+  ChatRouteAction default_target = 2;
+  repeated ChatRouteRule rules = 3;
+}
+
+message RemoveChatRouteRuleRequested {
+  string rule_id = 1;
+}
+
+message ResetChatRoutePolicyRequested {
+  // Wipes rules and clears default_target. Caller responsibility to set
+  // a sane default_target after — resolver will fall back to env default
+  // until a valid one is upserted.
+}
+
+// ─── Domain events (committed) ───
+message ChatRoutePolicyUpdated {
+  ChatRoutePolicyState state = 1;
+}
+
+// ─── Resolver output (TRANSIENT — never persisted) ───
+//
+// ChatRouteDecision is observed only by the immediate ingress caller.
+// It MUST NOT be written to:
+//   - ChatRoutePolicyState (that is the config side)
+//   - any other actor state / event store
+//   - any readmodel document
+//   - any persistent log
+//
+// Resolver-level telemetry MAY record matched_rule_id + used_fallback +
+// resolved_at for observability, but the structured fields below stay
+// transient at the ingress boundary.
+message ChatRouteDecision {
+  ChatRouteAction action = 1;
+  // rule_id of the matching ChatRouteRule. Empty when used_fallback=true
+  // or when default_target was returned without a rule match.
+  string matched_rule_id = 2;
+  google.protobuf.Timestamp resolved_at = 3;
+  // True iff resolver fell back to env-driven default because the
+  // policy actor didn't exist or readmodel snapshot was unavailable.
+  bool used_fallback = 4;
+}
