@@ -116,6 +116,9 @@ internal sealed class WorkflowRunCommandTarget
     public Task PublishDetachedCommandSignalAsync(
         DetachedCommandSignal<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus> signal,
         CancellationToken ct = default) =>
+        // Refactor (iter17/cluster-036):
+        // Old pattern: the generic detached worker resolved durable workflow state and destroyed created actors.
+        // New principle: workflow target consumes detached signals and owns durable fallback plus cleanup decisions.
         PublishDetachedCommandSignalCoreAsync(signal, ct);
 
     public async Task ReleaseAsync(

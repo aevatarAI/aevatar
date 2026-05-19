@@ -130,7 +130,9 @@ public sealed class DefaultDetachedCommandDispatchServiceTests
                 "src/Aevatar.CQRS.Core/Commands/DefaultDetachedCommandDispatchService.cs"));
 
         source.Should().NotContain("Task.Run");
-        source.Should().Contain("Refactor (iter17/cluster-036): Detached workers only publish completion signals; business cleanup via continuation contract.");
+        source.Should().Contain("Refactor (iter17/cluster-036):");
+        source.Should().Contain("Old pattern: detached workers drained live events, resolved durable completion, and ran business cleanup.");
+        source.Should().Contain("New principle: detached workers only publish typed completion signals; target-owned continuations finalize.");
     }
 
     private sealed record TestShutdownSignal(CancellationToken ShutdownToken) : ICommandDispatchShutdownSignal;

@@ -68,7 +68,9 @@ public sealed class DefaultDetachedCommandDispatchService<TCommand, TTarget, TRe
         TTarget target,
         TReceipt receipt)
     {
-        // Refactor (iter17/cluster-036): Detached workers only publish completion signals; business cleanup via continuation contract.
+        // Refactor (iter17/cluster-036):
+        // Old pattern: detached workers drained live events, resolved durable completion, and ran business cleanup.
+        // New principle: detached workers only publish typed completion signals; target-owned continuations finalize.
         // Reset drain signal if transitioning from 0 to 1.
         if (Interlocked.Increment(ref _inflightCount) == 1)
             Interlocked.Exchange(ref _drainComplete, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
