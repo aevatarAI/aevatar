@@ -103,6 +103,14 @@ human_brief:
     <对应 2-3 句中文。说明哪些是机械重构无法决定的、需要 trade-off。>
   design_question_pattern_en: "<one specific question the maintainer must answer about the chosen fix shape>"
   design_question_pattern_zh: "<对应中文问题>"
+  original_authors:
+    # Top 1-3 commit authors across the evidence files (most lines blamed to them).
+    # Use `git blame --line-porcelain <file> | grep "^author " | sort | uniq -c | sort -rn | head -3`.
+    # Output GitHub handles, mapped per the SKILL.md handle table.
+    # The writer-codex will emit @-mention block from this list per Auric's
+    # "找到违反原则的地方,请直接at那个违反原则的人进来讨论" rule.
+    - "@<handle>"  # e.g. @eanzhao (authored <N>% of evidence lines)
+    - "@<handle>"
 ```
 
 **红线**：

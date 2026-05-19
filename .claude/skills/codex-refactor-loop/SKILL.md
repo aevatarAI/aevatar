@@ -651,6 +651,35 @@ Escalation action:
 
 All review/fix/consensus/escalation behavior MUST be observable on GitHub so the whole loop is traceable without reading local `.refactor-loop/` artifacts. Bilingual EN+ZH per hard rule #8.
 
+**Hard rule (per Auric 2026-05-19): all natural-language GitHub posts go through `prompts/github-post-writer.md` codex, NOT directly composed by controller.**
+
+The controller's only inline composition allowed for GitHub:
+- Status one-liners (≤ 80 chars, e.g. "labels updated").
+- Mechanical link / SHA / cluster id mentions.
+- Programmatic label edits + merge actions.
+
+EVERYTHING ELSE (reviewer verdict surfacing, fix-done body, consensus celebration, escalation rationale, design issue body, cross-post unblock notices, PR descriptions including rollup PR) is dispatched as a writer-codex run:
+1. Controller drops the raw codex artifact at `${RAW_ARTIFACT_PATH}` + writes a short bullet `${SITUATION_CONTEXT_PATH}` describing this round (round number, what changed, what's next).
+2. spawn-codex with `prompts/github-post-writer.md` (3600s timeout per CLAUDE Codex CLI 调用规范).
+3. On `POST_WRITTEN:...` marker, `gh ... --body-file <POST_OUTPUT_PATH>`.
+
+Rationale: stale controller context produces unreadable dense posts (raw solver YAML, jargon dumps, "see X" cross-refs). Fresh codex sessions write to human readers. The writer-codex prompt enforces TL;DR-first / details-second / collapsed `<details>` for raw artifact.
+
+**@-mention rule (per Auric 2026-05-19 "找到违反原则的地方,请直接at那个违反原则的人进来讨论"):**
+
+Every design issue body AND every escalation comment MUST include an "📢 cc 原作者 / cc original authors" section with `@<github-handle>` of the top 1-3 commit authors per evidence file (via `git blame --line-porcelain | uniq -c`). Handle mapping (current team):
+
+| git author | GitHub handle |
+|---|---|
+| eanzhao | @eanzhao |
+| louis.li | @louis4li |
+| loning / Loning | @loning |
+| jason | @jason-aelf |
+| AbigailDeng | @AbigailDeng |
+| potter / potter-sun | @potter-sun |
+
+The audit codex captures `original_authors` per cluster (top blame authors across evidence files); the writer-codex emits the @-mention block from that input. If git blame extraction fails or returns unknown handle, fall back to "@loning" alone with a note that auto-mention was incomplete.
+
 Required PR comments (controller posts via `gh pr comment <PR> --body-file <file>`):
 
 | Phase 8 event | PR comment content |
