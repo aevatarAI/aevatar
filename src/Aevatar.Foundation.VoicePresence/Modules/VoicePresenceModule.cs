@@ -147,9 +147,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             case VoiceModuleSignal.SignalOneofCase.RemoteSessionCloseRequested:
                 await HandleRemoteSessionCloseRequestedAsync(signal.RemoteSessionCloseRequested, ctx, ct);
                 break;
-            case VoiceModuleSignal.SignalOneofCase.RemoteAudioInputReceived:
-                HandleRemoteAudioInputReceived(signal.RemoteAudioInputReceived);
-                break;
             case VoiceModuleSignal.SignalOneofCase.RemoteControlInputReceived:
                 await HandleRemoteControlInputReceivedAsync(signal.RemoteControlInputReceived, ct);
                 break;
@@ -481,15 +478,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             string.IsNullOrWhiteSpace(request.Reason) ? "remote_session_closed" : request.Reason,
             ctx,
             ct);
-    }
-
-    // Refactor (iter15/cluster-025-voice-host-session-state-actorization):
-    //   Old pattern: voice host resolver locks shared mutable lease state outside actor lifecycle
-    //   New principle: remote setup/control may use envelopes; PCM chunks may not.
-    //   The actor keeps the stale proto arm inert for compatibility.
-    private void HandleRemoteAudioInputReceived(VoiceRemoteAudioInputReceived request)
-    {
-        _ = request;
     }
 
     private async Task HandleRemoteControlInputReceivedAsync(

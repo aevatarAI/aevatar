@@ -331,14 +331,10 @@ public class RemoteActorVoicePresenceSessionResolverTests
 
         public bool Disposed { get; private set; }
 
-        public TaskCompletionSource DisposedTask { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public List<byte[]> AudioFrames { get; } = [];
-
         public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
         {
             _ = ct;
-            AudioFrames.Add(pcm16.ToArray());
+            _ = pcm16;
             return Task.CompletedTask;
         }
 
@@ -363,7 +359,6 @@ public class RemoteActorVoicePresenceSessionResolverTests
         {
             Disposed = true;
             _frames.Writer.TryComplete();
-            DisposedTask.TrySetResult();
             return ValueTask.CompletedTask;
         }
     }
@@ -375,8 +370,6 @@ public class RemoteActorVoicePresenceSessionResolverTests
         public bool Disposed { get; private set; }
 
         public bool ReceiveStarted { get; private set; }
-
-        public TaskCompletionSource DisposedTask { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
         {
@@ -407,7 +400,6 @@ public class RemoteActorVoicePresenceSessionResolverTests
         public ValueTask DisposeAsync()
         {
             Disposed = true;
-            DisposedTask.TrySetResult();
             return ValueTask.CompletedTask;
         }
     }
