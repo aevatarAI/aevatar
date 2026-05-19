@@ -945,7 +945,12 @@ Required labels (additions to Phase 8 set):
 Per Auric (2026-05-19) "凡是新回复都要完整重新让多个solver分析,必须达成共识才可以":
 
 - **No `MAX_CONVERGENCE_ROUNDS` cap**. The loop iterates until 3/3 unanimous OR hardcoded escalation trigger OR maintainer adds `auto-loop-resume` with explicit framing OR maintainer closes issue.
-- **Stall detection**: if 3 consecutive rounds with NO maintainer input AND NO change in any solver's verdict text → escalate as `stalled:no-progress-no-input`. (This catches the case where the loop spins on its own context without learning anything new.)
+- **Stall detection**: if 3 consecutive rounds with NO maintainer input AND NO change in any solver's verdict text → **trigger meta-layer reflector** (not human escalate;per Auric 2026-05-19 "issues 也一样")。Reflector 同样回 4 framing question + 输出 `META_RESOLVED:<kind>` marker;路由:
+  - `retry-fix` → 派 r+1 solver,加 "reflector 提示: 你们三 round 没收敛,本轮必须 propose 新 framing 不重复之前"
+  - `re-design` → reset Phase 9 round counter,prompt 重写带 reflector 总结的新 framing 角度
+  - `re-cluster` → close design issue + audit re-split(下 iter 拆 cluster)
+  - `drop` → close design issue with `wontfix`
+  - `escalate-human` → `🆘 human:卡死` + PushNotification(仅 reflector 也无解)
 - **Maintainer reply RESETS stall counter** — fresh round dispatched with their comment as constraint; stall counter goes back to 0.
 - Solver may not propose a framing that any prior round's meta-judge ruled out as `escalate:philosophy:...` (track in `phase9.rounds[].ruled_out_framings`); doing so → meta-judge auto-escalates that solver's plan.
 - Cumulative solver runtime across all rounds capped at 12h per issue (raised from 6h to account for maintainer-reset iterations); over → escalate as `stalled:budget-exhausted`.
@@ -1079,6 +1084,7 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 - CI same-check 失败 6 次(同 test 6 次 fix 仍红)
 - Cumulative PR diff size > 原 PR 200%(scope-runaway 信号)
 - Reviewer 同一类 evidence(test coverage / dead surface / self-doc)在 3 round 内反复出现 → meta-reflect "为什么 evidence 总是同类"
+- **Phase 9 design issue stall**:3 consecutive round 无 maintainer input AND solver verdict text 无变化 → 也走 meta-layer(per Auric 2026-05-19 "issues 也一样")
 
 ### 派出 reflector codex
 
