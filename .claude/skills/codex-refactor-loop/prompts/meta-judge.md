@@ -6,7 +6,7 @@ You are the **4th codex** for design-issue **${ISSUE_NUMBER}** (cluster `${CLUST
 2. **Convergence round needed** → re-dispatch the 3 solvers with a narrowed question (max 2 convergence rounds total per `MAX_CONVERGENCE_ROUNDS=2`)
 3. **Escalate to human** — architecture philosophy involved OR irreconcilable split after convergence cap
 
-Per Auric's policy (2026-05-19): **3/3 unanimous** is the consensus bar. Anything less goes through convergence OR escalation. Early failure beats late failure.
+Per Auric's policy (2026-05-19): **3/3 unanimous** is the consensus bar. Anything less goes through convergence (no hard round cap; loop iterates until consensus OR architecture-philosophy trigger OR maintainer override). "凡是新回复都要完整重新让多个solver分析,必须达成共识才可以." — every maintainer reply resets the round; you escalate ONLY on hardcoded architecture-philosophy triggers (Step 2 below), not on round count.
 
 ## Inputs
 
@@ -51,16 +51,16 @@ Take the 3 solvers' `verdict` + their `Recommended framing` summary:
 
 ### Step 4 — Convergence vs escalate
 
-If `${CONVERGENCE_ROUND} >= ${MAX_CONVERGENCE_ROUNDS}` (default 2):
-- → escalate (can't keep iterating forever)
+**No hard round cap.** Per Auric's policy "凡是新回复都要完整重新让多个solver分析,必须达成共识才可以" — the loop iterates until 3/3 unanimous consensus, regardless of round count, UNLESS one of these fires:
 
-Else, if 2+ solvers proposed and the divergence is on a NAMED specific question:
-- → CONVERGENCE: write a `convergence_question.md` that names exactly the disputed dimension (e.g., "do we add new abstraction X or reuse existing Y?"), the controller dispatches another round of 3 solvers with this question prepended to their input
-- → marker: `META_JUDGE_DONE:converge:<round N+1>:<one-line question>`
+- **Stall trigger**: if `${CONVERGENCE_ROUND} >= 3` AND no maintainer comment landed since last round AND all 3 solvers' verdict text is essentially the same as last round (no new evidence, no shifted stance) → escalate as `stalled:no-progress-no-input` (controller will re-prompt maintainer).
+- **Architecture-philosophy trigger** (per Step 2 hardcoded triggers): regardless of round count, immediate escalate.
 
-Else (divergence is unnamed / fundamental):
-- → escalate
-- → marker: `META_JUDGE_DONE:escalate:<category>:<short>`
+Otherwise:
+- If divergence is on a NAMED specific technical question and there's progress vs prior rounds → CONVERGENCE: write the `convergence_question`, controller dispatches another round.
+- → marker: `META_JUDGE_DONE:converge:round-${CONVERGENCE_ROUND_PLUS_ONE}:<one-line question>`
+- If divergence is named but no progress for 3+ rounds with no maintainer input → escalate as stalled (above).
+- If divergence is fundamental / unnamed AND not stalled → still converge (the next round may surface the right framing). Only stall trigger or architecture-philosophy trigger escalates.
 
 ### Step 5 — Output the decision
 

@@ -758,9 +758,23 @@ envsubst < .claude/skills/codex-refactor-loop/prompts/meta-judge.md \
 ```
 
 Meta-judge emits `META_JUDGE_DONE:<decision>:<...>`:
-- `consensus:<framing>:<summary>` → controller auto-applies (see "Consensus action" below)
-- `converge:round-N:<question>` → controller re-runs Phase 9 with the convergence question prepended (max `MAX_CONVERGENCE_ROUNDS=2`)
-- `escalate:<category>:<short>` → controller adds `auto-loop-stuck` label + PushNotification
+- `consensus:<framing>:<summary>` → controller auto-applies (see "Consensus action" below). **3/3 unanimous IS the only path that auto-implements** — anything less keeps the loop going.
+- `converge:round-N:<question>` → controller re-runs Phase 9 with the convergence question prepended. **No hard convergence cap** — loop iterates until 3/3 unanimous OR a hardcoded architecture-philosophy trigger fires OR maintainer comments. Anti-spiral safeguards (below) still apply.
+- `escalate:<category>:<short>` → controller adds `auto-loop-stuck` label + PushNotification. Only fires on hardcoded architecture-philosophy triggers (see "Escalation criteria" below).
+
+### Maintainer-reply-resets-the-round (mandatory)
+
+Per Auric (2026-05-19): "凡是新回复都要完整重新让多个solver分析, 必须达成共识才可以."
+
+When the auto-discover Monitor fires `design-issue-event:<N>` and the new comment is from a verified team member (per Phase 7 security gate) AND is substantive (>30 chars / contains technical content / not a controller self-reply):
+
+1. **TaskStop any in-flight Phase 9 codex for that issue** (solvers OR meta-judge) — old reasoning is stale once new constraint lands.
+2. **Treat the new comment as fresh constraint material** — prepend its verbatim text to a NEW round's solver prompt header under "Maintainer comment (must incorporate)".
+3. **Dispatch FRESH 3 solver codex** (not "continue convergence"; truly fresh, with all prior rounds as context but no inherited stance).
+4. **No round counter penalty** — maintainer input is the loop's continuation signal, not a stop signal. The round counter increments but does NOT trip the escalation cap.
+5. **Only 3/3 unanimous + meta-judge consensus** moves the cluster to implement. Maintainer can override at any time by adding `auto-loop-resume` label with their explicit framing in a comment.
+
+This means: even if a previous round escalated with `auto-loop-stuck`, a new maintainer comment re-opens Phase 9. The `auto-loop-stuck` label is removed automatically on reset; `phase9-converging` is re-applied.
 
 ### Consensus action (3/3 unanimous + meta-judge consensus)
 
@@ -794,13 +808,14 @@ Every Phase 9 action posts a bilingual comment to the issue. **Humans must be ab
 
 | Phase 9 event | Issue comment content |
 |---|---|
-| Round N solvers dispatched | Bilingual: "Phase 9 round N — minimal/structural/delete codex in flight. Max convergence ${MAX_CONVERGENCE_ROUNDS}." |
+| Round N solvers dispatched | Bilingual: "Phase 9 round N — minimal/structural/delete codex in flight. 3/3 unanimous required to auto-implement; otherwise iterate." |
+| Maintainer reply detected mid-Phase-9 | Bilingual: "Halted in-flight round; resetting with maintainer comment as new constraint. New round dispatched. Old round outputs preserved for solver context." |
 | **Each individual solver completes** | Post FULL solver output as its own comment. Header: `## 🤖 Phase 9 Solver — \`<role>\` (round N)`. Body = verbatim solver output (already bilingual). One comment per solver, three comments per round. |
 | **Meta-judge completes** | Post FULL meta-judge output as its own comment. Header: `## 🤖 Phase 9 Meta-judge — round N verdict: \`<consensus\|converge\|escalate>\``. Body = verbatim judge output (bilingual). |
 | Meta-judge → consensus | Same as above + then a follow-up controller comment: "auto-loop-resume label added; implement codex dispatched" |
 | Meta-judge → converge | Same as above + the round-(N+1) "solvers dispatched" comment that includes the convergence question for transparency |
 | Meta-judge → escalate | Same as above + label `auto-loop-stuck` + `## 🤖 Controller next-step` comment laying out the exact human action needed + PushNotification |
-| Convergence cap reached | Post the round-2 meta-judge output + summary "convergence exhausted — escalating to human" comment + label `auto-loop-stuck` |
+| Hardcoded escalation trigger fired | Post meta-judge output + summary "architecture-philosophy trigger — escalating to human" + label `auto-loop-stuck`. Trigger fires on architecture-philosophy categories ONLY (see below); convergence-only splits do NOT escalate, they keep iterating. |
 
 **Forbidden**: posting a "summary" of solver outputs instead of the FULL outputs. The human needs the raw reasoning, evidence, and concrete plans to make an informed call — a summary loses too much fidelity. The 3+ comments per round are intentional; they ARE the audit trail.
 
@@ -830,12 +845,16 @@ Required labels (additions to Phase 8 set):
 }]
 ```
 
-### Anti-spiral safeguards
+### Anti-spiral safeguards (no hard round cap — different safeguards instead)
 
-- `MAX_CONVERGENCE_ROUNDS = 2`. Round 2 still not unanimous → escalate.
-- Solver may not propose a framing that any prior round's meta-judge ruled out (track in `phase9.rounds[].ruled_out_framings`).
-- Cumulative solver runtime across all rounds capped at 6h per issue; over → escalate.
-- If maintainer comments on the issue mid-Phase-9 (Monitor fires) → halt Phase 9, switch back to Phase 7 maintainer-conversation flow (maintainer's input always takes precedence over Phase 9 automation).
+Per Auric (2026-05-19) "凡是新回复都要完整重新让多个solver分析,必须达成共识才可以":
+
+- **No `MAX_CONVERGENCE_ROUNDS` cap**. The loop iterates until 3/3 unanimous OR hardcoded escalation trigger OR maintainer adds `auto-loop-resume` with explicit framing OR maintainer closes issue.
+- **Stall detection**: if 3 consecutive rounds with NO maintainer input AND NO change in any solver's verdict text → escalate as `stalled:no-progress-no-input`. (This catches the case where the loop spins on its own context without learning anything new.)
+- **Maintainer reply RESETS stall counter** — fresh round dispatched with their comment as constraint; stall counter goes back to 0.
+- Solver may not propose a framing that any prior round's meta-judge ruled out as `escalate:philosophy:...` (track in `phase9.rounds[].ruled_out_framings`); doing so → meta-judge auto-escalates that solver's plan.
+- Cumulative solver runtime across all rounds capped at 12h per issue (raised from 6h to account for maintainer-reset iterations); over → escalate as `stalled:budget-exhausted`.
+- Hardcoded architecture-philosophy triggers (see "Escalation criteria" below) still escalate immediately regardless of consensus — the loop does not try to talk humans out of architecture decisions.
 
 ### When to trigger Phase 9 (operator policy)
 
