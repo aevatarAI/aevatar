@@ -43,6 +43,9 @@ Write initial `state.json`:
 {
   "schema_version": 1,
   "trunk_branch": "<current branch>",
+  "integration_branch": "<current branch>",
+  "review_base_branch": "dev",
+  "pr_mode": "stacked",
   "max_parallel_clusters": 3,
   "iteration": 1,
   "phase": "audit",
@@ -52,6 +55,13 @@ Write initial `state.json`:
   "clusters_failed": []
 }
 ```
+
+**`pr_mode` choice (set in Phase 0; do not change mid-loop)**:
+
+- `"stacked"` (**default**): each cluster opens its own PR. Hard-dep clusters stack (PR B's base = PR A's branch); soft-dep / independent clusters PR against `integration_branch`. Integration branch eventually opens one rollup PR to `review_base_branch`. Reviewer sees small per-cluster PRs and can ack independently; cost is rebase-on-reject when an upstream cluster is changed. This is the right shape for typical refactor loops (3+ clusters, reviewable independently).
+- `"single"`: all clusters merge to `integration_branch` and a single PR targets `review_base_branch`. Simple; reviewer sees one big PR. Use only when the loop is expected to produce ≤ 2 clusters or the user explicitly asks for a single PR.
+
+If the user doesn't specify, default `"stacked"` and surface in bootstrap PushNotification: "Using stacked-PR mode; pass `pr_mode: single` to override."
 
 Create top-level TaskCreate items: audit / dispatch / merge.
 
@@ -139,29 +149,80 @@ Verify output marker: `VERIFY_DONE:<cluster-id>:<verdict>` where verdict ∈ `{p
 
 ## Phase 4 — Merge & Push (controller, not codex)
 
-**cwd discipline (critical)**: `git merge` and `git push` MUST run from `$REPO_ROOT`, never from a worktree directory. Cwd persists across Bash invocations in the harness, so chained commands that include `cd .refactor-loop/worktrees/<id>` leak cwd into the next call. Always either start the merge command with `cd "$REPO_ROOT" && git merge …` or run merge in a separate Bash invocation after the worktree-scoped commit completes. If you see `Already up to date.` after the merge, that is the signature of cwd leak — diagnose and redo from `$REPO_ROOT`.
+**cwd discipline (critical)**: `git merge`, `git push`, and `gh pr create` MUST run from `$REPO_ROOT`, never from a worktree directory. Cwd persists across Bash invocations in the harness, so chained commands that include `cd .refactor-loop/worktrees/<id>` leak cwd into the next call. Always either start the trunk-side command with `cd "$REPO_ROOT" && …` or run it in a separate Bash invocation after the worktree-scoped commit. If you see `Already up to date.` after a merge, that is the signature of cwd leak — diagnose and redo from `$REPO_ROOT`.
 
 For each `pass` cluster, serially:
 
-1. In the worktree: `git add -A && git commit -m "<msg>"`.
-2. In trunk worktree (`$REPO_ROOT`, explicit `cd $REPO_ROOT &&` if chained):
-   ```bash
-   git merge --no-ff refactor/iterN-<cluster-id> -m "Merge cluster-<id>: <short title>"
-   ```
-3. Run local CI gates (the ones listed in CLAUDE.md "CI 门禁"):
+1. **Commit in worktree**: `cd <worktree> && git add -A && git commit -m "<msg>"`.
+
+2. **Local CI on the cluster branch** (still in worktree):
    ```bash
    bash tools/ci/architecture_guards.sh
-   bash tools/ci/solution_split_guards.sh
-   bash tools/ci/solution_split_test_guards.sh
    bash tools/ci/test_stability_guards.sh
    # plus any cluster-specific guards from audit.verification_hints
    ```
-4. On pass → `git push origin <trunk_branch>`.
-5. On conflict or local CI fail → `git merge --abort`, mark cluster `rework`, re-dispatch implement codex with conflict details.
+   On fail → `git reset --soft HEAD~1` (undo the commit), mark cluster `rework`, re-dispatch implement codex with the failure log.
 
-After merge → `git worktree remove .refactor-loop/worktrees/<cluster-id>`, `git branch -d refactor/iterN-<cluster-id>` (only if pushed).
+3. **Push cluster branch**: `cd $REPO_ROOT && git push origin refactor/iterN-<cluster-id>`.
 
-If no clusters left in current batch → start next batch (Phase 2 again). If no batches left → start next iteration (Phase 1 again) or **start Phase 5 if there is an open PR for the trunk branch**.
+4. **Branch off** by `pr_mode`:
+
+### Phase 4a — `pr_mode: "single"`
+
+5a. Merge cluster branch into `integration_branch`:
+    ```bash
+    cd "$REPO_ROOT" && git merge --no-ff refactor/iterN-<cluster-id> \
+      -m "Merge cluster-<id>: <short title>"
+    ```
+6a. Re-run local CI on integration_branch (catches inter-cluster interaction).
+7a. `git push origin <integration_branch>`.
+8a. Goto Phase 5 (remote CI watch).
+
+### Phase 4b — `pr_mode: "stacked"`
+
+5b. **Choose PR base** per the cluster's `dependencies` field from the audit:
+    - `dependencies: []` (independent, soft-dep, or batch-disjoint) → base = `integration_branch`.
+    - `dependencies: ["cluster-XXX", ...]` (hard-dep — won't compile without the prerequisite) → base = the prerequisite cluster's branch (use the **first**, primary one; document others in PR description).
+
+6b. **Open PR**:
+    ```bash
+    cd "$REPO_ROOT" && \
+    gh pr create \
+      --base "<base_branch>" \
+      --head "refactor/iterN-<cluster-id>" \
+      --title "<cluster id>: <short title>" \
+      --body "$(cat .refactor-loop/runs/implement-<cluster-id>.md)
+---
+Auto-generated by codex-refactor-loop iter<N>.
+
+Verify report: .refactor-loop/runs/verify-<cluster-id>.md
+$(if [[ -n "<deps>" ]]; then echo "Depends on: <deps as PR links>"; fi)
+$(if [[ "<soft_deps>" ]]; then echo "Related (no merge order required): <soft-dep links>"; fi)"
+    ```
+
+7b. Record the PR number in `state.clusters_active[i].pr_number`.
+8b. **Stack rebase on upstream merge**: when an upstream (dependency) cluster's PR merges into `integration_branch`, immediately:
+    - For each downstream cluster whose `dependencies` contained it:
+      - `git -C <worktree> rebase --onto integration_branch <old_upstream_branch>` (or `gh pr edit <pr> --base integration_branch` if stacked-on-stacked is no longer needed).
+      - Re-run local CI in worktree; on conflict, mark cluster `rework` and re-dispatch implement codex with conflict diff.
+      - Force-push the cluster branch: `git push --force-with-lease origin refactor/iterN-<cluster-id>`.
+9b. Goto Phase 5 (remote CI watch on the cluster's PR).
+10b. After **all** iteration clusters have their PRs merged into `integration_branch`, ensure exactly one rollup PR exists from `integration_branch` to `review_base_branch`:
+     ```bash
+     gh pr list --head "<integration_branch>" --base "<review_base_branch>" --json number --jq '.[0].number'
+     # If empty, gh pr create --base "<review_base_branch>" --head "<integration_branch>" --title "Refactor iter<N>: rollup" --body <scorecard.md>
+     ```
+
+After merge of the cluster branch into its target → `git worktree remove .refactor-loop/worktrees/<cluster-id>`. **Do NOT** delete the cluster branch yet under `stacked` mode — downstream PRs may still reference it as base; let GitHub auto-delete on merge.
+
+If no clusters left in current batch → start next batch (Phase 2 again). If no batches left → start next iteration (Phase 1 again) or **start Phase 5 if there is an open PR for the trunk/cluster branches**.
+
+### Phase 4 stack-depth cap
+
+Hard cap: any single dependency stack ≥ 5 PRs deep triggers a controller halt. Reason: rebase blast-radius compounds — reviewer changes to the bottom PR force-rebase the entire stack, and reviewers stop landing PRs that get rebased twice. On cap:
+- send PushNotification with the stack contents,
+- merge all completed lower PRs into `integration_branch` immediately (collapse stack to a single base),
+- continue remaining clusters from the collapsed base.
 
 ---
 
