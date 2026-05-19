@@ -579,8 +579,53 @@ Each reviewer outputs `REVIEW_DONE:${PR}:${role}:<approve|comment|reject>` marke
 | **All approve except 1 comment**        | Same auto-merge. Surface comment's "Evidence" in merge comment. |
 | **2 approve + 1 comment**               | Same auto-merge with surfaced comment. |
 | **3+ comment, 0 reject**                | Surface all comments in PR review comment; **do not** merge; PushNotification: "PR #N: 3 comments, no rejects — human decision recommended." |
-| **Any reject**                          | Block auto-merge. Add label `needs-human-review`. Post bilingual summary of rejector's evidence + "What would change your verdict". PushNotification: "PR #N rejected by <role>; human review required." |
+| **Any reject**                          | **Enter fix-retry loop** (see next subsection). Do NOT escalate to human on first reject. |
 | **Reviewer crashes / no marker**        | Re-dispatch that reviewer once. Second crash → `reject:reviewer-stuck`, escalate. |
+
+### Fix-retry loop (AI iterates until consensus)
+
+Policy: AI keeps iterating until unanimous-approve consensus, OR until escalation criteria are hit. Default `max_fix_rounds = 3` per PR.
+
+Loop:
+
+1. **Round entry** — `state.pr_reviews[PR].fix_round += 1`. If `fix_round > max_fix_rounds`, escalate (see below).
+2. **Dispatch fix codex** in PR's own worktree:
+   ```bash
+   .claude/skills/codex-refactor-loop/scripts/spawn-codex.sh \
+     --cd "$PR_WORKTREE" --add-dir "$REPO_ROOT" \
+     --prompt .refactor-loop/prompts/fixes/fix-pr${PR}-round-${N}.md \
+     --log .refactor-loop/logs/fix-pr${PR}-round-${N}.log \
+     --timeout 3600
+   ```
+   Fix codex reads all 3 reviewer outputs, applies in-scope fixes, validates locally, writes `FIX_REPORT.md`, emits `FIX_DONE:${PR}:round-${N}:applied-<N>:rejected-<M>:blocked-<K>` OR `FIX_BLOCKED:${PR}:round-${N}:<reason>:<short>`.
+3. **Controller commits + pushes** the fix codex's changes to the PR's HEAD branch (codex itself doesn't push, per hard rule 4). Commit message includes round number and applied/blocked counts.
+4. **Re-dispatch all 3 reviewers** against the new HEAD SHA (drop prior consensus).
+5. **Re-evaluate**:
+   - Unanimous approve → auto-merge (per table above).
+   - Same reject reasons as previous round (no progress) → escalate.
+   - New reject reasons but still <unanimous → go to step 1.
+
+### Escalation criteria ("十分难搞" — truly stuck)
+
+Escalate to human ONLY when:
+
+- `fix_round > max_fix_rounds` (default 3) and still not unanimous.
+- Fix codex emits `FIX_BLOCKED:<PR>:round-<N>:human-decision:<...>` (e.g. reviewer demands deleting a feature, splitting into 3 PRs, renaming a cross-cluster type).
+- Fix codex emits `FIX_BLOCKED:<PR>:round-<N>:conflict:<...>` (reviewers' demands contradict each other and codex cannot resolve).
+- Two consecutive rounds produce IDENTICAL reject text for the same reviewer (the fix didn't address the demand and codex isn't making progress).
+- A reviewer's demand requires touching another in-flight cluster's PR (would create cross-PR dependency).
+
+Escalation action:
+- Add `needs-human-review` label on PR.
+- Post bilingual PR comment with: round history (N rounds tried), reject evidence per round, what fix codex tried, why it's stuck.
+- `PushNotification`: "PR #N stuck at round N — human decision needed: <one-line reason>".
+- State: `pr_reviews[PR].consensus = "stuck-human-review"`.
+
+### Anti-spiral safeguards
+
+- Round-N reviewer outputs MUST be diffed against round-(N-1). If reviewer text didn't change but verdict didn't change either → that reviewer is stuck on a non-addressable demand → escalate.
+- Each fix round must reduce total reject count OR change which reviewer rejects. If neither → escalate.
+- Cumulative PR diff size grows by ≤ +30% per round; if a fix round adds more code than the original PR → controller flags scope-runaway and escalates.
 
 ### State tracking
 
@@ -694,5 +739,6 @@ If any check fails, regenerate. Do not post.
 - [prompts/reviewer-architect.md](prompts/reviewer-architect.md) — Phase 8 architect reviewer (CLAUDE.md compliance angle)
 - [prompts/reviewer-tests.md](prompts/reviewer-tests.md) — Phase 8 tests reviewer (coverage/quality angle)
 - [prompts/reviewer-quality.md](prompts/reviewer-quality.md) — Phase 8 code quality reviewer (readability/simplicity angle)
+- [prompts/review-fix.md](prompts/review-fix.md) — Phase 8 fix-codex: addresses reject demands without escalating to human
 - [scripts/spawn-codex.sh](scripts/spawn-codex.sh) — standardized `codex exec` wrapper (enforces 3600s minimum timeout)
 - [REFERENCE.md](REFERENCE.md) — state schema, batching heuristics, recovery playbook
