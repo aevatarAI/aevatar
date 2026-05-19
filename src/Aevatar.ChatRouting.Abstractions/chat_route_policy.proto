@@ -12,8 +12,8 @@ import "google/protobuf/timestamp.proto";
 // ChatRouting.Abstractions so this project doesn't depend on the Scheduled
 // agent package. Phase 2 wires a thin mapper at the resolver boundary
 // (CompositeCallerScopeResolver output → ChatRouteCallerScope). Moving
-// OwnerScope to Foundation.Abstractions is a deferred refactor — out of
-// scope for the ingress-layer milestone.
+// OwnerScope to Foundation.Abstractions (tracked as #700) lets us delete
+// this mirror; out of scope for the ingress-layer milestone.
 message ChatRouteCallerScope {
   string nyx_user_id = 1;
   string platform = 2;                  // "nyxid" / "lark" / "telegram"
@@ -118,20 +118,19 @@ message Reject {
   string reason = 1;
 }
 
-message Bypass {
-  // Reserved for explicit-actor entries (/ws/voice/{actorId}). The
-  // policy-aware /ws/voice endpoint should never produce Bypass in
-  // v1 — bypass is the dev-mode endpoint's contract, not a rule action.
-  string target_actor_id = 1;
-}
-
 message ChatRouteAction {
+  // tag 5 + name `bypass` were previously a `Bypass` oneof variant; removed
+  // because the dev `/ws/voice/{actorId}` entry does not produce a
+  // ChatRouteAction at all (it bypasses the resolver entirely). Don't reuse
+  // tag 5 or the field name `bypass` to keep wire/protoc churn predictable
+  // if this proto ever sees deployed binaries.
+  reserved 5;
+  reserved "bypass";
   oneof action {
     ForwardToModel forward_to_model = 1;
     ForwardToGAgent forward_to_gagent = 2;
     ForwardToWorkflow forward_to_workflow = 3;
     Reject reject = 4;
-    Bypass bypass = 5;
   }
 }
 
@@ -186,11 +185,11 @@ message RemoveChatRouteRuleRequested {
   string rule_id = 1;
 }
 
-message ResetChatRoutePolicyRequested {
-  // Wipes rules and clears default_target. Caller responsibility to set
-  // a sane default_target after — resolver will fall back to env default
-  // until a valid one is upserted.
-}
+// (ResetChatRoutePolicyRequested removed — `default_target` is REQUIRED
+// whenever the actor exists, so "wipe and clear" would leave an invalid
+// persisted state. Callers that want to reset to a known shape should use
+// `UpsertChatRoutePolicyRequested` with the desired `default_target` and an
+// empty `rules` list, which is atomic and preserves the invariant.)
 
 // ─── Domain events (committed) ───
 message ChatRoutePolicyUpdated {

@@ -44,7 +44,7 @@ Routing is split into three objects with disjoint responsibilities:
 | **Query view** | `ChatRoutePolicyCurrentStateDocument` | projection | committed → readmodel |
 
 `ChatRoutePolicyGAgent` only handles config commands (`Upsert*`,
-`RemoveRule*`, `Reset*`) — never turn dispatch, never reply tokens, never
+`RemoveRule*`) — never turn dispatch, never reply tokens, never
 audio frames. `ChatRouteResolver.Resolve(snapshot, input) → ChatRouteDecision`
 is a pure function each entry calls before its existing dispatch path. The
 readmodel is a coverage replica of the actor's current `ChatRoutePolicyState`.
@@ -71,8 +71,8 @@ sub-message. For routing this includes:
 - `ChatSourceKind` (enum), `ToolMode` (enum)
 - `VoiceCodec`, `VoiceConversationMode`, `VadMode` (enums)
 - `VoiceInput` (sub-message) — only valid when `source_kind = VOICE`
-- `ForwardToModel`, `ForwardToGAgent`, `ForwardToWorkflow`, `Reject`,
-  `Bypass` (oneof variants)
+- `ForwardToModel`, `ForwardToGAgent`, `ForwardToWorkflow`, `Reject`
+  (oneof variants)
 - `VoiceInput.voice_module_name` (typed string) — chooses among
   `voice_presence`, `voice_presence_openai`, `voice_presence_minicpm`,
   `voice_presence_minicpm_o` registered at bootstrap
@@ -97,11 +97,23 @@ Only `ForwardToGAgent` and `ForwardToModel` are implemented in v1.
 
 - `Reject` is declared on the wire but unused by v1 rule semantics — it lets
   endpoints uniformly return HTTP 403 when policy lookup fails closed.
-- `Bypass` is reserved as the dev endpoint's contract; the policy-aware
-  endpoint should never produce it.
 - `ForwardToWorkflow` is reserved on the wire only — no implementation.
+- No `Bypass` action exists on `ChatRouteAction`. The dev endpoint
+  `/ws/voice/{actorId}` does not produce a `ChatRouteAction` at all — it
+  reads the `actorId` from the route directly and short-circuits the
+  resolver. The previous `Bypass` oneof variant has been removed (tag 5
+  reserved on the wire) because letting a persisted policy encode a
+  dev-only bypass target contradicted CLAUDE.md "API 字段单一语义".
 - No voice "scratch actor" (`ForwardToModel` over `/ws/voice`); voice in v1
   must target an existing voice-enabled GAgent.
+
+The write side also drops `ResetChatRoutePolicyRequested`: because
+`default_target` is REQUIRED whenever the actor exists (per D6 below), a
+"wipe and clear" command would leave an invalid persisted state that
+neither matches the cold-start fallback path nor a fully-configured one.
+Callers that want to start over should issue `UpsertChatRoutePolicyRequested`
+with the desired `default_target` and an empty `rules` list — atomic,
+single-event, no temporary invalid window.
 
 ### D6 — Default target and fallback
 
