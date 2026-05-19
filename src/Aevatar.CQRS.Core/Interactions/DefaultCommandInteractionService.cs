@@ -42,13 +42,14 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(emitAsync);
 
-        var dispatch = await _dispatchPipeline.DispatchAsync(command, ct);
+        var dispatch = await _dispatchPipeline.PrepareAsync(command, ct);
         if (!dispatch.Succeeded || dispatch.Target == null)
             return CommandInteractionResult<TReceipt, TError, TCompletion>.Failure(dispatch.Error);
 
         var execution = dispatch.Target;
         var target = execution.Target;
         var receipt = execution.Receipt;
+        var dispatchTask = Task.CompletedTask;
         var observedCompleted = false;
         var observedCompletion = _completionPolicy.IncompleteCompletion;
         var durableCompletion = CommandDurableCompletionObservation<TCompletion>.Incomplete;
@@ -61,7 +62,9 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
             if (onAcceptedAsync != null)
                 await onAcceptedAsync(receipt, ct);
 
-            await _outputStream.PumpAsync(
+            dispatchTask = _dispatchPipeline.DispatchPreparedAsync(execution, ct);
+
+            var pumpTask = _outputStream.PumpAsync(
                 target.RequireLiveSink().ReadAllAsync(ct),
                 emitAsync,
                 evt =>
@@ -74,6 +77,13 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
                     return true;
                 },
                 ct);
+
+            var firstCompletedTask = await Task.WhenAny(dispatchTask, pumpTask);
+            if (ReferenceEquals(firstCompletedTask, dispatchTask))
+                await dispatchTask;
+
+            await pumpTask;
+            await dispatchTask;
 
             if (!observedCompleted)
             {
@@ -107,6 +117,19 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
         {
             try
             {
+                if (!dispatchTask.IsCompleted)
+                {
+                    try
+                    {
+                        await dispatchTask.ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        // Preserve the primary interaction exception while still
+                        // giving dispatch failure cleanup a chance to run.
+                    }
+                }
+
                 if (!observedCompleted && !durableCompletionAttempted)
                 {
                     durableCompletion = await _durableCompletionResolver.ResolveAsync(
