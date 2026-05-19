@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -783,10 +784,11 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     }
 
     [Fact]
-    public async Task UpsertAsync_ShouldReuseExistingWorkflowRevision_WhenReplayRevisionMatches()
+    public async Task UpsertAsync_ShouldReuseExistingWorkflowRevision_WhenReplayRevisionMatchesAndArtifactHashMatches()
     {
         const string revisionId = "rev-platform-bind-1";
         var commandPort = new RecordingServiceCommandPort();
+        var existingHash = "9FAFFAFE586BDBA6791AF7488B3D09AA3E9AA19B587D21AC772432E52DE86709";
         var lifecyclePort = new FakeServiceLifecycleQueryPort(
             new ServiceCatalogSnapshot(
                 "scope-a:default:default:default",
@@ -818,7 +820,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                         revisionId,
                         ServiceImplementationKind.Workflow.ToString(),
                         ServiceRevisionStatus.Published.ToString(),
-                        string.Empty,
+                        existingHash,
                         string.Empty,
                         [],
                         DateTimeOffset.UtcNow.AddHours(-1),
@@ -852,6 +854,74 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         commandPort.Calls.Should().Contain(call => call.Method == "PublishRevisionAsync");
         commandPort.Calls.Should().Contain(call => call.Method == "SetDefaultServingRevisionAsync");
         commandPort.Calls.Should().Contain(call => call.Method == "ActivateServiceRevisionAsync");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldRejectExistingWorkflowRevision_WhenReplayArtifactHashDoesNotMatch()
+    {
+        const string revisionId = "rev-platform-bind-1";
+        var commandPort = new RecordingServiceCommandPort();
+        var existingHash = CreateWorkflowArtifactHash(revisionId, "main", "name: main\nsteps:\n  - run: echo old");
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(
+            new ServiceCatalogSnapshot(
+                "scope-a:default:default:default",
+                ScopeId,
+                DefaultOptions.ServiceAppId,
+                DefaultOptions.ServiceNamespace,
+                DefaultOptions.DefaultServiceId,
+                "main",
+                revisionId,
+                revisionId,
+                "dep-1",
+                "actor-1",
+                "Active",
+                [
+                    new ServiceEndpointSnapshot(
+                        "chat",
+                        "chat",
+                        ServiceEndpointKind.Chat.ToString(),
+                        "type.googleapis.com/aevatar.ai.ChatRequestEvent",
+                        "type.googleapis.com/aevatar.ai.ChatResponseEvent",
+                        "Workflow chat endpoint."),
+                ],
+                [],
+                DateTimeOffset.UtcNow),
+            new ServiceRevisionCatalogSnapshot(
+                "scope-a:default:default:default",
+                [
+                    new ServiceRevisionSnapshot(
+                        revisionId,
+                        ServiceImplementationKind.Workflow.ToString(),
+                        ServiceRevisionStatus.Published.ToString(),
+                        existingHash,
+                        string.Empty,
+                        [],
+                        DateTimeOffset.UtcNow.AddHours(-1),
+                        DateTimeOffset.UtcNow.AddHours(-1),
+                        DateTimeOffset.UtcNow.AddHours(-1),
+                        null),
+                ],
+                DateTimeOffset.UtcNow));
+        var scopeScriptQueryPort = new FakeScopeScriptQueryPort();
+        var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
+
+        var act = () => service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec([
+                "name: main\nsteps:\n  - run: echo hello",
+            ]),
+            RevisionId: revisionId,
+            AllowExistingRevisionReplay: true,
+            ReplayRevisionId: revisionId));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*different Workflow artifact*");
+        commandPort.Calls.Should().ContainSingle(call => call.Method == "UpdateServiceAsync");
+        commandPort.Calls.Should().NotContain(call => call.Method == "CreateRevisionAsync");
+        commandPort.Calls.Should().NotContain(call => call.Method == "PrepareRevisionAsync");
     }
 
     [Fact]
@@ -922,10 +992,21 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     }
 
     [Fact]
-    public async Task UpsertAsync_ShouldReuseExistingGAgentRevision_WhenReplayRevisionMatches()
+    public async Task UpsertAsync_ShouldReuseExistingGAgentRevision_WhenReplayRevisionMatchesAndArtifactHashMatches()
     {
         const string revisionId = "rev-static-bind-1";
         var commandPort = new RecordingServiceCommandPort();
+        var existingHash = CreateStaticArtifactHash(revisionId, typeof(TestStaticServiceAgent).AssemblyQualifiedName!, [
+            new ServiceEndpointDescriptor
+            {
+                EndpointId = "chat",
+                DisplayName = "chat",
+                Kind = ServiceEndpointKind.Chat,
+                RequestTypeUrl = "type.googleapis.com/aevatar.ai.ChatRequestEvent",
+                ResponseTypeUrl = "type.googleapis.com/aevatar.ai.ChatResponseEvent",
+                Description = "Default chat endpoint.",
+            },
+        ], serviceId: "default");
         var lifecyclePort = new FakeServiceLifecycleQueryPort(
             new ServiceCatalogSnapshot(
                 "scope-a:default:default:default",
@@ -957,7 +1038,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                         revisionId,
                         ServiceImplementationKind.Static.ToString(),
                         ServiceRevisionStatus.Published.ToString(),
-                        string.Empty,
+                        existingHash,
                         string.Empty,
                         [],
                         DateTimeOffset.UtcNow.AddHours(-1),
@@ -1418,6 +1499,82 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             .Assemble(artifact)
             .ArtifactHash;
     }
+
+    private static string CreateWorkflowArtifactHash(
+        string revisionId,
+        string workflowName,
+        string workflowYaml,
+        string endpointDescription = "Workflow chat endpoint.",
+        string? serviceId = null)
+    {
+        var artifact = new PreparedServiceRevisionArtifact
+        {
+            Identity = DefaultServiceIdentity(serviceId),
+            RevisionId = revisionId,
+            ImplementationKind = ServiceImplementationKind.Workflow,
+            Endpoints =
+            {
+                new ServiceEndpointDescriptor
+                {
+                    EndpointId = "chat",
+                    DisplayName = "chat",
+                    Kind = ServiceEndpointKind.Chat,
+                    RequestTypeUrl = GetTypeUrl(ChatRequestEvent.Descriptor),
+                    ResponseTypeUrl = GetTypeUrl(ChatResponseEvent.Descriptor),
+                    Description = endpointDescription,
+                },
+            },
+            DeploymentPlan = new ServiceDeploymentPlan
+            {
+                WorkflowPlan = new WorkflowServiceDeploymentPlan
+                {
+                    WorkflowName = workflowName,
+                    WorkflowYaml = workflowYaml,
+                    DefinitionActorId = $"scope-workflow:{ScopeId}:default",
+                },
+            },
+        };
+        return new PreparedServiceRevisionArtifactAssembler()
+            .Assemble(artifact)
+            .ArtifactHash;
+    }
+
+    private static string CreateStaticArtifactHash(
+        string revisionId,
+        string actorTypeName,
+        IReadOnlyList<ServiceEndpointDescriptor> endpoints,
+        string? serviceId = null)
+    {
+        var artifact = new PreparedServiceRevisionArtifact
+        {
+            Identity = DefaultServiceIdentity(serviceId),
+            RevisionId = revisionId,
+            ImplementationKind = ServiceImplementationKind.Static,
+            Endpoints = { endpoints.Select(x => x.Clone()) },
+            DeploymentPlan = new ServiceDeploymentPlan
+            {
+                StaticPlan = new StaticServiceDeploymentPlan
+                {
+                    ActorTypeName = actorTypeName,
+                },
+            },
+        };
+        return new PreparedServiceRevisionArtifactAssembler()
+            .Assemble(artifact)
+            .ArtifactHash;
+    }
+
+    private static string GetTypeUrl(Google.Protobuf.Reflection.MessageDescriptor descriptor) =>
+        $"type.googleapis.com/{descriptor.FullName}";
+
+    private static ServiceIdentity DefaultServiceIdentity(string? serviceId = null) =>
+        new()
+        {
+            TenantId = ScopeId,
+            AppId = DefaultOptions.ServiceAppId,
+            Namespace = DefaultOptions.ServiceNamespace,
+            ServiceId = serviceId ?? DefaultOptions.DefaultServiceId,
+        };
 
     private static ServiceSourcePackageSpec ToServicePackage(ScriptPackageSpec packageSpec)
     {
