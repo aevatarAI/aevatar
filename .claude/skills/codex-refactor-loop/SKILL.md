@@ -285,6 +285,8 @@ For each `pass` cluster, serially:
 
     Controller must run the equivalence test (SKILL.md Bilingual rule §"Equivalence test") on the generated body before `gh pr create`. If 中文 section is missing or visibly shorter than English, regenerate or fall back to a one-paragraph machine-translation as last resort (and PushNotification flagging the legacy fallback so operator can fix).
 
+7b. **立刻给 PR 加 `auto-loop` label**(per Auric 2026-05-19 "我发现你会掉监控"):`gh pr edit <PR> --add-label "auto-loop"`。**漏加 → comment-monitor 不监控该 PR 评论 → maintainer 评论无 react 无回复**。漏加是 P0 bug,等同失保。Phase 4b 在 `gh pr create` 成功后立刻 chain 这条 `gh pr edit`,不能延后到下一 turn。
+
 7b. Record the PR number in `state.clusters_active[i].pr_number`.
 8b. **Stack rebase on upstream merge**: when an upstream (dependency) cluster's PR merges into `integration_branch`, immediately:
     - For each downstream cluster whose `dependencies` contained it:
@@ -1290,6 +1292,7 @@ PR 同理(`gh pr edit` instead of `gh issue edit`)。
 - ❌ 同时挂多个 phase label → 人类困惑
 - ❌ 用纯文字 label(无 emoji)→ 列表页一眼看不出 phase / human 类别
 - ❌ blocked-on 不打 `⏸️ phase:blocked` → 人类以为还在主动跑
+- ❌ **PR 不加 `auto-loop` label** → comment-monitor.sh 查的是 `--label auto-loop` 而非 phase:*,漏加 = monitor 完全不监控该 PR 评论 → maintainer 喊话无 react 无回复(per Auric 2026-05-19 "我发现你会掉监控")
 
 ## Hard rules (controller-level, propagated into every codex prompt)
 
