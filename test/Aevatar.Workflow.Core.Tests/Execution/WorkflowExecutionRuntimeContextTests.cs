@@ -19,7 +19,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
     {
         var host = new RecordingStateHost();
 
-        WorkflowRequestMetadataItemsAccess.SetRequestMetadata(
+        WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(
             host,
             new Dictionary<string, string>
             {
@@ -46,7 +46,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
     public void SetRequestMetadata_ShouldClearRuntimeValuesWhenMetadataIsNullEmptyOrInvalid()
     {
         var host = new RecordingStateHost();
-        WorkflowRequestMetadataItemsAccess.SetRequestMetadata(
+        WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(
             host,
             new Dictionary<string, string>
             {
@@ -54,12 +54,12 @@ public sealed class WorkflowExecutionRuntimeContextTests
                 [LLMRequestMetadataKeys.ModelOverride] = "model",
             });
 
-        WorkflowRequestMetadataItemsAccess.SetRequestMetadata(host, null);
+        WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(host, null);
 
         host.RuntimeContext.LlmOverrides.ModelOverride.Should().BeNull();
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
 
-        WorkflowRequestMetadataItemsAccess.SetRequestMetadata(
+        WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(
             host,
             new Dictionary<string, string>
             {
@@ -74,7 +74,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
     public void RemoveRequestMetadata_ShouldValidateAndClearRuntimeContext()
     {
         var host = new RecordingStateHost();
-        WorkflowRequestMetadataItemsAccess.SetRequestMetadata(
+        WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(
             host,
             new Dictionary<string, string>
             {
@@ -82,12 +82,12 @@ public sealed class WorkflowExecutionRuntimeContextTests
                 [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer secret",
             });
 
-        WorkflowRequestMetadataItemsAccess.RemoveRequestMetadata(host);
+        WorkflowRequestMetadataRuntimeContextAccess.RemoveRequestMetadata(host);
 
         host.RuntimeContext.Connector.Authorization.Should().BeNull();
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
 
-        FluentActions.Invoking(() => WorkflowRequestMetadataItemsAccess.RemoveRequestMetadata(null!))
+        FluentActions.Invoking(() => WorkflowRequestMetadataRuntimeContextAccess.RemoveRequestMetadata(null!))
             .Should()
             .Throw<ArgumentNullException>();
     }
@@ -97,11 +97,11 @@ public sealed class WorkflowExecutionRuntimeContextTests
     {
         var target = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        WorkflowRequestMetadataItemsAccess.CopyRequestMetadata(new ContextWithoutRuntimeAccessor(), target)
+        WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(new ContextWithoutRuntimeAccessor(), target)
             .Should()
             .Be(0);
 
-        WorkflowRequestMetadataItemsAccess.CopyRequestMetadata(new RecordingWorkflowExecutionContext(), target)
+        WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(new RecordingWorkflowExecutionContext(), target)
             .Should()
             .Be(0);
     }
@@ -120,7 +120,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
             });
         var target = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        var copied = WorkflowRequestMetadataItemsAccess.CopyRequestMetadata(context, target);
+        var copied = WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(context, target);
 
         copied.Should().Be(1);
         target.Should().ContainSingle();
@@ -135,13 +135,13 @@ public sealed class WorkflowExecutionRuntimeContextTests
         var context = new RecordingWorkflowExecutionContext();
         var target = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        FluentActions.Invoking(() => WorkflowRequestMetadataItemsAccess.CopyRequestMetadata(null!, target))
+        FluentActions.Invoking(() => WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(null!, target))
             .Should()
             .Throw<ArgumentNullException>();
-        FluentActions.Invoking(() => WorkflowRequestMetadataItemsAccess.CopyRequestMetadata(context, null!))
+        FluentActions.Invoking(() => WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(context, null!))
             .Should()
             .Throw<ArgumentNullException>();
-        FluentActions.Invoking(() => WorkflowRequestMetadataItemsAccess.SetRequestMetadata(null!, target))
+        FluentActions.Invoking(() => WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(null!, target))
             .Should()
             .Throw<ArgumentNullException>();
     }
@@ -151,22 +151,22 @@ public sealed class WorkflowExecutionRuntimeContextTests
     {
         var context = new RecordingWorkflowExecutionContext();
 
-        SecureInputRuntimeItemsAccess.SetCapturedValue(context, " run-1 ", " api_key ", "secret");
+        SecureInputRuntimeContextAccess.SetCapturedValue(context, " run-1 ", " api_key ", "secret");
 
-        SecureInputRuntimeItemsAccess.TryGetCapturedValue(context, "run-1", "api_key", out var value)
+        SecureInputRuntimeContextAccess.TryGetCapturedValue(context, "run-1", "api_key", out var value)
             .Should()
             .BeTrue();
         value.Should().Be("secret");
         context.RuntimeContext.CapturedSecureInputs.Values.Should().ContainKey(new CapturedSecureInputKey("run-1", "api_key"));
 
-        SecureInputRuntimeItemsAccess.RemoveCapturedValue(context, "run-1", "api_key").Should().BeTrue();
-        SecureInputRuntimeItemsAccess.TryGetCapturedValue(context, "run-1", "api_key", out _)
+        SecureInputRuntimeContextAccess.RemoveCapturedValue(context, "run-1", "api_key").Should().BeTrue();
+        SecureInputRuntimeContextAccess.TryGetCapturedValue(context, "run-1", "api_key", out _)
             .Should()
             .BeFalse();
 
-        SecureInputRuntimeItemsAccess.SetCapturedValue(context, "run-1", "api_key", "secret");
-        SecureInputRuntimeItemsAccess.SetCapturedValue(context, "run-2", "api_key", "other");
-        SecureInputRuntimeItemsAccess.RemoveRun(context, "run-1");
+        SecureInputRuntimeContextAccess.SetCapturedValue(context, "run-1", "api_key", "secret");
+        SecureInputRuntimeContextAccess.SetCapturedValue(context, "run-2", "api_key", "other");
+        SecureInputRuntimeContextAccess.RemoveRun(context, "run-1");
 
         context.RuntimeContext.CapturedSecureInputs.Values.Should().NotContainKey(new CapturedSecureInputKey("run-1", "api_key"));
         context.RuntimeContext.CapturedSecureInputs.Values.Should().ContainKey(new CapturedSecureInputKey("run-2", "api_key"));

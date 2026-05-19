@@ -3,7 +3,12 @@ using Aevatar.Workflow.Abstractions.Execution;
 
 namespace Aevatar.Workflow.Core.Execution;
 
-internal static class ConnectorAuthorizationRuntimeItemsAccess
+// Refactor (iter16/cluster-031):
+//   Old pattern: connector authorization lived under the generic execution item
+//                key `http.authorization` and was recovered through string-key bag lookup.
+//   New principle: connector authorization is a typed field on the actor-owned
+//                  WorkflowExecutionRuntimeContext connector section.
+internal static class ConnectorAuthorizationRuntimeContextAccess
 {
     public static void SetAuthorization(
         IWorkflowExecutionStateHost stateHost,

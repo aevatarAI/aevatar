@@ -226,7 +226,7 @@ public sealed class WorkflowRunGAgent
                 CancellationToken.None);
         }
 
-        WorkflowRequestMetadataItemsAccess.SetRequestMetadata(this, request.Metadata);
+        WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(this, request.Metadata);
 
         await EnsureAgentTreeAsync();
 

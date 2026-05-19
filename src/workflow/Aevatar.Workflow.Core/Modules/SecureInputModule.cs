@@ -37,7 +37,7 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
             var workflowCompleted = payload.Unpack<WorkflowCompletedEvent>();
             var state = SecureInputStateAccess.Load(ctx);
             SecureInputStateAccess.RemoveRun(state, workflowCompleted.RunId);
-            SecureInputRuntimeItemsAccess.RemoveRun(ctx, workflowCompleted.RunId);
+            SecureInputRuntimeContextAccess.RemoveRun(ctx, workflowCompleted.RunId);
             await SecureInputStateAccess.SaveAsync(state, ctx, ct);
             return;
         }
@@ -82,7 +82,7 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
                 MaskedOutput = requestMaskedOutput,
             };
             await SecureInputStateAccess.SaveAsync(state, ctx, ct);
-            SecureInputRuntimeItemsAccess.RemoveCapturedValue(ctx, runId, requestVariableName);
+            SecureInputRuntimeContextAccess.RemoveCapturedValue(ctx, runId, requestVariableName);
 
             ctx.Logger.LogInformation(
                 "SecureInput: run={RunId} step={StepId} suspended, variable={Variable}, timeout={Timeout}s",
@@ -125,7 +125,7 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
         {
             stateForResume.Pending.Remove(pendingKey);
             await SecureInputStateAccess.SaveAsync(stateForResume, ctx, ct);
-            SecureInputRuntimeItemsAccess.RemoveCapturedValue(ctx, pending.RunId, variableName);
+            SecureInputRuntimeContextAccess.RemoveCapturedValue(ctx, pending.RunId, variableName);
 
             ctx.Logger.LogWarning(
                 "SecureInput: run={RunId} step={StepId} timed out or cancelled",
@@ -147,7 +147,7 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
         {
             stateForResume.Pending.Remove(pendingKey);
             await SecureInputStateAccess.SaveAsync(stateForResume, ctx, ct);
-            SecureInputRuntimeItemsAccess.RemoveCapturedValue(ctx, pending.RunId, variableName);
+            SecureInputRuntimeContextAccess.RemoveCapturedValue(ctx, pending.RunId, variableName);
 
             ctx.Logger.LogWarning(
                 "SecureInput: run={RunId} step={StepId} rejected empty secure value",
@@ -171,7 +171,7 @@ public sealed class SecureInputModule : IEventModule<IWorkflowExecutionContext>
             userInput.Length);
 
         stateForResume.Pending.Remove(pendingKey);
-        SecureInputRuntimeItemsAccess.SetCapturedValue(ctx, pending.RunId, variableName, userInput);
+        SecureInputRuntimeContextAccess.SetCapturedValue(ctx, pending.RunId, variableName, userInput);
         await SecureInputStateAccess.SaveAsync(stateForResume, ctx, ct);
 
         await ctx.PublishAsync(new SecureValueCapturedEvent

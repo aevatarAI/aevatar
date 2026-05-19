@@ -3,7 +3,12 @@ using Aevatar.Workflow.Core.Execution;
 
 namespace Aevatar.Workflow.Core.Modules;
 
-internal static class SecureInputRuntimeItemsAccess
+// Refactor (iter16/cluster-031):
+//   Old pattern: captured secure input values used string-composed keys in the
+//                generic execution item bag.
+//   New principle: captured secure values use typed run/variable keys in the
+//                  actor-owned WorkflowExecutionRuntimeContext.
+internal static class SecureInputRuntimeContextAccess
 {
     public static void SetCapturedValue(
         IWorkflowExecutionContext ctx,

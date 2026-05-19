@@ -1788,7 +1788,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     {
         var module = new LLMCallModule();
         var ctx = CreateContext();
-        WorkflowRequestMetadataItemsAccess.SetRequestMetadata(
+        WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(
             (IWorkflowExecutionStateHost)ctx.Agent,
             new Dictionary<string, string>
             {
@@ -1822,7 +1822,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         var connector = new RecordingConnector("runtime-auth");
         var module = new ConnectorCallModule(new FixedWorkflowConnectorResolver(connector));
         var ctx = CreateContext();
-        WorkflowRequestMetadataItemsAccess.SetRequestMetadata(
+        WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadata(
             (IWorkflowExecutionStateHost)ctx.Agent,
             new Dictionary<string, string>
             {

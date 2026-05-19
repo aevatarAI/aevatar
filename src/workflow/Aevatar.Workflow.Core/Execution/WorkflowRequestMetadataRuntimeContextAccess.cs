@@ -2,7 +2,12 @@ using Aevatar.Workflow.Abstractions.Execution;
 
 namespace Aevatar.Workflow.Core.Execution;
 
-internal static class WorkflowRequestMetadataItemsAccess
+// Refactor (iter16/cluster-031):
+//   Old pattern: request metadata was copied into the generic execution item
+//                bag as `workflow.request.metadata`, mixing control values with passthrough metadata.
+//   New principle: request metadata is normalized into typed runtime sections
+//                  for LLM overrides, connector authorization, and filtered passthrough metadata.
+internal static class WorkflowRequestMetadataRuntimeContextAccess
 {
     public static void SetRequestMetadata(
         IWorkflowExecutionStateHost stateHost,
