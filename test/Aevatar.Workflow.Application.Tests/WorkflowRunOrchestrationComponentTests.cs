@@ -87,7 +87,10 @@ public sealed class WorkflowRunOrchestrationComponentTests
 
         var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", "direct", null), CancellationToken.None);
         result.Target.Should().NotBeNull();
-        result.Target!.BindLiveObservation(new FakeProjectionLease("actor-1", "cmd-1"), new EventChannel<WorkflowRunEventEnvelope>());
+        result.Target!.BindLiveObservation(
+            new FakeProjectionLease("actor-1", "cmd-1"),
+            null,
+            new EventChannel<WorkflowRunEventEnvelope>());
 
         await result.Target.PublishDetachedCommandSignalAsync(
             new DetachedCommandTimeout<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>(
