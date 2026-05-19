@@ -46,12 +46,6 @@ internal sealed class GAgentApprovalCommandTarget
 
     public void BindLiveObservation(
         IGAgentDraftRunProjectionLease lease,
-        IEventSink<AGUIEvent> sink,
-        string sessionId) =>
-        BindLiveObservation(lease, null, sink, sessionId);
-
-    public void BindLiveObservation(
-        IGAgentDraftRunProjectionLease lease,
         IAsyncDisposable? liveSinkLease,
         IEventSink<AGUIEvent> sink,
         string sessionId)

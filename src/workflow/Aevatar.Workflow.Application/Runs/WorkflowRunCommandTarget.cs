@@ -53,11 +53,6 @@ internal sealed class WorkflowRunCommandTarget
 
     public void BindLiveObservation(
         IWorkflowExecutionProjectionLease lease,
-        IEventSink<WorkflowRunEventEnvelope> sink) =>
-        BindLiveObservation(lease, null, sink);
-
-    public void BindLiveObservation(
-        IWorkflowExecutionProjectionLease lease,
         IAsyncDisposable? liveSinkLease,
         IEventSink<WorkflowRunEventEnvelope> sink)
     {

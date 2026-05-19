@@ -73,11 +73,13 @@ public sealed class GAgentDraftRunInteractionCoverageTests
             GAgentRunTerminalInteractionKind.DraftRun);
         var sink = new DraftRunRecordingSink();
         target.BindTerminalProjection(terminalLease);
-        target.BindLiveObservation(lease, sink, "session-1");
+        var liveSinkLease = new RecordingLiveSinkLease();
+        target.BindLiveObservation(lease, liveSinkLease, sink, "session-1");
 
         await target.CleanupAfterDispatchFailureAsync(CancellationToken.None);
 
-        projectionPort.DetachCalls.Should().ContainSingle(x => ReferenceEquals(x.lease, lease));
+        projectionPort.DetachedLiveSinkLeases.Should().ContainSingle(x => ReferenceEquals(x, liveSinkLease));
+        liveSinkLease.DisposeCount.Should().Be(1);
         projectionPort.ReleaseCalls.Should().ContainSingle(x => ReferenceEquals(x, lease));
         sink.Completed.Should().BeTrue();
         sink.DisposeCalls.Should().Be(1);
@@ -104,7 +106,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
             GAgentRunTerminalInteractionKind.DraftRun);
         var sink = new DraftRunRecordingSink();
         target.BindTerminalProjection(terminalLease);
-        target.BindLiveObservation(lease, sink, "session-1");
+        target.BindLiveObservation(lease, new RecordingLiveSinkLease(), sink, "session-1");
         sink.Push(new AGUIEvent
         {
             Custom = new CustomEvent
@@ -152,7 +154,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
             "corr-1",
             GAgentRunTerminalInteractionKind.DraftRun);
         target.BindTerminalProjection(terminalLease);
-        target.BindLiveObservation(lease, new DraftRunRecordingSink(), "session-1");
+        target.BindLiveObservation(lease, new RecordingLiveSinkLease(), new DraftRunRecordingSink(), "session-1");
 
         await target.ReleaseAfterInteractionAsync(
             new GAgentDraftRunAcceptedReceipt(
@@ -187,7 +189,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
             "corr-1",
             GAgentRunTerminalInteractionKind.DraftRun);
         target.BindTerminalProjection(terminalLease);
-        target.BindLiveObservation(lease, new DraftRunRecordingSink(), "session-1");
+        target.BindLiveObservation(lease, new RecordingLiveSinkLease(), new DraftRunRecordingSink(), "session-1");
 
         await target.ReleaseAfterInteractionAsync(
             new GAgentDraftRunAcceptedReceipt(
@@ -485,10 +487,11 @@ public sealed class GAgentDraftRunInteractionCoverageTests
     private sealed class DraftRunProjectionPort : IGAgentDraftRunProjectionPort
     {
         public DraftRunProjectionLease? LeaseToReturn { get; init; } = new("actor-1", "cmd-1");
+        public RecordingLiveSinkLease LiveSinkLeaseToReturn { get; } = new();
         public bool ProjectionEnabled => true;
         public List<(string actorId, string commandId)> EnsureCalls { get; } = [];
         public List<(IGAgentDraftRunProjectionLease lease, IEventSink<AGUIEvent> sink)> AttachCalls { get; } = [];
-        public List<(IGAgentDraftRunProjectionLease lease, IEventSink<AGUIEvent> sink)> DetachCalls { get; } = [];
+        public List<IAsyncDisposable?> DetachedLiveSinkLeases { get; } = [];
         public List<IGAgentDraftRunProjectionLease> ReleaseCalls { get; } = [];
 
         public Task<IGAgentDraftRunProjectionLease?> EnsureActorProjectionAsync(
@@ -506,12 +509,21 @@ public sealed class GAgentDraftRunInteractionCoverageTests
             CancellationToken ct = default)
         {
             AttachCalls.Add((lease, sink));
-            return Task.FromResult<IAsyncDisposable?>(null);
+            return Task.FromResult<IAsyncDisposable?>(LiveSinkLeaseToReturn);
         }
+
         public Task DetachLiveSinkAsync(
             IAsyncDisposable? liveSinkLease,
-            CancellationToken ct = default) =>
-            Task.CompletedTask;
+            CancellationToken ct = default)
+        {
+            DetachedLiveSinkLeases.Add(liveSinkLease);
+            if (liveSinkLease != null)
+            {
+                return liveSinkLease.DisposeAsync().AsTask();
+            }
+
+            return Task.CompletedTask;
+        }
 
         public Task ReleaseActorProjectionAsync(
             IGAgentDraftRunProjectionLease lease,
@@ -523,6 +535,17 @@ public sealed class GAgentDraftRunInteractionCoverageTests
     }
 
     private sealed record DraftRunProjectionLease(string ActorId, string CommandId) : IGAgentDraftRunProjectionLease;
+
+    private sealed class RecordingLiveSinkLease : IAsyncDisposable
+    {
+        public int DisposeCount { get; private set; }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCount++;
+            return ValueTask.CompletedTask;
+        }
+    }
 
     private sealed class RecordingGAgentRunTerminalProjectionPort : IGAgentRunTerminalProjectionPort
     {

@@ -71,6 +71,7 @@ public sealed class GAgentApprovalInteractionTests
 
         result.Succeeded.Should().BeTrue();
         target.ProjectionLease.Should().BeSameAs(projectionPort.LeaseToReturn);
+        target.LiveSinkLease.Should().BeSameAs(projectionPort.LiveSinkLeaseToReturn);
         target.LiveSink.Should().NotBeNull();
         projectionPort.EnsureCalls.Should().ContainSingle(x => x.actorId == "actor-1" && x.commandId == "corr-1");
         projectionPort.AttachCalls.Should().ContainSingle();
@@ -126,11 +127,13 @@ public sealed class GAgentApprovalInteractionTests
             "corr-1",
             GAgentRunTerminalInteractionKind.Approval);
         target.BindTerminalProjection(terminalLease);
-        target.BindLiveObservation(lease, sink, "session-1");
+        var liveSinkLease = new RecordingLiveSinkLease();
+        target.BindLiveObservation(lease, liveSinkLease, sink, "session-1");
 
         await target.CleanupAfterDispatchFailureAsync(CancellationToken.None);
 
-        projectionPort.DetachCalls.Should().ContainSingle(x => ReferenceEquals(x.lease, lease));
+        projectionPort.DetachedLiveSinkLeases.Should().ContainSingle(x => ReferenceEquals(x, liveSinkLease));
+        liveSinkLease.DisposeCount.Should().Be(1);
         projectionPort.ReleaseCalls.Should().ContainSingle(x => ReferenceEquals(x, lease));
         sink.Completed.Should().BeTrue();
         sink.DisposeCalls.Should().Be(1);
@@ -359,10 +362,11 @@ public sealed class GAgentApprovalInteractionTests
     private sealed class ApprovalProjectionPort : IGAgentDraftRunProjectionPort
     {
         public ApprovalProjectionLease? LeaseToReturn { get; init; } = new("actor-1", "cmd-1");
+        public RecordingLiveSinkLease LiveSinkLeaseToReturn { get; } = new();
         public bool ProjectionEnabled => true;
         public List<(string actorId, string commandId)> EnsureCalls { get; } = [];
         public List<(IGAgentDraftRunProjectionLease lease, IEventSink<AGUIEvent> sink)> AttachCalls { get; } = [];
-        public List<(IGAgentDraftRunProjectionLease lease, IEventSink<AGUIEvent> sink)> DetachCalls { get; } = [];
+        public List<IAsyncDisposable?> DetachedLiveSinkLeases { get; } = [];
         public List<IGAgentDraftRunProjectionLease> ReleaseCalls { get; } = [];
 
         public Task<IGAgentDraftRunProjectionLease?> EnsureActorProjectionAsync(
@@ -380,12 +384,21 @@ public sealed class GAgentApprovalInteractionTests
             CancellationToken ct = default)
         {
             AttachCalls.Add((lease, sink));
-            return Task.FromResult<IAsyncDisposable?>(null);
+            return Task.FromResult<IAsyncDisposable?>(LiveSinkLeaseToReturn);
         }
+
         public Task DetachLiveSinkAsync(
             IAsyncDisposable? liveSinkLease,
-            CancellationToken ct = default) =>
-            Task.CompletedTask;
+            CancellationToken ct = default)
+        {
+            DetachedLiveSinkLeases.Add(liveSinkLease);
+            if (liveSinkLease != null)
+            {
+                return liveSinkLease.DisposeAsync().AsTask();
+            }
+
+            return Task.CompletedTask;
+        }
 
         public Task ReleaseActorProjectionAsync(
             IGAgentDraftRunProjectionLease lease,
@@ -397,6 +410,17 @@ public sealed class GAgentApprovalInteractionTests
     }
 
     private sealed record ApprovalProjectionLease(string ActorId, string CommandId) : IGAgentDraftRunProjectionLease;
+
+    private sealed class RecordingLiveSinkLease : IAsyncDisposable
+    {
+        public int DisposeCount { get; private set; }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCount++;
+            return ValueTask.CompletedTask;
+        }
+    }
 
     private sealed class ApprovalTerminalProjectionPort : IGAgentRunTerminalProjectionPort
     {

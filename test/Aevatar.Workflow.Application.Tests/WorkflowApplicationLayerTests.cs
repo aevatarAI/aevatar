@@ -288,7 +288,11 @@ public sealed class WorkflowApplicationLayerTests
             readModelActivationPort,
             actorPort,
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
-        target.BindLiveObservation(new FakeProjectionLease(actorId, commandId), new EventChannel<WorkflowRunEventEnvelope>());
+        var projectionLease = new FakeProjectionLease(actorId, commandId);
+        target.BindLiveObservation(
+            projectionLease,
+            new FakeLiveSinkLease(projectionLease),
+            new EventChannel<WorkflowRunEventEnvelope>());
         return target;
     }
 
@@ -491,15 +495,25 @@ public sealed class WorkflowApplicationLayerTests
             CancellationToken ct = default)
         {
             if (lease is FakeProjectionLease trackingLease)
+            {
                 trackingLease.LiveSinkAttached = true;
+                return Task.FromResult<IAsyncDisposable?>(new FakeLiveSinkLease(trackingLease));
+            }
 
             return Task.FromResult<IAsyncDisposable?>(null);
         }
+
         public Task DetachLiveSinkAsync(
             IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default)
         {
             DetachCalls.Add(liveSinkLease);
+            if (liveSinkLease is FakeLiveSinkLease fakeLease)
+            {
+                fakeLease.ProjectionLease.LiveSinkAttached = false;
+                return fakeLease.DisposeAsync().AsTask();
+            }
+
             return Task.CompletedTask;
         }
 
@@ -541,6 +555,13 @@ public sealed class WorkflowApplicationLayerTests
         public string CommandId { get; }
         public bool LiveSinkAttached { get; set; } = true;
         public bool Released { get; set; }
+    }
+
+    private sealed class FakeLiveSinkLease(FakeProjectionLease projectionLease) : IAsyncDisposable
+    {
+        public FakeProjectionLease ProjectionLease { get; } = projectionLease;
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort

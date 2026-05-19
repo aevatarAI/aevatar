@@ -452,8 +452,8 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
         var lease = new FakeProjectionLease("actor-1", "cmd-1");
         var sink = new FakeEventSink();
 
-        var actOnLease = () => target.BindLiveObservation(null!, sink);
-        var actOnSink = () => target.BindLiveObservation(lease, null!);
+        var actOnLease = () => target.BindLiveObservation(null!, new FakeLiveSinkLease("actor-1"), sink);
+        var actOnSink = () => target.BindLiveObservation(lease, new FakeLiveSinkLease("actor-1"), null!);
 
         actOnLease.Should().Throw<ArgumentNullException>();
         actOnSink.Should().Throw<ArgumentNullException>();
@@ -478,7 +478,10 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             projectionPort,
             actorPort,
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
-        target.BindLiveObservation(new FakeProjectionLease("actor-1", "cmd-1"), new FakeEventSink());
+        target.BindLiveObservation(
+            new FakeProjectionLease("actor-1", "cmd-1"),
+            new FakeLiveSinkLease("actor-1"),
+            new FakeEventSink());
 
         await target.ReleaseAfterInteractionAsync(
             new WorkflowChatRunAcceptedReceipt("actor-1", "workflow-1", "cmd-1", "corr-1"),
@@ -636,7 +639,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             projectionPort,
             actorPort,
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
-        target.BindLiveObservation(new FakeProjectionLease("actor-1", "cmd-1"), sink);
+        target.BindLiveObservation(new FakeProjectionLease("actor-1", "cmd-1"), new FakeLiveSinkLease("actor-1"), sink);
         return target;
     }
 
@@ -755,8 +758,12 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
         }
         public Task DetachLiveSinkAsync(
             IAsyncDisposable? liveSinkLease,
-            CancellationToken ct = default) =>
-            Task.CompletedTask;
+            CancellationToken ct = default)
+        {
+            var actorId = liveSinkLease is FakeLiveSinkLease fakeLease ? fakeLease.ActorId : string.Empty;
+            Events.Add($"detach:{actorId}");
+            return Task.CompletedTask;
+        }
 
         public Task ReleaseActorProjectionAsync(
             IWorkflowExecutionProjectionLease lease,
@@ -812,6 +819,13 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
     {
         public string ActorId { get; } = actorId;
         public string CommandId { get; } = commandId;
+    }
+
+    private sealed class FakeLiveSinkLease(string actorId) : IAsyncDisposable
+    {
+        public string ActorId { get; } = actorId;
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class FakeEventSink : IEventSink<WorkflowRunEventEnvelope>

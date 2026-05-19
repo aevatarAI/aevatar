@@ -76,12 +76,28 @@ public sealed class ServiceConfigurationProjectionInfrastructureTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(IServiceConfigurationQueryReader) &&
             x.ImplementationType == typeof(ServiceConfigurationQueryReader));
-        services.Should().Contain(x =>
+        services.Should().ContainSingle(x =>
             x.ServiceType == typeof(IProjectionMaterializer<ServiceConfigurationProjectionContext>) &&
-            x.ImplementationType == typeof(ServiceConfigurationProjector));
-        services.Should().Contain(x =>
+            IsObservedProjectionMaterializerFor<ServiceConfigurationProjector>(x.ImplementationType));
+        services.Should().ContainSingle(x =>
             x.ServiceType == typeof(IProjectionArtifactMaterializer<ServiceConfigurationProjectionContext>) &&
-            x.ImplementationType == typeof(ServiceConfigurationProjector));
+            IsObservedProjectionArtifactMaterializerFor<ServiceConfigurationProjector>(x.ImplementationType));
+    }
+
+    private static bool IsObservedProjectionMaterializerFor<TProjector>(System.Type? type)
+    {
+        return type?.IsGenericType == true &&
+               type.Name.StartsWith("ObservedProjectionMaterializer`", StringComparison.Ordinal) &&
+               type.GenericTypeArguments.Length == 2 &&
+               type.GenericTypeArguments[1] == typeof(TProjector);
+    }
+
+    private static bool IsObservedProjectionArtifactMaterializerFor<TProjector>(System.Type? type)
+    {
+        return type?.IsGenericType == true &&
+               type.Name.StartsWith("ObservedProjectionArtifactMaterializer`", StringComparison.Ordinal) &&
+               type.GenericTypeArguments.Length == 2 &&
+               type.GenericTypeArguments[1] == typeof(TProjector);
     }
 
     [Fact]
