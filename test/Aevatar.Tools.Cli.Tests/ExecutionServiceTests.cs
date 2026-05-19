@@ -129,6 +129,46 @@ public sealed class ExecutionServiceTests
     }
 
     [Fact]
+    public async Task StopAsync_WhenExecutionIdMatchesRunId_ShouldFallbackToListAndDispatch()
+    {
+        var runQueryPort = new RecordingServiceRunQueryPort();
+        runQueryPort.Runs.Add(CreateRun("scope-a", "workflow-1", "run-a", "cmd-a"));
+        var stopDispatch = new RecordingStopDispatchService();
+        var service = CreateService(
+            runQueryPort: runQueryPort,
+            stopDispatch: stopDispatch,
+            scopeResolver: new StubAppScopeResolver("scope-a"));
+
+        var detail = await service.StopAsync("run-a", new StopExecutionRequest(" manual "));
+
+        detail.Should().NotBeNull();
+        detail!.Status.Should().Be("stopped");
+        runQueryPort.LastQuery.Should().NotBeNull();
+        runQueryPort.LastQuery!.Take.Should().Be(100);
+        stopDispatch.LastCommand.Should().NotBeNull();
+        stopDispatch.LastCommand!.RunId.Should().Be("run-a");
+        stopDispatch.LastCommand.Reason.Should().Be("manual");
+    }
+
+    [Fact]
+    public async Task StopAsync_WhenRunAlreadyTerminal_ShouldReturnDetailWithoutDispatch()
+    {
+        var runQueryPort = new RecordingServiceRunQueryPort();
+        runQueryPort.Runs.Add(CreateRun("scope-a", "workflow-1", "run-a", "cmd-a", ServiceRunStatus.Completed));
+        var stopDispatch = new RecordingStopDispatchService();
+        var service = CreateService(
+            runQueryPort: runQueryPort,
+            stopDispatch: stopDispatch,
+            scopeResolver: new StubAppScopeResolver("scope-a"));
+
+        var detail = await service.StopAsync("cmd-a", new StopExecutionRequest("manual"));
+
+        detail.Should().NotBeNull();
+        detail!.Status.Should().Be("completed");
+        stopDispatch.LastCommand.Should().BeNull();
+    }
+
+    [Fact]
     public async Task StartAsync_WhenRequestedScopeDoesNotMatchCaller_ShouldThrow()
     {
         var service = CreateService(scopeResolver: new StubAppScopeResolver("scope-a"));
