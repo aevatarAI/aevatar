@@ -94,14 +94,9 @@ public sealed class ChatRuntime
         // Refactor (iter15/cluster-024):
         //   Old pattern: non-streaming ChatAsync directly called provider.ChatAsync.
         //   New principle: ChatStreamAsync is the only authoritative AI executor; offline text aggregation consumes the stream as an explicit adapter.
-        var content = new StringBuilder();
-        await foreach (var chunk in ChatStreamAsync(userContent, maxToolRounds, requestId, metadata, ct))
-        {
-            if (!string.IsNullOrEmpty(chunk.DeltaContent))
-                content.Append(chunk.DeltaContent);
-        }
-
-        return content.Length > 0 ? content.ToString() : null;
+        return await ChatStreamContentAggregator.AggregateContentAsync(
+            ChatStreamAsync(userContent, maxToolRounds, requestId, metadata, ct),
+            ct: ct);
     }
 
     /// <summary>流式 Chat，包裹 LLM Call Middleware。</summary>

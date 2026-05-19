@@ -301,7 +301,7 @@ public sealed class ToolCallLoop
         await MiddlewarePipeline.RunLLMCallAsync(_llmMiddlewares, llmCallContext, async () =>
         {
             if (llmCallContext.Terminate) return;
-            llmCallContext.Response = await AggregateStreamResponseAsync(provider, llmCallContext.Request, ct);
+            llmCallContext.Response = await ChatStreamContentAggregator.AggregateResponseAsync(provider, llmCallContext.Request, ct);
         });
 
         var response = llmCallContext.Response
@@ -313,46 +313,6 @@ public sealed class ToolCallLoop
         if (_hooks != null) await _hooks.RunLLMRequestEndAsync(llmCtx, ct);
 
         return (response, llmCallContext.Terminate);
-    }
-
-    private static async Task<LLMResponse> AggregateStreamResponseAsync(
-        ILLMProvider provider,
-        LLMRequest request,
-        CancellationToken ct)
-    {
-        var content = new StringBuilder();
-        var reasoningContent = new StringBuilder();
-        var toolCalls = new StreamingToolCallAccumulator();
-        TokenUsage? usage = null;
-        string? finishReason = null;
-
-        await foreach (var chunk in provider.ChatStreamAsync(request, ct).WithCancellation(ct))
-        {
-            if (!string.IsNullOrEmpty(chunk.DeltaContent))
-                content.Append(chunk.DeltaContent);
-
-            if (!string.IsNullOrEmpty(chunk.DeltaReasoningContent))
-                reasoningContent.Append(chunk.DeltaReasoningContent);
-
-            if (chunk.DeltaToolCall != null)
-                toolCalls.TrackDelta(chunk.DeltaToolCall);
-
-            if (chunk.Usage != null)
-                usage = chunk.Usage;
-
-            if (chunk.FinishReason != null)
-                finishReason = chunk.FinishReason;
-        }
-
-        var finalToolCalls = toolCalls.BuildToolCalls();
-        return new LLMResponse
-        {
-            Content = content.Length > 0 ? content.ToString() : null,
-            ReasoningContent = reasoningContent.Length > 0 ? reasoningContent.ToString() : null,
-            ToolCalls = finalToolCalls.Count > 0 ? finalToolCalls : null,
-            Usage = usage,
-            FinishReason = finishReason,
-        };
     }
 
     internal static IReadOnlyDictionary<string, string>? BuildPerCallMetadata(

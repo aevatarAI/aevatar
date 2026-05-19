@@ -3,11 +3,11 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
+using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Microsoft.Extensions.Logging;
-using System.Text;
 
 namespace Aevatar.GAgents.ChatbotClassifier;
 
@@ -67,14 +67,9 @@ public sealed class ChatbotClassifierGAgent : RoleGAgent
             // Refactor (iter15/cluster-024):
             //   Old pattern: non-streaming ChatAsync directly called provider.ChatAsync.
             //   New principle: ChatStreamAsync is the only authoritative AI executor; offline text aggregation consumes the stream as an explicit adapter.
-            var content = new StringBuilder();
-            await foreach (var chunk in ChatStreamAsync(request.Prompt, request.SessionId, metadata, CancellationToken.None))
-            {
-                if (!string.IsNullOrEmpty(chunk.DeltaContent))
-                    content.Append(chunk.DeltaContent);
-            }
-
-            result = content.Length > 0 ? content.ToString() : null;
+            result = await ChatStreamContentAggregator.AggregateContentAsync(
+                ChatStreamAsync(request.Prompt, request.SessionId, metadata, CancellationToken.None),
+                ct: CancellationToken.None);
         }
         catch (Exception ex)
         {

@@ -256,14 +256,9 @@ public static class ContextCompressor
         // Refactor (iter15/cluster-024):
         //   Old pattern: non-streaming ChatAsync directly called provider.ChatAsync.
         //   New principle: ChatStreamAsync is the only authoritative AI executor; offline text aggregation consumes the stream as an explicit adapter.
-        var summary = new StringBuilder();
-        await foreach (var chunk in provider.ChatStreamAsync(request, ct).WithCancellation(ct))
-        {
-            if (!string.IsNullOrEmpty(chunk.DeltaContent))
-                summary.Append(chunk.DeltaContent);
-        }
-
-        var summaryText = summary.ToString();
+        var summaryText = await ChatStreamContentAggregator.AggregateContentAsync(
+            provider.ChatStreamAsync(request, ct),
+            ct: ct);
         if (string.IsNullOrWhiteSpace(summaryText))
             return false;
 

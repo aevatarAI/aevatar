@@ -1,4 +1,5 @@
 using Aevatar.AI.Core;
+using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -40,7 +41,10 @@ internal sealed class WorkflowGenerateGAgent : AIGAgentBase<Empty>
         // Refactor (iter15/cluster-024):
         //   Old pattern: non-streaming ChatAsync directly called provider.ChatAsync.
         //   New principle: ChatStreamAsync is the only authoritative AI executor; offline text aggregation consumes the stream as an explicit adapter.
-        return await GenerateWithReasoningAsync(prompt, requestId, metadata, onReasoning: null, ct);
+        return await ChatStreamContentAggregator.AggregateContentAsync(
+            ChatStreamAsync(prompt, requestId, metadata, ct),
+            emptyAsNull: false,
+            ct: ct);
     }
 
     public async Task<string?> GenerateWithReasoningAsync(
