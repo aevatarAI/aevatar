@@ -274,6 +274,18 @@
 - 打分/审计文档 → `docs/audit-scorecard/`。
 - 工作文档不加入 `aevatar.slnx`。
 
+### Mermaid 在 GitHub issue / PR comment 的禁忌（强制）
+
+post 到 GitHub issue 或 PR comment 的 mermaid 经常渲染失败。规则：
+
+- **禁止双语混排标签**：`participant X as "Caller / 调用线程"` 这种带 `/` 的引号双语标签 GitHub 渲染器会断行或不识别。EN 与 ZH 各画一张图。
+- **禁止依赖 `%%{init: ...}%%` 指令**：GitHub mermaid 不保证支持 `themeVariables.fontSize`、`flowchart.useMaxWidth: false` 等。默认指令只对仓库内 docs 渲染有效，不对 GitHub UI 评论框生效。
+- **禁止超宽 sequenceDiagram**：6+ participant + 长标签会被 GitHub 容器裁掉，且不会出现横向滚动条。如超过 4 个 participant 或单标签超 30 字符，改用 ASCII 框图。
+- **优先用 ASCII / 表格**：GitHub issue/PR 评论里的设计澄清,首选 ASCII 流程图(monospace block)和 markdown 表格,而不是 mermaid。可读性优先。
+- **mermaid 仅在仓库内 `docs/` 文件用**：那里渲染器稳定、CSS 可控。issue/PR 评论里只在确认渲染成功的简单 `flowchart LR` 场景才用。
+
+教训来源: 2026-05-19 在 issue #684 post 多 participant + 引号双语 sequence diagram,GitHub 完全不渲染,Auric 直接反馈 "图没法看"。
+
 ## gstack
 
 Use the `/browse` skill from gstack for all web browsing. Never use `mcp__Claude_in_Chrome__*` tools directly.
