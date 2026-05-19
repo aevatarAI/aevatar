@@ -15,6 +15,9 @@ public interface ILLMProvider
     LLMProviderCapabilities Capabilities => LLMProviderCapabilities.TextOnly;
 
     /// <summary>同步 Chat 调用。返回完整响应内容与 tool_calls。</summary>
+    // Refactor (iter15/cluster-024):
+    //   Old pattern: formal conversation entrypoints could call provider ChatAsync as a parallel executor.
+    //   New principle: provider ChatAsync is a boundary compatibility contract only; formal entrypoints call ChatStreamAsync.
     /// <param name="request">LLM 请求，包含消息、工具、模型参数等。</param>
     /// <param name="ct">取消令牌。</param>
     /// <returns>LLM 响应，包含文本内容、工具调用、Token 用量等。</returns>

@@ -282,6 +282,9 @@ public sealed class ToolCallLoop
         LLMRequest request,
         CancellationToken ct)
     {
+        // Refactor (iter15/cluster-024):
+        //   Old pattern: non-streaming ChatAsync directly called provider.ChatAsync.
+        //   New principle: ChatStreamAsync is the only authoritative AI executor; offline text aggregation consumes the stream as an explicit adapter.
         // ─── Hook: LLM Request Start ───
         var llmCtx = new AIGAgentExecutionHookContext { LLMRequest = request };
         if (_hooks != null) await _hooks.RunLLMRequestStartAsync(llmCtx, ct);
@@ -291,14 +294,14 @@ public sealed class ToolCallLoop
             Request = request,
             Provider = provider,
             CancellationToken = ct,
-            IsStreaming = false,
+            IsStreaming = true,
         };
         AnnotateRequestIdentity(llmCallContext);
 
         await MiddlewarePipeline.RunLLMCallAsync(_llmMiddlewares, llmCallContext, async () =>
         {
             if (llmCallContext.Terminate) return;
-            llmCallContext.Response = await provider.ChatAsync(llmCallContext.Request, ct);
+            llmCallContext.Response = await ChatStreamContentAggregator.AggregateResponseAsync(provider, llmCallContext.Request, ct);
         });
 
         var response = llmCallContext.Response

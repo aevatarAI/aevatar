@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
+using Aevatar.AI.Core.Chat;
 using Google.Protobuf.WellKnownTypes;
 using System.Text;
 
@@ -31,12 +32,20 @@ internal sealed class ScriptGenerateGAgent : AIGAgentBase<Empty>
         return new AIAgentConfigStateOverrides();
     }
 
-    public Task<string?> GenerateAsync(
+    public async Task<string?> GenerateAsync(
         string prompt,
         string requestId,
         IReadOnlyDictionary<string, string>? metadata,
-        CancellationToken ct = default) =>
-        ChatAsync(prompt, requestId, metadata, ct);
+        CancellationToken ct = default)
+    {
+        // Refactor (iter15/cluster-024):
+        //   Old pattern: non-streaming ChatAsync directly called provider.ChatAsync.
+        //   New principle: ChatStreamAsync is the only authoritative AI executor; offline text aggregation consumes the stream as an explicit adapter.
+        return await ChatStreamContentAggregator.AggregateContentAsync(
+            ChatStreamAsync(prompt, requestId, metadata, ct),
+            emptyAsNull: false,
+            ct: ct);
+    }
 
     public async Task<string?> GenerateWithReasoningAsync(
         string prompt,

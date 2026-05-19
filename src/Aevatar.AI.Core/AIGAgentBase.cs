@@ -199,39 +199,9 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         return merged;
     }
 
-    // ─── Chat 快捷方法 ───
-
-    /// <summary>单轮 Chat（含 Tool Calling 循环）。</summary>
-    protected Task<string?> ChatAsync(string userMessage, CancellationToken ct = default)
-    {
-        EnsureRuntime();
-        return _chat!.ChatAsync(userMessage, EffectiveConfig.MaxToolRounds, ct);
-    }
-
-    /// <summary>单轮 Chat（含 Tool Calling 循环），显式传入稳定 request id 和 metadata。</summary>
-    protected Task<string?> ChatAsync(
-        string userMessage,
-        string? requestId,
-        IReadOnlyDictionary<string, string>? metadata = null,
-        CancellationToken ct = default)
-    {
-        EnsureRuntime();
-        var maxRounds = ResolveMaxToolRounds(metadata);
-        return _chat!.ChatAsync([ContentPart.TextPart(userMessage)], maxRounds, requestId, metadata, ct);
-    }
-
-    /// <summary>单轮 Chat（多模态内容），显式传入稳定 request id 和 metadata。</summary>
-    protected Task<string?> ChatAsync(
-        IReadOnlyList<ContentPart> userContent,
-        string? requestId,
-        IReadOnlyDictionary<string, string>? metadata = null,
-        CancellationToken ct = default)
-    {
-        EnsureRuntime();
-        var maxRounds = ResolveMaxToolRounds(metadata);
-        return _chat!.ChatAsync(userContent, maxRounds, requestId, metadata, ct);
-    }
-
+    // Refactor (iter15/cluster-024):
+    //   Old pattern: protected ChatAsync helpers let GAgents call the non-streaming executor as a formal conversation path.
+    //   New principle: GAgent subclasses use ChatStreamAsync; explicit offline aggregation is local to the caller that needs text.
     /// <summary>流式 Chat。</summary>
     protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(string userMessage, CancellationToken ct = default)
     {
