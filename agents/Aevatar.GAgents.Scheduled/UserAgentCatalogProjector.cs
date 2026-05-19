@@ -82,6 +82,13 @@ public sealed class UserAgentCatalogProjector
             }
 
             var existing = await _documentReader.GetAsync(key, ct);
+            // Fix (pr678-review): per-source monotonic guard. The document merges two
+            //   authoritative sources (catalog + runner), so it cannot carry one
+            //   authoritative version. Skip a catalog commit already materialized here —
+            //   without this, a stale/replayed catalog event would roll CatalogSourceVersion
+            //   back and re-write older membership fields over newer ones.
+            if (existing is not null && stateEvent.Version <= existing.CatalogSourceVersion)
+                continue;
             var document = MaterializeCatalogEntry(entry, stateEvent, updatedAt, existing);
             if (!string.Equals(document.Id, key, StringComparison.Ordinal))
             {
@@ -105,6 +112,10 @@ public sealed class UserAgentCatalogProjector
 
         var updatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
         var existing = await _documentReader.GetAsync(agentId, ct);
+        // Fix (pr678-review): per-source monotonic guard — skip a runner commit already
+        //   materialized into this document (see ProjectCatalogMembershipAsync).
+        if (existing is not null && stateEvent.Version <= existing.RunnerSourceVersion)
+            return;
         await _writeDispatcher.UpsertAsync(
             MaterializeRunnerExecution(agentId, state, stateEvent, updatedAt, existing),
             ct);
@@ -230,6 +241,11 @@ public sealed class UserAgentCatalogProjector
             : SkillRunnerDefaults.StatusRunning;
     }
 
+    // Fix (pr678-review): StateVersion merges two authoritative source versions. With the
+    //   per-source monotonic guards above, every accepted event strictly advances exactly
+    //   one source, so the sum is strictly monotonic per document and is a valid overwrite
+    //   watermark. CatalogSourceVersion / RunnerSourceVersion remain the honest per-source
+    //   versions; a fully vector-typed StateVersion would need a proto schema change.
     private static long ResolveMergedStateVersion(UserAgentCatalogDocument document) =>
         Math.Max(0, document.CatalogSourceVersion) + Math.Max(0, document.RunnerSourceVersion);
 

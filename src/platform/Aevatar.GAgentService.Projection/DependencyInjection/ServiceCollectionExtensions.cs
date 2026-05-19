@@ -14,6 +14,7 @@ using Aevatar.GAgentService.Projection.ReadModels;
 using Aevatar.Presentation.AGUI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgentService.Projection.DependencyInjection;
 
@@ -138,10 +139,22 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IGAgentRunTerminalProjectionPort, GAgentRunTerminalProjectionPort>();
         services.TryAddSingleton<ILlmSessionCurrentStateProjectionPort, LlmSessionCurrentStateProjectionPort>();
         services.TryAddSingleton<IResponsesAgentToolStateCurrentStateProjectionPort, ResponsesAgentToolStateCurrentStateProjectionPort>();
-        services.TryAddSingleton<IProjectionSessionEventCodec<AGUIEvent>, GAgentDraftRunSessionEventCodec>();
-        services.TryAddSingleton<IProjectionSessionEventHub<AGUIEvent>, ProjectionSessionEventHub<AGUIEvent>>();
-        services.TryAddSingleton<IGAgentDraftRunProjectionPort, GAgentDraftRunProjectionPort>();
-        services.TryAddSingleton<IScriptServiceAguiProjectionPort, ScriptServiceAguiProjectionPort>();
+        // Fix (pr678-review): see Aevatar.GAgents.NyxidChat ServiceCollectionExtensions.
+        //   AGUIEvent is projected by three pipelines (draft-run, script-service, NyxId chat);
+        //   a single shared IProjectionSessionEventHub<AGUIEvent> made TryAddSingleton silently
+        //   drop all codecs but the first. Each pipeline now builds its own channel-scoped hub.
+        services.TryAddSingleton<IGAgentDraftRunProjectionPort>(static sp =>
+            new GAgentDraftRunProjectionPort(
+                sp.GetRequiredService<ServiceProjectionOptions>(),
+                sp.GetRequiredService<IProjectionScopeActivationService<GAgentDraftRunRuntimeLease>>(),
+                sp.GetRequiredService<IProjectionScopeReleaseService<GAgentDraftRunRuntimeLease>>(),
+                CreateAguiSessionEventHub(sp, new GAgentDraftRunSessionEventCodec())));
+        services.TryAddSingleton<IScriptServiceAguiProjectionPort>(static sp =>
+            new ScriptServiceAguiProjectionPort(
+                sp.GetRequiredService<ServiceProjectionOptions>(),
+                sp.GetRequiredService<IProjectionScopeActivationService<ScriptServiceAguiRuntimeLease>>(),
+                sp.GetRequiredService<IProjectionScopeReleaseService<ScriptServiceAguiRuntimeLease>>(),
+                CreateAguiSessionEventHub(sp, new ScriptServiceAguiSessionEventCodec())));
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceCatalogReadModel>, ServiceCatalogReadModelMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceDeploymentCatalogReadModel>, ServiceDeploymentCatalogReadModelMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ServiceServingSetReadModel>, ServiceServingSetReadModelMetadataProvider>();
@@ -197,15 +210,27 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             ResponsesAgentToolStateCurrentStateProjectionContext,
             ResponsesAgentToolStateCurrentStateProjector>();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<GAgentDraftRunProjectionContext>,
-            GAgentDraftRunSessionEventProjector>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<ScriptServiceAguiProjectionContext>,
-            ScriptServiceAguiSessionEventProjector>());
+        services.TryAddEnumerable(ServiceDescriptor
+            .Singleton<IProjectionProjector<GAgentDraftRunProjectionContext>, GAgentDraftRunSessionEventProjector>(
+                static sp => new GAgentDraftRunSessionEventProjector(
+                    CreateAguiSessionEventHub(sp, new GAgentDraftRunSessionEventCodec()))));
+        services.TryAddEnumerable(ServiceDescriptor
+            .Singleton<IProjectionProjector<ScriptServiceAguiProjectionContext>, ScriptServiceAguiSessionEventProjector>(
+                static sp => new ScriptServiceAguiSessionEventProjector(
+                    CreateAguiSessionEventHub(sp, new ScriptServiceAguiSessionEventCodec()))));
 
         return services;
     }
+
+    // Fix (pr678-review): builds a channel-scoped AGUIEvent hub for one projection
+    //   pipeline. The hub holds no mutable state, so a per-consumer instance is safe.
+    private static ProjectionSessionEventHub<AGUIEvent> CreateAguiSessionEventHub(
+        IServiceProvider sp,
+        IProjectionSessionEventCodec<AGUIEvent> codec) =>
+        new(
+            sp.GetRequiredService<IStreamProvider>(),
+            codec,
+            sp.GetService<ILogger<ProjectionSessionEventHub<AGUIEvent>>>());
 
     private static IServiceCollection AddServiceProjectionRuntime<TContext, TScopeAgent>(
         this IServiceCollection services,

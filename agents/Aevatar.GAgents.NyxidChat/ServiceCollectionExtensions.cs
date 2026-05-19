@@ -5,6 +5,7 @@ using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
@@ -108,15 +109,31 @@ public static class ServiceCollectionExtensions
             },
             static context => new NyxIdChatSessionRuntimeLease(context));
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
-        services.TryAddSingleton<IProjectionSessionEventCodec<AGUIEvent>, NyxIdChatSessionEventCodec>();
-        services.TryAddSingleton<IProjectionSessionEventHub<AGUIEvent>, ProjectionSessionEventHub<AGUIEvent>>();
-        services.TryAddSingleton<INyxIdChatSessionProjectionPort, NyxIdChatSessionProjectionPort>();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IProjectionProjector<NyxIdChatSessionProjectionContext>,
-            NyxIdChatSessionEventProjector>());
+        // Fix (pr678-review): NyxId chat, GAgent draft-run and script-service AGUI all
+        //   project AGUIEvent. Registering IProjectionSessionEventCodec<AGUIEvent> /
+        //   IProjectionSessionEventHub<AGUIEvent> as one shared service let TryAddSingleton
+        //   silently drop whichever module registered second — a pipeline could then run on
+        //   the wrong codec/channel. Each pipeline now builds its own channel-scoped hub.
+        services.TryAddSingleton<INyxIdChatSessionProjectionPort>(static sp =>
+            new NyxIdChatSessionProjectionPort(
+                sp.GetRequiredService<IProjectionScopeActivationService<NyxIdChatSessionRuntimeLease>>(),
+                sp.GetRequiredService<IProjectionScopeReleaseService<NyxIdChatSessionRuntimeLease>>(),
+                CreateNyxIdChatSessionEventHub(sp)));
+        services.TryAddEnumerable(ServiceDescriptor
+            .Singleton<IProjectionProjector<NyxIdChatSessionProjectionContext>, NyxIdChatSessionEventProjector>(
+                static sp => new NyxIdChatSessionEventProjector(CreateNyxIdChatSessionEventHub(sp))));
 
         return services;
     }
+
+    // Fix (pr678-review): builds a NyxId-chat-scoped event hub so its session streams
+    //   are codec/channel-isolated from the draft-run and script-service AGUI pipelines.
+    //   The hub holds no mutable state, so a per-consumer instance is safe.
+    private static ProjectionSessionEventHub<AGUIEvent> CreateNyxIdChatSessionEventHub(IServiceProvider sp) =>
+        new(
+            sp.GetRequiredService<IStreamProvider>(),
+            new NyxIdChatSessionEventCodec(),
+            sp.GetService<ILogger<ProjectionSessionEventHub<AGUIEvent>>>());
 
     private static NyxIdRelayOptions BindRelayOptions(IConfiguration? configuration)
     {
