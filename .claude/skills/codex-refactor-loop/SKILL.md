@@ -25,7 +25,81 @@ This skill complements `refactor-team` (Agent-subagent based). Use this skill wh
 
 First wakeup → bootstrap state, dispatch audit codex, schedule fallback wakeup, end turn.
 
-Subsequent wakeups → read state, advance any cluster that's ready, schedule next wakeup.
+Subsequent wakeups → **derive state from GitHub**(open PR / open issue / labels / CI / log markers),advance any cluster that's ready, schedule next wakeup。**禁止**把 `.refactor-loop/state.json` 当 source of truth(详见下节)。
+
+---
+
+## 状态源 — GitHub 为真,本地 log 为辅(强制,per Auric 2026-05-19 "真实源以github为准,任务都在后台进程")
+
+**问题**:`.refactor-loop/state.json` 频繁过时——controller turn 跨多 wakeup、session 中断、user `/clear`、后台进程独立写 GitHub、跨 session 恢复——把它当 source of truth 会让 controller 基于错误前提派 codex / 重复跑已完成的 round / 漏跑实际 in-flight 的 round。
+
+**铁律**:所有控制流决策只读 **GitHub state + 本地 log marker + OS 进程列表**。`.refactor-loop/state.json` 仅作 logs 索引 + debug 辅助,**不参与决策**。
+
+### Per-wakeup sweep(每次 wakeup 第一件事,在派任何 codex / 转 phase 之前)
+
+1. **GitHub state derive**:
+   ```bash
+   gh pr list --label "auto-loop" --state open --json number,headRefName,labels,title
+   gh issue list --state open --label "refactor-design-needed" --json number,title,labels
+   gh issue list --state open --label "phase9-auto-solve" --json number,title,labels
+   ```
+   开 PR / 开 issue / phase label / human label 是当前 phase 真实状态的唯一来源。
+
+2. **Per-PR CI sweep**(Phase 5 强制):
+   ```bash
+   for pr in <open auto-loop PR list>; do
+     gh pr checks "$pr" --json name,bucket,state
+   done
+   ```
+   任一 bucket=fail → 立刻派 fix codex(per Phase 5)。
+
+3. **In-flight codex 探测**(看 OS 进程,不看 state.json):
+   ```bash
+   ps -ef | grep -E "(codex exec|spawn-codex)" | grep -v grep   # 真正还在跑的
+   ls -lt .refactor-loop/logs/ | head -20                        # 最近完成的 log
+   tail -5 <log>                                                  # marker(EXIT/DONE_AT/SOLVER_DONE/...)
+   ```
+
+4. **Per-issue Phase 9 进展判定**:从最新 log marker 推断,不读 state.json:
+   - `phase9-issueN-rK-{minimal,delete,structural}.log` 全有 `EXIT=0` 且 `phase9-issueN-rK-judge.log` 不存在 → **派 r-K meta-judge**
+   - `phase9-issueN-rK-judge.log` 有 `META_JUDGE_DONE:consensus:...` → 派 implement,加 `auto-loop-resume` label
+   - `phase9-issueN-rK-judge.log` 有 `META_JUDGE_DONE:converge:round-K+1:...` → 派 r-K+1 三 solver
+   - `phase9-issueN-rK-judge.log` 有 `META_JUDGE_DONE:escalate:...` → label `🆘 human:卡死` + PushNotification
+
+5. **Per-PR Phase 8 进展判定**:从 log marker 推断:
+   - 三 reviewer 全 `REVIEW_DONE:` + 全 approve → auto-merge
+   - 任一 reject → 看 fix log;无 fix log → 派 fix r1;有 fix-rN log `FIX_DONE:` → 派 reviewer rN+1
+   - `fix_round > 6` → meta-layer reflect
+
+6. **State.json 仅作 debug**:可以追加 phase transition 记录到 state.json 作为 audit trail,但**不允许读 state.json 的字段决定派什么**。
+
+### 任务都在后台进程(强制)
+
+每个 codex spawn 用 `Bash run_in_background: true`(per "## Codex 调用方式")→ harness 跟踪、Claude Code shells panel 可见、harness 在 exit 时发 task-notification。**任务的真实状态**由三处共同决定:
+- OS 进程列表(`ps aux | grep codex`)— 是否还在跑
+- log 文件 tail marker — 是否完成 / 完成什么结果(`EXIT=`、`SOLVER_DONE:`、`REVIEW_DONE:`、`FIX_DONE:`、`META_JUDGE_DONE:`、`POSTED:`)
+- GitHub 副作用(comment / label / merge / close)— 是否对外可见
+
+Controller turn 间 / session 间 / `/clear` 后,**后台 codex 继续跑不中断**。Controller 醒来时只读这三处 derive 真实状态,**不依赖任何 in-memory / in-context / state.json 维护的状态**。
+
+### 跨 session 恢复(/clear / 新 conversation / 重启)
+
+每次 controller 进 turn 假设**自己刚醒**,不记得任何上下文:
+1. 跑 per-wakeup sweep(上面 1–5)
+2. 完全从 GitHub + log marker derive 当前每个 PR / issue 在哪一步
+3. 派出该派的下一步
+
+这意味着 controller 设计上**完全无状态**(stateless)。每个 turn 自洽。state.json 即便完全删除,也不影响控制流(只丢 debug 历史)。
+
+### 反面(❌ 禁止)
+
+- ❌ 读 `state.json.clusters_active[]` 决定当前在跑哪些 cluster → 状态过时,可能把已完成 cluster 重派
+- ❌ 读 `state.json.phase` 决定走哪一 phase → `/clear` 后字段不存在但 GitHub 上 PR / issue 真实存在
+- ❌ controller "记得" 上一 turn 派了 fix r3 → cross-turn 不持续,必查 `ls .refactor-loop/logs/fix-pr<N>-r*.log` 找最新 round
+- ❌ 把 codex 留在 conversation 同步等(`run_in_background: false`)→ session clear 后丢失,codex 仍在跑但 controller 看不见
+- ❌ controller turn 中维护 in-memory `pending_issues = [721, 722, 723]` → 下次 wakeup 一是不在,二是 GitHub 可能已经多 / 少了 issue
+- ❌ 假设 state.json 是最新的 → 多 controller 并发 / cross-process 写 race / writer-codex 独立写 GitHub 不写 state → 不可信
+- ❌ 任务 spawn 后 controller 主动等(`wait`、sleep 轮询)→ 任务在后台跑,controller 应该排 ScheduleWakeup 然后退出 turn,等 task-notification 唤醒
 
 ---
 
