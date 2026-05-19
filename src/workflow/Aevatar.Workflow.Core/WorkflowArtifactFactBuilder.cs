@@ -22,7 +22,7 @@ internal static class WorkflowArtifactFactBuilder
             ? WorkflowRunIdNormalizer.Normalize(actorId)
             : WorkflowRunIdNormalizer.Normalize(stateRunId);
 
-        if (TryBuildWorkflowRoleReplyRecordedEvent(envelope, actorId, normalizedRunId, out var roleReplyFact))
+        if (TryBuildWorkflowRoleReplyRecordedEvent(envelope, normalizedRunId, out var roleReplyFact))
         {
             artifactFact = roleReplyFact;
             return true;
@@ -66,7 +66,6 @@ internal static class WorkflowArtifactFactBuilder
 
     private static bool TryBuildWorkflowRoleReplyRecordedEvent(
         EventEnvelope envelope,
-        string actorId,
         string runId,
         out WorkflowRoleReplyRecordedEvent evt)
     {
@@ -82,16 +81,20 @@ internal static class WorkflowArtifactFactBuilder
             return false;
         }
 
-        var publisherActorId = envelope.Route?.PublisherActorId ?? string.Empty;
-        if (!IsRoleChildActor(actorId, publisherActorId))
+        var completed = published.StateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>();
+        var roleId = completed.RoleId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(roleId))
             return false;
 
-        var completed = published.StateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>();
+        var publisherActorId = envelope.Route?.PublisherActorId ?? string.Empty;
+        // Refactor (iter15/cluster-028):
+        //   Old pattern: parsed childActorId prefix to derive RoleId via string split.
+        //   New principle: role id comes from typed event payload / readmodel; actor id is opaque address only.
         evt = new WorkflowRoleReplyRecordedEvent
         {
             RunId = runId,
             RoleActorId = publisherActorId,
-            RoleId = ResolveRoleId(actorId, publisherActorId),
+            RoleId = roleId,
             SessionId = completed.SessionId ?? string.Empty,
             Content = completed.Content ?? string.Empty,
             ReasoningContent = completed.ReasoningContent ?? string.Empty,
@@ -109,17 +112,5 @@ internal static class WorkflowArtifactFactBuilder
         }
 
         return true;
-    }
-
-    private static bool IsRoleChildActor(string actorId, string childActorId) =>
-        !string.IsNullOrWhiteSpace(childActorId) &&
-        childActorId.StartsWith(actorId + ":", StringComparison.Ordinal);
-
-    private static string ResolveRoleId(string actorId, string childActorId)
-    {
-        if (!IsRoleChildActor(actorId, childActorId))
-            return childActorId ?? string.Empty;
-
-        return childActorId[(actorId.Length + 1)..];
     }
 }

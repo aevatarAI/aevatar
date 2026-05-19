@@ -28,6 +28,7 @@ public class RoleGAgentReplayContractTests
         await agent1.ActivateAsync();
         await agent1.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
         {
+            RoleId = "role-researcher",
             RoleName = "researcher",
             ProviderName = "mock",
             Model = "m1",
@@ -44,6 +45,8 @@ public class RoleGAgentReplayContractTests
         var agent2 = CreateAgent(services, "role-init-replay");
         await agent2.ActivateAsync();
 
+        agent2.RoleId.Should().Be("role-researcher");
+        agent2.State.RoleId.Should().Be("role-researcher");
         agent2.RoleName.Should().Be("researcher");
         agent2.State.RoleName.Should().Be("researcher");
         agent2.EffectiveConfig.ProviderName.Should().Be("mock");
@@ -164,6 +167,7 @@ public class RoleGAgentReplayContractTests
         await agent1.ActivateAsync();
         await agent1.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
         {
+            RoleId = "role-assistant",
             RoleName = "assistant",
             ProviderName = provider.Name,
             SystemPrompt = "system",
@@ -181,6 +185,13 @@ public class RoleGAgentReplayContractTests
         var persisted = await store.GetEventsAsync("role-session-replay");
         persisted.Should().Contain(x => x.EventType.Contains(nameof(RoleChatSessionStartedEvent), StringComparison.Ordinal));
         persisted.Should().Contain(x => x.EventType.Contains(nameof(RoleChatSessionCompletedEvent), StringComparison.Ordinal));
+        persisted
+            .Single(x => x.EventType.Contains(nameof(RoleChatSessionCompletedEvent), StringComparison.Ordinal))
+            .EventData
+            .Unpack<RoleChatSessionCompletedEvent>()
+            .RoleId
+            .Should()
+            .Be("role-assistant");
 
         var replayPublisher = new RecordingEventPublisher();
         var agent2 = CreateAgent(services, "role-session-replay", provider);
@@ -310,6 +321,7 @@ public class RoleGAgentReplayContractTests
         await agent.ActivateAsync();
         await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
         {
+            RoleId = "role-timeout",
             RoleName = "assistant",
             ProviderName = provider.Name,
             SystemPrompt = "system",
@@ -334,6 +346,7 @@ public class RoleGAgentReplayContractTests
             .EventData
             .Unpack<RoleChatSessionCompletedEvent>();
         completed.Content.Should().Be("[[AEVATAR_LLM_ERROR]] provider exploded");
+        completed.RoleId.Should().Be("role-timeout");
     }
 
     [Fact]
