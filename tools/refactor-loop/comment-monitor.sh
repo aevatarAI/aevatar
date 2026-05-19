@@ -29,11 +29,26 @@ is_team_member() {
   esac
 }
 
-# Skip controller / writer-codex own posts: body starts with "## 🤖" or contains
-# "Generated with Claude Code" or starts with "## 📢 cc 原作者"
+# Skip controller / writer-codex own posts. body first line check.
+# 包括:
+# - "## 🤖" (controller status marker)
+# - "## 📢 cc" (cc 原作者)
+# - "## 📎" (attachment / raw)
+# - "## ✅" (consensus reached / merged)
+# - "## 🎉" (celebration)
+# - "## 🔄" (rebase / round dispatched)
+# - "## Phase " (writer-codex 标题如 "## Phase 9 r2 已收敛..." / "## Phase 8 ...")
+# - "## Studio " / "## Workflow " / "## iter1" (writer-codex 通常用 cluster 主题做标题)
+# - "Generated with Claude Code" 后缀
+# - 任何 body 内含 "POSTED:phase" 标记的(writer-codex 自身 marker 不会出现在 body,但若误传则 skip)
 is_controller_post() {
   case "$1" in
-    "## 🤖"*|*"Generated with Claude Code"*|"## 📢 cc"*|"## 📎"*) return 0 ;;
+    "## 🤖"*|"## 📢 cc"*|"## 📎"*|"## ✅"*|"## 🎉"*|"## 🔄"*|"## Phase "*|"## Studio "*|"## Workflow "*|"## iter"*) return 0 ;;
+    *) ;;
+  esac
+  # 兜底:body 任意位置含 "Generated with Claude Code" 也 skip
+  case "$2" in
+    *"Generated with Claude Code"*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -72,7 +87,7 @@ while true; do
       if seen "$id"; then continue; fi
 
       first_line=$(echo "$body" | head -1)
-      if is_controller_post "$first_line"; then
+      if is_controller_post "$first_line" "$body"; then
         mark_seen "$id"
         continue
       fi
