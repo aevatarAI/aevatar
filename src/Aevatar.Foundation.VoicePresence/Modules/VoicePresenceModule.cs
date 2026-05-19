@@ -20,6 +20,10 @@ namespace Aevatar.Foundation.VoicePresence.Modules;
 /// transports without entering the grain inbox or event pipeline. Only control events
 /// (state transitions, tool calls, drain ack) are dispatched as actor events.
 /// </summary>
+// Refactor (iter15/cluster-026-voice-provider-background-state):
+//   Old pattern: realtime provider receive loop writes _responseEpochs dictionary from background thread outside actor event-loop
+//   New principle: provider emits provider-native ids; this module maps them to actor response ids.
+//   The mapping is actor-turn runtime state and never becomes a provider/background fact.
 public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFastPath, IRouteBypassModule
 {
     private static readonly JsonFormatter PayloadJsonFormatter = new(JsonFormatter.Settings.Default);
@@ -32,6 +36,8 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
     private readonly IVoiceToolCatalog? _toolCatalog;
     private readonly ILogger _logger;
     private readonly Queue<VoiceConversationEventInjection> _pendingInjections = [];
+    private readonly Dictionary<string, int> _providerResponseIds = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _cancelledProviderResponseIds = new(StringComparer.Ordinal);
 
     private IVoiceTransport? _userTransport;
     private Func<IMessage, CancellationToken, Task>? _selfEventDispatcher;
@@ -40,6 +46,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
     private Task? _providerToUserRelay;
     private bool _awaitingInjectedResponseStart;
     private string? _remoteSessionId;
+    private string? _activeProviderResponseId;
 
     public VoicePresenceModule(
         IRealtimeVoiceProvider provider,
@@ -144,7 +151,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
                 await HandleRemoteSessionCloseRequestedAsync(signal.RemoteSessionCloseRequested, ctx, ct);
                 break;
             case VoiceModuleSignal.SignalOneofCase.RemoteAudioInputReceived:
-                await HandleRemoteAudioInputReceivedAsync(signal.RemoteAudioInputReceived, ct);
                 break;
             case VoiceModuleSignal.SignalOneofCase.RemoteControlInputReceived:
                 await HandleRemoteControlInputReceivedAsync(signal.RemoteControlInputReceived, ct);
@@ -184,7 +190,10 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
 
         await _provider.DisposeAsync();
         _pendingInjections.Clear();
+        _providerResponseIds.Clear();
+        _cancelledProviderResponseIds.Clear();
         _awaitingInjectedResponseStart = false;
+        _activeProviderResponseId = null;
         _remoteSessionId = null;
         _selfEventDispatcher = null;
     }
@@ -331,60 +340,194 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         CancellationToken ct)
     {
         EnsureSelfEventDispatcher(ctx);
+        if (!TryNormalizeProviderEvent(providerEvent, out var normalizedEvent))
+            return;
 
-        switch (providerEvent.EventCase)
+        switch (normalizedEvent.EventCase)
         {
             case VoiceProviderEvent.EventOneofCase.ResponseStarted:
                 _awaitingInjectedResponseStart = false;
-                StateMachine.OnResponseStarted(providerEvent.ResponseStarted.ResponseId);
+                StateMachine.OnResponseStarted(normalizedEvent.ResponseStarted.ResponseId);
                 break;
             case VoiceProviderEvent.EventOneofCase.ResponseDone:
-                StateMachine.OnResponseDone(providerEvent.ResponseDone.ResponseId);
+                StateMachine.OnResponseDone(normalizedEvent.ResponseDone.ResponseId);
+                RetireProviderResponse(normalizedEvent.ResponseDone.ProviderResponseId);
                 break;
             case VoiceProviderEvent.EventOneofCase.ResponseCancelled:
                 _awaitingInjectedResponseStart = false;
-                StateMachine.OnResponseCancelled(providerEvent.ResponseCancelled.ResponseId);
+                StateMachine.OnResponseCancelled(normalizedEvent.ResponseCancelled.ResponseId);
+                RetireProviderResponse(normalizedEvent.ResponseCancelled.ProviderResponseId);
                 await FlushPendingEventInjectionsAsync(ct);
                 break;
             case VoiceProviderEvent.EventOneofCase.SpeechStarted:
             {
                 var wasInProgress = StateMachine.State == VoicePresenceState.ResponseInProgress;
-                StateMachine.OnSpeechStarted();
                 if (wasInProgress)
+                {
+                    var responseId = StateMachine.CurrentResponseId;
+                    var providerResponseId = _activeProviderResponseId;
                     await _provider.CancelResponseAsync(ct);
+                    if (!string.IsNullOrWhiteSpace(providerResponseId))
+                    {
+                        _cancelledProviderResponseIds.Add(providerResponseId);
+                        RetireProviderResponse(providerResponseId);
+                    }
+
+                    StateMachine.OnResponseCancelled(responseId);
+                }
+
+                StateMachine.OnSpeechStarted();
                 break;
             }
             case VoiceProviderEvent.EventOneofCase.SpeechStopped:
                 StateMachine.OnSpeechStopped();
                 break;
             case VoiceProviderEvent.EventOneofCase.FunctionCall:
-                await ExecuteToolCallAsync(providerEvent.FunctionCall, ctx, ct);
+                await ExecuteToolCallAsync(normalizedEvent.FunctionCall, ctx, ct);
                 break;
             case VoiceProviderEvent.EventOneofCase.Disconnected:
                 _awaitingInjectedResponseStart = false;
                 StateMachine.OnProviderDisconnected();
+                _providerResponseIds.Clear();
+                _cancelledProviderResponseIds.Clear();
+                _activeProviderResponseId = null;
                 await CloseRemoteSessionAsync("provider_disconnected", ctx, ct);
                 break;
             case VoiceProviderEvent.EventOneofCase.AudioReceived:
-                if (!string.IsNullOrWhiteSpace(_remoteSessionId))
-                {
-                    await PublishRemoteOutputAsync(
-                        new VoiceRemoteTransportOutput
-                        {
-                            ModuleName = Name,
-                            SessionId = _remoteSessionId,
-                            AudioOutput = providerEvent.AudioReceived.Clone(),
-                        },
-                        ctx,
-                        ct);
-                }
-
                 break;
             case VoiceProviderEvent.EventOneofCase.Error:
             case VoiceProviderEvent.EventOneofCase.None:
             default:
                 break;
         }
+    }
+
+    private bool TryNormalizeProviderEvent(
+        VoiceProviderEvent providerEvent,
+        out VoiceProviderEvent normalizedEvent)
+    {
+        normalizedEvent = providerEvent;
+        switch (providerEvent.EventCase)
+        {
+            case VoiceProviderEvent.EventOneofCase.ResponseStarted:
+            {
+                var responseStarted = providerEvent.ResponseStarted.Clone();
+                if (!TryNormalizeResponseIdentity(responseStarted.ProviderResponseId, responseStarted.ResponseId,
+                        out var responseId))
+                    return false;
+
+                responseStarted.ResponseId = responseId;
+                normalizedEvent = new VoiceProviderEvent { ResponseStarted = responseStarted };
+                return true;
+            }
+            case VoiceProviderEvent.EventOneofCase.ResponseDone:
+            {
+                var responseDone = providerEvent.ResponseDone.Clone();
+                if (!TryNormalizeResponseIdentity(responseDone.ProviderResponseId, responseDone.ResponseId,
+                        out var responseId))
+                    return false;
+
+                responseDone.ResponseId = responseId;
+                normalizedEvent = new VoiceProviderEvent { ResponseDone = responseDone };
+                return true;
+            }
+            case VoiceProviderEvent.EventOneofCase.ResponseCancelled:
+            {
+                var responseCancelled = providerEvent.ResponseCancelled.Clone();
+                if (!TryNormalizeResponseIdentity(responseCancelled.ProviderResponseId, responseCancelled.ResponseId,
+                        out var responseId))
+                    return false;
+
+                responseCancelled.ResponseId = responseId;
+                normalizedEvent = new VoiceProviderEvent { ResponseCancelled = responseCancelled };
+                return true;
+            }
+            case VoiceProviderEvent.EventOneofCase.FunctionCall:
+            {
+                var functionCall = providerEvent.FunctionCall.Clone();
+                if (!TryNormalizeResponseIdentity(functionCall.ProviderResponseId, functionCall.ResponseId,
+                        out var responseId))
+                    return false;
+
+                functionCall.ResponseId = responseId;
+                normalizedEvent = new VoiceProviderEvent { FunctionCall = functionCall };
+                return true;
+            }
+            case VoiceProviderEvent.EventOneofCase.AudioReceived:
+            {
+                var audioReceived = providerEvent.AudioReceived;
+                if (!string.IsNullOrWhiteSpace(audioReceived.ProviderResponseId) &&
+                    _cancelledProviderResponseIds.Contains(audioReceived.ProviderResponseId))
+                {
+                    return false;
+                }
+
+                if (!string.IsNullOrWhiteSpace(audioReceived.ProviderResponseId) &&
+                    TryGetProviderResponse(audioReceived.ProviderResponseId, out var responseId))
+                {
+                    var normalizedAudio = audioReceived.Clone();
+                    normalizedAudio.ResponseId = responseId;
+                    normalizedEvent = new VoiceProviderEvent { AudioReceived = normalizedAudio };
+                }
+
+                return true;
+            }
+            case VoiceProviderEvent.EventOneofCase.Disconnected:
+            case VoiceProviderEvent.EventOneofCase.Error:
+            case VoiceProviderEvent.EventOneofCase.SpeechStarted:
+            case VoiceProviderEvent.EventOneofCase.SpeechStopped:
+            case VoiceProviderEvent.EventOneofCase.None:
+            default:
+                return true;
+        }
+    }
+
+    private bool TryNormalizeResponseIdentity(string providerResponseId, int suppliedResponseId, out int responseId)
+    {
+        if (!string.IsNullOrWhiteSpace(providerResponseId))
+        {
+            if (_cancelledProviderResponseIds.Contains(providerResponseId))
+            {
+                responseId = 0;
+                return false;
+            }
+
+            responseId = GetOrCreateProviderResponse(providerResponseId, suppliedResponseId);
+            return true;
+        }
+
+        if (suppliedResponseId > 0)
+        {
+            responseId = suppliedResponseId;
+            return true;
+        }
+
+        responseId = StateMachine.AllocateNextResponseId();
+        return true;
+    }
+
+    private int GetOrCreateProviderResponse(string providerResponseId, int suppliedResponseId)
+    {
+        if (_providerResponseIds.TryGetValue(providerResponseId, out var existing))
+            return existing;
+
+        var responseId = suppliedResponseId > 0 ? suppliedResponseId : StateMachine.AllocateNextResponseId();
+        _providerResponseIds[providerResponseId] = responseId;
+        _activeProviderResponseId = providerResponseId;
+        return responseId;
+    }
+
+    private bool TryGetProviderResponse(string providerResponseId, out int responseId) =>
+        _providerResponseIds.TryGetValue(providerResponseId, out responseId);
+
+    private void RetireProviderResponse(string providerResponseId)
+    {
+        if (string.IsNullOrWhiteSpace(providerResponseId))
+            return;
+
+        _providerResponseIds.Remove(providerResponseId);
+        if (string.Equals(_activeProviderResponseId, providerResponseId, StringComparison.Ordinal))
+            _activeProviderResponseId = null;
     }
 
     private async Task DispatchSelfEventAsync(IMessage message, CancellationToken ct)
@@ -492,20 +635,6 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             ct);
     }
 
-    private async Task HandleRemoteAudioInputReceivedAsync(
-        VoiceRemoteAudioInputReceived request,
-        CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(_remoteSessionId) ||
-            !string.Equals(_remoteSessionId, request.SessionId, StringComparison.Ordinal) ||
-            request.Pcm16.IsEmpty)
-        {
-            return;
-        }
-
-        await _provider.SendAudioAsync(request.Pcm16.Memory, ct);
-    }
-
     private async Task HandleRemoteControlInputReceivedAsync(
         VoiceRemoteControlInputReceived request,
         CancellationToken ct)
@@ -530,6 +659,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             return;
 
         _remoteSessionId = null;
+        _providerResponseIds.Clear();
+        _cancelledProviderResponseIds.Clear();
+        _activeProviderResponseId = null;
         _provider.OnEvent = _userTransport == null ? null : OnProviderEventAsync;
         await PublishRemoteOutputAsync(
             new VoiceRemoteTransportOutput

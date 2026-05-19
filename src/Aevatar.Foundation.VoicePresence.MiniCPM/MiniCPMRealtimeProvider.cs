@@ -12,6 +12,10 @@ namespace Aevatar.Foundation.VoicePresence.MiniCPM;
 /// <summary>
 /// MiniCPM-o demo-protocol adapter for <see cref="IRealtimeVoiceProvider" />.
 /// </summary>
+// Refactor (iter15/cluster-026-voice-provider-background-state):
+//   Old pattern: realtime provider receive loop writes _responseEpochs dictionary from background thread outside actor event-loop
+//   New principle: provider callbacks emit provider-native response ids only.
+//   VoicePresenceModule owns actor response epoch mapping inside the actor turn.
 public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
 {
     private readonly HttpClient _httpClient;
@@ -27,9 +31,6 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
     private string? _uid;
     private bool _disposed;
     private int _inputSampleRateHz = MiniCPMRealtimeProviderOptions.DefaultInputSampleRateHz;
-    private int _nextResponseId;
-    private int _activeResponseId;
-    private int _suppressedResponseId;
 
     public MiniCPMRealtimeProvider(
         MiniCPMRealtimeProviderOptions? options = null,
@@ -144,19 +145,6 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
         using var response = await _httpClient.SendAsync(message, HttpCompletionOption.ResponseContentRead, ct);
         if (!response.IsSuccessStatusCode)
             throw new InvalidOperationException(await BuildHttpFailureMessageAsync("stop", response, ct));
-
-        var responseId = Interlocked.Exchange(ref _activeResponseId, 0);
-        if (responseId <= 0 || _eventChannel == null)
-            return;
-
-        Volatile.Write(ref _suppressedResponseId, responseId);
-        await _eventChannel.Writer.WriteAsync(new VoiceProviderEvent
-        {
-            ResponseCancelled = new VoiceResponseCancelled
-            {
-                ResponseId = responseId,
-            },
-        }, ct);
     }
 
     public Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct)
@@ -199,8 +187,6 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
         _eventChannel = null;
         _endpoint = null;
         _uid = null;
-        _activeResponseId = 0;
-        _suppressedResponseId = 0;
 
         cts?.Dispose();
         if (_ownsHttpClient)
@@ -272,7 +258,7 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
     {
         var responseStarted = false;
         var responseTerminated = false;
-        var responseId = 0;
+        var providerResponseId = string.Empty;
 
         await foreach (var payload in MiniCPMSsePayloadReader.ReadPayloadsAsync(stream, ct))
         {
@@ -326,18 +312,11 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
                     continue;
 
                 responseTerminated = true;
-                Interlocked.CompareExchange(ref _activeResponseId, 0, responseId);
-                if (Volatile.Read(ref _suppressedResponseId) == responseId)
-                {
-                    Volatile.Write(ref _suppressedResponseId, 0);
-                    continue;
-                }
-
                 await TryWriteAsync(writer, new VoiceProviderEvent
                 {
                     ResponseDone = new VoiceResponseDone
                     {
-                        ResponseId = responseId,
+                        ProviderResponseId = providerResponseId,
                     },
                 }, ct);
                 continue;
@@ -349,19 +328,15 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
             if (!responseStarted)
             {
                 responseStarted = true;
-                responseId = Interlocked.Increment(ref _nextResponseId);
-                Volatile.Write(ref _activeResponseId, responseId);
+                providerResponseId = ResolveProviderResponseId(frame);
                 await TryWriteAsync(writer, new VoiceProviderEvent
                 {
                     ResponseStarted = new VoiceResponseStarted
                     {
-                        ResponseId = responseId,
+                        ProviderResponseId = providerResponseId,
                     },
                 }, ct);
             }
-
-            if (Volatile.Read(ref _suppressedResponseId) == responseId)
-                continue;
 
             if (string.IsNullOrWhiteSpace(choice.Audio))
                 continue;
@@ -376,6 +351,7 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
                     {
                         Pcm16 = Google.Protobuf.ByteString.CopyFrom(decoded.Pcm16),
                         SampleRateHz = decoded.SampleRateHz,
+                        ProviderResponseId = providerResponseId,
                     },
                 }, ct);
             }
@@ -394,13 +370,6 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
 
         if (!responseStarted)
             return;
-
-        Interlocked.CompareExchange(ref _activeResponseId, 0, responseId);
-        if (Volatile.Read(ref _suppressedResponseId) == responseId)
-        {
-            Volatile.Write(ref _suppressedResponseId, 0);
-            return;
-        }
 
         if (!responseTerminated)
         {
@@ -481,6 +450,11 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
         frame.ResponseId.GetValueOrDefault() == 0 &&
         !string.IsNullOrWhiteSpace(choice.Audio) &&
         string.Equals(choice.Text?.Trim(), "assistant:", StringComparison.Ordinal);
+
+    private static string ResolveProviderResponseId(MiniCPMCompletionsFrame frame) =>
+        frame.ResponseId is > 0
+            ? frame.ResponseId.GetValueOrDefault().ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : Guid.NewGuid().ToString("n");
 
     private static void ValidateProviderConfig(VoiceProviderConfig config)
     {

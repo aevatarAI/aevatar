@@ -52,18 +52,23 @@ message VoiceRemoteAudioInputReceived {
 message VoiceAudioReceived {
   bytes pcm16 = 1;
   int32 sample_rate_hz = 2;
+  string provider_response_id = 3;
+  int32 response_id = 4;
 }
 
 message VoiceResponseStarted {
   int32 response_id = 1;
+  string provider_response_id = 2;
 }
 
 message VoiceResponseDone {
   int32 response_id = 1;
+  string provider_response_id = 2;
 }
 
 message VoiceResponseCancelled {
   int32 response_id = 1;
+  string provider_response_id = 2;
 }
 
 message VoiceFunctionCallRequested {
@@ -71,6 +76,7 @@ message VoiceFunctionCallRequested {
   string tool_name = 2;
   string arguments_json = 3;
   int32 response_id = 4;
+  string provider_response_id = 5;
 }
 
 message VoiceSpeechStarted {}

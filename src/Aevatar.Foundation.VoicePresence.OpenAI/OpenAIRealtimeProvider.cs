@@ -12,6 +12,10 @@ namespace Aevatar.Foundation.VoicePresence.OpenAI;
 /// <summary>
 /// OpenAI Realtime GA implementation of <see cref="IRealtimeVoiceProvider" />.
 /// </summary>
+// Refactor (iter15/cluster-026-voice-provider-background-state):
+//   Old pattern: realtime provider receive loop writes _responseEpochs dictionary from background thread outside actor event-loop
+//   New principle: provider callbacks emit provider-native response ids only.
+//   VoicePresenceModule owns actor response epoch mapping inside the actor turn.
 public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
 {
     private static readonly BinaryData PermissiveToolSchema =
@@ -22,15 +26,12 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
     private readonly OpenAIRealtimeProviderOptions _options;
     private readonly ILogger _logger;
 
-    private readonly Dictionary<string, int> _responseEpochs = [];
-
     private IOpenAIRealtimeSession? _session;
     private Channel<VoiceProviderEvent>? _eventChannel;
     private CancellationTokenSource? _lifetimeCts;
     private Task? _receiveLoop;
     private Task? _dispatchLoop;
     private bool _disposed;
-    private int _nextResponseId;
     private int _sampleRateHz = OpenAIRealtimeProviderOptions.DefaultSampleRateHz;
 
     public OpenAIRealtimeProvider(
@@ -228,21 +229,21 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
             {
                 ResponseStarted = new VoiceResponseStarted
                 {
-                    ResponseId = ResolveResponseEpoch(created.ProviderResponseId),
+                    ProviderResponseId = created.ProviderResponseId,
                 },
             },
             OpenAIRealtimeResponseFinishedEvent finished when finished.Cancelled => new VoiceProviderEvent
             {
                 ResponseCancelled = new VoiceResponseCancelled
                 {
-                    ResponseId = ResolveAndRetireResponseEpoch(finished.ProviderResponseId),
+                    ProviderResponseId = finished.ProviderResponseId,
                 },
             },
             OpenAIRealtimeResponseFinishedEvent finished => new VoiceProviderEvent
             {
                 ResponseDone = new VoiceResponseDone
                 {
-                    ResponseId = ResolveAndRetireResponseEpoch(finished.ProviderResponseId),
+                    ProviderResponseId = finished.ProviderResponseId,
                 },
             },
             OpenAIRealtimeOutputAudioDeltaEvent audio => new VoiceProviderEvent
@@ -251,6 +252,7 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
                 {
                     Pcm16 = Google.Protobuf.ByteString.CopyFrom(audio.Pcm16),
                     SampleRateHz = _sampleRateHz,
+                    ProviderResponseId = audio.ProviderResponseId,
                 },
             },
             OpenAIRealtimeFunctionCallEvent functionCall => new VoiceProviderEvent
@@ -260,7 +262,7 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
                     CallId = functionCall.CallId,
                     ToolName = functionCall.FunctionName,
                     ArgumentsJson = functionCall.ArgumentsJson,
-                    ResponseId = ResolveResponseEpoch(functionCall.ProviderResponseId),
+                    ProviderResponseId = functionCall.ProviderResponseId,
                 },
             },
             OpenAIRealtimeErrorEvent error => new VoiceProviderEvent
@@ -385,27 +387,6 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
         }
 
         return requested;
-    }
-
-    private int ResolveResponseEpoch(string providerResponseId)
-    {
-        if (string.IsNullOrWhiteSpace(providerResponseId))
-            return ++_nextResponseId;
-
-        if (_responseEpochs.TryGetValue(providerResponseId, out var existing))
-            return existing;
-
-        var next = ++_nextResponseId;
-        _responseEpochs[providerResponseId] = next;
-        return next;
-    }
-
-    private int ResolveAndRetireResponseEpoch(string providerResponseId)
-    {
-        var epoch = ResolveResponseEpoch(providerResponseId);
-        if (!string.IsNullOrWhiteSpace(providerResponseId))
-            _responseEpochs.Remove(providerResponseId);
-        return epoch;
     }
 
     private static void ValidateProviderConfig(VoiceProviderConfig config)

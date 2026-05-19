@@ -334,7 +334,65 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
-    public async Task Remote_session_signals_should_forward_audio_and_publish_remote_outputs()
+    public async Task Provider_response_identity_should_be_mapped_by_module_turn()
+    {
+        var provider = new RecordingVoiceProvider();
+        var invoker = new RecordingVoiceToolInvoker("""{"ok":true}""");
+        var module = CreateModule(provider, toolInvoker: invoker);
+        var ctx = new StubEventHandlerContext();
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            ResponseStarted = new VoiceResponseStarted { ProviderResponseId = "provider-r1" },
+        }), ctx, CancellationToken.None);
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            FunctionCall = new VoiceFunctionCallRequested
+            {
+                ProviderResponseId = "provider-r1",
+                CallId = "call-1",
+                ToolName = "doorbell.open",
+                ArgumentsJson = "{}",
+            },
+        }), ctx, CancellationToken.None);
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            ResponseDone = new VoiceResponseDone { ProviderResponseId = "provider-r1" },
+        }), ctx, CancellationToken.None);
+
+        module.StateMachine.CurrentResponseId.ShouldBe(1);
+        module.StateMachine.State.ShouldBe(VoicePresenceState.AudioDraining);
+        invoker.Calls.ShouldBe(1);
+        provider.ToolResults.ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public async Task Speech_started_should_cancel_active_provider_response_inside_module_turn()
+    {
+        var provider = new RecordingVoiceProvider();
+        var module = CreateModule(provider);
+        var ctx = new StubEventHandlerContext();
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            ResponseStarted = new VoiceResponseStarted { ProviderResponseId = "provider-r1" },
+        }), ctx, CancellationToken.None);
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            SpeechStarted = new VoiceSpeechStarted(),
+        }), ctx, CancellationToken.None);
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            ResponseDone = new VoiceResponseDone { ProviderResponseId = "provider-r1" },
+        }), ctx, CancellationToken.None);
+
+        provider.CancelCalls.ShouldBe(1);
+        module.StateMachine.CurrentResponseId.ShouldBe(1);
+        module.StateMachine.State.ShouldBe(VoicePresenceState.UserSpeaking);
+    }
+
+    [Fact]
+    public async Task Remote_session_signals_should_not_forward_audio_or_publish_audio_outputs()
     {
         var provider = new RecordingVoiceProvider();
         var module = CreateModule(provider);
@@ -360,8 +418,7 @@ public class VoicePresenceModuleTests
             },
         }), ctx, CancellationToken.None);
 
-        provider.AudioFrames.ShouldHaveSingleItem();
-        provider.AudioFrames[0].ShouldBe([5, 6]);
+        provider.AudioFrames.ShouldBeEmpty();
 
         await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
         {
@@ -372,11 +429,7 @@ public class VoicePresenceModuleTests
             },
         }), ctx, CancellationToken.None);
 
-        ctx.PublishedEvents.ShouldHaveSingleItem();
-        var audioOutput = ctx.PublishedEvents[0];
-        audioOutput.ShouldBeOfType<VoiceRemoteTransportOutput>();
-        ((VoiceRemoteTransportOutput)audioOutput).SessionId.ShouldBe("remote-1");
-        ((VoiceRemoteTransportOutput)audioOutput).OutputCase.ShouldBe(VoiceRemoteTransportOutput.OutputOneofCase.AudioOutput);
+        ctx.PublishedEvents.ShouldBeEmpty();
 
         await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
         {
@@ -386,8 +439,7 @@ public class VoicePresenceModuleTests
             },
         }), ctx, CancellationToken.None);
 
-        ctx.PublishedEvents.Count.ShouldBe(2);
-        var closedOutput = ctx.PublishedEvents[1].ShouldBeOfType<VoiceRemoteTransportOutput>();
+        var closedOutput = ctx.PublishedEvents.ShouldHaveSingleItem().ShouldBeOfType<VoiceRemoteTransportOutput>();
         closedOutput.OutputCase.ShouldBe(VoiceRemoteTransportOutput.OutputOneofCase.SessionClosed);
         closedOutput.SessionClosed.Reason.ShouldBe("provider_disconnected");
     }
@@ -656,7 +708,7 @@ public class VoicePresenceModuleTests
             },
         }), ctx, CancellationToken.None);
 
-        provider.AudioFrames.ShouldHaveSingleItem();
+        provider.AudioFrames.ShouldBeEmpty();
         ctx.PublishedEvents.ShouldBeEmpty();
 
         await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
