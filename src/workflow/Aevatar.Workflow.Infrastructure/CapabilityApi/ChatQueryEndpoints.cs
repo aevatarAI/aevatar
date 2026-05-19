@@ -10,6 +10,7 @@ public static class ChatQueryEndpoints
     public static void Map(RouteGroupBuilder group)
     {
         group.MapGet("/agents", ListAgents)
+            // security-allowlist: workflow standalone host is dev-only; production hosts must add .RequireAuthorization() -- see cluster-022
             .Produces(StatusCodes.Status200OK);
 
         group.MapGet("/primitives", ListPrimitives)
@@ -29,20 +30,25 @@ public static class ChatQueryEndpoints
             .Produces(StatusCodes.Status404NotFound);
 
         group.MapGet("/actors/{actorId}", GetActorSnapshot)
+            // security-allowlist: workflow standalone host is dev-only; production hosts must add .RequireAuthorization() -- see cluster-022
             .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status404NotFound);
 
         group.MapGet("/actors/{actorId}/timeline", ListActorTimeline)
+            // security-allowlist: workflow standalone host is dev-only; production hosts must add .RequireAuthorization() -- see cluster-022
             .Produces(StatusCodes.Status200OK);
 
         group.MapGet("/actors/{actorId}/graph-edges", ListActorGraphEdges)
+            // security-allowlist: workflow standalone host is dev-only; production hosts must add .RequireAuthorization() -- see cluster-022
             .Produces(StatusCodes.Status200OK);
 
         group.MapGet("/actors/{actorId}/graph-enriched", GetActorGraphEnriched)
+            // security-allowlist: workflow standalone host is dev-only; production hosts must add .RequireAuthorization() -- see cluster-022
             .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status404NotFound);
 
         group.MapGet("/actors/{actorId}/graph-subgraph", GetActorGraphSubgraph)
+            // security-allowlist: workflow standalone host is dev-only; production hosts must add .RequireAuthorization() -- see cluster-022
             .Produces(StatusCodes.Status200OK);
 
     }
