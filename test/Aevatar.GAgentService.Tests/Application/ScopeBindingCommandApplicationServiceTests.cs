@@ -1208,6 +1208,36 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         createCommand.Spec.Identity.AppId.Should().Be(ScopeWorkflowCapabilityOptions.FixedServiceAppId);
     }
 
+    [Fact]
+    public async Task UpsertAsync_ShouldNotPollServingReadiness()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var service = CreateService(
+            commandPort,
+            lifecyclePort,
+            new RecordingServiceGovernanceCommandPort(),
+            new FakeServiceGovernanceQueryPort(),
+            new FakeScopeScriptQueryPort(),
+            new FakeScriptDefinitionSnapshotPort(),
+            new FakeWorkflowRunActorPort(),
+            DefaultOptions);
+
+        await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec([
+                "name: main\nsteps:\n  - run: echo hello",
+            ])));
+
+        typeof(ScopeBindingCommandApplicationService)
+            .GetConstructors()
+            .Single()
+            .GetParameters()
+            .Should()
+            .NotContain(parameter => parameter.ParameterType == typeof(IServiceServingQueryPort));
+    }
+
     private static ScopeBindingCommandApplicationService CreateService(
         RecordingServiceCommandPort commandPort,
         FakeServiceLifecycleQueryPort lifecyclePort,
@@ -1253,7 +1283,6 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         new(
             commandPort,
             lifecyclePort,
-            new FakeServiceServingQueryPort(),
             governanceCommandPort,
             governanceQueryPort,
             scopeScriptQueryPort,
@@ -1462,33 +1491,6 @@ public sealed class ScopeBindingCommandApplicationServiceTests
 
         public Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult<ServiceDeploymentCatalogSnapshot?>(null);
-    }
-
-    /// <summary>
-    /// Test stub — returns null for every readmodel lookup. Combined with
-    /// <see cref="FakeServiceLifecycleQueryPort"/> returning null for
-    /// <c>GetServiceAsync</c>, the bind service's post-activate visibility
-    /// poll fast-fails (8 consecutive no-progress polls at 25ms) and
-    /// <c>UpsertAsync</c> returns within ~200ms. Tests that want to exercise
-    /// the visibility wait should supply a custom stub.
-    /// </summary>
-    private sealed class FakeServiceServingQueryPort : IServiceServingQueryPort
-    {
-        public Task<ServiceServingSetSnapshot?> GetServiceServingSetAsync(
-            ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult<ServiceServingSetSnapshot?>(null);
-
-        public Task<ServiceRolloutSnapshot?> GetServiceRolloutAsync(
-            ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult<ServiceRolloutSnapshot?>(null);
-
-        public Task<ServiceRolloutCommandObservationSnapshot?> GetServiceRolloutCommandObservationAsync(
-            ServiceIdentity identity, string commandId, CancellationToken ct = default) =>
-            Task.FromResult<ServiceRolloutCommandObservationSnapshot?>(null);
-
-        public Task<ServiceTrafficViewSnapshot?> GetServiceTrafficViewAsync(
-            ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult<ServiceTrafficViewSnapshot?>(null);
     }
 
     private sealed class RecordingServiceGovernanceCommandPort : IServiceGovernanceCommandPort

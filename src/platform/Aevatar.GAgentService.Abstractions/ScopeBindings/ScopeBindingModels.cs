@@ -63,4 +63,5 @@ public sealed record ScopeBindingUpsertResult(
     string DefinitionActorIdPrefix = "",
     ScopeBindingWorkflowResult? Workflow = null,
     ScopeBindingScriptResult? Script = null,
-    ScopeBindingGAgentResult? GAgent = null);
+    ScopeBindingGAgentResult? GAgent = null,
+    string ExpectedDeploymentId = "");

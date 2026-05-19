@@ -1,0 +1,346 @@
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Application.Bindings;
+using Aevatar.GAgentService.Application.Workflows;
+using FluentAssertions;
+using Microsoft.Extensions.Options;
+
+namespace Aevatar.GAgentService.Tests.Application;
+
+public sealed class ScopeBindingReadinessQueryServiceTests
+{
+    private static readonly ScopeWorkflowCapabilityOptions DefaultOptions = new()
+    {
+        DefaultServiceId = "default",
+        ServiceAppId = "default",
+        ServiceNamespace = "default",
+    };
+
+    [Fact]
+    public async Task GetReadinessAsync_WhenServiceCatalogMissing_ShouldReturnServiceCatalogMissing()
+    {
+        var lifecyclePort = new FakeServiceLifecycleQueryPort();
+        var servingPort = new FakeServiceServingQueryPort();
+        var service = CreateService(lifecyclePort, servingPort);
+
+        var snapshot = await service.GetReadinessAsync(new ScopeBindingReadinessRequest(" scope-a ", " service-a "));
+
+        snapshot.Status.Should().Be(ScopeBindingReadinessStatus.ServiceCatalogMissing);
+        snapshot.ServiceCatalogVisible.Should().BeFalse();
+        snapshot.ServingSetVisible.Should().BeFalse();
+        snapshot.EligibleServingTargetVisible.Should().BeFalse();
+        snapshot.InvokeReady.Should().BeFalse();
+        snapshot.ScopeId.Should().Be("scope-a");
+        snapshot.ServiceId.Should().Be("service-a");
+        servingPort.GetServingSetCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetReadinessAsync_WhenServingSetMissing_ShouldReturnServingSetMissing()
+    {
+        var lifecyclePort = new FakeServiceLifecycleQueryPort
+        {
+            Service = CreateServiceSnapshot("service-a"),
+        };
+        var servingPort = new FakeServiceServingQueryPort();
+        var service = CreateService(lifecyclePort, servingPort);
+
+        var snapshot = await service.GetReadinessAsync(new ScopeBindingReadinessRequest("scope-a", "service-a"));
+
+        snapshot.Status.Should().Be(ScopeBindingReadinessStatus.ServingSetMissing);
+        snapshot.ServiceCatalogVisible.Should().BeTrue();
+        snapshot.ServingSetVisible.Should().BeFalse();
+        snapshot.EligibleServingTargetVisible.Should().BeFalse();
+        snapshot.InvokeReady.Should().BeFalse();
+        servingPort.GetServingSetCallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GetReadinessAsync_WhenServiceCatalogHasDifferentExpectedTarget_ShouldReturnServiceCatalogTargetMissing()
+    {
+        var lifecyclePort = new FakeServiceLifecycleQueryPort
+        {
+            Service = CreateServiceSnapshot("service-a"),
+        };
+        var servingPort = new FakeServiceServingQueryPort
+        {
+            ServingSet = CreateServingSet([
+                CreateTarget("rev-new", ServiceServingState.Active, allocationWeight: 100),
+            ]),
+        };
+        var service = CreateService(lifecyclePort, servingPort);
+
+        var snapshot = await service.GetReadinessAsync(new ScopeBindingReadinessRequest(
+            "scope-a",
+            "service-a",
+            ExpectedRevisionId: "rev-new",
+            ExpectedDeploymentId: "deployment-rev-new"));
+
+        snapshot.Status.Should().Be(ScopeBindingReadinessStatus.ServiceCatalogTargetMissing);
+        snapshot.ServiceCatalogVisible.Should().BeTrue();
+        snapshot.ServingSetVisible.Should().BeFalse();
+        snapshot.InvokeReady.Should().BeFalse();
+        servingPort.GetServingSetCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetReadinessAsync_WhenServingSetHasNoEligibleTarget_ShouldReturnEligibleServingTargetMissing()
+    {
+        var lifecyclePort = new FakeServiceLifecycleQueryPort
+        {
+            Service = CreateServiceSnapshot("service-a"),
+        };
+        var servingPort = new FakeServiceServingQueryPort
+        {
+            ServingSet = CreateServingSet([
+                CreateTarget("rev-paused", ServiceServingState.Paused, allocationWeight: 100),
+            ]),
+        };
+        var service = CreateService(lifecyclePort, servingPort);
+
+        var snapshot = await service.GetReadinessAsync(new ScopeBindingReadinessRequest("scope-a", "service-a"));
+
+        snapshot.Status.Should().Be(ScopeBindingReadinessStatus.EligibleServingTargetMissing);
+        snapshot.ServiceCatalogVisible.Should().BeTrue();
+        snapshot.ServingSetVisible.Should().BeTrue();
+        snapshot.EligibleServingTargetVisible.Should().BeFalse();
+        snapshot.InvokeReady.Should().BeFalse();
+        snapshot.RevisionId.Should().BeNull();
+        snapshot.DeploymentId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetReadinessAsync_WhenServingSetHasActiveZeroWeightTarget_ShouldReturnEligibleServingTargetMissing()
+    {
+        var lifecyclePort = new FakeServiceLifecycleQueryPort
+        {
+            Service = CreateServiceSnapshot("service-a"),
+        };
+        var servingPort = new FakeServiceServingQueryPort
+        {
+            ServingSet = CreateServingSet([
+                CreateTarget("rev-zero", ServiceServingState.Active, allocationWeight: 0),
+            ]),
+        };
+        var service = CreateService(lifecyclePort, servingPort);
+
+        var snapshot = await service.GetReadinessAsync(new ScopeBindingReadinessRequest("scope-a", "service-a"));
+
+        snapshot.Status.Should().Be(ScopeBindingReadinessStatus.EligibleServingTargetMissing);
+        snapshot.InvokeReady.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GetReadinessAsync_WhenServingSetHasEligibleTarget_ShouldReturnReady()
+    {
+        var lifecyclePort = new FakeServiceLifecycleQueryPort
+        {
+            Service = CreateServiceSnapshot("service-a"),
+        };
+        var servingPort = new FakeServiceServingQueryPort
+        {
+            ServingSet = CreateServingSet([
+                CreateTarget("rev-zero", ServiceServingState.Active, allocationWeight: 0),
+                CreateTarget("rev-ready", ServiceServingState.Active, allocationWeight: 100),
+            ]),
+        };
+        var service = CreateService(lifecyclePort, servingPort);
+
+        var snapshot = await service.GetReadinessAsync(new ScopeBindingReadinessRequest("scope-a", "service-a"));
+
+        snapshot.Status.Should().Be(ScopeBindingReadinessStatus.Ready);
+        snapshot.ServiceCatalogVisible.Should().BeTrue();
+        snapshot.ServingSetVisible.Should().BeTrue();
+        snapshot.EligibleServingTargetVisible.Should().BeTrue();
+        snapshot.InvokeReady.Should().BeTrue();
+        snapshot.RevisionId.Should().Be("rev-ready");
+        snapshot.DeploymentId.Should().Be("deployment-rev-ready");
+    }
+
+    [Fact]
+    public async Task GetReadinessAsync_WhenExpectedRevisionTargetIsMissing_ShouldReturnEligibleServingTargetMissing()
+    {
+        var lifecyclePort = new FakeServiceLifecycleQueryPort
+        {
+            Service = CreateServiceSnapshot("service-a", activeRevisionId: "rev-new"),
+        };
+        var servingPort = new FakeServiceServingQueryPort
+        {
+            ServingSet = CreateServingSet([
+                CreateTarget("rev-old", ServiceServingState.Active, allocationWeight: 100),
+            ]),
+        };
+        var service = CreateService(lifecyclePort, servingPort);
+
+        var snapshot = await service.GetReadinessAsync(new ScopeBindingReadinessRequest(
+            "scope-a",
+            "service-a",
+            ExpectedRevisionId: "rev-new"));
+
+        snapshot.Status.Should().Be(ScopeBindingReadinessStatus.EligibleServingTargetMissing);
+        snapshot.InvokeReady.Should().BeFalse();
+        snapshot.RevisionId.Should().BeNull();
+        snapshot.DeploymentId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetReadinessAsync_WhenExpectedDeploymentTargetIsMissing_ShouldReturnEligibleServingTargetMissing()
+    {
+        var lifecyclePort = new FakeServiceLifecycleQueryPort
+        {
+            Service = CreateServiceSnapshot("service-a", activeRevisionId: "rev-ready", deploymentId: "deployment-new"),
+        };
+        var servingPort = new FakeServiceServingQueryPort
+        {
+            ServingSet = CreateServingSet([
+                CreateTarget("rev-ready", ServiceServingState.Active, allocationWeight: 100),
+            ]),
+        };
+        var service = CreateService(lifecyclePort, servingPort);
+
+        var snapshot = await service.GetReadinessAsync(new ScopeBindingReadinessRequest(
+            "scope-a",
+            "service-a",
+            ExpectedRevisionId: "rev-ready",
+            ExpectedDeploymentId: "deployment-new"));
+
+        snapshot.Status.Should().Be(ScopeBindingReadinessStatus.EligibleServingTargetMissing);
+        snapshot.InvokeReady.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GetReadinessAsync_ShouldBuildServiceIdentityFromNormalizedRequestAndAppId()
+    {
+        var lifecyclePort = new FakeServiceLifecycleQueryPort
+        {
+            Service = CreateServiceSnapshot("service-a"),
+        };
+        var servingPort = new FakeServiceServingQueryPort
+        {
+            ServingSet = CreateServingSet([
+                CreateTarget("rev-ready", ServiceServingState.Active, allocationWeight: 100),
+            ]),
+        };
+        var service = CreateService(lifecyclePort, servingPort);
+
+        await service.GetReadinessAsync(new ScopeBindingReadinessRequest(" scope-a ", " service-a ", " app-custom "));
+
+        lifecyclePort.LastIdentity.Should().BeEquivalentTo(new ServiceIdentity
+        {
+            TenantId = "scope-a",
+            AppId = "app-custom",
+            Namespace = ScopeWorkflowCapabilityOptions.FixedServiceNamespace,
+            ServiceId = "service-a",
+        });
+        servingPort.LastIdentity.Should().BeEquivalentTo(lifecyclePort.LastIdentity);
+    }
+
+    private static ScopeBindingReadinessQueryService CreateService(
+        FakeServiceLifecycleQueryPort lifecyclePort,
+        FakeServiceServingQueryPort servingPort) =>
+        new(lifecyclePort, servingPort, Options.Create(DefaultOptions));
+
+    private static ServiceCatalogSnapshot CreateServiceSnapshot(
+        string serviceId,
+        string activeRevisionId = "rev-1",
+        string deploymentId = "deployment-1") =>
+        new(
+            ServiceKey: $"scope-a:default:default:{serviceId}",
+            TenantId: "scope-a",
+            AppId: DefaultOptions.ServiceAppId,
+            Namespace: DefaultOptions.ServiceNamespace,
+            ServiceId: serviceId,
+            DisplayName: serviceId,
+            DefaultServingRevisionId: activeRevisionId,
+            ActiveServingRevisionId: activeRevisionId,
+            DeploymentId: deploymentId,
+            PrimaryActorId: "actor-1",
+            DeploymentStatus: "Active",
+            Endpoints: [],
+            PolicyIds: [],
+            UpdatedAt: DateTimeOffset.UtcNow);
+
+    private static ServiceServingSetSnapshot CreateServingSet(IReadOnlyList<ServiceServingTargetSnapshot> targets) =>
+        new(
+            ServiceKey: "scope-a:default:default:service-a",
+            Generation: 1,
+            ActiveRolloutId: "",
+            Targets: targets,
+            UpdatedAt: DateTimeOffset.UtcNow);
+
+    private static ServiceServingTargetSnapshot CreateTarget(
+        string revisionId,
+        ServiceServingState state,
+        int allocationWeight,
+        string? deploymentId = null) =>
+        new(
+            DeploymentId: deploymentId ?? $"deployment-{revisionId}",
+            RevisionId: revisionId,
+            PrimaryActorId: $"actor-{revisionId}",
+            AllocationWeight: allocationWeight,
+            ServingState: state.ToString(),
+            EnabledEndpointIds: []);
+
+    private sealed class FakeServiceLifecycleQueryPort : IServiceLifecycleQueryPort
+    {
+        public ServiceCatalogSnapshot? Service { get; init; }
+        public ServiceIdentity? LastIdentity { get; private set; }
+
+        public Task<ServiceCatalogSnapshot?> GetServiceAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            LastIdentity = identity.Clone();
+            return Task.FromResult(Service);
+        }
+
+        public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListServicesAsync(
+            string tenantId,
+            string appId,
+            string @namespace,
+            int take = 200,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
+
+        public Task<ServiceRevisionCatalogSnapshot?> GetServiceRevisionsAsync(
+            ServiceIdentity identity,
+            CancellationToken ct = default) =>
+            Task.FromResult<ServiceRevisionCatalogSnapshot?>(null);
+
+        public Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(
+            ServiceIdentity identity,
+            CancellationToken ct = default) =>
+            Task.FromResult<ServiceDeploymentCatalogSnapshot?>(null);
+    }
+
+    private sealed class FakeServiceServingQueryPort : IServiceServingQueryPort
+    {
+        public ServiceServingSetSnapshot? ServingSet { get; init; }
+        public ServiceIdentity? LastIdentity { get; private set; }
+        public int GetServingSetCallCount { get; private set; }
+
+        public Task<ServiceServingSetSnapshot?> GetServiceServingSetAsync(
+            ServiceIdentity identity,
+            CancellationToken ct = default)
+        {
+            GetServingSetCallCount++;
+            LastIdentity = identity.Clone();
+            return Task.FromResult(ServingSet);
+        }
+
+        public Task<ServiceRolloutSnapshot?> GetServiceRolloutAsync(
+            ServiceIdentity identity,
+            CancellationToken ct = default) =>
+            Task.FromResult<ServiceRolloutSnapshot?>(null);
+
+        public Task<ServiceRolloutCommandObservationSnapshot?> GetServiceRolloutCommandObservationAsync(
+            ServiceIdentity identity,
+            string commandId,
+            CancellationToken ct = default) =>
+            Task.FromResult<ServiceRolloutCommandObservationSnapshot?>(null);
+
+        public Task<ServiceTrafficViewSnapshot?> GetServiceTrafficViewAsync(
+            ServiceIdentity identity,
+            CancellationToken ct = default) =>
+            Task.FromResult<ServiceTrafficViewSnapshot?>(null);
+    }
+}
