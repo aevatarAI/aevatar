@@ -776,16 +776,19 @@ These trigger escalation regardless of solver consensus. Meta-judge MUST flag th
 
 ### GitHub traceability (mandatory per SKILL.md "GitHub traceability" — same standard as Phase 8)
 
-Every Phase 9 action posts a bilingual comment to the issue:
+Every Phase 9 action posts a bilingual comment to the issue. **Humans must be able to read and decide from the issue alone** — solver outputs are bilingual by construction (per `prompts/solver-*.md`); the controller posts each one as a SEPARATE issue comment so the human can read the 3 perspectives side-by-side and override the meta-judge if needed.
 
 | Phase 9 event | Issue comment content |
 |---|---|
-| 3 solvers dispatched | Bilingual: "Phase 9 multi-solver dispatched — minimal/structural/delete codex in flight. Round N of max convergence ${MAX_CONVERGENCE_ROUNDS}." |
-| All 3 solvers done | Bilingual summary table: role / verdict / one-line framing summary per solver |
-| Meta-judge done (consensus) | Bilingual: chosen framing + plan link + "auto-loop-resume label added; implement codex dispatched" |
-| Meta-judge done (converge) | Bilingual: convergence question + "re-running 3 solvers with this narrowed scope" |
-| Meta-judge done (escalate) | Bilingual: trigger category + what needs human input + add `auto-loop-stuck` label + PushNotification |
-| Convergence cap reached | Bilingual: full round history + escalation rationale |
+| Round N solvers dispatched | Bilingual: "Phase 9 round N — minimal/structural/delete codex in flight. Max convergence ${MAX_CONVERGENCE_ROUNDS}." |
+| **Each individual solver completes** | Post FULL solver output as its own comment. Header: `## 🤖 Phase 9 Solver — \`<role>\` (round N)`. Body = verbatim solver output (already bilingual). One comment per solver, three comments per round. |
+| **Meta-judge completes** | Post FULL meta-judge output as its own comment. Header: `## 🤖 Phase 9 Meta-judge — round N verdict: \`<consensus\|converge\|escalate>\``. Body = verbatim judge output (bilingual). |
+| Meta-judge → consensus | Same as above + then a follow-up controller comment: "auto-loop-resume label added; implement codex dispatched" |
+| Meta-judge → converge | Same as above + the round-(N+1) "solvers dispatched" comment that includes the convergence question for transparency |
+| Meta-judge → escalate | Same as above + label `auto-loop-stuck` + `## 🤖 Controller next-step` comment laying out the exact human action needed + PushNotification |
+| Convergence cap reached | Post the round-2 meta-judge output + summary "convergence exhausted — escalating to human" comment + label `auto-loop-stuck` |
+
+**Forbidden**: posting a "summary" of solver outputs instead of the FULL outputs. The human needs the raw reasoning, evidence, and concrete plans to make an informed call — a summary loses too much fidelity. The 3+ comments per round are intentional; they ARE the audit trail.
 
 Required labels (additions to Phase 8 set):
 - `phase9-solving`: 3 solver codexes in flight
