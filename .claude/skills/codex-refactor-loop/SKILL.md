@@ -67,7 +67,7 @@ Create top-level TaskCreate items: audit / dispatch / merge.
 
 ---
 
-## Phase 1 — Audit (one codex)
+## Phase 1 — Audit (one codex + controller validation)
 
 1. Copy `prompts/audit.md` (this skill's template) to `.refactor-loop/prompts/audit-iter-N.md`.
 2. Replace `{{iteration}}` placeholder.
@@ -78,18 +78,31 @@ Create top-level TaskCreate items: audit / dispatch / merge.
      --cd "$REPO_ROOT" \
      --prompt .refactor-loop/prompts/audit-iter-N.md \
      --log .refactor-loop/logs/audit-iter-N.log \
-     --timeout 1800
+     --timeout 2400
    ```
 
-   Use Bash with `run_in_background: true`.
+   Use Bash with `run_in_background: true`. 2400s (40 min) accommodates the mandatory coverage manifest + opened-file requirements.
 
-4. Schedule wakeup 1200–1800s as safety net (task notification is primary wake).
+4. Schedule wakeup 1500–1800s as safety net (task notification is primary wake).
 5. **End turn.**
 
-When task notification fires → read `audit-iter-N.md` output, populate `clusters_planned`, split into batches (max `max_parallel_clusters` per batch) by **file/project disjointness**:
+When task notification fires → **controller validation** before accepting the audit:
+
+- a. Check log tail for the terminal marker: `AUDIT_DONE:...:<N>` or `AUDIT_INCOMPLETE:<reason>`.
+- b. If `AUDIT_INCOMPLETE` → log reason, re-dispatch audit with the missing pieces called out in the prompt header (e.g., "previous audit returned INCOMPLETE because <reason>; deliver the missing artifact this run"). Do NOT proceed to Phase 2 with an incomplete audit.
+- c. Verify the two output files exist: `audit-iter-N.md` AND `audit-iter-N-candidates.ndjson`. Missing either → treat as INCOMPLETE.
+- d. Verify the candidate file has `>= 25` entries unless the audit body explicitly explains why every analyzer pack command returned 0 hits.
+- e. Verify the audit body contains the 6 fixed-analyzer-pack commands by name with hit counts.
+- f. Verify reject reasons cite a CLAUDE clause + per-candidate evidence (not blanket "covered by guard"). Sample 3 random rejects; if any lack evidence → INCOMPLETE.
+- g. Verify `coverage_manifest.total_opened_files >= 60` with the documented sub-distribution.
+
+Anti-anchoring: **do not** include phrases like "prefer 0", "loop saturated", "healthy signal" in the audit prompt body. These bias codex toward terminating instead of digging. Use the mechanical thresholds in `prompts/audit.md` as the only stop criteria.
+
+After validation: read `audit-iter-N.md`, populate `clusters_planned`, split into batches (max `max_parallel_clusters` per batch) by **file/project disjointness**:
 
 - Two clusters that touch the same `.csproj` or share a file path go in different batches.
 - Two clusters that touch the same proto file → different batches.
+- A cluster with `requires_design: true` (audit-marked deep violation) goes in a batch by itself; controller may also escalate it to a separate planning issue rather than auto-implement.
 
 Update state, advance to Phase 2.
 
