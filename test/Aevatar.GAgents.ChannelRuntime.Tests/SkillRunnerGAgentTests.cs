@@ -14,6 +14,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using FluentAssertions;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.Platform.Lark;
@@ -814,7 +815,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ExecuteSkillAsync_StreamingCoalescesThrottledSnapshotsAndFinalizesBeforeCompletion()
+    public async Task ExecuteSkillAsync_StreamingFinalizesBeforeCompletion()
     {
         var provider = new StubStreamingProviderFactory("a", "b", "c");
         var agent = CreateAgent("skill-runner-stream-coalesce", providerFactory: provider);
@@ -839,21 +840,32 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task SkillRunnerStreamingRunState_CoalescesInsideThrottleAndDispatchesAfterThrottle()
+    {
+        var handler = new SequencedHandler(
+            """{"code":0,"msg":"success","data":{"message_id":"om_stream"}}""",
+            """{"code":0,"msg":"success"}""");
+        var sink = CreateStreamingSink(handler);
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 5, 19, 9, 0, 0, TimeSpan.Zero));
+        var runState = CreateStreamingRunState(sink, TimeSpan.FromMilliseconds(300), time);
+
+        await InvokeStreamingRunStateAsync(runState, "OnDeltaAsync", "a");
+        time.Advance(TimeSpan.FromMilliseconds(100));
+        await InvokeStreamingRunStateAsync(runState, "OnDeltaAsync", "ab");
+        time.Advance(TimeSpan.FromMilliseconds(250));
+        await InvokeStreamingRunStateAsync(runState, "OnDeltaAsync", "abc");
+
+        handler.Requests.Should().HaveCount(2);
+        ExtractLarkText(handler.Bodies[0]!).Should().Be("a");
+        ExtractLarkText(handler.Bodies[1]!).Should().Be("abc");
+    }
+
+    [Fact]
     public async Task SkillRunnerStreamingRunState_TruncatesBeforeDedupeAndSuppressesDuplicateFinal()
     {
         var handler = new SequencedHandler("""{"code":0,"msg":"success","data":{"message_id":"om_truncated"}}""");
-        var client = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-        using var sink = new SkillRunnerStreamingReplySink(
-            client,
-            "nyx-api-key",
-            "api-lark-bot",
-            new LarkReceiveTarget("oc_chat_1", "chat_id", FellBackToPrefixInference: false),
-            fallbackTarget: null,
-            (_, detail) => detail,
-            logger: null);
-        var runState = CreateStreamingRunState(sink, TimeSpan.Zero);
+        using var sink = CreateStreamingSink(handler);
+        var runState = CreateStreamingRunState(sink, TimeSpan.Zero, TimeProvider.System);
         var longText = new string('x', SkillRunnerStreamingReplySink.MaxLarkTextLength + 100);
 
         await InvokeStreamingRunStateAsync(runState, "OnDeltaAsync", longText);
@@ -889,15 +901,31 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
 
     private static object CreateStreamingRunState(
         SkillRunnerStreamingReplySink sink,
-        TimeSpan throttle)
+        TimeSpan throttle,
+        TimeProvider timeProvider)
     {
         var type = typeof(SkillRunnerGAgent).GetNestedType(
             "SkillRunnerStreamingRunState",
             BindingFlags.NonPublic);
         type.Should().NotBeNull();
         return Activator.CreateInstance(type!, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, binder: null,
-            args: [sink, throttle, TimeProvider.System],
+            args: [sink, throttle, timeProvider],
             culture: null)!;
+    }
+
+    private static SkillRunnerStreamingReplySink CreateStreamingSink(HttpMessageHandler handler)
+    {
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+        return new SkillRunnerStreamingReplySink(
+            client,
+            "nyx-api-key",
+            "api-lark-bot",
+            new LarkReceiveTarget("oc_chat_1", "chat_id", FellBackToPrefixInference: false),
+            fallbackTarget: null,
+            (_, detail) => detail,
+            logger: null);
     }
 
     private static Task InvokeStreamingRunStateAsync(object runState, string methodName, string text)

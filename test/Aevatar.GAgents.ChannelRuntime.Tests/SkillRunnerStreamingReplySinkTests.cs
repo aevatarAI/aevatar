@@ -6,7 +6,6 @@ using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Time.Testing;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -33,7 +32,7 @@ public sealed class SkillRunnerStreamingReplySinkTests
     }
 
     [Fact]
-    public async Task SecondDelta_PatchesCapturedMessageId()
+    public async Task SecondDelta_EditsCapturedMessageIdWithPut()
     {
         var handler = new SequencedHandler(OkSendResponse, OkEditResponse);
         var sink = CreateSink(handler);
@@ -76,7 +75,7 @@ public sealed class SkillRunnerStreamingReplySinkTests
     }
 
     [Fact]
-    public async Task FinalizeAsync_BypassesThrottleAndPatchesFinalText()
+    public async Task FinalizeAsync_SendsActorApprovedFinalEdit()
     {
         var handler = new SequencedHandler(OkSendResponse, OkEditResponse);
         var sink = CreateSink(handler);
