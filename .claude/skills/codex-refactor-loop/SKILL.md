@@ -866,11 +866,41 @@ Per Auric (2026-05-19) "凡是新回复都要完整重新让多个solver分析,�
 
 ## Loop control
 
-- **Stop conditions**: all planned clusters done OR every remaining cluster failed twice.
+### This is an INFINITE refactor loop — never idle on "iter done"
+
+Per Auric (2026-05-19): "这是一个无限重构循环". An iteration completing is NEVER a stop signal. The loop's only legitimate stops are:
+1. Audit returns 0 candidates (codebase has no flagged violations under current rules) — extremely rare.
+2. Every cluster in the current batch failed verify twice — escalate operator.
+3. Operator explicitly tells the loop to stop.
+
+**Iteration boundary is automatic**: as soon as iter N's last cluster PR merges into `integration_branch` (NOT after rollup PR human review — rollup runs independently in parallel as a human gate), controller IMMEDIATELY dispatches `Phase 1 audit` for iter N+1. The rollup PR (auto-refact-dev → review_base_branch) is a parallel human-review track, not a serial gate.
+
+Concretely, this means:
+- After PR #708 (cluster-027 in iter15) merged, controller does NOT wait for PR #690 (rollup) review — it immediately dispatches the iter16 audit codex.
+- iter16 implement / verify / Phase 8 review runs in parallel with iter15 rollup PR being reviewed.
+- If iter15 rollup PR gets rejected by human, iter16 work stays on auto-refact-dev (which now contains iter15 + iter16 deltas); we re-do iter15 rework on top and ship combined.
+
+### Sync to remote in time (强制)
+
+Per Auric (2026-05-19): "及时与远程同步."
+
+- After EVERY skill edit that affects controller behavior, `git commit && git push origin auto-refact-dev` IMMEDIATELY — do not batch multiple skill changes for a single push, do not defer to "end of turn".
+- After EVERY cluster PR commit (fix codex round output): `git push origin <branch>` IMMEDIATELY — the reviewer / CI / Auric all need to see latest state, not yesterday's local state.
+- Phase 6 sync (auto-refact-dev ← origin/dev) runs FIRST on every controller wakeup; never assume "I just synced" — verify with `git fetch && git rev-list --count`.
+- Phase 5 CI watch reads `gh pr checks <PR>` (always remote), never a local cached value.
+- Phase 7/8/9 reviewer/judge outputs MUST be posted to GitHub as PR/issue comments within the same controller turn they complete; do not let them sit local-only across multiple turns.
+
+If a push fails (network, conflict, branch protection): controller MUST surface the failure inline and either fix-and-retry or escalate within the same turn — never silently leave local changes uncommitted/unpushed.
+
+### Stop conditions / stop action
+
+- **Stop conditions**: audit returns 0 candidates twice in a row OR every cluster in current batch failed verify twice OR operator says stop.
 - **Stop action**: omit ScheduleWakeup, TaskStop any monitor, send one-line PushNotification with summary.
-- **Wakeup cadence**:
-  - Primary: harness task notifications (auto on codex exit).
-  - Fallback: 1200–1800s ScheduleWakeup (matches /loop dynamic mode guidance).
+
+### Wakeup cadence
+
+- Primary: harness task notifications (auto on codex exit).
+- Fallback: 1200–1800s ScheduleWakeup (matches /loop dynamic mode guidance).
 
 ---
 
