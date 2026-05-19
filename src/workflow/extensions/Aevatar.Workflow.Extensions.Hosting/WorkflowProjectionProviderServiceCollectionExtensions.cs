@@ -5,6 +5,7 @@ using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Providers.Neo4j.Configuration;
 using Aevatar.CQRS.Projection.Providers.Neo4j.DependencyInjection;
+using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Projection.ReadModels;
 using Microsoft.Extensions.Configuration;
@@ -97,6 +98,10 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             services,
             configuration,
             static document => document.Id);
+        TryAddElasticsearchDocumentStore<ProjectionScopeWatermarkReadModel>(
+            services,
+            configuration,
+            static document => document.Id);
     }
 
     private static void AddInMemoryDocumentStores(IServiceCollection services)
@@ -117,6 +122,10 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             services,
             static document => document.Id,
             static document => document.UpdatedAt);
+        TryAddInMemoryDocumentStore<ProjectionScopeWatermarkReadModel>(
+            services,
+            static document => document.Id,
+            static document => document.UpdatedAt);
     }
 
     private static bool HasAllWorkflowDocumentReaders(
@@ -126,7 +135,8 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         return HasDocumentReaderForProvider<WorkflowExecutionCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<WorkflowRunTimelineDocument>(services, providerKind)
                && HasDocumentReaderForProvider<WorkflowRunInsightReportDocument>(services, providerKind)
-               && HasDocumentReaderForProvider<WorkflowActorBindingDocument>(services, providerKind);
+               && HasDocumentReaderForProvider<WorkflowActorBindingDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<ProjectionScopeWatermarkReadModel>(services, providerKind);
     }
 
     private static bool HasAnyDocumentReader<TDocument>(IServiceCollection services)

@@ -6,6 +6,7 @@ using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
@@ -98,10 +99,44 @@ public sealed class ProjectionScopeGAgentBaseTests
         await act.Should().NotThrowAsync();
     }
 
+    [Fact]
+    public async Task HandleObservedEnvelopeAsync_MaterializesScopeWatermarkReadModel()
+    {
+        var writer = new RecordingWatermarkWriter();
+        var eventSourcing = new TrackingEventSourcing
+        {
+            ConfirmResult = new EventStoreCommitResult
+            {
+                AgentId = "projection-scope-watermark",
+                LatestVersion = 7,
+            },
+        };
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-watermark",
+            onProcess: _ => ProjectionScopeDispatchResult.Success(42, "state.updated"),
+            eventSourcing: eventSourcing,
+            watermarkWriter: writer);
+        var envelope = BuildForwardedObserverEnvelope(targetStreamId: "projection-scope-watermark");
+
+        await agent.HandleObservedEnvelopeAsync(envelope);
+
+        writer.LastUpsert.Should().NotBeNull();
+        writer.LastUpsert!.Id.Should().Be(ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
+            "root-actor",
+            "test-kind",
+            ProjectionRuntimeMode.DurableMaterialization,
+            "session-1")));
+        writer.LastUpsert.Active.Should().BeTrue();
+        writer.LastUpsert.Released.Should().BeFalse();
+        writer.LastUpsert.LastSuccessfulVersion.Should().Be(42);
+        writer.LastUpsert.StateVersion.Should().Be(7);
+    }
+
     private static TestScopeAgent BuildActivatedAgent(
         string scopeId,
         Func<EventEnvelope, ProjectionScopeDispatchResult> onProcess,
-        IEventSourcingBehavior<ProjectionScopeState>? eventSourcing = null)
+        IEventSourcingBehavior<ProjectionScopeState>? eventSourcing = null,
+        IProjectionDocumentWriter<ProjectionScopeWatermarkReadModel>? watermarkWriter = null)
     {
         var agent = new TestScopeAgent(onProcess);
 
@@ -115,12 +150,15 @@ public sealed class ProjectionScopeGAgentBaseTests
         agent.State.RootActorId = "root-actor";
         agent.State.ProjectionKind = "test-kind";
         agent.State.SessionId = "session-1";
+        agent.State.Mode = ProjectionScopeMode.DurableMaterialization;
         agent.State.Active = true;
         agent.State.Released = false;
 
         var services = new ServiceCollection();
         services.AddSingleton<Func<ProjectionRuntimeScopeKey, TestContext>>(
             static _ => new TestContext("root-actor", "test-kind"));
+        if (watermarkWriter != null)
+            services.AddSingleton(watermarkWriter);
         agent.Services = services.BuildServiceProvider();
 
         return agent;
@@ -168,15 +206,38 @@ public sealed class ProjectionScopeGAgentBaseTests
     private sealed class TrackingEventSourcing : IEventSourcingBehavior<ProjectionScopeState>
     {
         public int DiscardCallCount { get; private set; }
-        public long CurrentVersion => 0;
+        public EventStoreCommitResult ConfirmResult { get; init; } = new();
+        public long CurrentVersion => ConfirmResult.LatestVersion;
         public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage { }
         public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default) =>
-            Task.FromResult(new EventStoreCommitResult());
+            Task.FromResult(ConfirmResult);
         public Task PersistSnapshotAsync(ProjectionScopeState currentState, CancellationToken ct = default) =>
             Task.CompletedTask;
         public Task<ProjectionScopeState?> ReplayAsync(string agentId, CancellationToken ct = default) =>
             Task.FromResult<ProjectionScopeState?>(null);
         public void DiscardPendingEvents() => DiscardCallCount++;
-        public ProjectionScopeState TransitionState(ProjectionScopeState current, IMessage evt) => current;
+        public ProjectionScopeState TransitionState(ProjectionScopeState current, IMessage evt) =>
+            evt is ProjectionScopeWatermarkAdvancedEvent watermark
+                ? ProjectionScopeStateApplier.ApplyWatermarkAdvanced(current, watermark)
+                : current;
+    }
+
+    private sealed class RecordingWatermarkWriter : IProjectionDocumentWriter<ProjectionScopeWatermarkReadModel>
+    {
+        public ProjectionScopeWatermarkReadModel? LastUpsert { get; private set; }
+
+        public Task<ProjectionWriteResult> UpsertAsync(
+            ProjectionScopeWatermarkReadModel readModel,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            LastUpsert = readModel.Clone();
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+        {
+            throw new NotSupportedException();
+        }
     }
 }

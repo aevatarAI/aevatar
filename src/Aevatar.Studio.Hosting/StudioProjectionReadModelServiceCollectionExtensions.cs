@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
+using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgents.ChatHistory;
 using Aevatar.GAgents.ConnectorCatalog;
@@ -73,6 +74,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterElasticsearch<StudioMemberBindingRunCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<StudioTeamCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<StudioWorkspaceCurrentStateDocument>(services, configuration);
+            RegisterElasticsearch<ProjectionScopeWatermarkReadModel>(services, configuration);
         }
         else
         {
@@ -88,6 +90,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterInMemory<StudioMemberBindingRunCurrentStateDocument>(services);
             RegisterInMemory<StudioTeamCurrentStateDocument>(services);
             RegisterInMemory<StudioWorkspaceCurrentStateDocument>(services);
+            RegisterInMemory<ProjectionScopeWatermarkReadModel>(services);
         }
 
         return services;
@@ -139,7 +142,8 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
                && HasDocumentReaderForProvider<StudioMemberCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StudioMemberBindingRunCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StudioTeamCurrentStateDocument>(services, providerKind)
-               && HasDocumentReaderForProvider<StudioWorkspaceCurrentStateDocument>(services, providerKind);
+               && HasDocumentReaderForProvider<StudioWorkspaceCurrentStateDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<ProjectionScopeWatermarkReadModel>(services, providerKind);
     }
 
     private static bool HasAnyDocumentReader<TDoc>(IServiceCollection services)

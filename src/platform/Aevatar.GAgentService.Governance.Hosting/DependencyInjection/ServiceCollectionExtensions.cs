@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
+using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -53,7 +54,8 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        if (services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<ServiceConfigurationReadModel, string>)))
+        if (services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<ServiceConfigurationReadModel, string>))
+            && services.Any(x => x.ServiceType == typeof(IProjectionDocumentReader<ProjectionScopeWatermarkReadModel, string>)))
             return services;
         var elasticsearchEnabled = ResolveElasticsearchDocumentEnabled(configuration);
         var inMemoryEnabled = ResolveOptionalBool(
@@ -73,10 +75,19 @@ public static class ServiceCollectionExtensions
                 metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ServiceConfigurationReadModel>>().Metadata,
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key);
+            services.AddElasticsearchDocumentProjectionStore<ProjectionScopeWatermarkReadModel, string>(
+                optionsFactory: _ => BuildElasticsearchDocumentOptions(configuration),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ProjectionScopeWatermarkReadModel>>().Metadata,
+                keySelector: readModel => readModel.Id,
+                keyFormatter: key => key);
         }
         else
         {
             services.AddInMemoryDocumentProjectionStore<ServiceConfigurationReadModel, string>(
+                keySelector: readModel => readModel.Id,
+                keyFormatter: key => key,
+                defaultSortSelector: readModel => readModel.UpdatedAt);
+            services.AddInMemoryDocumentProjectionStore<ProjectionScopeWatermarkReadModel, string>(
                 keySelector: readModel => readModel.Id,
                 keyFormatter: key => key,
                 defaultSortSelector: readModel => readModel.UpdatedAt);

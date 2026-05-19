@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
+using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Application.Bindings;
@@ -128,6 +129,7 @@ public static class ServiceCollectionExtensions
             TryAddElasticsearchDocumentProjectionStore<LlmSessionCurrentStateReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<ResponsesAgentToolStateCurrentStateReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<UserConfigCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<ProjectionScopeWatermarkReadModel>(services, configuration, static readModel => readModel.Id);
         }
         else
         {
@@ -143,6 +145,7 @@ public static class ServiceCollectionExtensions
             TryAddInMemoryDocumentProjectionStore<LlmSessionCurrentStateReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<ResponsesAgentToolStateCurrentStateReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<UserConfigCurrentStateDocument>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<ProjectionScopeWatermarkReadModel>(services, static readModel => readModel.Id);
         }
 
         return services;
@@ -163,7 +166,8 @@ public static class ServiceCollectionExtensions
                && HasProjectionDocumentReaderForProvider<GAgentRunTerminalReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<LlmSessionCurrentStateReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<ResponsesAgentToolStateCurrentStateReadModel>(services, providerKind)
-               && HasProjectionDocumentReaderForProvider<UserConfigCurrentStateDocument>(services, providerKind);
+               && HasProjectionDocumentReaderForProvider<UserConfigCurrentStateDocument>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<ProjectionScopeWatermarkReadModel>(services, providerKind);
     }
 
     private static bool HasAnyProjectionDocumentReader<TReadModel>(IServiceCollection services)

@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Microsoft.Extensions.DependencyInjection;
@@ -28,6 +29,10 @@ public static class EventSinkProjectionRuntimeRegistration
 
         services.TryAddSingleton<IProjectionFailureReplayService, ProjectionFailureReplayService>();
         services.TryAddSingleton<IProjectionFailureAlertSink, LoggingProjectionFailureAlertSink>();
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<ProjectionScopeWatermarkReadModel>,
+            ProjectionScopeWatermarkReadModelMetadataProvider>();
+        services.TryAddSingleton<IProjectionScopeWatermarkQueryPort, ProjectionScopeWatermarkReadModelQueryPort>();
         services.TryAddSingleton<Func<ProjectionRuntimeScopeKey, TContext>>(_ => contextFactory);
         services.TryAddSingleton<IProjectionScopeActivationService<TRuntimeLease>>(sp =>
             new ProjectionScopeActivationService<
