@@ -45,8 +45,11 @@ public sealed record ChatInput
     public IReadOnlyList<string>? WorkflowYamls { get; init; }
 
     /// <summary>
-    /// Optional workflow scope identifier. Prefer this typed field over metadata keys.
+    /// Optional workflow scope identifier.
     /// </summary>
+    // Refactor (iter15/cluster-029):
+    //   Old pattern: scope id / channel facts fell back to metadata bag string keys.
+    //   New principle: stable business semantics use typed proto field; metadata bag only for genuine open extension.
     public string? ScopeId { get; init; }
 
     /// <summary>
