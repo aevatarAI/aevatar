@@ -164,7 +164,7 @@ post_or_update() {
       log_msg "FAIL to delete comment $cid for $base (already gone?); marking finished anyway"
     fi
     # mark finished in state so we don't re-create next tick
-    state_set "$base" "$target" "$kind" "0" "$cur_md5" "true"
+    state_set "$base" "$target" "$kind" "0" "deleted" "true"
     return
   fi
 
