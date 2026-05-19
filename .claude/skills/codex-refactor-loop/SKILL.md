@@ -539,6 +539,85 @@ If the user manually edits state.json and sets `design_pending[i].status = "resu
 
 ---
 
+## Phase 8 — Multi-codex PR review with consensus merge
+
+Runs when a cluster PR's remote CI is green (Phase 5 settled with pass) and the PR is mergeable. Goal: 3 (or more) independent codex reviewers from **different angles** verify the PR; **unanimous approve → auto-merge to `integration_branch`**; any reject → human review required.
+
+### Default reviewer roles
+
+- **Architect** (`prompts/reviewer-architect.md`): CLAUDE.md / AGENTS.md clause compliance.
+- **Tests** (`prompts/reviewer-tests.md`): test coverage on net-new logic, no `[Skip]` / `Task.Delay` sneaking in, no loosened assertions.
+- **Quality** (`prompts/reviewer-quality.md`): naming / dead code / over-engineering / readability / refactor self-doc clarity.
+
+Optional (add when cluster touches the relevant area, audit's `rule_ids` decides): Perf (future), Security (future).
+
+### Dispatch (parallel)
+
+For each cluster PR with `CI green AND mergeable AND not yet auto-reviewed`:
+
+```bash
+for role in architect tests quality; do
+  envsubst < .claude/skills/codex-refactor-loop/prompts/reviewer-${role}.md \
+    > .refactor-loop/prompts/review-pr${PR_NUMBER}-${role}.md
+  .claude/skills/codex-refactor-loop/scripts/spawn-codex.sh \
+    --cd "$REPO_ROOT" \
+    --prompt .refactor-loop/prompts/review-pr${PR_NUMBER}-${role}.md \
+    --log .refactor-loop/logs/review-pr${PR_NUMBER}-${role}.log \
+    --timeout 3600 &
+done
+```
+
+All reviewers in parallel background; one task-notification per reviewer when done.
+
+### Consensus rules
+
+Each reviewer outputs `REVIEW_DONE:${PR}:${role}:<approve|comment|reject>` marker.
+
+| Combined verdicts                       | Action |
+|---|---|
+| **All approve**                         | Auto-merge: `gh pr merge ${PR} --merge --auto`. Post bilingual "auto-merged after consensus" comment. Cluster moves to `clusters_done`. |
+| **All approve except 1 comment**        | Same auto-merge. Surface comment's "Evidence" in merge comment. |
+| **2 approve + 1 comment**               | Same auto-merge with surfaced comment. |
+| **3+ comment, 0 reject**                | Surface all comments in PR review comment; **do not** merge; PushNotification: "PR #N: 3 comments, no rejects — human decision recommended." |
+| **Any reject**                          | Block auto-merge. Add label `needs-human-review`. Post bilingual summary of rejector's evidence + "What would change your verdict". PushNotification: "PR #N rejected by <role>; human review required." |
+| **Reviewer crashes / no marker**        | Re-dispatch that reviewer once. Second crash → `reject:reviewer-stuck`, escalate. |
+
+### State tracking
+
+```json
+"pr_reviews": {
+  "<PR_NUMBER>": {
+    "head_sha": "<sha at review dispatch>",
+    "dispatched_at": "<ISO8601>",
+    "reviewers": {
+      "architect": {"verdict": "approve|comment|reject", "rationale_path": "...", "log": "..."},
+      "tests": {...},
+      "quality": {...}
+    },
+    "consensus": "auto-merge | block-human-review | partial-comment",
+    "merged_at": "<ISO8601|null>",
+    "auto_merge_commit": "<sha|null>"
+  }
+}
+```
+
+### Re-review on push
+
+If PR is pushed after consensus (rebase, requested change), head SHA changes. Next Phase 8 sweep: if `state.pr_reviews[PR].head_sha != current head SHA` → drop prior consensus, re-dispatch all reviewers against new head. Never auto-merge stale consensus.
+
+### Idempotency
+
+Skip a PR in Phase 8 if any of:
+- already merged / closed
+- `needs-human-review` label present (operator handling)
+- consensus recorded for current head SHA AND not stale
+
+### Why three angles, not one
+
+A single reviewer codex would weigh all dimensions and might trade tests for architecture or vice versa. Three independent codexes with bounded scopes are harder to convince than one — a real defect tends to hit one role hard rather than all three lightly. Consensus across orthogonal angles is the actual signal.
+
+---
+
 ## Loop control
 
 - **Stop conditions**: all planned clusters done OR every remaining cluster failed twice.
@@ -612,5 +691,8 @@ If any check fails, regenerate. Do not post.
 - [prompts/test-add.md](prompts/test-add.md) — Phase 5 codecov-driven test-add template (per cluster)
 - [prompts/design-issue-body.md](prompts/design-issue-body.md) — Phase 1/6 GitHub issue body for `requires_design: true` clusters
 - [prompts/design-issue-reply.md](prompts/design-issue-reply.md) — Phase 7 analyst codex template for substantively replying to maintainer comments on design issues
+- [prompts/reviewer-architect.md](prompts/reviewer-architect.md) — Phase 8 architect reviewer (CLAUDE.md compliance angle)
+- [prompts/reviewer-tests.md](prompts/reviewer-tests.md) — Phase 8 tests reviewer (coverage/quality angle)
+- [prompts/reviewer-quality.md](prompts/reviewer-quality.md) — Phase 8 code quality reviewer (readability/simplicity angle)
 - [scripts/spawn-codex.sh](scripts/spawn-codex.sh) — standardized `codex exec` wrapper (enforces 3600s minimum timeout)
 - [REFERENCE.md](REFERENCE.md) — state schema, batching heuristics, recovery playbook
