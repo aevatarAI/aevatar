@@ -496,36 +496,50 @@ Update `state.design_pending[i].last_comment_count` and `last_checked` after eve
 
 **Mode A: passive sweep (default when other phase work is active).** Every controller wakeup runs the sweep before any other phase. Cheap: one `gh issue view` per pending cluster. ScheduleWakeup cadence is dominated by other in-flight work; design issues piggyback on those wakeups.
 
-**Mode B: active 60s Monitor (when design_pending is the ONLY remaining work).** Instead of sleeping 1h between checks, arm a persistent Monitor that polls all design issues at 60s cadence and emits an event line the **first** time any issue's `(state, labels, comment_count)` tuple changes. The conversation wakes <60s after the maintainer adds the `auto-loop-resume` label / closes the issue / comments. Use:
+**Mode B: active 60s Monitor with auto-discovery (when design_pending is the ONLY remaining work).** Instead of sleeping 1h between checks, arm a persistent Monitor that **discovers issues by label on every tick** (never hardcoded issue numbers — new issues opened mid-session are picked up automatically), polls them at 60s cadence, and emits an event line the **first** time any issue's `(state, labels, comment_count)` tuple changes. The conversation wakes <60s after the maintainer adds the `auto-loop-resume` label / closes the issue / comments / opens a new design issue.
+
+**Hard rule — Monitor discovery is dynamic, not enumerated**: hardcoding `PENDING_ISSUES=(681 682 684)` will miss any issue opened after the Monitor arms. The required pattern queries `gh issue list --label "refactor-design-needed,phase9-auto-solve"` on every loop iteration so new issues join coverage automatically. A controller that hardcodes issue lists into Monitor commands is broken — re-arm with discovery as soon as the gap is caught.
 
 ```bash
-# Single Monitor watches all pending issues; emits one line per detected change.
-# 60s cadence × 3 issues = 180 gh API calls/hr — well under rate limit.
-prev=""
+# Auto-discovery Monitor — emits one line per detected change across ALL open issues
+# carrying refactor-design-needed OR phase9-auto-solve labels. New issues opened mid-session
+# are picked up on the next 60s tick without re-arming.
+declare -A LAST=()
 while true; do
-  cur=$(
-    for issue in "${PENDING_ISSUES[@]}"; do
-      gh issue view "$issue" --json state,labels,comments 2>/dev/null \
-        | jq -r --arg n "$issue" '
-            "\($n)\t\(.state)\t\([.labels[].name] | sort | join(","))\t\(.comments | length)"
-          '
-    done | sort
-  )
-  if [[ -n "$prev" && "$cur" != "$prev" ]]; then
-    diff <(printf '%s\n' "$prev") <(printf '%s\n' "$cur") \
-      | grep '^>' | sed 's/^> /design-issue-event: /'
-    # Exit immediately on resume / close so controller can act
-    if echo "$cur" | grep -qE "auto-loop-resume|CLOSED"; then
-      echo "DESIGN_EVENT_DONE: state change requires controller wakeup"
-      break
+  # Discover current open issues with either Phase 7 or Phase 9 label (union)
+  issues=$(gh issue list --state open \
+    --label "refactor-design-needed" --json number -q '.[].number' 2>/dev/null; \
+    gh issue list --state open \
+    --label "phase9-auto-solve" --json number -q '.[].number' 2>/dev/null) | sort -u
+  cur_state=""
+  for issue in $issues; do
+    data=$(gh api repos/aevatarAI/aevatar/issues/$issue \
+      --jq '{state, labels: ([.labels[].name] | sort | join(",")), comments}' 2>/dev/null)
+    [ -z "$data" ] && continue
+    state=$(echo "$data" | jq -r '.state // "?"')
+    labels=$(echo "$data" | jq -r '.labels // ""')
+    count=$(echo "$data" | jq -r '.comments // 0')
+    sig="${state}|${labels}|${count}"
+    if [ "$sig" != "${LAST[$issue]}" ]; then
+      resume=0
+      echo ",$labels," | grep -q ",auto-loop-resume," && resume=1
+      echo "design-issue-event: $issue $state $labels $count resume=$resume"
+      LAST[$issue]="$sig"
     fi
+    cur_state+="$issue|$sig"$'\n'
+  done
+  # Exit if any issue hit auto-loop-resume or closed (controller needs to act now)
+  if echo "$cur_state" | grep -qE "\|auto-loop-resume|\|CLOSED\|"; then
+    echo "DESIGN_EVENT_DONE: state change requires controller wakeup"
+    break
   fi
-  prev="$cur"
   sleep 60
 done
 ```
 
 Arm via Monitor tool with `persistent: true` and `timeout_ms: 3600000` (1h ceiling). At 1h ceiling the Monitor exits; the controller's next ScheduleWakeup (3600s) re-arms it. If Monitor crashes early, ScheduleWakeup still catches it.
+
+**Controller-level gap check (mandatory every wakeup)**: before relying on existing Monitor, the controller MUST verify it's still alive AND its discovery pattern is current. Run `gh issue list --state open --label "refactor-design-needed,phase9-auto-solve" --json number,title` and confirm the Monitor's emit history covers each open issue at least once. Gap → TaskStop the stale Monitor and re-arm with discovery. **Never trust a Monitor that was armed before the latest set of issues opened.**
 
 **Mode transition**:
 - Mode A → B: when active work drains to only design_pending (no `clusters_active`, no `rollup_pr` awaiting CI) → arm Mode B Monitor and set ScheduleWakeup 3600s as fallback.
