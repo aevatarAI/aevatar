@@ -182,6 +182,96 @@ if [ -n "${forbidden_web_api_port_report}" ]; then
   exit 1
 fi
 
+# Refactor (iter12/cluster-022):
+#   Old: actor query endpoints could be mapped without auth, exposing readmodel
+#   by raw actor id.
+#   New: CI guard requires explicit .RequireAuthorization() or
+#   security-allowlist comment per endpoint.
+#   TODO: Once a caller-scope query contract exists, extend this guard to require
+#   AI workflow tools to reference that scoped query port.
+workflow_actor_query_endpoint_files=()
+while IFS= read -r endpoint_file; do
+  workflow_actor_query_endpoint_files+=("${endpoint_file}")
+done < <(
+  find src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi \
+    -type f \
+    -name '*Endpoint*.cs' \
+    | sort
+)
+
+if [ "${#workflow_actor_query_endpoint_files[@]}" -gt 0 ]; then
+  set +e
+  workflow_actor_query_authz_report="$(
+    awk '
+function trim(value) {
+  sub(/^[[:space:]]+/, "", value);
+  sub(/[[:space:]]+$/, "", value);
+  return value;
+}
+
+function record_if_unprotected() {
+  if (in_endpoint == 0)
+    return;
+  if (requires_authorization == 0 && has_allowlist == 0)
+    print endpoint_file ":" endpoint_line ":" endpoint_text;
+}
+
+BEGIN {
+  in_endpoint = 0;
+}
+
+FNR == 1 {
+  record_if_unprotected();
+  in_endpoint = 0;
+}
+
+{
+  line = $0;
+
+  if (line ~ /MapGet[[:space:]]*\([[:space:]]*"\/(api\/)?agents"/ ||
+      line ~ /MapGet[[:space:]]*\([[:space:]]*"\/(api\/)?actors\/\{[^}]+}/) {
+    record_if_unprotected();
+    in_endpoint = 1;
+    endpoint_file = FILENAME;
+    endpoint_line = FNR;
+    endpoint_text = trim(line);
+    requires_authorization = line ~ /\.RequireAuthorization[[:space:]]*\(/;
+    has_allowlist = line ~ /security-allowlist:/;
+    next;
+  }
+
+  if (in_endpoint == 1) {
+    if (line ~ /\.RequireAuthorization[[:space:]]*\(/)
+      requires_authorization = 1;
+    if (line ~ /security-allowlist:/)
+      has_allowlist = 1;
+    if (line ~ /;[[:space:]]*$/) {
+      record_if_unprotected();
+      in_endpoint = 0;
+    }
+  }
+}
+
+END {
+  record_if_unprotected();
+}
+' "${workflow_actor_query_endpoint_files[@]}"
+  )"
+  workflow_actor_query_authz_status=$?
+  set -e
+
+  if [[ ${workflow_actor_query_authz_status} -ne 0 ]]; then
+    echo "Workflow actor query authorization guard execution failed."
+    exit "${workflow_actor_query_authz_status}"
+  fi
+
+  if [ -n "${workflow_actor_query_authz_report}" ]; then
+    echo "${workflow_actor_query_authz_report}"
+    echo "Workflow actor query endpoints must call .RequireAuthorization() or carry a per-endpoint security-allowlist comment."
+    exit 1
+  fi
+fi
+
 bash "${SCRIPT_DIR}/query_projection_priming_guard.sh"
 bash "${SCRIPT_DIR}/scripting_write_path_cqrs_guard.sh"
 bash "${SCRIPT_DIR}/projection_state_version_guard.sh"
