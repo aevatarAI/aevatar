@@ -1061,6 +1061,47 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 - ❌ banner 用 `## 🤖 controller` 第一行(comment-monitor 已经把 `## 🤖` 当 codex post 跳过,但 banner 应该是 controller 自己,用 `## 📊` 区分)
 - ❌ "需要人介入"用模糊措辞 → 人类还是不知道要不要看
 
+## CI 监控即时推进 — 强制(per Auric 2026-05-19 "ci 监控,应该红了就及时推进")
+
+**问题**:PR push 后 controller 把 CI watch 当 "等 Monitor 通知" 然后该睡就睡。结果 CI 红了 controller 没及时反应,PR 一红就挂半天,人类看到 🔴 而无动作。
+
+**规则**:**每次 controller wakeup**(/loop 触发 + 任何 task notification)**必查所有 open PR 的 CI 状态**。任一 PR 出 fail check → 立刻派 fix codex,不等下一个 task notification。
+
+### 强制 sweep
+
+每次 wakeup 第一件事(在处理 task notification / 派新 codex 之前):
+
+```bash
+# 列所有 auto-loop 创建的 open PR
+for pr in $(gh pr list --label "auto-loop,🚀 phase:pr-open,⚙️ phase:ci-running" --state open --json number --jq '.[].number'); do
+  failed=$(gh pr checks "$pr" --json bucket --jq '[.[] | select(.bucket=="fail") | 1] | length')
+  if [ "$failed" -gt 0 ]; then
+    # 立即拉 fail log + 派 fix codex + label `🔧 phase:fixing` + post banner
+    handle_ci_red "$pr"
+  fi
+done
+```
+
+### CI red 处理流水
+
+1. **拉 fail log**:`gh run view <run> --log-failed > .refactor-loop/logs/remote-ci-pr<N>-<check>.log`
+2. **分类**(per Phase 5):
+   - flaky/infra → retry by `gh workflow run` 或 empty commit;记入 `clusters_failed.<id>.flaky_retries++`
+   - real failure → 派 fix codex(prompt 含 fail log + 推荐修法)
+   - pre-existing failure(同失败也存在于 base branch) → 不在本 PR 修,PushNotification 标记
+   - codecov/patch → 派 `prompts/test-add.md` codex(uncovered patch lines)
+3. **label 转 `🔧 phase:fixing`** + post `## 📊` banner
+4. **fix codex 完成 → controller 立刻 commit + push + 重 watch CI**
+5. **2 次 fix 同 check 仍 fail → label 升 `🆘 human:卡死-需-rework` + PushNotification + 停 loop**
+
+### 反面(❌ 禁止)
+
+- ❌ 拿到 push 结果就走,不 arm CI watch / sweep → 红了没人管,PR 挂尸
+- ❌ 看到 CI 红等下次 controller wakeup 才反应 → 滞后 25 min
+- ❌ pre-existing failure 不区分 → 一直 fix 改不动本 PR 的红
+- ❌ 同 check 连续 fix 3 次以上 → 卡死无 escalation
+- ❌ codecov/patch 红被忽略 → 重构引入的 net-new line 没测试
+
 ## Codex 进展实时上报 — 强制(per Auric 2026-05-19 "每10分钟更新一次各 codex 进展到 issue/PR")
 
 **问题**:codex 单 task 可能跑 30–120 分钟。期间人类打开 issue/PR 只看到"派出"banner,看不到中间进展(它在分析哪个文件 / 在写什么 / 跑到第几步)。等结果 banner 时已经 1–2 小时过去。
