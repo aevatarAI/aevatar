@@ -658,12 +658,13 @@ The controller's only inline composition allowed for GitHub:
 - Mechanical link / SHA / cluster id mentions.
 - Programmatic label edits + merge actions.
 
-EVERYTHING ELSE (reviewer verdict surfacing, fix-done body, consensus celebration, escalation rationale, design issue body, cross-post unblock notices, PR descriptions including rollup PR) is dispatched as a writer-codex run:
-1. Controller drops the raw codex artifact at `${RAW_ARTIFACT_PATH}` + writes a short bullet `${SITUATION_CONTEXT_PATH}` describing this round (round number, what changed, what's next).
-2. spawn-codex with `prompts/github-post-writer.md` (3600s timeout per CLAUDE Codex CLI 调用规范).
-3. On `POST_WRITTEN:...` marker, `gh ... --body-file <POST_OUTPUT_PATH>`.
+EVERYTHING ELSE (reviewer verdict surfacing, fix-done body, consensus celebration, escalation rationale, design issue body, cross-post unblock notices, PR descriptions including rollup PR) 走 writer-codex,且 writer-codex **直接调 `gh`,不再经 controller 中转**(per Auric 2026-05-19 "我感觉你都没必要转一遍, 直接让 codex 调用 gh"):
 
-Rationale: stale controller context produces unreadable dense posts (raw solver YAML, jargon dumps, "see X" cross-refs). Fresh codex sessions write to human readers. The writer-codex prompt enforces TL;DR-first / details-second / collapsed `<details>` for raw artifact.
+1. Controller 把 raw codex artifact 路径 + 一段 bullet situation context 写到本地文件。
+2. spawn-codex 跑 `prompts/github-post-writer.md`(3600s)。Codex 自己:读 raw + situation → 写 body 到 mktemp → 调 `gh issue comment`/`gh pr comment`/`gh pr edit --body-file` post → 末尾打 `POSTED:<type>:<N>:<URL>:<headline>` 或 `POST_FAILED:<type>:<N>:<gh-stderr>`。
+3. Controller 只读 log 末尾 marker,不读 body。
+
+Rationale: 减少 controller 上下文负担;writer-codex 是 fresh session 写出来质量更高;直接调 gh 减少一跳。controller 边界仍是 git topology(commit/push/checkout)+ PR/issue 创建/merge/close 决策,这些 writer-codex 不动。
 
 **@-mention rule (per Auric 2026-05-19 "找到违反原则的地方,请直接at那个违反原则的人进来讨论"):**
 
