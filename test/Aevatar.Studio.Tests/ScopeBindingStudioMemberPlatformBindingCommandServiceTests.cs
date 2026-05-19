@@ -127,6 +127,64 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenGAgentEndpointIsCommand_ShouldMapEndpointKind()
+    {
+        var scopeBindingPort = new RecordingScopeBindingCommandPort();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var service = CreateService(scopeBindingPort, dispatchPort);
+        var request = NewGAgentStartRequest();
+        request.Request.Gagent.Endpoints[0].Kind = StudioMemberGAgentEndpointKind.Command;
+
+        await service.ExecuteAsync(
+            "studio-member-binding-run:bind-1",
+            "platform-bind-1",
+            request);
+
+        var succeeded = await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingSucceeded>();
+        succeeded.Result.ImplementationKind.Should().Be(StudioMemberImplementationKind.Gagent);
+        scopeBindingPort.Requests.Should().ContainSingle();
+        scopeBindingPort.Requests[0].GAgent!.Endpoints.Should().ContainSingle().Which.Kind.Should().Be(ServiceEndpointKind.Command);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenCommandIdContainsSeparators_ShouldNormalizeRevisionAndReplayId()
+    {
+        var scopeBindingPort = new RecordingScopeBindingCommandPort();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var service = CreateService(scopeBindingPort, dispatchPort);
+
+        await service.ExecuteAsync(
+            "studio-member-binding-run:bind-1",
+            "Platform Bind: 2!!",
+            NewScriptStartRequest());
+
+        var succeeded = await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingSucceeded>();
+        succeeded.Result.RevisionId.Should().Be("rev-platform-bind-2");
+        scopeBindingPort.Requests.Should().ContainSingle();
+        scopeBindingPort.Requests[0].RevisionId.Should().Be("rev-platform-bind-2");
+        scopeBindingPort.Requests[0].ReplayRevisionId.Should().Be("rev-platform-bind-2");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenScriptRevisionAbsent_ShouldPassNullScriptRevision()
+    {
+        var scopeBindingPort = new RecordingScopeBindingCommandPort();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var service = CreateService(scopeBindingPort, dispatchPort);
+        var request = NewScriptStartRequest();
+        request.Request.Script.ClearScriptRevision();
+
+        await service.ExecuteAsync(
+            "studio-member-binding-run:bind-1",
+            "platform-bind-1",
+            request);
+
+        await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingSucceeded>();
+        scopeBindingPort.Requests.Should().ContainSingle();
+        scopeBindingPort.Requests[0].Script!.ScriptRevision.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ShouldAckBeforePlatformOutcomeAndDispatchContinuation()
     {
         var releaseUpsert = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);

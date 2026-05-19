@@ -125,6 +125,32 @@ public sealed class ActorDispatchStudioWorkspaceCommandPortTests
         evt.WorkflowId.Should().Be("workflow-1");
     }
 
+    [Fact]
+    public async Task DeleteDraftAsync_WhenExpectedVersionMissing_ShouldDispatchZeroButReturnWeakReceipt()
+    {
+        var harness = new CommandPortHarness();
+
+        var receipt = await harness.Port.DeleteDraftAsync("workflow-1");
+
+        var evt = harness.SinglePayload<StudioWorkflowDraftDeleted>();
+        evt.ExpectedVersion.Should().Be(0);
+        evt.WorkflowId.Should().Be("workflow-1");
+        receipt.ExpectedVersion.Should().BeNull();
+        receipt.CommandId.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public async Task RemoveDirectoryAsync_WhenDirectoryIdIsBlank_ShouldRejectBeforeDispatch()
+    {
+        var harness = new CommandPortHarness();
+
+        var act = () => harness.Port.RemoveDirectoryAsync("   ");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("directoryId is required.");
+        harness.DispatchCount.Should().Be(0);
+    }
+
     private static WorkflowLayoutDocument NewLayout() => new()
     {
         EntryWorkflow = "workflow-one",
@@ -153,6 +179,8 @@ public sealed class ActorDispatchStudioWorkspaceCommandPortTests
         }
 
         public ActorDispatchStudioWorkspaceCommandPort Port { get; }
+
+        public int DispatchCount => _dispatchPort.Dispatches.Count;
 
         public TPayload SinglePayload<TPayload>()
             where TPayload : IMessage, new()

@@ -98,6 +98,28 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
         dispatcher.Upserts.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task ProjectAsync_WhenStateEventTimestampMissing_ShouldUseEnvelopeTimestamp()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var clock = new FixedProjectionClock(DateTimeOffset.Parse("2026-05-19T12:00:00Z"));
+        var projector = new StudioWorkspaceCurrentStateProjector(dispatcher, clock);
+        var envelopeTimestamp = DateTimeOffset.Parse("2026-05-19T11:00:00Z");
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new StudioWorkspaceDirectoryRemoved { WorkspaceId = RootActorId, ScopeId = "scope-1" },
+                new StudioWorkspaceState { WorkspaceId = RootActorId, ScopeId = "scope-1" },
+                version: 8,
+                eventId: "evt-8",
+                envelopeTimestamp: envelopeTimestamp,
+                stateEventTimestamp: null));
+
+        dispatcher.Upserts.Should().ContainSingle();
+        dispatcher.Upserts[0].UpdatedAt.ToDateTimeOffset().Should().Be(envelopeTimestamp);
+    }
+
     private static StudioMaterializationContext NewContext() => new()
     {
         RootActorId = RootActorId,
@@ -108,12 +130,14 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
         IMessage payload,
         StudioWorkspaceState state,
         long version,
-        string eventId)
+        string eventId,
+        DateTimeOffset? envelopeTimestamp = null,
+        DateTimeOffset? stateEventTimestamp = null)
     {
         return new EventEnvelope
         {
             Id = eventId,
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Timestamp = Timestamp.FromDateTimeOffset(envelopeTimestamp ?? DateTimeOffset.UtcNow),
             Route = EnvelopeRouteSemantics.CreateObserverPublication(RootActorId),
             Payload = Any.Pack(new CommittedStateEventPublished
             {
@@ -122,7 +146,9 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
                     EventId = eventId,
                     Version = version,
                     EventData = Any.Pack(payload),
-                    Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    Timestamp = stateEventTimestamp.HasValue
+                        ? Timestamp.FromDateTimeOffset(stateEventTimestamp.Value)
+                        : null,
                 },
                 StateRoot = Any.Pack(state),
             }),

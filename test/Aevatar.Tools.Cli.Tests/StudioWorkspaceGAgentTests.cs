@@ -273,6 +273,44 @@ public sealed class StudioWorkspaceGAgentTests
         agent.State.LastAppliedEventVersion.Should().Be(1);
     }
 
+    [Fact]
+    public async Task Commands_WhenWorkspaceIdentityChanges_ShouldRejectMutation()
+    {
+        var services = CreateServices();
+        var agent = CreateAgent("studio-workspace-scope-7", services);
+
+        await agent.ActivateAsync();
+        await agent.HandleEventAsync(Envelope(new StudioWorkspaceSettingsUpdated
+        {
+            WorkspaceId = "studio-workspace-scope-7",
+            ScopeId = "scope-7",
+            Settings = new StudioWorkspaceSettings
+            {
+                RuntimeBaseUrl = "http://127.0.0.1:5100",
+                AppearanceTheme = "blue",
+            },
+            UpdatedAtUtc = Now(),
+        }));
+
+        Func<Task> act = () => agent.HandleEventAsync(Envelope(new StudioWorkspaceSettingsUpdated
+        {
+            WorkspaceId = "studio-workspace-other",
+            ScopeId = "scope-7",
+            Settings = new StudioWorkspaceSettings
+            {
+                RuntimeBaseUrl = "http://127.0.0.1:5101",
+                AppearanceTheme = "teal",
+            },
+            UpdatedAtUtc = Now(),
+        }));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .Where(ex => ex.Message.Contains("workspace actor already initialized", StringComparison.Ordinal));
+        agent.State.WorkspaceId.Should().Be("studio-workspace-scope-7");
+        agent.State.Settings.RuntimeBaseUrl.Should().Be("http://127.0.0.1:5100");
+        agent.State.LastAppliedEventVersion.Should().Be(1);
+    }
+
     private static ServiceProvider CreateServices()
     {
         var services = new ServiceCollection();

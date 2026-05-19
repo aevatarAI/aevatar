@@ -150,6 +150,45 @@ public class WorkspaceServiceTests
     }
 
     [Fact]
+    public async Task AddDirectoryAsync_WhenPathAlreadyExistsWithDifferentCase_ShouldReturnSettingsWithoutDispatch()
+    {
+        var store = new InMemoryStudioWorkspaceStore();
+        var path = Path.Combine(Path.GetTempPath(), $"studio-workflows-existing-{Guid.NewGuid():N}");
+        await store.SaveSettingsAsync(new StudioWorkspaceSettings(
+            RuntimeBaseUrl: "http://127.0.0.1:5100",
+            Directories: [new StudioWorkspaceDirectory("dir-1", "Existing", path, IsBuiltIn: false)],
+            AppearanceTheme: "blue",
+            ColorMode: "light"));
+        var service = new WorkspaceService(store, store, new StubWorkflowYamlDocumentService());
+        var duplicatePath = Path.Combine(
+            Path.GetDirectoryName(path)!,
+            Path.GetFileName(path).ToUpperInvariant());
+
+        try
+        {
+            var response = await service.AddDirectoryAsync(new AddWorkflowDirectoryRequest(duplicatePath, "Duplicate"));
+
+            response.Directories.Should().ContainSingle(directory =>
+                directory.DirectoryId == "dir-1" &&
+                directory.Label == "Existing");
+            store.CommandPortCalls.Should().BeEmpty();
+        }
+        finally
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+
+            if (!string.Equals(path, duplicatePath, StringComparison.Ordinal) &&
+                Directory.Exists(duplicatePath))
+            {
+                Directory.Delete(duplicatePath, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task CreateDraftAsync_WhenTargetPathConflictsWithAnotherDraft_ShouldThrowWorkflowDraftPathConflictException()
     {
         var store = new InMemoryStudioWorkspaceStore();

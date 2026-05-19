@@ -122,6 +122,34 @@ public sealed class ProjectionStudioWorkspaceQueryPortTests
     }
 
     [Fact]
+    public async Task GetAsync_WhenStateRootIsUnexpectedType_ShouldUseScopedEmptyStateButKeepDocumentWatermark()
+    {
+        var scopeResolver = new StubScopeResolver { ScopeId = "scope-2" };
+        var actorId = StudioWorkspaceConventions.BuildActorId("scope-2");
+        var updatedAt = DateTimeOffset.Parse("2026-05-19T10:30:00Z");
+        var reader = new StubDocumentReader();
+        reader.Set(actorId, new StudioWorkspaceCurrentStateDocument
+        {
+            Id = actorId,
+            ActorId = actorId,
+            StateVersion = 23,
+            LastEventId = "evt-23",
+            UpdatedAt = Timestamp.FromDateTimeOffset(updatedAt),
+            StateRoot = Any.Pack(new StringValue { Value = "not-a-workspace-state" }),
+        });
+        var port = new ProjectionStudioWorkspaceQueryPort(reader, scopeResolver);
+
+        var snapshot = await port.GetAsync();
+
+        snapshot.WorkspaceId.Should().Be(actorId);
+        snapshot.ScopeId.Should().Be("scope-2");
+        snapshot.StateVersion.Should().Be(23);
+        snapshot.UpdatedAtUtc.Should().Be(updatedAt);
+        snapshot.Settings.RuntimeBaseUrl.Should().Be(UserConfigRuntimeDefaults.LocalRuntimeBaseUrl);
+        snapshot.Drafts.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task GetAsync_ShouldThrow_WhenAuthenticatedCallerHasNoScope()
     {
         var port = new ProjectionStudioWorkspaceQueryPort(
