@@ -762,8 +762,8 @@ public sealed class ScriptEvolutionCommandTargetTests
             new RecordingEvolutionProjectionPort(),
             new RecordingEvolutionProjectionPort());
 
-        Action nullLease = () => target.BindLiveObservation(null!, new RecordingCompletedEventSink());
-        Action nullSink = () => target.BindLiveObservation(new RecordingEvolutionProjectionLease("session-1", "proposal-1"), null!);
+        Action nullLease = () => target.BindLiveObservation(null!, new RecordingLiveSinkLease(), new RecordingCompletedEventSink());
+        Action nullSink = () => target.BindLiveObservation(new RecordingEvolutionProjectionLease("session-1", "proposal-1"), new RecordingLiveSinkLease(), null!);
 
         nullLease.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("lease");
         nullSink.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("sink");
@@ -794,12 +794,14 @@ public sealed class ScriptEvolutionCommandTargetTests
             projectionPort,
             projectionPort);
         var lease = new RecordingEvolutionProjectionLease("session-1", "proposal-1");
+        var liveSinkLease = new RecordingLiveSinkLease();
         var sink = new RecordingCompletedEventSink();
-        target.BindLiveObservation(lease, sink);
+        target.BindLiveObservation(lease, liveSinkLease, sink);
 
         await target.ReleaseAsync(CancellationToken.None);
 
-        projectionPort.DetachedLeases.Should().ContainSingle().Which.Should().BeSameAs(lease);
+        projectionPort.DetachedLiveSinkLeases.Should().ContainSingle().Which.Should().BeSameAs(liveSinkLease);
+        liveSinkLease.DisposeCount.Should().Be(1);
         projectionPort.ReleasedLeases.Should().ContainSingle().Which.Should().BeSameAs(lease);
         sink.DisposeCount.Should().Be(1);
         target.ProjectionLease.Should().BeNull();
@@ -815,8 +817,8 @@ public sealed class ScriptEvolutionCommandTargetTests
             new RecordingEvolutionProjectionPort(),
             new RecordingEvolutionProjectionPort());
         var sink = new RecordingCompletedEventSink();
-        target.BindLiveObservation(new RecordingEvolutionProjectionLease("session-1", "proposal-1"), sink);
-        target.BindLiveObservation(new RecordingEvolutionProjectionLease("session-1", "proposal-1"), sink);
+        target.BindLiveObservation(new RecordingEvolutionProjectionLease("session-1", "proposal-1"), new RecordingLiveSinkLease(), sink);
+        target.BindLiveObservation(new RecordingEvolutionProjectionLease("session-1", "proposal-1"), new RecordingLiveSinkLease(), sink);
         target.GetType().GetProperty(nameof(ScriptEvolutionCommandTarget.ProjectionLease))!.SetValue(target, null);
 
         await target.ReleaseAsync(CancellationToken.None);
@@ -829,6 +831,7 @@ public sealed class ScriptEvolutionCommandTargetTests
     public async Task CleanupMethods_ShouldDelegateToReleaseAsync()
     {
         var projectionPort = new RecordingEvolutionProjectionPort();
+        var liveSinkLease = new RecordingLiveSinkLease();
         var target = new ScriptEvolutionCommandTarget(
             new FakeActor("session-1"),
             "proposal-1",
@@ -836,6 +839,7 @@ public sealed class ScriptEvolutionCommandTargetTests
             projectionPort);
         target.BindLiveObservation(
             new RecordingEvolutionProjectionLease("session-1", "proposal-1"),
+            liveSinkLease,
             new RecordingCompletedEventSink());
 
         await target.CleanupAfterDispatchFailureAsync(CancellationToken.None);
@@ -847,7 +851,8 @@ public sealed class ScriptEvolutionCommandTargetTests
                 CommandDurableCompletionObservation<ScriptEvolutionInteractionCompletion>.Incomplete),
             CancellationToken.None);
 
-        projectionPort.DetachedLeases.Should().HaveCount(1);
+        projectionPort.DetachedLiveSinkLeases.Should().ContainSingle().Which.Should().BeSameAs(liveSinkLease);
+        liveSinkLease.DisposeCount.Should().Be(1);
     }
 
     [Fact]
@@ -864,6 +869,7 @@ public sealed class ScriptEvolutionCommandTargetTests
             projectionPort);
         target.BindLiveObservation(
             new RecordingEvolutionProjectionLease("session-1", "proposal-1"),
+            new RecordingLiveSinkLease(),
             new RecordingCompletedEventSink());
 
         var act = () => target.ReleaseAsync(CancellationToken.None);
@@ -1160,7 +1166,7 @@ internal sealed class RecordingEvolutionProjectionPort
       IScriptEvolutionReadModelActivationPort
 {
     public bool ProjectionEnabled => true;
-    public List<IScriptEvolutionProjectionLease> DetachedLeases { get; } = [];
+    public List<IAsyncDisposable?> DetachedLiveSinkLeases { get; } = [];
     public List<IScriptEvolutionProjectionLease> ReleasedLeases { get; } = [];
     public Exception? DetachException { get; set; }
     public Exception? ReleaseException { get; set; }
@@ -1180,16 +1186,19 @@ internal sealed class RecordingEvolutionProjectionPort
         _ = sink;
         await Task.CompletedTask;
         ct.ThrowIfCancellationRequested();
-        return null;
+        return new RecordingLiveSinkLease();
     }
 
-    public Task DetachLiveSinkAsync(IAsyncDisposable? liveSinkLease, CancellationToken ct = default)
+    public async Task DetachLiveSinkAsync(IAsyncDisposable? liveSinkLease, CancellationToken ct = default)
     {
-        _ = liveSinkLease;
         ct.ThrowIfCancellationRequested();
         if (DetachException != null)
             throw DetachException;
-        return Task.CompletedTask;
+        DetachedLiveSinkLeases.Add(liveSinkLease);
+        if (liveSinkLease != null)
+        {
+            await liveSinkLease.DisposeAsync();
+        }
     }
 
     public Task ReleaseActorProjectionAsync(IScriptEvolutionProjectionLease lease, CancellationToken ct = default)
@@ -1203,6 +1212,17 @@ internal sealed class RecordingEvolutionProjectionPort
 }
 
 internal sealed record RecordingEvolutionProjectionLease(string ActorId, string ProposalId) : IScriptEvolutionProjectionLease;
+
+internal sealed class RecordingLiveSinkLease : IAsyncDisposable
+{
+    public int DisposeCount { get; private set; }
+
+    public ValueTask DisposeAsync()
+    {
+        DisposeCount++;
+        return ValueTask.CompletedTask;
+    }
+}
 
 internal sealed class RecordingCompletedEventSink : IEventSink<ScriptEvolutionSessionCompletedEvent>
 {

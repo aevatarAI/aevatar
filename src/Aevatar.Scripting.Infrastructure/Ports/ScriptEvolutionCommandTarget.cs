@@ -44,11 +44,6 @@ public sealed class ScriptEvolutionCommandTarget
 
     public void BindLiveObservation(
         IScriptEvolutionProjectionLease lease,
-        IEventSink<ScriptEvolutionSessionCompletedEvent> sink) =>
-        BindLiveObservation(lease, null, sink);
-
-    public void BindLiveObservation(
-        IScriptEvolutionProjectionLease lease,
         IAsyncDisposable? liveSinkLease,
         IEventSink<ScriptEvolutionSessionCompletedEvent> sink)
     {

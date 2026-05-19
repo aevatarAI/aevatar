@@ -7,24 +7,7 @@ namespace Aevatar.CQRS.Core.Abstractions.Streaming;
 /// </summary>
 public static class EventSinkProjectionLeaseOrchestrator
 {
-    public static async Task<TLease?> EnsureAndAttachAsync<TLease, TEvent>(
-        Func<CancellationToken, Task<TLease?>> ensureAsync,
-        Func<TLease, IEventSink<TEvent>, CancellationToken, Task<IAsyncDisposable?>> attachAsync,
-        Func<TLease, CancellationToken, Task> releaseAsync,
-        IEventSink<TEvent> sink,
-        CancellationToken ct = default)
-        where TLease : class
-    {
-        var attachment = await EnsureAndAttachLeaseAsync(
-            ensureAsync,
-            attachAsync,
-            releaseAsync,
-            sink,
-            ct).ConfigureAwait(false);
-
-        return attachment?.ProjectionLease;
-    }
-
+    // Refactor (iter17/cluster-035): Old pattern: helper returned only the projection lease and lost the live sink cleanup handle. New principle: attach returns the full attachment so callers own both lifecycle leases explicitly.
     public static async Task<EventSinkProjectionAttachment<TLease>?> EnsureAndAttachLeaseAsync<TLease, TEvent>(
         Func<CancellationToken, Task<TLease?>> ensureAsync,
         Func<TLease, IEventSink<TEvent>, CancellationToken, Task<IAsyncDisposable?>> attachAsync,
@@ -84,6 +67,7 @@ public static class EventSinkProjectionLeaseOrchestrator
         }
     }
 
+    // Refactor (iter17/cluster-035): Old pattern: detach found subscriptions through hidden process-local registries. New principle: callers pass the live sink lease returned by attach so cleanup is explicit and runtime-neutral.
     public static async Task DetachReleaseAndDisposeAsync<TLease, TEvent>(
         TLease? lease,
         IAsyncDisposable? liveSinkLease,

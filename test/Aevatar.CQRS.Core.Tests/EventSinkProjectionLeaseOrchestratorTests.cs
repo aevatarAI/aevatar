@@ -7,14 +7,14 @@ namespace Aevatar.CQRS.Core.Tests;
 public sealed class EventSinkProjectionLeaseOrchestratorTests
 {
     [Fact]
-    public async Task EnsureAndAttachAsync_WhenLeaseResolved_ShouldAttachAndReturnLease()
+    public async Task EnsureAndAttachLeaseAsync_WhenLeaseResolved_ShouldAttachAndReturnAttachment()
     {
         var sink = new TrackingEventSink();
         var lease = new TestLease("lease-1");
         var attachCalls = 0;
 
         var liveSinkLease = new TrackingAsyncDisposable();
-        var resolved = await EventSinkProjectionLeaseOrchestrator.EnsureAndAttachAsync<TestLease, string>(
+        var attachment = await EventSinkProjectionLeaseOrchestrator.EnsureAndAttachLeaseAsync<TestLease, string>(
             _ => Task.FromResult<TestLease?>(lease),
             (runtimeLease, eventSink, _) =>
             {
@@ -27,35 +27,37 @@ public sealed class EventSinkProjectionLeaseOrchestratorTests
             sink,
             CancellationToken.None);
 
-        resolved.Should().BeSameAs(lease);
+        attachment.Should().NotBeNull();
+        attachment!.ProjectionLease.Should().BeSameAs(lease);
+        attachment.LiveSinkLease.Should().BeSameAs(liveSinkLease);
         attachCalls.Should().Be(1);
         sink.DisposeCalls.Should().Be(0);
     }
 
     [Fact]
-    public async Task EnsureAndAttachAsync_WhenLeaseIsNull_ShouldDisposeSinkAndReturnNull()
+    public async Task EnsureAndAttachLeaseAsync_WhenLeaseIsNull_ShouldDisposeSinkAndReturnNull()
     {
         var sink = new TrackingEventSink();
 
-        var resolved = await EventSinkProjectionLeaseOrchestrator.EnsureAndAttachAsync<TestLease, string>(
+        var attachment = await EventSinkProjectionLeaseOrchestrator.EnsureAndAttachLeaseAsync<TestLease, string>(
             _ => Task.FromResult<TestLease?>(null),
             (_, _, _) => Task.FromResult<IAsyncDisposable?>(null),
             (_, _) => Task.CompletedTask,
             sink,
             CancellationToken.None);
 
-        resolved.Should().BeNull();
+        attachment.Should().BeNull();
         sink.DisposeCalls.Should().Be(1);
     }
 
     [Fact]
-    public async Task EnsureAndAttachAsync_WhenAttachThrows_ShouldReleaseAndDisposeThenRethrow()
+    public async Task EnsureAndAttachLeaseAsync_WhenAttachThrows_ShouldReleaseAndDisposeThenRethrow()
     {
         var sink = new TrackingEventSink();
         var lease = new TestLease("lease-2");
         var releaseCalls = 0;
 
-        Func<Task> act = () => EventSinkProjectionLeaseOrchestrator.EnsureAndAttachAsync<TestLease, string>(
+        Func<Task> act = () => EventSinkProjectionLeaseOrchestrator.EnsureAndAttachLeaseAsync<TestLease, string>(
             _ => Task.FromResult<TestLease?>(lease),
             (_, _, _) => Task.FromException<IAsyncDisposable?>(new InvalidOperationException("attach failed")),
             (_, _) =>

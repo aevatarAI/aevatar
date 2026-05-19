@@ -1332,12 +1332,20 @@ public class RuntimeScriptInfrastructurePortsTests
         {
             ct.ThrowIfCancellationRequested();
             _sinks[lease.ActorId] = sink;
-            return Task.FromResult<IAsyncDisposable?>(null);
+            return Task.FromResult<IAsyncDisposable?>(new TestLiveSinkLease());
         }
-    public Task DetachLiveSinkAsync(
-        IAsyncDisposable? liveSinkLease,
-        CancellationToken ct = default) =>
-        Task.CompletedTask;
+
+        public async Task DetachLiveSinkAsync(
+            IAsyncDisposable? liveSinkLease,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            DetachCount++;
+            if (liveSinkLease != null)
+            {
+                await liveSinkLease.DisposeAsync();
+            }
+        }
 
         public Task ReleaseActorProjectionAsync(
             IScriptEvolutionProjectionLease lease,
@@ -1379,12 +1387,19 @@ public class RuntimeScriptInfrastructurePortsTests
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IAsyncDisposable?>(null);
+            return Task.FromResult<IAsyncDisposable?>(new TestLiveSinkLease());
         }
-    public Task DetachLiveSinkAsync(
-        IAsyncDisposable? liveSinkLease,
-        CancellationToken ct = default) =>
-        Task.CompletedTask;
+
+        public async Task DetachLiveSinkAsync(
+            IAsyncDisposable? liveSinkLease,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (liveSinkLease != null)
+            {
+                await liveSinkLease.DisposeAsync();
+            }
+        }
 
         public Task ReleaseActorProjectionAsync(
             IScriptExecutionProjectionLease lease,
@@ -1393,7 +1408,11 @@ public class RuntimeScriptInfrastructurePortsTests
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
+        private sealed record NoOpScriptExecutionProjectionLease(string ActorId) : IScriptExecutionProjectionLease;
     }
 
-    private sealed record NoOpScriptExecutionProjectionLease(string ActorId) : IScriptExecutionProjectionLease;
+    private sealed class TestLiveSinkLease : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
 }
