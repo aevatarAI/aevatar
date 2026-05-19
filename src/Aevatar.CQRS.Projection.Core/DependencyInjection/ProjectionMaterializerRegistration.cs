@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Projection.Core.Observability;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -15,8 +16,11 @@ public static class ProjectionMaterializerRegistration
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IProjectionMaterializer<TContext>, TMaterializer>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<ICurrentStateProjectionMaterializer<TContext>, TMaterializer>());
+        services.TryAddSingleton<TMaterializer>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IProjectionMaterializer<TContext>, ObservedProjectionMaterializer<TContext, TMaterializer>>());
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<ICurrentStateProjectionMaterializer<TContext>, ObservedCurrentStateProjectionMaterializer<TContext, TMaterializer>>());
         return services;
     }
 
@@ -27,8 +31,11 @@ public static class ProjectionMaterializerRegistration
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IProjectionMaterializer<TContext>, TMaterializer>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IProjectionArtifactMaterializer<TContext>, TMaterializer>());
+        services.TryAddSingleton<TMaterializer>();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IProjectionMaterializer<TContext>, ObservedProjectionMaterializer<TContext, TMaterializer>>());
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IProjectionArtifactMaterializer<TContext>, ObservedProjectionArtifactMaterializer<TContext, TMaterializer>>());
         return services;
     }
 }

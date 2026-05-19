@@ -26,6 +26,7 @@
   </Folder>
   <Folder Name="/demos/">
     <Project Path="demos\Aevatar.Demos.Cli\Aevatar.Demos.Cli.csproj" />
+    <Project Path="demos\Aevatar.Demos.Inspector\Aevatar.Demos.Inspector.csproj" />
     <Project Path="demos\Aevatar.Demos.Maker\Aevatar.Demos.Maker.csproj" />
     <Project Path="demos\Aevatar.Demos.Workflow\Aevatar.Demos.Workflow.csproj" />
     <Project Path="demos\Aevatar.Demos.Workflow.Web\Aevatar.Demos.Workflow.Web.csproj" />
@@ -167,6 +168,7 @@
     <Project Path="test\Aevatar.Bootstrap.Tests\Aevatar.Bootstrap.Tests.csproj" />
     <Project Path="test\Aevatar.CQRS.Core.Tests\Aevatar.CQRS.Core.Tests.csproj" />
     <Project Path="test\Aevatar.CQRS.Projection.Core.Tests\Aevatar.CQRS.Projection.Core.Tests.csproj" />
+    <Project Path="test\Aevatar.Demos.Inspector.Tests\Aevatar.Demos.Inspector.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.Abstractions.Tests\Aevatar.Foundation.Abstractions.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.Core.Tests\Aevatar.Foundation.Core.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.Runtime.Hosting.Tests\Aevatar.Foundation.Runtime.Hosting.Tests.csproj" />

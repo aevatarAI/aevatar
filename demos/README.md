@@ -3,6 +3,7 @@
 ## Existing
 
 - `Aevatar.Demos.Cli`：Runtime 行为场景演示。
+- `Aevatar.Demos.Inspector`：本地双层 Actor Inspector，使用 readmodel 查询 + OTel live SSE。
 - `Aevatar.Demos.Maker`：MAKER 模式宿主演示（核心实现已迁移到 `src/maker/*`）。
 
 ## CQRS Projection 扩展示例
