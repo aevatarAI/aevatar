@@ -47,6 +47,7 @@ public sealed class WorkflowHostingExtensionsCoverageTests
             {
                 aiOptions.EnableMCPTools = false;
                 aiOptions.EnableSkills = false;
+                aiOptions.EnableOrnnSkills = false;
                 aiOptions.ApiKey = "demo-key";
                 aiOptions.DefaultProvider = "openai";
             };

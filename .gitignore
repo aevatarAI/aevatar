@@ -510,3 +510,5 @@ entities.json
 
 # codex-refactor-loop runtime state (worktrees, logs, per-iter prompts, state.json)
 .refactor-loop/
+
+.vmap/
