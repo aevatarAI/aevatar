@@ -6,8 +6,9 @@ namespace Aevatar.GAgents.Channel.Runtime;
 
 public sealed partial class ConversationGAgent
 {
-    private readonly Dictionary<string, LarkCardStreamingState> _larkCardStreamingStates = new(StringComparer.Ordinal);
-
+    // Refactor (iter20/cluster-004):
+    //   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
+    //   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
     /// <summary>
     /// Per-turn phase of the Lark CardKit streaming pipeline. Distinct from
     /// <see cref="NyxRelayStreamingPhase"/> (which models channel-relay edit-message
@@ -40,8 +41,8 @@ public sealed partial class ConversationGAgent
     }
 
     /// <summary>
-    /// Actor-scoped, in-memory streaming state for one CardKit-driven turn. Keyed by
-    /// <c>correlation_id</c>, same lifecycle as <see cref="NyxRelayReplyTokenContext"/>.
+    /// Actor-scoped streaming state for one CardKit-driven turn, backed by
+    /// ConversationGAgentState.ActiveReplyLifecycles.
     /// </summary>
     /// <param name="Phase">Lifecycle phase; gates interim updates and finalization.</param>
     /// <param name="CardId">
@@ -134,8 +135,22 @@ public sealed partial class ConversationGAgent
             _ => false,
         };
 
-    private LarkCardStreamingState GetOrInitLarkCardStreamingState(string correlationId) =>
-        _larkCardStreamingStates.GetValueOrDefault(correlationId) ?? LarkCardStreamingState.Initial;
+    private LarkCardStreamingState GetOrInitLarkCardStreamingState(string correlationId)
+    {
+        var lifecycle = FindReplyLifecycle(correlationId, ConversationReplyLifecycleMode.LarkCard);
+        if (lifecycle is null)
+            return LarkCardStreamingState.Initial;
+
+        return new LarkCardStreamingState(
+            ToLarkCardStreamingPhase(lifecycle.Phase),
+            NormalizeOptional(lifecycle.CardId),
+            NormalizeOptional(lifecycle.CardMessageId),
+            NormalizeOptional(lifecycle.OriginalCardId),
+            lifecycle.LastFlushedText ?? string.Empty,
+            lifecycle.Sequence,
+            NormalizeOptional(lifecycle.StreamingElementId) ?? LarkCardStreamingState.DefaultStreamingElementId,
+            NormalizeOptional(lifecycle.TerminalReason));
+    }
 
     private static bool ShouldSkipLarkCardStreamingForUnavailable(
         LarkCardStreamingState state,
@@ -147,7 +162,7 @@ public sealed partial class ConversationGAgent
             _ => false,
         };
 
-    private LarkCardStreamingState TransitionLarkCardStreamingPhase(
+    private async Task<LarkCardStreamingState> TransitionLarkCardStreamingPhaseAsync(
         string correlationId,
         LarkCardStreamingState current,
         LarkCardStreamingPhase next,
@@ -170,9 +185,55 @@ public sealed partial class ConversationGAgent
                 ? (terminalReason ?? carried.TerminalReason)
                 : carried.TerminalReason,
         };
-        _larkCardStreamingStates[correlationId] = updated;
+        await PersistDomainEventAsync(new ConversationReplyLifecycleChangedEvent
+        {
+            Lifecycle = ToLifecycleState(correlationId, updated),
+            ChangedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
         return updated;
     }
+
+    private static LarkCardStreamingPhase ToLarkCardStreamingPhase(ConversationReplyLifecyclePhase phase) =>
+        phase switch
+        {
+            ConversationReplyLifecyclePhase.LarkCardCreating => LarkCardStreamingPhase.Creating,
+            ConversationReplyLifecyclePhase.LarkCardStreaming => LarkCardStreamingPhase.Streaming,
+            ConversationReplyLifecyclePhase.LarkCardCompleted => LarkCardStreamingPhase.Completed,
+            ConversationReplyLifecyclePhase.LarkCardAborted => LarkCardStreamingPhase.Aborted,
+            ConversationReplyLifecyclePhase.LarkCardTerminated => LarkCardStreamingPhase.Terminated,
+            ConversationReplyLifecyclePhase.LarkCardCreationFailed => LarkCardStreamingPhase.CreationFailed,
+            _ => LarkCardStreamingPhase.Idle,
+        };
+
+    private static ConversationReplyLifecyclePhase ToLifecyclePhase(LarkCardStreamingPhase phase) =>
+        phase switch
+        {
+            LarkCardStreamingPhase.Creating => ConversationReplyLifecyclePhase.LarkCardCreating,
+            LarkCardStreamingPhase.Streaming => ConversationReplyLifecyclePhase.LarkCardStreaming,
+            LarkCardStreamingPhase.Completed => ConversationReplyLifecyclePhase.LarkCardCompleted,
+            LarkCardStreamingPhase.Aborted => ConversationReplyLifecyclePhase.LarkCardAborted,
+            LarkCardStreamingPhase.Terminated => ConversationReplyLifecyclePhase.LarkCardTerminated,
+            LarkCardStreamingPhase.CreationFailed => ConversationReplyLifecyclePhase.LarkCardCreationFailed,
+            _ => ConversationReplyLifecyclePhase.Unspecified,
+        };
+
+    private static ConversationReplyLifecycleState ToLifecycleState(
+        string correlationId,
+        LarkCardStreamingState state) =>
+        new()
+        {
+            CorrelationId = correlationId,
+            Mode = ConversationReplyLifecycleMode.LarkCard,
+            Phase = ToLifecyclePhase(state.Phase),
+            CardId = state.CardId ?? string.Empty,
+            CardMessageId = state.CardMessageId ?? string.Empty,
+            OriginalCardId = state.OriginalCardId ?? string.Empty,
+            LastFlushedText = state.LastFlushedText ?? string.Empty,
+            Sequence = state.Sequence,
+            StreamingElementId = state.StreamingElementId ?? LarkCardStreamingState.DefaultStreamingElementId,
+            TerminalReason = state.TerminalReason ?? string.Empty,
+            UpdatedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        };
 
     private IConversationCardTurnRunner ResolveCardRunner() =>
         Services.GetService<IConversationCardTurnRunner>() ?? new NullConversationCardTurnRunner();
@@ -193,19 +254,23 @@ public sealed partial class ConversationGAgent
         // Already-decided text-edit fallback: let the caller continue down the text-edit path.
         if (state.Phase is LarkCardStreamingPhase.CreationFailed)
         {
-            _larkCardStreamingStates.Remove(correlationId);
+            await ClearReplyLifecycleAsync(correlationId, ConversationReplyLifecycleMode.LarkCard, "card_fallback_or_terminal");
             return false;
         }
 
         if (ShouldSkipLarkCardStreamingForUnavailable(state, LarkCardStreamingGuardSource.AcceptInterimChunk))
             return true;
 
-        var runtimeContext = BuildNyxRelayRuntimeContext(evt.CorrelationId, evt.Activity);
+        var runtimeContext = BuildNyxRelayRuntimeContext(
+            evt.CorrelationId,
+            evt.Activity,
+            evt.ReplyToken,
+            evt.ReplyTokenExpiresAtUnixMs);
         var runner = ResolveCardRunner();
 
         if (state.Phase is LarkCardStreamingPhase.Idle)
         {
-            TransitionLarkCardStreamingPhase(correlationId, state, LarkCardStreamingPhase.Creating);
+            await TransitionLarkCardStreamingPhaseAsync(correlationId, state, LarkCardStreamingPhase.Creating);
             var creating = GetOrInitLarkCardStreamingState(correlationId);
             ConversationCardCreateResult createResult;
             try
@@ -224,7 +289,7 @@ public sealed partial class ConversationGAgent
             catch (Exception ex)
             {
                 Logger.LogWarning(ex, "Card create threw; falling back to text-edit. correlation={CorrelationId}", evt.CorrelationId);
-                TransitionLarkCardStreamingPhase(
+                await TransitionLarkCardStreamingPhaseAsync(
                     correlationId,
                     creating,
                     LarkCardStreamingPhase.CreationFailed,
@@ -246,7 +311,7 @@ public sealed partial class ConversationGAgent
                         evt.CorrelationId,
                         createResult.ErrorCode,
                         createResult.CardId);
-                    var terminated = TransitionLarkCardStreamingPhase(
+                    var terminated = await TransitionLarkCardStreamingPhaseAsync(
                         correlationId,
                         creating,
                         LarkCardStreamingPhase.Terminated,
@@ -274,7 +339,7 @@ public sealed partial class ConversationGAgent
                     createResult.IsRateLimited,
                     createResult.IsTableLimitExceeded,
                     createResult.IsCardUnavailable);
-                TransitionLarkCardStreamingPhase(
+                await TransitionLarkCardStreamingPhaseAsync(
                     correlationId,
                     creating,
                     LarkCardStreamingPhase.CreationFailed,
@@ -282,7 +347,7 @@ public sealed partial class ConversationGAgent
                 return false;
             }
 
-            TransitionLarkCardStreamingPhase(
+            await TransitionLarkCardStreamingPhaseAsync(
                 correlationId,
                 creating,
                 LarkCardStreamingPhase.Streaming,
@@ -336,7 +401,7 @@ public sealed partial class ConversationGAgent
                 Logger.LogWarning(
                     "Card stream terminal failure; ending turn. correlation={CorrelationId}, code={ErrorCode}",
                     evt.CorrelationId, streamResult.ErrorCode);
-                var terminated = TransitionLarkCardStreamingPhase(
+                var terminated = await TransitionLarkCardStreamingPhaseAsync(
                     correlationId,
                     state,
                     LarkCardStreamingPhase.Terminated,
@@ -361,7 +426,7 @@ public sealed partial class ConversationGAgent
             return true;
         }
 
-        TransitionLarkCardStreamingPhase(
+        await TransitionLarkCardStreamingPhaseAsync(
             correlationId,
             state,
             LarkCardStreamingPhase.Streaming,
@@ -394,7 +459,7 @@ public sealed partial class ConversationGAgent
             return false;
         if (state.Phase is LarkCardStreamingPhase.CreationFailed)
         {
-            _larkCardStreamingStates.Remove(correlationId);
+            await ClearReplyLifecycleAsync(correlationId, ConversationReplyLifecycleMode.LarkCard, "card_fallback_or_terminal");
             return false;
         }
 
@@ -407,7 +472,7 @@ public sealed partial class ConversationGAgent
                        or LarkCardStreamingPhase.Aborted
                        or LarkCardStreamingPhase.Terminated)
         {
-            _larkCardStreamingStates.Remove(correlationId);
+            await ClearReplyLifecycleAsync(correlationId, ConversationReplyLifecycleMode.LarkCard, "card_fallback_or_terminal");
             return true;
         }
 
@@ -419,7 +484,11 @@ public sealed partial class ConversationGAgent
         var finalDiffers = !string.IsNullOrWhiteSpace(finalText)
             && !string.Equals(finalText, state.LastFlushedText, StringComparison.Ordinal);
 
-        var runtimeContext = BuildNyxRelayRuntimeContext(evt.CorrelationId, evt.Activity);
+        var runtimeContext = BuildNyxRelayRuntimeContext(
+            evt.CorrelationId,
+            evt.Activity,
+            evt.ReplyToken,
+            evt.ReplyTokenExpiresAtUnixMs);
         var runner = ResolveCardRunner();
         var nextSequence = state.Sequence + 1;
         var activityForToken = referenceActivity ?? evt.Activity ?? new ChatActivity();
@@ -444,7 +513,7 @@ public sealed partial class ConversationGAgent
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Card finalize threw; persisting last flushed partial. correlation={CorrelationId}", evt.CorrelationId);
-            TransitionLarkCardStreamingPhase(
+            await TransitionLarkCardStreamingPhaseAsync(
                 correlationId,
                 state,
                 LarkCardStreamingPhase.Terminated,
@@ -467,7 +536,7 @@ public sealed partial class ConversationGAgent
         var visibleText = finalizeResult.FinalTextWritten ? finalText : state.LastFlushedText;
         if (finalizeResult.Success)
         {
-            TransitionLarkCardStreamingPhase(
+            await TransitionLarkCardStreamingPhaseAsync(
                 correlationId,
                 state,
                 LarkCardStreamingPhase.Completed,
@@ -478,7 +547,7 @@ public sealed partial class ConversationGAgent
             Logger.LogWarning(
                 "Card finalize failed; persisting partial. correlation={CorrelationId}, code={ErrorCode}",
                 evt.CorrelationId, finalizeResult.ErrorCode);
-            TransitionLarkCardStreamingPhase(
+            await TransitionLarkCardStreamingPhaseAsync(
                 correlationId,
                 state,
                 LarkCardStreamingPhase.Terminated,
@@ -523,9 +592,16 @@ public sealed partial class ConversationGAgent
             CompletedAtUnixMs = nowMs,
             OutboundDelivery = ToOutboundDeliveryReceipt(eventActivity?.OutboundDelivery),
         };
+        var delivered = new LlmReplyDeliveredEvent
+        {
+            CorrelationId = correlationId,
+            RunId = correlationId,
+            AckedAtUnixMs = nowMs,
+            ChannelMessageId = $"lark-card-stream:{cardMessageId}",
+        };
+        await PersistDomainEventAsync(delivered);
+        await ClearReplyLifecycleAsync(correlationId, ConversationReplyLifecycleMode.LarkCard, "card_fallback_or_terminal");
         await PersistDomainEventAsync(completed);
-        RemoveNyxRelayReplyToken(correlationId, referenceActivity);
-        _larkCardStreamingStates.Remove(correlationId);
         Logger.LogInformation(
             "Completed card-streamed LLM reply: correlation={CorrelationId} cardMessageId={CardMessageId} conversation={Key}",
             correlationId,

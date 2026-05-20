@@ -4,6 +4,9 @@ namespace Aevatar.GAgents.Channel.Runtime;
 
 public sealed partial class ConversationGAgent
 {
+    // Refactor (iter20/cluster-004):
+    //   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
+    //   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
     /// <summary>
     /// Per-turn phase of the NyxID-relay edit-message streaming pipeline.
     /// </summary>
@@ -37,8 +40,8 @@ public sealed partial class ConversationGAgent
     }
 
     /// <summary>
-    /// Actor-scoped, in-memory streaming state for one conversation turn. Never persisted.
-    /// Keyed by <c>correlation_id</c>, same lifecycle as <see cref="NyxRelayReplyTokenContext"/>.
+    /// Actor-scoped streaming state for one conversation turn, backed by
+    /// ConversationGAgentState.ActiveReplyLifecycles.
     /// </summary>
     private sealed record NyxRelayStreamingState(
         NyxRelayStreamingPhase Phase,
@@ -92,8 +95,19 @@ public sealed partial class ConversationGAgent
             _ => false,
         };
 
-    private NyxRelayStreamingState GetOrInitNyxRelayStreamingState(string correlationId) =>
-        _nyxRelayStreamingStates.GetValueOrDefault(correlationId) ?? NyxRelayStreamingState.Initial;
+    private NyxRelayStreamingState GetOrInitNyxRelayStreamingState(string correlationId)
+    {
+        var lifecycle = FindReplyLifecycle(correlationId, ConversationReplyLifecycleMode.NyxRelayText);
+        if (lifecycle is null)
+            return NyxRelayStreamingState.Initial;
+
+        return new NyxRelayStreamingState(
+            ToNyxRelayStreamingPhase(lifecycle.Phase),
+            NormalizeOptional(lifecycle.PlatformMessageId),
+            lifecycle.LastFlushedText ?? string.Empty,
+            lifecycle.EditCount,
+            NormalizeOptional(lifecycle.TerminalReason));
+    }
 
     /// <summary>
     /// Single guard that owns the "should this streaming callback short-circuit?" decision.
@@ -124,7 +138,7 @@ public sealed partial class ConversationGAgent
     /// updated state, and returns it. Illegal transitions are logged at warn level and
     /// return the unchanged current state — actor turns must keep making progress.
     /// </summary>
-    private NyxRelayStreamingState TransitionNyxRelayStreamingPhase(
+    private async Task<NyxRelayStreamingState> TransitionNyxRelayStreamingPhaseAsync(
         string correlationId,
         NyxRelayStreamingState current,
         NyxRelayStreamingPhase next,
@@ -147,7 +161,63 @@ public sealed partial class ConversationGAgent
                 ? (terminalReason ?? carried.TerminalReason)
                 : carried.TerminalReason,
         };
-        _nyxRelayStreamingStates[correlationId] = updated;
+        await PersistDomainEventAsync(new ConversationReplyLifecycleChangedEvent
+        {
+            Lifecycle = ToLifecycleState(correlationId, updated),
+            ChangedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
         return updated;
     }
+
+    private ConversationReplyLifecycleState? FindReplyLifecycle(
+        string? correlationId,
+        ConversationReplyLifecycleMode mode)
+    {
+        var normalized = NormalizeOptional(correlationId);
+        if (normalized is null)
+            return null;
+
+        return State.ActiveReplyLifecycles.FirstOrDefault(lifecycle =>
+            lifecycle.Mode == mode &&
+            string.Equals(lifecycle.CorrelationId, normalized, StringComparison.Ordinal));
+    }
+
+    private static NyxRelayStreamingPhase ToNyxRelayStreamingPhase(ConversationReplyLifecyclePhase phase) =>
+        phase switch
+        {
+            ConversationReplyLifecyclePhase.TextPlaceholderSent => NyxRelayStreamingPhase.PlaceholderSent,
+            ConversationReplyLifecyclePhase.TextStreaming => NyxRelayStreamingPhase.Streaming,
+            ConversationReplyLifecyclePhase.TextSuppressingInterim => NyxRelayStreamingPhase.SuppressingInterim,
+            ConversationReplyLifecyclePhase.TextDisabledPreSend => NyxRelayStreamingPhase.DisabledPreSend,
+            ConversationReplyLifecyclePhase.TextTerminalSucceeded => NyxRelayStreamingPhase.TerminalSucceeded,
+            ConversationReplyLifecyclePhase.TextTerminalPartial => NyxRelayStreamingPhase.TerminalPartial,
+            _ => NyxRelayStreamingPhase.Idle,
+        };
+
+    private static ConversationReplyLifecyclePhase ToLifecyclePhase(NyxRelayStreamingPhase phase) =>
+        phase switch
+        {
+            NyxRelayStreamingPhase.PlaceholderSent => ConversationReplyLifecyclePhase.TextPlaceholderSent,
+            NyxRelayStreamingPhase.Streaming => ConversationReplyLifecyclePhase.TextStreaming,
+            NyxRelayStreamingPhase.SuppressingInterim => ConversationReplyLifecyclePhase.TextSuppressingInterim,
+            NyxRelayStreamingPhase.DisabledPreSend => ConversationReplyLifecyclePhase.TextDisabledPreSend,
+            NyxRelayStreamingPhase.TerminalSucceeded => ConversationReplyLifecyclePhase.TextTerminalSucceeded,
+            NyxRelayStreamingPhase.TerminalPartial => ConversationReplyLifecyclePhase.TextTerminalPartial,
+            _ => ConversationReplyLifecyclePhase.TextIdle,
+        };
+
+    private static ConversationReplyLifecycleState ToLifecycleState(
+        string correlationId,
+        NyxRelayStreamingState state) =>
+        new()
+        {
+            CorrelationId = correlationId,
+            Mode = ConversationReplyLifecycleMode.NyxRelayText,
+            Phase = ToLifecyclePhase(state.Phase),
+            PlatformMessageId = state.PlatformMessageId ?? string.Empty,
+            LastFlushedText = state.LastFlushedText ?? string.Empty,
+            EditCount = state.EditCount,
+            TerminalReason = state.TerminalReason ?? string.Empty,
+            UpdatedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        };
 }
