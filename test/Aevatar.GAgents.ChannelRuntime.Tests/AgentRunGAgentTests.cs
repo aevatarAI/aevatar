@@ -1315,6 +1315,7 @@ public sealed class AgentRunGAgentTests
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled.Add(call.Arg<EventEnvelope>()));
         var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        const long replyTokenExpiresAtUnixMs = 1770000000000;
         var runtime = CreateRunAgent(
             actorRuntime,
             replyGenerator,
@@ -1334,7 +1335,7 @@ public sealed class AgentRunGAgentTests
             RegistrationId = "reg-1",
             Activity = BuildRelayActivity(),
             ReplyToken = "relay-token-stream",
-            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+            ReplyTokenExpiresAtUnixMs = replyTokenExpiresAtUnixMs,
         });
 
         handled.Any(e => e.Payload.Is(LlmReplyStreamChunkEvent.Descriptor)).Should().BeTrue();
@@ -1343,6 +1344,8 @@ public sealed class AgentRunGAgentTests
             .Payload.Unpack<LlmReplyStreamChunkEvent>();
         chunk.AccumulatedText.Should().Be("streamed reply");
         chunk.CorrelationId.Should().Be("corr-stream");
+        chunk.ReplyToken.Should().Be("relay-token-stream");
+        chunk.ReplyTokenExpiresAtUnixMs.Should().Be(replyTokenExpiresAtUnixMs);
     }
 
     [Fact]
@@ -1452,6 +1455,7 @@ public sealed class AgentRunGAgentTests
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled.Add(call.Arg<EventEnvelope>()));
         var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        const long replyTokenExpiresAtUnixMs = 1770000000001;
         var runtime = CreateRunAgent(
             actorRuntime,
             replyGenerator,
@@ -1471,7 +1475,7 @@ public sealed class AgentRunGAgentTests
             RegistrationId = "reg-1",
             Activity = BuildRelayActivity(),
             ReplyToken = "relay-token-card-stream",
-            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+            ReplyTokenExpiresAtUnixMs = replyTokenExpiresAtUnixMs,
         });
 
         handled.Any(e => e.Payload.Is(LlmReplyCardStreamChunkEvent.Descriptor)).Should().BeTrue();
@@ -1480,6 +1484,8 @@ public sealed class AgentRunGAgentTests
             .Payload.Unpack<LlmReplyCardStreamChunkEvent>();
         chunk.AccumulatedText.Should().Be("card streamed reply");
         chunk.CorrelationId.Should().Be("corr-card-stream");
+        chunk.ReplyToken.Should().Be("relay-token-card-stream");
+        chunk.ReplyTokenExpiresAtUnixMs.Should().Be(replyTokenExpiresAtUnixMs);
     }
 
     [Fact]

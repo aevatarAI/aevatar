@@ -15,6 +15,22 @@ namespace Aevatar.GAgents.Channel.Protocol.Tests;
 public sealed class ConversationGAgentDedupTests
 {
     [Fact]
+    public void ConversationRuntimeSource_ShouldNotReintroduceActorTokenRegistryCleanupPath()
+    {
+        var productionSource = string.Join(
+            Environment.NewLine,
+            ReadRepositoryText("agents/Aevatar.GAgents.Channel.Runtime/Conversation/ConversationGAgent.cs"),
+            ReadRepositoryText("agents/Aevatar.GAgents.Channel.Runtime/Conversation/ConversationGAgent.NyxRelayStreaming.cs"),
+            ReadRepositoryText("agents/Aevatar.GAgents.Channel.Runtime/Conversation/ConversationGAgent.LarkCardStreaming.cs"),
+            ReadRepositoryText("agents/Aevatar.GAgents.Channel.Runtime/protos/conversation_events.proto"));
+
+        productionSource.ShouldNotContain("_nyxRelayReplyTokens");
+        productionSource.ShouldNotContain("NyxRelayReplyTokenCleanupRequestedEvent");
+        productionSource.ShouldNotContain("HandleNyxRelayReplyTokenCleanupRequestedAsync");
+        productionSource.ShouldNotContain("RemoveNyxRelayReplyToken");
+    }
+
+    [Fact]
     public async Task HandleInboundActivityAsync_WhenDuplicateActivityId_CollapsesToSingleCommit()
     {
         var runner = new RecordingTurnRunner();
@@ -1947,6 +1963,22 @@ public sealed class ConversationGAgentDedupTests
         },
         Content = new MessageContent { Text = "hi" },
     };
+
+    private static string ReadRepositoryText(string relativePath) =>
+        File.ReadAllText(Path.Combine(GetRepositoryRoot(), relativePath), Encoding.UTF8);
+
+    private static string GetRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "aevatar.slnx")))
+                return directory.FullName;
+            directory = directory.Parent;
+        }
+
+        throw new InvalidOperationException("Could not locate repository root from test output directory.");
+    }
 
     private static ConversationContinueRequestedEvent CreateContinueCommand(string commandId) => new()
     {

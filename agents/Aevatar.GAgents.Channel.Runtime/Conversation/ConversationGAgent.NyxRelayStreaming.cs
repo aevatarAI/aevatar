@@ -95,6 +95,9 @@ public sealed partial class ConversationGAgent
             _ => false,
         };
 
+    // Refactor (iter20/cluster-004):
+    //   Old pattern: Nyx relay streaming lifecycle lived in an actor token registry / process-memory dictionary.
+    //   New principle: Rehydrate visible reply lifecycle from actor-owned persisted state; keep credentials runtime-only.
     private NyxRelayStreamingState GetOrInitNyxRelayStreamingState(string correlationId)
     {
         var lifecycle = FindReplyLifecycle(correlationId, ConversationReplyLifecycleMode.NyxRelayText);
@@ -138,6 +141,9 @@ public sealed partial class ConversationGAgent
     /// updated state, and returns it. Illegal transitions are logged at warn level and
     /// return the unchanged current state — actor turns must keep making progress.
     /// </summary>
+    // Refactor (iter20/cluster-004):
+    //   Old pattern: Phase transitions mutated a private in-memory streaming dictionary.
+    //   New principle: Persist every lifecycle phase change as a typed actor event owned by ConversationGAgent.
     private async Task<NyxRelayStreamingState> TransitionNyxRelayStreamingPhaseAsync(
         string correlationId,
         NyxRelayStreamingState current,

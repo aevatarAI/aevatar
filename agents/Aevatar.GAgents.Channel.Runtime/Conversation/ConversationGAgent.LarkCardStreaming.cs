@@ -135,6 +135,9 @@ public sealed partial class ConversationGAgent
             _ => false,
         };
 
+    // Refactor (iter20/cluster-004):
+    //   Old pattern: Card streaming lifecycle lived in a process-memory dictionary beside the reply token registry.
+    //   New principle: Rehydrate card lifecycle from actor-owned persisted state; keep credentials runtime-only.
     private LarkCardStreamingState GetOrInitLarkCardStreamingState(string correlationId)
     {
         var lifecycle = FindReplyLifecycle(correlationId, ConversationReplyLifecycleMode.LarkCard);
@@ -162,6 +165,9 @@ public sealed partial class ConversationGAgent
             _ => false,
         };
 
+    // Refactor (iter20/cluster-004):
+    //   Old pattern: Card phase transitions updated only process-local state.
+    //   New principle: Persist each card lifecycle change through ConversationReplyLifecycleChangedEvent.
     private async Task<LarkCardStreamingState> TransitionLarkCardStreamingPhaseAsync(
         string correlationId,
         LarkCardStreamingState current,
@@ -326,7 +332,6 @@ public sealed partial class ConversationGAgent
                         correlationId,
                         BuildLlmReplyCommandId(evt.CorrelationId),
                         evt.Activity,
-                        evt.Activity,
                         terminated.CardMessageId ?? string.Empty,
                         terminated.LastFlushedText);
                     return true;
@@ -414,7 +419,6 @@ public sealed partial class ConversationGAgent
                 await PersistCardStreamedCompletionAsync(
                     correlationId,
                     BuildLlmReplyCommandId(evt.CorrelationId),
-                    evt.Activity,
                     evt.Activity,
                     terminated.CardMessageId ?? string.Empty,
                     terminated.LastFlushedText);
@@ -522,7 +526,6 @@ public sealed partial class ConversationGAgent
                 correlationId,
                 commandId,
                 evt.Activity,
-                referenceActivity,
                 state.CardMessageId ?? string.Empty,
                 state.LastFlushedText);
             return true;
@@ -558,7 +561,6 @@ public sealed partial class ConversationGAgent
             correlationId,
             commandId,
             evt.Activity,
-            referenceActivity,
             state.CardMessageId ?? string.Empty,
             visibleText);
         return true;
@@ -570,11 +572,13 @@ public sealed partial class ConversationGAgent
     /// mid-stream Terminated path (post-send-failure / table-limit / unavailable, observed
     /// while still processing chunks) can share one writer.
     /// </summary>
+    // Refactor (iter20/cluster-004):
+    //   Old pattern: Card completion removed process-local token/card registries after writing only completion.
+    //   New principle: Persist delivered + completion facts and clear the actor-owned lifecycle state explicitly.
     private async Task PersistCardStreamedCompletionAsync(
         string correlationId,
         string commandId,
         ChatActivity? eventActivity,
-        ChatActivity? referenceActivity,
         string cardMessageId,
         string outboundText)
     {

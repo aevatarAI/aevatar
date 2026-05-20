@@ -281,8 +281,8 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             FailedAtUnixMs = nowMs,
         };
         AssignRetryPolicy(failed, result);
-            await PersistDomainEventAsync(failed);
-            await ClearReplyLifecyclesAsync(runtimeContext.NyxRelayReplyToken?.CorrelationId, activity, "inbound_retries_exhausted");
+        await PersistDomainEventAsync(failed);
+        await ClearReplyLifecyclesAsync(runtimeContext.NyxRelayReplyToken?.CorrelationId, activity, "inbound_retries_exhausted");
         Logger.LogWarning(
             "Inbound turn failed: activity={ActivityId} code={Code} kind={Kind}",
             activity.Id, result.ErrorCode, result.FailureKind);
@@ -1661,7 +1661,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         await ClearReplyLifecycleAsync(normalizedCorrelationId, ConversationReplyLifecycleMode.LarkCard, reason);
     }
 
-    // refactor helper, no behavior change
+    // Clears only an existing lifecycle so duplicate cleanup paths do not emit empty clear events.
     private async Task ClearReplyLifecycleAsync(
         string? correlationId,
         ConversationReplyLifecycleMode mode,
