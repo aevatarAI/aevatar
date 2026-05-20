@@ -1108,6 +1108,62 @@ gh issue edit <N> \
 
 唯一例外:`META_RESOLVED:escalate-human` → 保留 / 加 `🆘 human:卡死` label,这才是真正 human 介入态。
 
+### Daemon → controller event channel + 自适应 wakeup(强制,per Auric 2026-05-20 "修一下 skills." 关于 daemon detect → controller 25 min gap 问题)
+
+**问题**:`comment-monitor.sh` 30s 周期 detect maintainer 评论 ✓ + eyes react ✓ + daemon banner ✓,但 controller wakeup 默认 1500s(25 min),maintainer 评论到 controller 派 fresh round 最长 25 min gap — Auric 看 daemon banner 后等 controller。
+
+**修法**:daemon 写 trigger file → controller per-wakeup 检测 → 缩短下次 wakeup。
+
+#### Daemon 侧(comment-monitor.sh)
+
+新 maintainer 评论 detect 后,**额外 append** 一行到 `.refactor-loop/.controller-pending-events.log`:
+```
+<ISO8601> new-team-comment <issue_number> <author> <comment_id>
+```
+
+(daemon 仍正常 react eyes + post daemon banner + write comment-monitor.log。新增的 pending-events 文件只用于 controller 自适应 wakeup。)
+
+#### Controller 侧 — per-wakeup step 1.6:check pending events
+
+每次 wakeup 在 sync(step 0)+ GitHub state derive(step 1)之后:
+
+```bash
+PENDING=".refactor-loop/.controller-pending-events.log"
+LAST_PROCESSED=".refactor-loop/.controller-last-processed-event-offset"
+prev_offset=$(cat "$LAST_PROCESSED" 2>/dev/null || echo 0)
+cur_offset=$(wc -l < "$PENDING" 2>/dev/null || echo 0)
+new_events=$(( cur_offset - prev_offset ))
+
+if (( new_events > 0 )); then
+  # 有 daemon detect 但未 controller-process 的 events
+  sed -n "$((prev_offset+1)),$((cur_offset))p" "$PENDING" | while read -r line; do
+    # 解析 issue / author / comment_id,触发 maintainer-reply-resets-the-round
+    process_maintainer_reply "$line"
+  done
+  echo "$cur_offset" > "$LAST_PROCESSED"
+  # 关键:下次 wakeup **缩短**到 600s — Auric 决策响应更快
+  NEXT_WAKEUP_SECONDS=600
+else
+  NEXT_WAKEUP_SECONDS=1500  # 默认
+fi
+
+ScheduleWakeup(delaySeconds=$NEXT_WAKEUP_SECONDS, ...)
+```
+
+#### 自适应 wakeup 策略
+
+| 触发 | 下次 wakeup 周期 |
+|---|---|
+| pending events file 有新 entry | **600s**(10 min,Auric 决策响应快) |
+| in-flight codex(busy 状态) | 1500s(默认,等 task-notification) |
+| 完全 idle 无 pending | 1800s(30 min idle heartbeat) |
+
+#### 防回(❌ 禁止)
+
+- ❌ daemon 写 events log 但 controller 不读 → maintainer 评论 → 25 min gap
+- ❌ controller 处理完 events 但不缩 wakeup → 下次再来评论 → 又 25 min gap
+- ❌ controller 不更新 LAST_PROCESSED offset → 每 wakeup 重复处理同 events
+
 ### Stuck label 4h 超时自动新一轮 meta-reflect(强制,per Auric 2026-05-20 "如果人长期不介入,比如四小时以上,则尝试进入新一轮元解决轮次,这样就不会积攒了")
 
 每次 controller wakeup 第一动作之后(per-wakeup sweep step 1 完成后),对每个带 `auto-loop-stuck` OR `👤 human:需-maintainer-决策` OR `🆘 human:卡死` label 的 issue:

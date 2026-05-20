@@ -107,6 +107,10 @@ while true; do
       react_ok=$?
       if [ $react_ok -eq 0 ]; then
         echo "new-team-comment: $n $author $id eyes-reacted-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        # 通知 controller 缩 wakeup:append 到 pending events file
+        # controller per-wakeup 第一步读此文件,有新 entry → 下次 wakeup 缩到 600s
+        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) new-team-comment $n $author $id" \
+          >> /Users/auric/aevatar/.refactor-loop/.controller-pending-events.log
         # 立刻 post status 卡片让 maintainer 看到 daemon 已识别 + controller 在路上
         # (per Auric 2026-05-20 "加了'看到'表情后, codex 启动也并没有更新状态卡片")
         body_excerpt=$(echo "$body" | head -1 | head -c 80)
