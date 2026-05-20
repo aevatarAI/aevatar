@@ -137,13 +137,6 @@ public class ChatbotClassifierGAgentTests
 
         public IReadOnlyList<string> GetAvailableProviders() => [Name];
 
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            _ = request;
-            ct.ThrowIfCancellationRequested();
-            throw new InvalidOperationException("Provider boundary ChatAsync should not be used by classifier.");
-        }
-
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)

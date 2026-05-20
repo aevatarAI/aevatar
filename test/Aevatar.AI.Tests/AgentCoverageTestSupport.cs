@@ -138,18 +138,19 @@ internal sealed class StubChatProviderFactory(
 
     public IReadOnlyList<string> GetAvailableProviders() => [Name];
 
-    public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default) => onChatAsync(request, ct);
-
     public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         LLMRequest request,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        _ = request;
-        ct.ThrowIfCancellationRequested();
-        await Task.Yield();
-        throw new InvalidOperationException("Streaming path should not be used in this test.");
-#pragma warning disable CS0162
-        yield break;
-#pragma warning restore CS0162
+        var response = await onChatAsync(request, ct);
+        if (!string.IsNullOrEmpty(response.Content))
+            yield return new LLMStreamChunk { DeltaContent = response.Content };
+
+        yield return new LLMStreamChunk
+        {
+            IsLast = true,
+            Usage = response.Usage,
+            FinishReason = response.FinishReason,
+        };
     }
 }

@@ -11,9 +11,9 @@ public static class ChatStreamContentAggregator
         bool emptyAsNull = true,
         CancellationToken ct = default)
     {
-        // Refactor (iter15/cluster-024):
-        //   Old pattern: offline callers duplicated StringBuilder loops after direct provider.ChatAsync removal.
-        //   New principle: ChatStreamAsync remains the only authoritative AI executor, with one narrow text aggregation adapter for offline consumers.
+        // Refactor (iter18/cluster-001):
+        //   Old pattern: ILLMProvider 仍暴露 ChatAsync 非流式入口,provider/failover 可绕过流式链路
+        //   New principle: Provider contract 只暴露 ChatStreamAsync;非流式聚合用现有 ChatStreamContentAggregator;无新 offline adapter
         var content = new StringBuilder();
         await foreach (var chunk in stream.WithCancellation(ct))
         {
@@ -29,11 +29,13 @@ public static class ChatStreamContentAggregator
         LLMRequest request,
         CancellationToken ct = default)
     {
-        // Refactor (iter15/cluster-024):
-        //   Old pattern: ToolCallLoop treated provider.ChatAsync as a second authoritative LLM response path.
-        //   New principle: stream-derived LLMResponse aggregation preserves content, reasoning, tool calls, usage, and finish reason from provider.ChatStreamAsync.
+        // Refactor (iter18/cluster-001):
+        //   Old pattern: ILLMProvider 仍暴露 ChatAsync 非流式入口,provider/failover 可绕过流式链路
+        //   New principle: Provider contract 只暴露 ChatStreamAsync;非流式聚合用现有 ChatStreamContentAggregator;无新 offline adapter
+        // New pattern: offline aggregation consumes ChatStreamAsync; provider execution remains stream-first.
         var content = new StringBuilder();
         var reasoningContent = new StringBuilder();
+        List<ContentPart>? contentParts = null;
         var toolCalls = new StreamingToolCallAccumulator();
         TokenUsage? usage = null;
         string? finishReason = null;
@@ -45,6 +47,12 @@ public static class ChatStreamContentAggregator
 
             if (!string.IsNullOrEmpty(chunk.DeltaReasoningContent))
                 reasoningContent.Append(chunk.DeltaReasoningContent);
+
+            if (chunk.DeltaContentPart != null)
+            {
+                contentParts ??= [];
+                contentParts.Add(chunk.DeltaContentPart);
+            }
 
             if (chunk.DeltaToolCall != null)
                 toolCalls.TrackDelta(chunk.DeltaToolCall);
@@ -61,6 +69,7 @@ public static class ChatStreamContentAggregator
         {
             Content = content.Length > 0 ? content.ToString() : null,
             ReasoningContent = reasoningContent.Length > 0 ? reasoningContent.ToString() : null,
+            ContentParts = contentParts,
             ToolCalls = finalToolCalls.Count > 0 ? finalToolCalls : null,
             Usage = usage,
             FinishReason = finishReason,

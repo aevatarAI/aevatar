@@ -217,23 +217,24 @@ public class MakerRecursiveRegressionTests
 
         public string Name => "mock-maker";
 
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
+        private LLMResponse BuildResponse(LLMRequest request)
         {
             var userMessage = request.Messages.LastOrDefault(x => x.Role == "user")?.Content ?? "";
             var response = Resolve(userMessage);
-            return Task.FromResult(new LLMResponse
+            return new LLMResponse
             {
                 Content = response,
                 FinishReason = "stop",
                 Usage = new TokenUsage(50, 20, 70),
-            });
+            };
         }
 
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
         {
-            var full = await ChatAsync(request, ct);
+            ct.ThrowIfCancellationRequested();
+            var full = BuildResponse(request);
             foreach (var ch in full.Content ?? "")
                 yield return new LLMStreamChunk { DeltaContent = ch.ToString() };
             yield return new LLMStreamChunk { IsLast = true, Usage = full.Usage };

@@ -67,25 +67,12 @@ public sealed class MEAILLMProvider : ILLMProvider
         _logger = logger ?? NullLogger.Instance;
     }
 
-    // ─── ILLMProvider.ChatAsync ───
-
-    /// <summary>Single-turn LLM call. Converts Aevatar's LLMRequest into a list of MEAI ChatMessage instances.</summary>
-    public async Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-    {
-        var messages = ConvertMessages(request.Messages);
-        var options = BuildOptions(request);
-
-        _logger.LogDebug("MEAI ChatAsync: {MessageCount} messages, model={Model}",
-            messages.Count, options?.ModelId);
-
-        var response = await _client.GetResponseAsync(messages, options, ct);
-
-        return ConvertResponse(response);
-    }
-
     // ─── ILLMProvider.ChatStreamAsync ───
 
     /// <summary>Streaming LLM call. Returns an async-enumerable stream of chunks.</summary>
+    // Refactor (iter18/cluster-001):
+    //   Old pattern: ILLMProvider 仍暴露 ChatAsync 非流式入口,provider/failover 可绕过流式链路
+    //   New principle: Provider contract 只暴露 ChatStreamAsync;非流式聚合用现有 ChatStreamContentAggregator;无新 offline adapter
     public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         LLMRequest request,
         [EnumeratorCancellation] CancellationToken ct = default)
@@ -168,47 +155,41 @@ public sealed class MEAILLMProvider : ILLMProvider
                 Name);
 
             var fallback = ConvertResponse(await _client.GetResponseAsync(messages, options, ct));
-            if (!string.IsNullOrEmpty(fallback.Content))
-            {
-                yield return new LLMStreamChunk
-                {
-                    DeltaContent = fallback.Content,
-                };
-            }
-
-            if (fallback.ContentParts is { Count: > 0 })
-            {
-                foreach (var contentPart in fallback.ContentParts)
-                {
-                    yield return new LLMStreamChunk
-                    {
-                        DeltaContentPart = contentPart,
-                    };
-                }
-            }
-
-            if (fallback.ToolCalls is { Count: > 0 })
-            {
-                foreach (var toolCall in fallback.ToolCalls)
-                {
-                    yield return new LLMStreamChunk
-                    {
-                        DeltaToolCall = toolCall,
-                    };
-                }
-            }
-
-            yield return new LLMStreamChunk
-            {
-                IsLast = true,
-                Usage = fallback.Usage,
-                FinishReason = fallback.FinishReason,
-            };
+            foreach (var fallbackChunk in MapResponseToStreamChunks(fallback))
+                yield return fallbackChunk;
             yield break;
         }
 
         // The final chunk marks the end
         yield return new LLMStreamChunk { IsLast = true, FinishReason = lastFinishReason };
+    }
+
+    private static IEnumerable<LLMStreamChunk> MapResponseToStreamChunks(LLMResponse fallback)
+    {
+        // Refactor (iter18/cluster-001):
+        //   Old pattern: ILLMProvider 仍暴露 ChatAsync 非流式入口,provider/failover 可绕过流式链路
+        //   New principle: Provider contract 只暴露 ChatStreamAsync;非流式聚合用现有 ChatStreamContentAggregator;无新 offline adapter
+        if (!string.IsNullOrEmpty(fallback.Content))
+            yield return new LLMStreamChunk { DeltaContent = fallback.Content };
+
+        if (fallback.ContentParts is { Count: > 0 })
+        {
+            foreach (var contentPart in fallback.ContentParts)
+                yield return new LLMStreamChunk { DeltaContentPart = contentPart };
+        }
+
+        if (fallback.ToolCalls is { Count: > 0 })
+        {
+            foreach (var toolCall in fallback.ToolCalls)
+                yield return new LLMStreamChunk { DeltaToolCall = toolCall };
+        }
+
+        yield return new LLMStreamChunk
+        {
+            IsLast = true,
+            Usage = fallback.Usage,
+            FinishReason = fallback.FinishReason,
+        };
     }
 
     // ─── Conversion: Aevatar -> MEAI ───

@@ -26,7 +26,6 @@ public sealed class StudioGenerateGAgentStreamingTests
         var result = await agent.GenerateAsync("write script", "request-script", metadata: null);
 
         result.Should().Be("script draft");
-        provider.ChatCallCount.Should().Be(0);
         provider.StreamCallCount.Should().Be(1);
     }
 
@@ -42,7 +41,6 @@ public sealed class StudioGenerateGAgentStreamingTests
         var result = await agent.GenerateAsync("write workflow", "request-workflow", metadata: null);
 
         result.Should().Be("workflow yaml");
-        provider.ChatCallCount.Should().Be(0);
         provider.StreamCallCount.Should().Be(1);
     }
 
@@ -63,8 +61,6 @@ public sealed class StudioGenerateGAgentStreamingTests
 
         scriptResult.Should().BeEmpty();
         workflowResult.Should().BeEmpty();
-        scriptProvider.ChatCallCount.Should().Be(0);
-        workflowProvider.ChatCallCount.Should().Be(0);
         scriptProvider.StreamCallCount.Should().BeGreaterThan(0);
         workflowProvider.StreamCallCount.Should().BeGreaterThan(0);
     }
@@ -99,8 +95,6 @@ public sealed class StudioGenerateGAgentStreamingTests
     {
         public string Name => "studio-test-provider";
 
-        public int ChatCallCount { get; private set; }
-
         public int StreamCallCount { get; private set; }
 
         public ILLMProvider GetProvider(string name)
@@ -112,14 +106,6 @@ public sealed class StudioGenerateGAgentStreamingTests
         public ILLMProvider GetDefault() => this;
 
         public IReadOnlyList<string> GetAvailableProviders() => [Name];
-
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            _ = request;
-            ChatCallCount++;
-            ct.ThrowIfCancellationRequested();
-            throw new InvalidOperationException("Provider boundary ChatAsync should not be used by Studio generate GAgents.");
-        }
 
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,

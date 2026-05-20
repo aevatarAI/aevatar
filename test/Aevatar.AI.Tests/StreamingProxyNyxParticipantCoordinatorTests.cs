@@ -379,20 +379,18 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
 
         public List<LLMRequest> Requests { get; } = [];
 
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
+        private LLMResponse BuildResponse(LLMRequest request)
         {
-            Requests.Add(request);
-
             if (_responseFactory != null)
-                return Task.FromResult(_responseFactory(request));
+                return _responseFactory(request);
 
             if (request.RequestId?.Contains("node-a", StringComparison.OrdinalIgnoreCase) == true)
                 throw new InvalidOperationException("node-a is unavailable");
 
-            return Task.FromResult(new LLMResponse
+            return new LLMResponse
             {
                 Content = $"reply from {request.RequestId}",
-            });
+            };
         }
 
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(

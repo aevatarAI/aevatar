@@ -7,11 +7,11 @@ namespace Aevatar.AI.Tests;
 public sealed class FailoverLLMProviderFactoryTests
 {
     [Fact]
-    public async Task GetProvider_WhenPrimaryMissing_ShouldResolveFromFallback()
+    public async Task ChatStreamAsync_WhenPrimaryMissing_ShouldResolveFromFallback()
     {
         var fallbackProvider = new StubProvider("openai")
         {
-            OnChatAsync = static (_, _) => Task.FromResult(new LLMResponse { Content = "fallback-ok" }),
+            OnChatStreamAsync = static (_, _) => ContentStream(["fallback-ok"]),
         };
         var factory = new FailoverLLMProviderFactory(
             primaryFactory: new StubFactory(throwOnGetProvider: new InvalidOperationException("primary missing")),
@@ -23,29 +23,27 @@ public sealed class FailoverLLMProviderFactoryTests
                 defaultName: "openai"));
 
         var provider = factory.GetProvider("openai");
-        var response = await provider.ChatAsync(new LLMRequest { Messages = [] });
+        var chunks = await ReadAllAsync(provider.ChatStreamAsync(new LLMRequest { Messages = [] }));
 
-        response.Content.Should().Be("fallback-ok");
+        chunks.Select(x => x.DeltaContent).Should().Contain("fallback-ok");
     }
 
     [Fact]
-    public async Task ChatAsync_WhenPrimaryThrows_ShouldFallback()
+    public async Task ChatStreamAsync_WhenPrimaryThrowsBeforeMeaningfulChunk_ShouldFallbackToSecondary()
     {
-        var primaryCalls = 0;
         var fallbackCalls = 0;
 
         var primaryProvider = new StubProvider("openai")
         {
-            OnChatAsync = (_, _) =>
-            {
-                primaryCalls++;
-                throw new InvalidOperationException("primary failed");
-            },
+            OnChatStreamAsync = static (_, _) => ThrowingStream(),
         };
         var fallbackProvider = new StubProvider("openai")
         {
-            OnChatAsync = static (_, _) => Task.FromResult(new LLMResponse { Content = "fallback-response" }),
-            OnChatAsyncWithCounter = () => fallbackCalls++,
+            OnChatStreamAsync = (_, _) =>
+            {
+                fallbackCalls++;
+                return ContentStream(["fallback-response"]);
+            },
         };
 
         var factory = new FailoverLLMProviderFactory(
@@ -62,31 +60,36 @@ public sealed class FailoverLLMProviderFactoryTests
                 },
                 defaultName: "openai"));
 
-        var response = await factory.GetProvider("openai").ChatAsync(new LLMRequest { Messages = [] });
+        var chunks = await ReadAllAsync(factory.GetProvider("openai").ChatStreamAsync(new LLMRequest { Messages = [] }));
 
-        primaryCalls.Should().Be(1);
         fallbackCalls.Should().Be(1);
-        response.Content.Should().Be("fallback-response");
+        chunks.Select(x => x.DeltaContent).Should().Contain("fallback-response");
     }
 
     [Fact]
-    public async Task GetProvider_WhenPreferFallbackDefaultEnabled_ShouldUseFallbackDefaultProvider()
+    public async Task ChatStreamAsync_WhenPreferFallbackDefaultEnabled_ShouldUseFallbackDefaultProvider()
     {
         var fallbackDefaultCalls = 0;
         var fallbackNamedCalls = 0;
         var primaryProvider = new StubProvider("openai")
         {
-            OnChatAsync = (_, _) => throw new InvalidOperationException("primary failed"),
+            OnChatStreamAsync = static (_, _) => ThrowingStream(),
         };
         var fallbackDefaultProvider = new StubProvider("deepseek")
         {
-            OnChatAsync = static (_, _) => Task.FromResult(new LLMResponse { Content = "fallback-default" }),
-            OnChatAsyncWithCounter = () => fallbackDefaultCalls++,
+            OnChatStreamAsync = (_, _) =>
+            {
+                fallbackDefaultCalls++;
+                return ContentStream(["fallback-default"]);
+            },
         };
         var fallbackNamedProvider = new StubProvider("openai")
         {
-            OnChatAsync = static (_, _) => Task.FromResult(new LLMResponse { Content = "fallback-named" }),
-            OnChatAsyncWithCounter = () => fallbackNamedCalls++,
+            OnChatStreamAsync = (_, _) =>
+            {
+                fallbackNamedCalls++;
+                return ContentStream(["fallback-named"]);
+            },
         };
 
         var factory = new FailoverLLMProviderFactory(
@@ -109,25 +112,28 @@ public sealed class FailoverLLMProviderFactoryTests
                 FallbackToDefaultProviderWhenNamedProviderMissing = true,
             });
 
-        var response = await factory.GetProvider("openai").ChatAsync(new LLMRequest { Messages = [] });
+        var chunks = await ReadAllAsync(factory.GetProvider("openai").ChatStreamAsync(new LLMRequest { Messages = [] }));
 
         fallbackDefaultCalls.Should().Be(1);
         fallbackNamedCalls.Should().Be(0);
-        response.Content.Should().Be("fallback-default");
+        chunks.Select(x => x.DeltaContent).Should().Contain("fallback-default");
     }
 
     [Fact]
-    public async Task ChatAsync_WhenPrimaryReturnsEmpty_ShouldFallback()
+    public async Task ChatStreamAsync_WhenPrimaryCompletesWithoutMeaningfulOutput_ShouldFallback()
     {
         var fallbackCalls = 0;
         var primaryProvider = new StubProvider("openai")
         {
-            OnChatAsync = static (_, _) => Task.FromResult(new LLMResponse { Content = "" }),
+            OnChatStreamAsync = static (_, _) => EmptyMeaninglessStream(),
         };
         var fallbackProvider = new StubProvider("openai")
         {
-            OnChatAsync = static (_, _) => Task.FromResult(new LLMResponse { Content = "fallback-non-empty" }),
-            OnChatAsyncWithCounter = () => fallbackCalls++,
+            OnChatStreamAsync = (_, _) =>
+            {
+                fallbackCalls++;
+                return ContentStream(["fallback-non-empty"]);
+            },
         };
 
         var factory = new FailoverLLMProviderFactory(
@@ -144,10 +150,10 @@ public sealed class FailoverLLMProviderFactoryTests
                 },
                 defaultName: "openai"));
 
-        var response = await factory.GetProvider("openai").ChatAsync(new LLMRequest { Messages = [] });
+        var chunks = await ReadAllAsync(factory.GetProvider("openai").ChatStreamAsync(new LLMRequest { Messages = [] }));
 
         fallbackCalls.Should().Be(1);
-        response.Content.Should().Be("fallback-non-empty");
+        chunks.Select(x => x.DeltaContent).Should().Contain("fallback-non-empty");
     }
 
     [Fact]
@@ -343,17 +349,7 @@ public sealed class FailoverLLMProviderFactoryTests
     {
         public string Name => name;
 
-        public Func<LLMRequest, CancellationToken, Task<LLMResponse>>? OnChatAsync { get; init; }
         public Func<LLMRequest, CancellationToken, IAsyncEnumerable<LLMStreamChunk>>? OnChatStreamAsync { get; init; }
-        public Action? OnChatAsyncWithCounter { get; init; }
-
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            OnChatAsyncWithCounter?.Invoke();
-            return OnChatAsync != null
-                ? OnChatAsync(request, ct)
-                : Task.FromResult(new LLMResponse { Content = "ok" });
-        }
 
         public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,

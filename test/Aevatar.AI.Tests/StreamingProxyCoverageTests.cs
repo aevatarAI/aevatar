@@ -1674,8 +1674,6 @@ public class StreamingProxyCoverageTests
     private sealed class StubLlmProvider : ILLMProvider
     {
         public string Name => "stub";
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-            => Task.FromResult(new LLMResponse { Content = string.Empty });
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(LLMRequest request, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
         {
             await Task.CompletedTask;

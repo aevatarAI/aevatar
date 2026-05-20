@@ -369,7 +369,6 @@ public sealed class ChatRuntimeStreamingBufferTests
         var result = await runtime.ChatAsync("hello");
 
         result.Should().Be("short-circuit");
-        provider.ChatCallCount.Should().Be(0);
         provider.StreamCallCount.Should().Be(0);
     }
 
@@ -382,7 +381,6 @@ public sealed class ChatRuntimeStreamingBufferTests
         var result = await runtime.ChatAsync("hello");
 
         result.Should().Be("stream-answer");
-        provider.ChatCallCount.Should().Be(0);
         provider.StreamCallCount.Should().Be(1);
     }
 
@@ -563,13 +561,6 @@ public sealed class ChatRuntimeStreamingBufferTests
         public string Name => "queued-streaming-provider";
         public List<LLMRequest> StreamRequests { get; } = [];
 
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            _ = request;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new LLMResponse());
-        }
-
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [EnumeratorCancellation] CancellationToken ct = default)
@@ -592,18 +583,8 @@ public sealed class ChatRuntimeStreamingBufferTests
         IReadOnlyList<LLMStreamChunk>? streamToolDeltas = null) : ILLMProvider
     {
         public string Name => "streaming-provider";
-        public int ChatCallCount { get; private set; }
         public int StreamCallCount { get; private set; }
         public LLMRequest? LastStreamRequest { get; private set; }
-        public LLMRequest? LastChatRequest { get; private set; }
-
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            LastChatRequest = request;
-            ChatCallCount++;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new LLMResponse { Content = string.Concat(chunks) });
-        }
 
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,

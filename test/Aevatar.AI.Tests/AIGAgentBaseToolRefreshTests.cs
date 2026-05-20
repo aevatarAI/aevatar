@@ -146,13 +146,6 @@ public class AIGAgentBaseToolRefreshTests
     {
         public string Name => name;
 
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            _ = request;
-            return Task.FromResult(new LLMResponse { Content = "ok" });
-        }
-
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)

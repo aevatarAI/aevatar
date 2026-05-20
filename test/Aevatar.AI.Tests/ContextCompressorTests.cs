@@ -774,12 +774,6 @@ public class ContextCompressorTests
 
         public string Name => "queue";
 
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(_responses.Count > 0 ? _responses.Dequeue() : new LLMResponse());
-        }
-
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [EnumeratorCancellation] CancellationToken ct = default)
@@ -830,9 +824,6 @@ public class ContextCompressorTests
     private sealed class CapturingLLMProvider(Func<LLMRequest, LLMResponse> handler) : ILLMProvider
     {
         public string Name => "capturing";
-
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default) =>
-            Task.FromResult(handler(request));
 
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
