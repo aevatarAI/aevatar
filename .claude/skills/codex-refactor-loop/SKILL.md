@@ -32,6 +32,52 @@ description: Unattended three-phase refactor loop (analyze → implement → ver
 - ❌ Banner 用模糊语言("处理中""稍等"),应该具体说当前 phase + 下一步 + ETA / 何时介入
 - ❌ 多个 daemon 同时跑但 maintainer 看 GitHub 只看到 eyes,不知道还有 codex 在工作
 
+### 0 codex + active task = bug(强制,per Auric 2026-05-20 "按说这个流程应该一直有 codex 工作的")
+
+**铁律**:任何 active phase issue/PR(`🔍 design-solving` / `🔧 fixing` / `👀 reviewing` / `🛠️ implementing`)存在时,**应至少有 1 codex 在跑**。`ps codex exec | wc -l == 0` AND `gh issue list --label "🔍 design-solving"` non-empty → **bug**。
+
+### Controller 每 wakeup 必派"下一步"(no gap policy)
+
+Controller wakeup 处理 markers 后,**必须在同 turn 内派出下一步 codex**(if any actionable),不留 gap 等下次 wakeup:
+
+| Marker 完成 | 立即派 |
+|---|---|
+| SOLVER_DONE × 3(同 issue 同 round)| 同 issue 同 round meta-judge |
+| META_JUDGE_DONE:consensus | implement codex |
+| META_JUDGE_DONE:converge:r+1 | r+1 三 solver |
+| META_JUDGE_DONE:escalate:stalled | reflector(per Phase 9 路由表) |
+| META_RESOLVED:re-design | fresh round 三 solver with new framing |
+| IMPLEMENT_DONE:ok | controller commit/push/open PR + Phase 8 reviewer × 3 |
+| REVIEW_DONE × 3 + any reject | fix codex r+1 |
+| FIX_DONE | reviewer r+1 |
+| TEST_ADD_DONE | controller commit/push 等 CI |
+| AUDIT_DONE | bootstrap design issues + cluster-003 类直接 implement |
+
+派出后 ScheduleWakeup;**不允许** "wakeup → sweep → 0 派出 → 下 wakeup" pattern(空 wakeup)。
+
+### Concurrency monitor:`tools/refactor-loop/concurrency_monitor.py`(强制)
+
+300s 周期 daemon,监控 actual vs expected codex 并发数:
+- expected = active issue/PR 数(per phase 表)
+- actual = `ps codex exec`
+- actual < expected/2 持续 2 tick → 告警(写 `.refactor-loop/.concurrency-alert.log` + 通知 controller pending events)
+- 不自动 spawn codex(business logic 在 controller)— controller 下次 wakeup 必派
+
+启动:
+```bash
+nohup python3 tools/refactor-loop/concurrency_monitor.py \
+  >> .refactor-loop/logs/concurrency-monitor.log 2>&1 &
+disown
+```
+
+### 反面(❌ 严禁)
+
+- ❌ wakeup sweep 看到 SOLVER_DONE × 3 但**不派 judge**(留 gap)
+- ❌ codex 完成后只删 progress comment,不派下一步
+- ❌ wakeup ScheduleWakeup 但本 turn 0 codex spawn(等 wakeup 才动 = lazy / 死循环)
+- ❌ 看到 concurrency-alert.log 有 entry 但 controller 不读
+- ❌ active issue 0 codex 跑 >= 1 wakeup 周期(说明 controller 漏派)
+
 ### Spawn helper:`spawn_with_banner.py`(强制,per Auric 2026-05-20 "#741 也看不到运行状态. 你继续修 skills 吧. 然后需要写脚本你可以写脚本")
 
 Controller 经常 spawn codex 时**忘 post banner**,GitHub 看不到运行状态。强制用 helper:
