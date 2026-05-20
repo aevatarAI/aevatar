@@ -70,6 +70,7 @@ internal static class ChatRoutePolicyAdminEndpoints
         string scopeId,
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] IActorDispatchPort actorDispatchPort,
+        [FromServices] ChatRoutePolicyProjectionPort projectionPort,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
@@ -111,7 +112,7 @@ internal static class ChatRoutePolicyAdminEndpoints
             SenderId = string.Empty,
         };
 
-        var (actorId, commandId) = await DispatchAsync(command, scopeId, actorRuntime, actorDispatchPort, ct);
+        var (actorId, commandId) = await DispatchAsync(command, scopeId, actorRuntime, actorDispatchPort, projectionPort, ct);
         return Results.Accepted(value: new
         {
             actor_id = actorId,
@@ -129,6 +130,7 @@ internal static class ChatRoutePolicyAdminEndpoints
         string ruleId,
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] IActorDispatchPort actorDispatchPort,
+        [FromServices] ChatRoutePolicyProjectionPort projectionPort,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
@@ -138,7 +140,7 @@ internal static class ChatRoutePolicyAdminEndpoints
             return JsonError(StatusCodes.Status400BadRequest, "rule_id_required", "rule_id path segment is required.");
 
         var command = new RemoveChatRouteRuleRequested { RuleId = ruleId.Trim() };
-        var (actorId, commandId) = await DispatchAsync(command, scopeId, actorRuntime, actorDispatchPort, ct);
+        var (actorId, commandId) = await DispatchAsync(command, scopeId, actorRuntime, actorDispatchPort, projectionPort, ct);
         return Results.Accepted(value: new
         {
             actor_id = actorId,
@@ -193,10 +195,18 @@ internal static class ChatRoutePolicyAdminEndpoints
         string scopeId,
         IActorRuntime actorRuntime,
         IActorDispatchPort actorDispatchPort,
+        ChatRoutePolicyProjectionPort projectionPort,
         CancellationToken ct)
     {
         var actorId = $"{ProjectionKindActorIdPrefix}{scopeId}";
         var actor = await actorRuntime.CreateAsync<ChatRoutePolicyGAgent>(actorId, ct);
+        // Activate the per-scope projection runtime BEFORE dispatching the
+        // command. Each chat-route-policy:{scopeId} actor is its own projection
+        // root (unlike Device/Scheduled singletons primed once at startup);
+        // without this call the actor commits ChatRoutePolicyUpdated but no
+        // projection.durable.scope:chat-route-policy:{scope} forwards it to
+        // the materializer, so the readmodel never populates.
+        await projectionPort.EnsureProjectionForActorAsync(actor.Id, ct);
         var commandId = Guid.NewGuid().ToString("N");
         var envelope = new EventEnvelope
         {

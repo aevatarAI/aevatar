@@ -60,6 +60,13 @@ public static class ChatRoutingServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ChatRoutePolicyCurrentStateDocument>,
             ChatRoutePolicyDocumentMetadataProvider>();
 
+        // Per-scope projection activation port. Callers (admin endpoint write
+        // path) must call EnsureProjectionForActorAsync(actorId) after
+        // CreateAsync<ChatRoutePolicyGAgent> and before dispatching the
+        // Upsert / Remove command — otherwise committed events fire into the
+        // void and the readmodel never materializes.
+        services.TryAddSingleton<ChatRoutePolicyProjectionPort>();
+
         var useElasticsearch = ElasticsearchProjectionConfiguration.IsEnabled(
             configuration,
             storeName: "ChatRouting");

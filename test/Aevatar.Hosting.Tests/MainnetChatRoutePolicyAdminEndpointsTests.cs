@@ -191,6 +191,12 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
         builder.Services.AddSingleton<IActorRuntime>(actorRuntime);
         builder.Services.AddSingleton<IActorDispatchPort>(dispatchPort);
         builder.Services.AddSingleton(queryPort ?? new StaticPolicyQueryPort(snapshot: null));
+        // Admin endpoints require ChatRoutePolicyProjectionPort to activate
+        // the per-scope projection runtime before dispatch — stub it with a
+        // no-op activation service for tests.
+        builder.Services.AddSingleton<Aevatar.CQRS.Projection.Core.Abstractions.IProjectionScopeActivationService<ChatRoutePolicyMaterializationRuntimeLease>,
+            NoopActivationService>();
+        builder.Services.AddSingleton<ChatRoutePolicyProjectionPort>();
 
         var app = builder.Build();
         app.MapChatRoutePolicyAdminEndpoints();
@@ -245,6 +251,20 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
             Dispatches.Add((actorId, envelope));
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class NoopActivationService
+        : Aevatar.CQRS.Projection.Core.Abstractions.IProjectionScopeActivationService<ChatRoutePolicyMaterializationRuntimeLease>
+    {
+        public Task<ChatRoutePolicyMaterializationRuntimeLease> EnsureAsync(
+            Aevatar.CQRS.Projection.Core.Abstractions.ProjectionScopeStartRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new ChatRoutePolicyMaterializationRuntimeLease(
+                new ChatRoutePolicyMaterializationContext
+                {
+                    RootActorId = request.RootActorId,
+                    ProjectionKind = request.ProjectionKind,
+                }));
     }
 
     private sealed class StaticPolicyQueryPort(ChatRoutePolicySnapshot? snapshot) : IChatRoutePolicyQueryPort
