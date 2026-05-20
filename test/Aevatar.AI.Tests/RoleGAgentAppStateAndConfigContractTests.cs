@@ -18,6 +18,7 @@ public class RoleGAgentAppStateAndConfigContractTests
 
         await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
         {
+            RoleId = "worker-role",
             RoleName = "worker",
             ProviderName = "mock",
             Model = "model-a",
@@ -29,6 +30,8 @@ public class RoleGAgentAppStateAndConfigContractTests
             StreamBufferCapacity = 33,
         });
 
+        agent.RoleId.Should().Be("worker-role");
+        agent.State.RoleId.Should().Be("worker-role");
         agent.RoleName.Should().Be("worker");
         agent.State.ConfigOverrides.Should().NotBeNull();
         agent.State.ConfigOverrides.ProviderName.Should().Be("mock");

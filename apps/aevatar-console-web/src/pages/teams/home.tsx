@@ -1,14 +1,12 @@
 import {
   AppstoreOutlined,
   BarsOutlined,
-  MoreOutlined,
   PlusOutlined,
 } from "@ant-design/icons";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import {
   Alert,
   Button,
-  Dropdown,
   Empty,
   Space,
   Tooltip,
@@ -21,7 +19,6 @@ import { loadRestorableAuthSession } from "@/shared/auth/session";
 import { formatCompactDateTime } from "@/shared/datetime/dateTime";
 import { history } from "@/shared/navigation/history";
 import { buildTeamDetailHref } from "@/shared/navigation/teamRoutes";
-import { buildRuntimeRunsHref } from "@/shared/navigation/runtimeRoutes";
 import { studioApi } from "@/shared/studio/api";
 import type { ScopeServiceRunSummary } from "@/shared/models/runtime/scopeServices";
 import type { ServiceCatalogSnapshot } from "@/shared/models/services";
@@ -30,20 +27,15 @@ import {
   type StudioMemberSummary,
   type StudioTeamSummary,
 } from "@/shared/studio/models";
-import { buildStudioWorkflowWorkspaceRoute } from "@/shared/studio/navigation";
 import {
   AevatarInspectorEmpty,
   AevatarPageShell,
-  AevatarPanel,
 } from "@/shared/ui/aevatarPageShells";
 import { describeError } from "@/shared/ui/errorText";
 import { resolveStudioScopeContext } from "../scopes/components/resolvedScope";
-import ScopeQueryCard from "../scopes/components/ScopeQueryCard";
 import {
   buildScopeHref,
-  normalizeScopeDraft,
   readScopeQueryDraft,
-  type ScopeQueryDraft,
 } from "../scopes/components/scopeQuery";
 import {
   WORKFLOW_RUNTIME_GUARDRAIL,
@@ -60,12 +52,8 @@ const compactTeamRosterThreshold = 6;
 type MemberRosterPreview = {
   readonly attention: WorkflowOperationalAttention;
   readonly attentionDetail: string;
-  readonly detailHref: string;
-  readonly entryLabel: string;
   readonly latestRun: ScopeServiceRunSummary | null;
   readonly memberId: string;
-  readonly moreActions: Array<{ key: string; label: string; onClick: () => void }>;
-  readonly primaryActionLabel: string;
   readonly serviceId: string;
   readonly serviceLabel: string;
   readonly title: string;
@@ -78,8 +66,6 @@ type TeamRosterPreview = {
   readonly detailHref: string;
   readonly latestRun: ScopeServiceRunSummary | null;
   readonly memberPreviewLabel: string;
-  readonly moreActions: Array<{ key: string; label: string; onClick: () => void }>;
-  readonly primaryActionLabel: string;
   readonly serviceLabel: string;
   readonly team: StudioTeamSummary;
   readonly teamId: string;
@@ -483,16 +469,10 @@ function buildMemberRosterPreview(input: {
   const runs =
     memberId && !runtimeUnavailable ? input.runsByMemberId[memberId] ?? [] : [];
   const latestRun = runs.slice().sort(compareRuns)[0] ?? null;
-  const entryLabel = pickMeaningfulLabel(input.member.memberId, input.member.displayName) || "未命名成员";
   const serviceLabel =
     pickMeaningfulLabel(trimOptional(matchedService?.displayName), serviceId) ||
     (trimOptional(input.member.lastBoundRevisionId) ? "已绑定待确认" : "未绑定");
   const title = pickMeaningfulLabel(input.member.displayName, input.member.memberId) || "未命名成员";
-  const studioHref = buildStudioWorkflowWorkspaceRoute({
-    scopeId: input.scopeId,
-    teamId: input.teamId || undefined,
-    memberId,
-  });
 
   let attention: WorkflowOperationalAttention = "draft";
   let attentionDetail = `当前成员还处于 ${formatStudioMemberLifecycleStage(input.member.lifecycleStage)} 阶段。`;
@@ -522,49 +502,11 @@ function buildMemberRosterPreview(input: {
     attentionDetail = "当前成员已经准备好绑定，但还没有稳定的成员调用入口。";
   }
 
-  const detailHref = serviceId
-    ? buildTeamDetailHref({
-        memberId,
-        runId: latestRun?.runId || undefined,
-        scopeId: input.scopeId,
-        serviceId: serviceId || undefined,
-      })
-    : studioHref;
-  const runtimeHref =
-    serviceId.length > 0
-      ? buildRuntimeRunsHref({
-          actorId:
-            latestRun?.actorId ||
-            matchedService?.primaryActorId ||
-            undefined,
-          runId: latestRun?.runId || undefined,
-          scopeId: input.scopeId,
-          serviceId,
-        })
-      : "";
-  const moreActions: Array<{ key: string; label: string; onClick: () => void }> = [];
-  if (runtimeHref) {
-    moreActions.push({
-      key: "runtime",
-      label: "查看成员运行",
-      onClick: () => history.push(runtimeHref),
-    });
-  }
-  moreActions.push({
-    key: "builder",
-    label: "进入 Studio",
-    onClick: () => history.push(studioHref),
-  });
-
   return {
     attention,
     attentionDetail,
-    detailHref,
-    entryLabel,
     latestRun,
     memberId,
-    moreActions,
-    primaryActionLabel: serviceId ? "查看团队" : "打开 Studio",
     serviceId,
     serviceLabel,
     title,
@@ -646,43 +588,6 @@ function buildTeamRosterPreview(input: {
     serviceId: primaryMemberPreview?.serviceId || undefined,
     teamId: input.team.teamId,
   });
-  const studioHref = buildStudioWorkflowWorkspaceRoute({
-    scopeId: input.scopeId,
-    teamId: input.team.teamId,
-    memberId: primaryMemberPreview?.memberId || undefined,
-  });
-  const runtimeHref =
-    primaryMemberPreview?.serviceId && primaryMemberPreview.serviceId.length > 0
-      ? buildRuntimeRunsHref({
-          actorId: latestRun?.actorId || undefined,
-          runId: latestRun?.runId || undefined,
-          scopeId: input.scopeId,
-          serviceId: primaryMemberPreview.serviceId,
-        })
-      : "";
-  const moreActions: Array<{ key: string; label: string; onClick: () => void }> = [];
-  const createMemberHref = buildStudioWorkflowWorkspaceRoute({
-    scopeId: input.scopeId,
-    teamId: input.team.teamId,
-    intent: "create-member",
-  });
-  if (runtimeHref) {
-    moreActions.push({
-      key: "runtime",
-      label: "查看默认成员运行",
-      onClick: () => history.push(runtimeHref),
-    });
-  }
-  moreActions.push({
-    key: "add-member",
-    label: "新增成员",
-    onClick: () => history.push(createMemberHref),
-  });
-  moreActions.push({
-    key: "builder",
-    label: "进入 Studio",
-    onClick: () => history.push(studioHref),
-  });
 
   let attention: WorkflowOperationalAttention =
     mostImportantMemberPreview?.attention ?? "draft";
@@ -700,8 +605,6 @@ function buildTeamRosterPreview(input: {
     detailHref,
     latestRun,
     memberPreviewLabel,
-    moreActions,
-    primaryActionLabel: "查看团队",
     serviceLabel:
       uniqueServiceLabels.length > 0
         ? uniqueServiceLabels.slice(0, 2).join(" / ")
@@ -716,37 +619,6 @@ function buildTeamRosterPreview(input: {
       null,
   };
 }
-
-const MoreActionsButton: React.FC<{
-  readonly actions: Array<{ key: string; label: string; onClick: () => void }>;
-}> = ({ actions }) => (
-  <Dropdown
-    menu={{
-      items: actions.map((action) => ({
-        key: action.key,
-        label: action.label,
-      })),
-      onClick: ({ key, domEvent }) => {
-        domEvent.stopPropagation();
-        const matchedAction = actions.find((action) => action.key === key);
-        if (!matchedAction) {
-          return;
-        }
-
-        matchedAction.onClick();
-      },
-    }}
-    trigger={["click"]}
-  >
-    <Button
-      icon={<MoreOutlined />}
-      onClick={(event) => event.stopPropagation()}
-      size="large"
-    >
-      更多
-    </Button>
-  </Dropdown>
-);
 
 const TeamRosterCard: React.FC<{
   readonly preview: TeamRosterPreview;
@@ -874,9 +746,8 @@ const TeamRosterCard: React.FC<{
           size="large"
           type="primary"
         >
-          {preview.primaryActionLabel}
+          查看团队
         </Button>
-        <MoreActionsButton actions={preview.moreActions} />
       </Space>
     </div>
   );
@@ -975,9 +846,8 @@ const TeamRosterRow: React.FC<{
           onClick={stopEvent(() => history.push(preview.detailHref))}
           type="primary"
         >
-          {preview.primaryActionLabel}
+          查看团队
         </Button>
-        <MoreActionsButton actions={preview.moreActions} />
       </Space>
     </div>
   );
@@ -985,16 +855,12 @@ const TeamRosterRow: React.FC<{
 
 const TeamsHomePage: React.FC = () => {
   const { token } = theme.useToken();
-  const [draft, setDraft] = React.useState<ScopeQueryDraft>(() =>
-    readScopeQueryDraft(),
-  );
-  const [activeDraft, setActiveDraft] = React.useState<ScopeQueryDraft>(() =>
-    readScopeQueryDraft(),
+  const [routeScopeId, setRouteScopeId] = React.useState(
+    () => readScopeQueryDraft().scopeId.trim(),
   );
   const [manualRosterView, setManualRosterView] = React.useState<
     "cards" | "list" | null
   >(null);
-  const [showScopePicker, setShowScopePicker] = React.useState(false);
 
   const authSessionQuery = useQuery({
     queryKey: ["scopes", "auth-session"],
@@ -1032,23 +898,27 @@ const TeamsHomePage: React.FC = () => {
       return;
     }
 
-    setDraft((currentDraft) =>
-      currentDraft.scopeId.trim()
-        ? currentDraft
-        : { scopeId: resolvedScope.scopeId },
-    );
-    setActiveDraft((currentDraft) =>
-      currentDraft.scopeId.trim()
-        ? currentDraft
-        : { scopeId: resolvedScope.scopeId },
+    setRouteScopeId((currentScopeId) =>
+      currentScopeId.trim() ? currentScopeId : resolvedScope.scopeId,
     );
   }, [resolvedScope?.scopeId]);
 
-  const scopeId = activeDraft.scopeId.trim();
+  const scopeId = routeScopeId || resolvedScope?.scopeId?.trim() || "";
 
   React.useEffect(() => {
-    history.replace(buildScopeHref("/teams", activeDraft));
-  }, [activeDraft]);
+    if (!scopeId) {
+      return;
+    }
+
+    const nextPath = buildScopeHref("/teams", { scopeId });
+    const currentPath =
+      typeof window === "undefined"
+        ? ""
+        : `${window.location.pathname}${window.location.search}`;
+    if (nextPath !== currentPath) {
+      history.replace(nextPath);
+    }
+  }, [scopeId]);
 
   const membersQuery = useQuery({
     enabled: scopeId.length > 0,
@@ -1096,10 +966,6 @@ const TeamsHomePage: React.FC = () => {
   );
   const membersByTeamId = React.useMemo(
     () => groupMembersByTeamId(studioMembers),
-    [studioMembers],
-  );
-  const unassignedMembers = React.useMemo(
-    () => studioMembers.filter((member) => !trimOptional(member.teamId)),
     [studioMembers],
   );
   const runtimeTrackableMembers = React.useMemo(
@@ -1178,15 +1044,6 @@ const TeamsHomePage: React.FC = () => {
       studioTeams,
     ],
   );
-  const membersPendingBindingCount = React.useMemo(
-    () =>
-      studioMembers.filter(
-        (member) =>
-          !trimOptional(member.publishedServiceId) ||
-          !trimOptional(member.lastBoundRevisionId),
-      ).length,
-    [studioMembers],
-  );
   const visibleTeamCount = teamPreviews.length;
   const resolvedRosterView =
     manualRosterView ??
@@ -1200,18 +1057,11 @@ const TeamsHomePage: React.FC = () => {
   ).length;
   const emptyRosterHint =
     scopeId.length > 0
-      ? "当前工作空间还没有创建任何 Team。创建 Team 后，这里会按后端 roster 展示真实团队。"
-      : "先选择一个工作空间，首页才能渲染出这组 Team roster。";
+      ? "当前账号还没有创建任何 Team。创建后，这里会展示你的 AI 团队列表。"
+      : "当前登录状态还没有解析出可用的团队范围，请刷新后重试。";
   const partialIssues = [
-    servicesQuery.isError ? "服务目录暂时不可见。" : null,
     membersQuery.isError ? "当前工作空间的成员清单暂时不可见。" : null,
     teamsQuery.isError ? "当前工作空间的 Team roster 暂时不可见。" : null,
-    ...memberRunQueries.map((query) =>
-      query.isError ? "部分成员运行信号暂时不可见。" : null,
-    ),
-    guardrailedMemberIds.size > 0
-      ? `当前首页只采样前 ${WORKFLOW_RUNTIME_GUARDRAIL} 个已绑定成员的运行信号。`
-      : null,
   ].filter((issue): issue is string => Boolean(issue));
 
   const titleNode = (
@@ -1234,7 +1084,6 @@ const TeamsHomePage: React.FC = () => {
       </Typography.Title>
     </div>
   );
-  const canCancelScopePicker = showScopePicker && scopeId.length > 0;
 
   return (
     <AevatarPageShell
@@ -1262,108 +1111,10 @@ const TeamsHomePage: React.FC = () => {
           gap: 20,
         }}
       >
-        {(showScopePicker || !scopeId) && (
-          <AevatarPanel
-            extra={
-              canCancelScopePicker ? (
-                <Button
-                  onClick={() => {
-                    setDraft(normalizeScopeDraft(activeDraft));
-                    setShowScopePicker(false);
-                  }}
-                >
-                  取消
-                </Button>
-              ) : null
-            }
-            title="工作空间上下文"
-            titleHelp="这一步只负责锁定你当前要查看的工作空间。"
-          >
-            <ScopeQueryCard
-              activeScopeId={scopeId}
-              draft={draft}
-              loadLabel="导入团队视图"
-              onChange={setDraft}
-              onLoad={() => {
-                const nextDraft = normalizeScopeDraft(draft);
-                setDraft(nextDraft);
-                setActiveDraft(nextDraft);
-                setShowScopePicker(false);
-              }}
-              onReset={() => {
-                const nextDraft = normalizeScopeDraft({
-                  scopeId: resolvedScope?.scopeId ?? "",
-                });
-                setDraft(nextDraft);
-                setActiveDraft(nextDraft);
-              }}
-              onUseResolvedScope={() => {
-                if (!resolvedScope?.scopeId) {
-                  return;
-                }
-
-                const nextDraft = normalizeScopeDraft({
-                  scopeId: resolvedScope.scopeId,
-                });
-                setDraft(nextDraft);
-                setActiveDraft(nextDraft);
-                setShowScopePicker(false);
-              }}
-              resetDisabled={
-                normalizeScopeDraft(draft).scopeId ===
-                  (resolvedScope?.scopeId?.trim() ?? "") &&
-                scopeId === (resolvedScope?.scopeId?.trim() ?? "")
-              }
-              resolvedScopeId={resolvedScope?.scopeId}
-              resolvedScopeSource={resolvedScope?.scopeSource}
-            />
-          </AevatarPanel>
-        )}
-
-        {scopeId && !showScopePicker ? (
-          <div
-            style={{
-              alignItems: "flex-start",
-              background: token.colorBgContainer,
-              border: `1px solid ${token.colorBorderSecondary}`,
-              borderRadius: 22,
-              boxShadow: token.boxShadowTertiary,
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 16,
-              justifyContent: "space-between",
-              padding: 18,
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: 6,
-                minWidth: 0,
-              }}
-            >
-              <Typography.Text type="secondary">当前工作空间</Typography.Text>
-              <Typography.Text
-                strong
-                style={{
-                  fontSize: 16,
-                  overflowWrap: "anywhere",
-                }}
-              >
-                {scopeId}
-              </Typography.Text>
-              <Typography.Text type="secondary">
-                首页按这个工作空间读取后端 Team roster；成员绑定与运行状态只作为 Team 卡片的辅助信号。
-              </Typography.Text>
-            </div>
-          </div>
-        ) : null}
-
         {!scopeId ? (
           <Alert
             showIcon
-            title="先选择一个工作空间，首页才能渲染出这组 Team roster。"
+            title="当前登录状态还没有解析出可用的团队范围，请刷新后重试。"
             type="info"
           />
         ) : null}
@@ -1381,13 +1132,13 @@ const TeamsHomePage: React.FC = () => {
           <Alert
             description={
               resolvedScope?.scopeId
-                ? `${authSessionIssue} 当前已回退到本地会话里的工作空间 ID ${resolvedScope.scopeId}。`
+                ? `${authSessionIssue} 已使用本地登录信息继续加载团队。`
                 : authSessionIssue
             }
             showIcon
             title={
               resolvedScope?.scopeId
-                ? "当前登录态校验失败，已回退到本地工作空间"
+                ? "当前登录态校验失败，已使用本地登录信息"
                 : "当前登录态校验失败"
             }
             type="warning"
@@ -1403,65 +1154,17 @@ const TeamsHomePage: React.FC = () => {
                 gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
               }}
             >
-              <SummaryStatCard accent label="真实 Team" value={visibleTeamCount} />
+              <SummaryStatCard accent label="AI Team" value={visibleTeamCount} />
               <SummaryStatCard label="运行正常" value={healthyTeamCount} />
               <SummaryStatCard label="需要处理" value={attentionTeamCount} />
             </div>
 
-            {unassignedMembers.length > 0 ? (
-              <Alert
-                action={
-                  <Button
-                    onClick={() =>
-                      history.push(
-                        buildStudioWorkflowWorkspaceRoute({
-                          scopeId,
-                        }),
-                      )
-                    }
-                    size="small"
-                    type="primary"
-                  >
-                    打开 Studio
-                  </Button>
-                }
-                description={`还有 ${unassignedMembers.length} 个成员没有归属 Team。它们不会被当成 Team 展示，只作为待整理成员保留。`}
-                showIcon
-                title="存在未归队成员"
-                type="info"
-              />
-            ) : null}
-
-            {membersPendingBindingCount > 0 ? (
-              <Alert
-                action={
-                  <Button
-                    onClick={() =>
-                      history.push(
-                        buildStudioWorkflowWorkspaceRoute({
-                          scopeId,
-                        }),
-                      )
-                    }
-                    size="small"
-                    type="primary"
-                  >
-                    打开 Studio
-                  </Button>
-                }
-                description={`其中 ${membersPendingBindingCount} 个成员还没有完成独立绑定，或还没有形成稳定的成员调用入口。`}
-                showIcon
-                title="还有成员待整理"
-                type="info"
-              />
-            ) : null}
-
             {teamsQuery.isLoading ? (
-              <AevatarInspectorEmpty description="正在读取当前工作空间的 Team roster。" />
+              <AevatarInspectorEmpty description="正在读取团队列表。" />
             ) : teamsQuery.isError ? (
               <Alert
                 showIcon
-                title="当前工作空间的 Team roster 暂时无法加载。"
+                title="团队列表暂时无法加载。"
                 type="error"
               />
             ) : teamPreviews.length > 0 ? (
@@ -1488,10 +1191,10 @@ const TeamsHomePage: React.FC = () => {
                         margin: 0,
                       }}
                     >
-                      Team roster
+                      团队列表
                     </Typography.Title>
                     <Typography.Text type="secondary">
-                      当前工作空间下已经登记的真实 Team；成员绑定和运行状态只作为辅助信号。
+                      当前账号下已经创建的 AI Team；成员和运行状态用于帮助你快速判断是否需要处理。
                     </Typography.Text>
                   </div>
                   {visibleTeamCount > 1 ? (

@@ -565,7 +565,6 @@ public static class ScopeWorkflowEndpoints
             WorkflowChatRunStartError.InvalidWorkflowYaml => (StatusCodes.Status400BadRequest, "INVALID_WORKFLOW_YAML", "Workflow YAML is invalid."),
             WorkflowChatRunStartError.WorkflowNameMismatch => (StatusCodes.Status400BadRequest, "WORKFLOW_NAME_MISMATCH", "Workflow name does not match workflow YAML."),
             WorkflowChatRunStartError.PromptRequired => (StatusCodes.Status400BadRequest, "PROMPT_REQUIRED", "Prompt is required."),
-            WorkflowChatRunStartError.ConflictingScopeId => (StatusCodes.Status400BadRequest, "CONFLICTING_SCOPE_ID", "Conflicting scope_id values were provided."),
             _ => (StatusCodes.Status400BadRequest, "RUN_START_FAILED", "Failed to resolve actor."),
         };
     }

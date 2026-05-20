@@ -11,6 +11,10 @@ internal static class WorkflowRoleAgentEnvelopeFactory
     {
         var initialize = new InitializeRoleAgentEvent
         {
+            // Refactor (iter15/cluster-028):
+            //   Old pattern: role actors received display/config data and downstream code recovered RoleId from actor id text.
+            //   New principle: workflow initialization sends RoleDefinition.Id as a typed RoleId field.
+            RoleId = role.Id ?? string.Empty,
             RoleName = role.Name ?? string.Empty,
             ProviderName = string.IsNullOrWhiteSpace(role.Provider) ? string.Empty : role.Provider,
             Model = string.IsNullOrWhiteSpace(role.Model) ? string.Empty : role.Model,

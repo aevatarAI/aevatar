@@ -27,6 +27,7 @@ public sealed class WorkflowArtifactCoverageTests
                     EventId = "evt-role-reply",
                     EventData = Any.Pack(new RoleChatSessionCompletedEvent
                     {
+                        RoleId = "typed-role",
                         SessionId = "session-1",
                         Content = "reply",
                         ReasoningContent = "reasoning",
@@ -56,7 +57,7 @@ public sealed class WorkflowArtifactCoverageTests
         var fact = artifactFact.Should().BeOfType<WorkflowRoleReplyRecordedEvent>().Subject;
         fact.RunId.Should().Be("run-1");
         fact.RoleActorId.Should().Be("workflow-run:role_a");
-        fact.RoleId.Should().Be("role_a");
+        fact.RoleId.Should().Be("typed-role");
         fact.SessionId.Should().Be("session-1");
         fact.Content.Should().Be("reply");
         fact.ReasoningContent.Should().Be("reasoning");
@@ -224,6 +225,7 @@ public sealed class WorkflowArtifactCoverageTests
         var withTemperaturePayload = withTemperature.Payload!.Unpack<InitializeRoleAgentEvent>();
         var withoutTemperaturePayload = withoutTemperature.Payload!.Unpack<InitializeRoleAgentEvent>();
 
+        withTemperaturePayload.RoleId.Should().Be("planner");
         withTemperaturePayload.RoleName.Should().Be("Planner");
         withTemperaturePayload.ProviderName.Should().Be("openai");
         withTemperaturePayload.Model.Should().Be("gpt-5.4");
@@ -233,6 +235,7 @@ public sealed class WorkflowArtifactCoverageTests
         withTemperature.Route!.PublisherActorId.Should().Be("workflow-run");
         withTemperature.Propagation!.CorrelationId.Should().NotBeNullOrWhiteSpace();
 
+        withoutTemperaturePayload.RoleId.Should().Be("reviewer");
         withoutTemperaturePayload.RoleName.Should().Be("Reviewer");
         withoutTemperaturePayload.HasTemperature.Should().BeFalse();
     }
