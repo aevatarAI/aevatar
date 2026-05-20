@@ -18,8 +18,22 @@ hits="$(
     || true
 )"
 
-if [[ -n "${hits}" ]]; then
-  echo "${hits}"
+endpoint_lifecycle_hits="$(
+  rg -n "EnsureAndAttachLeaseAsync|EnsureChatProjectionAsync|EnsureSubscriptionProjectionAsync|INyxIdChatSessionProjectionPort" \
+    agents/Aevatar.GAgents.StreamingProxy/StreamingProxyEndpoints.cs \
+    agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.Streaming.cs \
+    agents/Aevatar.GAgents.NyxidChat/NyxIdChatStreamingRunner.cs \
+    || true
+)"
+
+if [[ -n "${hits}${endpoint_lifecycle_hits}" ]]; then
+  if [[ -n "${hits}" ]]; then
+    echo "${hits}"
+  fi
+  if [[ -n "${endpoint_lifecycle_hits}" ]]; then
+    echo "${endpoint_lifecycle_hits}"
+    echo "Streaming endpoints and runner must use interaction services or attach-only observation ports, not projection lifecycle APIs."
+  fi
   echo "Query/read paths must not trigger projection priming, activation, or lifecycle control."
   exit 1
 fi

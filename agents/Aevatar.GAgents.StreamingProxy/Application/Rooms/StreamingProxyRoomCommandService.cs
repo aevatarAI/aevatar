@@ -12,17 +12,23 @@ public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomComman
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _actorDispatchPort;
     private readonly IGAgentActorRegistryCommandPort _registryCommandPort;
+    private readonly IStreamingProxyRoomSessionProjectionPort _roomSessionProjectionPort;
     private readonly ILogger<StreamingProxyRoomCommandService> _logger;
 
     public StreamingProxyRoomCommandService(
         IActorRuntime actorRuntime,
         IActorDispatchPort actorDispatchPort,
         IGAgentActorRegistryCommandPort registryCommandPort,
+        IStreamingProxyRoomSessionProjectionPort roomSessionProjectionPort,
         ILogger<StreamingProxyRoomCommandService> logger)
     {
+        // Refactor (iter20/cluster-002):
+        //   Old pattern: 请求路径临时启动 projection session 等待完成
+        //   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _registryCommandPort = registryCommandPort ?? throw new ArgumentNullException(nameof(registryCommandPort));
+        _roomSessionProjectionPort = roomSessionProjectionPort ?? throw new ArgumentNullException(nameof(roomSessionProjectionPort));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -44,6 +50,19 @@ public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomComman
 
             var envelope = BuildRoomInitializedEnvelope(actor.Id, roomName);
             await DispatchRoomEnvelopeAsync(actor.Id, envelope, cancellationToken);
+
+            var subscriptionLease = await _roomSessionProjectionPort.EnsureSubscriptionProjectionAsync(
+                actor.Id,
+                StreamingProxyRoomSubscriptionObservationPort.RoomSubscriptionSessionId(actor.Id),
+                cancellationToken);
+            if (subscriptionLease == null)
+            {
+                await TryRollbackRoomCreationAsync(scopeId, roomId, CancellationToken.None);
+                return new StreamingProxyRoomCreateResult(
+                    StreamingProxyRoomCreateStatus.AdmissionUnavailable,
+                    roomId,
+                    roomName);
+            }
 
             var receipt = await _registryCommandPort.RegisterActorAsync(
                 new GAgentActorRegistration(scopeId, StreamingProxyDefaults.GAgentTypeName, roomId),

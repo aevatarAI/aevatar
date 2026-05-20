@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgents.StreamingProxy;
 using Aevatar.GAgents.StreamingProxy.Application.Rooms;
@@ -17,10 +18,12 @@ public sealed class StreamingProxyRoomCommandServiceTests
         var runtime = new RecordingActorRuntime(operations, actor);
         var dispatchPort = new RecordingActorDispatchPort(operations, runtime);
         var registry = new RecordingGAgentActorRegistryCommandPort(operations);
+        var projectionPort = new RecordingRoomSessionProjectionPort(operations);
         var service = new StreamingProxyRoomCommandService(
             runtime,
             dispatchPort,
             registry,
+            projectionPort,
             NullLogger<StreamingProxyRoomCommandService>.Instance);
 
         var result = await service.CreateRoomAsync(
@@ -38,6 +41,9 @@ public sealed class StreamingProxyRoomCommandServiceTests
         runtime.LastCreatedActor.Should().NotBeNull();
         dispatchPort.Dispatches.Should().ContainSingle();
         dispatchPort.Dispatches[0].ActorId.Should().Be(result.RoomId);
+        projectionPort.EnsureSubscriptionCalls.Should().ContainSingle(x =>
+            x.ActorId == result.RoomId &&
+            x.SubscriptionId == $"room:{result.RoomId}:subscription");
         runtime.LastCreatedActor!.ReceivedEnvelopes.Should().ContainSingle();
         var envelope = runtime.LastCreatedActor.ReceivedEnvelopes[0];
         envelope.Route.Direct.TargetActorId.Should().Be(result.RoomId);
@@ -51,6 +57,7 @@ public sealed class StreamingProxyRoomCommandServiceTests
             $"runtime:create:{result.RoomId}",
             $"dispatch:{result.RoomId}",
             $"actor:init:{result.RoomId}",
+            $"projection:ensure-subscription:{result.RoomId}:room:{result.RoomId}:subscription",
             $"registry:register:{result.RoomId}");
     }
 
@@ -61,10 +68,12 @@ public sealed class StreamingProxyRoomCommandServiceTests
         var runtime = new RecordingActorRuntime(operations, new RecordingActor("room-created", operations));
         var dispatchPort = new RecordingActorDispatchPort(operations, runtime);
         var registry = new RecordingGAgentActorRegistryCommandPort(operations);
+        var projectionPort = new RecordingRoomSessionProjectionPort(operations);
         var service = new StreamingProxyRoomCommandService(
             runtime,
             dispatchPort,
             registry,
+            projectionPort,
             NullLogger<StreamingProxyRoomCommandService>.Instance);
 
         var act = async () => await service.CreateRoomAsync(
@@ -77,6 +86,7 @@ public sealed class StreamingProxyRoomCommandServiceTests
         registry.RegisteredActors.Should().BeEmpty();
         registry.UnregisteredActors.Should().BeEmpty();
         runtime.DestroyedActorIds.Should().BeEmpty();
+        projectionPort.EnsureSubscriptionCalls.Should().BeEmpty();
     }
 
     [Fact]
@@ -86,10 +96,12 @@ public sealed class StreamingProxyRoomCommandServiceTests
         var runtime = new RecordingActorRuntime(operations, new RecordingActor("room-created", operations));
         var dispatchPort = new RecordingActorDispatchPort(operations, runtime);
         var registry = new RecordingGAgentActorRegistryCommandPort(operations);
+        var projectionPort = new RecordingRoomSessionProjectionPort(operations);
         var service = new StreamingProxyRoomCommandService(
             runtime,
             dispatchPort,
             registry,
+            projectionPort,
             NullLogger<StreamingProxyRoomCommandService>.Instance);
 
         var result = await service.CreateRoomAsync(
@@ -104,6 +116,9 @@ public sealed class StreamingProxyRoomCommandServiceTests
             .RoomName
             .Should()
             .Be("Group Chat");
+        projectionPort.EnsureSubscriptionCalls.Should().ContainSingle(x =>
+            x.ActorId == result.RoomId &&
+            x.SubscriptionId == $"room:{result.RoomId}:subscription");
     }
 
     [Fact]
@@ -116,10 +131,12 @@ public sealed class StreamingProxyRoomCommandServiceTests
         {
             RegisterStage = GAgentActorRegistryCommandStage.AcceptedForDispatch,
         };
+        var projectionPort = new RecordingRoomSessionProjectionPort(operations);
         var service = new StreamingProxyRoomCommandService(
             runtime,
             dispatchPort,
             registry,
+            projectionPort,
             NullLogger<StreamingProxyRoomCommandService>.Instance);
 
         var result = await service.CreateRoomAsync(
@@ -133,7 +150,46 @@ public sealed class StreamingProxyRoomCommandServiceTests
             $"runtime:create:{result.RoomId}",
             $"dispatch:{result.RoomId}",
             $"actor:init:{result.RoomId}",
+            $"projection:ensure-subscription:{result.RoomId}:room:{result.RoomId}:subscription",
             $"registry:register:{result.RoomId}",
+            $"registry:unregister:{result.RoomId}",
+            $"runtime:destroy:{result.RoomId}");
+    }
+
+    [Fact]
+    public async Task CreateRoomAsync_ShouldRollbackCreatedRoom_WhenSubscriptionProjectionIsUnavailable()
+    {
+        var operations = new List<string>();
+        var runtime = new RecordingActorRuntime(operations, new RecordingActor("room-created", operations));
+        var dispatchPort = new RecordingActorDispatchPort(operations, runtime);
+        var registry = new RecordingGAgentActorRegistryCommandPort(operations);
+        var projectionPort = new RecordingRoomSessionProjectionPort(operations)
+        {
+            EnsureSubscriptionResult = null,
+        };
+        var service = new StreamingProxyRoomCommandService(
+            runtime,
+            dispatchPort,
+            registry,
+            projectionPort,
+            NullLogger<StreamingProxyRoomCommandService>.Instance);
+
+        var result = await service.CreateRoomAsync(
+            new StreamingProxyRoomCreateCommand("scope-a", "Incident Room"),
+            CancellationToken.None);
+
+        result.Status.Should().Be(StreamingProxyRoomCreateStatus.AdmissionUnavailable);
+        projectionPort.EnsureSubscriptionCalls.Should().ContainSingle(x =>
+            x.ActorId == result.RoomId &&
+            x.SubscriptionId == $"room:{result.RoomId}:subscription");
+        registry.RegisteredActors.Should().BeEmpty();
+        registry.UnregisteredActors.Should().ContainSingle();
+        runtime.DestroyedActorIds.Should().ContainSingle(result.RoomId);
+        operations.Should().ContainInOrder(
+            $"runtime:create:{result.RoomId}",
+            $"dispatch:{result.RoomId}",
+            $"actor:init:{result.RoomId}",
+            $"projection:ensure-subscription:{result.RoomId}:room:{result.RoomId}:subscription",
             $"registry:unregister:{result.RoomId}",
             $"runtime:destroy:{result.RoomId}");
     }
@@ -149,10 +205,12 @@ public sealed class StreamingProxyRoomCommandServiceTests
             ThrowOnRegister = new InvalidOperationException("registry unavailable"),
             ThrowOnUnregister = new InvalidOperationException("registry unregister unavailable"),
         };
+        var projectionPort = new RecordingRoomSessionProjectionPort(operations);
         var service = new StreamingProxyRoomCommandService(
             runtime,
             dispatchPort,
             registry,
+            projectionPort,
             NullLogger<StreamingProxyRoomCommandService>.Instance);
 
         var result = await service.CreateRoomAsync(
@@ -166,6 +224,7 @@ public sealed class StreamingProxyRoomCommandServiceTests
             $"runtime:create:{result.RoomId}",
             $"dispatch:{result.RoomId}",
             $"actor:init:{result.RoomId}",
+            $"projection:ensure-subscription:{result.RoomId}:room:{result.RoomId}:subscription",
             $"registry:register:{result.RoomId}",
             $"registry:unregister:{result.RoomId}");
     }
@@ -180,10 +239,12 @@ public sealed class StreamingProxyRoomCommandServiceTests
         {
             ThrowOnRegister = new OperationCanceledException("client disconnected"),
         };
+        var projectionPort = new RecordingRoomSessionProjectionPort(operations);
         var service = new StreamingProxyRoomCommandService(
             runtime,
             dispatchPort,
             registry,
+            projectionPort,
             NullLogger<StreamingProxyRoomCommandService>.Instance);
 
         var act = async () => await service.CreateRoomAsync(
@@ -198,6 +259,71 @@ public sealed class StreamingProxyRoomCommandServiceTests
         unregisterIndex.Should().BeGreaterThanOrEqualTo(0);
         destroyIndex.Should().BeGreaterThan(unregisterIndex);
     }
+
+    private sealed class RecordingRoomSessionProjectionPort(List<string> operations)
+        : IStreamingProxyRoomSessionProjectionPort
+    {
+        public List<(string ActorId, string SubscriptionId)> EnsureSubscriptionCalls { get; } = [];
+        public IStreamingProxyRoomSessionProjectionLease? EnsureSubscriptionResult { get; init; } =
+            new RecordingRoomSessionProjectionLease("pending", "pending");
+        public bool ProjectionEnabled => true;
+
+        public Task<IStreamingProxyRoomSessionProjectionLease?> EnsureChatProjectionAsync(
+            string actorId,
+            string sessionId,
+            CancellationToken ct = default)
+        {
+            _ = actorId;
+            _ = sessionId;
+            ct.ThrowIfCancellationRequested();
+            throw new NotSupportedException("Room creation should not ensure chat projections.");
+        }
+
+        public Task<IStreamingProxyRoomSessionProjectionLease?> EnsureSubscriptionProjectionAsync(
+            string actorId,
+            string subscriptionId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            operations.Add($"projection:ensure-subscription:{actorId}:{subscriptionId}");
+            EnsureSubscriptionCalls.Add((actorId, subscriptionId));
+            return Task.FromResult<IStreamingProxyRoomSessionProjectionLease?>(EnsureSubscriptionResult is null
+                ? null
+                : new RecordingRoomSessionProjectionLease(actorId, subscriptionId));
+        }
+
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
+            IStreamingProxyRoomSessionProjectionLease lease,
+            IEventSink<StreamingProxyRoomSessionEnvelope> sink,
+            CancellationToken ct = default)
+        {
+            _ = lease;
+            _ = sink;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IAsyncDisposable?>(null);
+        }
+
+        public Task DetachLiveSinkAsync(
+            IAsyncDisposable? liveSinkLease,
+            CancellationToken ct = default)
+        {
+            _ = liveSinkLease;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task ReleaseActorProjectionAsync(
+            IStreamingProxyRoomSessionProjectionLease lease,
+            CancellationToken ct = default)
+        {
+            _ = lease;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed record RecordingRoomSessionProjectionLease(string ActorId, string SessionId)
+        : IStreamingProxyRoomSessionProjectionLease;
 
     private sealed class RecordingGAgentActorRegistryCommandPort(List<string> operations)
         : IGAgentActorRegistryCommandPort
