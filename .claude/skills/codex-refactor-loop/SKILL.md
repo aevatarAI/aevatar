@@ -1388,50 +1388,73 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 - 不要发废 banner(同 phase 连续两次没变化 → 不要重发)。
 - escalation banner 必须**显式**说"✅ 需要人介入"并列出 maintainer 需要做的具体决策(不是"看一下"这种 vague 描述)。
 
-### Escalation banner — 必须含 ASCII 图 + 详细决策说明(强制,per Auric 2026-05-20 "修改一下需要人介入的时候画一下 ascii 图在 github 上, 详细说明一下")
+### Escalation banner — 必须含问题 ASCII 图 + 详细问题描述(强制,per Auric 2026-05-20 "修改一下需要人介入的时候画一下 ascii 图在 github 上, 详细说明一下" + "改问题描述清楚,而不是把决策路径描述清楚")
 
-普通 status banner 是 *index*(简短);**escalation banner 是 maintainer 决策依据**,必须**详尽**含:
+普通 status banner 是 *index*(简短);**escalation banner 是 maintainer 看懂问题的依据**,必须**问题导向**:
 
-1. **ASCII 路径图**:历史 round 走向 → reflector → 当前停在哪
-2. **决策选项表**:每个选项的具体 plan + 影响范围 + tradeoff
-3. **背景上下文**:为什么 reflector / fresh round 都无法解
-4. **maintainer 行动入口**:reply with `<framing>` / add `auto-loop-resume` label / close as wontfix
+1. **问题 ASCII 图**:当前架构里**问题模式**长什么样(数据流 / 调用链 / 状态归属违反点),不是 reflector 路径
+2. **问题描述**:具体 `file:line` + 当前行为 + 违反的 CLAUDE/AGENTS 条款 + 影响范围
+3. **决策选项**:每个选项的 Plan / 影响 / Tradeoff(maintainer 看完问题描述自己判断哪个更合理)
+4. **maintainer 行动入口**:choose A/B/C / narrowing constraint / close wontfix
+5. **历史轮次**降为表格内**一行**(`r1+reflector+r2 仍 escalate` 一句话),不画路径图——不是 maintainer 关心的
 
 #### 模板(必须严格遵循)
 
 ```markdown
-## 🆘 状态卡片 — 需 maintainer 决策(reflector + fresh round 均无解)
+## 🆘 状态卡片 — 需 maintainer 决策
 
 | 维度 | 值 |
 |---|---|
 | Issue | #<N> <title> |
 | Cluster | <cluster-id> |
-| 历史轮次 | r1 + reflector r1 + r2 + reflector r2(全 escalate) |
-| 当前停在 | reflector r2 META_RESOLVED:escalate-human:<reason> |
-| **需 maintainer 决策** | **<一句话总结决策点>** |
+| 历史 | r1+reflector r1+r2+reflector r2 全 escalate(详情见上面评论) |
+| **核心问题** | **<一句话,具体到 file/类/方法,说清楚现在系统在哪里做什么导致违反什么>** |
+| **需要决策** | **<一句话,maintainer 该回答什么问题>** |
 
-### 决策路径(ASCII)
+### 问题图(ASCII)
 
 \`\`\`
-[r1 solver] ── [r1 judge: escalate:<category>]
-                       │
-                       ▼
-              [reflector r1] ── META_RESOLVED:re-design
-                       │
-                       ▼
-              [r2 solver(新 framing)] ── [r2 judge: 仍 escalate]
-                       │
-                       ▼
-              [reflector r2] ── META_RESOLVED:escalate-human  ◀── 当前
-                       │
-                       ▼
-              [maintainer 决策] ── ?
+当前架构(违反点):
+
+  ┌──────────────────────┐         ┌─────────────────────┐
+  │  <调用方 file:line>  │ ──────▶ │  <被调对象 file:line>│
+  │  e.g. endpoint       │         │  e.g. ExternalLink   │
+  │                      │         │      Manager         │
+  └──────────────────────┘         └─────────────────────┘
+                                            │
+                                            ▼ ← problem: 这里持有 process-local
+                                   ┌─────────────────────┐
+                                   │ ConcurrentDictionary│
+                                   │ <state-violating-X> │
+                                   └─────────────────────┘
+
+  违反:<CLAUDE.md 哪条 + 一句话>
 \`\`\`
 
-### 决策选项(reflector r2 已分析)
+(根据问题类型画对应图——状态归属:框 + 数据流箭头;生命周期:时间线 + actor 栏;调用链:source→sink 链;依赖反转:层 + 反向箭头标 ❌)
 
-#### 选项 A — <选项名>
-- **Plan**:<file:line 级别,1-3 行>
+### 问题描述
+
+**当前行为**(具体到代码):
+- `<file:line>`:<这里在干什么,1-3 行>
+- `<file:line>`:<另一个 evidence>
+
+**违反规则**:
+- CLAUDE.md「<引用条款>」
+- 或 AGENTS.md「<引用条款>」
+
+**影响范围**:
+- <谁会被 affected,具体到 callers / data flow>
+- <如不修是否阻塞 production / cause silent fail / 仅风格>
+
+**为什么不是机械重构能解**:
+- <如:涉及 public surface 删除策略 / cross-cluster 耦合 / docs/canon 改动 / 性能 vs 简洁取舍>
+- <一句话引用 hardcoded trigger 命中:e.g. "trigger #3 fires whenever solver plan touches lifecycle">
+
+### 决策选项
+
+#### 选项 A — <选项名,动词起始>
+- **Plan**:<具体 file:line 改动,1-3 行>
 - **影响**:<改动范围 + 谁会被 break>
 - **Tradeoff**:<这条路的代价>
 
@@ -1440,18 +1463,14 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 - **影响**:...
 - **Tradeoff**:...
 
-#### 选项 C — <选项名>
+#### 选项 C — <选项名>(可选,2-4 个之间)
 - ...
-
-### 背景:为什么 AI 自己解不了
-
-<2-3 段中文,引用 r1/r2 judge marker + reflector 分析,说明 hardcoded trigger 命中点 / framing 无法绕开 / 跨 cluster 耦合等>
 
 ### Maintainer 行动入口
 
-- **选定一个选项**:在本 issue 评论 `choose: <选项标识 A/B/C>` 或具体 narrowing constraint
-- **重新进入共识**:加 `auto-loop-resume` label,controller 会用你的评论作 narrowing 派 fresh round
-- **关闭不做**:close issue 加 `wontfix` label
+- **选定**:评论 `choose: A` / `choose: B` / `choose: C` 或给具体 narrowing constraint
+- **重派**:加 `auto-loop-resume` label,controller 用你评论作 narrowing 派 fresh round
+- **不做**:close issue + 加 `wontfix` label
 
 🤖 controller status banner
 
@@ -1459,10 +1478,12 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 ```
 
 **约束**:
-- ASCII 图用 box-drawing characters(`─`/`│`/`▼`/`◀`/`▲`)+ 空格对齐;**禁用 mermaid**(per CLAUDE.md "GitHub issue/PR comment mermaid 禁忌")
-- 路径图必须包含**所有**历史 round + reflector 节点 + 当前停在哪(`◀── 当前` 箭头)
-- 决策选项**最少 2 个,最多 4 个**(< 2 = 没选 = vague,> 4 = 没思考过)
-- 每个选项必含 Plan / 影响 / Tradeoff 三栏
+- 问题 ASCII 图**画当前架构的违反点**——数据流 / 状态归属 / 调用链 / 生命周期等;**不画**reflector / round 路径(那是过程,不是问题)
+- 用 box-drawing(`─│┌┐└┘▶▼◀▲`)+ 空格对齐;**禁用 mermaid**(per CLAUDE.md "GitHub issue/PR comment mermaid 禁忌")
+- 历史 round 信息**降级为表格一行**(`r1+reflector+r2 仍 escalate`),不占主视觉
+- 决策选项 2-4 个,每个 Plan / 影响 / Tradeoff 三栏(file:line 级别)
+- "为什么不是机械重构能解"段是**根因**而非 *recap*(maintainer 看一眼知道为什么 AI 不接手)
+- 末尾标准 `🤖 controller status banner` + sentinel
 - 背景段不要 *recap* 评论历史,是**为什么 AI 解不了**的根因分析
 - maintainer 行动入口三选一(选项 / 重派 / 关闭)
 - 末尾标准 `🤖 controller status banner` + sentinel
