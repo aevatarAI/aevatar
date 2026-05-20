@@ -106,6 +106,34 @@ while true; do
       react_ok=$?
       if [ $react_ok -eq 0 ]; then
         echo "new-team-comment: $n $author $id eyes-reacted-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        # 立刻 post status 卡片让 maintainer 看到 daemon 已识别 + controller 在路上
+        # (per Auric 2026-05-20 "加了'看到'表情后, codex 启动也并没有更新状态卡片")
+        body_excerpt=$(echo "$body" | head -1 | head -c 80)
+        tmp_banner=$(mktemp)
+        cat > "$tmp_banner" <<EOF
+## 📊 状态 — 已收到 maintainer 评论(daemon 识别)
+
+| 维度 | 值 |
+|---|---|
+| 触发评论 | id=$id author=$author |
+| 评论摘要 | $body_excerpt |
+| daemon 反应 | 👀 eyes react 已加 |
+| 下一步 | controller 下次 wakeup(≤25 min)读 daemon log → 派 fresh codex round(maintainer-reply-resets-the-round)→ 更新本卡片 |
+| **是否需要人介入** | ❌ 否(自动响应中) |
+
+🤖 comment-monitor.sh daemon
+
+⟦AI:AUTO-LOOP⟧
+EOF
+        post_out=$(gh issue comment "$n" --repo "$REPO" --body-file "$tmp_banner" 2>&1)
+        if [ $? -eq 0 ]; then
+          echo "daemon-banner-posted: $n $id $(echo "$post_out" | grep -oE 'https://[^ ]+' | head -1)"
+        else
+          post_out=$(gh pr comment "$n" --repo "$REPO" --body-file "$tmp_banner" 2>&1)
+          [ $? -eq 0 ] && echo "daemon-banner-posted: $n $id $(echo "$post_out" | grep -oE 'https://[^ ]+' | head -1)" \
+            || echo "daemon-banner-FAILED: $n $id $(echo "$post_out" | head -1)"
+        fi
+        rm -f "$tmp_banner"
       else
         echo "new-team-comment: $n $author $id eyes-react-FAILED: $(echo "$react_out" | head -1)"
       fi
