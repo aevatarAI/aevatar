@@ -46,16 +46,29 @@ def run(cmd: list[str], cwd: Path | None = None, check: bool = False) -> subproc
 
 
 def ensure_worktree() -> bool:
-    """Ensure the daemon's dedicated worktree exists and is on INTEGRATION branch."""
+    """Ensure the daemon's dedicated worktree exists (detached HEAD off INTEGRATION).
+
+    git 不允许两个 worktree checkout 同 branch,所以 daemon 用 detached HEAD。
+    Push 时 `git push origin HEAD:INTEGRATION` 显式映射回 branch。
+    """
     if not WORKTREE.exists():
-        log(f"creating worktree {WORKTREE}")
-        r = run(["git", "worktree", "add", str(WORKTREE), INTEGRATION], cwd=MAIN_REPO)
+        log(f"creating worktree {WORKTREE} (detached off origin/{INTEGRATION})")
+        # fetch 先,确保 origin/INTEGRATION 是最新
+        run(["git", "fetch", "origin", "--quiet"], cwd=MAIN_REPO)
+        r = run(["git", "worktree", "add", "--detach", str(WORKTREE),
+                 f"origin/{INTEGRATION}"], cwd=MAIN_REPO)
         if r.returncode != 0:
             log(f"FATAL: git worktree add failed: {r.stderr.strip()}")
             return False
-    current = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=WORKTREE).stdout.strip()
-    if current != INTEGRATION:
-        log(f"FATAL: worktree HEAD={current}, expected {INTEGRATION}")
+    return True
+
+
+def reset_to_remote(cwd: Path) -> bool:
+    """每 tick 开始 reset 到 origin/INTEGRATION,确保 base 最新。"""
+    run(["git", "fetch", "origin", "--quiet"], cwd=cwd)
+    r = run(["git", "reset", "--hard", f"origin/{INTEGRATION}"], cwd=cwd)
+    if r.returncode != 0:
+        log(f"FAIL reset to origin/{INTEGRATION}: {r.stderr.strip()[:120]}")
         return False
     return True
 
@@ -138,11 +151,6 @@ def tick() -> None:
         if not ensure_worktree():
             return
 
-    current = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=cwd).stdout.strip()
-    if current != INTEGRATION:
-        log(f"skip tick: HEAD={current} (not {INTEGRATION})")
-        return
-
     if merge_in_progress(cwd):
         if codex_resolve_in_flight():
             log("skip: merge in progress + codex resolving")
@@ -155,7 +163,10 @@ def tick() -> None:
         log("skip: worktree dirty (no merge in progress)")
         return
 
-    run(["git", "fetch", "origin", "--quiet"], cwd=cwd)
+    # 每 tick reset 到 origin/INTEGRATION 确保最新(detached HEAD)
+    if not reset_to_remote(cwd):
+        return
+
     behind = run(["git", "rev-list", "--count", f"HEAD..origin/{REVIEW_BASE}"], cwd=cwd).stdout.strip()
     try:
         behind_n = int(behind)
@@ -168,13 +179,13 @@ def tick() -> None:
 
     log(f"behind origin/{REVIEW_BASE} by {behind_n} commits, attempting sync")
 
-    # 尝试 ff-only
+    # 尝试 ff-only(detached HEAD push 用 HEAD:branch 映射)
     r = run(["git", "merge", "--ff-only", f"origin/{REVIEW_BASE}"], cwd=cwd)
     if r.returncode == 0 and ("Fast-forward" in r.stdout or "Already up to date" in r.stdout):
         log(f"ff-merged with origin/{REVIEW_BASE} (+{behind_n} commits)")
-        push = run(["git", "push", "origin", INTEGRATION], cwd=cwd)
+        push = run(["git", "push", "origin", f"HEAD:{INTEGRATION}"], cwd=cwd)
         if push.returncode == 0:
-            log(f"pushed {INTEGRATION} → origin")
+            log(f"pushed HEAD → origin/{INTEGRATION}")
         else:
             log(f"FAIL push: {push.stderr.strip()[:120]}")
         return
@@ -186,9 +197,9 @@ def tick() -> None:
              f"origin/{REVIEW_BASE}"], cwd=cwd)
     if r.returncode == 0:
         log(f"no-ff merge-committed +{behind_n} commits")
-        push = run(["git", "push", "origin", INTEGRATION], cwd=cwd)
+        push = run(["git", "push", "origin", f"HEAD:{INTEGRATION}"], cwd=cwd)
         if push.returncode == 0:
-            log(f"pushed {INTEGRATION} → origin")
+            log(f"pushed HEAD → origin/{INTEGRATION}")
         else:
             log(f"FAIL push after merge: {push.stderr.strip()[:120]}")
         return
