@@ -3,7 +3,7 @@ using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Core.Compilation;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Studio.Application.Scripts.Contracts;
-using Aevatar.Studio.Hosting.Endpoints;
+using Aevatar.Studio.Application.Studio.Authoring;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -11,7 +11,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Tools.Cli.Tests;
 
-public class ScriptGenerateOrchestratorTests
+public class ScriptAuthoringPreviewGeneratorTests
 {
     [Fact]
     public async Task GenerateAsync_ShouldDisposeCompiledArtifactAfterSuccessfulValidation()
@@ -23,9 +23,9 @@ public class ScriptGenerateOrchestratorTests
                 CreateArtifact(() => disposed++),
                 Array.Empty<string>()),
         ]);
-        var orchestrator = new ScriptGenerateOrchestrator(compiler);
+        var generator = new ScriptAuthoringPreviewGenerator(compiler);
 
-        var result = await orchestrator.GenerateAsync(
+        var result = await generator.GenerateAsync(
             new ScriptGenerateRequest(
                 "Uppercase the input",
                 null,
@@ -58,10 +58,10 @@ public class ScriptGenerateOrchestratorTests
                 CreateArtifact(() => disposed++),
                 Array.Empty<string>()),
         ]);
-        var orchestrator = new ScriptGenerateOrchestrator(compiler);
+        var generator = new ScriptAuthoringPreviewGenerator(compiler);
         var prompts = new List<string>();
 
-        var result = await orchestrator.GenerateAsync(
+        var result = await generator.GenerateAsync(
             new ScriptGenerateRequest(
                 "Accept structured input with name and priority",
                 null,
@@ -96,9 +96,9 @@ public class ScriptGenerateOrchestratorTests
                 (Action<ScriptBehaviorCompilationRequest>?)(request => capturedRequest = request)
             ),
         ]);
-        var orchestrator = new ScriptGenerateOrchestrator(compiler);
+        var generator = new ScriptAuthoringPreviewGenerator(compiler);
 
-        var result = await orchestrator.GenerateAsync(
+        var result = await generator.GenerateAsync(
             new ScriptGenerateRequest(
                 "Split the behavior into helper files",
                 null,
@@ -146,9 +146,9 @@ public class ScriptGenerateOrchestratorTests
                 (Action<ScriptBehaviorCompilationRequest>?)(request => capturedRequest = request)
             ),
         ]);
-        var orchestrator = new ScriptGenerateOrchestrator(compiler);
+        var generator = new ScriptAuthoringPreviewGenerator(compiler);
 
-        var result = await orchestrator.GenerateAsync(
+        var result = await generator.GenerateAsync(
             new ScriptGenerateRequest(
                 "Only update the behavior file",
                 "public sealed class DraftBehavior { }",
@@ -181,9 +181,9 @@ public class ScriptGenerateOrchestratorTests
     }
 
     [Fact]
-    public void ScriptGeneratePromptCatalog_ShouldKeepGeneratorBoundToAppScriptCommand()
+    public void ScriptAuthoringPromptCatalog_ShouldKeepGeneratorBoundToAppScriptCommand()
     {
-        var catalog = new ScriptGeneratePromptCatalog(NullLogger<ScriptGeneratePromptCatalog>.Instance);
+        var catalog = new ScriptAuthoringPromptCatalog(NullLogger<ScriptAuthoringPromptCatalog>.Instance);
 
         catalog.SystemPrompt.Should().Contain("Use AppScriptCommand as the only inbound command contract.");
         catalog.SystemPrompt.Should().Contain("parse it from AppScriptCommand.Input");

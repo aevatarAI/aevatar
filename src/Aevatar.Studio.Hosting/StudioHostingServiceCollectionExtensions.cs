@@ -67,13 +67,9 @@ internal static class StudioHostingServiceCollectionExtensions
 
     internal static IServiceCollection AddStudioAuthoringServices(this IServiceCollection services)
     {
-        services.AddSingleton<AppAuthoringChatSessionFactory>();
-        services.AddSingleton<WorkflowGeneratePromptCatalog>();
-        services.AddSingleton<WorkflowGenerateOrchestrator>();
-        services.AddSingleton<WorkflowGenerateActorService>();
-        services.AddSingleton<ScriptGeneratePromptCatalog>();
-        services.AddSingleton<ScriptGenerateOrchestrator>();
-        services.AddSingleton<ScriptGenerateActorService>();
+        // Refactor (iter21/cluster-001):
+        //   Old pattern: Host registered fake authoring actors, process gates, and ChatRuntime factories.
+        //   New principle: Host keeps only protocol helpers; Application/Infrastructure own authoring preview behavior.
         services.AddSingleton<ScriptEditorValidationService>();
         return services;
     }

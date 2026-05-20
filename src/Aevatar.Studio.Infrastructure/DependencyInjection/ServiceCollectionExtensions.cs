@@ -1,7 +1,9 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Authoring;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.Studio.Infrastructure.Authoring;
 using Aevatar.Studio.Domain.Studio.Compatibility;
 using Aevatar.Studio.Domain.Studio.Services;
 using Aevatar.Studio.Infrastructure.ActorBacked;
@@ -50,6 +52,10 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IChatHistoryStore, ActorBackedChatHistoryStore>();
         services.AddSingleton<ILLMCallMiddleware, UserMemoryInjectionMiddleware>();
         services.AddSingleton<ILLMCallMiddleware, ConnectedServicesContextMiddleware>();
+        // Refactor (iter21/cluster-001):
+        //   Old pattern: Host constructed ChatRuntime for Studio Ask AI preview sessions.
+        //   New principle: Infrastructure implements the typed Application LLM stream port with ChatStreamAsync.
+        services.AddSingleton<IStudioAuthoringLLMStreamPort, ChatRuntimeStudioAuthoringLLMStreamPort>();
         services.AddSingleton<IWorkflowDraftStore, ChronoStorageWorkflowDraftStore>();
         services.AddSingleton<IScriptStoragePort, ChronoStorageScriptStoragePort>();
         services.AddSingleton<IAevatarSettingsStore, FileAevatarSettingsStore>();

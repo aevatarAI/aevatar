@@ -1,41 +1,15 @@
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Aevatar.Scripting.Core.Compilation;
-using System.Text.Json;
-
 using Aevatar.Studio.Application.Scripts.Contracts;
-namespace Aevatar.Studio.Hosting.Endpoints;
 
-internal sealed record ScriptGenerateRequest(
-    string Prompt,
-    string? CurrentSource,
-    IReadOnlyDictionary<string, string>? Metadata,
-    AppScriptPackage? CurrentPackage = null,
-    string? CurrentFilePath = null);
+namespace Aevatar.Studio.Application.Studio.Authoring;
 
-internal sealed record ScriptGenerateResult(
-    string Source,
-    int Attempts,
-    IReadOnlyList<string> Diagnostics,
-    AppScriptPackage? Package = null,
-    string? CurrentFilePath = null);
-
-internal enum ScriptGenerateProgressStage
-{
-    Starting,
-    Queued,
-    GeneratingDraft,
-    ValidatingDraft,
-    RepairingDraft,
-    Completed,
-}
-
-internal sealed record ScriptGenerateProgress(
-    ScriptGenerateProgressStage Stage,
-    int Attempt,
-    string Message);
-
-internal sealed class ScriptGenerateOrchestrator
+// Refactor (iter21/cluster-001):
+//   Old pattern: Host ScriptGenerateOrchestrator parsed LLM JSON and compiled repair attempts beside endpoints.
+//   New principle: Application owns script preview generation/validation; Host never executes authoring business loops.
+internal sealed class ScriptAuthoringPreviewGenerator
 {
     private const int MaxAttempts = 3;
     private static readonly Regex CodeFenceRegex = new(
@@ -52,7 +26,7 @@ internal sealed class ScriptGenerateOrchestrator
         "Do not introduce or replace it with richer command message types. " +
         "If structured input is needed, parse it from AppScriptCommand.Input.";
 
-    public ScriptGenerateOrchestrator(IScriptBehaviorCompiler compiler)
+    public ScriptAuthoringPreviewGenerator(IScriptBehaviorCompiler compiler)
     {
         _compiler = compiler;
     }
@@ -60,7 +34,7 @@ internal sealed class ScriptGenerateOrchestrator
     public async Task<ScriptGenerateResult> GenerateAsync(
         ScriptGenerateRequest request,
         Func<string, IReadOnlyDictionary<string, string>?, CancellationToken, Task<string?>> generateTurnAsync,
-        Func<ScriptGenerateProgress, CancellationToken, Task>? onProgress,
+        Func<StudioAuthoringPreviewEvent.Progress, CancellationToken, Task>? onProgress,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -81,8 +55,8 @@ internal sealed class ScriptGenerateOrchestrator
             if (onProgress != null)
             {
                 await onProgress(
-                    new ScriptGenerateProgress(
-                        ScriptGenerateProgressStage.GeneratingDraft,
+                    new StudioAuthoringPreviewEvent.Progress(
+                        StudioAuthoringProgressStage.GeneratingDraft,
                         attempt,
                         $"Generating script draft (attempt {attempt}/{MaxAttempts})..."),
                     ct);
@@ -122,8 +96,8 @@ internal sealed class ScriptGenerateOrchestrator
             if (onProgress != null)
             {
                 await onProgress(
-                    new ScriptGenerateProgress(
-                        ScriptGenerateProgressStage.ValidatingDraft,
+                    new StudioAuthoringPreviewEvent.Progress(
+                        StudioAuthoringProgressStage.ValidatingDraft,
                         attempt,
                         $"Compiling generated script package (attempt {attempt}/{MaxAttempts})..."),
                     ct);
@@ -141,8 +115,8 @@ internal sealed class ScriptGenerateOrchestrator
                     if (onProgress != null && attempt < MaxAttempts)
                     {
                         await onProgress(
-                            new ScriptGenerateProgress(
-                                ScriptGenerateProgressStage.RepairingDraft,
+                            new StudioAuthoringPreviewEvent.Progress(
+                                StudioAuthoringProgressStage.RepairingDraft,
                                 attempt,
                                 BuildRepairStatusMessage(lastDiagnostics, attempt)),
                             ct);
@@ -154,8 +128,8 @@ internal sealed class ScriptGenerateOrchestrator
                 if (onProgress != null)
                 {
                     await onProgress(
-                        new ScriptGenerateProgress(
-                            ScriptGenerateProgressStage.Completed,
+                        new StudioAuthoringPreviewEvent.Progress(
+                            StudioAuthoringProgressStage.Completed,
                             attempt,
                             "Script package compiled and is ready."),
                         ct);

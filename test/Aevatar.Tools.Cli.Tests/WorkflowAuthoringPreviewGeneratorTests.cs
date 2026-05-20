@@ -1,26 +1,26 @@
 using Aevatar.Studio.Application.Studio.Services;
+using Aevatar.Studio.Application.Studio.Authoring;
 using Aevatar.Studio.Domain.Studio.Compatibility;
 using Aevatar.Studio.Domain.Studio.Services;
-using Aevatar.Studio.Hosting.Endpoints;
 using Aevatar.Studio.Infrastructure.Serialization;
 using FluentAssertions;
 
 namespace Aevatar.Tools.Cli.Tests;
 
-public class WorkflowGenerateOrchestratorTests
+public class WorkflowAuthoringPreviewGeneratorTests
 {
     [Fact]
     public async Task GenerateAsync_ShouldRetryUntilYamlIsValid()
     {
-        var orchestrator = CreateOrchestrator();
+        var generator = CreateGenerator();
         var responses = new Queue<string>([
             "name: broken\nsteps:\n  - id: only_step\n    type: llm_call\n    next: missing_step",
             "name: repaired\nsteps:\n  - id: only_step\n    type: llm_call"
         ]);
         var prompts = new List<string>();
-        var progress = new List<WorkflowGenerateProgress>();
+        var progress = new List<StudioAuthoringPreviewEvent.Progress>();
 
-        var result = await orchestrator.GenerateAsync(
+        var result = await generator.GenerateAsync(
             new WorkflowGenerateRequest(
                 "Create a simple workflow",
                 null,
@@ -48,20 +48,20 @@ public class WorkflowGenerateOrchestratorTests
         prompts[1].Should().Contain("Validation findings:");
         prompts[1].Should().Contain("missing_step");
         progress.Select(item => item.Stage).Should().ContainInOrder(
-            WorkflowGenerateProgressStage.GeneratingDraft,
-            WorkflowGenerateProgressStage.ValidatingDraft,
-            WorkflowGenerateProgressStage.RepairingDraft,
-            WorkflowGenerateProgressStage.GeneratingDraft,
-            WorkflowGenerateProgressStage.ValidatingDraft,
-            WorkflowGenerateProgressStage.Completed);
+            StudioAuthoringProgressStage.GeneratingDraft,
+            StudioAuthoringProgressStage.ValidatingDraft,
+            StudioAuthoringProgressStage.RepairingDraft,
+            StudioAuthoringProgressStage.GeneratingDraft,
+            StudioAuthoringProgressStage.ValidatingDraft,
+            StudioAuthoringProgressStage.Completed);
     }
 
     [Fact]
     public async Task GenerateAsync_WhenNoValidYamlIsProduced_ShouldFail()
     {
-        var orchestrator = CreateOrchestrator();
+        var generator = CreateGenerator();
 
-        var act = () => orchestrator.GenerateAsync(
+        var act = () => generator.GenerateAsync(
             new WorkflowGenerateRequest(
                 "Create a workflow",
                 null,
@@ -85,9 +85,9 @@ public class WorkflowGenerateOrchestratorTests
     [Fact]
     public async Task GenerateAsync_ShouldNormalizeAiHallucinatedStepFieldsBeforeFailing()
     {
-        var orchestrator = CreateOrchestrator();
+        var generator = CreateGenerator();
 
-        var result = await orchestrator.GenerateAsync(
+        var result = await generator.GenerateAsync(
             new WorkflowGenerateRequest(
                 "Create the simplest possible chat workflow",
                 null,
@@ -130,9 +130,9 @@ public class WorkflowGenerateOrchestratorTests
     [InlineData("chat")]
     public async Task GenerateAsync_ShouldNormalizeHallucinatedStepTypeAliases(string hallucinatedType)
     {
-        var orchestrator = CreateOrchestrator();
+        var generator = CreateGenerator();
 
-        var result = await orchestrator.GenerateAsync(
+        var result = await generator.GenerateAsync(
             new WorkflowGenerateRequest(
                 "Create the simplest possible chat workflow",
                 null,
@@ -166,13 +166,13 @@ public class WorkflowGenerateOrchestratorTests
     [InlineData("name: sample\nsteps:\n  - id: a\n    type: llm_call", "name: sample")]
     public void TryExtractYamlCandidate_ShouldSupportFencedAndRawYaml(string content, string expectedPrefix)
     {
-        var success = WorkflowGenerateOrchestrator.TryExtractYamlCandidate(content, out var yaml);
+        var success = WorkflowAuthoringPreviewGenerator.TryExtractYamlCandidate(content, out var yaml);
 
         success.Should().BeTrue();
         yaml.Should().StartWith(expectedPrefix);
     }
 
-    private static WorkflowGenerateOrchestrator CreateOrchestrator()
+    private static WorkflowAuthoringPreviewGenerator CreateGenerator()
     {
         var profile = WorkflowCompatibilityProfile.AevatarV1;
         var editor = new WorkflowEditorService(
@@ -181,6 +181,6 @@ public class WorkflowGenerateOrchestratorTests
             new WorkflowValidator(profile),
             new WorkflowGraphMapper(profile),
             new TextDiffService());
-        return new WorkflowGenerateOrchestrator(editor);
+        return new WorkflowAuthoringPreviewGenerator(editor);
     }
 }
