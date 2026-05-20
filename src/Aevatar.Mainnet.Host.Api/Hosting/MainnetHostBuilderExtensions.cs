@@ -28,6 +28,7 @@ using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.Foundation.VoicePresence.Hosting;
+using Aevatar.Mainnet.Host.Api.ChatRouting;
 using Aevatar.Mainnet.Host.Api.Messages;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Mainnet.Host.Api.Voice;
@@ -94,11 +95,10 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddChannelIdentityProjectionStores(builder.Configuration);
         builder.Services.AddDeviceRegistration(builder.Configuration);
         builder.Services.AddScheduledAgents(builder.Configuration);
-        // Ingress layer v1 (issue #692, Phase 1): registers the ChatRoutePolicy
-        // current-state readmodel document store. The policy actor + projector
-        // ship in this phase; ingress entries start consulting the readmodel in
-        // a later phase.
-        builder.Services.AddChatRoutingAgents();
+        // Ingress layer v1: registers the ChatRoutePolicy current-state readmodel
+        // document store (Elasticsearch in prod, InMemory otherwise — same
+        // selection pattern as AddScheduledAgents / AddDeviceRegistration).
+        builder.Services.AddChatRoutingAgents(builder.Configuration);
         builder.Services.AddChatRoutingCore();
         // Implement (issue #695):
         //   Behavior: gate explicit /ws/voice/{actorId} bypass behind voice:bypass or admin.
@@ -198,6 +198,7 @@ public static class MainnetHostBuilderExtensions
 
         app.UseAevatarDefaultHost();
         app.MapNyxIdChatEndpoints();
+        app.MapChatRoutePolicyAdminEndpoints();
         app.MapStreamingProxyEndpoints();
         app.MapResponsesApiEndpoints();
         app.MapMessagesApiEndpoints();

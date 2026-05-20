@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -117,6 +118,7 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         }
 
         var request = command.Request.Clone();
+        ApplyTargetRefOverrides(request);
         var runId = NormalizeOptional(request.CorrelationId) ?? Id;
         var startedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
 
@@ -987,6 +989,71 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var actor = await _actorRuntime.GetAsync(targetActorId);
         if (actor is null)
             await _actorRuntime.CreateAsync<ConversationGAgent>(targetActorId, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// Applies the chat-route boundary decision carried on
+    /// <see cref="NeedsLlmReplyEvent.TargetRef"/> to the cloned request before
+    /// it flows into <c>ProcessAsync</c>. Without this the typed field is
+    /// written by <c>ConversationGAgent</c> + persisted but no downstream
+    /// consumer ever reads it — Forward* actions silently no-op on the relay
+    /// path while only <c>Reject</c> is honored at the resolver edge.
+    ///
+    /// Action semantics on the relay run-actor path:
+    /// <list type="bullet">
+    ///   <item><c>ForwardToGAgent.actor_id</c> → overrides
+    ///     <see cref="NeedsLlmReplyEvent.TargetActorId"/>. The reply is
+    ///     dispatched to the forwarded actor; <c>EnsureTargetActorAsync</c>
+    ///     creates it as a <c>ConversationGAgent</c> if missing.</item>
+    ///   <item><c>ForwardToModel.model_name</c> → sets
+    ///     <c>metadata[LLMRequestMetadataKeys.ModelOverride]</c>. The chat
+    ///     route policy is more specific than the bot owner's default model,
+    ///     so it intentionally overwrites a bot-owner-config-supplied model
+    ///     when both are present.</item>
+    ///   <item><c>Reject</c> → resolver-side already failed the turn before
+    ///     the run was dispatched; this method shouldn't see it.</item>
+    ///   <item>Anything else / no TargetRef → no-op (resolver returned
+    ///     fallback / no policy / unsupported v2 action).</item>
+    /// </list>
+    /// </summary>
+    private void ApplyTargetRefOverrides(NeedsLlmReplyEvent request)
+    {
+        var targetRef = request.TargetRef;
+        if (targetRef is null)
+            return;
+
+        switch (targetRef.ActionCase)
+        {
+            case ChatRouteAction.ActionOneofCase.ForwardToGagent:
+                var forwardedActorId = NormalizeOptional(targetRef.ForwardToGagent?.ActorId);
+                if (forwardedActorId is not null &&
+                    !string.Equals(forwardedActorId, request.TargetActorId, StringComparison.Ordinal))
+                {
+                    _logger.LogInformation(
+                        "Chat-route override: redirecting run target actor {Original} → {Override} (correlation={CorrelationId})",
+                        NormalizeOptional(request.TargetActorId) ?? "<empty>",
+                        forwardedActorId,
+                        request.CorrelationId);
+                    request.TargetActorId = forwardedActorId;
+                }
+                break;
+            case ChatRouteAction.ActionOneofCase.ForwardToModel:
+                var routedModel = NormalizeOptional(targetRef.ForwardToModel?.ModelName);
+                if (routedModel is not null)
+                {
+                    _logger.LogInformation(
+                        "Chat-route override: pinning LLM model to {Model} (correlation={CorrelationId})",
+                        routedModel,
+                        request.CorrelationId);
+                    request.Metadata[LLMRequestMetadataKeys.ModelOverride] = routedModel;
+                }
+                break;
+            default:
+                // ForwardToWorkflow is v2 (no relay-side implementation);
+                // Reject was handled at the resolver before run dispatch;
+                // None means resolver returned no rule + no default.
+                break;
+        }
     }
 
     private bool ShouldCaptureInteractiveReply(ChatActivity? activity)

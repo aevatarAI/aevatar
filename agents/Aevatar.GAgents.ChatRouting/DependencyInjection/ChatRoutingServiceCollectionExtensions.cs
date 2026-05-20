@@ -1,8 +1,11 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -22,17 +25,15 @@ public static class ChatRoutingServiceCollectionExtensions
     /// <list type="bullet">
     ///   <item>materialization runtime + scope + per-scope lease,</item>
     ///   <item>the current-state projector as an <see cref="Aevatar.CQRS.Projection.Core.Abstractions.ICurrentStateProjectionMaterializer{TContext}"/> contributor,</item>
-    ///   <item>the InMemory document projection store (reader + writer).</item>
+    ///   <item>the document projection store (Elasticsearch in prod, InMemory for dev / tests when no configuration is supplied).</item>
     /// </list>
-    /// Without the runtime and materializer registrations the projector would
-    /// have a backing store but no subscribed materialization, so the readmodel
-    /// would silently never populate (the projection-store-registration pitfall).
-    ///
-    /// Phase 1 wires the InMemory store unconditionally; the Elasticsearch-vs-InMemory
-    /// selection (mirroring <c>AddScheduledAgents</c>) lands when an ingress entry
-    /// actually consumes the readmodel.
+    /// Pass <paramref name="configuration"/> so the document store choice matches the
+    /// host environment — production must use Elasticsearch (multi-pod safe, persistent
+    /// across restarts); the unconditional InMemory store made policies pod-local and
+    /// vanish on restart.
     /// </summary>
-    public static IServiceCollection AddChatRoutingAgents(this IServiceCollection services)
+    public static IServiceCollection AddChatRoutingAgents(
+        this IServiceCollection services, IConfiguration? configuration = null)
     {
         ArgumentNullException.ThrowIfNull(services);
 
@@ -56,9 +57,27 @@ public static class ChatRoutingServiceCollectionExtensions
             ChatRoutePolicyMaterializationContext,
             ChatRoutePolicyCurrentStateProjector>();
 
-        services.AddInMemoryDocumentProjectionStore<ChatRoutePolicyCurrentStateDocument, string>(
-            static document => document.ActorId,
-            static key => key);
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<ChatRoutePolicyCurrentStateDocument>,
+            ChatRoutePolicyDocumentMetadataProvider>();
+
+        var useElasticsearch = ElasticsearchProjectionConfiguration.IsEnabled(
+            configuration,
+            storeName: "ChatRouting");
+
+        if (useElasticsearch)
+        {
+            services.AddElasticsearchDocumentProjectionStore<ChatRoutePolicyCurrentStateDocument, string>(
+                optionsFactory: _ => ElasticsearchProjectionConfiguration.BindOptions(configuration!),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ChatRoutePolicyCurrentStateDocument>>().Metadata,
+                keySelector: static doc => doc.ActorId,
+                keyFormatter: static key => key);
+        }
+        else
+        {
+            services.AddInMemoryDocumentProjectionStore<ChatRoutePolicyCurrentStateDocument, string>(
+                static document => document.ActorId,
+                static key => key);
+        }
 
         return services;
     }

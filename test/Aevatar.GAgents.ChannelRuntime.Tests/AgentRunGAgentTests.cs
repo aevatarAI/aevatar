@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.ChatRouting.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
@@ -322,6 +323,137 @@ public sealed class AgentRunGAgentTests
         // eviction — acceptable trade-off vs. delivering a duplicate user-visible fallback.
         runtime.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
         runtime.State.ProducedReplyText.Should().Be("the real reply");
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_WhenTargetRefForwardsToGAgent_OverridesTargetActorId()
+    {
+        // Regression: NeedsLlmReplyEvent.TargetRef carries the chat-route
+        // boundary decision from ConversationGAgent into the run actor.
+        // Before this fix the field was written + persisted but no consumer
+        // read it — Forward* actions silently no-op'd on the relay path.
+        // ForwardToGAgent.actor_id must redirect the reply target so per-bot
+        // routing rules (e.g. /daily → specialized agent X) actually take effect.
+        var originalTarget = Substitute.For<IActor>();
+        originalTarget.Id.Returns("conversation:original");
+        var forwardedTarget = Substitute.For<IActor>();
+        forwardedTarget.Id.Returns("conversation:forwarded");
+        var forwardedHandled = new List<EventEnvelope>();
+        forwardedTarget.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => forwardedHandled.Add(call.Arg<EventEnvelope>()));
+        var originalHandled = new List<EventEnvelope>();
+        originalTarget.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => originalHandled.Add(call.Arg<EventEnvelope>()));
+
+        var actorRuntime = new DispatchingActorRuntime(
+            ("conversation:original", originalTarget),
+            ("conversation:forwarded", forwardedTarget));
+        var replyGenerator = new RecordingReplyGenerator(() => false) { ReplyText = "ok" };
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-forward-gagent",
+            TargetActorId = "conversation:original",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-forward-gagent",
+            TargetRef = new ChatRouteAction
+            {
+                ForwardToGagent = new ForwardToGAgent { ActorId = "conversation:forwarded" },
+            },
+        });
+
+        forwardedHandled.Should().ContainSingle(e => e.Payload.Is(LlmReplyReadyEvent.Descriptor),
+            "ForwardToGAgent.actor_id must redirect the reply target");
+        originalHandled.Should().BeEmpty(
+            "the original conversation actor must not receive the reply when the route override fires");
+        runtime.State.TargetActorId.Should().Be("conversation:forwarded",
+            "the persisted run state must reflect the override, otherwise replay/retry undoes it");
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_WhenTargetRefForwardsToModel_InjectsModelOverrideMetadata()
+    {
+        // Regression: ForwardToModel.model_name from the chat-route policy
+        // must inject LLMRequestMetadataKeys.ModelOverride so the LLM
+        // provider sees the policy-chosen model. Bot-owner default model
+        // intentionally loses to the chat-route override — chat route is
+        // the more specific decision (caller-scope + rule match).
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("conversation:c");
+        var actorRuntime = new DispatchingActorRuntime(("conversation:c", actor));
+        IReadOnlyDictionary<string, string>? observedMetadata = null;
+        var replyGenerator = new RecordingReplyGenerator(() => false)
+        {
+            ReplyText = "ok",
+            MetadataObserver = m => observedMetadata = m,
+        };
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-forward-model",
+            TargetActorId = "conversation:c",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-forward-model",
+            TargetRef = new ChatRouteAction
+            {
+                ForwardToModel = new ForwardToModel { ModelName = "anthropic/claude-sonnet-4-6" },
+            },
+        });
+
+        observedMetadata.Should().NotBeNull("the LLM provider must have been invoked");
+        observedMetadata!.Should().ContainKey(LLMRequestMetadataKeys.ModelOverride);
+        observedMetadata[LLMRequestMetadataKeys.ModelOverride].Should().Be(
+            "anthropic/claude-sonnet-4-6",
+            "ForwardToModel.model_name must reach the LLM provider via the ModelOverride metadata key");
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_WhenTargetRefIsNullOrNone_LeavesRequestUnchanged()
+    {
+        // Defense-in-depth: turns without a chat-route policy match must
+        // behave exactly like pre-PR code. No actor redirect, no model
+        // override metadata injection.
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("conversation:c");
+        var actorRuntime = new DispatchingActorRuntime(("conversation:c", actor));
+        IReadOnlyDictionary<string, string>? observedMetadata = null;
+        var replyGenerator = new RecordingReplyGenerator(() => false)
+        {
+            ReplyText = "ok",
+            MetadataObserver = m => observedMetadata = m,
+        };
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-no-targetref",
+            TargetActorId = "conversation:c",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-no-targetref",
+            // TargetRef intentionally not set
+        });
+
+        runtime.State.TargetActorId.Should().Be("conversation:c");
+        observedMetadata.Should().NotBeNull();
+        observedMetadata!.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride,
+            "ModelOverride metadata must only appear when TargetRef.ForwardToModel was set");
     }
 
     [Fact]
