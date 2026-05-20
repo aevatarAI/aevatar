@@ -158,6 +158,25 @@ internal static class MessagesApiEndpoints
             logger,
             ct);
 
+        // /v1/messages is the Anthropic Messages facade. Native Anthropic
+        // clients (Claude Code, Cursor's Anthropic mode, Anthropic SDK) send
+        // raw Anthropic model ids without a provider prefix
+        // (e.g. `claude-sonnet-4-5-20250929`). Without normalization those
+        // strings have no `/` so the catalog router treats them as
+        // gateway-default, and NyxID's gateway then rejects them with HTTP 400
+        // because it doesn't know to route a bare `claude-*` to the anthropic
+        // backend. Auto-prefix `anthropic/` so the existing OpenRouter-style
+        // routing below resolves to `/api/v1/llm/anthropic/v1` for any caller
+        // that doesn't hand-prefix the model. If the route resolver doesn't
+        // recognize `anthropic` we fall back to the original bare name (which
+        // was the pre-fix behavior), so this change is strictly additive.
+        var anthropicPrefixed = false;
+        if (!routedModel.Contains('/', StringComparison.Ordinal))
+        {
+            routedModel = $"anthropic/{routedModel}";
+            anthropicPrefixed = true;
+        }
+
         // OpenRouter-style vendor prefix routing (same as Path A). If the
         // model is `vendor/name`, resolve the route value through the catalog;
         // unknown slugs fall through to gateway default.
@@ -171,6 +190,15 @@ internal static class MessagesApiEndpoints
                 .ConfigureAwait(false);
             if (resolvedRouteValue is not null)
                 effectiveModel = modelRoute.Model;
+            else if (anthropicPrefixed)
+            {
+                // Resolver doesn't know the synthesized "anthropic" slug;
+                // fall back to the original bare model so downstream behavior
+                // matches pre-fix code paths and tests that wire a no-op
+                // resolver keep working.
+                routedModel = modelRoute.Model;
+                effectiveModel = modelRoute.Model;
+            }
         }
 
         var llmMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
