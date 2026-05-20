@@ -81,6 +81,7 @@
     <Project Path="src\Aevatar.Bootstrap.Extensions.AI\Aevatar.Bootstrap.Extensions.AI.csproj" />
     <Project Path="src\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
     <Project Path="src\Aevatar.ChatRouting.Abstractions\Aevatar.ChatRouting.Abstractions.csproj" />
+    <Project Path="src\Aevatar.ChatRouting.Core\Aevatar.ChatRouting.Core.csproj" />
     <Project Path="src\Aevatar.Configuration\Aevatar.Configuration.csproj" />
     <Project Path="src\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
     <Project Path="src\Aevatar.CQRS.Core\Aevatar.CQRS.Core.csproj" />
@@ -158,6 +159,7 @@
   <Folder Name="/test/">
     <Project Path="test/Aevatar.Interop.A2A.Tests/Aevatar.Interop.A2A.Tests.csproj" />
     <Project Path="test/Aevatar.Studio.Tests/Aevatar.Studio.Tests.csproj" />
+    <Project Path="test/Aevatar.ChatRouting.Core.Tests/Aevatar.ChatRouting.Core.Tests.csproj" />
     <Project Path="test/Aevatar.GAgents.ChatRouting.Tests/Aevatar.GAgents.ChatRouting.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Core.Tests\Aevatar.AI.Core.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Tests\Aevatar.AI.Tests.csproj" />

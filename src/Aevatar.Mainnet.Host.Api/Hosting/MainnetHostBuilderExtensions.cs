@@ -10,6 +10,7 @@ using Aevatar.AI.ToolProviders.Web;
 using Aevatar.Authentication.Hosting;
 using Aevatar.Authentication.Providers.NyxId;
 using Aevatar.Bootstrap.Hosting;
+using Aevatar.ChatRouting.Core;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.GAgents.Authoring.Lark;
@@ -96,6 +97,7 @@ public static class MainnetHostBuilderExtensions
         // ship in this phase; ingress entries start consulting the readmodel in
         // a later phase.
         builder.Services.AddChatRoutingAgents();
+        builder.Services.AddChatRoutingCore();
         builder.Services.TryAddSingleton<IResponsesCallerScopeResolver, NyxIdResponsesCallerScopeResolver>();
         builder.Services.TryAddSingleton<IResponsesModelsAggregator, NyxIdResponsesModelsAggregator>();
         builder.Services.TryAddSingleton<IResponsesRouteResolver, CachingResponsesRouteResolver>();
