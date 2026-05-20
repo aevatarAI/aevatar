@@ -125,6 +125,64 @@ public sealed class ChatRouteResolverTests
     }
 
     [Fact]
+    public void Resolve_MatchingRuleWithEmptyAction_FallsThroughToDefaultTarget()
+    {
+        var resolver = NewResolver();
+        var snapshot = new ChatRoutePolicySnapshot(
+            ForwardToModelAction("default-model"),
+            [
+                // A projected rule whose action was never set — proto3 leaves
+                // the message field null, and the write side only validates
+                // default_target on upsert, so this is reachable on the read
+                // side. Resolver must not NRE on action.Clone().
+                new ChatRouteRule
+                {
+                    RuleId = "broken",
+                    Priority = 10,
+                    Match = new ChatRouteMatch { Channel = "lark" },
+                    Action = null,
+                },
+            ]);
+
+        var decision = resolver.Resolve(snapshot, new ChatRouteInput { Channel = "lark" });
+
+        decision.MatchedRuleId.Should().BeEmpty(
+            "an actionless matching rule must be skipped, not return a half-built decision");
+        decision.Action.ForwardToModel.ModelName.Should().Be("default-model");
+        decision.UsedFallback.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Resolve_HigherPriorityRuleEmpty_LowerPriorityRuleWithActionStillWins()
+    {
+        var resolver = NewResolver();
+        var snapshot = new ChatRoutePolicySnapshot(
+            ForwardToModelAction("default-model"),
+            [
+                new ChatRouteRule
+                {
+                    RuleId = "high-empty",
+                    Priority = 20,
+                    Match = new ChatRouteMatch { Channel = "lark" },
+                    Action = null,
+                },
+                new ChatRouteRule
+                {
+                    RuleId = "low-actioned",
+                    Priority = 5,
+                    Match = new ChatRouteMatch { Channel = "lark" },
+                    Action = ForwardToModelAction("low-model"),
+                },
+            ]);
+
+        var decision = resolver.Resolve(snapshot, new ChatRouteInput { Channel = "lark" });
+
+        decision.MatchedRuleId.Should().Be("low-actioned",
+            "a higher-priority but actionless rule must not block a lower-priority actionable one");
+        decision.Action.ForwardToModel.ModelName.Should().Be("low-model");
+    }
+
+    [Fact]
     public void ResolverAssembly_HasNoOrleansRuntimeOrHttpClientInjectionSurface()
     {
         var disallowedReferences = typeof(ChatRouteResolver).Assembly.GetReferencedAssemblies()

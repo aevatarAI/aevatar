@@ -36,11 +36,25 @@ public sealed class ChatRouteResolver
                 continue;
             }
 
+            // A projected rule whose action was omitted is not actionable —
+            // proto3 message fields can be null when not set, and the write
+            // side validates only default_target on upsert, so a stored rule
+            // can legitimately have no action. Skip it so resolution falls
+            // through to the next rule (and, if no rule has an action, to
+            // default_target) instead of NREing on action.Clone().
+            if (!HasAction(rule.Action))
+            {
+                continue;
+            }
+
             return NewDecision(rule.Action, matchedRuleId: rule.RuleId, usedFallback: false);
         }
 
         return NewDecision(snapshot.DefaultTarget, matchedRuleId: string.Empty, usedFallback: false);
     }
+
+    private static bool HasAction(ChatRouteAction? action) =>
+        action is not null && action.ActionCase != ChatRouteAction.ActionOneofCase.None;
 
     private static bool Matches(ChatRouteMatch? match, ChatRouteInput input)
     {
