@@ -209,6 +209,52 @@ public sealed class LlmSessionGAgentTests
     }
 
     [Fact]
+    public async Task HandleResolveForwardedToolResultAsync_WhenCallIsAlreadyResolved_ShouldPreserveFirstResolvedAt()
+    {
+        var actor = CreateActor("resp_1");
+        var firstResolvedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-12T00:02:00+00:00"));
+        var secondResolvedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-12T00:03:00+00:00"));
+
+        await actor.HandleRegisterAsync(new RegisterResponseSessionRequested
+        {
+            Record = BuildRecord("resp_1"),
+        });
+        await actor.HandleRecordForwardedToolCallAsync(new RecordForwardedToolCallRequested
+        {
+            ResponseId = "resp_1",
+            Call = BuildToolCall("call_1"),
+        });
+        await actor.HandleReceiveForwardedToolResultAsync(new ReceiveForwardedToolResultRequested
+        {
+            ResponseId = "resp_1",
+            CallId = "call_1",
+            SchemaHash = "schema-1",
+            Result = ResponsesJsonValues.ParseBoundaryPayload("""{"temperature":28}"""),
+        });
+
+        await actor.HandleResolveForwardedToolResultAsync(new ResolveForwardedToolResultRequested
+        {
+            ResponseId = "resp_1",
+            CallId = "call_1",
+            ResolvedAt = firstResolvedAt,
+        });
+        var versionAfterFirstResolve = actor.State.LastAppliedEventVersion;
+
+        await actor.HandleResolveForwardedToolResultAsync(new ResolveForwardedToolResultRequested
+        {
+            ResponseId = "resp_1",
+            CallId = "call_1",
+            ResolvedAt = secondResolvedAt,
+        });
+
+        actor.State.LastAppliedEventVersion.Should().Be(versionAfterFirstResolve);
+        var call = actor.State.ForwardedToolCalls.Should().ContainSingle().Which;
+        call.Status.Should().Be(LlmSessionForwardedToolCallStatus.Resolved);
+        call.ResolvedAt.Should().Be(firstResolvedAt);
+        ResponsesJsonValues.ToBoundaryJson(call.Result).Should().Be("""{"temperature":28}""");
+    }
+
+    [Fact]
     public async Task ForwardedToolCallLifecycle_ShouldDurablyAdvanceFromPendingToReceivedToResolved()
     {
         var actor = CreateActor("resp_1");

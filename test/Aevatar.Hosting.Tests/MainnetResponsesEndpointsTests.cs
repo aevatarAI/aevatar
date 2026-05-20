@@ -840,6 +840,72 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
+    public async Task PostResponses_WithCancelledForwardedToolCall_ShouldReturnToolCallNotAvailable_WithoutCallingProvider()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        var schemaHash = ResponsesToolSchemaHashes.Compute("""{"type":"object"}""");
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_previous",
+            "user-1",
+            "user-1",
+            LlmSessionOriginKind.ApiKey,
+            null,
+            LlmSessionStatus.Completed,
+            DateTimeOffset.UtcNow.AddMinutes(-2),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_previous",
+            3,
+            "resp_previous:tool:call_1:cancelled",
+            [
+                new LlmSessionForwardedToolCallSnapshot(
+                    "call_1",
+                    "get_weather",
+                    schemaHash,
+                    """{"city":"Singapore"}""",
+                    LlmSessionForwardedToolCallStatus.Cancelled,
+                    DateTimeOffset.UtcNow.AddMinutes(30),
+                    null,
+                    DateTimeOffset.UtcNow.AddHours(-1),
+                    null,
+                    null),
+            ]));
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent($$"""
+            {
+              "model": "gpt-5.4",
+              "previous_response_id": "resp_previous",
+              "input": [
+                {
+                  "type": "function_call_output",
+                  "call_id": "call_1",
+                  "schema_hash": "{{schemaHash}}",
+                  "output": {"temperature": 28}
+                }
+              ]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        GetErrorCode(body).Should().Be("tool_call_not_available");
+        body.Should().NotContain("secret-token");
+        sessions.ToolResults.Should().BeEmpty();
+        sessions.ResolvedToolResults.Should().BeEmpty();
+        sessions.Registered.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task PostResponses_WithFunctionCallOutputSchemaMismatch_ShouldReturnBadRequest()
     {
         var provider = new RecordingLLMProvider();
@@ -987,6 +1053,43 @@ public sealed class MainnetResponsesEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
         GetErrorCode(body).Should().Be("previous_response_expired");
+        sessions.Registered.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostResponses_WithCancelledPreviousResponse_ShouldReturnStructuredNotAvailableError_WithoutCallingProvider()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_previous",
+            "user-1",
+            "user-1",
+            LlmSessionOriginKind.ApiKey,
+            null,
+            LlmSessionStatus.Cancelled,
+            DateTimeOffset.UtcNow.AddMinutes(-10),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_previous",
+            2,
+            "resp_previous:status:cancelled"));
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""{"model":"gpt-5.4","input":"continue","previous_response_id":"resp_previous"}"""),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        GetErrorCode(body).Should().Be("previous_response_not_available");
+        body.Should().NotContain("secret-token");
         sessions.Registered.Should().BeEmpty();
         provider.LastRequest.Should().BeNull();
     }
