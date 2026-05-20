@@ -156,7 +156,7 @@ EOF
 5. **Per-PR Phase 8 进展判定**:从 log marker 推断:
    - 三 reviewer 全 `REVIEW_DONE:` + 全 approve → auto-merge
    - 任一 reject → 看 fix log;无 fix log → 派 fix r1;有 fix-rN log `FIX_DONE:` → 派 reviewer rN+1
-   - `fix_round > 6` → meta-layer reflect
+   - `fix_round > 3` → meta-layer reflect
 
 6. **State.json 仅作 debug**:可以追加 phase transition 记录到 state.json 作为 audit trail,但**不允许读 state.json 的字段决定派什么**。
 
@@ -821,7 +821,7 @@ Each reviewer outputs `REVIEW_DONE:${PR}:${role}:<approve|comment|reject>` marke
 
 ### Fix-retry loop (AI iterates until consensus)
 
-Policy: AI keeps iterating until unanimous-approve consensus, OR until escalation criteria are hit. Default `max_fix_rounds = 6` per PR (per Auric 2026-05-19 "2 轮太少,改到 6 轮")。
+Policy: AI keeps iterating until unanimous-approve consensus, OR until escalation criteria are hit. Default `max_fix_rounds = 3` per PR (per Auric 2026-05-19 "2 轮太少,改到 3 轮"(2026-05-20 "共识轮次由 6 轮改为 3 轮"))。
 
 Loop:
 
@@ -846,7 +846,7 @@ Loop:
 
 Escalate to human ONLY when:
 
-- `fix_round > max_fix_rounds` (default 6) and still not unanimous → **不要直接升 human,先升 meta-layer**(see "## Meta-layer escalation" 下文)。Meta-layer 也无法解 OR 命中 architecture-philosophy 硬条件 → 才升 human。
+- `fix_round > max_fix_rounds` (default 3) and still not unanimous → **不要直接升 human,先升 meta-layer**(see "## Meta-layer escalation" 下文)。Meta-layer 也无法解 OR 命中 architecture-philosophy 硬条件 → 才升 human。
 - Fix codex emits `FIX_BLOCKED:<PR>:round-<N>:human-decision:<...>` (e.g. reviewer demands deleting a feature, splitting into 3 PRs, renaming a cross-cluster type).
 - Fix codex emits `FIX_BLOCKED:<PR>:round-<N>:conflict:<...>` (reviewers' demands contradict each other and codex cannot resolve).
 - Two consecutive rounds produce IDENTICAL reject text for the same reviewer (the fix didn't address the demand and codex isn't making progress).
@@ -1021,7 +1021,52 @@ Meta-judge emits `META_JUDGE_DONE:<decision>:<...>`,**controller 路由表(强�
 
 **重大 bug(per Auric 2026-05-20 "元思考逻辑似乎没有生效")**:iter18 中 #730 / #731 / #733 都 `escalate:stalled` 直接 label 了人,**没派 reflector**。原因:本节只写"escalate → label",没明确 `stalled` 子类必须 reflector 优先。已纠正——上表 `escalate:stalled` 行强制 reflector。
 
-reflector spawn 模板见 [Meta-layer escalation](#meta-layer-escalation--强制per-auric-2026-05-19-6-轮还解决不掉则考虑是否应该把问题升级再更元层进行考虑解决问题)节。reflector 输出 `META_RESOLVED:<kind>:<reason>` 后 controller 再按 retry-fix / re-design / re-cluster / drop / escalate-human 路由。**只有** reflector 显式输出 `META_RESOLVED:escalate-human:<reason>` 时,controller 才允许 label `🆘 human:卡死`。
+reflector spawn 模板见 "Meta-layer escalation" 节。reflector 输出 `META_RESOLVED:<kind>:<reason>` 后 controller 再按 retry-fix / re-design / re-cluster / drop / escalate-human 路由。**只有** reflector 显式输出 `META_RESOLVED:escalate-human:<reason>` 时,controller 才允许 label `🆘 human:卡死`。
+
+### Reflector 完成 → 立即回到共识阶段(强制,per Auric 2026-05-20 "元讨论结束,可能之前由于打着需要人介入的标签,所以感觉并没有很好的再次进入共识阶段;整个系统的核心是多角色多角度共识")
+
+**关键 bug**:之前 `escalate:stalled` 触发后挂 `auto-loop-stuck` + `👤 human:需-maintainer-决策` label,**reflector 完成后没清掉**,导致 issue 视觉上仍卡在"等人"状态;controller sweep 时也会看到 stuck label 误以为不需处理。
+
+**修复**:reflector 完成(任何 `META_RESOLVED:<kind>` 除 `escalate-human` 外)后,controller **必须立即**执行 label transition:
+
+```bash
+gh issue edit <N> \
+  --remove-label "auto-loop-stuck" \
+  --remove-label "👤 human:需-maintainer-决策" \
+  --remove-label "🆘 human:卡死" \
+  --add-label "🔍 phase:design-solving" \
+  --add-label "🤖 human:auto-推进"
+```
+
+然后按 `META_RESOLVED:<kind>` 路由立刻做下一步(派 fresh 3 solver 轮 / 关 issue / re-cluster);**不允许**停在"reflector done but stuck label still on"暧昧态。整个系统核心是多角色多角度共识——reflector 是中介调和角色,完成后必须把控制权交回 solver 共识循环。
+
+唯一例外:`META_RESOLVED:escalate-human` → 保留 / 加 `🆘 human:卡死` label,这才是真正 human 介入态。
+
+### Stuck label 4h 超时自动新一轮 meta-reflect(强制,per Auric 2026-05-20 "如果人长期不介入,比如四小时以上,则尝试进入新一轮元解决轮次,这样就不会积攒了")
+
+每次 controller wakeup 第一动作之后(per-wakeup sweep step 1 完成后),对每个带 `auto-loop-stuck` OR `👤 human:需-maintainer-决策` OR `🆘 human:卡死` label 的 issue:
+
+```bash
+last_human_at=$(gh issue view <N> --json comments --jq '[.comments[] | select(.body | contains("⟦AI:AUTO-LOOP⟧") | not) | .createdAt][-1] // .createdAt' | tr -d '"')
+now_epoch=$(date -u +%s)
+last_epoch=$(date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$last_human_at" +%s 2>/dev/null \
+  || date -u -d "$last_human_at" +%s)
+delta_h=$(( (now_epoch - last_epoch) / 3600 ))
+
+# 防重复:有 in-flight reflector(meta-reflect-issue<N>*.log mtime < 30min)→ 跳过
+if (( delta_h >= 4 )) && [ -z "$(find .refactor-loop/logs/meta-reflect-issue<N>*.log -mmin -30 2>/dev/null)" ]; then
+  # 派 fresh reflector,suffix -rN+1 防 overwrite 历史 reflector log
+  spawn-reflector <N>
+fi
+```
+
+意图:防 escalated issue 在"等 maintainer"无限堆积。4h 后**自动**派 fresh reflector,让 AI 反思能否重新框架到共识路径(narrow scope / drop / re-cluster),不积攒。
+
+**反面禁止**:
+- ❌ 见 stuck label 就跳过,不计算 delta
+- ❌ 用 `author=loning` 判真人评论时间(deprecated,见 sentinel 节)
+- ❌ 4h 内重复派 reflector 浪费 codex
+- ❌ reflector 完成但忘清 stuck label → 下次 sweep 仍误判为 stuck
 
 ### 任何 concrete-plan 都必须走 multi-solver consensus(per Auric 2026-05-19 "核心流程是都需要达成共识")
 
@@ -1255,7 +1300,7 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 - ❌ banner 用 `## 🤖 controller` 第一行(comment-monitor 已经把 `## 🤖` 当 codex post 跳过,但 banner 应该是 controller 自己,用 `## 📊` 区分)
 - ❌ "需要人介入"用模糊措辞 → 人类还是不知道要不要看
 
-## Meta-layer escalation — 强制(per Auric 2026-05-19 "6 轮还解决不掉,则考虑是否应该把问题升级,再更元层进行考虑解决问题")
+## Meta-layer escalation — 强制(per Auric 2026-05-19 "3 轮还解决不掉,则考虑是否应该把问题升级,再更元层进行考虑解决问题")
 
 **问题**:Phase 8 fix r6 仍 reject,或 CI same-check 6 次仍 fail,**第一反应不是喊 human**,而是**反思上一层是否本身错了**。喊 human 是最后的手段。
 
@@ -1269,7 +1314,7 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 
 ### 触发 meta-layer 反思
 
-- Phase 8 `fix_round > 6` 仍 reject(所有 reviewer 同一组 / 同一 reviewer 反复 reject)
+- Phase 8 `fix_round > 3` 仍 reject(所有 reviewer 同一组 / 同一 reviewer 反复 reject)
 - CI same-check 失败 6 次(同 test 6 次 fix 仍红)
 - Cumulative PR diff size > 原 PR 200%(scope-runaway 信号)
 - Reviewer 同一类 evidence(test coverage / dead surface / self-doc)在 3 round 内反复出现 → meta-reflect "为什么 evidence 总是同类"
@@ -1290,7 +1335,7 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 4. Audit cluster 框定是否过大 / 过小 / 错混?
 
 决议(选一):
-- `META_RESOLVED:retry-fix`: 是 reviewer 正常审查,继续 fix r7+ 仍可收敛(给 reviewer 一个 "approve if r7 仍 narrow valid" 的窗口)
+- `META_RESOLVED:retry-fix`: 是 reviewer 正常审查,继续 fix r4+ 仍可收敛(给 reviewer 一个 "approve if r4 仍 narrow valid" 的窗口)
 - `META_RESOLVED:re-design`: design 错位,关 PR / 撤回当前 implement,re-Phase 9 with reflector prompt
 - `META_RESOLVED:re-cluster`: cluster scope 错位,关 PR + audit 阶段 re-split(拆为 2-3 个小 cluster)
 - `META_RESOLVED:drop`: 任务价值不足或代价 > 收益,关 PR + close issue wontfix
@@ -1305,7 +1350,7 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 ```
 
 Controller 读 marker 后路由:
-- `retry-fix` → 派 fix r7 + 提高 max_fix_rounds 临时到 8(只本 PR)+ 同时 narrow reviewer 关注新 evidence only(不再 surface 旧 evidence)
+- `retry-fix` → 派 fix r4 + 提高 max_fix_rounds 临时到 5(只本 PR)+ 同时 narrow reviewer 关注新 evidence only(不再 surface 旧 evidence)
 - `re-design` → 关 PR / 撤回 commits / re-Phase 9 with constraint = reject evidence pattern
 - `re-cluster` → 关 PR / audit re-split(产新 cluster 在 next iter)
 - `drop` → close PR + close issue with `wontfix` label + 转 phase merged-no-op
@@ -1313,11 +1358,11 @@ Controller 读 marker 后路由:
 
 ### 反面(❌ 禁止)
 
-- ❌ fix r7 直接派出而不 reflect → 可能在错的层级死循环
-- ❌ 6 轮卡死直接升 human → 没把 AI 自身的反思能力用足
+- ❌ fix r4 直接派出而不 reflect → 可能在错的层级死循环
+- ❌ 3 轮卡死直接升 human → 没把 AI 自身的反思能力用足
 - ❌ reflector 也写代码 → 它的职责是 question framing,不是 propose fix
 - ❌ reflector 决议 `re-design` 但 controller 继续派 fix → 框架失效
-- ❌ 临时 `max_fix_rounds = 8` 滥用 → 仅 reflector 明确 `retry-fix` 时允许,且不超过 8
+- ❌ 临时 `max_fix_rounds = 5` 滥用 → 仅 reflector 明确 `retry-fix` 时允许,且不超过 5
 
 ## CI 监控即时推进 — 强制(per Auric 2026-05-19 "ci 监控,应该红了就及时推进")
 
@@ -1350,7 +1395,7 @@ done
    - codecov/patch → 派 `prompts/test-add.md` codex(uncovered patch lines)
 3. **label 转 `🔧 phase:fixing`** + post `## 📊` banner
 4. **fix codex 完成 → controller 立刻 commit + push + 重 watch CI**
-5. **6 次 fix 同 check 仍 fail → label 升 `🆘 human:卡死-需-rework` + PushNotification + 停 loop**(per Auric 2026-05-19 "2 轮太少,改到 6 轮")
+5. **3 次 fix 同 check 仍 fail → label 升 `🆘 human:卡死-需-rework` + PushNotification + 停 loop**(per Auric 2026-05-19 "2 轮太少,改到 3 轮"(2026-05-20 "共识轮次由 6 轮改为 3 轮"))
 
 ### 反面(❌ 禁止)
 
