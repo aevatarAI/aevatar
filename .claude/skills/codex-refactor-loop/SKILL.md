@@ -37,6 +37,13 @@ Subsequent wakeups → **derive state from GitHub**(open PR / open issue / label
 
 ### Per-wakeup sweep(每次 wakeup 第一件事,在派任何 codex / 转 phase 之前)
 
+0. **本地 main repo 同步**(强制,per Auric 2026-05-20 "为什么本地分支没有跟远程同步"):
+   ```bash
+   cd "$REPO_ROOT" && git fetch origin --quiet
+   git pull --ff-only origin auto-refact-dev 2>&1 | tail -1
+   ```
+   Worktree push 后 origin 推进,**main repo HEAD 不会自动跟**;不 sync 会让 controller 拿到陈旧 commit / 编错误 PR base。每次 wakeup 第一动作。
+
 1. **GitHub state derive**:
    ```bash
    gh pr list --label "auto-loop" --state open --json number,headRefName,labels,title
@@ -544,6 +551,20 @@ labels=$(jq -r '[.labels[].name] | join(",")' <<<"$issue_json")
 ```
 
 Classify:
+
+**🔴 真人评论 vs controller 评论识别(强制,per Auric 2026-05-20 "为什么许多 issues 我回复了没及时处理")**:`gh` CLI authenticated user = `loning`,与 maintainer Auric/Loning **同账号**;`comments[].author.login` **无法区分**真人 vs controller。**必须按 body 内容判断**:
+
+- **body 第一行匹配** `^## 🤖 ` 或 `^## 📊 ` → **controller post**(banner / codex-output / status),跳过
+- **body 末尾含** `🤖 controller status banner` / `🤖 Auto-loop` / `Generated with Claude Code` → **controller post**,跳过
+- **以上都不匹配** → **真人评论**(maintainer Auric 等),**必须响应**(react eyes + 触发 maintainer-reply-resets-the-round)
+
+Comment sweep 命令:
+```bash
+gh issue view <N> --json comments --jq '.comments[] | select((.body | startswith("## 🤖") | not) and (.body | startswith("## 📊") | not)) | "\(.createdAt)|\(.body[0:120])"' | tail -3
+```
+拿到的就是真人评论(或者真人评论列表为空)。`select(.author.login=="loning")` 一律放弃—因为 controller 自己也是 loning。
+
+历史教训:iter18 中 #719/#731/#732/#733 maintainer 真有评论("处理一下" / "choose:structural-no-live-sink" / "架构升级" / "应该统一 tg lark stream 用 actor 持有"),controller 按 author=loning 当 self-banner 跳过,等了几小时才发现。**禁止**再用 author 判断。
 
 - **No new comments AND state==open**: nothing to do; bump `last_checked` only.
 - **State==closed without `auto-loop-resume` label**: maintainer closed without resume signal. Move to `clusters_failed` with reason `design-rejected:closed`. PushNotification: "cluster-<id> design issue #<num> closed without auto-resume; cluster permanently deferred."
