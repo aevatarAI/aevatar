@@ -301,6 +301,12 @@ message TransportExtras {
   // lets ConversationGAgent build the chat-routing caller scope before any turn runner metadata
   // exists, without falling back to a generic metadata bag.
   string nyx_registration_scope_id = 9;
+  // The sender's NyxID user id, resolved at the relay ingress boundary by calling NyxID `/me`
+  // with the relay-supplied user access token. Lets `ConversationGAgent` build a per-user
+  // owner scope for chat-route policy lookup (matching scope_id-only and per-user scopes
+  // alike) without re-resolving inside the actor turn. Empty when the relay payload did not
+  // surface a user access token or when `/me` resolution failed at ingress.
+  string nyx_sender_user_id = 10;
 }
 
 // Represents one normalized activity flowing through the channel pipeline.

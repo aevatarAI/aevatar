@@ -32,6 +32,7 @@ public static partial class NyxIdChatEndpoints
         [FromServices] NyxIdRelayTransport relayTransport,
         [FromServices] NyxIdRelayAuthValidator relayAuthValidator,
         [FromServices] Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions relayOptions,
+        [FromServices] Aevatar.GAgents.Scheduled.INyxIdCurrentUserResolver nyxIdCurrentUserResolver,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -116,6 +117,16 @@ public static partial class NyxIdChatEndpoints
             activity.TransportExtras ??= new TransportExtras();
             activity.TransportExtras.NyxUserAccessToken = validation.UserAccessToken ?? string.Empty;
             activity.TransportExtras.NyxRegistrationScopeId = scopeId.Trim();
+            // Resolve sender NyxID at ingress so the actor can build a per-user
+            // caller scope for chat-route policy lookup without making an HTTP
+            // call inside the turn. Fail-soft: log + leave empty so policy
+            // resolution falls through to scope-only / default policies.
+            activity.TransportExtras.NyxSenderUserId =
+                await TryResolveSenderNyxUserIdAsync(
+                    nyxIdCurrentUserResolver,
+                    validation.UserAccessToken,
+                    logger,
+                    ct);
             var relayInbound = new NyxRelayInboundActivity
             {
                 Activity = activity,
@@ -232,6 +243,34 @@ public static partial class NyxIdChatEndpoints
                 payload.MessageId,
                 nyxAgentApiKeyId);
             return null;
+        }
+    }
+
+    private static async Task<string> TryResolveSenderNyxUserIdAsync(
+        Aevatar.GAgents.Scheduled.INyxIdCurrentUserResolver resolver,
+        string? userAccessToken,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        var token = NormalizeOptional(userAccessToken);
+        if (token is null)
+            return string.Empty;
+
+        try
+        {
+            var resolved = NormalizeOptional(await resolver.ResolveCurrentUserIdAsync(token, ct));
+            return resolved ?? string.Empty;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Failed to resolve sender NyxID at relay ingress; chat-routing per-user policies will not match for this turn.");
+            return string.Empty;
         }
     }
 

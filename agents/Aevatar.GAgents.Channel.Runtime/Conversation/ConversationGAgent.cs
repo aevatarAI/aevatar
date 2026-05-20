@@ -254,7 +254,13 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         if (platform is null || registrationScopeId is null || senderId is null)
             return null;
 
-        return OwnerScope.ForChannel(registrationScopeId, platform, registrationScopeId, senderId);
+        // The sender's NyxID is resolved by the relay ingress (NyxID `/me` with the
+        // user access token) and stashed in TransportExtras. Using it here matches
+        // per-user channel policies; an empty value falls through to scope-only
+        // policies (same key shape as policy upserts without a per-user binding).
+        var senderNyxUserId = NormalizeOptional(activity.TransportExtras?.NyxSenderUserId)
+                              ?? string.Empty;
+        return OwnerScope.ForChannel(senderNyxUserId, platform, registrationScopeId, senderId);
     }
 
     private static string ExtractCommandName(string? text)

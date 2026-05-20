@@ -115,10 +115,16 @@ public static partial class NyxIdChatEndpoints
         // Conversation creation is fail-fast on registry persistence.
         // NyxId chat depends on the registry being available; there is no
         // degraded mode where a conversation can run without being registered.
-        var actorId = !string.IsNullOrWhiteSpace(decision.Action.ForwardToGagent?.ActorId)
-            ? decision.Action.ForwardToGagent.ActorId.Trim()
+        var forwardedActorId = decision.Action.ForwardToGagent?.ActorId;
+        var actorId = !string.IsNullOrWhiteSpace(forwardedActorId)
+            ? forwardedActorId.Trim()
             : NyxIdChatServiceDefaults.GenerateActorId();
-        if (decision.Action.ForwardToGagent is null)
+        // We only own the actor's lifecycle when we created it in this request.
+        // A forwarded ChatRoute decision reuses an actor that an earlier request
+        // (possibly under a different scope) created; destroying it on a
+        // registry rollback would delete unrelated traffic's target actor.
+        var createdLocally = decision.Action.ForwardToGagent is null;
+        if (createdLocally)
             await actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);
         try
         {
@@ -132,7 +138,8 @@ public static partial class NyxIdChatEndpoints
                     scopeId,
                     actorId,
                     registryCommandPort,
-                    actorRuntime);
+                    actorRuntime,
+                    destroyActor: createdLocally);
                 return Results.Json(
                     new { error = "Conversation registration is not admission-visible" },
                     statusCode: StatusCodes.Status503ServiceUnavailable);
@@ -145,7 +152,8 @@ public static partial class NyxIdChatEndpoints
                 scopeId,
                 actorId,
                 registryCommandPort,
-                actorRuntime);
+                actorRuntime,
+                destroyActor: createdLocally);
             throw;
         }
 
@@ -176,7 +184,8 @@ public static partial class NyxIdChatEndpoints
         string scopeId,
         string actorId,
         IGAgentActorRegistryCommandPort registryCommandPort,
-        IActorRuntime actorRuntime)
+        IActorRuntime actorRuntime,
+        bool destroyActor)
     {
         var logger = http.RequestServices?.GetService<ILoggerFactory>()
             ?.CreateLogger("Aevatar.NyxId.Chat.CreateConversation");
@@ -196,6 +205,12 @@ public static partial class NyxIdChatEndpoints
                 actorId);
             return;
         }
+
+        // Only destroy the actor when this request actually created it.
+        // ChatRoute ForwardToGAgent reuses an existing target and must not be
+        // torn down by a rollback in this request.
+        if (!destroyActor)
+            return;
 
         try
         {
