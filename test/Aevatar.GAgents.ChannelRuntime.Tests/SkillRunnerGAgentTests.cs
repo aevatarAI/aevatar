@@ -1141,9 +1141,6 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     {
         public string Name => "stub";
 
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default) =>
-            Task.FromResult(new LLMResponse { Content = string.Concat(deltas) });
-
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [EnumeratorCancellation] CancellationToken ct = default)

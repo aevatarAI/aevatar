@@ -155,7 +155,7 @@ public class ToolCallLoopTests
                 ReasoningContent = "stream-reasoning",
                 FinishReason = "stop",
             },
-        ], throwOnChatAsync: true);
+        ]);
         bool? observedIsStreaming = null;
         var middleware = new DelegateLlmCallMiddleware(async (context, next) =>
         {
@@ -780,26 +780,14 @@ public class ToolCallLoopTests
     private sealed class QueueLLMProvider : ILLMProvider
     {
         private readonly Queue<LLMResponse> _responses;
-        private readonly bool _throwOnChatAsync;
 
-        public QueueLLMProvider(IEnumerable<LLMResponse> responses, bool throwOnChatAsync = false)
+        public QueueLLMProvider(IEnumerable<LLMResponse> responses)
         {
             _responses = new Queue<LLMResponse>(responses);
-            _throwOnChatAsync = throwOnChatAsync;
         }
 
         public string Name => "queue";
         public List<LLMRequest> Requests { get; } = [];
-
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            if (_throwOnChatAsync)
-                throw new InvalidOperationException("Provider boundary ChatAsync should not be used by ToolCallLoop.");
-
-            Requests.Add(request);
-            return Task.FromResult(_responses.Count > 0 ? _responses.Dequeue() : new LLMResponse());
-        }
 
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
