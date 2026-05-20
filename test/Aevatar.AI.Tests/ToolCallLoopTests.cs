@@ -777,7 +777,7 @@ public class ToolCallLoopTests
         forwardedToolMessage.ContentParts[1].DataBase64.Should().Be("Zm9v");
     }
 
-        private sealed class QueueLLMProvider : ILLMProvider
+    private sealed class QueueLLMProvider : ILLMProvider
     {
         private readonly Queue<LLMResponse> _responses;
 

@@ -408,6 +408,39 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
+    public void ProviderContractSurfaces_ShouldNotDeclareNonStreamingChatAsync()
+    {
+        var root = FindRepositoryRoot();
+        var providerContractFile = Path.Combine(
+            root,
+            "src",
+            "Aevatar.AI.Abstractions",
+            "LLMProviders",
+            "ILLMProvider.cs");
+        var concreteProviderRoots = new[]
+        {
+            Path.Combine(root, "src", "Aevatar.AI.LLMProviders.MEAI"),
+            Path.Combine(root, "src", "Aevatar.AI.LLMProviders.NyxId"),
+            Path.Combine(root, "src", "Aevatar.AI.LLMProviders.Tornado"),
+        };
+
+        var scannedFiles = new[] { providerContractFile }
+            .Concat(concreteProviderRoots.SelectMany(scanRoot =>
+                Directory.EnumerateFiles(scanRoot, "*.cs", SearchOption.AllDirectories)));
+        var offenders = scannedFiles
+            .SelectMany(file => File.ReadLines(file)
+                .Select((line, index) => new { file, line, index })
+                .Where(x => !x.line.TrimStart().StartsWith("//", StringComparison.Ordinal))
+                .Where(x => System.Text.RegularExpressions.Regex.IsMatch(
+                    x.line,
+                    @"Task<LLMResponse>\s+ChatAsync\s*\("))
+                .Select(x => $"{Path.GetRelativePath(root, x.file)}:{x.index + 1}:{x.line.Trim()}"))
+            .ToArray();
+
+        offenders.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ChatStreamAsync_WhenAgentMiddlewareTerminates_ShouldEmitSyntheticContentChunk()
     {
         var provider = new StreamingProvider(["ignored"]);
