@@ -1388,6 +1388,85 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 - 不要发废 banner(同 phase 连续两次没变化 → 不要重发)。
 - escalation banner 必须**显式**说"✅ 需要人介入"并列出 maintainer 需要做的具体决策(不是"看一下"这种 vague 描述)。
 
+### Escalation banner — 必须含 ASCII 图 + 详细决策说明(强制,per Auric 2026-05-20 "修改一下需要人介入的时候画一下 ascii 图在 github 上, 详细说明一下")
+
+普通 status banner 是 *index*(简短);**escalation banner 是 maintainer 决策依据**,必须**详尽**含:
+
+1. **ASCII 路径图**:历史 round 走向 → reflector → 当前停在哪
+2. **决策选项表**:每个选项的具体 plan + 影响范围 + tradeoff
+3. **背景上下文**:为什么 reflector / fresh round 都无法解
+4. **maintainer 行动入口**:reply with `<framing>` / add `auto-loop-resume` label / close as wontfix
+
+#### 模板(必须严格遵循)
+
+```markdown
+## 🆘 状态卡片 — 需 maintainer 决策(reflector + fresh round 均无解)
+
+| 维度 | 值 |
+|---|---|
+| Issue | #<N> <title> |
+| Cluster | <cluster-id> |
+| 历史轮次 | r1 + reflector r1 + r2 + reflector r2(全 escalate) |
+| 当前停在 | reflector r2 META_RESOLVED:escalate-human:<reason> |
+| **需 maintainer 决策** | **<一句话总结决策点>** |
+
+### 决策路径(ASCII)
+
+\`\`\`
+[r1 solver] ── [r1 judge: escalate:<category>]
+                       │
+                       ▼
+              [reflector r1] ── META_RESOLVED:re-design
+                       │
+                       ▼
+              [r2 solver(新 framing)] ── [r2 judge: 仍 escalate]
+                       │
+                       ▼
+              [reflector r2] ── META_RESOLVED:escalate-human  ◀── 当前
+                       │
+                       ▼
+              [maintainer 决策] ── ?
+\`\`\`
+
+### 决策选项(reflector r2 已分析)
+
+#### 选项 A — <选项名>
+- **Plan**:<file:line 级别,1-3 行>
+- **影响**:<改动范围 + 谁会被 break>
+- **Tradeoff**:<这条路的代价>
+
+#### 选项 B — <选项名>
+- **Plan**:...
+- **影响**:...
+- **Tradeoff**:...
+
+#### 选项 C — <选项名>
+- ...
+
+### 背景:为什么 AI 自己解不了
+
+<2-3 段中文,引用 r1/r2 judge marker + reflector 分析,说明 hardcoded trigger 命中点 / framing 无法绕开 / 跨 cluster 耦合等>
+
+### Maintainer 行动入口
+
+- **选定一个选项**:在本 issue 评论 `choose: <选项标识 A/B/C>` 或具体 narrowing constraint
+- **重新进入共识**:加 `auto-loop-resume` label,controller 会用你的评论作 narrowing 派 fresh round
+- **关闭不做**:close issue 加 `wontfix` label
+
+🤖 controller status banner
+
+⟦AI:AUTO-LOOP⟧
+```
+
+**约束**:
+- ASCII 图用 box-drawing characters(`─`/`│`/`▼`/`◀`/`▲`)+ 空格对齐;**禁用 mermaid**(per CLAUDE.md "GitHub issue/PR comment mermaid 禁忌")
+- 路径图必须包含**所有**历史 round + reflector 节点 + 当前停在哪(`◀── 当前` 箭头)
+- 决策选项**最少 2 个,最多 4 个**(< 2 = 没选 = vague,> 4 = 没思考过)
+- 每个选项必含 Plan / 影响 / Tradeoff 三栏
+- 背景段不要 *recap* 评论历史,是**为什么 AI 解不了**的根因分析
+- maintainer 行动入口三选一(选项 / 重派 / 关闭)
+- 末尾标准 `🤖 controller status banner` + sentinel
+
 ### 反面(❌ 禁止)
 
 - ❌ 一堆 codex artifact 评论之后无 status banner → 人类不知道当前 phase
