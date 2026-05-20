@@ -57,7 +57,6 @@ public static class ChannelRuntimeServiceCollectionExtensions
         //   Old pattern: Replay-based projection scope watermark query via IEventStore (EventStoreProjectionScopeWatermarkQueryPort).
         //   New principle: Materialized ProjectionScopeStatusDocument readmodel; ProjectionScopeStatusQueryPort reads document only; never replays IEventStore.
         services.AddProjectionScopeStatusRuntimeCore();
-        services.TryAddSingleton<ProjectionScopeWatermarkReadModelQueryPort>();
         if (configuration != null)
         {
             services.Configure<ChannelRuntimeTombstoneCompactionOptions>(
@@ -111,19 +110,12 @@ public static class ChannelRuntimeServiceCollectionExtensions
                 metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ProjectionScopeStatusDocument>>().Metadata,
                 keySelector: static doc => doc.Id,
                 keyFormatter: static key => key);
-            services.AddElasticsearchDocumentProjectionStore<ProjectionScopeWatermarkReadModel, string>(
-                optionsFactory: _ => ElasticsearchProjectionConfiguration.BindOptions(configuration!),
-                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ProjectionScopeWatermarkReadModel>>().Metadata,
-                keySelector: static doc => doc.Id,
-                keyFormatter: static key => key);
         }
         else
         {
             services.AddInMemoryDocumentProjectionStore<ChannelBotRegistrationDocument, string>(
                 static doc => doc.Id, static key => key);
             services.AddInMemoryDocumentProjectionStore<ProjectionScopeStatusDocument, string>(
-                static doc => doc.Id, static key => key);
-            services.AddInMemoryDocumentProjectionStore<ProjectionScopeWatermarkReadModel, string>(
                 static doc => doc.Id, static key => key);
         }
 

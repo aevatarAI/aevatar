@@ -25,21 +25,6 @@ message ProjectionScopeState {
   google.protobuf.Timestamp updated_at_utc = 11;
 }
 
-message ProjectionScopeWatermarkReadModel {
-  string id = 1;
-  string root_actor_id = 2;
-  string projection_kind = 3;
-  string session_id = 4;
-  ProjectionScopeMode mode = 5;
-  bool active = 6;
-  bool released = 7;
-  int64 last_observed_version = 8;
-  int64 last_successful_version = 9;
-  int64 state_version = 10;
-  string last_event_id = 11;
-  google.protobuf.Timestamp updated_at_utc = 12;
-}
-
 message ProjectionScopeFailure {
   string failure_id = 1;
   string stage = 2;

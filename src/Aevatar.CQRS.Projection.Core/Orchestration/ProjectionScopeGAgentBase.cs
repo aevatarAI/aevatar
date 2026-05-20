@@ -1,6 +1,5 @@
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Streaming;
-using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf.WellKnownTypes;
@@ -160,41 +159,6 @@ public abstract class ProjectionScopeGAgentBase<TContext>
             .On<ProjectionScopeDispatchFailedEvent>(ProjectionScopeStateApplier.ApplyDispatchFailed)
             .On<ProjectionScopeFailureReplayedEvent>(ProjectionScopeStateApplier.ApplyFailureReplayed)
             .OrCurrent();
-
-    // Refactor (iter18/cluster-003):
-    //   Old pattern: Projection watermark query port reads IEventStore and rebuilds ProjectionScopeState in the query call.
-    //   New principle: Watermark queries read a materialized actor-owned/projection-owned read model, with rebuild only in maintenance paths.
-    // New pattern: query reads materialized watermark; event replay is repair/recovery only.
-    protected override async Task OnStateChangedAsync(ProjectionScopeState state, CancellationToken ct)
-    {
-        var writer = Services.GetService<IProjectionDocumentWriter<ProjectionScopeWatermarkReadModel>>();
-        if (writer == null || string.IsNullOrWhiteSpace(state.RootActorId) || string.IsNullOrWhiteSpace(state.ProjectionKind))
-            return;
-
-        var scopeKey = new ProjectionRuntimeScopeKey(
-            state.RootActorId,
-            state.ProjectionKind,
-            ProjectionScopeModeMapper.ToRuntime(state.Mode),
-            state.SessionId);
-        var scopeActorId = ProjectionScopeActorId.Build(scopeKey);
-        var currentVersion = EventSourcing?.CurrentVersion ?? state.LastObservedVersion;
-        await writer.UpsertAsync(
-            new ProjectionScopeWatermarkReadModel
-            {
-                Id = scopeActorId,
-                RootActorId = state.RootActorId,
-                ProjectionKind = state.ProjectionKind,
-                SessionId = state.SessionId,
-                Mode = state.Mode,
-                Active = state.Active,
-                Released = state.Released,
-                LastObservedVersion = state.LastObservedVersion,
-                LastSuccessfulVersion = state.LastSuccessfulVersion,
-                StateVersion = currentVersion,
-                UpdatedAtUtc = state.UpdatedAtUtc?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow),
-            },
-            ct).ConfigureAwait(false);
-    }
 
     protected ProjectionRuntimeScopeKey BuildScopeKey() =>
         new(

@@ -5,7 +5,6 @@ using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Providers.Neo4j.Configuration;
 using Aevatar.CQRS.Projection.Providers.Neo4j.DependencyInjection;
-using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Scripting.Projection.ReadModels;
 using Microsoft.Extensions.Configuration;
@@ -88,10 +87,6 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
                 configuration,
                 static readModel => readModel.Id,
                 static readModel => readModel.DocumentIndexScope);
-            TryAddElasticsearchDocumentStore<ProjectionScopeWatermarkReadModel>(
-                services,
-                configuration,
-                static readModel => readModel.Id);
         }
         else
         {
@@ -118,7 +113,6 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
         TryAddInMemoryDocumentStore<ScriptReadModelDocument>(services, static readModel => readModel.Id);
         TryAddInMemoryDocumentStore<ScriptEvolutionReadModel>(services, static readModel => readModel.Id);
         TryAddInMemoryDocumentStore<ScriptNativeDocumentReadModel>(services, static readModel => readModel.Id);
-        TryAddInMemoryDocumentStore<ProjectionScopeWatermarkReadModel>(services, static readModel => readModel.Id);
     }
 
     private static bool HasAllScriptingDocumentReaders(
@@ -129,8 +123,7 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
                && HasDocumentReaderForProvider<ScriptCatalogEntryDocument>(services, providerKind)
                && HasDocumentReaderForProvider<ScriptReadModelDocument>(services, providerKind)
                && HasDocumentReaderForProvider<ScriptEvolutionReadModel>(services, providerKind)
-               && HasDocumentReaderForProvider<ScriptNativeDocumentReadModel>(services, providerKind)
-               && HasDocumentReaderForProvider<ProjectionScopeWatermarkReadModel>(services, providerKind);
+               && HasDocumentReaderForProvider<ScriptNativeDocumentReadModel>(services, providerKind);
     }
 
     private static bool HasAnyDocumentReader<TDocument>(IServiceCollection services)

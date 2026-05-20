@@ -6,7 +6,6 @@ using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.CQRS.Projection.Stores.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
@@ -99,44 +98,10 @@ public sealed class ProjectionScopeGAgentBaseTests
         await act.Should().NotThrowAsync();
     }
 
-    [Fact]
-    public async Task HandleObservedEnvelopeAsync_MaterializesScopeWatermarkReadModel()
-    {
-        var writer = new RecordingWatermarkWriter();
-        var eventSourcing = new TrackingEventSourcing
-        {
-            ConfirmResult = new EventStoreCommitResult
-            {
-                AgentId = "projection-scope-watermark",
-                LatestVersion = 7,
-            },
-        };
-        var agent = BuildActivatedAgent(
-            scopeId: "projection-scope-watermark",
-            onProcess: _ => ProjectionScopeDispatchResult.Success(42, "state.updated"),
-            eventSourcing: eventSourcing,
-            watermarkWriter: writer);
-        var envelope = BuildForwardedObserverEnvelope(targetStreamId: "projection-scope-watermark");
-
-        await agent.HandleObservedEnvelopeAsync(envelope);
-
-        writer.LastUpsert.Should().NotBeNull();
-        writer.LastUpsert!.Id.Should().Be(ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
-            "root-actor",
-            "test-kind",
-            ProjectionRuntimeMode.DurableMaterialization,
-            "session-1")));
-        writer.LastUpsert.Active.Should().BeTrue();
-        writer.LastUpsert.Released.Should().BeFalse();
-        writer.LastUpsert.LastSuccessfulVersion.Should().Be(42);
-        writer.LastUpsert.StateVersion.Should().Be(7);
-    }
-
     private static TestScopeAgent BuildActivatedAgent(
         string scopeId,
         Func<EventEnvelope, ProjectionScopeDispatchResult> onProcess,
-        IEventSourcingBehavior<ProjectionScopeState>? eventSourcing = null,
-        IProjectionDocumentWriter<ProjectionScopeWatermarkReadModel>? watermarkWriter = null)
+        IEventSourcingBehavior<ProjectionScopeState>? eventSourcing = null)
     {
         var agent = new TestScopeAgent(onProcess);
 
@@ -157,8 +122,6 @@ public sealed class ProjectionScopeGAgentBaseTests
         var services = new ServiceCollection();
         services.AddSingleton<Func<ProjectionRuntimeScopeKey, TestContext>>(
             static _ => new TestContext("root-actor", "test-kind"));
-        if (watermarkWriter != null)
-            services.AddSingleton(watermarkWriter);
         agent.Services = services.BuildServiceProvider();
 
         return agent;
@@ -222,22 +185,4 @@ public sealed class ProjectionScopeGAgentBaseTests
                 : current;
     }
 
-    private sealed class RecordingWatermarkWriter : IProjectionDocumentWriter<ProjectionScopeWatermarkReadModel>
-    {
-        public ProjectionScopeWatermarkReadModel? LastUpsert { get; private set; }
-
-        public Task<ProjectionWriteResult> UpsertAsync(
-            ProjectionScopeWatermarkReadModel readModel,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            LastUpsert = readModel.Clone();
-            return Task.FromResult(ProjectionWriteResult.Applied());
-        }
-
-        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
-        {
-            throw new NotSupportedException();
-        }
-    }
 }
