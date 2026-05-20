@@ -148,14 +148,13 @@ public sealed class StudioAuthoringPreviewApplicationServiceTests
             request.RequestId.Should().NotBeNullOrWhiteSpace();
             StreamCallCount++;
             foreach (var reasoning in reasoningChunks ?? [])
-                yield return new StudioAuthoringLLMChunk(null, reasoning, false);
+                yield return new StudioAuthoringLLMChunk(null, reasoning);
             foreach (var chunk in contentChunks)
             {
                 ct.ThrowIfCancellationRequested();
-                yield return new StudioAuthoringLLMChunk(chunk, null, false);
+                yield return new StudioAuthoringLLMChunk(chunk, null);
             }
 
-            yield return new StudioAuthoringLLMChunk(null, null, true);
             await Task.CompletedTask;
         }
     }
@@ -188,9 +187,7 @@ public sealed class StudioAuthoringPreviewApplicationServiceTests
                 await Release.Task.WaitAsync(ct);
                 yield return new StudioAuthoringLLMChunk(
                     "name: generated\nsteps:\n  - id: chat\n    type: llm_call",
-                    null,
-                    false);
-                yield return new StudioAuthoringLLMChunk(null, null, true);
+                    null);
             }
             finally
             {

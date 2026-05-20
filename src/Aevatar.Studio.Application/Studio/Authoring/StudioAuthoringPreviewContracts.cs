@@ -26,6 +26,9 @@ public sealed record StudioAuthoringPreviewRequest(
     string? CurrentFilePath = null,
     IReadOnlyDictionary<string, string>? Metadata = null);
 
+// Refactor (iter21/cluster-001):
+//   Old pattern: Host generator progress enums were split by fake workflow/script service shells.
+//   New principle: Application exposes one authoring progress vocabulary shared by both preview kinds.
 public enum StudioAuthoringProgressStage
 {
     Starting,
@@ -61,10 +64,12 @@ public sealed record StudioAuthoringLLMRequest(
     string RequestId,
     IReadOnlyDictionary<string, string>? Metadata);
 
+// Refactor (iter21/cluster-001):
+//   Old pattern: Host aggregated provider stream chunks and leaked terminal bookkeeping into endpoint flow.
+//   New principle: Application consumes only reasoning/content deltas needed for preview generation.
 public sealed record StudioAuthoringLLMChunk(
     string? DeltaContent,
-    string? DeltaReasoningContent,
-    bool IsLast);
+    string? DeltaReasoningContent);
 
 // Refactor (iter21/cluster-001):
 //   Old pattern: Workflow generation contracts lived beside Host endpoints and fake actor services.
@@ -75,6 +80,9 @@ public sealed record WorkflowGenerateRequest(
     IReadOnlyCollection<string>? AvailableWorkflowNames,
     IReadOnlyDictionary<string, string>? Metadata);
 
+// Refactor (iter21/cluster-001):
+//   Old pattern: Workflow completion was returned from Host-local generator services.
+//   New principle: Application returns a typed workflow preview result for Host SSE adaptation.
 public sealed record WorkflowGenerateResult(
     string Yaml,
     int Attempts,
@@ -90,6 +98,9 @@ public sealed record ScriptGenerateRequest(
     AppScriptPackage? CurrentPackage = null,
     string? CurrentFilePath = null);
 
+// Refactor (iter21/cluster-001):
+//   Old pattern: Script completion was assembled inside Host from JSON and compiler diagnostics.
+//   New principle: Application returns a typed script preview result including package/current-file details.
 public sealed record ScriptGenerateResult(
     string Source,
     int Attempts,

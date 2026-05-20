@@ -69,8 +69,7 @@ internal sealed class ChatRuntimeStudioAuthoringLLMStreamPort : IStudioAuthoring
         {
             yield return new StudioAuthoringLLMChunk(
                 chunk.DeltaContent,
-                chunk.DeltaReasoningContent,
-                chunk.IsLast);
+                chunk.DeltaReasoningContent);
         }
     }
 
