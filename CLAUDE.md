@@ -170,7 +170,9 @@ Per Auric (2026-05-19) "不要保留历史记录,历史记录都在git里面有"
 
 ### CI 门禁（全量）
 - `bash tools/ci/architecture_guards.sh`：CI 架构门禁主入口。
-- 分片构建/测试：`bash tools/ci/solution_split_guards.sh` / `bash tools/ci/solution_split_test_guards.sh`
+- 分片构建：`bash tools/ci/solution_split_guards.sh`
+- 全量测试：`dotnet test aevatar.slnx --nologo`
+- 慢测：`bash tools/ci/slow_test_guards.sh`
 
 ### 专项门禁（按变更范围触发）
 

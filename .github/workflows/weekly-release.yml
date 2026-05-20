@@ -88,8 +88,24 @@ jobs:
       - name: Test Stability Guards
         run: bash tools/ci/test_stability_guards.sh
 
-      - name: Split Test Guards
-        run: bash tools/ci/solution_split_test_guards.sh
+      - name: Test Solution Ownership Guard
+        run: bash tools/ci/test_solution_ownership_guard.sh
+
+      # Refactor (iter18/cluster-019-strict-coverage-aevatar-slnx):
+      #   Old pattern: coverage_quality_guard.sh 吞 test fail 继续 emit coverage;split-test-guards 漏跑 22 orphan project
+      #   New principle: strict-coverage fail-fast(不吞 fail);aevatar.slnx-or-slow-test 唯一测试权威;
+      #   retire slnf 测试执行(只保留 slnf build boundary);slow-tests 独立 CI job
+      - name: Full Solution Tests
+        run: |
+          dotnet test aevatar.slnx \
+            --nologo \
+            --tl:off \
+            -m:1 \
+            -p:UseSharedCompilation=false \
+            -p:NuGetAudit=false
+
+      - name: Slow Test Guards
+        run: bash tools/ci/slow_test_guards.sh
 
       - name: Distributed 3-Node Smoke
         run: bash tools/ci/distributed_3node_smoke.sh
