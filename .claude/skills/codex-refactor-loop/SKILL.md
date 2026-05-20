@@ -32,6 +32,27 @@ description: Unattended three-phase refactor loop (analyze → implement → ver
 - ❌ Banner 用模糊语言("处理中""稍等"),应该具体说当前 phase + 下一步 + ETA / 何时介入
 - ❌ 多个 daemon 同时跑但 maintainer 看 GitHub 只看到 eyes,不知道还有 codex 在工作
 
+### Controller comment sweep:必排除 bot author(per Auric 2026-05-20 "stop mentioning me!"+ codecov bot 评论被误判)
+
+Controller 之前 sentinel-aware sweep filter 用 body prefix(`## 🤖` 等),但 **codecov[bot] / dependabot[bot]** 等 GitHub bot 评论以 `## [Codecov](` 起首,filter 漏。误判为"真人新评论"派 fresh codex round → 浪费 + 可能再误 ping。
+
+**修法**:sweep query 必加 `author.login | endswith("[bot]") | not` filter:
+
+```bash
+gh issue view <N> --json comments --jq '
+  [.comments[] | select(
+    (.body | contains("⟦AI:AUTO-LOOP⟧") | not)
+    and (.body | startswith("## 🤖") | not)
+    and (.body | startswith("## 📊") | not)
+    and (.body | startswith("## ✅") | not)
+    and (.body | startswith("## 🆘") | not)
+    and (.author.login | endswith("[bot]") | not)
+  )][-1]
+'
+```
+
+剔除:codecov[bot] / dependabot[bot] / github-actions[bot] / etc。
+
 ### ❌ 严禁写 `@auric` `@Auric` `Auric` 任何形式(强制,per Auric 2026-05-20 "为什么一直在 at auric")
 
 **根因**:GitHub username `auric` 是不相关 user。但 prompts / banner 文本里大量 `Per Auric`、`Auric 决策` 等 plain text "Auric",codex 生成评论时把它转成 `@Auric` → GitHub auto-link 误 ping `@auric`。
