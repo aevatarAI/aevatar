@@ -2038,6 +2038,104 @@ public class NyxIdChatEndpointsCoverageTests
         approval.SessionId.Should().Be("session-2");
     }
 
+    [Fact]
+    public void NyxIdChatCompletionPolicy_ShouldResolveTerminalAguiEvents()
+    {
+        var completionPolicy = AgentCoverageTestSupport.CreateNonPublicInstance(
+            typeof(NyxIdChatCommand).Assembly,
+            "Aevatar.GAgents.NyxidChat.NyxIdChatCompletionPolicy");
+        var tryResolve = completionPolicy.GetType().GetMethod("TryResolve")!;
+
+        object?[] runFinishedArgs = [new AGUIEvent { RunFinished = new RunFinishedEvent() }, null];
+        ((bool)tryResolve.Invoke(completionPolicy, runFinishedArgs)!).Should().BeTrue();
+        runFinishedArgs[1].Should().Be(NyxIdChatCompletionStatus.Completed);
+
+        object?[] runErrorArgs = [new AGUIEvent { RunError = new RunErrorEvent { Message = "failed" } }, null];
+        ((bool)tryResolve.Invoke(completionPolicy, runErrorArgs)!).Should().BeTrue();
+        runErrorArgs[1].Should().Be(NyxIdChatCompletionStatus.Failed);
+
+        object?[] textArgs =
+        [
+            new AGUIEvent { TextMessageContent = new AguiTextMessageContentEvent { Delta = "still streaming" } },
+            null,
+        ];
+        ((bool)tryResolve.Invoke(completionPolicy, textArgs)!).Should().BeFalse();
+        textArgs[1].Should().Be(NyxIdChatCompletionStatus.Unknown);
+    }
+
+    [Fact]
+    public async Task NyxIdChatFinalizeEmitter_ShouldSuppressFrame_WhenCompletionAlreadyObserved()
+    {
+        var emitter = AgentCoverageTestSupport.CreateNonPublicInstance(
+            typeof(NyxIdChatCommand).Assembly,
+            "Aevatar.GAgents.NyxidChat.NyxIdChatFinalizeEmitter");
+        var emitted = new List<AGUIEvent>();
+        var emitMethod = emitter.GetType().GetMethod("EmitAsync")!;
+
+        await InvokeTaskAsync(emitMethod.Invoke(
+            emitter,
+            [
+                new NyxIdChatAcceptedReceipt("actor-1", "command-1", "correlation-1", "session-1"),
+                NyxIdChatCompletionStatus.Completed,
+                true,
+                new Func<AGUIEvent, CancellationToken, ValueTask>((frame, _) =>
+                {
+                    emitted.Add(frame);
+                    return ValueTask.CompletedTask;
+                }),
+                CancellationToken.None,
+            ]));
+
+        emitted.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task NyxIdChatFinalizeEmitter_ShouldEmitTimeoutRunError_WhenCompletionMissing()
+    {
+        var emitter = AgentCoverageTestSupport.CreateNonPublicInstance(
+            typeof(NyxIdChatCommand).Assembly,
+            "Aevatar.GAgents.NyxidChat.NyxIdChatFinalizeEmitter");
+        var emitted = new List<AGUIEvent>();
+        var emitMethod = emitter.GetType().GetMethod("EmitAsync")!;
+
+        await InvokeTaskAsync(emitMethod.Invoke(
+            emitter,
+            [
+                new NyxIdChatAcceptedReceipt("actor-1", "command-1", "correlation-1", "session-1"),
+                NyxIdChatCompletionStatus.Unknown,
+                false,
+                new Func<AGUIEvent, CancellationToken, ValueTask>((frame, _) =>
+                {
+                    emitted.Add(frame);
+                    return ValueTask.CompletedTask;
+                }),
+                CancellationToken.None,
+            ]));
+
+        var runError = emitted.Should().ContainSingle().Subject.RunError;
+        runError.Code.Should().Be("timeout");
+        runError.Message.Should().Be("Request timed out.");
+    }
+
+    [Fact]
+    public async Task NyxIdChatDurableCompletionResolver_ShouldReturnIncomplete()
+    {
+        var resolver = AgentCoverageTestSupport.CreateNonPublicInstance(
+            typeof(NyxIdChatCommand).Assembly,
+            "Aevatar.GAgents.NyxidChat.NyxIdChatDurableCompletionResolver");
+        var resolveMethod = resolver.GetType().GetMethod("ResolveAsync")!;
+
+        var observation = await InvokeTaskOfResultAsync(resolveMethod.Invoke(
+            resolver,
+            [
+                new NyxIdChatAcceptedReceipt("actor-1", "command-1", "correlation-1", "session-1"),
+                CancellationToken.None,
+            ]));
+
+        observation.GetType().GetProperty("HasTerminalCompletion")!.GetValue(observation).Should().Be(false);
+        observation.GetType().GetProperty("Completion")!.GetValue(observation).Should().Be(NyxIdChatCompletionStatus.Unknown);
+    }
+
     private static async Task<IResult> InvokeResultAsync(string methodName, params object[] args)
     {
         var method = EndpointsType.GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static)!;

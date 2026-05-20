@@ -75,6 +75,9 @@ public enum NyxIdChatCompletionStatus
     Failed = 2,
 }
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 internal sealed class NyxIdChatCommandTarget
     : IActorCommandDispatchTarget,
       ICommandEventTarget<AGUIEvent>,
@@ -177,6 +180,9 @@ internal sealed class NyxIdChatCommandTarget
     }
 }
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 internal sealed class NyxIdChatCommandTargetResolver<TCommand>
     : ICommandTargetResolver<TCommand, NyxIdChatCommandTarget, NyxIdChatStartError>
 {
@@ -198,6 +204,9 @@ internal sealed class NyxIdChatCommandTargetResolver<TCommand>
         TCommand command,
         CancellationToken ct = default)
     {
+        // Refactor (iter20/cluster-002):
+        //   Old pattern: 请求路径临时启动 projection session 等待完成
+        //   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
         ArgumentNullException.ThrowIfNull(command);
 
         var actor = await _actorRuntime.GetAsync(_actorIdResolver(command));
@@ -212,6 +221,9 @@ internal sealed class NyxIdChatCommandTargetResolver<TCommand>
     }
 }
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 internal sealed class NyxIdChatCommandTargetBinder<TCommand>
     : ICommandTargetBinder<TCommand, NyxIdChatCommandTarget, NyxIdChatStartError>
 {
@@ -269,6 +281,9 @@ internal sealed class NyxIdChatCommandTargetBinder<TCommand>
     }
 }
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<NyxIdChatCommand>
 {
     public EventEnvelope CreateEnvelope(NyxIdChatCommand command, CommandContext context)
@@ -323,10 +338,16 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
         };
 }
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 internal sealed class NyxIdApprovalCommandEnvelopeFactory : ICommandEnvelopeFactory<NyxIdApprovalCommand>
 {
     public EventEnvelope CreateEnvelope(NyxIdApprovalCommand command, CommandContext context)
     {
+        // Refactor (iter20/cluster-002):
+        //   Old pattern: 请求路径临时启动 projection session 等待完成
+        //   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(context);
 
@@ -347,6 +368,9 @@ internal sealed class NyxIdApprovalCommandEnvelopeFactory : ICommandEnvelopeFact
     }
 }
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 internal sealed class NyxIdChatAcceptedReceiptFactory
     : ICommandReceiptFactory<NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt>
 {
@@ -354,6 +378,9 @@ internal sealed class NyxIdChatAcceptedReceiptFactory
         NyxIdChatCommandTarget target,
         CommandContext context)
     {
+        // Refactor (iter20/cluster-002):
+        //   Old pattern: 请求路径临时启动 projection session 等待完成
+        //   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(context);
 
@@ -365,6 +392,9 @@ internal sealed class NyxIdChatAcceptedReceiptFactory
     }
 }
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 internal sealed class NyxIdChatCompletionPolicy
     : ICommandCompletionPolicy<AGUIEvent, NyxIdChatCompletionStatus>
 {
@@ -372,6 +402,9 @@ internal sealed class NyxIdChatCompletionPolicy
 
     public bool TryResolve(AGUIEvent evt, out NyxIdChatCompletionStatus completion)
     {
+        // Refactor (iter20/cluster-002):
+        //   Old pattern: 请求路径临时启动 projection session 等待完成
+        //   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
         ArgumentNullException.ThrowIfNull(evt);
 
         completion = evt.EventCase switch
@@ -384,6 +417,9 @@ internal sealed class NyxIdChatCompletionPolicy
     }
 }
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 internal sealed class NyxIdChatFinalizeEmitter
     : ICommandFinalizeEmitter<NyxIdChatAcceptedReceipt, NyxIdChatCompletionStatus, AGUIEvent>
 {
@@ -416,6 +452,9 @@ internal sealed class NyxIdChatFinalizeEmitter
     }
 }
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 internal sealed class NyxIdChatDurableCompletionResolver
     : ICommandDurableCompletionResolver<NyxIdChatAcceptedReceipt, NyxIdChatCompletionStatus>
 {
@@ -423,6 +462,9 @@ internal sealed class NyxIdChatDurableCompletionResolver
         NyxIdChatAcceptedReceipt receipt,
         CancellationToken ct = default)
     {
+        // Refactor (iter20/cluster-002):
+        //   Old pattern: 请求路径临时启动 projection session 等待完成
+        //   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
         _ = receipt;
         ct.ThrowIfCancellationRequested();
         return Task.FromResult(CommandDurableCompletionObservation<NyxIdChatCompletionStatus>.Incomplete);

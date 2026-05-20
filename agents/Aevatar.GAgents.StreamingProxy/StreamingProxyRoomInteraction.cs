@@ -37,6 +37,9 @@ public enum StreamingProxyRoomChatStartError
     ProjectionUnavailable = 2,
 }
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 internal sealed class StreamingProxyRoomChatCommandTarget
     : IActorCommandDispatchTarget,
       ICommandEventTarget<StreamingProxyRoomSessionEnvelope>,
@@ -140,6 +143,9 @@ internal sealed class StreamingProxyRoomChatCommandTarget
     }
 }
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 internal sealed class StreamingProxyRoomChatCommandTargetResolver
     : ICommandTargetResolver<StreamingProxyRoomChatCommand, StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatStartError>
 {
@@ -158,6 +164,9 @@ internal sealed class StreamingProxyRoomChatCommandTargetResolver
         StreamingProxyRoomChatCommand command,
         CancellationToken ct = default)
     {
+        // Refactor (iter20/cluster-002):
+        //   Old pattern: 请求路径临时启动 projection session 等待完成
+        //   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
         ArgumentNullException.ThrowIfNull(command);
 
         var actor = await _actorRuntime.GetAsync(command.RoomId.Trim());
@@ -172,6 +181,9 @@ internal sealed class StreamingProxyRoomChatCommandTargetResolver
     }
 }
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 internal sealed class StreamingProxyRoomChatCommandTargetBinder
     : ICommandTargetBinder<StreamingProxyRoomChatCommand, StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatStartError>
 {
@@ -230,6 +242,9 @@ internal sealed class StreamingProxyRoomChatCommandTargetBinder
     }
 }
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 internal sealed class StreamingProxyRoomChatCommandEnvelopeFactory
     : ICommandEnvelopeFactory<StreamingProxyRoomChatCommand>
 {
@@ -262,6 +277,9 @@ internal sealed class StreamingProxyRoomChatCommandEnvelopeFactory
     }
 }
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 internal sealed class StreamingProxyRoomChatAcceptedReceiptFactory
     : ICommandReceiptFactory<StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatAcceptedReceipt>
 {
@@ -269,6 +287,9 @@ internal sealed class StreamingProxyRoomChatAcceptedReceiptFactory
         StreamingProxyRoomChatCommandTarget target,
         CommandContext context)
     {
+        // Refactor (iter20/cluster-002):
+        //   Old pattern: 请求路径临时启动 projection session 等待完成
+        //   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(context);
 
@@ -280,6 +301,9 @@ internal sealed class StreamingProxyRoomChatAcceptedReceiptFactory
     }
 }
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 internal sealed class StreamingProxyRoomChatCompletionPolicy
     : ICommandCompletionPolicy<StreamingProxyRoomSessionEnvelope, StreamingProxyProjectionCompletionStatus>
 {
@@ -289,6 +313,9 @@ internal sealed class StreamingProxyRoomChatCompletionPolicy
         StreamingProxyRoomSessionEnvelope evt,
         out StreamingProxyProjectionCompletionStatus completion)
     {
+        // Refactor (iter20/cluster-002):
+        //   Old pattern: 请求路径临时启动 projection session 等待完成
+        //   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
         ArgumentNullException.ThrowIfNull(evt);
 
         completion = StreamingProxyProjectionCompletionStatus.Unknown;
@@ -305,6 +332,9 @@ internal sealed class StreamingProxyRoomChatCompletionPolicy
     }
 }
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 internal sealed class StreamingProxyRoomChatFinalizeEmitter
     : ICommandFinalizeEmitter<StreamingProxyRoomChatAcceptedReceipt, StreamingProxyProjectionCompletionStatus, StreamingProxyRoomSessionEnvelope>
 {
@@ -330,15 +360,16 @@ internal sealed class StreamingProxyRoomChatFinalizeEmitter
                 Envelope = StreamingProxyRoomInteractionHelpers.CreateTerminalEnvelope(
                     receipt.ActorId,
                     receipt.SessionId,
-                    completion == StreamingProxyProjectionCompletionStatus.Failed
-                        ? StreamingProxyChatSessionTerminalStatus.Failed
-                        : StreamingProxyChatSessionTerminalStatus.Failed,
+                    StreamingProxyChatSessionTerminalStatus.Failed,
                     "StreamingProxy completion timed out."),
             },
             ct).AsTask();
     }
 }
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 internal sealed class StreamingProxyRoomChatDurableCompletionResolverAdapter
     : ICommandDurableCompletionResolver<StreamingProxyRoomChatAcceptedReceipt, StreamingProxyProjectionCompletionStatus>
 {
@@ -354,6 +385,9 @@ internal sealed class StreamingProxyRoomChatDurableCompletionResolverAdapter
         StreamingProxyRoomChatAcceptedReceipt receipt,
         CancellationToken ct = default)
     {
+        // Refactor (iter20/cluster-002):
+        //   Old pattern: 请求路径临时启动 projection session 等待完成
+        //   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
         ArgumentNullException.ThrowIfNull(receipt);
 
         var completion = await _inner.ResolveAsync(receipt.ActorId, receipt.SessionId, ct);
@@ -366,6 +400,9 @@ internal sealed class StreamingProxyRoomChatDurableCompletionResolverAdapter
     }
 }
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 internal sealed class StreamingProxyRoomChatOutputStream
     : IEventOutputStream<StreamingProxyRoomSessionEnvelope, StreamingProxyRoomSessionEnvelope>
 {
@@ -423,10 +460,16 @@ internal sealed class StreamingProxyRoomChatOutputStream
     }
 }
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 internal static class StreamingProxyRoomInteractionHelpers
 {
     public static StreamingProxyEndpoints.StreamingProxyStreamSignal? ResolveSignal(StreamingProxyRoomSessionEnvelope sessionEnvelope)
     {
+        // Refactor (iter20/cluster-002):
+        //   Old pattern: 请求路径临时启动 projection session 等待完成
+        //   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
         var envelope = sessionEnvelope.Envelope;
         if (envelope == null)
             return null;
@@ -460,6 +503,9 @@ internal static class StreamingProxyRoomInteractionHelpers
         EventEnvelope envelope,
         out StreamingProxyChatSessionTerminalStateChanged terminalEvent)
     {
+        // Refactor (iter20/cluster-002):
+        //   Old pattern: 请求路径临时启动 projection session 等待完成
+        //   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
         terminalEvent = new StreamingProxyChatSessionTerminalStateChanged();
         if (CommittedStateEventEnvelope.TryGetObservedPayload(envelope, out var payload, out _, out _) &&
             payload?.Is(StreamingProxyChatSessionTerminalStateChanged.Descriptor) == true)
@@ -483,6 +529,9 @@ internal static class StreamingProxyRoomInteractionHelpers
         StreamingProxyChatSessionTerminalStatus status,
         string? errorMessage)
     {
+        // Refactor (iter20/cluster-002):
+        //   Old pattern: 请求路径临时启动 projection session 等待完成
+        //   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
         var terminalEvent = new StreamingProxyChatSessionTerminalStateChanged
         {
             SessionId = sessionId,
