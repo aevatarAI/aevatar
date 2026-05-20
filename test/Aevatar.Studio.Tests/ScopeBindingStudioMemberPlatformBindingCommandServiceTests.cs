@@ -4,6 +4,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgents.StudioMember;
 using Aevatar.Studio.Projection.CommandServices;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -71,16 +72,16 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         succeeded.Result.ImplementationKind.Should().Be(StudioMemberImplementationKind.Script);
         succeeded.Result.ImplementationRef.Script.ScriptId.Should().Be("script-1");
 
-        scopeBindingPort.Requests.Should().ContainSingle();
-        scopeBindingPort.Requests[0].ScopeId.Should().Be("scope-1");
-        scopeBindingPort.Requests[0].ServiceId.Should().Be("member-m-1");
-        scopeBindingPort.Requests[0].DisplayName.Should().Be("Script member");
-        scopeBindingPort.Requests[0].ImplementationKind.Should().Be(ScopeBindingImplementationKind.Scripting);
-        scopeBindingPort.Requests[0].Script!.ScriptId.Should().Be("script-1");
-        scopeBindingPort.Requests[0].Script!.ScriptRevision.Should().Be("draft-1");
-        scopeBindingPort.Requests[0].RevisionId.Should().Be("rev-platform-bind-1");
-        scopeBindingPort.Requests[0].AllowExistingRevisionReplay.Should().BeTrue();
-        scopeBindingPort.Requests[0].ReplayRevisionId.Should().Be("rev-platform-bind-1");
+        var request = scopeBindingPort.Requests.Should().ContainSingle().Subject;
+        request.ScopeId.Should().Be("scope-1");
+        request.ServiceId.Should().Be("member-m-1");
+        request.DisplayName.Should().Be("Script member");
+        request.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Scripting);
+        request.Script!.ScriptId.Should().Be("script-1");
+        request.Script!.ScriptRevision.Should().Be("draft-1");
+        request.RevisionId.Should().Be("rev-platform-bind-1");
+        request.AllowExistingRevisionReplay.Should().BeTrue();
+        request.ReplayRevisionId.Should().Be("rev-platform-bind-1");
         var readinessRequest = readinessPort.Requests.Should().ContainSingle().Subject;
         readinessRequest.Should().BeEquivalentTo(new ScopeBindingReadinessRequest(
             ScopeId: "scope-1",
@@ -244,7 +245,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             "platform-bind-1",
             NewScriptStartRequest("rev-explicit"));
 
-        await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingSucceeded>();
         var request = scopeBindingPort.Requests.Should().ContainSingle().Subject;
         request.RevisionId.Should().Be("rev-explicit");
         request.ReplayRevisionId.Should().BeNull();
@@ -264,7 +265,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             "platform-bind-1",
             request);
 
-        await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingSucceeded>();
         var upsert = scopeBindingPort.Requests.Should().ContainSingle().Subject;
         upsert.RevisionId.Should().Be("rev-explicit");
         upsert.AllowExistingRevisionReplay.Should().BeTrue();
@@ -285,7 +286,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             "platform-bind-1",
             request);
 
-        await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingSucceeded>();
         var upsert = scopeBindingPort.Requests.Should().ContainSingle().Subject;
         upsert.RevisionId.Should().Be("rev-explicit");
         upsert.AllowExistingRevisionReplay.Should().BeTrue();
@@ -337,9 +338,8 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             "platform-bind-1",
             NewScriptStartRequest());
 
-        var dispatch = await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        dispatch.Envelope.Payload.Unpack<StudioMemberPlatformBindingSucceeded>()
-            .Result.PublishedServiceId.Should().Be("member-m-1");
+        var succeeded = await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingSucceeded>();
+        succeeded.Result.PublishedServiceId.Should().Be("member-m-1");
         readinessPort.Requests.Should().HaveCount(2);
     }
 
@@ -387,8 +387,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             "platform-bind-1",
             NewScriptStartRequest());
 
-        var dispatch = await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var failed = dispatch.Envelope.Payload.Unpack<StudioMemberPlatformBindingFailed>();
+        var failed = await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingFailed>();
         failed.BindingRunId.Should().Be("bind-1");
         failed.PlatformBindingCommandId.Should().Be("platform-bind-1");
         failed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_READINESS_FAILED");
@@ -436,8 +435,7 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             "platform-bind-1",
             NewScriptStartRequest());
 
-        var dispatch = await dispatchPort.NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var failed = dispatch.Envelope.Payload.Unpack<StudioMemberPlatformBindingFailed>();
+        var failed = await dispatchPort.WaitForPayloadAsync<StudioMemberPlatformBindingFailed>();
         failed.Failure.Code.Should().Be("STUDIO_MEMBER_PLATFORM_BINDING_READINESS_FAILED");
         failed.Failure.Message.Should().Be("scope binding result deployment id is required for readiness observation.");
     }
@@ -773,6 +771,18 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
             Dispatches.Add(dispatch);
             NextDispatch.TrySetResult(dispatch);
             return Task.CompletedTask;
+        }
+
+        public async Task<TPayload> WaitForPayloadAsync<TPayload>()
+            where TPayload : class, IMessage<TPayload>, new()
+        {
+            var dispatch = Dispatches.Count == 0
+                ? await NextDispatch.Task.WaitAsync(TimeSpan.FromSeconds(5))
+                : Dispatches[^1];
+
+            var payload = new TPayload();
+            dispatch.Envelope.Payload.Is(payload.Descriptor).Should().BeTrue();
+            return dispatch.Envelope.Payload.Unpack<TPayload>();
         }
 
         public sealed record DispatchedCommand(string ActorId, EventEnvelope Envelope);

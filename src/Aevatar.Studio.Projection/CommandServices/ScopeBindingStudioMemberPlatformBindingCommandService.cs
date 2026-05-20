@@ -15,6 +15,7 @@ namespace Aevatar.Studio.Projection.CommandServices;
 internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IStudioMemberPlatformBindingCommandPort
 {
     private const string BindingRunDirectRoute = "aevatar.studio.projection.studio-member-binding-run";
+    private const string PlatformBindingFailedFailureCode = "STUDIO_MEMBER_PLATFORM_BINDING_FAILED";
     private const string ReadinessFailedFailureCode = "STUDIO_MEMBER_PLATFORM_BINDING_READINESS_FAILED";
 
     private readonly IScopeBindingCommandPort _scopeBindingCommandPort;
@@ -99,12 +100,26 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         StudioMemberPlatformBindingStartRequested request,
         CancellationToken ct)
     {
+        IMessage? outcome;
         try
         {
-            var outcome = await RunBindingAsync(commandId, request, ct).ConfigureAwait(false);
-            if (outcome == null)
-                return;
+            outcome = await RunBindingAsync(commandId, request, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "StudioMember platform binding execution failed unexpectedly. bindingRunId={BindingRunId} platformBindingCommandId={CommandId}",
+                request.BindingRunId,
+                commandId);
+            return;
+        }
 
+        if (outcome == null)
+            return;
+
+        try
+        {
             await DispatchContinuationAsync(replyActorId, outcome, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -138,17 +153,11 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                 request.BindingRunId,
                 commandId);
 
-            return new StudioMemberPlatformBindingFailed
-            {
-                BindingRunId = request.BindingRunId,
-                PlatformBindingCommandId = commandId,
-                Failure = new StudioMemberBindingFailure
-                {
-                    Code = "STUDIO_MEMBER_PLATFORM_BINDING_FAILED",
-                    Message = ex.Message,
-                    FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                },
-            };
+            return BuildFailedContinuation(
+                request.BindingRunId,
+                commandId,
+                PlatformBindingFailedFailureCode,
+                ex.Message);
         }
 
         ScopeBindingReadinessSnapshot readiness;
@@ -164,17 +173,11 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                 request.BindingRunId,
                 commandId);
 
-            return new StudioMemberPlatformBindingFailed
-            {
-                BindingRunId = request.BindingRunId,
-                PlatformBindingCommandId = commandId,
-                Failure = new StudioMemberBindingFailure
-                {
-                    Code = ReadinessFailedFailureCode,
-                    Message = ex.Message,
-                    FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                },
-            };
+            return BuildFailedContinuation(
+                request.BindingRunId,
+                commandId,
+                ReadinessFailedFailureCode,
+                ex.Message);
         }
 
         if (!readiness.InvokeReady)
@@ -210,7 +213,6 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         CancellationToken ct)
     {
         var deadline = _utcNow() + _options.BindingReadinessTimeout;
-        ScopeBindingReadinessSnapshot? lastSnapshot = null;
         var expectedRevisionId = result.RevisionId?.Trim();
         if (string.IsNullOrWhiteSpace(expectedRevisionId))
             throw new InvalidOperationException("scope binding result revision id is required for readiness observation.");
@@ -218,6 +220,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         var expectedDeploymentId = result.ExpectedDeploymentId?.Trim();
         if (string.IsNullOrWhiteSpace(expectedDeploymentId))
             throw new InvalidOperationException("scope binding result deployment id is required for readiness observation.");
+
         var request = new ScopeBindingReadinessRequest(
             result.ScopeId,
             result.ServiceId,
@@ -229,13 +232,13 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         {
             ct.ThrowIfCancellationRequested();
 
-            lastSnapshot = await _readinessQueryPort.GetReadinessAsync(request, ct).ConfigureAwait(false);
-            if (lastSnapshot.InvokeReady || _utcNow() >= deadline)
-                return lastSnapshot;
+            var snapshot = await _readinessQueryPort.GetReadinessAsync(request, ct).ConfigureAwait(false);
+            if (snapshot.InvokeReady || _utcNow() >= deadline)
+                return snapshot;
 
             var remaining = deadline - _utcNow();
             if (remaining <= TimeSpan.Zero)
-                return lastSnapshot;
+                return snapshot;
 
             var delay = remaining < _options.BindingReadinessPollInterval
                 ? remaining
@@ -288,6 +291,23 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         };
         return _dispatchPort.DispatchAsync(replyActorId, envelope, ct);
     }
+
+    private static StudioMemberPlatformBindingFailed BuildFailedContinuation(
+        string bindingRunId,
+        string commandId,
+        string code,
+        string message) =>
+        new()
+        {
+            BindingRunId = bindingRunId,
+            PlatformBindingCommandId = commandId,
+            Failure = new StudioMemberBindingFailure
+            {
+                Code = code,
+                Message = message,
+                FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        };
 
     private static ScopeBindingUpsertRequest BuildScopeBindingRequest(
         StudioMemberPlatformBindingStartRequested request)

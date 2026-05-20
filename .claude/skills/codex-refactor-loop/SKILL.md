@@ -32,6 +32,27 @@ description: Unattended three-phase refactor loop (analyze → implement → ver
 - ❌ Banner 用模糊语言("处理中""稍等"),应该具体说当前 phase + 下一步 + ETA / 何时介入
 - ❌ 多个 daemon 同时跑但 maintainer 看 GitHub 只看到 eyes,不知道还有 codex 在工作
 
+### Spawn helper:`spawn_with_banner.py`(强制,per Auric 2026-05-20 "#741 也看不到运行状态. 你继续修 skills 吧. 然后需要写脚本你可以写脚本")
+
+Controller 经常 spawn codex 时**忘 post banner**,GitHub 看不到运行状态。强制用 helper:
+
+```bash
+python3 tools/refactor-loop/spawn_with_banner.py \
+  --cd <worktree> --add-dir /Users/auric/aevatar \
+  --prompt <prompt-file> --log <log-file> --timeout 5400 \
+  --banner-target <issue-or-pr-num> --banner-kind <issue|pr> \
+  --banner-role <test-add|fix|reviewer|implement|solver|judge|reflector> \
+  --banner-detail "<short context>"
+```
+
+Helper 行为:
+1. **先 Post 状态卡片**到 target issue/PR(`## 📊 状态卡片 — <role> 派出`)立即可见
+2. Spawn codex(nohup + start_new_session,后台跑)
+3. timeout < 3600 拒绝 spawn(per CLAUDE.md floor)
+4. Banner 含 codex log 名 / 工作目录 / timeout / role-specific "下一步自动会做" / 不需介入
+
+**禁止**直接调 `spawn-codex.sh`(绕过 banner)— 强制走 `spawn_with_banner.py`。例外只:audit / bootstrap 等完全独立任务(不绑 issue/PR)可不带 banner。
+
 ### Controller 自检(每次 wakeup)
 
 per-wakeup sweep step 1.5 之后,**对每个 in-flight codex 验证关联 issue/PR 是否有最新状态卡片**(创建时间 ≥ codex spawn 时间):
@@ -588,6 +609,55 @@ For each `bucket: fail` check:
 ## Phase 6 — Integration branch auto-sync with `review_base_branch` (heartbeat)
 
 Runs **first** on every controller wakeup, before Phase 7 design-issue sweep and before any new Phase 2 cluster work. Goal: keep `integration_branch` continuously up-to-date with `review_base_branch` so cluster PRs base on fresh code and the eventual rollup PR has minimal merge conflicts.
+
+### Phase 6 现在由独立 daemon 自主完成(per Auric 2026-05-20 "写一个独立脚本, 自动 merge dev 到 auto-refact-dev 分支. 如果有冲突让脚本调用 codex 解决冲突合并. daemon 运行")
+
+**`tools/refactor-loop/dev_sync_daemon.py`** 是独立 daemon,**600s 周期**自主跑 sync,不依赖 controller wakeup:
+
+```bash
+nohup python3 tools/refactor-loop/dev_sync_daemon.py \
+  >> .refactor-loop/logs/dev-sync-daemon.log 2>&1 &
+disown
+```
+
+Daemon 工作流:
+1. cd `$REPO_ROOT`,确认 HEAD = `auto-refact-dev`(不是则 skip)
+2. Working tree dirty → skip(controller 在工作)
+3. 但若 `.git/MERGE_HEAD` 存在 + 无 in-flight codex → **dispatch codex resolve**(防止上次 codex 死)
+4. `git fetch origin` + `git rev-list --count HEAD..origin/dev`
+5. behind=0 → idle skip
+6. behind>0 → 尝试 `git merge --ff-only`,成功则 push;失败则 `git merge --no-ff`(merge commit)
+7. **冲突** → 写 `prompts/dev-sync-conflict-<ts>.md` + spawn-codex resolve(timeout 5400s)
+8. codex 在同一 worktree resolve 文件 + `git add` + `git merge --continue`(不 push,daemon 后续 push)
+9. codex 完成 marker:`DEV_SYNC_RESOLVED:<files>` 或 `DEV_SYNC_BLOCKED:<reason>`
+
+### Daemon vs controller 分工
+
+| 任务 | 谁做 |
+|---|---|
+| dev → auto-refact-dev sync(常规 + 冲突解决) | **daemon**(600s 自主) |
+| 处理 design issue / Phase 9 / Phase 8 fix loop | controller(wakeup) |
+| 派 reviewer / fix / implement codex | controller |
+| 监控 daemon liveness + restart | controller per-wakeup |
+| Sync 异常 escalation(DEV_SYNC_BLOCKED) | controller 读 daemon log + escalate |
+
+### Controller 每 wakeup 责任(改为只 verify daemon)
+
+```bash
+# Phase 6 现在 controller 只 verify daemon 健康
+ps -ef | grep dev-sync-daemon.sh | grep -v grep | wc -l  # 必须 >=1
+tail -10 .refactor-loop/logs/dev-sync-daemon.log | grep -E "(DEV_SYNC_BLOCKED|FAIL|FATAL)" | tail -3
+```
+
+若 daemon 死 → restart `nohup ... >> log 2>&1 & disown`。
+若发现 `DEV_SYNC_BLOCKED` → controller post 卡片到 rollup PR / 通知 maintainer。
+
+### 反面(❌ 禁止)
+
+- ❌ controller 自己跑 `git merge dev` 同步(daemon 已做,会 race / 冲突)
+- ❌ daemon push 后 controller 不 fetch 就 commit(stale base bug)
+- ❌ Daemon 派 codex 自己 push(daemon 决定 push 时机,codex 只 resolve + merge --continue)
+- ❌ 多 daemon 实例(`pgrep -c dev-sync-daemon` 必须 = 1)
 
 ### Sync procedure
 
