@@ -61,6 +61,37 @@ describe('proxy config', () => {
     jest.resetModules();
   });
 
+  it('keeps local backend targets by default', () => {
+    delete process.env.AEVATAR_API_TARGET;
+    delete process.env.AEVATAR_STUDIO_API_TARGET;
+    delete process.env.AEVATAR_PROXY_SECURE;
+    delete process.env.AEVATAR_PROXY_PRESERVE_AUTH_HOST;
+
+    const proxyModule = require('../../../config/proxy');
+    const devProxy = proxyModule.default.dev as Record<string, ProxyEntry>;
+
+    expect(resolveProxyEntry(devProxy, '/api/auth/me')).toEqual({
+      target: 'http://127.0.0.1:5080',
+      changeOrigin: false,
+      secure: true,
+      ws: true,
+    });
+    expect(
+      resolveProxyEntry(devProxy, '/api/scopes/scope-1/gagent/draft-run'),
+    ).toEqual({
+      target: 'http://127.0.0.1:5080',
+      changeOrigin: true,
+      secure: true,
+      ws: true,
+    });
+    expect(devProxy['/api/']).toEqual({
+      target: 'http://127.0.0.1:5080',
+      changeOrigin: true,
+      secure: true,
+      ws: true,
+    });
+  });
+
   it('routes scope script draft runs to the Studio host', () => {
     process.env.AEVATAR_API_TARGET = 'http://127.0.0.1:5080';
     process.env.AEVATAR_STUDIO_API_TARGET = 'http://127.0.0.1:5180';
