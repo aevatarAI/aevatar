@@ -100,6 +100,66 @@ public sealed class ResponsesAgentToolStateGAgentTests
             .Should().Be("""{"status":"accepted"}""");
     }
 
+    [Fact]
+    public async Task HandleApplyTodoWriteAsync_ShouldIgnoreDuplicateWrite_AndKeepDurableStateStable()
+    {
+        var actor = CreateActor();
+        await RegisterAsync(actor);
+
+        var observedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-12T00:00:00+00:00"));
+        const string argumentsJson = """{"todos":[{"id":"todo-1","content":"Ship","status":"pending"}]}""";
+        var apply = new ApplyResponsesTodoWriteRequested
+        {
+            ScopeId = "scope-1",
+            OwnerSubject = "owner-1",
+            SourceResponseId = "resp_1",
+            Arguments = ResponsesJsonValues.ParseBoundaryPayload(argumentsJson),
+            ObservedAt = observedAt,
+        };
+        apply.TodoItems.AddRange(ResponsesTodoItemParser.Parse(argumentsJson, "resp_1", observedAt));
+
+        await actor.HandleApplyTodoWriteAsync(apply);
+        var versionAfterFirstWrite = actor.State.LastAppliedEventVersion;
+        var updatedAtAfterFirstWrite = actor.State.Record!.UpdatedAt!.Clone();
+
+        await actor.HandleApplyTodoWriteAsync(apply);
+
+        actor.State.LastAppliedEventVersion.Should().Be(versionAfterFirstWrite);
+        actor.State.Record!.UpdatedAt.Should().Be(updatedAtAfterFirstWrite);
+        actor.State.TodoItems.Should().ContainSingle();
+        actor.State.TodoItems[0].Id.Should().Be("todo-1");
+        actor.State.TodoItems[0].SourceResponseId.Should().Be("resp_1");
+    }
+
+    [Fact]
+    public async Task HandleRecordTaskAsync_ShouldIgnoreDuplicateTaskRecord_AndReusePersistedTrace()
+    {
+        var actor = CreateActor();
+        await RegisterAsync(actor);
+
+        var command = new RecordResponsesTaskRequested
+        {
+            SourceResponseId = "resp_1",
+            TaskId = "task_1",
+            ChildActorId = "responses-agent-tools-scope-task-1",
+            Description = "summarize",
+            Arguments = ResponsesJsonValues.ParseBoundaryPayload("""{"prompt":"summarize"}"""),
+            Result = ResponsesJsonValues.ParseBoundaryPayload("""{"status":"accepted"}"""),
+            Status = ResponsesAgentToolTaskStatus.Accepted,
+            ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-12T00:00:00+00:00")),
+        };
+
+        await actor.HandleRecordTaskAsync(command);
+        var versionAfterFirstRecord = actor.State.LastAppliedEventVersion;
+
+        await actor.HandleRecordTaskAsync(command);
+
+        actor.State.LastAppliedEventVersion.Should().Be(versionAfterFirstRecord);
+        actor.State.TaskTraces.Should().ContainSingle();
+        actor.State.TaskTraces[0].TaskId.Should().Be("task_1");
+        actor.State.TaskTraces[0].Status.Should().Be(ResponsesAgentToolTaskStatus.Accepted);
+    }
+
     private static ResponsesAgentToolStateGAgent CreateActor() =>
         GAgentServiceTestKit.CreateStatefulAgent<ResponsesAgentToolStateGAgent, ResponsesAgentToolState>(
             new InMemoryEventStore(),

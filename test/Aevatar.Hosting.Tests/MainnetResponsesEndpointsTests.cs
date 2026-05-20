@@ -774,6 +774,72 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
+    public async Task PostResponses_WithExpiredForwardedToolCall_ShouldReturnToolCallNotAvailable_WithoutCallingProvider()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        var schemaHash = ResponsesToolSchemaHashes.Compute("""{"type":"object"}""");
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_previous",
+            "user-1",
+            "user-1",
+            LlmSessionOriginKind.ApiKey,
+            null,
+            LlmSessionStatus.Completed,
+            DateTimeOffset.UtcNow.AddMinutes(-2),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_previous",
+            3,
+            "resp_previous:tool:call_1:expired",
+            [
+                new LlmSessionForwardedToolCallSnapshot(
+                    "call_1",
+                    "get_weather",
+                    schemaHash,
+                    """{"city":"Singapore"}""",
+                    LlmSessionForwardedToolCallStatus.Expired,
+                    DateTimeOffset.UtcNow.AddMinutes(-1),
+                    """{"error":"tool_call_expired","call_id":"call_1"}""",
+                    DateTimeOffset.UtcNow.AddHours(-1),
+                    DateTimeOffset.UtcNow.AddMinutes(-1),
+                    null),
+            ]));
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent($$"""
+            {
+              "model": "gpt-5.4",
+              "previous_response_id": "resp_previous",
+              "input": [
+                {
+                  "type": "function_call_output",
+                  "call_id": "call_1",
+                  "schema_hash": "{{schemaHash}}",
+                  "output": {"temperature": 28}
+                }
+              ]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        GetErrorCode(body).Should().Be("tool_call_not_available");
+        body.Should().NotContain("secret-token");
+        sessions.ToolResults.Should().BeEmpty();
+        sessions.ResolvedToolResults.Should().BeEmpty();
+        sessions.Registered.Should().BeEmpty();
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task PostResponses_WithFunctionCallOutputSchemaMismatch_ShouldReturnBadRequest()
     {
         var provider = new RecordingLLMProvider();
@@ -883,6 +949,10 @@ public sealed class MainnetResponsesEndpointsTests
         doc.RootElement.GetProperty("previous_response_id").GetString().Should().Be("resp_previous");
         sessions.Registered.Should().ContainSingle();
         sessions.Registered[0].PreviousResponseId.Should().Be("resp_previous");
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.Messages.Should().ContainSingle();
+        provider.LastRequest.Messages[0].Role.Should().Be("user");
+        provider.LastRequest.Messages[0].Content.Should().Be("continue");
     }
 
     [Fact]
@@ -916,7 +986,7 @@ public sealed class MainnetResponsesEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
-        body.Should().Contain("previous_response_expired");
+        GetErrorCode(body).Should().Be("previous_response_expired");
         sessions.Registered.Should().BeEmpty();
         provider.LastRequest.Should().BeNull();
     }
@@ -952,7 +1022,7 @@ public sealed class MainnetResponsesEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.Forbidden, body);
-        body.Should().Contain("response_scope_mismatch");
+        GetErrorCode(body).Should().Be("response_scope_mismatch");
         sessions.Registered.Should().BeEmpty();
         provider.LastRequest.Should().BeNull();
     }
@@ -988,7 +1058,7 @@ public sealed class MainnetResponsesEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.Forbidden, body);
-        body.Should().Contain("response_origin_mismatch");
+        GetErrorCode(body).Should().Be("response_origin_mismatch");
         sessions.Registered.Should().BeEmpty();
         provider.LastRequest.Should().BeNull();
     }
@@ -1042,6 +1112,40 @@ public sealed class MainnetResponsesEndpointsTests
         snapshot!.Status.Should().Be(LlmSessionStatus.Cancelled);
         snapshot.ForwardedToolCalls.Should().ContainSingle()
             .Which.Status.Should().Be(LlmSessionForwardedToolCallStatus.Cancelled);
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostResponsesCancel_WithExpiredResponse_ShouldReturnStructuredExpiredError()
+    {
+        var provider = new RecordingLLMProvider();
+        var sessions = new RecordingResponseSessionStore();
+        sessions.Seed(new LlmSessionSnapshot(
+            "resp_expired",
+            "user-1",
+            "user-1",
+            LlmSessionOriginKind.ApiKey,
+            null,
+            LlmSessionStatus.Expired,
+            DateTimeOffset.UtcNow.AddHours(-2),
+            TimeSpan.FromHours(1),
+            null,
+            "response-session:resp_expired",
+            2,
+            "resp_expired:status:5"));
+        await using var app = await CreateAppAsync(provider, sessions);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses/resp_expired/cancel");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "secret-token");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        GetErrorCode(body).Should().Be("response_expired");
+        body.Should().NotContain("secret-token");
+        sessions.StatusUpdates.Should().BeEmpty();
         provider.LastRequest.Should().BeNull();
     }
 
@@ -1535,6 +1639,12 @@ public sealed class MainnetResponsesEndpointsTests
 
     private static StringContent JsonContent(string json) =>
         new(json, Encoding.UTF8, "application/json");
+
+    private static string? GetErrorCode(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.GetProperty("error").GetProperty("code").GetString();
+    }
 
     private sealed class RecordingLLMProvider : ILLMProvider, ILLMProviderFactory
     {
