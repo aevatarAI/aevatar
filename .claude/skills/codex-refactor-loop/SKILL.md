@@ -677,25 +677,46 @@ Update `state.design_pending[i].last_comment_count` and `last_checked` after eve
 
 **Mode A: passive sweep (default when other phase work is active).** Every controller wakeup runs the sweep before any other phase. Cheap: one `gh issue view` per pending cluster. ScheduleWakeup cadence is dominated by other in-flight work; design issues piggyback on those wakeups.
 
-**独立 comment-monitor 脚本(per Auric 2026-05-19 "要写个脚本挂个循环监控")**
+**独立 comment-monitor 脚本(per Auric 2026-05-19 "要写个脚本挂个循环监控" + 2026-05-20 "应该脚本监控,写日志,monitor 监控处理")**
 
-`tools/refactor-loop/comment-monitor.sh` 是独立 bash 脚本,跑 forever,30s 轮询 GitHub:
-- 自己 `gh api .../reactions content=eyes` 给 team-member 新评论加 👀(不依赖 controller turn 时序)
-- 同时把 `new-team-comment: <issue> <author> <comment-id>` 打到 stdout
-- controller 通过 Monitor tool 包它 → 每行 stdout 变 task-notification → controller 立刻醒来处理 reply
-- state 存 `.refactor-loop/comment-monitor-state.json`(comment_id → seen),重启不重发
+设计:**daemon 脚本 → 写持续 log → controller sweep 读 log → 处理**。三段解耦:
 
-启动方式:
-```bash
-Monitor(
-  description: "Comment monitor — auto eyes-react + signal new team comments",
-  persistent: true,
-  timeout_ms: 3600000,
-  command: "tools/refactor-loop/comment-monitor.sh"
-)
-```
+1. **Daemon 脚本**(`tools/refactor-loop/comment-monitor.sh`)forever 跑,30s 轮询 GitHub:
+   - 自己 `gh api .../reactions content=eyes` 给 team-member 新评论加 👀(脚本内 side-effect,不需 controller)
+   - emit `new-team-comment: <issue> <author> <comment-id> eyes-reacted-at=<ISO8601>` 到 **stdout**
+   - emit `new-outsider-comment: <issue> <author> <id>` 同
+   - state 存 `.refactor-loop/comment-monitor-state.json`(comment_id → seen),重启不重发
 
-死则重启;controller 每次 wakeup 检查 task ID 是否存活,挂了立刻 re-arm。**eyes react 在脚本里完成**,即使 controller 跨多 turn 才回复,maintainer 也看见眼睛了。
+2. **持续 log 文件**(强制,per Auric 2026-05-20 修复 stdout 丢失 bug):
+   ```bash
+   nohup bash tools/refactor-loop/comment-monitor.sh >> .refactor-loop/logs/comment-monitor.log 2>&1 &
+   disown
+   ```
+   **禁止** `> /dev/null`(之前的 bug)— 否则 controller 看不到 event。所有 daemon(`comment-monitor.sh` / `codex-progress-reporter.sh`)都 append 写自己的 `.log` 文件。
+
+3. **Controller wakeup sweep 读 log**(per-wakeup step 1.5,加在 GitHub state derive 之后):
+   ```bash
+   # 拿到上次 sweep 后到现在的新 event
+   prev_offset=$(cat .refactor-loop/comment-monitor.offset 2>/dev/null || echo 0)
+   cur_offset=$(wc -l < .refactor-loop/logs/comment-monitor.log)
+   if (( cur_offset > prev_offset )); then
+     # 新 event 数 = cur - prev
+     sed -n "$((prev_offset+1)),$((cur_offset))p" .refactor-loop/logs/comment-monitor.log \
+       | grep "^new-team-comment:" | while read -r line; do
+       # 解析 issue / author / id,触发 maintainer-reply-resets-the-round 流程
+       process_new_team_comment "$line"
+     done
+     echo "$cur_offset" > .refactor-loop/comment-monitor.offset
+   fi
+   ```
+
+4. **Daemon liveness 检查**:每次 wakeup `ps -ef | grep comment-monitor.sh` 至少 1 个;0 个 → restart with log redirect。同理 `codex-progress-reporter.sh`。
+
+历史 bug(2026-05-20):
+- ❌ daemon 用 `> /dev/null` 启动 → stdout event 全丢 → controller 看不到 → #733 maintainer 评论被 daemon eyes-react ✓ 但 controller 不知道有新评论
+- ✅ 修法:`>> .refactor-loop/logs/<daemon>.log 2>&1`(append,持续可读)
+
+**eyes react 在脚本里完成**,即使 controller 跨多 turn 才回复 / log offset 滞后,maintainer 已经看见眼睛 — 这部分是 daemon side-effect 不丢。
 
 **Mode A1: 每次 controller wakeup 强制 comment sweep(per Auric 2026-05-19 "不要漏")**
 
