@@ -35,7 +35,16 @@ Architecture-philosophy escalation triggers (ALWAYS escalate, no exceptions):
 2. Issue body's `human_brief.why_needs_design` contains keywords: `rule-boundary` / `architecture-change` / `philosophy` / `CLAUDE.md` / `canon-vocabulary`
 3. Any solver's plan adds a new actor type / new envelope kind / new pipeline phase (read their "New abstractions" section)
 4. Any solver's plan modifies `docs/canon/*` to change repo vocabulary
-5. Issue has the label `design-philosophy` already
+5. Issue has the label `design-philosophy` AND **no maintainer directive narrowing scope**(see Step 2.5)
+
+### Step 2.5 — Stale-label override(maintainer directive narrowing)
+
+如果 issue 有 `design-philosophy` label,**先检查**最新 maintainer 评论(非 AI post — 不含 `⟦AI:AUTO-LOOP⟧` sentinel,也不以 `## 🤖` / `## 📊` 开头):
+
+- 若 maintainer 在 escalate 后给出**明确 directive**(选了某 framing / 给出具体 narrowing constraint / 明确接受某方向),则 `design-philosophy` label 视为**stale**,**不**触发 trigger #5。此时按 3 solver alignment 正常判 consensus / converge。
+- 若 maintainer 评论是 vague(只说"处理一下""怎么办"),或没 maintainer 评论 → label 仍 active,trigger #5 fires。
+
+Rationale:hardcoded `design-philosophy` label 是 audit / initial reflector 贴的;maintainer directive 给出后 scope 已 narrow,label 不再代表当前状态。**solver alignment + maintainer directive 同时存在时,override label**。
 
 If ANY trigger fires → SKIP to Step 5 (escalate).
 
