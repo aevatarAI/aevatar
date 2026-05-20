@@ -197,50 +197,12 @@ jobs:
       - name: Build console-web
         run: pnpm --dir apps/aevatar-console-web build
 
-  split-test-guards:
-    needs: changes
-    # Refactor (iter16/cluster-ci-systemic-refactor):
-    #   Old pattern: split-test-guards ran unconditionally on scheduled/manual CI, including doc-only changes
-    #   New principle: preserve scheduled/manual health checks; gate PR and non-health-check paths on core_code
-    if: |
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch' ||
-      (
-        needs.changes.outputs.docs_only == 'false' &&
-        needs.changes.outputs.core_code == 'true'
-      )
-    runs-on: ubuntu-latest
-    timeout-minutes: 35
-    strategy:
-      fail-fast: false
-      matrix:
-        solution_filter:
-          - aevatar.foundation.slnf
-          - aevatar.ai.slnf
-          - aevatar.cqrs.slnf
-          - aevatar.workflow.slnf
-          - aevatar.hosting.slnf
-          - aevatar.distributed.slnf
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Prepare Runner
-        uses: ./.github/actions/prepare-runner
-
-      - name: Run split test guard (${{ matrix.solution_filter }})
-        run: |
-          dotnet test "${{ matrix.solution_filter }}" \
-            --nologo \
-            --tl:off \
-            -m:1 \
-            -p:UseSharedCompilation=false \
-            -p:NuGetAudit=false
-
   slow-test-guards:
     needs: changes
-    # Refactor (iter16/cluster-ci-systemic-refactor):
-    #   Old pattern: slow-test-guards ran unconditionally on scheduled/manual/push CI, including doc-only changes
-    #   New principle: preserve scheduled/manual/main-dev push health checks; gate PR and non-health-check paths on core_code
+    # Refactor (iter18/cluster-019-strict-coverage-aevatar-slnx):
+    #   Old pattern: coverage_quality_guard.sh 吞 test fail 继续 emit coverage;split-test-guards 漏跑 22 orphan project
+    #   New principle: strict-coverage fail-fast(不吞 fail);aevatar.slnx-or-slow-test 唯一测试权威;
+    #   retire slnf 测试执行(只保留 slnf build boundary);slow-tests 独立 CI job
     if: |
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
@@ -338,9 +300,10 @@ jobs:
 
   coverage-quality:
     needs: changes
-    # Refactor (iter16/cluster-ci-systemic-refactor):
-    #   Old pattern: coverage-quality ran unconditionally on every PR, scheduled/manual CI, and main/dev push
-    #   New principle: preserve scheduled/manual/main-dev push health checks; skip only doc-only PR/non-health-check paths
+    # Refactor (iter18/cluster-019-strict-coverage-aevatar-slnx):
+    #   Old pattern: coverage_quality_guard.sh 吞 test fail 继续 emit coverage;split-test-guards 漏跑 22 orphan project
+    #   New principle: strict-coverage fail-fast(不吞 fail);aevatar.slnx-or-slow-test 唯一测试权威;
+    #   retire slnf 测试执行(只保留 slnf build boundary);slow-tests 独立 CI job
     if: |
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||

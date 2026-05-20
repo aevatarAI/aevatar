@@ -1153,6 +1153,7 @@ public class WorkflowGAgentCoverageTests
                     EventData = Any.Pack(new RoleChatSessionCompletedEvent
                     {
                         SessionId = "session-1",
+                        RoleId = "role_a",
                         Content = "reply",
                         ReasoningContent = "reasoning",
                         Prompt = "prompt",
