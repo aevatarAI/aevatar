@@ -97,19 +97,9 @@ public sealed class GAgentDraftRunSessionEventProjector
             ? context.SessionId
             : completed.SessionId;
         var content = completed.Content ?? string.Empty;
-        if (string.IsNullOrEmpty(content))
+        if (string.IsNullOrEmpty(content) || completed.ContentEmitted)
         {
-            return
-            [
-                new ProjectionSessionEventEntry<AGUIEvent>(
-                    context.RootActorId,
-                    context.SessionId,
-                    BuildTextMessageEnd(messageId)),
-                new ProjectionSessionEventEntry<AGUIEvent>(
-                    context.RootActorId,
-                    context.SessionId,
-                    BuildRunFinished(context)),
-            ];
+            return BuildTerminalEntries(context, messageId);
         }
 
         return
@@ -196,6 +186,20 @@ public sealed class GAgentDraftRunSessionEventProjector
 
         return false;
     }
+
+    private static IReadOnlyList<ProjectionSessionEventEntry<AGUIEvent>> BuildTerminalEntries(
+        GAgentDraftRunProjectionContext context,
+        string messageId) =>
+        [
+            new ProjectionSessionEventEntry<AGUIEvent>(
+                context.RootActorId,
+                context.SessionId,
+                BuildTextMessageEnd(messageId)),
+            new ProjectionSessionEventEntry<AGUIEvent>(
+                context.RootActorId,
+                context.SessionId,
+                BuildRunFinished(context)),
+        ];
 
     private static AGUIEvent BuildTextMessageEnd(string messageId) =>
         new()

@@ -296,7 +296,7 @@ public sealed class ScopeServiceEndpointsStreamTests
     }
 
     [Fact]
-    public async Task GAgentDraftRunSessionEventProjector_ShouldPublishRunFinished_FromCommittedTerminalSuccess()
+    public async Task GAgentDraftRunSessionEventProjector_ShouldPublishOnlyTerminalFrames_FromCommittedTerminalSuccess_WhenContentAlreadyEmitted()
     {
         var sessionHub = new RecordingProjectionSessionEventHub();
         var projector = new GAgentDraftRunSessionEventProjector(sessionHub);
@@ -315,6 +315,38 @@ public sealed class ScopeServiceEndpointsStreamTests
                     SessionId = "cmd-1",
                     Content = "pong",
                     ContentEmitted = true,
+                },
+                correlationId: "cmd-1"),
+            CancellationToken.None);
+
+        sessionHub.Published.Should().HaveCount(2);
+        sessionHub.Published[0].Event.TextMessageEnd.Should().NotBeNull();
+        sessionHub.Published[0].Event.TextMessageEnd!.MessageId.Should().Be("cmd-1");
+        sessionHub.Published[1].Event.RunFinished.Should().NotBeNull();
+        sessionHub.Published[1].Event.RunFinished!.ThreadId.Should().Be("actor-1");
+        sessionHub.Published[1].Event.RunFinished.RunId.Should().Be("cmd-1");
+    }
+
+    [Fact]
+    public async Task GAgentDraftRunSessionEventProjector_ShouldPublishContentFrames_FromCommittedTerminalSuccess_WhenContentWasNotEmitted()
+    {
+        var sessionHub = new RecordingProjectionSessionEventHub();
+        var projector = new GAgentDraftRunSessionEventProjector(sessionHub);
+        var context = new GAgentDraftRunProjectionContext
+        {
+            RootActorId = "actor-1",
+            SessionId = "cmd-1",
+            ProjectionKind = "service-draft-run-session",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            WrapCommittedCompletion(
+                new RoleChatSessionCompletedEvent
+                {
+                    SessionId = "cmd-1",
+                    Content = "pong",
+                    ContentEmitted = false,
                 },
                 correlationId: "cmd-1"),
             CancellationToken.None);
