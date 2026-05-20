@@ -23,6 +23,7 @@
     <Project Path="agents\Aevatar.GAgents.Household\Aevatar.GAgents.Household.csproj" />
     <Project Path="agents/Aevatar.GAgents.StudioMember/Aevatar.GAgents.StudioMember.csproj" />
     <Project Path="agents/Aevatar.GAgents.StudioTeam/Aevatar.GAgents.StudioTeam.csproj" />
+    <Project Path="agents/Aevatar.GAgents.ChatRouting/Aevatar.GAgents.ChatRouting.csproj" />
   </Folder>
   <Folder Name="/demos/">
     <Project Path="demos\Aevatar.Demos.Cli\Aevatar.Demos.Cli.csproj" />
@@ -157,6 +158,7 @@
   <Folder Name="/test/">
     <Project Path="test/Aevatar.Interop.A2A.Tests/Aevatar.Interop.A2A.Tests.csproj" />
     <Project Path="test/Aevatar.Studio.Tests/Aevatar.Studio.Tests.csproj" />
+    <Project Path="test/Aevatar.GAgents.ChatRouting.Tests/Aevatar.GAgents.ChatRouting.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Core.Tests\Aevatar.AI.Core.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Tests\Aevatar.AI.Tests.csproj" />
     <Project Path="test\Aevatar.AI.ToolProviders.Ornn.Tests\Aevatar.AI.ToolProviders.Ornn.Tests.csproj" />
