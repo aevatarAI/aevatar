@@ -17,20 +17,17 @@ public sealed class LlmSessionRegistrationAdapterTests
     {
         var runtime = new RecordingRuntime();
         var dispatch = new RecordingDispatchPort();
-        var projection = new RecordingProjectionPort();
 
-        ((Action)(() => new LlmSessionRegistrationAdapter(null!, dispatch, projection)))
+        ((Action)(() => new LlmSessionRegistrationAdapter(null!, dispatch)))
             .Should().Throw<ArgumentNullException>().WithMessage("*runtime*");
-        ((Action)(() => new LlmSessionRegistrationAdapter(runtime, null!, projection)))
+        ((Action)(() => new LlmSessionRegistrationAdapter(runtime, null!)))
             .Should().Throw<ArgumentNullException>().WithMessage("*dispatchPort*");
-        ((Action)(() => new LlmSessionRegistrationAdapter(runtime, dispatch, null!)))
-            .Should().Throw<ArgumentNullException>().WithMessage("*projectionPort*");
     }
 
     [Fact]
     public async Task RegisterAsync_ShouldCreateActor_DefaultTimestampsAndStatus()
     {
-        var (adapter, runtime, dispatch, projection) = CreateAdapter();
+        var (adapter, runtime, dispatch) = CreateAdapter();
         var record = BuildRecord();
         record.CreatedAt = null;
         record.Status = LlmSessionStatus.Unspecified;
@@ -41,7 +38,6 @@ public sealed class LlmSessionRegistrationAdapterTests
         result.ActorId.Should().StartWith("response-session-");
         runtime.CreateCalls.Should().ContainSingle();
         runtime.CreateCalls[0].agentType.Should().Be(typeof(LlmSessionGAgent));
-        projection.EnsureCalls.Should().ContainSingle().Which.Should().Be(result.ActorId);
         dispatch.Calls.Should().ContainSingle();
         dispatch.Calls[0].envelope.Payload.TypeUrl.Should().Contain("RegisterResponseSessionRequested");
         var packed = dispatch.Calls[0].envelope.Payload.Unpack<RegisterResponseSessionRequested>();
@@ -53,7 +49,7 @@ public sealed class LlmSessionRegistrationAdapterTests
     [Fact]
     public async Task RegisterAsync_ShouldPreservePreSetTimestampsAndStatus()
     {
-        var (adapter, _, dispatch, _) = CreateAdapter();
+        var (adapter, _, dispatch) = CreateAdapter();
         var preset = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-04-01T00:00:00+00:00"));
         var record = BuildRecord();
         record.CreatedAt = preset;
@@ -70,7 +66,7 @@ public sealed class LlmSessionRegistrationAdapterTests
     [Fact]
     public async Task RegisterAsync_ShouldRejectMissingRequiredFields()
     {
-        var (adapter, _, _, _) = CreateAdapter();
+        var (adapter, _, _) = CreateAdapter();
 
         await ((Func<Task>)(() => adapter.RegisterAsync(null!)))
             .Should().ThrowAsync<ArgumentNullException>();
@@ -91,7 +87,7 @@ public sealed class LlmSessionRegistrationAdapterTests
     [Fact]
     public async Task UpdateStatusAsync_ShouldDispatchUpdateEnvelope()
     {
-        var (adapter, _, dispatch, _) = CreateAdapter();
+        var (adapter, _, dispatch) = CreateAdapter();
 
         await adapter.UpdateStatusAsync("session-actor-1", "resp_1", LlmSessionStatus.Completed);
 
@@ -106,7 +102,7 @@ public sealed class LlmSessionRegistrationAdapterTests
     [Fact]
     public async Task UpdateStatusAsync_ShouldNoOp_WhenStatusUnspecified()
     {
-        var (adapter, _, dispatch, _) = CreateAdapter();
+        var (adapter, _, dispatch) = CreateAdapter();
 
         await adapter.UpdateStatusAsync("session-actor-1", "resp_1", LlmSessionStatus.Unspecified);
 
@@ -118,7 +114,7 @@ public sealed class LlmSessionRegistrationAdapterTests
     [InlineData("actor-1", "", "responseId")]
     public async Task UpdateStatusAsync_ShouldRejectMissingArguments(string actorId, string respId, string param)
     {
-        var (adapter, _, _, _) = CreateAdapter();
+        var (adapter, _, _) = CreateAdapter();
 
         var act = () => adapter.UpdateStatusAsync(actorId, respId, LlmSessionStatus.Completed);
 
@@ -128,7 +124,7 @@ public sealed class LlmSessionRegistrationAdapterTests
     [Fact]
     public async Task RecordForwardedToolCallAsync_ShouldDispatch_WithDefaultStatusAndTimestamp()
     {
-        var (adapter, _, dispatch, _) = CreateAdapter();
+        var (adapter, _, dispatch) = CreateAdapter();
         var call = new LlmSessionForwardedToolCall
         {
             CallId = "call-1",
@@ -150,7 +146,7 @@ public sealed class LlmSessionRegistrationAdapterTests
     [Fact]
     public async Task RecordForwardedToolCallAsync_ShouldPreservePreSetStatusAndTimestamp()
     {
-        var (adapter, _, dispatch, _) = CreateAdapter();
+        var (adapter, _, dispatch) = CreateAdapter();
         var preset = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-04-01T00:00:00+00:00"));
         var call = new LlmSessionForwardedToolCall
         {
@@ -170,7 +166,7 @@ public sealed class LlmSessionRegistrationAdapterTests
     [Fact]
     public async Task RecordForwardedToolCallAsync_ShouldRejectMissingArguments()
     {
-        var (adapter, _, _, _) = CreateAdapter();
+        var (adapter, _, _) = CreateAdapter();
         var call = new LlmSessionForwardedToolCall { CallId = "call-1" };
 
         await ((Func<Task>)(() => adapter.RecordForwardedToolCallAsync("", "resp_1", call)))
@@ -188,7 +184,7 @@ public sealed class LlmSessionRegistrationAdapterTests
     [Fact]
     public async Task ReceiveForwardedToolResultAsync_ShouldDispatchAndAcceptNullJson()
     {
-        var (adapter, _, dispatch, _) = CreateAdapter();
+        var (adapter, _, dispatch) = CreateAdapter();
 
         await adapter.ReceiveForwardedToolResultAsync("actor-1", "resp_1", "call-1", "hash-1", resultJson: null!);
 
@@ -202,7 +198,7 @@ public sealed class LlmSessionRegistrationAdapterTests
     [Fact]
     public async Task ReceiveForwardedToolResultAsync_ShouldParseBoundaryJsonResult()
     {
-        var (adapter, _, dispatch, _) = CreateAdapter();
+        var (adapter, _, dispatch) = CreateAdapter();
 
         await adapter.ReceiveForwardedToolResultAsync(
             " actor-1 ",
@@ -226,7 +222,7 @@ public sealed class LlmSessionRegistrationAdapterTests
     public async Task ReceiveForwardedToolResultAsync_ShouldRejectMissingArguments(
         string actorId, string respId, string callId, string hash, string param)
     {
-        var (adapter, _, _, _) = CreateAdapter();
+        var (adapter, _, _) = CreateAdapter();
 
         var act = () => adapter.ReceiveForwardedToolResultAsync(actorId, respId, callId, hash, "{}");
 
@@ -236,7 +232,7 @@ public sealed class LlmSessionRegistrationAdapterTests
     [Fact]
     public async Task ResolveForwardedToolResultAsync_ShouldDispatchResolvedEnvelope()
     {
-        var (adapter, _, dispatch, _) = CreateAdapter();
+        var (adapter, _, dispatch) = CreateAdapter();
 
         await adapter.ResolveForwardedToolResultAsync("actor-1", "resp_1", "call-1");
 
@@ -254,20 +250,19 @@ public sealed class LlmSessionRegistrationAdapterTests
     public async Task ResolveForwardedToolResultAsync_ShouldRejectMissingArguments(
         string actorId, string respId, string callId, string param)
     {
-        var (adapter, _, _, _) = CreateAdapter();
+        var (adapter, _, _) = CreateAdapter();
 
         var act = () => adapter.ResolveForwardedToolResultAsync(actorId, respId, callId);
 
         await act.Should().ThrowAsync<ArgumentException>().Where(ex => ex.ParamName == param);
     }
 
-    private static (LlmSessionRegistrationAdapter adapter, RecordingRuntime runtime, RecordingDispatchPort dispatch, RecordingProjectionPort projection) CreateAdapter()
+    private static (LlmSessionRegistrationAdapter adapter, RecordingRuntime runtime, RecordingDispatchPort dispatch) CreateAdapter()
     {
         var runtime = new RecordingRuntime();
         var dispatch = new RecordingDispatchPort();
-        var projection = new RecordingProjectionPort();
-        var adapter = new LlmSessionRegistrationAdapter(runtime, dispatch, projection);
-        return (adapter, runtime, dispatch, projection);
+        var adapter = new LlmSessionRegistrationAdapter(runtime, dispatch);
+        return (adapter, runtime, dispatch);
     }
 
     private static LlmSessionRecord BuildRecord() => new()
@@ -309,18 +304,6 @@ public sealed class LlmSessionRegistrationAdapterTests
             return Task.CompletedTask;
         }
     }
-
-    private sealed class RecordingProjectionPort : ILlmSessionCurrentStateProjectionPort
-    {
-        public List<string> EnsureCalls { get; } = [];
-
-        public Task EnsureProjectionAsync(string actorId, CancellationToken ct = default)
-        {
-            EnsureCalls.Add(actorId);
-            return Task.CompletedTask;
-        }
-    }
-
     private sealed class RecordingActor : IActor
     {
         public RecordingActor(string id) { Id = id; }
