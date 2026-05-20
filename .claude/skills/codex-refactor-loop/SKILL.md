@@ -5,6 +5,51 @@ description: Unattended three-phase refactor loop (analyze → implement → ver
 
 # Codex Refactor Loop — Unattended Three-Phase Mode
 
+## ⭐ 核心原则:GitHub 是系统状态唯一显示面(强制,per Auric 2026-05-20 "核心要做到的就是要把系统的状态完全反映在 github 上")
+
+**Maintainer 打开 GitHub 必须一眼看到完整状态**,不用读本地 log / state.json / ps process / chat history。任何状态变化在 GitHub **立即可见**。
+
+### 必须 reflect 到 GitHub 的状态变化
+
+| 状态变化 | 触发位置 | GitHub 反映方式 |
+|---|---|---|
+| 派 codex(任何角色) | spawn 同 turn | `## 📊 状态卡片` post 到关联 issue/PR + label transition |
+| Codex 完成(任何角色) | task-notification 处理 | update 卡片(或 post 新卡片说"X 已完成,下一步 Y") |
+| 共识达成 | meta-judge consensus | `## ✅ 共识卡片` post(详见 Phase 9 Consensus action) |
+| Maintainer 评论被识别 | daemon eyes react 后 | `## 📊 状态 — 已收到 maintainer 评论(daemon 识别)` daemon banner |
+| Reflector 决议 | META_RESOLVED:<kind> | `## 🤖 meta-reflector decision: <kind>` post + label 转 |
+| Escalate human | label 加 🆘 | banner 说"✅ 需要 maintainer 决策:具体什么决策" |
+| Phase transition | controller route | label sync(`🔍`→`✅`→`🛠️`→`🚀`→`👀`→`🔧`→`⚙️`→`🎉`) |
+| Stuck 4h timeout | controller sweep | banner 说"等了 4h 自动派 reflector 重新评估" |
+| iter 完成 | last cluster merged | rollup PR banner + 派 next iter audit |
+| Bug 修复 | skill commit | commit 内容 push 到 auto-refact-dev,maintainer 可看 commit diff |
+
+### 反面(❌ 严禁)
+
+- ❌ Codex 在本地跑但 GitHub 上对应 issue/PR 无任何状态卡片(maintainer 不知道 controller 在干什么)
+- ❌ Codex 完成后只更新本地 log,不 post GitHub banner
+- ❌ Label 在 GitHub 转了但没配 banner 解释(label list 不解释 why)
+- ❌ Banner 用模糊语言("处理中""稍等"),应该具体说当前 phase + 下一步 + ETA / 何时介入
+- ❌ 多个 daemon 同时跑但 maintainer 看 GitHub 只看到 eyes,不知道还有 codex 在工作
+
+### Controller 自检(每次 wakeup)
+
+per-wakeup sweep step 1.5 之后,**对每个 in-flight codex 验证关联 issue/PR 是否有最新状态卡片**(创建时间 ≥ codex spawn 时间):
+
+```bash
+# 对每个 in-flight codex 任务
+for log in $(ls -t .refactor-loop/logs/*-r*.log .refactor-loop/logs/implement-*.log .refactor-loop/logs/meta-reflect-*.log 2>/dev/null); do
+  # 找到关联 issue/PR
+  # 找到 spawn 时间(log mtime / SPAWN 行)
+  # gh 查 issue/PR 最新 AI banner 时间
+  # 如 banner 早于 spawn 时间 → controller MUST post 新 banner 反映 "<codex> 在跑"
+done
+```
+
+如发现 in-flight codex 但关联 issue 无对应 banner → **本 turn 必须 post 补**,然后才能 schedule wakeup。
+
+---
+
 You are the **Controller**. You never edit production code yourself. You orchestrate `codex exec` subprocesses that do all analysis, implementation, and verification work in isolated git worktrees.
 
 Each `/loop` wakeup runs **one iteration tick**: inspect `.refactor-loop/state.json`, advance whichever phase is ready, schedule the next wakeup. Stop when `clusters_planned == clusters_done`.
