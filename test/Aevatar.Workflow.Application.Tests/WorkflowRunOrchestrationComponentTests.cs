@@ -91,6 +91,23 @@ public sealed class WorkflowRunOrchestrationComponentTests
     }
 
     [Fact]
+    public async Task WorkflowRunAcceptedCommandTargetResolver_ShouldPropagateActorResolutionError()
+    {
+        var actorResolver = new FakeWorkflowRunActorResolver(
+            new WorkflowActorResolutionResult(null, string.Empty, WorkflowChatRunStartError.WorkflowNotFound));
+        var resolver = new WorkflowRunAcceptedCommandTargetResolver(
+            actorResolver,
+            new FakeWorkflowRunActorPort());
+
+        var result = await resolver.ResolveAsync(new WorkflowChatRunRequest("hello", "missing", null));
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.WorkflowNotFound);
+        result.Target.Should().BeNull();
+        actorResolver.ResolveCallCount.Should().Be(1);
+    }
+
+    [Fact]
     public void WorkflowRunAcceptedCommandTarget_ShouldExposeOnlyDispatchCleanupInterface()
     {
         var target = new WorkflowRunAcceptedCommandTarget(
@@ -119,6 +136,55 @@ public sealed class WorkflowRunOrchestrationComponentTests
         await target.CleanupAfterDispatchFailureAsync(CancellationToken.None);
         await target.CleanupAfterDispatchFailureAsync(CancellationToken.None);
 
+        actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
+    }
+
+    [Fact]
+    public async Task WorkflowRunAcceptedCommandTarget_ShouldWrapSingleCleanupFailure()
+    {
+        var actorPort = new FakeWorkflowRunActorPort
+        {
+            DestroyException = new InvalidOperationException("destroy failed"),
+        };
+        var target = new WorkflowRunAcceptedCommandTarget(
+            new FakeActor("actor-1"),
+            "direct",
+            ["actor-1"],
+            actorPort);
+
+        var act = () => target.CleanupAfterDispatchFailureAsync(CancellationToken.None);
+
+        var exception = await act.Should().ThrowAsync<InvalidOperationException>();
+        exception.WithMessage("Failed to destroy workflow actor 'actor-1'.");
+        exception.Which.InnerException.Should().BeOfType<InvalidOperationException>()
+            .Which.Message.Should().Be("destroy failed");
+        actorPort.DestroyCalls.Should().Equal("actor-1");
+    }
+
+    [Fact]
+    public async Task WorkflowRunAcceptedCommandTarget_ShouldAggregateCleanupFailures()
+    {
+        var actorPort = new FakeWorkflowRunActorPort
+        {
+            DestroyException = new InvalidOperationException("destroy failed"),
+        };
+        var target = new WorkflowRunAcceptedCommandTarget(
+            new FakeActor("actor-1"),
+            "direct",
+            ["definition-1", "actor-1"],
+            actorPort);
+
+        var act = () => target.CleanupAfterDispatchFailureAsync(CancellationToken.None);
+
+        var exception = await act.Should().ThrowAsync<AggregateException>();
+        exception.WithMessage("Workflow actor cleanup failed.*");
+        exception.Which.InnerExceptions.Should().HaveCount(2);
+        exception.Which.InnerExceptions.Should().AllSatisfy(ex =>
+        {
+            ex.Should().BeOfType<InvalidOperationException>();
+            ex.InnerException.Should().BeOfType<InvalidOperationException>()
+                .Which.Message.Should().Be("destroy failed");
+        });
         actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
     }
 
@@ -351,6 +417,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
     private sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort
     {
         public List<string> DestroyCalls { get; } = [];
+        public Exception? DestroyException { get; set; }
 
         public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
@@ -362,6 +429,9 @@ public sealed class WorkflowRunOrchestrationComponentTests
         {
             ct.ThrowIfCancellationRequested();
             DestroyCalls.Add(actorId);
+            if (DestroyException != null)
+                throw DestroyException;
+
             return Task.CompletedTask;
         }
 

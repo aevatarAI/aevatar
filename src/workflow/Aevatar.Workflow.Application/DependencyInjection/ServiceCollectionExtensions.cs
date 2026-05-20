@@ -80,12 +80,12 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWorkflowRunReportExportPort, NoopWorkflowRunReportExporter>();
         services.TryAddSingleton<IWorkflowExecutionTopologyResolver, ActorRuntimeWorkflowExecutionTopologyResolver>();
         // Refactor (iter18/cluster-005):
-        //   Old pattern: DefaultDetachedCommandDispatchService 在 accepted-only path 持有 live sink
+        //   Old pattern: accepted-only dispatch used a detached live-sink monitor service
         //   New principle: accepted-only target split + NoOp binder default + receipt-only(no live sink acquired)
-        services.AddSingleton<DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>();
+        services.AddSingleton<DefaultCommandDispatchService<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>();
         services.AddSingleton<ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>(sp =>
             new FallbackCommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>(
-                sp.GetRequiredService<DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>(),
+                sp.GetRequiredService<DefaultCommandDispatchService<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>(),
                 sp.GetRequiredService<ICommandFallbackPolicy<WorkflowChatRunRequest>>(),
                 sp.GetService<Microsoft.Extensions.Logging.ILogger<FallbackCommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>>()));
         services.TryAddSingleton<ICommandTargetDispatcher<WorkflowRunControlCommandTarget>, ActorCommandTargetDispatcher<WorkflowRunControlCommandTarget>>();

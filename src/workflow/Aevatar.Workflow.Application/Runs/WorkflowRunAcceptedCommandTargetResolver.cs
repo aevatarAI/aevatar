@@ -3,6 +3,9 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Application.Runs;
 
+// Refactor (iter18/cluster-005):
+//   Old pattern: accepted-only target resolution allocated projection/live-sink dependencies
+//   New principle: accepted-only target split + NoOp binder default + receipt-only(no live sink acquired)
 internal sealed class WorkflowRunAcceptedCommandTargetResolver
     : ICommandTargetResolver<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunStartError>
 {
@@ -22,7 +25,7 @@ internal sealed class WorkflowRunAcceptedCommandTargetResolver
         CancellationToken ct = default)
     {
         // Refactor (iter18/cluster-005):
-        //   Old pattern: DefaultDetachedCommandDispatchService 在 accepted-only path 持有 live sink
+        //   Old pattern: accepted-only dispatch reused interaction targets that owned live sinks
         //   New principle: accepted-only target split + NoOp binder default + receipt-only(no live sink acquired)
         ArgumentNullException.ThrowIfNull(command);
 
