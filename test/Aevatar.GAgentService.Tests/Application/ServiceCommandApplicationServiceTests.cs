@@ -2,7 +2,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
-using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Tests.TestSupport;
@@ -13,344 +12,54 @@ namespace Aevatar.GAgentService.Tests.Application;
 public sealed class ServiceCommandApplicationServiceTests
 {
     [Fact]
-    public async Task DefinitionCommands_ShouldUseDefinitionTargetProjectionAndDispatch()
+    public async Task DefinitionRevisionAndDeploymentCommands_ShouldReturnAcceptedReceiptsWithoutProjectionPorts()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var provisioner = new RecordingCommandTargetProvisioner();
         var dispatchPort = new RecordingActorDispatchPort();
-        var catalogProjectionPort = new RecordingCatalogProjectionPort();
-        var service = CreateService(
-            provisioner,
-            dispatchPort,
-            catalogProjectionPort,
-            new RecordingRevisionProjectionPort());
+        var service = CreateService(provisioner, dispatchPort);
 
         var createReceipt = await service.CreateServiceAsync(new CreateServiceDefinitionCommand
         {
             Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
         });
-        var updateReceipt = await service.UpdateServiceAsync(new UpdateServiceDefinitionCommand
-        {
-            Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
-        });
-        var defaultReceipt = await service.SetDefaultServingRevisionAsync(new SetDefaultServingRevisionCommand
-        {
-            Identity = identity.Clone(),
-            RevisionId = "rev-1",
-        });
-
-        provisioner.DefinitionRequests.Should().HaveCount(3);
-        catalogProjectionPort.ActorIds.Should().Equal(
-            ServiceActorIds.Definition(identity),
-            ServiceActorIds.Definition(identity),
-            ServiceActorIds.Definition(identity));
-        dispatchPort.Calls.Should().HaveCount(3);
-        createReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
-        updateReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
-        defaultReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:rev-1");
-    }
-
-    [Fact]
-    public async Task RevisionCommands_ShouldUseRevisionCatalogProjectionAndDispatch()
-    {
-        var identity = GAgentServiceTestKit.CreateIdentity();
-        var provisioner = new RecordingCommandTargetProvisioner();
-        var dispatchPort = new RecordingActorDispatchPort();
-        var revisionProjectionPort = new RecordingRevisionProjectionPort();
-        var service = CreateService(
-            provisioner,
-            dispatchPort,
-            new RecordingCatalogProjectionPort(),
-            revisionProjectionPort);
-
-        var createReceipt = await service.CreateRevisionAsync(new CreateServiceRevisionCommand
+        var revisionReceipt = await service.CreateRevisionAsync(new CreateServiceRevisionCommand
         {
             Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r1"),
         });
-        var prepareReceipt = await service.PrepareRevisionAsync(new PrepareServiceRevisionCommand
+        var deploymentReceipt = await service.ActivateServiceRevisionAsync(new ActivateServiceRevisionCommand
         {
             Identity = identity.Clone(),
-            RevisionId = "r2",
-        });
-        var publishReceipt = await service.PublishRevisionAsync(new PublishServiceRevisionCommand
-        {
-            Identity = identity.Clone(),
-            RevisionId = "r3",
-        });
-        var retireReceipt = await service.RetireRevisionAsync(new RetireServiceRevisionCommand
-        {
-            Identity = identity.Clone(),
-            RevisionId = "r4",
+            RevisionId = "r1",
         });
 
-        provisioner.RevisionCatalogRequests.Should().HaveCount(4);
-        revisionProjectionPort.ActorIds.Should().Equal(
-            ServiceActorIds.RevisionCatalog(identity),
-            ServiceActorIds.RevisionCatalog(identity),
-            ServiceActorIds.RevisionCatalog(identity),
-            ServiceActorIds.RevisionCatalog(identity));
-        dispatchPort.Calls.Should().HaveCount(4);
-        createReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:r1");
-        prepareReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:r2");
-        publishReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:r3");
-        retireReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:r4");
-    }
-
-    [Fact]
-    public async Task ActivateServiceRevisionAsync_ShouldUseDeploymentTargetAndProjection()
-    {
-        var identity = GAgentServiceTestKit.CreateIdentity();
-        var provisioner = new RecordingCommandTargetProvisioner();
-        var dispatchPort = new RecordingActorDispatchPort();
-        var deploymentProjectionPort = new RecordingProjectionPort();
-        var servingProjectionPort = new RecordingProjectionPort();
-        var trafficProjectionPort = new RecordingProjectionPort();
-        var service = CreateService(
-            provisioner,
-            dispatchPort,
-            new RecordingCatalogProjectionPort(),
-            new RecordingRevisionProjectionPort(),
-            deploymentProjectionPort: deploymentProjectionPort,
-            servingProjectionPort: servingProjectionPort,
-            trafficProjectionPort: trafficProjectionPort);
-
-        var receipt = await service.ActivateServiceRevisionAsync(new ActivateServiceRevisionCommand
-        {
-            Identity = identity.Clone(),
-            RevisionId = "rev-2",
-        });
-
-        receipt.TargetActorId.Should().Be(ServiceActorIds.Deployment(identity));
+        createReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
+        revisionReceipt.TargetActorId.Should().Be(ServiceActorIds.RevisionCatalog(identity));
+        deploymentReceipt.TargetActorId.Should().Be(ServiceActorIds.Deployment(identity));
+        provisioner.DefinitionRequests.Should().ContainSingle();
+        provisioner.RevisionCatalogRequests.Should().ContainSingle();
         provisioner.DeploymentRequests.Should().ContainSingle();
         provisioner.ServingSetRequests.Should().ContainSingle();
-        deploymentProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.Deployment(identity));
-        servingProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
-        trafficProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
-        dispatchPort.Calls.Should().ContainSingle(x => x.actorId == ServiceActorIds.Deployment(identity));
-    }
-
-    [Fact]
-    public async Task DeploymentAndRolloutLifecycleCommands_ShouldUseExpectedTargetsAndProjections()
-    {
-        var identity = GAgentServiceTestKit.CreateIdentity();
-        var provisioner = new RecordingCommandTargetProvisioner();
-        var dispatchPort = new RecordingActorDispatchPort();
-        var deploymentProjectionPort = new RecordingProjectionPort();
-        var servingProjectionPort = new RecordingProjectionPort();
-        var rolloutProjectionPort = new RecordingProjectionPort();
-        var trafficProjectionPort = new RecordingProjectionPort();
-        var service = CreateService(
-            provisioner,
-            dispatchPort,
-            new RecordingCatalogProjectionPort(),
-            new RecordingRevisionProjectionPort(),
-            deploymentProjectionPort: deploymentProjectionPort,
-            servingProjectionPort: servingProjectionPort,
-            rolloutProjectionPort: rolloutProjectionPort,
-            trafficProjectionPort: trafficProjectionPort);
-
-        var deactivateReceipt = await service.DeactivateServiceDeploymentAsync(new DeactivateServiceDeploymentCommand
-        {
-            Identity = identity.Clone(),
-            DeploymentId = "dep-1",
-        });
-        var advanceReceipt = await service.AdvanceServiceRolloutAsync(new AdvanceServiceRolloutCommand
-        {
-            Identity = identity.Clone(),
-            RolloutId = "rollout-1",
-        });
-        var pauseReceipt = await service.PauseServiceRolloutAsync(new PauseServiceRolloutCommand
-        {
-            Identity = identity.Clone(),
-            RolloutId = "rollout-1",
-            Reason = "pause",
-        });
-
-        deactivateReceipt.TargetActorId.Should().Be(ServiceActorIds.Deployment(identity));
-        advanceReceipt.TargetActorId.Should().Be(ServiceActorIds.Rollout(identity));
-        pauseReceipt.TargetActorId.Should().Be(ServiceActorIds.Rollout(identity));
-        deactivateReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:dep-1");
-        advanceReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:rollout-1");
-        pauseReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:rollout-1");
-        provisioner.DeploymentRequests.Should().ContainSingle();
-        provisioner.RolloutRequests.Should().HaveCount(2);
-        provisioner.ServingSetRequests.Should().ContainSingle();
-        deploymentProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.Deployment(identity));
-        rolloutProjectionPort.ActorIds.Should().Equal(
-            ServiceActorIds.Rollout(identity),
-            ServiceActorIds.Rollout(identity));
-        servingProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
-        trafficProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
         dispatchPort.Calls.Should().HaveCount(3);
     }
 
     [Fact]
-    public async Task PauseServiceRolloutAsync_ShouldReturnAcceptedReceipt()
-    {
-        var identity = GAgentServiceTestKit.CreateIdentity();
-        var service = CreateService(
-            new RecordingCommandTargetProvisioner(),
-            new RecordingActorDispatchPort(),
-            new RecordingCatalogProjectionPort(),
-            new RecordingRevisionProjectionPort());
-
-        var receipt = await service.PauseServiceRolloutAsync(new PauseServiceRolloutCommand
-        {
-            Identity = identity.Clone(),
-            RolloutId = "rollout-1",
-            Reason = "pause-again",
-        });
-
-        receipt.TargetActorId.Should().Be(ServiceActorIds.Rollout(identity));
-        receipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:rollout-1");
-    }
-
-    [Fact]
-    public async Task ResumeServiceRolloutAsync_ShouldEnsureServingProjectionAndReturnAcceptedReceipt()
+    public async Task ServingAndRolloutCommands_ShouldDispatchCommandsWithoutProjectionPriming()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var provisioner = new RecordingCommandTargetProvisioner();
         var dispatchPort = new RecordingActorDispatchPort();
-        var servingProjectionPort = new RecordingProjectionPort();
-        var rolloutProjectionPort = new RecordingProjectionPort();
-        var trafficProjectionPort = new RecordingProjectionPort();
-        var service = CreateService(
-            provisioner,
-            dispatchPort,
-            new RecordingCatalogProjectionPort(),
-            new RecordingRevisionProjectionPort(),
-            servingProjectionPort: servingProjectionPort,
-            rolloutProjectionPort: rolloutProjectionPort,
-            trafficProjectionPort: trafficProjectionPort);
+        var service = CreateService(provisioner, dispatchPort);
 
-        var receipt = await service.ResumeServiceRolloutAsync(new ResumeServiceRolloutCommand
-        {
-            Identity = identity.Clone(),
-            RolloutId = "rollout-1",
-        });
-
-        receipt.TargetActorId.Should().Be(ServiceActorIds.Rollout(identity));
-        receipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:rollout-1");
-        provisioner.RolloutRequests.Should().ContainSingle();
-        provisioner.ServingSetRequests.Should().ContainSingle();
-        rolloutProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.Rollout(identity));
-        servingProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
-        trafficProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
-        dispatchPort.Calls.Should().ContainSingle();
-    }
-
-    [Fact]
-    public async Task RollbackServiceRolloutAsync_ShouldEnsureServingProjectionAndReturnAcceptedReceipt()
-    {
-        var identity = GAgentServiceTestKit.CreateIdentity();
-        var provisioner = new RecordingCommandTargetProvisioner();
-        var servingProjectionPort = new RecordingProjectionPort();
-        var rolloutProjectionPort = new RecordingProjectionPort();
-        var trafficProjectionPort = new RecordingProjectionPort();
-        var service = CreateService(
-            provisioner,
-            new RecordingActorDispatchPort(),
-            new RecordingCatalogProjectionPort(),
-            new RecordingRevisionProjectionPort(),
-            servingProjectionPort: servingProjectionPort,
-            rolloutProjectionPort: rolloutProjectionPort,
-            trafficProjectionPort: trafficProjectionPort);
-
-        var receipt = await service.RollbackServiceRolloutAsync(new RollbackServiceRolloutCommand
-        {
-            Identity = identity.Clone(),
-            RolloutId = "rollout-1",
-            Reason = "rollback-after-complete",
-        });
-
-        receipt.TargetActorId.Should().Be(ServiceActorIds.Rollout(identity));
-        receipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:rollout-1");
-        provisioner.RolloutRequests.Should().ContainSingle();
-        provisioner.ServingSetRequests.Should().ContainSingle();
-        rolloutProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.Rollout(identity));
-        servingProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
-        trafficProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
-    }
-
-    [Fact]
-    public async Task ResumeServiceRolloutAsync_ShouldPropagateDispatchFailure_ForMismatchedRolloutId()
-    {
-        var identity = GAgentServiceTestKit.CreateIdentity();
-        var service = CreateService(
-            new RecordingCommandTargetProvisioner(),
-            new ThrowingActorDispatchPort(new InvalidOperationException("Rollout 'stale' does not match active rollout 'rollout-1'.")),
-            new RecordingCatalogProjectionPort(),
-            new RecordingRevisionProjectionPort());
-
-        var act = () => service.ResumeServiceRolloutAsync(new ResumeServiceRolloutCommand
-        {
-            Identity = identity.Clone(),
-            RolloutId = "stale",
-        });
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*does not match active rollout*");
-    }
-
-    [Fact]
-    public async Task ReplaceServiceServingTargetsAsync_ShouldDispatchRawTargetsToServingSet()
-    {
-        var identity = GAgentServiceTestKit.CreateIdentity();
-        var provisioner = new RecordingCommandTargetProvisioner();
-        var dispatchPort = new RecordingActorDispatchPort();
-        var servingProjectionPort = new RecordingProjectionPort();
-        var trafficProjectionPort = new RecordingProjectionPort();
-        var service = CreateService(
-            provisioner,
-            dispatchPort,
-            new RecordingCatalogProjectionPort(),
-            new RecordingRevisionProjectionPort(),
-            servingProjectionPort: servingProjectionPort,
-            trafficProjectionPort: trafficProjectionPort);
-
-        var receipt = await service.ReplaceServiceServingTargetsAsync(new ReplaceServiceServingTargetsCommand
+        var replaceReceipt = await service.ReplaceServiceServingTargetsAsync(new ReplaceServiceServingTargetsCommand
         {
             Identity = identity.Clone(),
             Targets =
             {
-                new ServiceServingTargetSpec
-                {
-                    RevisionId = "rev-1",
-                },
+                new ServiceServingTargetSpec { RevisionId = "rev-1" },
             },
         });
-
-        receipt.TargetActorId.Should().Be(ServiceActorIds.ServingSet(identity));
-        provisioner.ServingSetRequests.Should().ContainSingle();
-        servingProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
-        trafficProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
-        var dispatched = dispatchPort.Calls.Should().ContainSingle().Subject.envelope.Payload.Unpack<ReplaceServiceServingTargetsCommand>();
-        dispatched.Targets.Should().ContainSingle();
-        dispatched.Targets[0].RevisionId.Should().Be("rev-1");
-        dispatched.Targets[0].DeploymentId.Should().BeEmpty();
-        dispatched.Targets[0].PrimaryActorId.Should().BeEmpty();
-        dispatched.Targets[0].EnabledEndpointIds.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task StartServiceRolloutAsync_ShouldDispatchRawPlanAndEmptyBaseline()
-    {
-        var identity = GAgentServiceTestKit.CreateIdentity();
-        var provisioner = new RecordingCommandTargetProvisioner();
-        var dispatchPort = new RecordingActorDispatchPort();
-        var servingProjectionPort = new RecordingProjectionPort();
-        var rolloutProjectionPort = new RecordingProjectionPort();
-        var trafficProjectionPort = new RecordingProjectionPort();
-        var service = CreateService(
-            provisioner,
-            dispatchPort,
-            new RecordingCatalogProjectionPort(),
-            new RecordingRevisionProjectionPort(),
-            servingProjectionPort: servingProjectionPort,
-            rolloutProjectionPort: rolloutProjectionPort,
-            trafficProjectionPort: trafficProjectionPort);
-
-        var receipt = await service.StartServiceRolloutAsync(new StartServiceRolloutCommand
+        var rolloutReceipt = await service.StartServiceRolloutAsync(new StartServiceRolloutCommand
         {
             Identity = identity.Clone(),
             Plan = new ServiceRolloutPlanSpec
@@ -361,70 +70,59 @@ public sealed class ServiceCommandApplicationServiceTests
                     new ServiceRolloutStageSpec
                     {
                         StageId = "stage-1",
-                        Targets =
-                        {
-                            new ServiceServingTargetSpec
-                            {
-                                RevisionId = "rev-2",
-                            },
-                        },
+                        Targets = { new ServiceServingTargetSpec { RevisionId = "rev-2" } },
                     },
                 },
             },
         });
 
-        receipt.TargetActorId.Should().Be(ServiceActorIds.Rollout(identity));
-        provisioner.ServingSetRequests.Should().ContainSingle();
+        replaceReceipt.TargetActorId.Should().Be(ServiceActorIds.ServingSet(identity));
+        rolloutReceipt.TargetActorId.Should().Be(ServiceActorIds.Rollout(identity));
+        provisioner.ServingSetRequests.Should().HaveCount(2);
         provisioner.RolloutRequests.Should().ContainSingle();
-        servingProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
-        trafficProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
-        rolloutProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.Rollout(identity));
-
-        var dispatched = dispatchPort.Calls.Should().ContainSingle().Subject.envelope.Payload.Unpack<StartServiceRolloutCommand>();
-        dispatched.BaselineTargets.Should().BeEmpty();
-        dispatched.Plan.Stages.Should().ContainSingle();
-        dispatched.Plan.Stages[0].Targets.Should().ContainSingle();
-        dispatched.Plan.Stages[0].Targets[0].RevisionId.Should().Be("rev-2");
-        dispatched.Plan.Stages[0].Targets[0].DeploymentId.Should().BeEmpty();
-        dispatched.Plan.Stages[0].Targets[0].PrimaryActorId.Should().BeEmpty();
+        dispatchPort.Calls.Should().HaveCount(2);
+        dispatchPort.Calls[0].envelope.Payload.Unpack<ReplaceServiceServingTargetsCommand>()
+            .Targets.Should().ContainSingle();
+        dispatchPort.Calls[1].envelope.Payload.Unpack<StartServiceRolloutCommand>()
+            .BaselineTargets.Should().BeEmpty();
     }
 
     [Fact]
     public async Task StartServiceRolloutAsync_ShouldRejectMissingPlan()
     {
-        var identity = GAgentServiceTestKit.CreateIdentity();
         var service = CreateService(
             new RecordingCommandTargetProvisioner(),
-            new RecordingActorDispatchPort(),
-            new RecordingCatalogProjectionPort(),
-            new RecordingRevisionProjectionPort());
+            new RecordingActorDispatchPort());
 
         var act = () => service.StartServiceRolloutAsync(new StartServiceRolloutCommand
         {
-            Identity = identity.Clone(),
+            Identity = GAgentServiceTestKit.CreateIdentity(),
         });
 
         await act.Should().ThrowAsync<ArgumentNullException>();
     }
 
+    [Fact]
+    public async Task ResumeServiceRolloutAsync_ShouldPropagateDispatchFailure()
+    {
+        var service = CreateService(
+            new RecordingCommandTargetProvisioner(),
+            new ThrowingActorDispatchPort(new InvalidOperationException("dispatch failed")));
+
+        var act = () => service.ResumeServiceRolloutAsync(new ResumeServiceRolloutCommand
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            RolloutId = "stale",
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("dispatch failed");
+    }
+
     private static ServiceCommandApplicationService CreateService(
         RecordingCommandTargetProvisioner provisioner,
-        IActorDispatchPort dispatchPort,
-        RecordingCatalogProjectionPort catalogProjectionPort,
-        RecordingRevisionProjectionPort revisionProjectionPort,
-        RecordingProjectionPort? deploymentProjectionPort = null,
-        RecordingProjectionPort? servingProjectionPort = null,
-        RecordingProjectionPort? rolloutProjectionPort = null,
-        RecordingProjectionPort? trafficProjectionPort = null) =>
-        new(
-            dispatchPort,
-            provisioner,
-            catalogProjectionPort,
-            revisionProjectionPort,
-            deploymentProjectionPort ?? new RecordingProjectionPort(),
-            servingProjectionPort ?? new RecordingProjectionPort(),
-            rolloutProjectionPort ?? new RecordingProjectionPort(),
-            trafficProjectionPort ?? new RecordingProjectionPort());
+        IActorDispatchPort dispatchPort) =>
+        new(dispatchPort, provisioner);
 
     private sealed class RecordingCommandTargetProvisioner : IServiceCommandTargetProvisioner
     {
@@ -491,42 +189,5 @@ public sealed class ServiceCommandApplicationServiceTests
 
         public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) =>
             Task.FromException(_exception);
-    }
-
-    private sealed class RecordingCatalogProjectionPort : IServiceCatalogProjectionPort
-    {
-        public List<string> ActorIds { get; } = [];
-
-        public Task EnsureProjectionAsync(string actorId, CancellationToken ct = default)
-        {
-            ActorIds.Add(actorId);
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class RecordingRevisionProjectionPort : IServiceRevisionCatalogProjectionPort
-    {
-        public List<string> ActorIds { get; } = [];
-
-        public Task EnsureProjectionAsync(string actorId, CancellationToken ct = default)
-        {
-            ActorIds.Add(actorId);
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class RecordingProjectionPort :
-        IServiceDeploymentCatalogProjectionPort,
-        IServiceServingSetProjectionPort,
-        IServiceRolloutProjectionPort,
-        IServiceTrafficViewProjectionPort
-    {
-        public List<string> ActorIds { get; } = [];
-
-        public Task EnsureProjectionAsync(string actorId, CancellationToken ct = default)
-        {
-            ActorIds.Add(actorId);
-            return Task.CompletedTask;
-        }
     }
 }

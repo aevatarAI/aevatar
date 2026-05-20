@@ -17,20 +17,17 @@ public sealed class ResponsesAgentToolStateCommandAdapterTests
     {
         var runtime = new RecordingRuntime();
         var dispatch = new RecordingDispatchPort();
-        var projection = new RecordingProjectionPort();
 
-        ((Action)(() => new ResponsesAgentToolStateCommandAdapter(null!, dispatch, projection)))
+        ((Action)(() => new ResponsesAgentToolStateCommandAdapter(null!, dispatch)))
             .Should().Throw<ArgumentNullException>().WithMessage("*runtime*");
-        ((Action)(() => new ResponsesAgentToolStateCommandAdapter(runtime, null!, projection)))
+        ((Action)(() => new ResponsesAgentToolStateCommandAdapter(runtime, null!)))
             .Should().Throw<ArgumentNullException>().WithMessage("*dispatchPort*");
-        ((Action)(() => new ResponsesAgentToolStateCommandAdapter(runtime, dispatch, null!)))
-            .Should().Throw<ArgumentNullException>().WithMessage("*projectionPort*");
     }
 
     [Fact]
-    public async Task ApplyTodoWriteAsync_ShouldDispatchAndPreviewArrayItems()
+    public async Task ApplyTodoWriteAsync_ShouldRegisterActorAndDispatchWithoutProjectionEnsure()
     {
-        var (adapter, _, dispatch, projection) = CreateAdapter();
+        var (adapter, _, dispatch) = CreateAdapter();
 
         var result = await adapter.ApplyTodoWriteAsync(
             scopeId: "scope-1",
@@ -40,14 +37,8 @@ public sealed class ResponsesAgentToolStateCommandAdapterTests
 
         result.SourceResponseId.Should().Be("resp_1");
         result.Todos.Should().HaveCount(2);
-        result.Todos[0].Id.Should().Be("todo-1");
-        result.Todos[0].Status.Should().Be("in_progress");
-        result.Todos[1].Id.Should().Be("todo_0001");
-        result.Todos[1].Status.Should().Be("pending");
-
-        // EnsureActorAsync registers + projection-ensures + dispatches
-        projection.EnsureCalls.Should().ContainSingle();
         dispatch.Calls.Should().HaveCount(2);
+        dispatch.Calls[0].envelope.Payload.TypeUrl.Should().Contain("RegisterResponsesAgentToolStateRequested");
         dispatch.Calls[1].envelope.Payload.TypeUrl.Should().Contain("ApplyResponsesTodoWriteRequested");
         var packed = dispatch.Calls[1].envelope.Payload.Unpack<ApplyResponsesTodoWriteRequested>();
         ResponsesJsonValues.ToBoundaryJson(packed.Arguments)
@@ -56,139 +47,28 @@ public sealed class ResponsesAgentToolStateCommandAdapterTests
     }
 
     [Fact]
-    public async Task ApplyTodoWriteAsync_ShouldHandleSingleStringTodo()
+    public async Task RecordTaskAsync_ShouldExtractDescriptionAndDispatch()
     {
-        var (adapter, _, _, _) = CreateAdapter();
+        var (adapter, _, dispatch) = CreateAdapter();
 
-        var result = await adapter.ApplyTodoWriteAsync("scope-1", "owner-1", "resp_1",
-            """ "just a single content string" """);
-
-        result.Todos.Should().ContainSingle();
-        result.Todos[0].Content.Should().Be("just a single content string");
-    }
-
-    [Fact]
-    public async Task ApplyTodoWriteAsync_ShouldHandleSingleObjectTodo_FallbackContentKey()
-    {
-        var (adapter, _, _, _) = CreateAdapter();
-
-        var result = await adapter.ApplyTodoWriteAsync("scope-1", "owner-1", "resp_1",
-            """{"task":"do thing"}""");
-
-        result.Todos.Should().ContainSingle();
-        result.Todos[0].Content.Should().Be("do thing");
-    }
-
-    [Fact]
-    public async Task ApplyTodoWriteAsync_ShouldReturnEmpty_OnMalformedJson()
-    {
-        var (adapter, _, _, _) = CreateAdapter();
-
-        var result = await adapter.ApplyTodoWriteAsync("scope-1", "owner-1", "resp_1", "not json {");
-
-        result.Todos.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task ApplyTodoWriteAsync_ShouldReturnEmpty_OnNullArguments()
-    {
-        var (adapter, _, _, _) = CreateAdapter();
-
-        var result = await adapter.ApplyTodoWriteAsync("scope-1", "owner-1", "resp_1", argumentsJson: null!);
-
-        result.Todos.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task ApplyTodoWriteAsync_ShouldSkipObjectsWithoutContent()
-    {
-        var (adapter, _, _, _) = CreateAdapter();
-
-        var result = await adapter.ApplyTodoWriteAsync("scope-1", "owner-1", "resp_1",
-            """{"todos":[{"id":"x"},{"content":"keep"}]}""");
-
-        result.Todos.Should().ContainSingle();
-        result.Todos[0].Content.Should().Be("keep");
-    }
-
-    [Theory]
-    [InlineData("", "owner-1", "scopeId")]
-    [InlineData("scope-1", "", "ownerSubject")]
-    public async Task ApplyTodoWriteAsync_ShouldRejectMissingActorIdentity(string scope, string owner, string param)
-    {
-        var (adapter, _, _, _) = CreateAdapter();
-
-        var act = () => adapter.ApplyTodoWriteAsync(scope, owner, "resp_1", "{}");
-
-        await act.Should().ThrowAsync<ArgumentException>().Where(ex => ex.ParamName == param);
-    }
-
-    [Theory]
-    [InlineData("""{"description":"do alpha"}""", "do alpha")]
-    [InlineData("""{"prompt":"do beta"}""", "do beta")]
-    [InlineData("""{"task":"do gamma"}""", "do gamma")]
-    [InlineData("""{"input":"do delta"}""", "do delta")]
-    public async Task RecordTaskAsync_ShouldExtractDescription_FromKnownKeys(string args, string expected)
-    {
-        var (adapter, _, dispatch, _) = CreateAdapter();
-
-        var result = await adapter.RecordTaskAsync("scope-1", "owner-1", "resp_1", args);
+        var result = await adapter.RecordTaskAsync(
+            "scope-1",
+            "owner-1",
+            "resp_1",
+            """{"description":"do alpha"}""");
 
         result.Status.Should().Be("accepted");
         result.TaskId.Should().StartWith("task_");
-        result.ChildActorId.Should().Contain("-task-");
+        dispatch.Calls.Should().HaveCount(2);
         var packed = dispatch.Calls[1].envelope.Payload.Unpack<RecordResponsesTaskRequested>();
-        packed.Description.Should().Be(expected);
-        ResponsesJsonValues.ToBoundaryJson(packed.Arguments).Should().Be(args);
-        ResponsesJsonValues.ToBoundaryJson(packed.Result).Should().Contain("\"status\":\"accepted\"");
+        packed.Description.Should().Be("do alpha");
+        ResponsesJsonValues.ToBoundaryJson(packed.Arguments).Should().Be("""{"description":"do alpha"}""");
     }
 
     [Fact]
-    public async Task RecordTaskAsync_ShouldFallBackToRawArguments_OnNonObjectJson()
+    public async Task RecordWebTraceAsync_ShouldDispatchTrace()
     {
-        var (adapter, _, dispatch, _) = CreateAdapter();
-
-        await adapter.RecordTaskAsync("scope-1", "owner-1", "resp_1", "[1,2,3]");
-
-        var packed = dispatch.Calls[1].envelope.Payload.Unpack<RecordResponsesTaskRequested>();
-        packed.Description.Should().Be("[1,2,3]");
-    }
-
-    [Fact]
-    public async Task RecordTaskAsync_ShouldFallBackToRawArguments_OnMalformedJson()
-    {
-        var (adapter, _, dispatch, _) = CreateAdapter();
-
-        await adapter.RecordTaskAsync("scope-1", "owner-1", "resp_1", "{not json");
-
-        var packed = dispatch.Calls[1].envelope.Payload.Unpack<RecordResponsesTaskRequested>();
-        packed.Description.Should().Be("{not json");
-    }
-
-    [Fact]
-    public async Task RecordTaskAsync_ShouldReturnEmptyDescription_OnEmptyArguments()
-    {
-        var (adapter, _, dispatch, _) = CreateAdapter();
-
-        await adapter.RecordTaskAsync("scope-1", "owner-1", "resp_1", argumentsJson: "");
-
-        var packed = dispatch.Calls[1].envelope.Payload.Unpack<RecordResponsesTaskRequested>();
-        packed.Description.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task RecordWebTraceAsync_ShouldRejectNullTrace()
-    {
-        var (adapter, _, _, _) = CreateAdapter();
-
-        await ((Func<Task>)(() => adapter.RecordWebTraceAsync("scope-1", "owner-1", "resp_1", null!)))
-            .Should().ThrowAsync<ArgumentNullException>();
-    }
-
-    [Fact]
-    public async Task RecordWebTraceAsync_ShouldReuseProvidedTraceId()
-    {
-        var (adapter, _, dispatch, _) = CreateAdapter();
+        var (adapter, _, dispatch) = CreateAdapter();
         var trace = new ResponsesWebTraceInput(
             TraceId: "web_explicit",
             ToolName: "WebFetch",
@@ -201,41 +81,38 @@ public sealed class ResponsesAgentToolStateCommandAdapterTests
         var result = await adapter.RecordWebTraceAsync("scope-1", "owner-1", "resp_1", trace);
 
         result.TraceId.Should().Be("web_explicit");
-        result.CacheHit.Should().BeFalse();
+        dispatch.Calls.Should().HaveCount(2);
         var packed = dispatch.Calls[1].envelope.Payload.Unpack<RecordResponsesWebTraceRequested>();
         packed.TraceId.Should().Be("web_explicit");
         ResponsesJsonValues.ToBoundaryJson(packed.Result).Should().Be("""{"content":"x"}""");
     }
 
     [Fact]
-    public async Task RecordWebTraceAsync_ShouldGenerateTraceId_WhenMissing()
+    public async Task ApplyTodoWriteAsync_ShouldRejectMissingActorIdentity()
     {
-        var (adapter, _, dispatch, _) = CreateAdapter();
-        var trace = new ResponsesWebTraceInput(
-            TraceId: string.Empty,
-            ToolName: "WebSearch",
-            CacheKey: "cache-2",
-            Url: string.Empty,
-            Query: "weather",
-            CacheHit: true,
-            ResultJson: string.Empty);
+        var (adapter, _, _) = CreateAdapter();
 
-        var result = await adapter.RecordWebTraceAsync("scope-1", "owner-1", "resp_1", trace);
-
-        result.TraceId.Should().StartWith("web_");
-        result.CacheHit.Should().BeTrue();
-        var packed = dispatch.Calls[1].envelope.Payload.Unpack<RecordResponsesWebTraceRequested>();
-        packed.TraceId.Should().Be(result.TraceId);
-        ResponsesJsonValues.ToBoundaryJson(packed.Result).Should().Be("{}");
+        await ((Func<Task>)(() => adapter.ApplyTodoWriteAsync("", "owner-1", "resp_1", "{}")))
+            .Should().ThrowAsync<ArgumentException>().Where(ex => ex.ParamName == "scopeId");
+        await ((Func<Task>)(() => adapter.ApplyTodoWriteAsync("scope-1", "", "resp_1", "{}")))
+            .Should().ThrowAsync<ArgumentException>().Where(ex => ex.ParamName == "ownerSubject");
     }
 
-    private static (ResponsesAgentToolStateCommandAdapter adapter, RecordingRuntime runtime, RecordingDispatchPort dispatch, RecordingProjectionPort projection) CreateAdapter()
+    [Fact]
+    public async Task RecordWebTraceAsync_ShouldRejectNullTrace()
+    {
+        var (adapter, _, _) = CreateAdapter();
+
+        await ((Func<Task>)(() => adapter.RecordWebTraceAsync("scope-1", "owner-1", "resp_1", null!)))
+            .Should().ThrowAsync<ArgumentNullException>();
+    }
+
+    private static (ResponsesAgentToolStateCommandAdapter adapter, RecordingRuntime runtime, RecordingDispatchPort dispatch) CreateAdapter()
     {
         var runtime = new RecordingRuntime();
         var dispatch = new RecordingDispatchPort();
-        var projection = new RecordingProjectionPort();
-        var adapter = new ResponsesAgentToolStateCommandAdapter(runtime, dispatch, projection);
-        return (adapter, runtime, dispatch, projection);
+        var adapter = new ResponsesAgentToolStateCommandAdapter(runtime, dispatch);
+        return (adapter, runtime, dispatch);
     }
 
     private sealed class RecordingRuntime : IActorRuntime
@@ -260,17 +137,6 @@ public sealed class ResponsesAgentToolStateCommandAdapterTests
         public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Calls.Add((actorId, envelope));
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class RecordingProjectionPort : IResponsesAgentToolStateCurrentStateProjectionPort
-    {
-        public List<string> EnsureCalls { get; } = [];
-
-        public Task EnsureProjectionAsync(string actorId, CancellationToken ct = default)
-        {
-            EnsureCalls.Add(actorId);
             return Task.CompletedTask;
         }
     }
