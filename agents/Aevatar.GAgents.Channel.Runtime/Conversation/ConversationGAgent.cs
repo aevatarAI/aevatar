@@ -1,3 +1,5 @@
+using Aevatar.ChatRouting.Abstractions;
+using Aevatar.ChatRouting.Core;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -118,6 +120,30 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             return;
         }
 
+        // Implement (issue #694):
+        //   Behavior: relay turns consult ChatRouteResolver during admission before runner dispatch.
+        //   Why this shape: routing remains a boundary decision and does not add an actor hop before the existing run handoff.
+        var targetRef = await ResolveInboundTargetRefAsync(activity, CancellationToken.None);
+        if (targetRef.Reject is not null)
+        {
+            var rejected = new ConversationContinueFailedEvent
+            {
+                CommandId = string.Empty,
+                CorrelationId = activity.Id,
+                CausationId = string.Empty,
+                Kind = FailureKind.PermanentAdapterError,
+                ErrorCode = "chat_route_rejected",
+                ErrorSummary = string.IsNullOrWhiteSpace(targetRef.Reject.Reason)
+                    ? "The chat route policy rejected this request."
+                    : targetRef.Reject.Reason,
+                NotRetryable = new Google.Protobuf.WellKnownTypes.Empty(),
+                FailedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            };
+            await PersistDomainEventAsync(rejected);
+            RemoveNyxRelayReplyToken(runtimeContext.NyxRelayReplyToken?.CorrelationId, activity);
+            return;
+        }
+
         var runner = ResolveRunner();
         var result = await runner.RunInboundAsync(activity, runtimeContext, CancellationToken.None);
 
@@ -130,6 +156,7 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
             // those credentials into the event store / projection / read model.
             var runCopy = result.LlmReplyRequest.Clone();
             runCopy.TargetActorId = Id;
+            runCopy.TargetRef = targetRef.Clone();
             var persistedCopy = runCopy.Clone();
             persistedCopy.ReplyToken = string.Empty;
             persistedCopy.ReplyTokenExpiresAtUnixMs = 0;
@@ -186,6 +213,60 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         Logger.LogWarning(
             "Inbound turn failed: activity={ActivityId} code={Code} kind={Kind}",
             activity.Id, result.ErrorCode, result.FailureKind);
+    }
+
+    private async Task<ChatRouteAction> ResolveInboundTargetRefAsync(
+        ChatActivity activity,
+        CancellationToken ct)
+    {
+        var queryPort = Services.GetService<IChatRoutePolicyQueryPort>();
+        var resolver = Services.GetService<ChatRouteResolver>();
+        var callerScope = TryBuildRelayCallerScope(activity);
+        if (queryPort is null || resolver is null || callerScope is null)
+            return new ChatRouteAction();
+
+        var snapshot = await queryPort.LookupForCallerAsync(callerScope, ct);
+        var input = new ChatRouteInput
+        {
+            SourceKind = ChatSourceKind.NyxRelay,
+            CallerScope = new ChatRouteCallerScope
+            {
+                NyxUserId = callerScope.NyxUserId,
+                Platform = callerScope.Platform,
+                RegistrationScopeId = callerScope.RegistrationScopeId,
+                SenderId = callerScope.SenderId,
+            },
+            Channel = callerScope.Platform,
+            CommandName = ExtractCommandName(activity.Content?.Text),
+            ContentHint = string.Empty,
+            ToolMode = ToolMode.None,
+        };
+        return resolver.Resolve(snapshot, input).Action.Clone();
+    }
+
+    private static OwnerScope? TryBuildRelayCallerScope(ChatActivity activity)
+    {
+        var platform = NormalizeOptional(activity.TransportExtras?.NyxPlatform) ??
+                       NormalizeOptional(activity.ChannelId?.Value);
+        var registrationScopeId = NormalizeOptional(activity.TransportExtras?.NyxRegistrationScopeId) ??
+                                  NormalizeOptional(activity.Bot?.Value);
+        var senderId = NormalizeOptional(activity.From?.CanonicalId);
+        if (platform is null || registrationScopeId is null || senderId is null)
+            return null;
+
+        // The sender's NyxID is resolved by the relay ingress (NyxID `/me` with the
+        // user access token) and stashed in TransportExtras. Using it here matches
+        // per-user channel policies; an empty value falls through to scope-only
+        // policies (same key shape as policy upserts without a per-user binding).
+        var senderNyxUserId = NormalizeOptional(activity.TransportExtras?.NyxSenderUserId)
+                              ?? string.Empty;
+        return OwnerScope.ForChannel(senderNyxUserId, platform, registrationScopeId, senderId);
+    }
+
+    private static string ExtractCommandName(string? text)
+    {
+        var first = ChannelTextCommandParser.Tokenize(text).FirstOrDefault();
+        return first is { Length: > 1 } && first[0] == '/' ? first : string.Empty;
     }
 
     /// <summary>

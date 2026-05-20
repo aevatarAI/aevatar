@@ -2,6 +2,8 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.ChatRouting.Abstractions;
+using Aevatar.ChatRouting.Core;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -46,6 +48,8 @@ internal static class ResponsesApiEndpoints
         ResponsesCreateRequest request,
         [FromServices] ILLMProviderFactory providerFactory,
         [FromServices] IResponsesCallerScopeResolver callerScopeResolver,
+        [FromServices] IChatRoutePolicyQueryPort chatRoutePolicyQueryPort,
+        [FromServices] ChatRouteResolver chatRouteResolver,
         [FromServices] IResponsesRouteResolver routeResolver,
         [FromServices] ILlmSessionRegistrationPort responseSessionRegistrationPort,
         [FromServices] ILlmSessionQueryPort responseSessionQueryPort,
@@ -57,6 +61,8 @@ internal static class ResponsesApiEndpoints
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(providerFactory);
         ArgumentNullException.ThrowIfNull(callerScopeResolver);
+        ArgumentNullException.ThrowIfNull(chatRoutePolicyQueryPort);
+        ArgumentNullException.ThrowIfNull(chatRouteResolver);
         ArgumentNullException.ThrowIfNull(routeResolver);
         ArgumentNullException.ThrowIfNull(responseSessionRegistrationPort);
         ArgumentNullException.ThrowIfNull(responseSessionQueryPort);
@@ -91,6 +97,36 @@ internal static class ResponsesApiEndpoints
         catch (ResponsesCallerScopeUnavailableException ex)
         {
             return ToErrorResult(StatusCodes.Status401Unauthorized, "authentication_required", ex.Message);
+        }
+
+        // Implement (issue #694):
+        //   Behavior: /v1/responses applies chat-route model overrides before LLM dispatch.
+        //   Why this shape: the endpoint keeps its existing session/tool flow and consumes only the transient target action.
+        var routedModel = normalized.Model;
+        var routeDecision = await ResolveResponsesChatRouteAsync(
+            chatRoutePolicyQueryPort,
+            chatRouteResolver,
+            callerScope,
+            normalized.Model,
+            ct);
+        if (routeDecision.Action.Reject is not null)
+            return ToErrorResult(
+                StatusCodes.Status403Forbidden,
+                "chat_route_rejected",
+                string.IsNullOrWhiteSpace(routeDecision.Action.Reject.Reason)
+                    ? "The chat route policy rejected this request."
+                    : routeDecision.Action.Reject.Reason);
+        if (!string.IsNullOrWhiteSpace(routeDecision.Action.ForwardToModel?.ModelName))
+        {
+            routedModel = routeDecision.Action.ForwardToModel.ModelName.Trim();
+        }
+        else if (routeDecision.Action.ForwardToGagent is not null)
+        {
+            logger.LogInformation(
+                "Chat route resolved ForwardToGAgent for /v1/responses but v1 falls back to model dispatch: actor={ActorId} usedFallback={UsedFallback} matchedRule={MatchedRuleId}",
+                routeDecision.Action.ForwardToGagent.ActorId,
+                routeDecision.UsedFallback,
+                routeDecision.MatchedRuleId);
         }
 
         LlmSessionSnapshot? previousSnapshot = null;
@@ -165,8 +201,8 @@ internal static class ResponsesApiEndpoints
         // just happens to contain `/`) falls through to default gateway routing
         // with the model string preserved verbatim — NyxID's gateway picks the
         // backend by model name.
-        var modelRoute = ResponsesModelRouteParser.Parse(normalized.Model);
-        var effectiveModel = normalized.Model;
+        var modelRoute = ResponsesModelRouteParser.Parse(routedModel);
+        var effectiveModel = routedModel;
         string? resolvedRouteValue = null;
         if (modelRoute.RouteSlug is not null)
         {
@@ -1171,6 +1207,32 @@ internal static class ResponsesApiEndpoints
                 [ChannelMetadataKeys.RegistrationScopeId] = callerScope.ScopeId,
                 [LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken,
             });
+    }
+
+    internal static async Task<ChatRouteDecision> ResolveResponsesChatRouteAsync(
+        IChatRoutePolicyQueryPort queryPort,
+        ChatRouteResolver resolver,
+        ResponsesCallerScope callerScope,
+        string model,
+        CancellationToken ct)
+    {
+        var ownerScope = OwnerScope.ForNyxIdNative(callerScope.ScopeId);
+        var snapshot = await queryPort.LookupForCallerAsync(ownerScope, ct);
+        return resolver.Resolve(snapshot, new ChatRouteInput
+        {
+            SourceKind = ChatSourceKind.NyxResponses,
+            CallerScope = new ChatRouteCallerScope
+            {
+                NyxUserId = ownerScope.NyxUserId,
+                Platform = ownerScope.Platform,
+                RegistrationScopeId = ownerScope.RegistrationScopeId,
+                SenderId = ownerScope.SenderId,
+            },
+            Channel = string.Empty,
+            CommandName = string.Empty,
+            ContentHint = string.Empty,
+            ToolMode = ToolMode.None,
+        });
     }
 
     private static LlmSessionRecord BuildResponseSessionRecord(
