@@ -56,9 +56,10 @@ public sealed class ServiceCollectionExtensionsTests
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(ChannelBotRegistrationStartupService));
-        services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(IHostedService) &&
-            descriptor.ImplementationType == typeof(LarkConversationInboxHostedService));
+        // Refactor (iter20/cluster-003):
+        //   Old pattern: Lark-local durable inbox subscriber worker stream path(orphan)
+        //   New principle: delete orphan path,NyxID relay 唯一 ingress
+        AssertNoRetiredLarkConversationInboxRegistration(services);
         registry.Get(ChannelId.From("lark")).Should().BeOfType<LarkMessageComposer>();
         services.Count(descriptor => descriptor.ServiceType == typeof(IPlatformAdapter))
             .Should().Be(0);
@@ -131,11 +132,20 @@ public sealed class ServiceCollectionExtensionsTests
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(ChannelBotRegistrationStartupService));
-        services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(IHostedService) &&
-            descriptor.ImplementationType == typeof(LarkConversationInboxHostedService));
+        AssertNoRetiredLarkConversationInboxRegistration(services);
         registry.Get(ChannelId.From("lark")).Should().BeOfType<LarkMessageComposer>();
         services.Should().NotContain(descriptor =>
             descriptor.ServiceType.Name.Contains("ChannelBotDirectCallbackBinding", StringComparison.Ordinal));
     }
+
+    private static void AssertNoRetiredLarkConversationInboxRegistration(IServiceCollection services)
+    {
+        services.Any(descriptor =>
+            ContainsLarkConversationInboxName(descriptor.ServiceType.FullName) ||
+            ContainsLarkConversationInboxName(descriptor.ImplementationType?.FullName))
+            .Should().BeFalse();
+    }
+
+    private static bool ContainsLarkConversationInboxName(string? name) =>
+        name is not null && name.Contains("LarkConversationInbox", StringComparison.Ordinal);
 }
