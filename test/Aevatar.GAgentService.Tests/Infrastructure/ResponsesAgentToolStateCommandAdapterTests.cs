@@ -47,6 +47,62 @@ public sealed class ResponsesAgentToolStateCommandAdapterTests
     }
 
     [Fact]
+    public async Task ApplyTodoWriteAsync_ShouldHandleSingleStringTodo()
+    {
+        var (adapter, _, _) = CreateAdapter();
+
+        var result = await adapter.ApplyTodoWriteAsync("scope-1", "owner-1", "resp_1",
+            """ "just a single content string" """);
+
+        result.Todos.Should().ContainSingle();
+        result.Todos[0].Content.Should().Be("just a single content string");
+    }
+
+    [Fact]
+    public async Task ApplyTodoWriteAsync_ShouldHandleSingleObjectTodo_FallbackContentKey()
+    {
+        var (adapter, _, _) = CreateAdapter();
+
+        var result = await adapter.ApplyTodoWriteAsync("scope-1", "owner-1", "resp_1",
+            """{"task":"do thing"}""");
+
+        result.Todos.Should().ContainSingle();
+        result.Todos[0].Content.Should().Be("do thing");
+    }
+
+    [Fact]
+    public async Task ApplyTodoWriteAsync_ShouldReturnEmpty_OnMalformedJson()
+    {
+        var (adapter, _, _) = CreateAdapter();
+
+        var result = await adapter.ApplyTodoWriteAsync("scope-1", "owner-1", "resp_1", "not json {");
+
+        result.Todos.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ApplyTodoWriteAsync_ShouldReturnEmpty_OnNullArguments()
+    {
+        var (adapter, _, _) = CreateAdapter();
+
+        var result = await adapter.ApplyTodoWriteAsync("scope-1", "owner-1", "resp_1", argumentsJson: null!);
+
+        result.Todos.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ApplyTodoWriteAsync_ShouldSkipObjectsWithoutContent()
+    {
+        var (adapter, _, _) = CreateAdapter();
+
+        var result = await adapter.ApplyTodoWriteAsync("scope-1", "owner-1", "resp_1",
+            """{"todos":[{"id":"x"},{"content":"keep"}]}""");
+
+        result.Todos.Should().ContainSingle();
+        result.Todos[0].Content.Should().Be("keep");
+    }
+
+    [Fact]
     public async Task RecordTaskAsync_ShouldExtractDescriptionAndDispatch()
     {
         var (adapter, _, dispatch) = CreateAdapter();
@@ -63,6 +119,42 @@ public sealed class ResponsesAgentToolStateCommandAdapterTests
         var packed = dispatch.Calls[1].envelope.Payload.Unpack<RecordResponsesTaskRequested>();
         packed.Description.Should().Be("do alpha");
         ResponsesJsonValues.ToBoundaryJson(packed.Arguments).Should().Be("""{"description":"do alpha"}""");
+    }
+
+    [Theory]
+    [InlineData("""{"prompt":"do beta"}""", "do beta")]
+    [InlineData("""{"task":"do gamma"}""", "do gamma")]
+    [InlineData("""{"input":"do delta"}""", "do delta")]
+    public async Task RecordTaskAsync_ShouldExtractDescription_FromFallbackKeys(string args, string expected)
+    {
+        var (adapter, _, dispatch) = CreateAdapter();
+
+        await adapter.RecordTaskAsync("scope-1", "owner-1", "resp_1", args);
+
+        var packed = dispatch.Calls[1].envelope.Payload.Unpack<RecordResponsesTaskRequested>();
+        packed.Description.Should().Be(expected);
+    }
+
+    [Fact]
+    public async Task RecordTaskAsync_ShouldFallBackToRawArguments_OnNonObjectJson()
+    {
+        var (adapter, _, dispatch) = CreateAdapter();
+
+        await adapter.RecordTaskAsync("scope-1", "owner-1", "resp_1", "[1,2,3]");
+
+        var packed = dispatch.Calls[1].envelope.Payload.Unpack<RecordResponsesTaskRequested>();
+        packed.Description.Should().Be("[1,2,3]");
+    }
+
+    [Fact]
+    public async Task RecordTaskAsync_ShouldFallBackToRawArguments_OnMalformedJson()
+    {
+        var (adapter, _, dispatch) = CreateAdapter();
+
+        await adapter.RecordTaskAsync("scope-1", "owner-1", "resp_1", "{not json");
+
+        var packed = dispatch.Calls[1].envelope.Payload.Unpack<RecordResponsesTaskRequested>();
+        packed.Description.Should().Be("{not json");
     }
 
     [Fact]
@@ -88,6 +180,28 @@ public sealed class ResponsesAgentToolStateCommandAdapterTests
     }
 
     [Fact]
+    public async Task RecordWebTraceAsync_ShouldGenerateTraceId_WhenMissing()
+    {
+        var (adapter, _, dispatch) = CreateAdapter();
+        var trace = new ResponsesWebTraceInput(
+            TraceId: string.Empty,
+            ToolName: "WebSearch",
+            CacheKey: "cache-2",
+            Url: string.Empty,
+            Query: "weather",
+            CacheHit: true,
+            ResultJson: string.Empty);
+
+        var result = await adapter.RecordWebTraceAsync("scope-1", "owner-1", "resp_1", trace);
+
+        result.TraceId.Should().StartWith("web_");
+        result.CacheHit.Should().BeTrue();
+        var packed = dispatch.Calls[1].envelope.Payload.Unpack<RecordResponsesWebTraceRequested>();
+        packed.TraceId.Should().Be(result.TraceId);
+        ResponsesJsonValues.ToBoundaryJson(packed.Result).Should().Be("{}");
+    }
+
+    [Fact]
     public async Task ApplyTodoWriteAsync_ShouldRejectMissingActorIdentity()
     {
         var (adapter, _, _) = CreateAdapter();
@@ -107,12 +221,45 @@ public sealed class ResponsesAgentToolStateCommandAdapterTests
             .Should().ThrowAsync<ArgumentNullException>();
     }
 
+    [Fact]
+    public void AdapterSources_ShouldNotContainProjectionActivationCalls()
+    {
+        var sources = new[]
+        {
+            SourcePath("src/platform/Aevatar.GAgentService.Infrastructure/Adapters/LlmSessionRegistrationAdapter.cs"),
+            SourcePath("src/platform/Aevatar.GAgentService.Infrastructure/Adapters/ResponsesAgentToolStateCommandAdapter.cs"),
+            SourcePath("src/platform/Aevatar.GAgentService.Infrastructure/Adapters/ServiceRunRegistrationAdapter.cs"),
+        };
+
+        foreach (var sourcePath in sources)
+        {
+            var source = File.ReadAllText(sourcePath);
+            source.Should().NotContain("EnsureProjectionAsync");
+            source.Should().NotContain("ActivateAsync(");
+        }
+    }
+
     private static (ResponsesAgentToolStateCommandAdapter adapter, RecordingRuntime runtime, RecordingDispatchPort dispatch) CreateAdapter()
     {
         var runtime = new RecordingRuntime();
         var dispatch = new RecordingDispatchPort();
         var adapter = new ResponsesAgentToolStateCommandAdapter(runtime, dispatch);
         return (adapter, runtime, dispatch);
+    }
+
+    private static string SourcePath(string relativePath)
+    {
+        var directory = AppContext.BaseDirectory;
+        while (!string.IsNullOrEmpty(directory))
+        {
+            var candidate = Path.Combine(directory, relativePath);
+            if (File.Exists(candidate))
+                return candidate;
+
+            directory = Directory.GetParent(directory)?.FullName;
+        }
+
+        throw new FileNotFoundException($"Could not locate source file '{relativePath}'.");
     }
 
     private sealed class RecordingRuntime : IActorRuntime

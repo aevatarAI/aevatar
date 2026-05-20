@@ -39,14 +39,55 @@ public sealed class CommittedStateProjectionActivationHookTests
     }
 
     [Fact]
-    public async Task BeforePublishAsync_ShouldAbortPublication_WhenProviderFails()
+    public async Task BeforePublishAsync_ShouldContinuePublication_WhenProviderFails()
     {
-        var hook = CreateHook([new ThrowingPlanProvider()], _ => { });
+        var activation = new RecordingActivationService<TestLease>();
+        var hook = CreateHook(
+            [
+                new ThrowingPlanProvider(),
+                new StaticPlanProvider(BuildPlan("actor-1", "projection-a", typeof(TestLease))),
+            ],
+            services => services.AddSingleton<IProjectionScopeActivationService<TestLease>>(activation));
 
-        var act = () => hook.BeforePublishAsync(BuildContext("actor-fail"), CancellationToken.None);
+        await hook.BeforePublishAsync(BuildContext("actor-fail"), CancellationToken.None);
+
+        activation.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task BeforePublishAsync_ShouldContinuePublication_WhenActivationServiceMissing()
+    {
+        var hook = CreateHook(
+            [new StaticPlanProvider(BuildPlan("actor-1", "projection-a", typeof(TestLease)))],
+            _ => { });
+
+        var act = () => hook.BeforePublishAsync(BuildContext("actor-missing"), CancellationToken.None);
+
+        await act.Should().NotThrowAsync();
+    }
+
+    [Fact]
+    public async Task Dispatcher_ShouldReportMissingActivationService()
+    {
+        var dispatcher = new ProjectionActivationPlanDispatcher(new ServiceCollection().BuildServiceProvider());
+
+        var act = () => dispatcher.DispatchAsync(BuildPlan("actor-1", "projection-a", typeof(TestLease)));
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Projection activation plan provider*actor-fail*");
+            .WithMessage("*Projection activation service for lease*TestLease*not registered*");
+    }
+
+    [Fact]
+    public async Task BeforePublishAsync_ShouldContinuePublication_WhenActivationDispatchFails()
+    {
+        var hook = CreateHook(
+            [new StaticPlanProvider(BuildPlan("actor-1", "projection-a", typeof(TestLease)))],
+            services => services.AddSingleton<IProjectionScopeActivationService<TestLease>>(
+                new ThrowingActivationService<TestLease>()));
+
+        var act = () => hook.BeforePublishAsync(BuildContext("actor-dispatch-fail"), CancellationToken.None);
+
+        await act.Should().NotThrowAsync();
     }
 
     private static CommittedStateProjectionActivationHook CreateHook(
@@ -103,6 +144,13 @@ public sealed class CommittedStateProjectionActivationHookTests
     {
         public IEnumerable<ProjectionActivationPlan> GetPlans(CommittedStatePublicationContext context) =>
             throw new InvalidOperationException("provider failed");
+    }
+
+    private sealed class ThrowingActivationService<TLease> : IProjectionScopeActivationService<TLease>
+        where TLease : class, IProjectionRuntimeLease
+    {
+        public Task<TLease> EnsureAsync(ProjectionScopeStartRequest request, CancellationToken ct = default) =>
+            Task.FromException<TLease>(new InvalidOperationException("activation failed"));
     }
 
     private sealed class RecordingActivationService<TLease> : IProjectionScopeActivationService<TLease>

@@ -8,6 +8,9 @@ namespace Aevatar.GAgentService.Governance.Projection.Orchestration;
 /// <summary>
 /// Maps governance committed state events to existing durable projection scopes.
 /// </summary>
+// Refactor (iter18/cluster-006):
+//   Old pattern: command-path projection activation facade with new actor/lifecycle phase
+//   New principle: committed-state publication hook activates existing projection scopes; no new actor/lifecycle phase
 public sealed class ServiceGovernanceCommittedStateProjectionActivationPlanProvider : IProjectionActivationPlanProvider
 {
     // Refactor (iter18/cluster-006):

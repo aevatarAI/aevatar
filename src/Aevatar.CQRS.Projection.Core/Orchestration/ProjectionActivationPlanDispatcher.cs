@@ -6,6 +6,9 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// <summary>
 /// Dispatches activation plans to existing projection scope activation services.
 /// </summary>
+// Refactor (iter18/cluster-006):
+//   Old pattern: command-path projection activation facade with new actor/lifecycle phase
+//   New principle: committed-state publication hook activates existing projection scopes; no new actor/lifecycle phase
 public sealed class ProjectionActivationPlanDispatcher
 {
     private static readonly MethodInfo DispatchCoreMethod = typeof(ProjectionActivationPlanDispatcher)

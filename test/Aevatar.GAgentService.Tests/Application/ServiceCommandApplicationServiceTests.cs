@@ -44,6 +44,112 @@ public sealed class ServiceCommandApplicationServiceTests
     }
 
     [Fact]
+    public async Task DefinitionLifecycleCommands_ShouldDispatchEachBranchWithoutProjectionPriming()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var provisioner = new RecordingCommandTargetProvisioner();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var service = CreateService(provisioner, dispatchPort);
+
+        var createReceipt = await service.CreateServiceAsync(new CreateServiceDefinitionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
+        });
+        var updateReceipt = await service.UpdateServiceAsync(new UpdateServiceDefinitionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
+        });
+        var defaultReceipt = await service.SetDefaultServingRevisionAsync(new SetDefaultServingRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "rev-1",
+        });
+
+        createReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
+        updateReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
+        defaultReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
+        defaultReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:rev-1");
+        provisioner.DefinitionRequests.Should().HaveCount(3);
+        dispatchPort.Calls.Select(x => x.envelope.Payload.TypeUrl).Should().Contain([
+            AnyTypeUrl<CreateServiceDefinitionCommand>(),
+            AnyTypeUrl<UpdateServiceDefinitionCommand>(),
+            AnyTypeUrl<SetDefaultServingRevisionCommand>(),
+        ]);
+    }
+
+    [Fact]
+    public async Task RevisionLifecycleCommands_ShouldDispatchEachBranchWithoutProjectionPriming()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var provisioner = new RecordingCommandTargetProvisioner();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var service = CreateService(provisioner, dispatchPort);
+
+        var createReceipt = await service.CreateRevisionAsync(new CreateServiceRevisionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r1"),
+        });
+        var prepareReceipt = await service.PrepareRevisionAsync(new PrepareServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r2",
+        });
+        var publishReceipt = await service.PublishRevisionAsync(new PublishServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r3",
+        });
+        var retireReceipt = await service.RetireRevisionAsync(new RetireServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r4",
+        });
+
+        createReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:r1");
+        prepareReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:r2");
+        publishReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:r3");
+        retireReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:r4");
+        provisioner.RevisionCatalogRequests.Should().HaveCount(4);
+        dispatchPort.Calls.Select(x => x.actorId).Should().OnlyContain(x => x == ServiceActorIds.RevisionCatalog(identity));
+        dispatchPort.Calls.Select(x => x.envelope.Payload.TypeUrl).Should().Contain([
+            AnyTypeUrl<CreateServiceRevisionCommand>(),
+            AnyTypeUrl<PrepareServiceRevisionCommand>(),
+            AnyTypeUrl<PublishServiceRevisionCommand>(),
+            AnyTypeUrl<RetireServiceRevisionCommand>(),
+        ]);
+    }
+
+    [Fact]
+    public async Task DeploymentLifecycleCommands_ShouldDispatchEachBranchWithoutProjectionPriming()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var provisioner = new RecordingCommandTargetProvisioner();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var service = CreateService(provisioner, dispatchPort);
+
+        var activateReceipt = await service.ActivateServiceRevisionAsync(new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "rev-2",
+        });
+        var deactivateReceipt = await service.DeactivateServiceDeploymentAsync(new DeactivateServiceDeploymentCommand
+        {
+            Identity = identity.Clone(),
+            DeploymentId = "dep-1",
+        });
+
+        activateReceipt.TargetActorId.Should().Be(ServiceActorIds.Deployment(identity));
+        deactivateReceipt.TargetActorId.Should().Be(ServiceActorIds.Deployment(identity));
+        deactivateReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:dep-1");
+        provisioner.DeploymentRequests.Should().HaveCount(2);
+        provisioner.ServingSetRequests.Should().ContainSingle();
+        dispatchPort.Calls.Select(x => x.envelope.Payload.TypeUrl).Should().Contain([
+            AnyTypeUrl<ActivateServiceRevisionCommand>(),
+            AnyTypeUrl<DeactivateServiceDeploymentCommand>(),
+        ]);
+    }
+
+    [Fact]
     public async Task ServingAndRolloutCommands_ShouldDispatchCommandsWithoutProjectionPriming()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
@@ -88,6 +194,55 @@ public sealed class ServiceCommandApplicationServiceTests
     }
 
     [Fact]
+    public async Task RolloutLifecycleCommands_ShouldDispatchEachBranchWithoutProjectionPriming()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var provisioner = new RecordingCommandTargetProvisioner();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var service = CreateService(provisioner, dispatchPort);
+
+        var advanceReceipt = await service.AdvanceServiceRolloutAsync(new AdvanceServiceRolloutCommand
+        {
+            Identity = identity.Clone(),
+            RolloutId = "rollout-1",
+        });
+        var pauseReceipt = await service.PauseServiceRolloutAsync(new PauseServiceRolloutCommand
+        {
+            Identity = identity.Clone(),
+            RolloutId = "rollout-1",
+            Reason = "pause",
+        });
+        var rollbackReceipt = await service.RollbackServiceRolloutAsync(new RollbackServiceRolloutCommand
+        {
+            Identity = identity.Clone(),
+            RolloutId = "rollout-1",
+            Reason = "rollback",
+        });
+
+        advanceReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:rollout-1");
+        pauseReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:rollout-1");
+        rollbackReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:rollout-1");
+        provisioner.RolloutRequests.Should().HaveCount(3);
+        provisioner.ServingSetRequests.Should().HaveCount(2);
+        dispatchPort.Calls.Select(x => x.actorId).Should().OnlyContain(x => x == ServiceActorIds.Rollout(identity));
+        dispatchPort.Calls.Select(x => x.envelope.Payload.TypeUrl).Should().Contain([
+            AnyTypeUrl<AdvanceServiceRolloutCommand>(),
+            AnyTypeUrl<PauseServiceRolloutCommand>(),
+            AnyTypeUrl<RollbackServiceRolloutCommand>(),
+        ]);
+    }
+
+    [Fact]
+    public void CommandSources_ShouldNotContainProjectionActivationCalls()
+    {
+        var source = File.ReadAllText(SourcePath(
+            "src/platform/Aevatar.GAgentService.Application/Services/ServiceCommandApplicationService.cs"));
+
+        source.Should().NotContain("EnsureProjectionAsync");
+        source.Should().NotContain("ActivateAsync(");
+    }
+
+    [Fact]
     public async Task StartServiceRolloutAsync_ShouldRejectMissingPlan()
     {
         var service = CreateService(
@@ -123,6 +278,24 @@ public sealed class ServiceCommandApplicationServiceTests
         RecordingCommandTargetProvisioner provisioner,
         IActorDispatchPort dispatchPort) =>
         new(dispatchPort, provisioner);
+
+    private static string AnyTypeUrl<T>() where T : Google.Protobuf.IMessage<T>, new() =>
+        Google.Protobuf.WellKnownTypes.Any.Pack(new T()).TypeUrl;
+
+    private static string SourcePath(string relativePath)
+    {
+        var directory = AppContext.BaseDirectory;
+        while (!string.IsNullOrEmpty(directory))
+        {
+            var candidate = Path.Combine(directory, relativePath);
+            if (File.Exists(candidate))
+                return candidate;
+
+            directory = Directory.GetParent(directory)?.FullName;
+        }
+
+        throw new FileNotFoundException($"Could not locate source file '{relativePath}'.");
+    }
 
     private sealed class RecordingCommandTargetProvisioner : IServiceCommandTargetProvisioner
     {
