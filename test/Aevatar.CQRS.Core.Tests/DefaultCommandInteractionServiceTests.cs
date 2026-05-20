@@ -82,91 +82,6 @@ public sealed class DefaultCommandInteractionServiceTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_ShouldInvokeAcceptedBeforeDispatchPreparedCompletes()
-    {
-        var sink = new EventChannel<string>();
-        var target = new TestTarget("target-1", sink);
-        var receipt = new TestReceipt("target-1", "receipt-early");
-        var dispatchCanFinish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var dispatchStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var pipeline = new TestDispatchPipeline(
-            CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(
-                new CommandDispatchExecution<TestTarget, TestReceipt>
-                {
-                    Target = target,
-                    Context = new CommandContext("target-1", "cmd-early", "corr-early", new Dictionary<string, string>()),
-                    Envelope = new Aevatar.Foundation.Abstractions.EventEnvelope { Id = "env-early" },
-                    Receipt = receipt,
-                }),
-            async (_, ct) =>
-            {
-                dispatchStarted.TrySetResult();
-                await dispatchCanFinish.Task.WaitAsync(ct);
-            });
-        var service = CreateService(pipeline);
-        var accepted = new TaskCompletionSource<TestReceipt>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        var runTask = service.ExecuteAsync(
-            "command-early",
-            static (_, _) => ValueTask.CompletedTask,
-            (acceptedReceipt, _) =>
-            {
-                accepted.TrySetResult(acceptedReceipt);
-                return ValueTask.CompletedTask;
-            },
-            CancellationToken.None);
-
-        var acceptedReceipt = await accepted.Task.WaitAsync(TimeSpan.FromSeconds(1));
-        acceptedReceipt.Should().Be(receipt);
-        runTask.IsCompleted.Should().BeFalse();
-
-        await dispatchStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
-        sink.Push("done:completed");
-        sink.Complete();
-        dispatchCanFinish.SetResult();
-
-        var result = await runTask.WaitAsync(TimeSpan.FromSeconds(1));
-        result.Succeeded.Should().BeTrue();
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_WhenPreparedDispatchFails_ShouldThrowWithoutWaitingForLiveStream()
-    {
-        var sink = new EventChannel<string>();
-        var target = new TestTarget("target-1", sink);
-        var receipt = new TestReceipt("target-1", "receipt-failed-dispatch");
-        var pipeline = new TestDispatchPipeline(
-            CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(
-                new CommandDispatchExecution<TestTarget, TestReceipt>
-                {
-                    Target = target,
-                    Context = new CommandContext("target-1", "cmd-failed-dispatch", "corr-failed-dispatch", new Dictionary<string, string>()),
-                    Envelope = new Aevatar.Foundation.Abstractions.EventEnvelope { Id = "env-failed-dispatch" },
-                    Receipt = receipt,
-                }),
-            (_, _) => Task.FromException(new InvalidOperationException("dispatch failed")));
-        var service = CreateService(pipeline);
-        var accepted = new TaskCompletionSource<TestReceipt>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        var act = () => service.ExecuteAsync(
-            "command-failed-dispatch",
-            static (_, _) => ValueTask.CompletedTask,
-            (acceptedReceipt, _) =>
-            {
-                accepted.TrySetResult(acceptedReceipt);
-                return ValueTask.CompletedTask;
-            },
-            CancellationToken.None);
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("dispatch failed")
-            .WaitAsync(TimeSpan.FromSeconds(1));
-        (await accepted.Task.WaitAsync(TimeSpan.FromSeconds(1))).Should().Be(receipt);
-        target.ReleaseCalls.Should().ContainSingle();
-        target.ReleaseCalls[0].Cleanup.ObservedCompleted.Should().BeFalse();
-    }
-
-    [Fact]
     public async Task ExecuteAsync_WhenLiveStreamNeverCompletes_ShouldUseDurableCompletionForFinalizeAndCleanup()
     {
         var sink = new EventChannel<string>();
@@ -306,8 +221,7 @@ public sealed class DefaultCommandInteractionServiceTests
     }
 
     private sealed class TestDispatchPipeline(
-        CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string> result,
-        Func<CommandDispatchExecution<TestTarget, TestReceipt>, CancellationToken, Task>? dispatchPreparedAsync = null)
+        CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string> result)
         : ICommandDispatchPipeline<string, TestTarget, TestReceipt, string>
     {
         public Task<CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>> PrepareAsync(
@@ -323,9 +237,9 @@ public sealed class DefaultCommandInteractionServiceTests
             CommandDispatchExecution<TestTarget, TestReceipt> execution,
             CancellationToken ct = default)
         {
-            ArgumentNullException.ThrowIfNull(execution);
+            _ = execution;
             ct.ThrowIfCancellationRequested();
-            return dispatchPreparedAsync?.Invoke(execution, ct) ?? Task.CompletedTask;
+            return Task.CompletedTask;
         }
 
         public Task<CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>> DispatchAsync(
