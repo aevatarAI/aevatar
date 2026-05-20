@@ -220,9 +220,6 @@ public static class StreamingProxyEndpoints
                 return;
             }
 
-            // Set up SSE response
-            await writer.StartAsync(ct);
-
             var accessToken = ExtractBearerToken(http);
             var preferredRoute = request.LlmRoute?.Trim();
             var defaultModel = request.LlmModel?.Trim();

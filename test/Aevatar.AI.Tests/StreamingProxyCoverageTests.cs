@@ -770,6 +770,69 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
+    public async Task HandleChatAsync_ShouldWriteRunError_WhenProjectionIsUnavailable()
+    {
+        var context = CreateScopedHttpContext();
+        context.Response.Body = new MemoryStream();
+        var runtime = new StubActorRuntime(new List<IActor> { new StubActor("room-a") });
+        var dispatchPort = new StubActorDispatchPort(runtime);
+        var interactionService = new StubStreamingProxyRoomChatInteractionService
+        {
+            Failure = StreamingProxyRoomChatStartError.ProjectionUnavailable,
+        };
+        var durableCompletionResolver = new StreamingProxyChatDurableCompletionResolver(new StubTerminalQueryPort());
+        var participantStore = new StubParticipantStore();
+        var actorStore = new StubGAgentActorStore();
+        var coordinator = CreateNyxParticipantCoordinator();
+
+        var method = typeof(StreamingProxyEndpoints).GetMethod(
+            "HandleChatAsync",
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+        await InvokeTaskAsync(method.Invoke(
+            null,
+            [context, "scope-a", "room-a", new ChatTopicRequest("Discuss failures", "session-failed"), runtime, dispatchPort, actorStore, interactionService, durableCompletionResolver, participantStore, coordinator, NullLoggerFactory.Instance, CancellationToken.None]));
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        interactionService.Commands.Should().ContainSingle().Which.Should().Be(new StreamingProxyRoomChatCommand(
+            "room-a",
+            "scope-a",
+            "Discuss failures",
+            "session-failed"));
+        context.Response.Body.Position = 0;
+        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        body.Should().Contain("RUN_ERROR");
+        body.Should().Contain("StreamingProxy room session projection pipeline is unavailable.");
+    }
+
+    [Fact]
+    public async Task HandleChatAsync_ShouldReturnNotFound_WhenInteractionStartReportsMissingRoom()
+    {
+        var context = CreateScopedHttpContext();
+        context.Response.Body = new MemoryStream();
+        var runtime = new StubActorRuntime(new List<IActor> { new StubActor("room-a") });
+        var dispatchPort = new StubActorDispatchPort(runtime);
+        var interactionService = new StubStreamingProxyRoomChatInteractionService
+        {
+            Failure = StreamingProxyRoomChatStartError.RoomNotFound,
+        };
+        var durableCompletionResolver = new StreamingProxyChatDurableCompletionResolver(new StubTerminalQueryPort());
+        var participantStore = new StubParticipantStore();
+        var actorStore = new StubGAgentActorStore();
+        var coordinator = CreateNyxParticipantCoordinator();
+
+        var method = typeof(StreamingProxyEndpoints).GetMethod(
+            "HandleChatAsync",
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+        await InvokeTaskAsync(method.Invoke(
+            null,
+            [context, "scope-a", "room-a", new ChatTopicRequest("Discuss missing room", "session-missing"), runtime, dispatchPort, actorStore, interactionService, durableCompletionResolver, participantStore, coordinator, NullLoggerFactory.Instance, CancellationToken.None]));
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        interactionService.Commands.Should().ContainSingle();
+        context.Response.Body.Length.Should().Be(0);
+    }
+
+    [Fact]
     public async Task HandleChatAsync_ShouldPublishFailedTerminalState_WhenCancelled()
     {
         var context = CreateScopedHttpContext();

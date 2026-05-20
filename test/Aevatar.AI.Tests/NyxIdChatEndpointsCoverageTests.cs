@@ -842,6 +842,76 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task HandleStreamMessageAsync_ShouldWriteProjectionUnavailableRunError_WhenInteractionStartFails()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Headers.Authorization = "Bearer valid-token";
+        context.Response.Body = new MemoryStream();
+
+        var runtime = new StubActorRuntime();
+        runtime.Actors["actor-1"] = new StubActor("actor-1");
+        var interactionService = new StubNyxIdChatInteractionService<NyxIdChatCommand>
+        {
+            Failure = NyxIdChatStartError.ProjectionUnavailable,
+        };
+
+        await InvokeTaskAsync(
+            "HandleStreamMessageAsync",
+            context,
+            "scope-a",
+            "actor-1",
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
+            runtime,
+            new StubGAgentActorStore(),
+            interactionService,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        interactionService.Commands.Should().ContainSingle();
+        context.Response.Body.Position = 0;
+        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        body.Should().Contain("RUN_STARTED");
+        body.Should().Contain("RUN_ERROR");
+        body.Should().Contain("NyxID chat projection pipeline is unavailable.");
+    }
+
+    [Fact]
+    public async Task HandleStreamMessageAsync_ShouldWriteGenericRunError_WhenInteractionStartFails()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Headers.Authorization = "Bearer valid-token";
+        context.Response.Body = new MemoryStream();
+
+        var runtime = new StubActorRuntime();
+        runtime.Actors["actor-1"] = new StubActor("actor-1");
+        var interactionService = new StubNyxIdChatInteractionService<NyxIdChatCommand>
+        {
+            Failure = NyxIdChatStartError.ActorNotFound,
+        };
+
+        await InvokeTaskAsync(
+            "HandleStreamMessageAsync",
+            context,
+            "scope-a",
+            "actor-1",
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
+            runtime,
+            new StubGAgentActorStore(),
+            interactionService,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        interactionService.Commands.Should().ContainSingle();
+        context.Response.Body.Position = 0;
+        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        body.Should().Contain("RUN_STARTED");
+        body.Should().Contain("RUN_ERROR");
+        body.Should().Contain("The chat request failed. Please try again.");
+    }
+
+    [Fact]
     public async Task HandleApproveAsync_ShouldDispatchDecision_AndWriteRunFinished()
     {
         var context = new DefaultHttpContext();
