@@ -11,6 +11,7 @@ using Aevatar.Studio.Projection.Projectors;
 using Aevatar.Studio.Projection.QueryPorts;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.GAgents.StudioMember;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -22,9 +23,18 @@ public static class ServiceCollectionExtensions
     /// Registers Studio projection components: materialization runtime,
     /// projectors, query ports, command services, and document metadata providers.
     /// </summary>
-    public static IServiceCollection AddStudioProjectionComponents(this IServiceCollection services)
+    public static IServiceCollection AddStudioProjectionComponents(this IServiceCollection services) =>
+        services.AddStudioProjectionComponents(configuration: null);
+
+    public static IServiceCollection AddStudioProjectionComponents(
+        this IServiceCollection services,
+        IConfiguration? configuration)
     {
         ArgumentNullException.ThrowIfNull(services);
+
+        var optionsBuilder = services.AddOptions<StudioMemberPlatformBindingOptions>();
+        if (configuration != null)
+            optionsBuilder.Bind(configuration.GetSection(StudioMemberPlatformBindingOptions.SectionName));
 
         // Projection read-model runtime (write dispatcher + sink bindings)
         services.AddProjectionReadModelRuntime();
