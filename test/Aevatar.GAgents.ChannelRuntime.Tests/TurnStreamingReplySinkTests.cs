@@ -22,6 +22,8 @@ public sealed class TurnStreamingReplySinkTests
         var chunk = envelopes[0].Payload.Unpack<LlmReplyStreamChunkEvent>();
         chunk.CorrelationId.Should().Be("corr-1");
         chunk.AccumulatedText.Should().Be("hello");
+        chunk.ReplyToken.Should().Be("runtime-reply-token");
+        chunk.ReplyTokenExpiresAtUnixMs.Should().Be(1770000000000);
         sink.ChunksEmitted.Should().Be(1);
     }
 
@@ -46,7 +48,10 @@ public sealed class TurnStreamingReplySinkTests
         await sink.OnDeltaAsync("card text", CancellationToken.None);
 
         envelopes.Should().ContainSingle();
-        envelopes[0].Payload.Unpack<LlmReplyCardStreamChunkEvent>().AccumulatedText.Should().Be("card text");
+        var chunk = envelopes[0].Payload.Unpack<LlmReplyCardStreamChunkEvent>();
+        chunk.AccumulatedText.Should().Be("card text");
+        chunk.ReplyToken.Should().Be("runtime-reply-token");
+        chunk.ReplyTokenExpiresAtUnixMs.Should().Be(1770000000000);
     }
 
     [Fact]
@@ -133,6 +138,8 @@ public sealed class TurnStreamingReplySinkTests
                     CorrelationId = "corr-1",
                 },
             },
+            replyToken: "runtime-reply-token",
+            replyTokenExpiresAtUnixMs: 1770000000000,
             timeProvider,
             NullLogger<TurnStreamingReplySink>.Instance,
             cardMode);

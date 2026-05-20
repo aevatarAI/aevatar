@@ -17,6 +17,9 @@ namespace Aevatar.GAgents.NyxidChat;
 /// <summary>
 /// Run-scoped continuation owner for one deferred channel LLM reply.
 /// </summary>
+// Refactor (iter20/cluster-004):
+//   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
+//   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
 public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 {
     public const string ActorIdPrefix = "channel-agent-run:";
@@ -711,6 +714,8 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             request.CorrelationId,
             request.RegistrationId,
             request.Activity.Clone(),
+            request.ReplyToken,
+            request.ReplyTokenExpiresAtUnixMs,
             _timeProvider,
             _logger,
             cardMode);

@@ -14,6 +14,9 @@ namespace Aevatar.GAgents.Channel.Runtime;
 /// Refactor (iter15/cluster-027-streaming-reply-timer-business-dispatch):
 ///   Old pattern: timer callback directly inspects/mutates pending business output and dispatches actor command from callback thread
 ///   New principle: actor-owned run flow keeps pending text and invokes this sink only for the snapshot it has decided to publish.
+/// Refactor (iter20/cluster-004):
+///   Old pattern: ConversationGAgent 持有 actor token registry + 可见回复状态部分仅在内存
+///   New principle: 删 actor token registry,credentials runtime-only,可见回复 lifecycle 持久到 ConversationGAgent state
 /// </remarks>
 public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
 {
@@ -24,6 +27,8 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
     private readonly string _correlationId;
     private readonly string _registrationId;
     private readonly ChatActivity _activityTemplate;
+    private readonly string _replyToken;
+    private readonly long _replyTokenExpiresAtUnixMs;
     private readonly bool _cardMode;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger? _logger;
@@ -35,6 +40,8 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
         string correlationId,
         string registrationId,
         ChatActivity activityTemplate,
+        string? replyToken,
+        long replyTokenExpiresAtUnixMs,
         TimeProvider timeProvider,
         ILogger? logger = null,
         bool cardMode = false)
@@ -48,6 +55,8 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
         _correlationId = correlationId.Trim();
         _registrationId = registrationId ?? string.Empty;
         _activityTemplate = activityTemplate ?? throw new ArgumentNullException(nameof(activityTemplate));
+        _replyToken = replyToken ?? string.Empty;
+        _replyTokenExpiresAtUnixMs = replyTokenExpiresAtUnixMs;
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _logger = logger;
         _cardMode = cardMode;
@@ -79,6 +88,8 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
                 Activity = _activityTemplate.Clone(),
                 AccumulatedText = text,
                 ChunkAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                ReplyToken = _replyToken,
+                ReplyTokenExpiresAtUnixMs = _replyTokenExpiresAtUnixMs,
             }
             : new LlmReplyStreamChunkEvent
             {
@@ -87,6 +98,8 @@ public sealed class TurnStreamingReplySink : IStreamingReplySink, IDisposable
                 Activity = _activityTemplate.Clone(),
                 AccumulatedText = text,
                 ChunkAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                ReplyToken = _replyToken,
+                ReplyTokenExpiresAtUnixMs = _replyTokenExpiresAtUnixMs,
             };
         var envelope = new EventEnvelope
         {
