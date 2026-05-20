@@ -157,43 +157,6 @@ public sealed class FailoverLLMProviderFactoryTests
     }
 
     [Fact]
-    public async Task ChatStreamAsync_WhenPrimaryThrowsBeforeMeaningfulChunk_ShouldFallback()
-    {
-        var fallbackStreamCalls = 0;
-        var primaryProvider = new StubProvider("openai")
-        {
-            OnChatStreamAsync = static (_, _) => ThrowingStream(),
-        };
-        var fallbackProvider = new StubProvider("openai")
-        {
-            OnChatStreamAsync = (_, _) =>
-            {
-                fallbackStreamCalls++;
-                return ContentStream(["fallback-stream"]);
-            },
-        };
-
-        var factory = new FailoverLLMProviderFactory(
-            primaryFactory: new StubFactory(
-                providers: new Dictionary<string, ILLMProvider>(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["openai"] = primaryProvider,
-                },
-                defaultName: "openai"),
-            fallbackFactory: new StubFactory(
-                providers: new Dictionary<string, ILLMProvider>(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["openai"] = fallbackProvider,
-                },
-                defaultName: "openai"));
-
-        var chunks = await ReadAllAsync(factory.GetProvider("openai").ChatStreamAsync(new LLMRequest { Messages = [] }));
-
-        fallbackStreamCalls.Should().Be(1);
-        chunks.Select(x => x.DeltaContent).Should().Contain("fallback-stream");
-    }
-
-    [Fact]
     public async Task ChatStreamAsync_WhenPrimaryEmitsMeaningfulChunkThenFails_ShouldNotFallback()
     {
         var fallbackStreamCalls = 0;

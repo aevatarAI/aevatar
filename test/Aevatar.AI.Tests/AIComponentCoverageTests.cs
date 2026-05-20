@@ -388,22 +388,31 @@ public class AIComponentCoverageTests
             OnGetResponse = (_, _, _) =>
             {
                 nonStreamingFallbackCalls++;
-                return Task.FromResult(new ChatResponse(new MeaiChatMessage(ChatRole.Assistant, "fallback-content")));
+                return Task.FromResult(new ChatResponse(new MeaiChatMessage(ChatRole.Assistant, "fallback-content"))
+                {
+                    Usage = new UsageDetails
+                    {
+                        InputTokenCount = 3,
+                        OutputTokenCount = 2,
+                        TotalTokenCount = 5,
+                    },
+                });
             },
         };
         var emptyStreamProvider = new MEAILLMProvider("meai-empty-stream", emptyStreamClient);
-        var emptyStreamChunks = new List<LLMStreamChunk>();
-        await foreach (var chunk in emptyStreamProvider.ChatStreamAsync(new LLMRequest
-        {
-            Messages = [new AevatarChatMessage { Role = "user", Content = "hello fallback" }],
-        }))
-        {
-            emptyStreamChunks.Add(chunk);
-        }
+        var emptyStreamResponse = await ChatStreamContentAggregator.AggregateResponseAsync(
+            emptyStreamProvider,
+            new LLMRequest
+            {
+                Messages = [new AevatarChatMessage { Role = "user", Content = "hello fallback" }],
+            });
 
         nonStreamingFallbackCalls.Should().Be(1);
-        emptyStreamChunks.Should().Contain(x => x.DeltaContent == "fallback-content");
-        emptyStreamChunks.Last().IsLast.Should().BeTrue();
+        emptyStreamResponse.Content.Should().Be("fallback-content");
+        emptyStreamResponse.Usage.Should().NotBeNull();
+        emptyStreamResponse.Usage!.PromptTokens.Should().Be(3);
+        emptyStreamResponse.Usage.CompletionTokens.Should().Be(2);
+        emptyStreamResponse.Usage.TotalTokens.Should().Be(5);
 
         var reasoningOnlyFallbackCalls = 0;
         var reasoningOnlyClient = new StubChatClient
