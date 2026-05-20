@@ -1,6 +1,6 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 
-namespace Aevatar.GAgents.ChatRouting;
+namespace Aevatar.ChatRouting.Core;
 
 /// <summary>
 /// Hand-written half of the proto-generated <see cref="ChatRoutePolicyCurrentStateDocument"/>:

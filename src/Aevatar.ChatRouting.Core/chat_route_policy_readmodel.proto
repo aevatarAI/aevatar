@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package aevatar.chat_routing.v1;
 
-option csharp_namespace = "Aevatar.GAgents.ChatRouting";
+option csharp_namespace = "Aevatar.ChatRouting.Core";
 
 import "google/protobuf/timestamp.proto";
 import "chat_route_policy.proto";

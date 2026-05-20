@@ -122,11 +122,10 @@ internal static class ResponsesApiEndpoints
         }
         else if (routeDecision.Action.ForwardToGagent is not null)
         {
-            logger.LogInformation(
-                "Chat route resolved ForwardToGAgent for /v1/responses but v1 falls back to model dispatch: actor={ActorId} usedFallback={UsedFallback} matchedRule={MatchedRuleId}",
-                routeDecision.Action.ForwardToGagent.ActorId,
-                routeDecision.UsedFallback,
-                routeDecision.MatchedRuleId);
+            return ToErrorResult(
+                StatusCodes.Status501NotImplemented,
+                "chat_route_action_not_supported",
+                "ForwardToGAgent is not supported by /v1/responses in v1.");
         }
 
         LlmSessionSnapshot? previousSnapshot = null;

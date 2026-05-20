@@ -123,7 +123,7 @@ public static partial class NyxIdChatEndpoints
         // A forwarded ChatRoute decision reuses an actor that an earlier request
         // (possibly under a different scope) created; destroying it on a
         // registry rollback would delete unrelated traffic's target actor.
-        var createdLocally = decision.Action.ForwardToGagent is null;
+        var createdLocally = string.IsNullOrWhiteSpace(forwardedActorId);
         if (createdLocally)
             await actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);
         try

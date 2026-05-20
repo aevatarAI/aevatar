@@ -2,6 +2,8 @@ namespace Aevatar.ChatRouting.Core;
 
 /// <summary>
 /// Caller ownership tuple used by chat routing read ports.
+/// Mirrors Aevatar.GAgents.Scheduled.OwnerScope until #700 moves the shared
+/// contract into Foundation.Abstractions.
 /// </summary>
 public sealed class OwnerScope
 {

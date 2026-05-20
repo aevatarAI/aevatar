@@ -1,3 +1,4 @@
+using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 
 namespace Aevatar.GAgents.ChatRouting;

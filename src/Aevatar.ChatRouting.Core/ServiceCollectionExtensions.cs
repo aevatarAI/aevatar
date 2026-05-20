@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -9,7 +10,9 @@ public static class ServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.AddOptions<ChatRoutingOptions>();
+        services.TryAddSingleton<IConfiguration>(_ => new ConfigurationBuilder().Build());
+        services.AddOptions<ChatRoutingOptions>()
+            .BindConfiguration("ChatRouting");
         services.TryAddSingleton<IChatRouteFallbackProvider, EnvChatRouteFallbackProvider>();
         services.TryAddSingleton<ChatRouteResolver>();
         services.TryAddSingleton<IChatRoutePolicyQueryPort, ChatRoutePolicyQueryPort>();

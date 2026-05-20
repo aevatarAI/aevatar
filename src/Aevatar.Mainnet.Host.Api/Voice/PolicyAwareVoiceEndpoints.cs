@@ -8,8 +8,8 @@ using Aevatar.Foundation.VoicePresence.Transport;
 using Aevatar.GAgents.Scheduled;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.DependencyInjection;
 using ScheduledOwnerScope = Aevatar.GAgents.Scheduled.OwnerScope;
 using RoutingOwnerScope = Aevatar.ChatRouting.Core.OwnerScope;
 
@@ -42,7 +42,12 @@ public static class PolicyAwareVoiceEndpoints
     //   Behavior: resolve /ws/voice target through ChatRoutePolicy before WebSocket upgrade.
     //   Why this shape: the host boundary composes routing, authorization, and voice attach without
     //   pulling ChatRouting back into Foundation.VoicePresence.
-    private static async Task HandlePolicyAwareVoiceAsync(HttpContext http)
+    private static async Task HandlePolicyAwareVoiceAsync(
+        HttpContext http,
+        [FromServices] IChatRoutePolicyQueryPort queryPort,
+        [FromServices] ChatRouteResolver resolver,
+        [FromServices] IUserAgentCatalogQueryPort userAgentCatalog,
+        [FromServices] IVoicePresenceSessionResolver sessionResolver)
     {
         if (!http.WebSockets.IsWebSocketRequest)
         {
@@ -59,8 +64,6 @@ public static class PolicyAwareVoiceEndpoints
         }
 
         var routeInput = BuildRouteInput(http, routingScope, channel);
-        var queryPort = http.RequestServices.GetRequiredService<IChatRoutePolicyQueryPort>();
-        var resolver = http.RequestServices.GetRequiredService<ChatRouteResolver>();
         var snapshot = await queryPort.LookupForCallerAsync(routingScope, http.RequestAborted);
         var decision = resolver.Resolve(snapshot, routeInput);
 
@@ -91,14 +94,13 @@ public static class PolicyAwareVoiceEndpoints
             return;
         }
 
-        if (!await CanAttachAsync(http, actorId, scheduledScope, http.RequestAborted))
+        if (!await CanAttachAsync(http, userAgentCatalog, actorId, scheduledScope, http.RequestAborted))
         {
             http.Response.StatusCode = StatusCodes.Status403Forbidden;
             await http.Response.WriteAsync("Caller is not allowed to attach to this voice target.", http.RequestAborted);
             return;
         }
 
-        var sessionResolver = http.RequestServices.GetRequiredService<IVoicePresenceSessionResolver>();
         var moduleName = FirstNonEmpty(action.ForwardToGagent.VoiceModuleName, routeInput.Voice?.VoiceModuleName);
         var session = await sessionResolver.ResolveAsync(
             new VoicePresenceSessionRequest(actorId, moduleName),
@@ -235,6 +237,7 @@ public static class PolicyAwareVoiceEndpoints
 
     private static async Task<bool> CanAttachAsync(
         HttpContext http,
+        IUserAgentCatalogQueryPort catalog,
         string actorId,
         ScheduledOwnerScope callerScope,
         CancellationToken ct)
@@ -242,7 +245,6 @@ public static class PolicyAwareVoiceEndpoints
         if (IsVoiceDevBypassPrincipal(http.User))
             return true;
 
-        var catalog = http.RequestServices.GetRequiredService<IUserAgentCatalogQueryPort>();
         return await catalog.GetForCallerAsync(actorId, callerScope, ct) is not null;
     }
 

@@ -80,6 +80,7 @@ Point-in-time design snapshots. Not authoritative — for context only.
 
 - [2026-05-11-aevatar-inspector-design](history/2026-05/2026-05-11-aevatar-inspector-design.md)
 - [2026-05-14-issue-370-gagent-durable-terminal-completion-design](history/2026-05/2026-05-14-issue-370-gagent-durable-terminal-completion-design.md)
+- [2026-05-19-issue-616-binding-readiness-observation-design](history/2026-05/2026-05-19-issue-616-binding-readiness-observation-design.md)
 
 ## Audit Scorecard
 

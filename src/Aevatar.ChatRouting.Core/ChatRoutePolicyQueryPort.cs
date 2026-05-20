@@ -1,6 +1,5 @@
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
-using Aevatar.GAgents.ChatRouting;
 
 namespace Aevatar.ChatRouting.Core;
 
@@ -23,22 +22,62 @@ public sealed class ChatRoutePolicyQueryPort : IChatRoutePolicyQueryPort
     {
         ArgumentNullException.ThrowIfNull(callerScope);
 
+        foreach (var lookupScope in BuildLookupScopes(callerScope))
+        {
+            var document = await LookupOneAsync(lookupScope, ct);
+            if (TryBuildSnapshot(document, out var snapshot))
+                return snapshot;
+        }
+
+        return null;
+    }
+
+    private async Task<ChatRoutePolicyCurrentStateDocument?> LookupOneAsync(
+        OwnerScope lookupScope,
+        CancellationToken ct)
+    {
         var result = await _documentReader.QueryAsync(
             new ProjectionDocumentQuery
             {
                 Take = 1,
-                Filters = BuildCallerScopeFilters(callerScope),
+                Filters = BuildCallerScopeFilters(lookupScope),
             },
             ct);
 
-        var document = result.Items.FirstOrDefault();
+        return result.Items.FirstOrDefault();
+    }
+
+    private static bool TryBuildSnapshot(
+        ChatRoutePolicyCurrentStateDocument? document,
+        out ChatRoutePolicySnapshot? snapshot)
+    {
+        snapshot = null;
         if (document?.DefaultTarget is null ||
             document.DefaultTarget.ActionCase == ChatRouteAction.ActionOneofCase.None)
         {
-            return null;
+            return false;
         }
 
-        return new ChatRoutePolicySnapshot(document.DefaultTarget, document.Rules);
+        snapshot = new ChatRoutePolicySnapshot(document.DefaultTarget, document.Rules);
+        return true;
+    }
+
+    private static IEnumerable<OwnerScope> BuildLookupScopes(OwnerScope callerScope)
+    {
+        yield return callerScope;
+
+        if (string.Equals(callerScope.Platform, OwnerScope.NyxIdPlatform, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(callerScope.RegistrationScopeId) ||
+            (string.IsNullOrEmpty(callerScope.NyxUserId) && string.IsNullOrEmpty(callerScope.SenderId)))
+        {
+            yield break;
+        }
+
+        yield return OwnerScope.ForChannel(
+            string.Empty,
+            callerScope.Platform,
+            callerScope.RegistrationScopeId,
+            string.Empty);
     }
 
     private static IReadOnlyList<ProjectionDocumentFilter> BuildCallerScopeFilters(OwnerScope callerScope) =>

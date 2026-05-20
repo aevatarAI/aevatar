@@ -1,6 +1,6 @@
 using Aevatar.ChatRouting.Abstractions;
+using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
-using Aevatar.GAgents.ChatRouting;
 using FluentAssertions;
 
 namespace Aevatar.ChatRouting.Core.Tests;
@@ -64,6 +64,45 @@ public sealed class ChatRoutePolicyQueryPortTests
         var snapshot = await port.LookupForCallerAsync(ChatRouteResolverTests.CallerScope());
 
         snapshot.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LookupForCallerAsync_ChannelPolicyFallsBackToScopeOnlyPolicy()
+    {
+        var caller = OwnerScope.ForChannel("user-1", "lark", "bot-1", "sender-1");
+        var scopeOnlyDocument = new ChatRoutePolicyCurrentStateDocument
+        {
+            OwnerScope = ToChatRouteCallerScope(OwnerScope.ForChannel(string.Empty, "lark", "bot-1", string.Empty)),
+            DefaultTarget = ChatRouteResolverTests.ForwardToModelAction("scope-default-model"),
+        };
+        var port = new ChatRoutePolicyQueryPort(new FakePolicyReader([scopeOnlyDocument]));
+
+        var snapshot = await port.LookupForCallerAsync(caller);
+
+        snapshot.Should().NotBeNull();
+        snapshot!.DefaultTarget.ForwardToModel.ModelName.Should().Be("scope-default-model");
+    }
+
+    [Fact]
+    public async Task LookupForCallerAsync_SpecificChannelPolicyWinsBeforeScopeOnlyFallback()
+    {
+        var caller = OwnerScope.ForChannel("user-1", "lark", "bot-1", "sender-1");
+        var scopeOnlyDocument = new ChatRoutePolicyCurrentStateDocument
+        {
+            OwnerScope = ToChatRouteCallerScope(OwnerScope.ForChannel(string.Empty, "lark", "bot-1", string.Empty)),
+            DefaultTarget = ChatRouteResolverTests.ForwardToModelAction("scope-default-model"),
+        };
+        var specificDocument = new ChatRoutePolicyCurrentStateDocument
+        {
+            OwnerScope = ToChatRouteCallerScope(caller),
+            DefaultTarget = ChatRouteResolverTests.ForwardToModelAction("specific-model"),
+        };
+        var port = new ChatRoutePolicyQueryPort(new FakePolicyReader([scopeOnlyDocument, specificDocument]));
+
+        var snapshot = await port.LookupForCallerAsync(caller);
+
+        snapshot.Should().NotBeNull();
+        snapshot!.DefaultTarget.ForwardToModel.ModelName.Should().Be("specific-model");
     }
 
     private static ChatRouteCallerScope ToChatRouteCallerScope(OwnerScope scope) =>

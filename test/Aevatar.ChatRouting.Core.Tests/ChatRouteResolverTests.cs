@@ -1,5 +1,6 @@
 using Aevatar.ChatRouting.Abstractions;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -62,7 +63,7 @@ public sealed class ChatRouteResolverTests
     }
 
     [Fact]
-    public void Resolve_MultipleMatchingRules_HighestPriorityWins()
+    public void Resolve_MultipleMatchingRules_UsesProjectedRuleOrder()
     {
         var resolver = NewResolver();
         var snapshot = new ChatRoutePolicySnapshot(
@@ -86,8 +87,10 @@ public sealed class ChatRouteResolverTests
 
         var decision = resolver.Resolve(snapshot, new ChatRouteInput { Channel = "lark" });
 
-        decision.MatchedRuleId.Should().Be("high");
-        decision.Action.ForwardToModel.ModelName.Should().Be("high-model");
+        decision.MatchedRuleId.Should().Be("low");
+        decision.Action.ForwardToModel.ModelName.Should().Be(
+            "low-model",
+            "the policy actor stores rules in priority order, so the resolver must not re-sort on the hot path");
     }
 
     [Fact]
@@ -232,7 +235,7 @@ public sealed class ChatRouteResolverTests
         var services = new ServiceCollection();
         services.AddSingleton(Substitute.For<
             Aevatar.CQRS.Projection.Stores.Abstractions.IProjectionDocumentReader<
-                Aevatar.GAgents.ChatRouting.ChatRoutePolicyCurrentStateDocument,
+                ChatRoutePolicyCurrentStateDocument,
                 string>>());
 
         using var provider = services.AddChatRoutingCore().BuildServiceProvider();
@@ -240,6 +243,28 @@ public sealed class ChatRouteResolverTests
         provider.GetRequiredService<ChatRouteResolver>().Should().NotBeNull();
         provider.GetRequiredService<IChatRouteFallbackProvider>().Should().BeOfType<EnvChatRouteFallbackProvider>();
         provider.GetRequiredService<IChatRoutePolicyQueryPort>().Should().BeOfType<ChatRoutePolicyQueryPort>();
+    }
+
+    [Fact]
+    public void AddChatRoutingCore_BindsChatRoutingOptionsFromConfiguration()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ChatRouting:Defaults:FallbackModel"] = "configured-model",
+            })
+            .Build();
+        var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(configuration);
+        services.AddSingleton(Substitute.For<
+            Aevatar.CQRS.Projection.Stores.Abstractions.IProjectionDocumentReader<
+                ChatRoutePolicyCurrentStateDocument,
+                string>>());
+
+        using var provider = services.AddChatRoutingCore().BuildServiceProvider();
+
+        provider.GetRequiredService<IOptions<ChatRoutingOptions>>()
+            .Value.Defaults.FallbackModel.Should().Be("configured-model");
     }
 
     private static ChatRouteResolver NewResolver()

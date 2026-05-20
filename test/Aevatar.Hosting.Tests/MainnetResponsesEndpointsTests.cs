@@ -1525,6 +1525,31 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
+    public async Task PostResponses_WhenChatRouteForwardsToGAgent_ReturnsNotImplementedWithoutLlmCall()
+    {
+        var provider = new RecordingLLMProvider();
+        var queryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
+            ForwardToGAgentAction("target-agent"),
+            []));
+        await using var app = await CreateAppAsync(provider, chatRoutePolicyQueryPort: queryPort);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""{"model":"original-model","input":"ping","stream":false}"""),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "route-secret");
+
+        var response = await app.GetTestClient().SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotImplemented, body);
+        using var doc = JsonDocument.Parse(body);
+        doc.RootElement.GetProperty("error").GetProperty("code").GetString()
+            .Should().Be("chat_route_action_not_supported");
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task PostResponses_WithNonSlugLookingPrefix_ShouldPassModelVerbatim()
     {
         // Edge case: `BadSlug/x` has an uppercase prefix that doesn't match the slug pattern
@@ -1710,6 +1735,11 @@ public sealed class MainnetResponsesEndpointsTests
     private static ChatRouteAction RejectAction(string code, string message) => new()
     {
         Reject = new Reject { Reason = message },
+    };
+
+    private static ChatRouteAction ForwardToGAgentAction(string actorId) => new()
+    {
+        ForwardToGagent = new ForwardToGAgent { ActorId = actorId },
     };
 
     private sealed class StubResponsesCallerScopeResolver : IResponsesCallerScopeResolver

@@ -27,9 +27,7 @@ public sealed class ChatRouteResolver
             return _fallbackProvider.GetFallbackDecision();
         }
 
-        foreach (var rule in snapshot.Rules
-                     .OrderByDescending(static rule => rule.Priority)
-                     .ThenBy(static rule => rule.RuleId, StringComparer.Ordinal))
+        foreach (var rule in snapshot.Rules)
         {
             if (!Matches(rule.Match, input))
             {

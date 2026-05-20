@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Aevatar.ChatRouting.Abstractions\Aevatar.ChatRouting.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.ChatRouting.Core\Aevatar.ChatRouting.Core.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Core\Aevatar.CQRS.Projection.Core.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Core.Abstractions\Aevatar.CQRS.Projection.Core.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Runtime\Aevatar.CQRS.Projection.Runtime.csproj" />
@@ -20,26 +21,8 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Google.Protobuf" />
-    <PackageReference Include="Grpc.Tools">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-    </PackageReference>
     <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
-  </ItemGroup>
-  <ItemGroup>
-    <!--
-      chat_route_policy_readmodel.proto imports chat_route_policy.proto from
-      Aevatar.ChatRouting.Abstractions. The imported proto is resolved for
-      protoc via AdditionalImportDirs (not listed as a compiled Protobuf item)
-      so its C# types are NOT regenerated here — they come from the
-      Aevatar.ChatRouting.Abstractions assembly via ProjectReference. This
-      keeps a single authoritative copy of the wire types.
-    -->
-    <Protobuf Include="chat_route_policy_readmodel.proto"
-              ProtoRoot="."
-              AdditionalImportDirs="..\..\src\Aevatar.ChatRouting.Abstractions"
-              GrpcServices="None" />
   </ItemGroup>
 </Project>

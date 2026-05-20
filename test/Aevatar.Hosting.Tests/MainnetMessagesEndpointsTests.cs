@@ -592,6 +592,38 @@ public sealed class MainnetMessagesEndpointsTests
         provider.LastRequest.Should().BeNull();
     }
 
+    [Fact]
+    public async Task PostMessages_WhenChatRouteForwardsToGAgent_ReturnsNotImplementedWithoutLlmCall()
+    {
+        var provider = new MessagesRecordingLLMProvider();
+        var queryPort = MessagesStaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
+            ForwardToGAgentAction("target-agent"),
+            []));
+        await using var app = await CreateAppAsync(provider, chatRoutePolicyQueryPort: queryPort);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
+        {
+            Content = JsonContent("""
+            {
+              "model": "original-claude",
+              "max_tokens": 32,
+              "messages": [{"role": "user", "content": "ping"}]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "anthropic-bearer");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotImplemented, body);
+        using var doc = JsonDocument.Parse(body);
+        doc.RootElement.GetProperty("error").GetProperty("type").GetString()
+            .Should().Be("chat_route_action_not_supported");
+        provider.LastRequest.Should().BeNull();
+    }
+
     // ----- Test fixtures -------------------------------------------------------
 
     private static async Task<WebApplication> CreateAppAsync(
@@ -725,6 +757,11 @@ public sealed class MainnetMessagesEndpointsTests
     private static ChatRouteAction RejectAction(string code, string message) => new()
     {
         Reject = new Reject { Reason = message },
+    };
+
+    private static ChatRouteAction ForwardToGAgentAction(string actorId) => new()
+    {
+        ForwardToGagent = new ForwardToGAgent { ActorId = actorId },
     };
 
     private sealed class MessagesRecordingSessionStore :
