@@ -4,36 +4,12 @@ using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Domain.Studio.Models;
 
-using Aevatar.Studio.Application.Scripts.Contracts;
-namespace Aevatar.Studio.Hosting.Endpoints;
+namespace Aevatar.Studio.Application.Studio.Authoring;
 
-internal sealed record WorkflowGenerateRequest(
-    string Prompt,
-    string? CurrentYaml,
-    IReadOnlyCollection<string>? AvailableWorkflowNames,
-    IReadOnlyDictionary<string, string>? Metadata);
-
-internal sealed record WorkflowGenerateResult(
-    string Yaml,
-    int Attempts,
-    IReadOnlyList<ValidationFinding> Findings);
-
-internal enum WorkflowGenerateProgressStage
-{
-    Starting,
-    Queued,
-    GeneratingDraft,
-    ValidatingDraft,
-    RepairingDraft,
-    Completed,
-}
-
-internal sealed record WorkflowGenerateProgress(
-    WorkflowGenerateProgressStage Stage,
-    int Attempt,
-    string Message);
-
-internal sealed class WorkflowGenerateOrchestrator
+// Refactor (iter21/cluster-001):
+//   Old pattern: Host WorkflowGenerateOrchestrator ran multi-attempt YAML authoring and validation.
+//   New principle: Application owns request-scoped workflow preview orchestration behind a typed LLM stream port.
+internal sealed class WorkflowAuthoringPreviewGenerator
 {
     private const int MaxAttempts = 3;
     private static readonly Regex YamlFenceRegex = new(
@@ -51,7 +27,7 @@ internal sealed class WorkflowGenerateOrchestrator
 
     private readonly WorkflowEditorService _editorService;
 
-    public WorkflowGenerateOrchestrator(WorkflowEditorService editorService)
+    public WorkflowAuthoringPreviewGenerator(WorkflowEditorService editorService)
     {
         _editorService = editorService;
     }
@@ -59,7 +35,7 @@ internal sealed class WorkflowGenerateOrchestrator
     public async Task<WorkflowGenerateResult> GenerateAsync(
         WorkflowGenerateRequest request,
         Func<string, IReadOnlyDictionary<string, string>?, CancellationToken, Task<string?>> generateTurnAsync,
-        Func<WorkflowGenerateProgress, CancellationToken, Task>? onProgress,
+        Func<StudioAuthoringPreviewEvent.Progress, CancellationToken, Task>? onProgress,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -79,8 +55,8 @@ internal sealed class WorkflowGenerateOrchestrator
             if (onProgress != null)
             {
                 await onProgress(
-                    new WorkflowGenerateProgress(
-                        WorkflowGenerateProgressStage.GeneratingDraft,
+                    new StudioAuthoringPreviewEvent.Progress(
+                        StudioAuthoringProgressStage.GeneratingDraft,
                         attempt,
                         $"Generating workflow draft (attempt {attempt}/{MaxAttempts})..."),
                     ct);
@@ -108,12 +84,13 @@ internal sealed class WorkflowGenerateOrchestrator
             if (onProgress != null)
             {
                 await onProgress(
-                    new WorkflowGenerateProgress(
-                        WorkflowGenerateProgressStage.ValidatingDraft,
+                    new StudioAuthoringPreviewEvent.Progress(
+                        StudioAuthoringProgressStage.ValidatingDraft,
                         attempt,
                         $"Validating generated YAML (attempt {attempt}/{MaxAttempts})..."),
                     ct);
             }
+
             var parse = _editorService.ParseYaml(new ParseYamlRequest(candidateYaml, request.AvailableWorkflowNames));
             if (parse.Document == null)
             {
@@ -130,8 +107,8 @@ internal sealed class WorkflowGenerateOrchestrator
                 if (onProgress != null && attempt < MaxAttempts)
                 {
                     await onProgress(
-                        new WorkflowGenerateProgress(
-                            WorkflowGenerateProgressStage.RepairingDraft,
+                        new StudioAuthoringPreviewEvent.Progress(
+                            StudioAuthoringProgressStage.RepairingDraft,
                             attempt,
                             BuildRepairStatusMessage(lastFindings, attempt)),
                         ct);
@@ -152,8 +129,8 @@ internal sealed class WorkflowGenerateOrchestrator
                 if (onProgress != null && attempt < MaxAttempts)
                 {
                     await onProgress(
-                        new WorkflowGenerateProgress(
-                            WorkflowGenerateProgressStage.RepairingDraft,
+                        new StudioAuthoringPreviewEvent.Progress(
+                            StudioAuthoringProgressStage.RepairingDraft,
                             attempt,
                             BuildRepairStatusMessage(lastFindings, attempt)),
                         ct);
@@ -168,8 +145,8 @@ internal sealed class WorkflowGenerateOrchestrator
                 if (onProgress != null && attempt < MaxAttempts)
                 {
                     await onProgress(
-                        new WorkflowGenerateProgress(
-                            WorkflowGenerateProgressStage.RepairingDraft,
+                        new StudioAuthoringPreviewEvent.Progress(
+                            StudioAuthoringProgressStage.RepairingDraft,
                             attempt,
                             BuildRepairStatusMessage(lastFindings, attempt)),
                         ct);
@@ -180,8 +157,8 @@ internal sealed class WorkflowGenerateOrchestrator
             if (onProgress != null)
             {
                 await onProgress(
-                    new WorkflowGenerateProgress(
-                        WorkflowGenerateProgressStage.Completed,
+                    new StudioAuthoringPreviewEvent.Progress(
+                        StudioAuthoringProgressStage.Completed,
                         attempt,
                         "Workflow YAML validated and ready."),
                     ct);

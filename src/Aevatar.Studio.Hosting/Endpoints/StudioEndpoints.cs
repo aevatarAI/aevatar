@@ -8,6 +8,7 @@ using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Scripts.Contracts;
 using Aevatar.Studio.Application.Studio;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Authoring;
 using Aevatar.Studio.Infrastructure.Storage;
 using Aevatar.Scripting.Hosting.CapabilityApi;
 using System.Security.Cryptography;
@@ -876,8 +877,8 @@ internal static class StudioEndpoints
             return;
         }
 
-        var generator = services.GetService<WorkflowGenerateActorService>();
-        if (generator == null)
+        var previewService = services.GetService<IStudioAuthoringPreviewApplicationService>();
+        if (previewService == null)
         {
             http.Response.StatusCode = StatusCodes.Status400BadRequest;
             await http.Response.WriteAsJsonAsync(new
@@ -892,39 +893,20 @@ internal static class StudioEndpoints
         {
             await StartSseAsync(http.Response, ct);
             var metadata = await InjectLLMMetadataAsync(http, request.Metadata, ct);
-            var result = await generator.GenerateAsync(
-                new WorkflowGenerateRequest(
-                    request.Prompt.Trim(),
-                    request.CurrentYaml,
-                    request.AvailableWorkflowNames,
-                    metadata),
-                (delta, token) => WriteSseFrameAsync(http.Response, new
-                {
-                    type = "TEXT_MESSAGE_REASONING",
-                    delta,
-                }, token),
-                (progress, token) => WriteSseFrameAsync(http.Response, new
-                {
-                    type = "TEXT_MESSAGE_REASONING",
-                    delta = progress.Message.EndsWith('\n') ? progress.Message : $"{progress.Message}\n",
-                }, token),
-                ct);
-
-            foreach (var chunk in ChunkText(result.Yaml, 320))
+            // Refactor (iter21/cluster-001):
+            //   Old pattern: Host resolved fake workflow generator services and executed authoring loops.
+            //   New principle: Host maps typed Application preview events to the existing SSE frame contract.
+            await foreach (var previewEvent in previewService.PreviewAsync(
+                               new StudioAuthoringPreviewRequest(
+                                   StudioAuthoringKind.Workflow,
+                                   request.Prompt.Trim(),
+                                   CurrentYaml: request.CurrentYaml,
+                                   AvailableWorkflowNames: request.AvailableWorkflowNames,
+                                   Metadata: metadata),
+                               ct))
             {
-                await WriteSseFrameAsync(http.Response, new
-                {
-                    type = "TEXT_MESSAGE_CONTENT",
-                    delta = chunk,
-                }, ct);
+                await WriteWorkflowAuthoringFrameAsync(http.Response, previewEvent, ct);
             }
-
-            await WriteSseFrameAsync(http.Response, new
-            {
-                type = "TEXT_MESSAGE_END",
-                message = result.Yaml,
-                delta = string.Empty,
-            }, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -998,8 +980,8 @@ internal static class StudioEndpoints
             return;
         }
 
-        var generator = services.GetService<ScriptGenerateActorService>();
-        if (generator == null)
+        var previewService = services.GetService<IStudioAuthoringPreviewApplicationService>();
+        if (previewService == null)
         {
             http.Response.StatusCode = StatusCodes.Status400BadRequest;
             await http.Response.WriteAsJsonAsync(new
@@ -1014,58 +996,21 @@ internal static class StudioEndpoints
         {
             await StartSseAsync(http.Response, ct);
             var metadata = await InjectLLMMetadataAsync(http, request.Metadata, ct);
-            var result = await generator.GenerateAsync(
-                new ScriptGenerateRequest(
-                    request.Prompt.Trim(),
-                    request.CurrentSource,
-                    metadata,
-                    request.CurrentPackage,
-                    request.CurrentFilePath),
-                (delta, token) => WriteSseFrameAsync(http.Response, new
-                {
-                    type = "TEXT_MESSAGE_REASONING",
-                    delta,
-                }, token),
-                (progress, token) => WriteSseFrameAsync(http.Response, new
-                {
-                    type = "TEXT_MESSAGE_REASONING",
-                    delta = progress.Message.EndsWith('\n') ? progress.Message : $"{progress.Message}\n",
-                }, token),
-                ct);
-
-            foreach (var chunk in ChunkText(result.Source, 320))
+            // Refactor (iter21/cluster-001):
+            //   Old pattern: Host resolved fake script generator services and executed authoring loops.
+            //   New principle: Host maps typed Application preview events to the existing SSE frame contract.
+            await foreach (var previewEvent in previewService.PreviewAsync(
+                               new StudioAuthoringPreviewRequest(
+                                   StudioAuthoringKind.Script,
+                                   request.Prompt.Trim(),
+                                   CurrentSource: request.CurrentSource,
+                                   CurrentPackage: request.CurrentPackage,
+                                   CurrentFilePath: request.CurrentFilePath,
+                                   Metadata: metadata),
+                               ct))
             {
-                await WriteSseFrameAsync(http.Response, new
-                {
-                    type = "TEXT_MESSAGE_CONTENT",
-                    delta = chunk,
-                }, ct);
+                await WriteScriptAuthoringFrameAsync(http.Response, previewEvent, ct);
             }
-
-            await WriteSseFrameAsync(http.Response, new
-            {
-                type = "TEXT_MESSAGE_END",
-                message = result.Source,
-                delta = string.Empty,
-                currentFilePath = result.CurrentFilePath ?? string.Empty,
-                scriptPackage = result.Package == null
-                    ? null
-                    : new
-                    {
-                        csharpSources = (result.Package.CsharpSources ?? Array.Empty<AppScriptPackageFile>()).Select(static file => new
-                        {
-                            path = file.Path,
-                            content = file.Content,
-                        }),
-                        protoFiles = (result.Package.ProtoFiles ?? Array.Empty<AppScriptPackageFile>()).Select(static file => new
-                        {
-                            path = file.Path,
-                            content = file.Content,
-                        }),
-                        entryBehaviorTypeName = result.Package.EntryBehaviorTypeName,
-                        entrySourcePath = result.Package.EntrySourcePath,
-                    },
-            }, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -1116,6 +1061,84 @@ internal static class StudioEndpoints
         return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 
+    private static Task WriteWorkflowAuthoringFrameAsync(
+        HttpResponse response,
+        StudioAuthoringPreviewEvent previewEvent,
+        CancellationToken ct) =>
+        previewEvent switch
+        {
+            StudioAuthoringPreviewEvent.ReasoningDelta reasoning => WriteSseFrameAsync(response, new
+            {
+                type = "TEXT_MESSAGE_REASONING",
+                delta = reasoning.Delta,
+            }, ct),
+            StudioAuthoringPreviewEvent.Progress progress => WriteSseFrameAsync(response, new
+            {
+                type = "TEXT_MESSAGE_REASONING",
+                delta = progress.Message.EndsWith('\n') ? progress.Message : $"{progress.Message}\n",
+            }, ct),
+            StudioAuthoringPreviewEvent.ContentDelta content => WriteSseFrameAsync(response, new
+            {
+                type = "TEXT_MESSAGE_CONTENT",
+                delta = content.Delta,
+            }, ct),
+            StudioAuthoringPreviewEvent.WorkflowCompleted completed => WriteSseFrameAsync(response, new
+            {
+                type = "TEXT_MESSAGE_END",
+                message = completed.Result.Yaml,
+                delta = string.Empty,
+            }, ct),
+            _ => Task.CompletedTask,
+        };
+
+    private static Task WriteScriptAuthoringFrameAsync(
+        HttpResponse response,
+        StudioAuthoringPreviewEvent previewEvent,
+        CancellationToken ct) =>
+        previewEvent switch
+        {
+            StudioAuthoringPreviewEvent.ReasoningDelta reasoning => WriteSseFrameAsync(response, new
+            {
+                type = "TEXT_MESSAGE_REASONING",
+                delta = reasoning.Delta,
+            }, ct),
+            StudioAuthoringPreviewEvent.Progress progress => WriteSseFrameAsync(response, new
+            {
+                type = "TEXT_MESSAGE_REASONING",
+                delta = progress.Message.EndsWith('\n') ? progress.Message : $"{progress.Message}\n",
+            }, ct),
+            StudioAuthoringPreviewEvent.ContentDelta content => WriteSseFrameAsync(response, new
+            {
+                type = "TEXT_MESSAGE_CONTENT",
+                delta = content.Delta,
+            }, ct),
+            StudioAuthoringPreviewEvent.ScriptCompleted completed => WriteSseFrameAsync(response, new
+            {
+                type = "TEXT_MESSAGE_END",
+                message = completed.Result.Source,
+                delta = string.Empty,
+                currentFilePath = completed.Result.CurrentFilePath ?? string.Empty,
+                scriptPackage = completed.Result.Package == null
+                    ? null
+                    : new
+                    {
+                        csharpSources = (completed.Result.Package.CsharpSources ?? Array.Empty<AppScriptPackageFile>()).Select(static file => new
+                        {
+                            path = file.Path,
+                            content = file.Content,
+                        }),
+                        protoFiles = (completed.Result.Package.ProtoFiles ?? Array.Empty<AppScriptPackageFile>()).Select(static file => new
+                        {
+                            path = file.Path,
+                            content = file.Content,
+                        }),
+                        entryBehaviorTypeName = completed.Result.Package.EntryBehaviorTypeName,
+                        entrySourcePath = completed.Result.Package.EntrySourcePath,
+                    },
+            }, ct),
+            _ => Task.CompletedTask,
+        };
+
     private static ValueTask StartSseAsync(HttpResponse response, CancellationToken ct)
     {
         response.StatusCode = StatusCodes.Status200OK;
@@ -1132,19 +1155,6 @@ internal static class StudioEndpoints
         var bytes = Encoding.UTF8.GetBytes($"data: {payload}\n\n");
         await response.Body.WriteAsync(bytes, ct);
         await response.Body.FlushAsync(ct);
-    }
-
-    private static IEnumerable<string> ChunkText(string text, int chunkSize)
-    {
-        if (string.IsNullOrEmpty(text))
-            yield break;
-
-        var size = chunkSize > 0 ? chunkSize : 320;
-        for (var index = 0; index < text.Length; index += size)
-        {
-            var length = Math.Min(size, text.Length - index);
-            yield return text.Substring(index, length);
-        }
     }
 
     private static string? ExtractBearerToken(HttpContext http)
