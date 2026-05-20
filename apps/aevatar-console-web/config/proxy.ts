@@ -12,6 +12,8 @@
 const apiTarget = process.env.AEVATAR_API_TARGET || 'http://127.0.0.1:5080';
 const studioApiTarget =
   process.env.AEVATAR_STUDIO_API_TARGET || apiTarget;
+const preserveAuthHost =
+  process.env.AEVATAR_PROXY_PRESERVE_AUTH_HOST !== 'false';
 
 const buildProxyTarget = (target: string) => ({
   target,
@@ -37,7 +39,9 @@ const studioProxyEntries = [
   '/api/workspace',
 ].reduce<Record<string, ReturnType<typeof buildProxyTarget>>>((entries, path) => {
   const proxyFactory = path === '/api/auth'
-    ? buildHostPreservingProxyTarget
+    ? preserveAuthHost
+      ? buildHostPreservingProxyTarget
+      : buildProxyTarget
     : buildProxyTarget;
   entries[`^${path}$`] = proxyFactory(studioApiTarget);
   entries[`${path}/`] = proxyFactory(studioApiTarget);
