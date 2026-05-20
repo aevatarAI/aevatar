@@ -27,8 +27,10 @@ using Aevatar.GAgents.Platform.Telegram;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
+using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Mainnet.Host.Api.Messages;
 using Aevatar.Mainnet.Host.Api.Responses;
+using Aevatar.Mainnet.Host.Api.Voice;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
 using Microsoft.AspNetCore.Builder;
@@ -98,6 +100,18 @@ public static class MainnetHostBuilderExtensions
         // a later phase.
         builder.Services.AddChatRoutingAgents();
         builder.Services.AddChatRoutingCore();
+        // Implement (issue #695):
+        //   Behavior: gate explicit /ws/voice/{actorId} bypass behind voice:bypass or admin.
+        //   Why this shape: policy-aware /ws/voice owns normal routing; actor-id bypass stays dev/admin only.
+        builder.Services.AddAuthorization(options =>
+        {
+            options.AddPolicy("voice-dev", policy =>
+            {
+                policy.RequireAuthenticatedUser();
+                policy.RequireAssertion(context =>
+                    PolicyAwareVoiceEndpoints.IsVoiceDevBypassPrincipal(context.User));
+            });
+        });
         builder.Services.TryAddSingleton<IResponsesCallerScopeResolver, NyxIdResponsesCallerScopeResolver>();
         builder.Services.TryAddSingleton<IResponsesModelsAggregator, NyxIdResponsesModelsAggregator>();
         builder.Services.TryAddSingleton<IResponsesRouteResolver, CachingResponsesRouteResolver>();
@@ -190,6 +204,9 @@ public static class MainnetHostBuilderExtensions
         app.MapChannelCallbackEndpoints();
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();
+        app.MapPolicyAwareVoiceEndpoint();
+        app.MapVoicePresenceWebSocket("/ws/voice/{actorId}")
+            .RequireAuthorization("voice-dev");
 
         return app;
     }
