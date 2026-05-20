@@ -155,26 +155,48 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                 $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but has been retired.");
         }
 
-        if (request.ImplementationKind != ScopeBindingImplementationKind.Scripting)
+        if (request.ImplementationKind == ScopeBindingImplementationKind.Scripting)
         {
-            if (!request.AllowExistingRevisionReplay ||
-                !string.Equals(request.ReplayRevisionId, revisionId, StringComparison.Ordinal))
+            var expectedScriptingArtifactHash = await ComputeScriptingArtifactHashAsync(revisionSpec, ct);
+            if (!string.Equals(existingRevision.ArtifactHash, expectedScriptingArtifactHash, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
-                    $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}'.");
+                    $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but points to a different scripting artifact.");
             }
 
             return false;
         }
 
-        var expectedArtifactHash = await ComputeScriptingArtifactHashAsync(revisionSpec, ct);
+        if (!request.AllowExistingRevisionReplay ||
+            !string.Equals(request.ReplayRevisionId, revisionId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}'.");
+        }
+
+        if (string.IsNullOrWhiteSpace(existingRevision.ArtifactHash))
+            return false;
+
+        var expectedArtifactHash = ComputeNonScriptingArtifactHash(revisionSpec);
         if (!string.Equals(existingRevision.ArtifactHash, expectedArtifactHash, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but points to a different scripting artifact.");
+                $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but points to a different {request.ImplementationKind} artifact.");
         }
 
         return false;
+    }
+
+    private static string ComputeNonScriptingArtifactHash(ServiceRevisionSpec revisionSpec)
+    {
+        var artifact = revisionSpec.ImplementationSpecCase switch
+        {
+            ServiceRevisionSpec.ImplementationSpecOneofCase.WorkflowSpec => BuildWorkflowArtifact(revisionSpec),
+            ServiceRevisionSpec.ImplementationSpecOneofCase.StaticSpec => BuildStaticArtifact(revisionSpec),
+            _ => throw new InvalidOperationException(
+                $"Unsupported replay implementation spec '{revisionSpec.ImplementationSpecCase}'."),
+        };
+        return ComputeArtifactHash(artifact);
     }
 
     private async Task<string> ComputeScriptingArtifactHashAsync(
@@ -213,6 +235,66 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         artifact.Endpoints.Add(
             BuildScriptEndpointSpecs(snapshot)
                 .Select(ToEndpointDescriptor));
+        return ComputeArtifactHash(artifact);
+    }
+
+    private static PreparedServiceRevisionArtifact BuildWorkflowArtifact(ServiceRevisionSpec revisionSpec)
+    {
+        var workflowSpec = revisionSpec.WorkflowSpec
+            ?? throw new InvalidOperationException("workflow implementation_spec is required.");
+        return new PreparedServiceRevisionArtifact
+        {
+            Identity = revisionSpec.Identity.Clone(),
+            RevisionId = revisionSpec.RevisionId,
+            ImplementationKind = ServiceImplementationKind.Workflow,
+            Endpoints =
+            {
+                new ServiceEndpointDescriptor
+                {
+                    EndpointId = "chat",
+                    DisplayName = "chat",
+                    Kind = ServiceEndpointKind.Chat,
+                    RequestTypeUrl = GetTypeUrl(ChatRequestEvent.Descriptor),
+                    ResponseTypeUrl = GetTypeUrl(ChatResponseEvent.Descriptor),
+                    Description = "Workflow chat endpoint.",
+                },
+            },
+            DeploymentPlan = new ServiceDeploymentPlan
+            {
+                WorkflowPlan = new WorkflowServiceDeploymentPlan
+                {
+                    WorkflowName = workflowSpec.WorkflowName,
+                    WorkflowYaml = workflowSpec.WorkflowYaml,
+                    DefinitionActorId = workflowSpec.DefinitionActorId ?? string.Empty,
+                    InlineWorkflowYamls = { workflowSpec.InlineWorkflowYamls },
+                },
+            },
+        };
+    }
+
+    private static PreparedServiceRevisionArtifact BuildStaticArtifact(ServiceRevisionSpec revisionSpec)
+    {
+        var staticSpec = revisionSpec.StaticSpec
+            ?? throw new InvalidOperationException("static implementation_spec is required.");
+        return new PreparedServiceRevisionArtifact
+        {
+            Identity = revisionSpec.Identity.Clone(),
+            RevisionId = revisionSpec.RevisionId,
+            ImplementationKind = ServiceImplementationKind.Static,
+            Endpoints = { staticSpec.Endpoints.Select(x => x.Clone()) },
+            DeploymentPlan = new ServiceDeploymentPlan
+            {
+                StaticPlan = new StaticServiceDeploymentPlan
+                {
+                    ActorTypeName = staticSpec.ActorTypeName,
+                    PreferredActorId = staticSpec.PreferredActorId ?? string.Empty,
+                },
+            },
+        };
+    }
+
+    private static string ComputeArtifactHash(PreparedServiceRevisionArtifact artifact)
+    {
         var normalizedArtifact = artifact.Clone();
         normalizedArtifact.ArtifactHash = string.Empty;
         return Convert.ToHexString(SHA256.HashData(normalizedArtifact.ToByteArray()));
@@ -287,7 +369,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     DefinitionActorIdPrefix: definitionActorIdPrefix,
                     Workflow: new ScopeBindingWorkflowResult(
                         workflowBundle.EntryWorkflowName,
-                        definitionActorIdPrefix)));
+                        definitionActorIdPrefix),
+                    ExpectedDeploymentId: expectedDeploymentId));
     }
 
     private async Task<DesiredScopeBinding> BuildScriptBindingAsync(
@@ -352,7 +435,11 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     Script: new ScopeBindingScriptResult(
                         scriptSummary.ScriptId,
                         scriptSummary.ActiveRevision,
-                        scriptSummary.DefinitionActorId)));
+                        scriptSummary.DefinitionActorId)
+                    {
+                        EndpointIds = endpointSpecs.Select(endpoint => endpoint.EndpointId).ToArray(),
+                    },
+                    ExpectedDeploymentId: expectedDeploymentId));
     }
 
     private DesiredScopeBinding BuildGAgentBinding(
@@ -405,7 +492,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     ScopeBindingImplementationKind.GAgent,
                     $"gagent-service:static-runtime:{expectedDeploymentId}",
                     GAgent: new ScopeBindingGAgentResult(
-                        actorTypeName)));
+                        actorTypeName),
+                    ExpectedDeploymentId: expectedDeploymentId));
     }
 
     private async Task<WorkflowYamlBundle> ParseWorkflowBundleAsync(
