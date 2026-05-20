@@ -266,6 +266,67 @@ public sealed class ScopeServiceEndpointsStreamTests
     }
 
     [Fact]
+    public async Task GAgentDraftRunSessionEventProjector_ShouldPublishRunError_FromCommittedTerminalFailure()
+    {
+        var sessionHub = new RecordingProjectionSessionEventHub();
+        var projector = new GAgentDraftRunSessionEventProjector(sessionHub);
+        var context = new GAgentDraftRunProjectionContext
+        {
+            RootActorId = "actor-1",
+            SessionId = "cmd-1",
+            ProjectionKind = "service-draft-run-session",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            WrapCommittedCompletion(
+                new RoleChatSessionCompletedEvent
+                {
+                    SessionId = "cmd-1",
+                    Content = "[[AEVATAR_LLM_ERROR]] NyxID authentication required for provider 'nyxid'. Please sign in.",
+                },
+                correlationId: "cmd-1"),
+            CancellationToken.None);
+
+        var published = sessionHub.Published.Should().ContainSingle().Subject;
+        published.ScopeId.Should().Be("actor-1");
+        published.SessionId.Should().Be("cmd-1");
+        published.Event.RunError.Should().NotBeNull();
+        published.Event.RunError!.Message.Should().Be("NyxID authentication required for provider 'nyxid'. Please sign in.");
+    }
+
+    [Fact]
+    public async Task GAgentDraftRunSessionEventProjector_ShouldPublishRunFinished_FromCommittedTerminalSuccess()
+    {
+        var sessionHub = new RecordingProjectionSessionEventHub();
+        var projector = new GAgentDraftRunSessionEventProjector(sessionHub);
+        var context = new GAgentDraftRunProjectionContext
+        {
+            RootActorId = "actor-1",
+            SessionId = "cmd-1",
+            ProjectionKind = "service-draft-run-session",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            WrapCommittedCompletion(
+                new RoleChatSessionCompletedEvent
+                {
+                    SessionId = "cmd-1",
+                    Content = "pong",
+                },
+                correlationId: "cmd-1"),
+            CancellationToken.None);
+
+        sessionHub.Published.Should().HaveCount(2);
+        sessionHub.Published[0].Event.TextMessageEnd.Should().NotBeNull();
+        sessionHub.Published[0].Event.TextMessageEnd!.MessageId.Should().Be("cmd-1");
+        sessionHub.Published[1].Event.RunFinished.Should().NotBeNull();
+        sessionHub.Published[1].Event.RunFinished!.ThreadId.Should().Be("actor-1");
+        sessionHub.Published[1].Event.RunFinished.RunId.Should().Be("cmd-1");
+    }
+
+    [Fact]
     public async Task GAgentDraftRunSessionEventProjector_ShouldIgnoreEnvelope_FromDifferentCommandSession()
     {
         var sessionHub = new RecordingProjectionSessionEventHub();
@@ -295,6 +356,30 @@ public sealed class ScopeServiceEndpointsStreamTests
 
         sessionHub.Published.Should().BeEmpty();
     }
+
+    private static EventEnvelope WrapCommittedCompletion(
+        RoleChatSessionCompletedEvent evt,
+        string correlationId) =>
+        new()
+        {
+            Id = "outer-evt-1",
+            Route = EnvelopeRouteSemantics.CreateObserverPublication("actor-1"),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = correlationId,
+            },
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventId = "evt-1",
+                    Version = 1,
+                    Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-20T00:00:00+00:00")),
+                    EventData = Any.Pack(evt),
+                },
+                StateRoot = Any.Pack(new RoleGAgentState()),
+            }),
+        };
 
     [Fact]
     public async Task ScriptServiceAguiSessionEventProjector_ShouldPublishMappedAguiEvent_ToMatchingRunSession()

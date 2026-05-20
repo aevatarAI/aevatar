@@ -52,6 +52,15 @@ public sealed class ScopeGAgentAguiEventMapperTests
         textEndFailed!.RunError.Should().NotBeNull();
         textEndFailed.RunError!.Message.Should().Be("LLM request failed: upstream");
 
+        var textEndToolFailed = ScopeGAgentAguiEventMapper.TryMap(
+            BuildEventEnvelope(new AiTextEnd
+            {
+                Content = "LLM request failed [tools=none]: upstream",
+                SessionId = "s2",
+            }));
+        textEndToolFailed!.RunError.Should().NotBeNull();
+        textEndToolFailed.RunError!.Message.Should().Be("LLM request failed [tools=none]: upstream");
+
         var toolCall = ScopeGAgentAguiEventMapper.TryMap(BuildEventEnvelope(new AiToolCall
         {
             ToolName = "search",
@@ -94,6 +103,32 @@ public sealed class ScopeGAgentAguiEventMapperTests
 
         var none = ScopeGAgentAguiEventMapper.TryMap(new EventEnvelope());
         none.Should().BeNull();
+    }
+
+    [Fact]
+    public void TryMap_ShouldMapCommittedRoleChatCompletion()
+    {
+        var completed = ScopeGAgentAguiEventMapper.TryMap(
+            BuildEventEnvelope(new RoleChatSessionCompletedEvent
+            {
+                SessionId = "session-1",
+                Content = "done",
+            }));
+
+        completed.Should().NotBeNull();
+        completed!.TextMessageEnd.Should().NotBeNull();
+        completed.TextMessageEnd!.MessageId.Should().Be("session-1");
+
+        var failed = ScopeGAgentAguiEventMapper.TryMap(
+            BuildEventEnvelope(new RoleChatSessionCompletedEvent
+            {
+                SessionId = "session-2",
+                Content = "[[AEVATAR_LLM_ERROR]] NyxID authentication required for provider 'nyxid'. Please sign in.",
+            }));
+
+        failed.Should().NotBeNull();
+        failed!.RunError.Should().NotBeNull();
+        failed.RunError!.Message.Should().Be("NyxID authentication required for provider 'nyxid'. Please sign in.");
     }
 
     [Fact]
