@@ -339,8 +339,8 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                 DisplayName: request.Admitted.DisplayName,
                 RevisionId: revisionId,
                 ServiceId: request.Admitted.PublishedServiceId,
-                AllowExistingRevisionReplay: replayRevisionId != null,
-                ReplayRevisionId: replayRevisionId),
+                AllowExistingRevisionReplay: true,
+                ReplayRevisionId: revisionId),
             StudioMemberBindingRequest.ImplementationOneofCase.Script => new ScopeBindingUpsertRequest(
                 ScopeId: bindingRequest.ScopeId,
                 ImplementationKind: ScopeBindingImplementationKind.Scripting,
@@ -361,8 +361,8 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                 DisplayName: request.Admitted.DisplayName,
                 RevisionId: revisionId,
                 ServiceId: request.Admitted.PublishedServiceId,
-                AllowExistingRevisionReplay: replayRevisionId != null,
-                ReplayRevisionId: replayRevisionId),
+                AllowExistingRevisionReplay: true,
+                ReplayRevisionId: revisionId),
             _ => throw new InvalidOperationException("binding request must carry exactly one implementation payload."),
         };
     }
