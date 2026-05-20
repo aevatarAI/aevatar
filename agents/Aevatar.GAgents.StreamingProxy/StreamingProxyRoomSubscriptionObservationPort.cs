@@ -2,6 +2,9 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 
 namespace Aevatar.GAgents.StreamingProxy;
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 public interface IStreamingProxyRoomSubscriptionObservationPort
 {
     Task<StreamingProxyRoomSubscriptionObservationAttachment> AttachAsync(
@@ -15,7 +18,9 @@ public interface IStreamingProxyRoomSubscriptionObservationPort
         CancellationToken ct = default);
 }
 
-// refactor helper, no behavior change
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: attachment owns the explicit live sink lease used for attach-only detach.
 public sealed record StreamingProxyRoomSubscriptionObservationAttachment(
     IStreamingProxyRoomSessionProjectionLease ProjectionLease,
     IAsyncDisposable? LiveSinkLease);

@@ -7,11 +7,6 @@ namespace Aevatar.GAgents.NyxidChat;
 
 internal static class NyxIdChatStreamingRunner
 {
-    internal sealed record ErrorMessages(
-        string DispatchFailedBeforeCompletion,
-        string Timeout,
-        string UnhandledFailure);
-
     public static async ValueTask<string?> WriteAguiEventAsync(
         AGUIEvent aguiEvent,
         string messageId,

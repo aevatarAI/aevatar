@@ -9,18 +9,27 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.StreamingProxy;
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 public sealed record StreamingProxyRoomChatCommand(
     string RoomId,
     string ScopeId,
     string Prompt,
     string SessionId);
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 public sealed record StreamingProxyRoomChatAcceptedReceipt(
     string ActorId,
     string CommandId,
     string CorrelationId,
     string SessionId);
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 public enum StreamingProxyRoomChatStartError
 {
     None = 0,

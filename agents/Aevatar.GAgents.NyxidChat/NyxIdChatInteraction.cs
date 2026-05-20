@@ -12,6 +12,9 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgents.NyxidChat;
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 public sealed record NyxIdChatCommand(
     string ActorId,
     string ScopeId,
@@ -27,6 +30,9 @@ public sealed record NyxIdChatCommand(
     public IReadOnlyDictionary<string, string>? Headers => null;
 }
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 public sealed record NyxIdApprovalCommand(
     string ActorId,
     string RequestId,
@@ -40,12 +46,18 @@ public sealed record NyxIdApprovalCommand(
     public IReadOnlyDictionary<string, string>? Headers => null;
 }
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 public sealed record NyxIdChatAcceptedReceipt(
     string ActorId,
     string CommandId,
     string CorrelationId,
     string SessionId);
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 public enum NyxIdChatStartError
 {
     None = 0,
@@ -53,6 +65,9 @@ public enum NyxIdChatStartError
     ProjectionUnavailable = 2,
 }
 
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 public enum NyxIdChatCompletionStatus
 {
     Unknown = 0,

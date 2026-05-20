@@ -1851,6 +1851,193 @@ public class NyxIdChatEndpointsCoverageTests
         sessionHub.Published.Should().OnlyContain(x => x.ScopeId == "actor-1" && x.SessionId == "session-1");
     }
 
+    [Fact]
+    public async Task NyxIdChatCommandBinder_ShouldAttachProjectionSession_AndCleanupLease()
+    {
+        var projectionPort = new StubNyxIdChatSessionProjectionPort();
+        var actor = new StubActor("actor-1");
+        var target = AgentCoverageTestSupport.CreateNonPublicInstance(
+            typeof(NyxIdChatCommand).Assembly,
+            "Aevatar.GAgents.NyxidChat.NyxIdChatCommandTarget",
+            actor,
+            projectionPort);
+        var binder = CreateClosedGenericInstance(
+            typeof(NyxIdChatCommand).Assembly,
+            "Aevatar.GAgents.NyxidChat.NyxIdChatCommandTargetBinder`1",
+            typeof(NyxIdChatCommand),
+            projectionPort,
+            static (NyxIdChatCommand command) => command.SessionId);
+        var bindMethod = binder.GetType().GetMethod("BindAsync")!;
+        var command = new NyxIdChatCommand(
+            "actor-1",
+            "scope-a",
+            "hello",
+            "session-1",
+            "access-token",
+            null,
+            null);
+        var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
+            "actor-1",
+            "session-1",
+            "session-1",
+            new Dictionary<string, string>());
+
+        var bindResult = await InvokeTaskOfResultAsync(bindMethod.Invoke(
+            binder,
+            [command, target, context, CancellationToken.None]));
+        var requireLiveSink = target.GetType().GetMethod("RequireLiveSink")!;
+        var sink = (IEventSink<AGUIEvent>)requireLiveSink.Invoke(target, [])!;
+
+        bindResult.GetType().GetProperty("Succeeded")!.GetValue(bindResult).Should().Be(true);
+        projectionPort.EnsureCalls.Should().ContainSingle().Which.Should().Be(("actor-1", "session-1"));
+        projectionPort.AttachCalls.Should().ContainSingle().Which.Lease.SessionId.Should().Be("session-1");
+
+        await sink.PushAsync(new AGUIEvent { RunFinished = new RunFinishedEvent() });
+        var observed = await sink.ReadAllAsync().FirstAsync();
+        observed.EventCase.Should().Be(AGUIEvent.EventOneofCase.RunFinished);
+
+        var releaseMethod = target.GetType().GetMethod("ReleaseAfterInteractionAsync")!;
+        await InvokeTaskAsync(releaseMethod.Invoke(
+            target,
+            [
+                new NyxIdChatAcceptedReceipt("actor-1", "command-1", "correlation-1", "session-1"),
+                new CommandInteractionCleanupContext<NyxIdChatCompletionStatus>(
+                    true,
+                    NyxIdChatCompletionStatus.Completed,
+                    new CommandDurableCompletionObservation<NyxIdChatCompletionStatus>(
+                        true,
+                        NyxIdChatCompletionStatus.Completed)),
+                CancellationToken.None,
+            ]));
+
+        projectionPort.DetachCalls.Should().Be(1);
+        projectionPort.ReleaseCalls.Should().ContainSingle().Which.SessionId.Should().Be("session-1");
+    }
+
+    [Fact]
+    public async Task NyxIdChatCommandBinder_ShouldDisposeSink_WhenProjectionAttachReturnsNull()
+    {
+        var projectionPort = new StubNyxIdChatSessionProjectionPort
+        {
+            AttachResult = null,
+        };
+        var target = AgentCoverageTestSupport.CreateNonPublicInstance(
+            typeof(NyxIdChatCommand).Assembly,
+            "Aevatar.GAgents.NyxidChat.NyxIdChatCommandTarget",
+            new StubActor("actor-1"),
+            projectionPort);
+        var binder = CreateClosedGenericInstance(
+            typeof(NyxIdChatCommand).Assembly,
+            "Aevatar.GAgents.NyxidChat.NyxIdChatCommandTargetBinder`1",
+            typeof(NyxIdApprovalCommand),
+            projectionPort,
+            static (NyxIdApprovalCommand command) => command.SessionId);
+        var bindMethod = binder.GetType().GetMethod("BindAsync")!;
+        var command = new NyxIdApprovalCommand("actor-1", "request-1", true, "ok", "session-2");
+        var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
+            "actor-1",
+            "session-2",
+            "session-2",
+            new Dictionary<string, string>());
+
+        var bindResult = await InvokeTaskOfResultAsync(bindMethod.Invoke(
+            binder,
+            [command, target, context, CancellationToken.None]));
+
+        bindResult.GetType().GetProperty("Succeeded")!.GetValue(bindResult).Should().Be(false);
+        bindResult.GetType().GetProperty("Error")!.GetValue(bindResult).Should().Be(NyxIdChatStartError.ProjectionUnavailable);
+        projectionPort.EnsureCalls.Should().ContainSingle().Which.Should().Be(("actor-1", "session-2"));
+        projectionPort.AttachCalls.Should().BeEmpty();
+        projectionPort.DisposedUnattachedSinks.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task NyxIdChatCommandBinder_ShouldReleaseProjection_WhenAttachThrows()
+    {
+        var projectionPort = new StubNyxIdChatSessionProjectionPort
+        {
+            AttachException = new InvalidOperationException("attach failed"),
+        };
+        var target = AgentCoverageTestSupport.CreateNonPublicInstance(
+            typeof(NyxIdChatCommand).Assembly,
+            "Aevatar.GAgents.NyxidChat.NyxIdChatCommandTarget",
+            new StubActor("actor-1"),
+            projectionPort);
+        var binder = CreateClosedGenericInstance(
+            typeof(NyxIdChatCommand).Assembly,
+            "Aevatar.GAgents.NyxidChat.NyxIdChatCommandTargetBinder`1",
+            typeof(NyxIdApprovalCommand),
+            projectionPort,
+            static (NyxIdApprovalCommand command) => command.SessionId);
+        var command = new NyxIdApprovalCommand("actor-1", "request-1", true, "ok", "session-3");
+        var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
+            "actor-1",
+            "session-3",
+            "session-3",
+            new Dictionary<string, string>());
+
+        var act = async () => await InvokeTaskOfResultAsync(binder.GetType().GetMethod("BindAsync")!.Invoke(
+            binder,
+            [command, target, context, CancellationToken.None]));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("attach failed");
+        projectionPort.EnsureCalls.Should().ContainSingle().Which.Should().Be(("actor-1", "session-3"));
+        projectionPort.AttachCalls.Should().ContainSingle().Which.Lease.SessionId.Should().Be("session-3");
+        projectionPort.ReleaseCalls.Should().ContainSingle().Which.SessionId.Should().Be("session-3");
+    }
+
+    [Fact]
+    public void NyxIdChatEnvelopeFactories_ShouldPackChatAndApprovalPayloads()
+    {
+        var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
+            "actor-1",
+            "command-1",
+            "correlation-1",
+            new Dictionary<string, string>());
+        var chatFactory = AgentCoverageTestSupport.CreateNonPublicInstance(
+            typeof(NyxIdChatCommand).Assembly,
+            "Aevatar.GAgents.NyxidChat.NyxIdChatCommandEnvelopeFactory");
+        var approvalFactory = AgentCoverageTestSupport.CreateNonPublicInstance(
+            typeof(NyxIdChatCommand).Assembly,
+            "Aevatar.GAgents.NyxidChat.NyxIdApprovalCommandEnvelopeFactory");
+        var chatCommand = new NyxIdChatCommand(
+            "actor-1",
+            "scope-a",
+            "prompt",
+            "session-1",
+            "access-token",
+            [new NyxIdChatEndpoints.ContentPartDto("text", "part text", null, null, null)],
+            new Dictionary<string, string> { [" custom "] = " value " });
+        var chatEnvelope = (EventEnvelope)chatFactory.GetType()
+            .GetMethod("CreateEnvelope")!
+            .Invoke(chatFactory, [chatCommand, context])!;
+        var approvalEnvelope = (EventEnvelope)approvalFactory.GetType()
+            .GetMethod("CreateEnvelope")!
+            .Invoke(
+                approvalFactory,
+                [new NyxIdApprovalCommand("actor-1", "request-1", false, "deny", "session-2"), context])!;
+
+        chatEnvelope.Route.Direct.TargetActorId.Should().Be("actor-1");
+        chatEnvelope.Propagation.CorrelationId.Should().Be("correlation-1");
+        var chatRequest = chatEnvelope.Payload.Unpack<ChatRequestEvent>();
+        chatRequest.Prompt.Should().Be("prompt");
+        chatRequest.ScopeId.Should().Be("scope-a");
+        chatRequest.SessionId.Should().Be("session-1");
+        chatRequest.InputParts.Should().ContainSingle().Which.Text.Should().Be("part text");
+        chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("access-token");
+        chatRequest.Metadata["scope_id"].Should().Be("scope-a");
+        chatRequest.Metadata["custom"].Should().Be("value");
+
+        approvalEnvelope.Route.Direct.TargetActorId.Should().Be("actor-1");
+        approvalEnvelope.Propagation.CorrelationId.Should().Be("correlation-1");
+        var approval = approvalEnvelope.Payload.Unpack<ToolApprovalDecisionEvent>();
+        approval.RequestId.Should().Be("request-1");
+        approval.Approved.Should().BeFalse();
+        approval.Reason.Should().Be("deny");
+        approval.SessionId.Should().Be("session-2");
+    }
+
     private static async Task<IResult> InvokeResultAsync(string methodName, params object[] args)
     {
         var method = EndpointsType.GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static)!;
@@ -1882,6 +2069,45 @@ public class NyxIdChatEndpointsCoverageTests
             default:
                 throw new InvalidOperationException($"Unexpected return type: {result.GetType().FullName}");
         }
+    }
+
+    private static async Task InvokeTaskAsync(object? result)
+    {
+        result.Should().NotBeNull();
+        switch (result)
+        {
+            case Task task:
+                await task;
+                return;
+            case ValueTask valueTask:
+                await valueTask;
+                return;
+            default:
+                throw new InvalidOperationException($"Unexpected async return type: {result!.GetType().FullName}");
+        }
+    }
+
+    private static async Task<object> InvokeTaskOfResultAsync(object? result)
+    {
+        result.Should().NotBeNull();
+        var task = result.Should().BeAssignableTo<Task>().Subject;
+        await task;
+        return task.GetType().GetProperty("Result")!.GetValue(task)!;
+    }
+
+    private static object CreateClosedGenericInstance(
+        Assembly assembly,
+        string typeName,
+        Type genericArgument,
+        params object[] args)
+    {
+        var type = assembly.GetType(typeName, throwOnError: true)!.MakeGenericType(genericArgument);
+        return Activator.CreateInstance(
+            type,
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+            binder: null,
+            args: args,
+            culture: null)!;
     }
 
     private static object[] NormalizeEndpointArgs(MethodInfo method, object[] args)
@@ -2303,6 +2529,13 @@ public class NyxIdChatEndpointsCoverageTests
 
         public List<AGUIEvent> Messages { get; } = [];
         public List<(string ActorId, string SessionId)> EnsureCalls { get; } = [];
+        public List<(INyxIdChatSessionProjectionLease Lease, IEventSink<AGUIEvent> Sink)> AttachCalls { get; } = [];
+        public List<INyxIdChatSessionProjectionLease> ReleaseCalls { get; } = [];
+        public int DetachCalls { get; private set; }
+        public int DisposedUnattachedSinks { get; private set; }
+        public Exception? AttachException { get; init; }
+        public INyxIdChatSessionProjectionLease? AttachResult { get; init; } =
+            new StubNyxIdChatSessionProjectionLease("pending", "pending");
         public bool ProjectionEnabled => true;
 
         public async Task<INyxIdChatSessionProjectionLease?> EnsureChatProjectionAsync(
@@ -2312,6 +2545,12 @@ public class NyxIdChatEndpointsCoverageTests
         {
             ct.ThrowIfCancellationRequested();
             EnsureCalls.Add((actorId, sessionId));
+            if (AttachResult == null)
+            {
+                DisposedUnattachedSinks++;
+                return null;
+            }
+
             _lease = new StubNyxIdChatSessionProjectionLease(actorId, sessionId);
             await PublishBufferedMessagesAsync(ct);
             return _lease;
@@ -2322,7 +2561,11 @@ public class NyxIdChatEndpointsCoverageTests
             IEventSink<AGUIEvent> sink,
             CancellationToken ct = default)
         {
-            _ = lease;
+            ct.ThrowIfCancellationRequested();
+            AttachCalls.Add((lease, sink));
+            if (AttachException is not null)
+                throw AttachException;
+
             _sink = sink;
             await PublishBufferedMessagesAsync(ct);
             return null;
@@ -2334,6 +2577,7 @@ public class NyxIdChatEndpointsCoverageTests
         {
             _ = liveSinkLease;
             ct.ThrowIfCancellationRequested();
+            DetachCalls++;
             return Task.CompletedTask;
         }
 
@@ -2341,8 +2585,8 @@ public class NyxIdChatEndpointsCoverageTests
             INyxIdChatSessionProjectionLease lease,
             CancellationToken ct = default)
         {
-            _ = lease;
             ct.ThrowIfCancellationRequested();
+            ReleaseCalls.Add(lease);
             return Task.CompletedTask;
         }
 

@@ -393,6 +393,227 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
+    public async Task StreamingProxyRoomChatCommandBinder_ShouldAttachProjectionSession_AndCleanupLease()
+    {
+        var projectionPort = new StubRoomSessionProjectionPort();
+        var target = AgentCoverageTestSupport.CreateNonPublicInstance(
+            typeof(StreamingProxyRoomChatCommand).Assembly,
+            "Aevatar.GAgents.StreamingProxy.StreamingProxyRoomChatCommandTarget",
+            new StubActor("room-a"),
+            projectionPort);
+        var binder = AgentCoverageTestSupport.CreateNonPublicInstance(
+            typeof(StreamingProxyRoomChatCommand).Assembly,
+            "Aevatar.GAgents.StreamingProxy.StreamingProxyRoomChatCommandTargetBinder",
+            projectionPort);
+        var command = new StreamingProxyRoomChatCommand("room-a", "scope-a", "topic", "session-1");
+        var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
+            "room-a",
+            "session-1",
+            "session-1",
+            new Dictionary<string, string>());
+
+        var bindResult = await InvokeTaskOfResultAsync(binder.GetType().GetMethod("BindAsync")!.Invoke(
+            binder,
+            [command, target, context, CancellationToken.None]));
+        var sink = (IEventSink<StreamingProxyRoomSessionEnvelope>)target.GetType()
+            .GetMethod("RequireLiveSink")!
+            .Invoke(target, [])!;
+
+        bindResult.GetType().GetProperty("Succeeded")!.GetValue(bindResult).Should().Be(true);
+        projectionPort.EnsureCalls.Should().ContainSingle().Which.Should().Be((
+            "room-a",
+            "session-1",
+            StreamingProxyProjectionKinds.RoomChatSession));
+        projectionPort.AttachCalls.Should().ContainSingle().Which.Lease.SessionId.Should().Be("session-1");
+
+        await sink.PushAsync(new StreamingProxyRoomSessionEnvelope
+        {
+            Envelope = CreateTopologyEnvelope(new GroupChatMessageEvent
+            {
+                AgentId = "agent-1",
+                AgentName = "Alice",
+                Content = "hello",
+                SessionId = "session-1",
+            }),
+        });
+        var observed = await sink.ReadAllAsync().FirstAsync();
+        observed.Envelope!.Payload.Is(GroupChatMessageEvent.Descriptor).Should().BeTrue();
+
+        await InvokeTaskAsync(target.GetType().GetMethod("ReleaseAfterInteractionAsync")!.Invoke(
+            target,
+            [
+                new StreamingProxyRoomChatAcceptedReceipt("room-a", "command-1", "correlation-1", "session-1"),
+                new CommandInteractionCleanupContext<StreamingProxyProjectionCompletionStatus>(
+                    true,
+                    StreamingProxyProjectionCompletionStatus.Completed,
+                    new CommandDurableCompletionObservation<StreamingProxyProjectionCompletionStatus>(
+                        true,
+                        StreamingProxyProjectionCompletionStatus.Completed)),
+                CancellationToken.None,
+            ]));
+
+        projectionPort.DetachCalls.Should().Be(1);
+        projectionPort.ReleaseCalls.Should().ContainSingle().Which.SessionId.Should().Be("session-1");
+    }
+
+    [Fact]
+    public async Task StreamingProxyRoomChatCommandBinder_ShouldReleaseProjection_WhenAttachThrows()
+    {
+        var projectionPort = new StubRoomSessionProjectionPort
+        {
+            AttachException = new InvalidOperationException("attach failed"),
+        };
+        var target = AgentCoverageTestSupport.CreateNonPublicInstance(
+            typeof(StreamingProxyRoomChatCommand).Assembly,
+            "Aevatar.GAgents.StreamingProxy.StreamingProxyRoomChatCommandTarget",
+            new StubActor("room-a"),
+            projectionPort);
+        var binder = AgentCoverageTestSupport.CreateNonPublicInstance(
+            typeof(StreamingProxyRoomChatCommand).Assembly,
+            "Aevatar.GAgents.StreamingProxy.StreamingProxyRoomChatCommandTargetBinder",
+            projectionPort);
+        var command = new StreamingProxyRoomChatCommand("room-a", "scope-a", "topic", "session-2");
+        var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
+            "room-a",
+            "session-2",
+            "session-2",
+            new Dictionary<string, string>());
+
+        var act = async () => await InvokeTaskOfResultAsync(binder.GetType().GetMethod("BindAsync")!.Invoke(
+            binder,
+            [command, target, context, CancellationToken.None]));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("attach failed");
+        projectionPort.EnsureCalls.Should().ContainSingle().Which.Should().Be((
+            "room-a",
+            "session-2",
+            StreamingProxyProjectionKinds.RoomChatSession));
+        projectionPort.AttachCalls.Should().ContainSingle().Which.Lease.SessionId.Should().Be("session-2");
+        projectionPort.ReleaseCalls.Should().ContainSingle().Which.SessionId.Should().Be("session-2");
+    }
+
+    [Fact]
+    public void StreamingProxyRoomChatEnvelopeAndCompletion_ShouldUseTypedPayloads()
+    {
+        var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
+            "room-a",
+            "command-1",
+            "correlation-1",
+            new Dictionary<string, string>());
+        var factory = AgentCoverageTestSupport.CreateNonPublicInstance(
+            typeof(StreamingProxyRoomChatCommand).Assembly,
+            "Aevatar.GAgents.StreamingProxy.StreamingProxyRoomChatCommandEnvelopeFactory");
+        var envelope = (EventEnvelope)factory.GetType()
+            .GetMethod("CreateEnvelope")!
+            .Invoke(factory, [new StreamingProxyRoomChatCommand("room-a", "scope-a", "topic", "session-1"), context])!;
+
+        envelope.Route.Direct.TargetActorId.Should().Be("room-a");
+        envelope.Propagation.CorrelationId.Should().Be("correlation-1");
+        var chatRequest = envelope.Payload.Unpack<ChatRequestEvent>();
+        chatRequest.Prompt.Should().Be("topic");
+        chatRequest.ScopeId.Should().Be("scope-a");
+        chatRequest.SessionId.Should().Be("session-1");
+
+        var completionPolicy = AgentCoverageTestSupport.CreateNonPublicInstance(
+            typeof(StreamingProxyRoomChatCommand).Assembly,
+            "Aevatar.GAgents.StreamingProxy.StreamingProxyRoomChatCompletionPolicy");
+        var tryResolve = completionPolicy.GetType().GetMethod("TryResolve")!;
+        object?[] args =
+        [
+            new StreamingProxyRoomSessionEnvelope
+            {
+                Envelope = StreamingProxyRoomInteractionHelpers.CreateTerminalEnvelope(
+                    "room-a",
+                    "session-1",
+                    StreamingProxyChatSessionTerminalStatus.Completed,
+                    null),
+            },
+            null,
+        ];
+
+        ((bool)tryResolve.Invoke(completionPolicy, args)!).Should().BeTrue();
+        args[1].Should().Be(StreamingProxyProjectionCompletionStatus.Completed);
+    }
+
+    [Fact]
+    public async Task StreamingProxyRoomChatFinalizeEmitter_ShouldEmitTerminalFrame_WhenNoCompletionObserved()
+    {
+        var emitter = AgentCoverageTestSupport.CreateNonPublicInstance(
+            typeof(StreamingProxyRoomChatCommand).Assembly,
+            "Aevatar.GAgents.StreamingProxy.StreamingProxyRoomChatFinalizeEmitter");
+        var emitted = new List<StreamingProxyRoomSessionEnvelope>();
+        var emitMethod = emitter.GetType().GetMethod("EmitAsync")!;
+
+        await InvokeTaskAsync(emitMethod.Invoke(
+            emitter,
+            [
+                new StreamingProxyRoomChatAcceptedReceipt("room-a", "command-1", "correlation-1", "session-1"),
+                StreamingProxyProjectionCompletionStatus.Unknown,
+                false,
+                new Func<StreamingProxyRoomSessionEnvelope, CancellationToken, ValueTask>((frame, _) =>
+                {
+                    emitted.Add(frame);
+                    return ValueTask.CompletedTask;
+                }),
+                CancellationToken.None,
+            ]));
+
+        var terminal = emitted.Should().ContainSingle().Subject.Envelope!.Payload
+            .Unpack<StreamingProxyChatSessionTerminalStateChanged>();
+        terminal.SessionId.Should().Be("session-1");
+        terminal.Status.Should().Be(StreamingProxyChatSessionTerminalStatus.Failed);
+        terminal.ErrorMessage.Should().Be("StreamingProxy completion timed out.");
+    }
+
+    [Fact]
+    public async Task StreamingProxyRoomChatOutputStream_ShouldReturnWithoutFrames_WhenSourceIsIdle()
+    {
+        var outputStream = AgentCoverageTestSupport.CreateNonPublicInstance(
+            typeof(StreamingProxyRoomChatCommand).Assembly,
+            "Aevatar.GAgents.StreamingProxy.StreamingProxyRoomChatOutputStream");
+        var frames = new List<StreamingProxyRoomSessionEnvelope>();
+        var pumpMethod = outputStream.GetType().GetMethod("PumpAsync")!;
+
+        await InvokeTaskAsync(pumpMethod.Invoke(
+            outputStream,
+            [
+                EmptyRoomSessionEvents(),
+                new Func<StreamingProxyRoomSessionEnvelope, CancellationToken, ValueTask>((frame, _) =>
+                {
+                    frames.Add(frame);
+                    return ValueTask.CompletedTask;
+                }),
+                null,
+                CancellationToken.None,
+            ]));
+
+        frames.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task StreamingProxyRoomSubscriptionObservationPort_ShouldAttachOnlyWithDeterministicLease_AndDetachSink()
+    {
+        var projectionPort = new StubRoomSessionProjectionPort();
+        var port = (IStreamingProxyRoomSubscriptionObservationPort)AgentCoverageTestSupport.CreateNonPublicInstance(
+            typeof(StreamingProxyRoomChatCommand).Assembly,
+            "Aevatar.GAgents.StreamingProxy.StreamingProxyRoomSubscriptionObservationPort",
+            projectionPort);
+        var sink = new EventChannel<StreamingProxyRoomSessionEnvelope>();
+
+        var attachment = await port.AttachAsync(" room-a ", sink, CancellationToken.None);
+        await port.DetachAndDisposeAsync(attachment, sink, CancellationToken.None);
+
+        projectionPort.EnsureCalls.Should().BeEmpty();
+        var attach = projectionPort.AttachCalls.Should().ContainSingle().Subject;
+        attach.Lease.ActorId.Should().Be("room-a");
+        attach.Lease.SessionId.Should().Be("room:room-a:subscription");
+        attachment.ProjectionLease.SessionId.Should().Be("room:room-a:subscription");
+        projectionPort.DetachCalls.Should().Be(1);
+        projectionPort.ReleaseCalls.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleChatAsync_ShouldAttachProjectionSession_AndEmitRunFinished()
     {
         var context = CreateScopedHttpContext();
@@ -1299,6 +1520,20 @@ public class StreamingProxyCoverageTests
         }
     }
 
+    private static async Task<object> InvokeTaskOfResultAsync(object? result)
+    {
+        result.Should().NotBeNull();
+        var task = result.Should().BeAssignableTo<Task>().Subject;
+        await task;
+        return task.GetType().GetProperty("Result")!.GetValue(task)!;
+    }
+
+    private static async IAsyncEnumerable<StreamingProxyRoomSessionEnvelope> EmptyRoomSessionEvents()
+    {
+        await Task.CompletedTask;
+        yield break;
+    }
+
     private static object[] NormalizeEndpointArgs(MethodInfo method, object[] args)
     {
         var parameters = method.GetParameters();
@@ -1527,6 +1762,10 @@ public class StreamingProxyCoverageTests
         public bool ProjectionEnabled => true;
 
         public List<(string actorId, string sessionId, string projectionKind)> EnsureCalls { get; } = [];
+        public List<(IStreamingProxyRoomSessionProjectionLease Lease, IEventSink<StreamingProxyRoomSessionEnvelope> Sink)> AttachCalls { get; } = [];
+        public List<IStreamingProxyRoomSessionProjectionLease> ReleaseCalls { get; } = [];
+        public int DetachCalls { get; private set; }
+        public Exception? AttachException { get; init; }
 
         public TaskCompletionSource<bool> Attached { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1576,6 +1815,10 @@ public class StreamingProxyCoverageTests
             _ = ct;
             _lease = lease;
             _sink = sink;
+            AttachCalls.Add((lease, sink));
+            if (AttachException is not null)
+                throw AttachException;
+
             Attached.TrySetResult(true);
             return Task.FromResult<IAsyncDisposable?>(null);
         }
@@ -1586,6 +1829,7 @@ public class StreamingProxyCoverageTests
         {
             _ = liveSinkLease;
             _ = ct;
+            DetachCalls++;
             return Task.CompletedTask;
         }
 
@@ -1593,8 +1837,8 @@ public class StreamingProxyCoverageTests
             IStreamingProxyRoomSessionProjectionLease lease,
             CancellationToken ct = default)
         {
-            _ = lease;
             _ = ct;
+            ReleaseCalls.Add(lease);
             return Task.CompletedTask;
         }
 
