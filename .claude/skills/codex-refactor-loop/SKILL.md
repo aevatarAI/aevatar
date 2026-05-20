@@ -36,7 +36,7 @@ description: Unattended three-phase refactor loop (analyze → implement → ver
 
 Controller 之前 sentinel-aware sweep filter 用 body prefix(`## 🤖` 等),但 **codecov[bot] / dependabot[bot]** 等 GitHub bot 评论以 `## [Codecov](` 起首,filter 漏。误判为"真人新评论"派 fresh codex round → 浪费 + 可能再误 ping。
 
-**修法**:sweep query 必加 `author.login | endswith("[bot]") | not` filter:
+**修法**:sweep query 必加 `author.login | endswith("[bot]") | not` filter,**同时** body prefix `## [Codecov](` 排除(codecov user login 不带 `[bot]` suffix,需 body 兜底):
 
 ```bash
 gh issue view <N> --json comments --jq '
