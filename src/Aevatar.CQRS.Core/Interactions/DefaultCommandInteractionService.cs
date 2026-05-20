@@ -42,11 +42,11 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(emitAsync);
 
-        var dispatch = await _dispatchPipeline.DispatchAsync(command, ct);
-        if (!dispatch.Succeeded || dispatch.Target == null)
-            return CommandInteractionResult<TReceipt, TError, TCompletion>.Failure(dispatch.Error);
+        var prepared = await _dispatchPipeline.PrepareAsync(command, ct);
+        if (!prepared.Succeeded || prepared.Target == null)
+            return CommandInteractionResult<TReceipt, TError, TCompletion>.Failure(prepared.Error);
 
-        var execution = dispatch.Target;
+        var execution = prepared.Target;
         var target = execution.Target;
         var receipt = execution.Receipt;
         var observedCompleted = false;
@@ -60,6 +60,8 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
         {
             if (onAcceptedAsync != null)
                 await onAcceptedAsync(receipt, ct);
+
+            await _dispatchPipeline.DispatchPreparedAsync(execution, ct);
 
             await _outputStream.PumpAsync(
                 target.RequireLiveSink().ReadAllAsync(ct),
