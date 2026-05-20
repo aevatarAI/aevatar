@@ -57,6 +57,7 @@ fi
 #   New principle: Provider contract 只暴露 ChatStreamAsync;非流式聚合用现有 ChatStreamContentAggregator;无新 offline adapter
 if rg -n "Task<LLMResponse>[[:space:]]+ChatAsync[[:space:]]*\(" \
   src/Aevatar.AI.Abstractions/LLMProviders/ILLMProvider.cs \
+  src/Aevatar.AI.Core/LLMProviders \
   src/Aevatar.AI.LLMProviders.* \
   -g '*.cs'
 then

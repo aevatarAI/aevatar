@@ -419,6 +419,7 @@ public sealed class ChatRuntimeStreamingBufferTests
             "ILLMProvider.cs");
         var concreteProviderRoots = new[]
         {
+            Path.Combine(root, "src", "Aevatar.AI.Core", "LLMProviders"),
             Path.Combine(root, "src", "Aevatar.AI.LLMProviders.MEAI"),
             Path.Combine(root, "src", "Aevatar.AI.LLMProviders.NyxId"),
             Path.Combine(root, "src", "Aevatar.AI.LLMProviders.Tornado"),

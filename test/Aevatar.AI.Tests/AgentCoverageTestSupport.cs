@@ -123,7 +123,7 @@ internal sealed class TestRecordingEventPublisher : IEventPublisher
 }
 
 internal sealed class StubChatProviderFactory(
-    Func<LLMRequest, CancellationToken, Task<LLMResponse>> onChatAsync)
+    Func<LLMRequest, CancellationToken, Task<LLMResponse>> buildResponseAsync)
     : ILLMProviderFactory, ILLMProvider
 {
     public string Name => "test-provider";
@@ -142,7 +142,7 @@ internal sealed class StubChatProviderFactory(
         LLMRequest request,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        var response = await onChatAsync(request, ct);
+        var response = await buildResponseAsync(request, ct);
         if (!string.IsNullOrEmpty(response.Content))
             yield return new LLMStreamChunk { DeltaContent = response.Content };
 
