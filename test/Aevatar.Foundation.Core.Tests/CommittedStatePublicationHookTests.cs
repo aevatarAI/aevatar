@@ -51,6 +51,21 @@ public sealed class CommittedStatePublicationHookTests
         publisher.Publications[0].published.Should().BeSameAs(context.Published);
     }
 
+    [Fact]
+    public async Task MissingOptionalHookCollection_ShouldStillPublishCommittedObservation()
+    {
+        var publisher = new RecordingCommittedPublisher();
+        var agent = CreateAgentWithoutHooks(publisher);
+        agent.SetId("no-hook-agent");
+        await agent.ActivateAsync();
+
+        await agent.HandleEventAsync(TestHelper.Envelope(new IncrementEvent { Amount = 2 }));
+
+        publisher.Publications.Should().ContainSingle();
+        publisher.Publications[0].published.StateEvent.AgentId.Should().Be("no-hook-agent");
+        publisher.Publications[0].published.StateRoot.Unpack<CounterState>().Count.Should().Be(2);
+    }
+
     private static HookCounterAgent CreateAgent(
         RecordingPublicationHook hook,
         RecordingCommittedPublisher publisher)
@@ -62,6 +77,24 @@ public sealed class CommittedStatePublicationHookTests
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .AddSingleton<IStateEventApplier<CounterState>, CounterIncrementApplier>()
             .AddSingleton<ICommittedStatePublicationHook>(hook)
+            .BuildServiceProvider();
+
+        return new HookCounterAgent
+        {
+            Services = services,
+            CommittedStateEventPublisher = publisher,
+            EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<CounterState>>(),
+        };
+    }
+
+    private static HookCounterAgent CreateAgentWithoutHooks(RecordingCommittedPublisher publisher)
+    {
+        var services = new ServiceCollection()
+            .AddRuntimeScheduler()
+            .AddSingleton<IEventStore, InMemoryEventStore>()
+            .AddSingleton<EventSourcingRuntimeOptions>()
+            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
+            .AddSingleton<IStateEventApplier<CounterState>, CounterIncrementApplier>()
             .BuildServiceProvider();
 
         return new HookCounterAgent
@@ -108,7 +141,7 @@ public sealed class CommittedStatePublicationHookTests
         }
     }
 
-    private sealed class RecordingCommittedPublisher(RecordingPublicationHook hook) : ICommittedStateEventPublisher
+    private sealed class RecordingCommittedPublisher(RecordingPublicationHook? hook = null) : ICommittedStateEventPublisher
     {
         public List<(CommittedStateEventPublished published, ObserverAudience audience, EventEnvelope? source, int order)> Publications { get; } = [];
 
@@ -121,7 +154,7 @@ public sealed class CommittedStatePublicationHookTests
         {
             _ = options;
             ct.ThrowIfCancellationRequested();
-            Publications.Add((evt, audience, sourceEnvelope, hook.NextOrder()));
+            Publications.Add((evt, audience, sourceEnvelope, hook?.NextOrder() ?? 0));
             return Task.CompletedTask;
         }
     }

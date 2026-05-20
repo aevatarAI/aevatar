@@ -277,9 +277,11 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
             return _publicationHooks;
         }
 
-        _publicationHooks = Services
-            .GetServices<ICommittedStatePublicationHook>()
-            .ToArray();
+        _publicationHooks =
+            Services.GetService(typeof(IEnumerable<ICommittedStatePublicationHook>))
+                is IEnumerable<ICommittedStatePublicationHook> hooks
+                    ? hooks.ToArray()
+                    : [];
         return _publicationHooks;
     }
 
