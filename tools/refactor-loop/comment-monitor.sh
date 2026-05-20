@@ -43,13 +43,14 @@ is_team_member() {
 # - "Generated with Claude Code" 后缀
 # - 任何 body 内含 "POSTED:phase" 标记的(writer-codex 自身 marker 不会出现在 body,但若误传则 skip)
 is_controller_post() {
-  case "$1" in
-    "## 🤖"*|"## 📊"*|"## 📢 cc"*|"## 📎"*|"## ✅"*|"## 🎉"*|"## 🔄"*|"## Phase "*|"## Studio "*|"## Workflow "*|"## iter"*) return 0 ;;
-    *) ;;
-  esac
-  # 兜底:body 任意位置含 "Generated with Claude Code" 也 skip
+  # 主判定:sentinel ⟦AI:AUTO-LOOP⟧ 在 body 任意位置 → AI post(per SKILL "AI 内容标识符")
   case "$2" in
+    *"⟦AI:AUTO-LOOP⟧"*) return 0 ;;
     *"Generated with Claude Code"*) return 0 ;;
+  esac
+  # Legacy emoji-prefix(过渡期老评论无 sentinel)— 任何 ## + emoji + ... 第一行
+  case "$1" in
+    "## 🤖"*|"## 📊"*|"## 📢"*|"## 📎"*|"## ✅"*|"## 🆘"*|"## 🎉"*|"## 🔄"*|"## ⏸️"*|"## 🔍"*|"## 🛠️"*|"## 🚀"*|"## 👀"*|"## 🔧"*|"## ⚙️"*|"## Phase "*|"## Studio "*|"## Workflow "*|"## iter"*) return 0 ;;
     *) return 1 ;;
   esac
 }
