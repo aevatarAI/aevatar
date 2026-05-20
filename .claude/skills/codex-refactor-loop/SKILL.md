@@ -1009,10 +1009,19 @@ envsubst < .claude/skills/codex-refactor-loop/prompts/meta-judge.md \
   --timeout 3600
 ```
 
-Meta-judge emits `META_JUDGE_DONE:<decision>:<...>`:
-- `consensus:<framing>:<summary>` → controller auto-applies (see "Consensus action" below). **3/3 unanimous IS the only path that auto-implements** — anything less keeps the loop going.
-- `converge:round-N:<question>` → controller re-runs Phase 9 with the convergence question prepended. **No hard convergence cap** — loop iterates until 3/3 unanimous OR a hardcoded architecture-philosophy trigger fires OR maintainer comments. Anti-spiral safeguards (below) still apply.
-- `escalate:<category>:<short>` → controller adds `auto-loop-stuck` label + PushNotification. Only fires on hardcoded architecture-philosophy triggers (see "Escalation criteria" below).
+Meta-judge emits `META_JUDGE_DONE:<decision>:<...>`,**controller 路由表(强制)**:
+
+| Decision | Category | Controller 动作 |
+|---|---|---|
+| `consensus:<framing>:<summary>` | — | auto-applies(派 implement,见 "Consensus action") |
+| `converge:round-N:<question>` | — | 派 r-N+1 三 solver(把 convergence question prepend prompt) |
+| `escalate:philosophy:<...>` | architecture-philosophy hardcoded trigger | **直接** label `🆘 human:卡死` + `auto-loop-stuck` + PushNotification |
+| `escalate:stalled:<...>` | 3+ round 无 maintainer input 且 solver verdict 无变化 | **必须先派 reflector codex**(走 meta-layer reflect 节);**禁止**直接 label 人 |
+| `escalate:<其他 category>` | conflict / budget-exhausted 等 | 派 reflector + 同时 PushNotification |
+
+**重大 bug(per Auric 2026-05-20 "元思考逻辑似乎没有生效")**:iter18 中 #730 / #731 / #733 都 `escalate:stalled` 直接 label 了人,**没派 reflector**。原因:本节只写"escalate → label",没明确 `stalled` 子类必须 reflector 优先。已纠正——上表 `escalate:stalled` 行强制 reflector。
+
+reflector spawn 模板见 [Meta-layer escalation](#meta-layer-escalation--强制per-auric-2026-05-19-6-轮还解决不掉则考虑是否应该把问题升级再更元层进行考虑解决问题)节。reflector 输出 `META_RESOLVED:<kind>:<reason>` 后 controller 再按 retry-fix / re-design / re-cluster / drop / escalate-human 路由。**只有** reflector 显式输出 `META_RESOLVED:escalate-human:<reason>` 时,controller 才允许 label `🆘 human:卡死`。
 
 ### 任何 concrete-plan 都必须走 multi-solver consensus(per Auric 2026-05-19 "核心流程是都需要达成共识")
 
