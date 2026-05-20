@@ -5,7 +5,7 @@
 ## 关键职责
 
 - 解析请求来源：registry / inline bundle / source actor
-- 生成 `WorkflowRunCommandTarget`
+- 生成 interaction 用 `WorkflowRunCommandTarget` 与 accepted-only 用 `WorkflowRunAcceptedCommandTarget`
 - 通过 `IWorkflowRunActorPort` 创建 definition actor 或 run actor
 - 为 run actor 建立 projection lifecycle 和 live sink
 - 生成 `WorkflowChatRunAcceptedReceipt`
@@ -43,7 +43,7 @@
 ### CQRS Interaction / Detached Dispatch
 
 - `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 走完整交互路径：驱动标准 CQRS interaction service、接收 accepted receipt、消费 sink 并持续输出 `WorkflowRunEventEnvelope`
-- `DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 走 accepted-only 路径：复用同一套 CQRS command skeleton，后台 drain session event stream，并在 `WorkflowRunCommandTarget.ReleaseAfterInteractionAsync(...)` 内统一做 release / cleanup
+- `DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 走 accepted-only 路径：复用 CQRS command skeleton，只返回 accepted receipt；该路径使用 `NoOpCommandTargetBinder`，不建立 live sink，也不 drain session event stream
 - `WorkflowDirectFallbackPolicy` 通过 generic fallback decorator 同时包裹 interaction / dispatch 两条命令入口
 - 真正的 envelope 投递由 CQRS Core 的 `ActorCommandTargetDispatcher` 通过 `IActorDispatchPort` 完成，`IActorRuntime` 继续负责目标 actor 的获取/创建与拓扑
 - 状态快照由 `WorkflowRunFinalizeEmitter` 统一在收尾阶段补发
@@ -71,6 +71,8 @@
 Aevatar.Workflow.Application/
 ├── Runs/
 │   ├── WorkflowRunAcceptedReceiptFactory.cs
+│   ├── WorkflowRunAcceptedCommandTarget.cs
+│   ├── WorkflowRunAcceptedCommandTargetResolver.cs
 │   ├── WorkflowRunActorResolver.cs
 │   ├── WorkflowRunControlAcceptedReceiptFactory.cs
 │   ├── WorkflowRunControlCommandTarget.cs
