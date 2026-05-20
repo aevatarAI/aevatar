@@ -32,6 +32,16 @@ description: Unattended three-phase refactor loop (analyze → implement → ver
 - ❌ Banner 用模糊语言("处理中""稍等"),应该具体说当前 phase + 下一步 + ETA / 何时介入
 - ❌ 多个 daemon 同时跑但 maintainer 看 GitHub 只看到 eyes,不知道还有 codex 在工作
 
+### ❌ 严禁写 `@auric` `@Auric` `Auric` 任何形式(强制,per Auric 2026-05-20 "为什么一直在 at auric")
+
+**根因**:GitHub username `auric` 是不相关 user。但 prompts / banner 文本里大量 `Per Auric`、`Auric 决策` 等 plain text "Auric",codex 生成评论时把它转成 `@Auric` → GitHub auto-link 误 ping `@auric`。
+
+**铁律**:
+- **所有 codex prompts**(`solver-*.md` / `meta-judge.md` / `reviewer-*.md` / `review-fix.md` / `audit.md` / `design-issue-*.md` 等)严禁出现 `Auric` 或 `@auric` `@Auric`。引用本 repo maintainer 用 `maintainer` / `Loning`(全小写 GitHub handle)
+- **Controller 自己 post banner** 严禁写 `Auric`,统一用 `maintainer` 或 `Loning`
+- **SKILL.md 历史 reference** `per Auric YYYY-MM-DD` 保留(只 controller 自己读,不输出到 GitHub)
+- **@-mention whitelist 不变**:loning / louis4li / eanzhao / jason-aelf / AbigailDeng / potter-sun(verbatim git blame 验证)
+
 ### 0 codex + active task = bug(强制,per Auric 2026-05-20 "按说这个流程应该一直有 codex 工作的")
 
 **铁律**:任何 active phase issue/PR(`🔍 design-solving` / `🔧 fixing` / `👀 reviewing` / `🛠️ implementing`)存在时,**应至少有 1 codex 在跑**。`ps codex exec | wc -l == 0` AND `gh issue list --label "🔍 design-solving"` non-empty → **bug**。

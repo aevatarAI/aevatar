@@ -1,6 +1,6 @@
 # GitHub post rules (shared 共享规则,各 codex prompt 引用本文件)
 
-任何 codex(solver / meta-judge / fix / reviewer / clarifier / investigator / analyst 等)产出 user-facing 内容时,**自己直接调 `gh`** post 到 GitHub,不需要 controller 中转、不需要 dedicated writer-codex(per Auric 2026-05-19 "没必要设置专门发github的角色,让各角色直接调用gh就好了")。
+任何 codex(solver / meta-judge / fix / reviewer / clarifier / investigator / analyst 等)产出 user-facing 内容时,**自己直接调 `gh`** post 到 GitHub,不需要 controller 中转、不需要 dedicated writer-codex(per maintainer 2026-05-19 "没必要设置专门发github的角色,让各角色直接调用gh就好了")。
 
 ## Body 结构(强制)
 

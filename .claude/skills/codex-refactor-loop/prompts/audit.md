@@ -99,8 +99,8 @@ human_brief:
     这是公共 API 改动,有 backward-compat 取舍。">
   design_question: "<给 maintainer 的一个具体问题,中文>"
   original_authors:
-    # ⚠️ STRICT WHITELIST + REAL git blame VERIFICATION REQUIRED (per Auric 2026-05-20
-    # "ai 原作者请确认真实在 git 源码出现过,不要用幻觉 at" + 投诉 @auric 误 ping 不相关用户事故)
+    # ⚠️ STRICT WHITELIST + REAL git blame VERIFICATION REQUIRED (per maintainer 2026-05-20
+    # "ai 原作者请确认真实在 git 源码出现过,不要用幻觉 at" + 投诉  误 ping 不相关用户事故)
     #
     # PROCEDURE(必须执行 — no shortcut):
     # 1. 跑实际 git blame:`git blame --line-porcelain <file> | grep -E "^author " | sort | uniq -c | sort -rn | head -5`
@@ -119,14 +119,14 @@ human_brief:
     #
     # ❌ 严禁 hallucinate(违反 = audit 拒收,重派):
     #    - 没跑 git blame 就 list → ban
-    #    - "@Auric"(GitHub 上 `auric` 是不相关用户,会被误 ping)→ ban
+    #    - ""(GitHub 上 `auric` 是不相关用户,会被误 ping)→ ban
     #    - "@louis-li" 等错 variation → ban,只能 verbatim 表里 handle
     #    - 非 whitelist handle → ban,即使真在 git blame 里(他们可能不在项目内)
     - "@<handle-from-whitelist>"  # e.g. @eanzhao(经 git blame 验证 + 在 whitelist)
     - "@<handle-from-whitelist>"  # 同上;若 git blame 只 1 个 whitelist match,只 list 1 个
 ```
 
-**Per Auric (2026-05-19) "默认工作语言中文吧, 不双语了"**: human_brief 不再要求 `_en` + `_zh` 双字段。`problem_title` / `problem_statement` / `why_needs_design` / `design_question` 直接用中文。Code snippet + file path + GitHub handle 等技术内容保留原英文。
+**Per maintainer (2026-05-19) "默认工作语言中文吧, 不双语了"**: human_brief 不再要求 `_en` + `_zh` 双字段。`problem_title` / `problem_statement` / `why_needs_design` / `design_question` 直接用中文。Code snippet + file path + GitHub handle 等技术内容保留原英文。
 
 **红线**：
 

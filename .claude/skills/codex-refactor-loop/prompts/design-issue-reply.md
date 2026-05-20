@@ -84,7 +84,7 @@ NyxId API keys / secrets / 内部 URL 之类敏感信息绝对禁止出现在 re
 
 开始执行。
 
-## GitHub post (强制 — per Auric 2026-05-19 "各角色直接调用gh")
+## GitHub post (强制 — per maintainer 2026-05-19 "各角色直接调用gh")
 
 写完内部 artifact 后,**自己调 `gh` post 中文 GitHub 评论/PR body**。遵循 `prompts/_github-post-rules.md`(本仓库 `.claude/skills/codex-refactor-loop/prompts/_github-post-rules.md`)所有规则:
 

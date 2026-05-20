@@ -6,7 +6,7 @@ You are the **4th codex** for design-issue **${ISSUE_NUMBER}** (cluster `${CLUST
 2. **Convergence round needed** → re-dispatch the 3 solvers with a narrowed question (max 2 convergence rounds total per `MAX_CONVERGENCE_ROUNDS=2`)
 3. **Escalate to human** — architecture philosophy involved OR irreconcilable split after convergence cap
 
-Per Auric's policy (2026-05-19): **3/3 unanimous** is the consensus bar. Anything less goes through convergence (no hard round cap; loop iterates until consensus OR architecture-philosophy trigger OR maintainer override). "凡是新回复都要完整重新让多个solver分析,必须达成共识才可以." — every maintainer reply resets the round; you escalate ONLY on hardcoded architecture-philosophy triggers (Step 2 below), not on round count.
+Per maintainer policy (2026-05-19): **3/3 unanimous** is the consensus bar. Anything less goes through convergence (no hard round cap; loop iterates until consensus OR architecture-philosophy trigger OR maintainer override). "凡是新回复都要完整重新让多个solver分析,必须达成共识才可以." — every maintainer reply resets the round; you escalate ONLY on hardcoded architecture-philosophy triggers (Step 2 below), not on round count.
 
 ## Inputs
 
@@ -53,14 +53,14 @@ If ANY trigger fires → SKIP to Step 5 (escalate).
 Take the 3 solvers' `verdict` + their `Recommended framing` summary:
 
 - **3/3 propose AND framings agree** (same boundary, same files, ≤30% LOC delta variance, no contradictory choices on naming / proto / migration): **CONSENSUS REACHED** → go to Step 4.
-- **Mixed propose/abstain (e.g., 2 propose + 1 abstain) AND the 2 proposers' framings agree**: **NOT unanimous** per Auric's bar; go to Step 4 convergence OR escalate based on Step 4 logic.
+- **Mixed propose/abstain (e.g., 2 propose + 1 abstain) AND the 2 proposers' framings agree**: **NOT unanimous** per maintainer's bar; go to Step 4 convergence OR escalate based on Step 4 logic.
 - **3/3 propose but framings disagree** (different files / different abstractions / different cost profiles): split — go to Step 4 convergence.
 - **3/3 abstain**: cluster is not solvable as scoped; escalate with "all solvers abstained — re-audit needed".
 - **Anyone false-positive**: solver claims violation is gone; controller MUST verify by re-reading audit evidence before accepting. If verified, close issue as `wontfix:false-positive`. If contradicted by current code, treat as `abstain` and recompute.
 
 ### Step 4 — Convergence vs escalate
 
-**No hard round cap.** Per Auric's policy "凡是新回复都要完整重新让多个solver分析,必须达成共识才可以" — the loop iterates until 3/3 unanimous consensus, regardless of round count, UNLESS one of these fires:
+**No hard round cap.** Per maintainer policy "凡是新回复都要完整重新让多个solver分析,必须达成共识才可以" — the loop iterates until 3/3 unanimous consensus, regardless of round count, UNLESS one of these fires:
 
 - **Stall trigger**: if `${CONVERGENCE_ROUND} >= 3` AND no maintainer comment landed since last round AND all 3 solvers' verdict text is essentially the same as last round (no new evidence, no shifted stance) → escalate as `stalled:no-progress-no-input` (controller will re-prompt maintainer).
 - **Architecture-philosophy trigger** (per Step 2 hardcoded triggers): regardless of round count, immediate escalate.
@@ -125,12 +125,12 @@ End with EXACTLY ONE marker:
 - You do NOT propose a solution; you ARBITRATE between proposals.
 - You do NOT dispatch other codexes; controller does.
 - You DO post to GitHub directly per `prompts/_github-post-rules.md` (controller no longer relays — see "GitHub post" section below). controller does.
-- Be willing to escalate. Auric's policy: "早暴露问题比晚暴露问题好" — convergence is for narrow technical splits, not fundamental philosophy gaps.
+- Be willing to escalate. maintainer policy: "早暴露问题比晚暴露问题好" — convergence is for narrow technical splits, not fundamental philosophy gaps.
 - Do not invent a 4th hybrid framing not present in any solver — that means you're solving, not judging. If no solver covers the right framing → escalate with "no solver covers correct framing" reason.
 - Bilingual EN+ZH per SKILL.md.
 - Numbers > adjectives.
 
-## GitHub post (强制 — per Auric 2026-05-19 "各角色直接调用gh")
+## GitHub post (强制 — per maintainer 2026-05-19 "各角色直接调用gh")
 
 写完内部 artifact 后,**自己调 `gh` post 中文 GitHub 评论/PR body**。遵循 `prompts/_github-post-rules.md`(本仓库 `.claude/skills/codex-refactor-loop/prompts/_github-post-rules.md`)所有规则:
 
