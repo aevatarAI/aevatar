@@ -29,6 +29,86 @@ Subsequent wakeups → **derive state from GitHub**(open PR / open issue / label
 
 ---
 
+## AI 内容标识符 ⟦AI:AUTO-LOOP⟧(强制,per Auric 2026-05-20 "所有 AI 产生的内容你都加一个特殊标识,这个字符串唯一只有这个 skills 会生成")
+
+**Sentinel**:`⟦AI:AUTO-LOOP⟧`(U+27E6 + ASCII + U+27E7)
+
+设计:
+- `⟦` U+27E6 / `⟧` U+27E7 mathematical white square brackets,**人类几乎不可能自然敲出**(中英输入法都没有)
+- 字面 `AI:AUTO-LOOP` 字母 + 冒号 + dash,grep 极易
+- 整串复制成本高,无明确意图者不会复制
+- 唯一仅本 skill 生成 → 程序可靠识别 AI vs 真人
+
+### 强制规则
+
+**所有 AI 生成的对外内容必须末尾带 sentinel**:
+
+| 内容类型 | 必带位置 |
+|---|---|
+| Controller post 的 status banner / 进度评论 | 末尾独立一行 |
+| Codex post 的 review / fix-report / consensus / solver 评论 | 末尾独立一行 |
+| Git commit message(controller 与 codex commit) | 末尾独立一行(commit body 末尾) |
+| PR title / PR body | body 末尾独立一行(title 不带 — 太短) |
+| Push notification | 末尾或独立 |
+| `.refactor-loop/runs/*.md` artifact 文件末尾 | 末尾独立一行 |
+| GitHub issue body(design issue 自动开的) | 末尾独立一行 |
+
+**不放**:
+- 代码注释 `// Refactor (iterN/cluster-XXX): ...`(代码层面不需要识别 AI,这是产线 code 自我说明)
+- 内部 log 文件(`*.log`)(spawn-codex.sh banner 等,不出仓库)
+- 路径名 / 分支名 / 文件名(避免污染 git tree)
+
+### 识别替代 `^## 🤖` body marker(Phase 7)
+
+之前 Phase 7 comment sweep 用 body `^## 🤖` / `^## 📊` 区分 controller post,有遗漏:
+- 真人手写 `## 🤖` 罕见但可能
+- 真人复制 Markdown emoji 段落混淆
+
+**改用 sentinel**:
+```bash
+# Controller / AI post(末尾含 sentinel)→ 跳过
+gh issue view <N> --json comments --jq '.comments[] | select(.body | contains("⟦AI:AUTO-LOOP⟧") | not) | .body[0:120]'
+```
+
+包含 sentinel = AI post 跳过。无 sentinel = 真人评论 必须响应。
+
+历史 marker `^## 🤖 ` / `^## 📊 ` / `Generated with Claude Code` 作为**兼容回退**保留(老评论无 sentinel)。新 controller post 一律加 sentinel。
+
+### Controller 自检
+
+每次 controller `gh issue comment` / `gh pr comment` / `gh pr create --body` / `git commit -m` 前,**检查最终内容末尾是否含 `⟦AI:AUTO-LOOP⟧`**;无则**拒绝 post**(用 bash 条件包一层):
+
+```bash
+body=$(cat <<'EOF'
+... banner content ...
+
+🤖 controller status banner
+
+⟦AI:AUTO-LOOP⟧
+EOF
+)
+[[ "$body" == *"⟦AI:AUTO-LOOP⟧"* ]] && gh issue comment "$N" --body "$body" || { echo "MISSING_SENTINEL"; exit 1; }
+```
+
+### Codex prompts 加 sentinel 要求
+
+所有 spawn 的 codex prompt 末尾**必须**加一行:
+
+```
+所有 AI 生成的对外内容(GitHub comment / PR body / commit message / runs/*.md artifact)必须末尾独立一行加 sentinel `⟦AI:AUTO-LOOP⟧`(不要修改字符)。无 sentinel 的 post 视为产生失败。
+```
+
+`reviewer-*.md` / `solver-*.md` / `meta-judge.md` / `review-fix.md` / `implement.md` / `test-add.md` / `audit.md` / `design-issue-body.md` / `design-issue-reply.md` 都该加。
+
+### 反面(❌ 禁止)
+
+- ❌ 修改 sentinel 字符串(必须字面 `⟦AI:AUTO-LOOP⟧`,大小写 / 字符 / 顺序 / 括号种类不能变)
+- ❌ 用 `<!-- ... -->` HTML 注释藏 sentinel(GitHub 渲染会吃,grep 失败)
+- ❌ 把 sentinel 放代码 / 路径 / 分支名(污染产线)
+- ❌ post body 末尾没 sentinel — bash 自检拦,违规 = bug
+
+---
+
 ## 状态源 — GitHub 为真,本地 log 为辅(强制,per Auric 2026-05-19 "真实源以github为准,任务都在后台进程")
 
 **问题**:`.refactor-loop/state.json` 频繁过时——controller turn 跨多 wakeup、session 中断、user `/clear`、后台进程独立写 GitHub、跨 session 恢复——把它当 source of truth 会让 controller 基于错误前提派 codex / 重复跑已完成的 round / 漏跑实际 in-flight 的 round。
@@ -554,17 +634,20 @@ Classify:
 
 **🔴 真人评论 vs controller 评论识别(强制,per Auric 2026-05-20 "为什么许多 issues 我回复了没及时处理")**:`gh` CLI authenticated user = `loning`,与 maintainer Auric/Loning **同账号**;`comments[].author.login` **无法区分**真人 vs controller。**必须按 body 内容判断**:
 
-- **body 第一行匹配** `^## 🤖 ` 或 `^## 📊 ` → **controller post**(banner / codex-output / status),跳过
-- **body 末尾含** `🤖 controller status banner` / `🤖 Auto-loop` / `Generated with Claude Code` → **controller post**,跳过
-- **以上都不匹配** → **真人评论**(maintainer Auric 等),**必须响应**(react eyes + 触发 maintainer-reply-resets-the-round)
+**主判定(强制)**:body 含 `⟦AI:AUTO-LOOP⟧` sentinel → AI post 跳过;不含 → 真人评论必须响应(详见上方 "## AI 内容标识符 ⟦AI:AUTO-LOOP⟧" 节)。
 
-Comment sweep 命令:
+**兼容回退**(老 AI 评论无 sentinel 的过渡期):
+- body 第一行匹配 `^## 🤖 ` / `^## 📊 ` → AI post 跳过
+- body 末尾含 `🤖 controller status banner` / `🤖 Auto-loop` / `Generated with Claude Code` → AI post 跳过
+- 上述都不匹配且无 sentinel → 真人评论
+
+Comment sweep 命令(主):
 ```bash
-gh issue view <N> --json comments --jq '.comments[] | select((.body | startswith("## 🤖") | not) and (.body | startswith("## 📊") | not)) | "\(.createdAt)|\(.body[0:120])"' | tail -3
+gh issue view <N> --json comments --jq '.comments[] | select((.body | contains("⟦AI:AUTO-LOOP⟧") | not) and (.body | startswith("## 🤖") | not) and (.body | startswith("## 📊") | not)) | "\(.createdAt)|\(.body[0:120])"' | tail -3
 ```
-拿到的就是真人评论(或者真人评论列表为空)。`select(.author.login=="loning")` 一律放弃—因为 controller 自己也是 loning。
+返回的是真人评论(包含 sentinel 或老 marker 的全跳过)。`select(.author.login=="loning")` 一律放弃—因为 controller 自己也是 loning。
 
-历史教训:iter18 中 #719/#731/#732/#733 maintainer 真有评论("处理一下" / "choose:structural-no-live-sink" / "架构升级" / "应该统一 tg lark stream 用 actor 持有"),controller 按 author=loning 当 self-banner 跳过,等了几小时才发现。**禁止**再用 author 判断。
+历史教训:iter18 中 #719/#731/#732/#733 maintainer 真有评论("处理一下" / "choose:structural-no-live-sink" / "架构升级" / "应该统一 tg lark stream 用 actor 持有"),controller 按 author=loning 当 self-banner 跳过,等了几小时才发现。**禁止**再用 author 判断。Sentinel 引入后此 bug 类型从根本上消除。
 
 - **No new comments AND state==open**: nothing to do; bump `last_checked` only.
 - **State==closed without `auto-loop-resume` label**: maintainer closed without resume signal. Move to `clusters_failed` with reason `design-rejected:closed`. PushNotification: "cluster-<id> design issue #<num> closed without auto-resume; cluster permanently deferred."
