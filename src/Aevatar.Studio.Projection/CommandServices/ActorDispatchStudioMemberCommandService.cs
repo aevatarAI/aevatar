@@ -336,11 +336,11 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
                 {
                     request.Gagent.Endpoints.Add(new StudioMemberGAgentEndpointBindingRequest
                     {
-                        EndpointId = endpoint.EndpointId,
-                        DisplayName = endpoint.DisplayName,
+                        EndpointId = endpoint.EndpointId ?? string.Empty,
+                        DisplayName = endpoint.DisplayName ?? string.Empty,
                         Kind = ParseGAgentEndpointKind(endpoint.Kind),
-                        RequestTypeUrl = endpoint.RequestTypeUrl,
-                        ResponseTypeUrl = endpoint.ResponseTypeUrl,
+                        RequestTypeUrl = endpoint.RequestTypeUrl ?? string.Empty,
+                        ResponseTypeUrl = endpoint.ResponseTypeUrl ?? string.Empty,
                         Description = endpoint.Description ?? string.Empty,
                     });
                 }
