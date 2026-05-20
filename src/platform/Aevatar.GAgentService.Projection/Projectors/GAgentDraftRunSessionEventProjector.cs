@@ -5,6 +5,7 @@ using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Projection.Orchestration;
 using Aevatar.Presentation.AGUI;
 using Google.Protobuf.WellKnownTypes;
+using RoleChatSessionCompletedEvent = Aevatar.AI.Abstractions.RoleChatSessionCompletedEvent;
 
 namespace Aevatar.GAgentService.Projection.Projectors;
 
@@ -30,7 +31,11 @@ public sealed class GAgentDraftRunSessionEventProjector
         if (!string.Equals(envelope.Propagation?.CorrelationId, context.SessionId, StringComparison.Ordinal))
             return EmptyEntries;
 
-        var mapped = TryMapCommittedStateEvent(envelope) ?? ScopeGAgentAguiEventMapper.TryMap(envelope);
+        var committedEntries = TryResolveCommittedCompletionEntries(context, envelope);
+        if (committedEntries.Count > 0)
+            return committedEntries;
+
+        var mapped = ScopeGAgentAguiEventMapper.TryMap(envelope);
         if (mapped == null)
             return EmptyEntries;
 
@@ -66,22 +71,80 @@ public sealed class GAgentDraftRunSessionEventProjector
         ];
     }
 
-    private static AGUIEvent? TryMapCommittedStateEvent(EventEnvelope envelope)
+    private static IReadOnlyList<ProjectionSessionEventEntry<AGUIEvent>> TryResolveCommittedCompletionEntries(
+        GAgentDraftRunProjectionContext context,
+        EventEnvelope envelope)
     {
         if (!CommittedStateEventEnvelope.TryGetObservedPayload(envelope, out var payload, out _, out _) ||
-            payload == null)
+            payload?.Is(RoleChatSessionCompletedEvent.Descriptor) != true)
         {
-            return null;
+            return EmptyEntries;
         }
 
-        return ScopeGAgentAguiEventMapper.TryMap(new EventEnvelope
+        var completed = payload.Unpack<RoleChatSessionCompletedEvent>();
+        if (TryBuildFailureFrame(completed.Content, out var failureFrame))
         {
-            Id = envelope.Id,
-            Timestamp = envelope.Timestamp?.Clone(),
-            Payload = payload.Clone(),
-            Route = envelope.Route?.Clone(),
-            Propagation = envelope.Propagation?.Clone(),
-        });
+            return
+            [
+                new ProjectionSessionEventEntry<AGUIEvent>(
+                    context.RootActorId,
+                    context.SessionId,
+                    failureFrame),
+            ];
+        }
+
+        var messageId = string.IsNullOrWhiteSpace(completed.SessionId)
+            ? context.SessionId
+            : completed.SessionId;
+        var content = completed.Content ?? string.Empty;
+        if (string.IsNullOrEmpty(content))
+        {
+            return
+            [
+                new ProjectionSessionEventEntry<AGUIEvent>(
+                    context.RootActorId,
+                    context.SessionId,
+                    BuildTextMessageEnd(messageId)),
+                new ProjectionSessionEventEntry<AGUIEvent>(
+                    context.RootActorId,
+                    context.SessionId,
+                    BuildRunFinished(context)),
+            ];
+        }
+
+        return
+        [
+            new ProjectionSessionEventEntry<AGUIEvent>(
+                context.RootActorId,
+                context.SessionId,
+                new AGUIEvent
+                {
+                    TextMessageStart = new TextMessageStartEvent
+                    {
+                        MessageId = messageId,
+                        Role = "assistant",
+                    },
+                }),
+            new ProjectionSessionEventEntry<AGUIEvent>(
+                context.RootActorId,
+                context.SessionId,
+                new AGUIEvent
+                {
+                    TextMessageContent = new TextMessageContentEvent
+                    {
+                        MessageId = messageId,
+                        Delta = content,
+                    },
+                }),
+            new ProjectionSessionEventEntry<AGUIEvent>(
+                context.RootActorId,
+                context.SessionId,
+                BuildTextMessageEnd(messageId)),
+            new ProjectionSessionEventEntry<AGUIEvent>(
+                context.RootActorId,
+                context.SessionId,
+                BuildRunFinished(context)),
+        ];
     }
 
     private static void CompleteRunFinishedFrame(
@@ -98,4 +161,58 @@ public sealed class GAgentDraftRunSessionEventProjector
             ? context.SessionId
             : aguiEvent.RunFinished.RunId;
     }
+
+    private static bool TryBuildFailureFrame(string? content, out AGUIEvent failureFrame)
+    {
+        failureFrame = null!;
+        if (string.IsNullOrEmpty(content))
+            return false;
+
+        const string llmErrorPrefix = "[[AEVATAR_LLM_ERROR]]";
+        const string llmFailedPrefix = "LLM request failed";
+        if (content.StartsWith(llmErrorPrefix, StringComparison.Ordinal))
+        {
+            failureFrame = new AGUIEvent
+            {
+                RunError = new RunErrorEvent
+                {
+                    Message = content[llmErrorPrefix.Length..].Trim(),
+                },
+            };
+            return true;
+        }
+
+        if (content.StartsWith(llmFailedPrefix, StringComparison.Ordinal))
+        {
+            failureFrame = new AGUIEvent
+            {
+                RunError = new RunErrorEvent
+                {
+                    Message = content.Trim(),
+                },
+            };
+            return true;
+        }
+
+        return false;
+    }
+
+    private static AGUIEvent BuildTextMessageEnd(string messageId) =>
+        new()
+        {
+            TextMessageEnd = new TextMessageEndEvent
+            {
+                MessageId = messageId,
+            },
+        };
+
+    private static AGUIEvent BuildRunFinished(GAgentDraftRunProjectionContext context) =>
+        new()
+        {
+            RunFinished = new RunFinishedEvent
+            {
+                ThreadId = context.RootActorId,
+                RunId = context.SessionId,
+            },
+        };
 }

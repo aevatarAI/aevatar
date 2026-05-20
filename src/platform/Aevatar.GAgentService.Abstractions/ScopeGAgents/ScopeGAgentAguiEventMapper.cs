@@ -24,12 +24,6 @@ public static class ScopeGAgentAguiEventMapper
         if (payload is null)
             return null;
 
-        if (payload.Is(RoleChatSessionCompletedEvent.Descriptor))
-        {
-            var completed = payload.Unpack<RoleChatSessionCompletedEvent>();
-            return MapTextCompletion(completed.SessionId, completed.Content);
-        }
-
         if (payload.Is(AiTextStart.Descriptor))
         {
             var ai = payload.Unpack<AiTextStart>();

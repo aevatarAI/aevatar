@@ -106,32 +106,6 @@ public sealed class ScopeGAgentAguiEventMapperTests
     }
 
     [Fact]
-    public void TryMap_ShouldMapCommittedRoleChatCompletion()
-    {
-        var completed = ScopeGAgentAguiEventMapper.TryMap(
-            BuildEventEnvelope(new RoleChatSessionCompletedEvent
-            {
-                SessionId = "session-1",
-                Content = "done",
-            }));
-
-        completed.Should().NotBeNull();
-        completed!.TextMessageEnd.Should().NotBeNull();
-        completed.TextMessageEnd!.MessageId.Should().Be("session-1");
-
-        var failed = ScopeGAgentAguiEventMapper.TryMap(
-            BuildEventEnvelope(new RoleChatSessionCompletedEvent
-            {
-                SessionId = "session-2",
-                Content = "[[AEVATAR_LLM_ERROR]] NyxID authentication required for provider 'nyxid'. Please sign in.",
-            }));
-
-        failed.Should().NotBeNull();
-        failed!.RunError.Should().NotBeNull();
-        failed.RunError!.Message.Should().Be("NyxID authentication required for provider 'nyxid'. Please sign in.");
-    }
-
-    [Fact]
     public void TryMap_ShouldHandleUnknownPayloadAndWrappedAguiEvent()
     {
         ScopeGAgentAguiEventMapper.TryMap(new EventEnvelope
