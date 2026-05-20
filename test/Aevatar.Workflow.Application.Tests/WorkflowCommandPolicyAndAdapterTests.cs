@@ -78,6 +78,27 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
         receipt.Should().Be(new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1"));
     }
 
+    [Fact]
+    public void WorkflowRunAcceptedReceiptFactory_ShouldCreateReceiptFromAcceptedTargetAndContext()
+    {
+        var target = new WorkflowRunAcceptedCommandTarget(
+            new FakeActor("actor-accepted"),
+            "direct",
+            createdActorIds: [],
+            new NoOpWorkflowRunActorPort());
+        var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
+            "actor-accepted",
+            "cmd-accepted",
+            "corr-accepted",
+            new Dictionary<string, string>());
+        var factory = new WorkflowRunAcceptedReceiptFactory();
+        var typedFactory = (Aevatar.CQRS.Core.Abstractions.Commands.ICommandReceiptFactory<WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt>)factory;
+
+        var receipt = typedFactory.Create(target, context);
+
+        receipt.Should().Be(new WorkflowChatRunAcceptedReceipt("actor-accepted", "direct", "cmd-accepted", "corr-accepted"));
+    }
+
     private sealed class NoOpProjectionPort
         : IWorkflowExecutionProjectionPort,
           IWorkflowExecutionMaterializationActivationPort

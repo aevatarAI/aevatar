@@ -207,14 +207,14 @@ public sealed class WorkflowApplicationLayerTests
     }
 
     [Fact]
-    public async Task DetachedCommandDispatchService_ShouldReturnFailure_WhenDispatchFails()
+    public async Task AcceptedOnlyCommandDispatchService_ShouldReturnFailure_WhenDispatchFails()
     {
-        var pipeline = new FakeDispatchPipeline
+        var pipeline = new FakeAcceptedDispatchPipeline
         {
-            Result = CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>
+            Result = CommandTargetResolution<CommandDispatchExecution<WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>
                 .Failure(WorkflowChatRunStartError.WorkflowNotFound),
         };
-        var service = CreateDetachedDispatchService(
+        var service = CreateAcceptedOnlyDispatchService(
             pipeline);
 
         var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "missing", null));
@@ -224,19 +224,23 @@ public sealed class WorkflowApplicationLayerTests
     }
 
     [Fact]
-    public async Task DetachedCommandDispatchService_ShouldReturnReceipt_WhenDispatchSucceeds()
+    public async Task AcceptedOnlyCommandDispatchService_ShouldReturnReceipt_WithoutConsumingRunEvents()
     {
-        var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort();
-        var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
+        var target = new WorkflowRunAcceptedCommandTarget(
+            new FakeActor("actor-1"),
+            "direct",
+            ["definition-1", "actor-1"],
+            actorPort);
         var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
-        var service = CreateDetachedDispatchService(
-            new FakeDispatchPipeline { Result = Success(target, receipt) });
+        var service = CreateAcceptedOnlyDispatchService(
+            new FakeAcceptedDispatchPipeline { Result = AcceptedSuccess(target, receipt) });
 
         var result = await service.DispatchAsync(new WorkflowChatRunRequest("hello", "direct", null));
 
         result.Succeeded.Should().BeTrue();
         result.Receipt.Should().Be(receipt);
+        actorPort.DestroyCalls.Should().BeEmpty();
     }
 
     private static ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> CreateInteractionService(
@@ -252,18 +256,27 @@ public sealed class WorkflowApplicationLayerTests
             finalizeEmitter,
             durableCompletionResolver);
 
-    private static ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> CreateDetachedDispatchService(
-        ICommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> pipeline) =>
-        new DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>(
-            pipeline,
-            new FakeEventOutputStream(),
-            new FakeWorkflowRunCompletionPolicy());
+    private static ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> CreateAcceptedOnlyDispatchService(
+        ICommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> pipeline) =>
+        new DefaultCommandDispatchService<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>(pipeline);
 
     private static CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError> Success(
         WorkflowRunCommandTarget target,
         WorkflowChatRunAcceptedReceipt receipt) =>
         CommandTargetResolution<CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>.Success(
             new CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>
+            {
+                Target = target,
+                Context = new CommandContext(target.ActorId, receipt.CommandId, receipt.CorrelationId, new Dictionary<string, string>()),
+                Envelope = new EventEnvelope { Id = "evt-1" },
+                Receipt = receipt,
+            });
+
+    private static CommandTargetResolution<CommandDispatchExecution<WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError> AcceptedSuccess(
+        WorkflowRunAcceptedCommandTarget target,
+        WorkflowChatRunAcceptedReceipt receipt) =>
+        CommandTargetResolution<CommandDispatchExecution<WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>.Success(
+            new CommandDispatchExecution<WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt>
             {
                 Target = target,
                 Context = new CommandContext(target.ActorId, receipt.CommandId, receipt.CorrelationId, new Dictionary<string, string>()),
@@ -377,6 +390,41 @@ public sealed class WorkflowApplicationLayerTests
 
             await DispatchPreparedAsync(prepared.Target, ct);
             return prepared;
+        }
+    }
+
+    private sealed class FakeAcceptedDispatchPipeline
+        : ICommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+    {
+        public CommandTargetResolution<CommandDispatchExecution<WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError> Result { get; set; } =
+            CommandTargetResolution<CommandDispatchExecution<WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>
+                .Failure(WorkflowChatRunStartError.AgentNotFound);
+
+        public Task<CommandTargetResolution<CommandDispatchExecution<WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>> PrepareAsync(
+            WorkflowChatRunRequest command,
+            CancellationToken ct = default)
+        {
+            _ = command;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(Result);
+        }
+
+        public Task DispatchPreparedAsync(
+            CommandDispatchExecution<WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt> execution,
+            CancellationToken ct = default)
+        {
+            _ = execution;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<CommandTargetResolution<CommandDispatchExecution<WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowChatRunStartError>> DispatchAsync(
+            WorkflowChatRunRequest command,
+            CancellationToken ct = default)
+        {
+            _ = command;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(Result);
         }
     }
 

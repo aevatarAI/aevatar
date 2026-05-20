@@ -30,6 +30,9 @@ internal sealed class WorkflowRunCommandTarget
         IWorkflowRunActorPort actorPort,
         WorkflowRunDurableCompletionResolver durableCompletionResolver)
     {
+        // Refactor (iter18/cluster-005):
+        //   Old pattern: accepted-only dispatch reused interaction targets that owned live sinks
+        //   New principle: accepted-only target split + NoOp binder default + receipt-only(no live sink acquired)
         Actor = actor ?? throw new ArgumentNullException(nameof(actor));
         WorkflowName = string.IsNullOrWhiteSpace(workflowName)
             ? throw new ArgumentException("Workflow name is required.", nameof(workflowName))

@@ -123,9 +123,10 @@ CQRS 不应只提供零散 helper，而应定义所有 capability 复用的标�
 2. Workflow 命令侧在此骨架上提供领域特化：
    `WorkflowRunCommandTargetResolver`（workflow source 解析） +  
    `WorkflowRunCommandTargetBinder`（projection/live sink 绑定） +  
+   `WorkflowRunAcceptedCommandTargetResolver` / `NoOpCommandTargetBinder<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunStartError>`（accepted-only receipt 路径） +
    `WorkflowRunAcceptedReceiptFactory`（receipt） +  
    `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>`（SSE/WS 交互入口） +  
-   `DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>`（accepted-only facade，复用同一 command skeleton） +  
+   `DefaultCommandDispatchService<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>`（accepted-only facade，复用同一 command skeleton，不持有 live sink） +
    `ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>` / `ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>`（run control 命令入口）。
 3. Scripting 命令侧已形成同一套 CQRS 接入模型：
    `RuntimeScriptEvolutionInteractionService`（generic interaction facade） +  

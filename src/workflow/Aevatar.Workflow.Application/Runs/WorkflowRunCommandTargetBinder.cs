@@ -23,6 +23,9 @@ internal sealed class WorkflowRunCommandTargetBinder
         CommandContext context,
         CancellationToken ct = default)
     {
+        // Refactor (iter18/cluster-005):
+        //   Old pattern: accepted-only dispatch reused interaction targets that owned live sinks
+        //   New principle: accepted-only target split + NoOp binder default + receipt-only(no live sink acquired)
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(context);
