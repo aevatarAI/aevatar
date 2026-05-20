@@ -12,6 +12,23 @@ namespace Aevatar.GAgents.StreamingProxy;
 // Refactor (iter20/cluster-002):
 //   Old pattern: 请求路径临时启动 projection session 等待完成
 //   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
+public interface IStreamingProxyRoomSessionEventSinkFactory
+{
+    IEventSink<StreamingProxyRoomSessionEnvelope> Create();
+}
+
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
+public sealed class StreamingProxyRoomSessionEventSinkFactory : IStreamingProxyRoomSessionEventSinkFactory
+{
+    public IEventSink<StreamingProxyRoomSessionEnvelope> Create() =>
+        new EventChannel<StreamingProxyRoomSessionEnvelope>();
+}
+
+// Refactor (iter20/cluster-002):
+//   Old pattern: 请求路径临时启动 projection session 等待完成
+//   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
 public sealed record StreamingProxyRoomChatCommand(
     string RoomId,
     string ScopeId,
@@ -188,11 +205,14 @@ internal sealed class StreamingProxyRoomChatCommandTargetBinder
     : ICommandTargetBinder<StreamingProxyRoomChatCommand, StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatStartError>
 {
     private readonly IStreamingProxyRoomSessionProjectionPort _projectionPort;
+    private readonly IStreamingProxyRoomSessionEventSinkFactory _sinkFactory;
 
     public StreamingProxyRoomChatCommandTargetBinder(
-        IStreamingProxyRoomSessionProjectionPort projectionPort)
+        IStreamingProxyRoomSessionProjectionPort projectionPort,
+        IStreamingProxyRoomSessionEventSinkFactory sinkFactory)
     {
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
+        _sinkFactory = sinkFactory ?? throw new ArgumentNullException(nameof(sinkFactory));
     }
 
     public async Task<CommandTargetBindingResult<StreamingProxyRoomChatStartError>> BindAsync(
@@ -208,7 +228,7 @@ internal sealed class StreamingProxyRoomChatCommandTargetBinder
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(context);
 
-        var sink = new EventChannel<StreamingProxyRoomSessionEnvelope>();
+        var sink = _sinkFactory.Create();
         try
         {
             var attachment = await _projectionPort.EnsureAndAttachLeaseAsync(

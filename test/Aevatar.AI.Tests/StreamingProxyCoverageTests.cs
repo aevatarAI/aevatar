@@ -1,7 +1,6 @@
 using System.IO;
 using System.Reflection;
 using System.Security.Claims;
-using System.Threading.Channels;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -404,7 +403,8 @@ public class StreamingProxyCoverageTests
         var binder = AgentCoverageTestSupport.CreateNonPublicInstance(
             typeof(StreamingProxyRoomChatCommand).Assembly,
             "Aevatar.GAgents.StreamingProxy.StreamingProxyRoomChatCommandTargetBinder",
-            projectionPort);
+            projectionPort,
+            new StreamingProxyRoomSessionEventSinkFactory());
         var command = new StreamingProxyRoomChatCommand("room-a", "scope-a", "topic", "session-1");
         var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
             "room-a",
@@ -471,7 +471,8 @@ public class StreamingProxyCoverageTests
         var binder = AgentCoverageTestSupport.CreateNonPublicInstance(
             typeof(StreamingProxyRoomChatCommand).Assembly,
             "Aevatar.GAgents.StreamingProxy.StreamingProxyRoomChatCommandTargetBinder",
-            projectionPort);
+            projectionPort,
+            new StreamingProxyRoomSessionEventSinkFactory());
         var command = new StreamingProxyRoomChatCommand("room-a", "scope-a", "topic", "session-2");
         var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
             "room-a",
@@ -491,6 +492,48 @@ public class StreamingProxyCoverageTests
             StreamingProxyProjectionKinds.RoomChatSession));
         projectionPort.AttachCalls.Should().ContainSingle().Which.Lease.SessionId.Should().Be("session-2");
         projectionPort.ReleaseCalls.Should().ContainSingle().Which.SessionId.Should().Be("session-2");
+    }
+
+    [Fact]
+    public async Task StreamingProxyRoomChatCommandBinder_ShouldDisposeSink_WhenProjectionAttachReturnsNull()
+    {
+        var projectionPort = new StubRoomSessionProjectionPort
+        {
+            ReturnNullLease = true,
+        };
+        var target = AgentCoverageTestSupport.CreateNonPublicInstance(
+            typeof(StreamingProxyRoomChatCommand).Assembly,
+            "Aevatar.GAgents.StreamingProxy.StreamingProxyRoomChatCommandTarget",
+            new StubActor("room-a"),
+            projectionPort);
+        var sink = new RecordingEventSink<StreamingProxyRoomSessionEnvelope>();
+        var binder = AgentCoverageTestSupport.CreateNonPublicInstance(
+            typeof(StreamingProxyRoomChatCommand).Assembly,
+            "Aevatar.GAgents.StreamingProxy.StreamingProxyRoomChatCommandTargetBinder",
+            projectionPort,
+            new StubRoomSessionEventSinkFactory(sink));
+        var command = new StreamingProxyRoomChatCommand("room-a", "scope-a", "topic", "session-x");
+        var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
+            "room-a",
+            "session-x",
+            "session-x",
+            new Dictionary<string, string>());
+
+        var bindResult = await InvokeTaskOfResultAsync(binder.GetType().GetMethod("BindAsync")!.Invoke(
+            binder,
+            [command, target, context, CancellationToken.None]));
+
+        bindResult.GetType().GetProperty("Succeeded")!.GetValue(bindResult).Should().Be(false);
+        bindResult.GetType().GetProperty("Error")!.GetValue(bindResult)
+            .Should().Be(StreamingProxyRoomChatStartError.ProjectionUnavailable);
+        projectionPort.EnsureCalls.Should().ContainSingle().Which.Should().Be((
+            "room-a",
+            "session-x",
+            StreamingProxyProjectionKinds.RoomChatSession));
+        projectionPort.AttachCalls.Should().BeEmpty();
+        target.GetType().GetProperty("LiveSink")!.GetValue(target).Should().BeNull();
+        sink.Completed.Should().BeTrue();
+        sink.Disposed.Should().BeTrue();
     }
 
     [Fact]
@@ -763,70 +806,6 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
-    public async Task FinalizeFromLiveOrDurableCompletionAsync_ShouldUseSingleDurableFallback_AfterLiveTimeout()
-    {
-        var context = new DefaultHttpContext();
-        context.Response.Body = new MemoryStream();
-        var writer = AgentCoverageTestSupport.CreateNonPublicInstance(
-            typeof(StreamingProxyGAgent).Assembly,
-            "Aevatar.GAgents.StreamingProxy.StreamingProxySseWriter",
-            context.Response);
-        var terminalQueryPort = new StubTerminalQueryPort(StreamingProxyChatSessionTerminalStatus.Completed);
-        var durableCompletionResolver = new StreamingProxyChatDurableCompletionResolver(terminalQueryPort);
-        var signalChannel = Channel.CreateUnbounded<StreamingProxyStreamSignal>();
-        signalChannel.Writer.TryComplete();
-
-        var method = typeof(StreamingProxyEndpoints).GetMethod(
-            "FinalizeFromLiveOrDurableCompletionAsync",
-            BindingFlags.NonPublic | BindingFlags.Static)!;
-
-        await InvokeTaskAsync(method.Invoke(
-            null,
-            ["room-a", "session-123", signalChannel.Reader, durableCompletionResolver, writer, TimeSpan.FromMilliseconds(50), CancellationToken.None]));
-
-        context.Response.Body.Position = 0;
-        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
-        body.Should().Contain("RUN_FINISHED");
-        body.Should().NotContain("RUN_ERROR");
-        terminalQueryPort.QueryCount.Should().Be(1);
-    }
-
-    [Fact]
-    public async Task FinalizeFromLiveOrDurableCompletionAsync_ShouldEmitRunError_WhenTerminalStateNeverAppears()
-    {
-        var context = new DefaultHttpContext();
-        context.Response.Body = new MemoryStream();
-        var writer = AgentCoverageTestSupport.CreateNonPublicInstance(
-            typeof(StreamingProxyGAgent).Assembly,
-            "Aevatar.GAgents.StreamingProxy.StreamingProxySseWriter",
-            context.Response);
-        var durableCompletionResolver = new StreamingProxyChatDurableCompletionResolver(new StubTerminalQueryPort());
-        var signalChannel = Channel.CreateUnbounded<StreamingProxyStreamSignal>();
-        signalChannel.Writer.TryComplete();
-
-        var method = typeof(StreamingProxyEndpoints).GetMethod(
-            "FinalizeFromLiveOrDurableCompletionAsync",
-            BindingFlags.NonPublic | BindingFlags.Static)!;
-
-        await InvokeTaskAsync(method.Invoke(
-            null,
-            [
-                "room-a",
-                "session-123",
-                signalChannel.Reader,
-                durableCompletionResolver,
-                writer,
-                TimeSpan.FromMilliseconds(50),
-                CancellationToken.None,
-            ]));
-
-        context.Response.Body.Position = 0;
-        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
-        body.Should().Contain("RUN_ERROR");
-        body.Should().Contain("StreamingProxy completion timed out.");
-    }
-
-    [Fact]
     public void DetermineParticipantTerminalState_ShouldFail_WhenNoRepliesWereProduced()
     {
         var method = typeof(StreamingProxyEndpoints).GetMethod(
@@ -838,22 +817,6 @@ public class StreamingProxyCoverageTests
         failed.ErrorMessage.Should().Be("StreamingProxy chat completed without any participant replies.");
 
         var completed = ((StreamingProxyChatSessionTerminalStatus Status, string? ErrorMessage))method.Invoke(null, [1])!;
-        completed.Status.Should().Be(StreamingProxyChatSessionTerminalStatus.Completed);
-        completed.ErrorMessage.Should().BeNull();
-    }
-
-    [Fact]
-    public void DetermineIdleTerminalState_ShouldFail_WhenNoAgentMessageWasObserved()
-    {
-        var method = typeof(StreamingProxyEndpoints).GetMethod(
-            "DetermineIdleTerminalState",
-            BindingFlags.NonPublic | BindingFlags.Static)!;
-
-        var failed = ((StreamingProxyChatSessionTerminalStatus Status, string? ErrorMessage))method.Invoke(null, [false])!;
-        failed.Status.Should().Be(StreamingProxyChatSessionTerminalStatus.Failed);
-        failed.ErrorMessage.Should().Be("StreamingProxy chat timed out without any agent replies.");
-
-        var completed = ((StreamingProxyChatSessionTerminalStatus Status, string? ErrorMessage))method.Invoke(null, [true])!;
         completed.Status.Should().Be(StreamingProxyChatSessionTerminalStatus.Completed);
         completed.ErrorMessage.Should().BeNull();
     }
@@ -1766,6 +1729,7 @@ public class StreamingProxyCoverageTests
         public List<IStreamingProxyRoomSessionProjectionLease> ReleaseCalls { get; } = [];
         public int DetachCalls { get; private set; }
         public Exception? AttachException { get; init; }
+        public bool ReturnNullLease { get; init; }
 
         public TaskCompletionSource<bool> Attached { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1803,6 +1767,9 @@ public class StreamingProxyCoverageTests
             _ = ct;
 
             EnsureCalls.Add((actorId, sessionId, projectionKind));
+            if (ReturnNullLease)
+                return Task.FromResult<IStreamingProxyRoomSessionProjectionLease?>(null);
+
             _lease = new StubRoomSessionProjectionLease(actorId, sessionId);
             return Task.FromResult<IStreamingProxyRoomSessionProjectionLease?>(_lease);
         }
@@ -1855,6 +1822,50 @@ public class StreamingProxyCoverageTests
                 },
                 ct);
         }
+    }
+
+    private sealed class RecordingEventSink<TEvent> : IEventSink<TEvent>
+    {
+        public bool Completed { get; private set; }
+        public bool Disposed { get; private set; }
+
+        public void Push(TEvent evt)
+        {
+            _ = evt;
+        }
+
+        public ValueTask PushAsync(TEvent evt, CancellationToken ct = default)
+        {
+            _ = evt;
+            ct.ThrowIfCancellationRequested();
+            return ValueTask.CompletedTask;
+        }
+
+        public void Complete()
+        {
+            Completed = true;
+        }
+
+        public async IAsyncEnumerable<TEvent> ReadAllAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.CompletedTask;
+            ct.ThrowIfCancellationRequested();
+            yield break;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            Disposed = true;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class StubRoomSessionEventSinkFactory(
+        IEventSink<StreamingProxyRoomSessionEnvelope> sink)
+        : IStreamingProxyRoomSessionEventSinkFactory
+    {
+        public IEventSink<StreamingProxyRoomSessionEnvelope> Create() => sink;
     }
 
     private sealed class RecordingRoomSessionEventHub

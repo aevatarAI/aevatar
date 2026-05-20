@@ -704,41 +704,6 @@ public static class StreamingProxyEndpoints
             ? (StreamingProxyChatSessionTerminalStatus.Completed, null)
             : (StreamingProxyChatSessionTerminalStatus.Failed, "StreamingProxy chat completed without any participant replies.");
 
-    private static (StreamingProxyChatSessionTerminalStatus Status, string? ErrorMessage) DetermineIdleTerminalState(
-        bool sawAgentMessage) =>
-        sawAgentMessage
-            ? (StreamingProxyChatSessionTerminalStatus.Completed, null)
-            : (StreamingProxyChatSessionTerminalStatus.Failed, "StreamingProxy chat timed out without any agent replies.");
-
-    private static async Task FinalizeFromLiveOrDurableCompletionAsync(
-        string actorId,
-        string sessionId,
-        ChannelReader<StreamingProxyStreamSignal> signalReader,
-        StreamingProxyChatDurableCompletionResolver durableCompletionResolver,
-        StreamingProxySseWriter writer,
-        TimeSpan? terminalCompletionTimeout,
-        CancellationToken ct)
-    {
-        var timeout = terminalCompletionTimeout ?? TimeSpan.FromMilliseconds(StreamingProxyDefaults.TerminalCompletionTimeoutMs);
-        if (await WaitForTerminalSignalAsync(signalReader, timeout, ct))
-            return;
-
-        var durableCompletion = await durableCompletionResolver.ResolveAsync(actorId, sessionId, ct);
-        switch (durableCompletion)
-        {
-            case StreamingProxyProjectionCompletionStatus.Failed:
-                await writer.WriteRunErrorAsync("StreamingProxy chat failed.", CancellationToken.None);
-                return;
-            case StreamingProxyProjectionCompletionStatus.Completed:
-                await writer.WriteRunFinishedAsync(CancellationToken.None);
-                return;
-            case StreamingProxyProjectionCompletionStatus.Unknown:
-            default:
-                await writer.WriteRunErrorAsync("StreamingProxy completion timed out.", CancellationToken.None);
-                return;
-        }
-    }
-
     private static async Task TryPublishCanceledTerminalStateAsync(
         IActorDispatchPort actorDispatchPort,
         IActor? actor,
@@ -806,33 +771,6 @@ public static class StreamingProxyEndpoints
                 actor.Id,
                 sessionId);
         }
-    }
-
-    private static async Task<bool> WaitForTerminalSignalAsync(
-        ChannelReader<StreamingProxyStreamSignal> signalReader,
-        TimeSpan timeout,
-        CancellationToken ct)
-    {
-        using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        waitCts.CancelAfter(timeout);
-
-        try
-        {
-            while (await signalReader.WaitToReadAsync(waitCts.Token))
-            {
-                while (signalReader.TryRead(out var signal))
-                {
-                    if (signal is StreamingProxyStreamSignal.RunFinished or StreamingProxyStreamSignal.RunFailed)
-                        return true;
-                }
-            }
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            return false;
-        }
-
-        return false;
     }
 
     private static async Task<IResult?> AuthorizeRoomAsync(

@@ -85,6 +85,7 @@ public static class ServiceCollectionExtensions
         // Refactor (iter20/cluster-002):
         //   Old pattern: 请求路径临时启动 projection session 等待完成
         //   New principle: reuse CQRS interaction binders + attach-only projection lifecycle
+        services.TryAddSingleton<IStreamingProxyRoomSessionEventSinkFactory, StreamingProxyRoomSessionEventSinkFactory>();
         services.TryAddSingleton<ICommandTargetResolver<StreamingProxyRoomChatCommand, StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatStartError>, StreamingProxyRoomChatCommandTargetResolver>();
         services.TryAddSingleton<ICommandTargetBinder<StreamingProxyRoomChatCommand, StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatStartError>, StreamingProxyRoomChatCommandTargetBinder>();
         services.TryAddSingleton<ICommandEnvelopeFactory<StreamingProxyRoomChatCommand>, StreamingProxyRoomChatCommandEnvelopeFactory>();
