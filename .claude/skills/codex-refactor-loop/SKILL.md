@@ -591,10 +591,10 @@ Runs **first** on every controller wakeup, before Phase 7 design-issue sweep and
 
 ### Phase 6 现在由独立 daemon 自主完成(per Auric 2026-05-20 "写一个独立脚本, 自动 merge dev 到 auto-refact-dev 分支. 如果有冲突让脚本调用 codex 解决冲突合并. daemon 运行")
 
-**`tools/refactor-loop/dev-sync-daemon.sh`** 是独立 daemon,**600s 周期**自主跑 sync,不依赖 controller wakeup:
+**`tools/refactor-loop/dev_sync_daemon.py`** 是独立 daemon,**600s 周期**自主跑 sync,不依赖 controller wakeup:
 
 ```bash
-nohup bash tools/refactor-loop/dev-sync-daemon.sh \
+nohup python3 tools/refactor-loop/dev_sync_daemon.py \
   >> .refactor-loop/logs/dev-sync-daemon.log 2>&1 &
 disown
 ```
