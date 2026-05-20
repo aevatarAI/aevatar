@@ -182,19 +182,25 @@ post_or_update() {
   echo "$body" > "$body_file"
 
   if [ "$cid" = "null" ] || [ -z "$cid" ]; then
-    # 首次见到但 codex 已 finish → 该 log 是 stale (历史已完成),跳过 — 不补刷"已结束" banner
-    if [ "$finished" = "true" ]; then
-      state_set "$base" "$target" "$kind" "0" "$cur_md5" "true"
-      log_msg "skip stale finished log $base → $kind #$target (no comment created)"
-      rm -f "$body_file"
-      return
-    fi
-    # 创建新 comment(只 in-flight)
+    # 首次见到。Per Auric 2026-05-20 "GitHub 反映原则" + "实际状态 = GitHub 状态":
+    # 短 codex 在 reporter tick 间 spawn+complete,首次见到时已 finished — 之前 silent skip
+    # 导致 GitHub 上看不到任何 codex 痕迹(maintainer 不知道有事发生)。
+    # 修法:首见 finished log → post 一张简短"✅ 已完成"banner(不删,留下 GitHub 痕迹)。
+    # Controller 后续 sweep 处理 marker 时再覆盖 / append 新 banner。
     local url
+    # parse_kind fallback:先 try $kind,fail 再 try 另一个(防 #700 issue 被当 pr)
     if [ "$kind" = "pr" ]; then
       url=$(gh pr comment "$target" --body-file "$body_file" 2>/dev/null | tail -1)
+      [ -z "$url" ] && {
+        url=$(gh issue comment "$target" --body-file "$body_file" 2>/dev/null | tail -1)
+        [ -n "$url" ] && kind="issue"
+      }
     else
       url=$(gh issue comment "$target" --body-file "$body_file" 2>/dev/null | tail -1)
+      [ -z "$url" ] && {
+        url=$(gh pr comment "$target" --body-file "$body_file" 2>/dev/null | tail -1)
+        [ -n "$url" ] && kind="pr"
+      }
     fi
     local new_cid
     new_cid=$(echo "$url" | grep -oE 'issuecomment-[0-9]+' | sed 's/issuecomment-//')
