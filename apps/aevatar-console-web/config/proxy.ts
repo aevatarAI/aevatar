@@ -12,20 +12,16 @@
 const apiTarget = process.env.AEVATAR_API_TARGET || 'http://127.0.0.1:5080';
 const studioApiTarget =
   process.env.AEVATAR_STUDIO_API_TARGET || apiTarget;
-const proxySecure = process.env.AEVATAR_PROXY_SECURE !== 'false';
-const preserveAuthHost = process.env.AEVATAR_PROXY_PRESERVE_AUTH_HOST !== 'false';
 
 const buildProxyTarget = (target: string) => ({
   target,
   changeOrigin: true,
-  secure: proxySecure,
   ws: true,
 });
 
 const buildHostPreservingProxyTarget = (target: string) => ({
   target,
   changeOrigin: false,
-  secure: proxySecure,
   ws: true,
 });
 
@@ -40,7 +36,7 @@ const studioProxyEntries = [
   '/api/studio',
   '/api/workspace',
 ].reduce<Record<string, ReturnType<typeof buildProxyTarget>>>((entries, path) => {
-  const proxyFactory = path === '/api/auth' && preserveAuthHost
+  const proxyFactory = path === '/api/auth'
     ? buildHostPreservingProxyTarget
     : buildProxyTarget;
   entries[`^${path}$`] = proxyFactory(studioApiTarget);
@@ -49,8 +45,6 @@ const studioProxyEntries = [
 }, {});
 
 const studioScopeProxyEntries = {
-  '^/api/scopes/[^/]+/gagent/draft-run$':
-    buildProxyTarget(studioApiTarget),
   '^/api/scopes/[^/]+/teams(?:/.*)?$':
     buildProxyTarget(studioApiTarget),
   '^/api/scopes/[^/]+/scripts/draft-run$':
@@ -66,7 +60,6 @@ const createProxyConfig = () => ({
   '/api/': {
     target: apiTarget,
     changeOrigin: true,
-    secure: proxySecure,
     ws: true,
   },
 });
