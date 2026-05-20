@@ -32,6 +32,27 @@ description: Unattended three-phase refactor loop (analyze → implement → ver
 - ❌ Banner 用模糊语言("处理中""稍等"),应该具体说当前 phase + 下一步 + ETA / 何时介入
 - ❌ 多个 daemon 同时跑但 maintainer 看 GitHub 只看到 eyes,不知道还有 codex 在工作
 
+### Spawn helper:`spawn_with_banner.py`(强制,per Auric 2026-05-20 "#741 也看不到运行状态. 你继续修 skills 吧. 然后需要写脚本你可以写脚本")
+
+Controller 经常 spawn codex 时**忘 post banner**,GitHub 看不到运行状态。强制用 helper:
+
+```bash
+python3 tools/refactor-loop/spawn_with_banner.py \
+  --cd <worktree> --add-dir /Users/auric/aevatar \
+  --prompt <prompt-file> --log <log-file> --timeout 5400 \
+  --banner-target <issue-or-pr-num> --banner-kind <issue|pr> \
+  --banner-role <test-add|fix|reviewer|implement|solver|judge|reflector> \
+  --banner-detail "<short context>"
+```
+
+Helper 行为:
+1. **先 Post 状态卡片**到 target issue/PR(`## 📊 状态卡片 — <role> 派出`)立即可见
+2. Spawn codex(nohup + start_new_session,后台跑)
+3. timeout < 3600 拒绝 spawn(per CLAUDE.md floor)
+4. Banner 含 codex log 名 / 工作目录 / timeout / role-specific "下一步自动会做" / 不需介入
+
+**禁止**直接调 `spawn-codex.sh`(绕过 banner)— 强制走 `spawn_with_banner.py`。例外只:audit / bootstrap 等完全独立任务(不绑 issue/PR)可不带 banner。
+
 ### Controller 自检(每次 wakeup)
 
 per-wakeup sweep step 1.5 之后,**对每个 in-flight codex 验证关联 issue/PR 是否有最新状态卡片**(创建时间 ≥ codex spawn 时间):
