@@ -112,7 +112,11 @@ public static class PolicyAwareVoiceEndpoints
 
         if (!session.IsInitialized)
         {
-            http.Response.StatusCode = StatusCodes.Status404NotFound;
+            // 503 (not 404) so clients treat the routed target as cold, not
+            // missing, and retry. Matches the dev bypass at
+            // VoicePresenceEndpoints.MapVoicePresenceWebSocket so /ws/voice
+            // behaves identically while the GAgent's voice module warms up.
+            http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
             await http.Response.WriteAsync("Voice module not initialized.", http.RequestAborted);
             return;
         }

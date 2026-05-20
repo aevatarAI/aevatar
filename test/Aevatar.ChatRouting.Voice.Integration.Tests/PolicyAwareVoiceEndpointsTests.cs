@@ -184,11 +184,14 @@ public sealed class PolicyAwareVoiceEndpointsTests
     }
 
     [Fact]
-    public async Task PolicyAwareVoice_WhenSessionIsNotInitialized_ShouldReturnNotFoundBeforeUpgrade()
+    public async Task PolicyAwareVoice_WhenSessionIsNotInitialized_ShouldReturnRetryableServiceUnavailableBeforeUpgrade()
     {
-        // Fix (review round 1, F3):
-        //   Reviewer found the voice-module-present-but-not-initialized 404 branch untested.
-        //   This asserts an uninitialized session returns HTTP 404 before WebSocket accept.
+        // Codex review (PR #709):
+        //   The routed GAgent exists but its voice module is still warming up.
+        //   Returning 404 made clients treat the policy target as permanently
+        //   absent. Match the dev bypass at VoicePresenceEndpoints.MapVoicePresenceWebSocket
+        //   and return 503 Service Unavailable so callers retry as the cold
+        //   actor finishes initializing.
         var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(ForwardToGAgent("voice-agent"), []));
         var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent"]);
         var resolver = new RecordingVoiceSessionResolver(new VoicePresenceSession(
@@ -205,7 +208,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
 
         await GetEndpoint(app, "/ws/voice").RequestDelegate!(context);
 
-        context.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        context.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
         wsFeature.AcceptCalls.Should().Be(0);
         resolver.Requests.Should().ContainSingle(request => request.ActorId == "voice-agent");
     }
