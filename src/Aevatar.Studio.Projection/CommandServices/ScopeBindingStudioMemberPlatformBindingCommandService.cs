@@ -5,6 +5,7 @@ using Aevatar.GAgents.StudioMember;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Projection.CommandServices;
 
@@ -13,18 +14,45 @@ namespace Aevatar.Studio.Projection.CommandServices;
 //   New principle: Start/Execute return accepted receipts only; terminal success/failure is delivered as a typed continuation to the run actor inbox.
 internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IStudioMemberPlatformBindingCommandPort
 {
+    private const string BindingRunDirectRoute = "aevatar.studio.projection.studio-member-binding-run";
+    private const string PlatformBindingFailedFailureCode = "STUDIO_MEMBER_PLATFORM_BINDING_FAILED";
+    private const string ReadinessFailedFailureCode = "STUDIO_MEMBER_PLATFORM_BINDING_READINESS_FAILED";
+
     private readonly IScopeBindingCommandPort _scopeBindingCommandPort;
+    private readonly IScopeBindingReadinessQueryPort _readinessQueryPort;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly ILogger<ScopeBindingStudioMemberPlatformBindingCommandService> _logger;
+    private readonly StudioMemberPlatformBindingOptions _options;
+    private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
+    private readonly Func<DateTimeOffset> _utcNow;
 
     public ScopeBindingStudioMemberPlatformBindingCommandService(
         IScopeBindingCommandPort scopeBindingCommandPort,
+        IScopeBindingReadinessQueryPort readinessQueryPort,
         IActorDispatchPort dispatchPort,
-        ILogger<ScopeBindingStudioMemberPlatformBindingCommandService> logger)
+        ILogger<ScopeBindingStudioMemberPlatformBindingCommandService> logger,
+        IOptions<StudioMemberPlatformBindingOptions> options)
+        : this(scopeBindingCommandPort, readinessQueryPort, dispatchPort, logger, options, Task.Delay, () => DateTimeOffset.UtcNow)
+    {
+    }
+
+    internal ScopeBindingStudioMemberPlatformBindingCommandService(
+        IScopeBindingCommandPort scopeBindingCommandPort,
+        IScopeBindingReadinessQueryPort readinessQueryPort,
+        IActorDispatchPort dispatchPort,
+        ILogger<ScopeBindingStudioMemberPlatformBindingCommandService> logger,
+        IOptions<StudioMemberPlatformBindingOptions> options,
+        Func<TimeSpan, CancellationToken, Task> delayAsync,
+        Func<DateTimeOffset> utcNow)
     {
         _scopeBindingCommandPort = scopeBindingCommandPort ?? throw new ArgumentNullException(nameof(scopeBindingCommandPort));
+        _readinessQueryPort = readinessQueryPort ?? throw new ArgumentNullException(nameof(readinessQueryPort));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        ArgumentNullException.ThrowIfNull(options);
+        _options = NormalizeOptions(options.Value);
+        _delayAsync = delayAsync ?? throw new ArgumentNullException(nameof(delayAsync));
+        _utcNow = utcNow ?? throw new ArgumentNullException(nameof(utcNow));
     }
 
     public Task<StudioMemberPlatformBindingAccepted> StartAsync(
@@ -72,7 +100,24 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         StudioMemberPlatformBindingStartRequested request,
         CancellationToken ct)
     {
-        var outcome = await RunBindingAsync(commandId, request, ct).ConfigureAwait(false);
+        IMessage? outcome;
+        try
+        {
+            outcome = await RunBindingAsync(commandId, request, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "StudioMember platform binding execution failed unexpectedly. bindingRunId={BindingRunId} platformBindingCommandId={CommandId}",
+                request.BindingRunId,
+                commandId);
+            return;
+        }
+
+        if (outcome == null)
+            return;
+
         try
         {
             await DispatchContinuationAsync(replyActorId, outcome, ct).ConfigureAwait(false);
@@ -88,7 +133,7 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         }
     }
 
-    private async Task<IMessage> RunBindingAsync(
+    private async Task<IMessage?> RunBindingAsync(
         string commandId,
         StudioMemberPlatformBindingStartRequested request,
         CancellationToken ct)
@@ -108,17 +153,42 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                 request.BindingRunId,
                 commandId);
 
-            return new StudioMemberPlatformBindingFailed
-            {
-                BindingRunId = request.BindingRunId,
-                PlatformBindingCommandId = commandId,
-                Failure = new StudioMemberBindingFailure
-                {
-                    Code = "STUDIO_MEMBER_PLATFORM_BINDING_FAILED",
-                    Message = ex.Message,
-                    FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                },
-            };
+            return BuildFailedContinuation(
+                request.BindingRunId,
+                commandId,
+                PlatformBindingFailedFailureCode,
+                ex.Message);
+        }
+
+        ScopeBindingReadinessSnapshot readiness;
+        try
+        {
+            readiness = await WaitForBindingReadyAsync(result, request, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "StudioMember platform binding readiness observation failed. bindingRunId={BindingRunId} platformBindingCommandId={CommandId}",
+                request.BindingRunId,
+                commandId);
+
+            return BuildFailedContinuation(
+                request.BindingRunId,
+                commandId,
+                ReadinessFailedFailureCode,
+                ex.Message);
+        }
+
+        if (!readiness.InvokeReady)
+        {
+            _logger.LogWarning(
+                "StudioMember platform binding commands completed, but readiness was not observed before timeout. Leaving binding run pending for watchdog recovery. bindingRunId={BindingRunId} platformBindingCommandId={CommandId} readinessStatus={ReadinessStatus}",
+                request.BindingRunId,
+                commandId,
+                readiness.Status);
+
+            return null;
         }
 
         return new StudioMemberPlatformBindingSucceeded
@@ -137,6 +207,76 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         };
     }
 
+    private async Task<ScopeBindingReadinessSnapshot> WaitForBindingReadyAsync(
+        ScopeBindingUpsertResult result,
+        StudioMemberPlatformBindingStartRequested bindingRequest,
+        CancellationToken ct)
+    {
+        var deadline = _utcNow() + _options.BindingReadinessTimeout;
+        var expectedRevisionId = result.RevisionId?.Trim();
+        if (string.IsNullOrWhiteSpace(expectedRevisionId))
+            throw new InvalidOperationException("scope binding result revision id is required for readiness observation.");
+
+        var expectedDeploymentId = result.ExpectedDeploymentId?.Trim();
+        if (string.IsNullOrWhiteSpace(expectedDeploymentId))
+            throw new InvalidOperationException("scope binding result deployment id is required for readiness observation.");
+
+        var request = new ScopeBindingReadinessRequest(
+            result.ScopeId,
+            result.ServiceId,
+            ExpectedRevisionId: expectedRevisionId,
+            ExpectedDeploymentId: expectedDeploymentId,
+            ExpectedEndpointIds: BuildExpectedEndpointIds(result, bindingRequest));
+
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var snapshot = await _readinessQueryPort.GetReadinessAsync(request, ct).ConfigureAwait(false);
+            if (snapshot.InvokeReady || _utcNow() >= deadline)
+                return snapshot;
+
+            var remaining = deadline - _utcNow();
+            if (remaining <= TimeSpan.Zero)
+                return snapshot;
+
+            var delay = remaining < _options.BindingReadinessPollInterval
+                ? remaining
+                : _options.BindingReadinessPollInterval;
+            await _delayAsync(delay, ct).ConfigureAwait(false);
+        }
+    }
+
+    private static IReadOnlyList<string> BuildExpectedEndpointIds(
+        ScopeBindingUpsertResult result,
+        StudioMemberPlatformBindingStartRequested request) =>
+        request.Request.ImplementationCase switch
+        {
+            StudioMemberBindingRequest.ImplementationOneofCase.Script => NormalizeEndpointIds(result.Script?.EndpointIds),
+            StudioMemberBindingRequest.ImplementationOneofCase.Gagent => NormalizeEndpointIds(
+                request.Request.Gagent.Endpoints.Select(endpoint => endpoint.EndpointId)),
+            _ => ["chat"],
+        };
+
+    private static IReadOnlyList<string> NormalizeEndpointIds(IEnumerable<string>? endpointIds) =>
+        endpointIds?
+            .Select(endpointId => endpointId?.Trim())
+            .Where(endpointId => !string.IsNullOrWhiteSpace(endpointId))
+            .Select(endpointId => endpointId!)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray() ?? [];
+
+    private static StudioMemberPlatformBindingOptions NormalizeOptions(StudioMemberPlatformBindingOptions options)
+    {
+        if (options.BindingReadinessTimeout <= TimeSpan.Zero)
+            throw new InvalidOperationException("Studio member platform binding readiness timeout must be positive.");
+
+        if (options.BindingReadinessPollInterval <= TimeSpan.Zero)
+            throw new InvalidOperationException("Studio member platform binding readiness poll interval must be positive.");
+
+        return options;
+    }
+
     private Task DispatchContinuationAsync(
         string replyActorId,
         IMessage continuation,
@@ -147,12 +287,27 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(continuation),
-            Route = EnvelopeRouteSemantics.CreateDirect(
-                "aevatar.studio.projection.platform-binding-command-service",
-                replyActorId),
+            Route = EnvelopeRouteSemantics.CreateDirect(BindingRunDirectRoute, replyActorId),
         };
         return _dispatchPort.DispatchAsync(replyActorId, envelope, ct);
     }
+
+    private static StudioMemberPlatformBindingFailed BuildFailedContinuation(
+        string bindingRunId,
+        string commandId,
+        string code,
+        string message) =>
+        new()
+        {
+            BindingRunId = bindingRunId,
+            PlatformBindingCommandId = commandId,
+            Failure = new StudioMemberBindingFailure
+            {
+                Code = code,
+                Message = message,
+                FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        };
 
     private static ScopeBindingUpsertRequest BuildScopeBindingRequest(
         StudioMemberPlatformBindingStartRequested request)
@@ -169,8 +324,8 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                 DisplayName: request.Admitted.DisplayName,
                 RevisionId: revisionId,
                 ServiceId: request.Admitted.PublishedServiceId,
-                AllowExistingRevisionReplay: replayRevisionId != null,
-                ReplayRevisionId: replayRevisionId),
+                AllowExistingRevisionReplay: true,
+                ReplayRevisionId: revisionId),
             StudioMemberBindingRequest.ImplementationOneofCase.Script => new ScopeBindingUpsertRequest(
                 ScopeId: bindingRequest.ScopeId,
                 ImplementationKind: ScopeBindingImplementationKind.Scripting,
@@ -191,8 +346,8 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
                 DisplayName: request.Admitted.DisplayName,
                 RevisionId: revisionId,
                 ServiceId: request.Admitted.PublishedServiceId,
-                AllowExistingRevisionReplay: replayRevisionId != null,
-                ReplayRevisionId: replayRevisionId),
+                AllowExistingRevisionReplay: true,
+                ReplayRevisionId: revisionId),
             _ => throw new InvalidOperationException("binding request must carry exactly one implementation payload."),
         };
     }
