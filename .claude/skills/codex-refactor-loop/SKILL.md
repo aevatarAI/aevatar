@@ -1117,7 +1117,36 @@ This means: even if a previous round escalated with `auto-loop-stuck`, a new mai
 3. Add `auto-loop-resume` label to the issue (mirrors maintainer-decision flow).
 4. Move cluster from `design_pending` to `clusters_active`.
 5. Dispatch implement codex per Phase 2 (worktree + 5400s timeout).
-6. Post bilingual comment on issue: "Phase 9 reached 3/3 consensus on <framing>; implement codex dispatched. Tracking PR will appear shortly. / Phase 9 达成 3/3 共识 <framing>;implement codex 已派,PR 即将打开。"
+6. **Post 共识卡片**(强制,per Auric 2026-05-20 "请在共识环节添加一个共识卡片,这样一清二楚")— 不再用普通 status banner,改用 distinct **consensus card** 格式:
+
+```markdown
+## ✅ 共识卡片 — Phase 9 r${ROUND} consensus reached
+
+| 维度 | 值 |
+|---|---|
+| Issue | #${ISSUE_NUMBER} ${TITLE} |
+| Cluster | ${CLUSTER_ID} |
+| Round | r${ROUND}(共识达成,3/3 unanimous) |
+| 选定 framing | **${FRAMING}**(minimal / structural / delete 中的一个) |
+| Solver 投票 | minimal: <verdict>:<summary> · structural: <verdict>:<summary> · delete: <verdict>:<summary> |
+| Meta-judge 仲裁 | ${JUDGE_VERBATIM_REASON} |
+| Concrete plan 摘要 | <3-5 bullet,来自 winning solver "Concrete plan" 头几条> |
+| 下一步自动会做 | 1. 创 worktree + branch  2. 派 implement codex(timeout 5400s)  3. implement done 后 open PR + Phase 8 reviewer  4. PR merge 后 close 本 issue |
+| **是否需要人介入** | **❌ 否**(自动推进;maintainer 仍可在本 issue 评论 override) |
+
+📦 implement worktree:\`/Users/auric/aevatar-wt-iter${ITER}-${CLUSTER_ID}\`
+📦 implement branch:\`refactor/iter${ITER}-${CLUSTER_ID}-${SLUG}\`
+
+🤖 controller consensus card
+
+⟦AI:AUTO-LOOP⟧
+```
+
+**约束**:
+- 共识卡片第一行**必须** `## ✅ 共识卡片 — Phase 9 r${ROUND} consensus reached`(✅ 而非 📊,与普通 status banner 区分)
+- 末尾 `🤖 controller consensus card` 标识 + sentinel
+- 不在普通 status banner / 进度评论用 ✅ 开头(只共识达成时用)
+- 共识卡片是 **一次性 event** post,implement 派出同 turn 内发,不重复
 
 ### Escalation criteria (hardcoded — always escalate)
 
