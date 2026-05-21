@@ -157,8 +157,9 @@ for x in d:
 validate_prompt() {
   local f="$1"
   local n
-  n=$(grep -c "{{" "$f" 2>/dev/null || echo 0)
-  if [ "$n" -gt 0 ]; then
+  n=$(grep -c "{{" "$f" 2>/dev/null | tr -d ' \n' || echo "0")
+  [ -z "$n" ] && n=0
+  if [ "$n" -gt 0 ] 2>/dev/null; then
     echo "❌ prompt $f 仍有 $n 个未解析 {{var}}:" >&2
     grep -n "{{" "$f" | head -5 >&2
     return 1
