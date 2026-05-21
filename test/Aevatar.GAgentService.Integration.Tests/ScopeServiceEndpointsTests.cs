@@ -14,6 +14,7 @@ using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgentService.Abstractions.ScopeScripts;
 using Aevatar.GAgentService.Application.Bindings;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Application.Workflows;
@@ -23,7 +24,6 @@ using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Scripting.Abstractions.Queries;
-using Aevatar.Scripting.Core.Ports;
 using Aevatar.Presentation.AGUI;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
@@ -1806,10 +1806,12 @@ public sealed class ScopeServiceEndpointsTests
                 "scope-a",
                 "default",
                 new Dictionary<string, string>(),
-                new NoOpScriptRuntimeCommandPort(),
-                new NoOpScriptServiceAguiProjectionPort(),
+                new FakeScriptServiceRunInteractionService
+                {
+                    StartError = ScriptServiceRunStartError.RuntimeActorUnavailable(
+                        "Script runtime actor is not available. The service may not be activated."),
+                },
                 new ServiceInvocationRequest(),
-                new NoOpServiceRunRegistrationPort(),
                 CancellationToken.None))
             .Should()
             .ThrowAsync<InvalidOperationException>();
@@ -1870,10 +1872,12 @@ public sealed class ScopeServiceEndpointsTests
                 "scope-a",
                 "default",
                 new Dictionary<string, string>(),
-                new ThrowingScriptRuntimeCommandPort(new InvalidOperationException("Script runtime actor 'script-runtime-1' could not be resolved. The service may not be activated.")),
-                new NoOpScriptServiceAguiProjectionPort(),
+                new FakeScriptServiceRunInteractionService
+                {
+                    StartError = ScriptServiceRunStartError.RuntimeActorUnavailable(
+                        "Script runtime actor 'script-runtime-1' could not be resolved. The service may not be activated."),
+                },
                 new ServiceInvocationRequest(),
-                new NoOpServiceRunRegistrationPort(),
                 CancellationToken.None))
             .Should()
             .ThrowAsync<InvalidOperationException>();
@@ -4224,8 +4228,7 @@ public sealed class ScopeServiceEndpointsTests
             var artifactStore = new FakeServiceRevisionArtifactStore();
             var interactionService = new FakeCommandInteractionService();
             var gagentDraftRunInteractionService = new FakeGAgentDraftRunInteractionService();
-            var scriptRuntimeCommandPort = new NoOpScriptRuntimeCommandPort();
-            var scriptServiceAguiProjectionPort = new NoOpScriptServiceAguiProjectionPort();
+            var scriptServiceRunInteractionService = new FakeScriptServiceRunInteractionService();
             var workflowQueryService = new FakeWorkflowExecutionQueryApplicationService();
             var runBindingReader = new FakeWorkflowRunBindingReader();
             var resumeDispatchService = new RecordingResumeDispatchService();
@@ -4262,8 +4265,7 @@ public sealed class ScopeServiceEndpointsTests
             builder.Services.AddSingleton<IInvokeAdmissionAuthorizer, AllowAllInvokeAdmissionAuthorizer>();
             builder.Services.AddSingleton<ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>(interactionService);
             builder.Services.AddSingleton<ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus>>(gagentDraftRunInteractionService);
-            builder.Services.AddSingleton<IScriptRuntimeCommandPort>(scriptRuntimeCommandPort);
-            builder.Services.AddSingleton<IScriptServiceAguiProjectionPort>(scriptServiceAguiProjectionPort);
+            builder.Services.AddSingleton<ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>>(scriptServiceRunInteractionService);
             builder.Services.AddSingleton<IWorkflowExecutionQueryApplicationService>(workflowQueryService);
             builder.Services.AddSingleton<IWorkflowRunBindingReader>(runBindingReader);
             builder.Services.AddSingleton<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(resumeDispatchService);
@@ -5000,94 +5002,37 @@ public sealed class ScopeServiceEndpointsTests
             Task.CompletedTask;
     }
 
-    private sealed class NoOpScriptRuntimeCommandPort : IScriptRuntimeCommandPort
+    private sealed class FakeScriptServiceRunInteractionService
+        : ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>
     {
-        public Task RunRuntimeAsync(
-            string runtimeActorId,
-            string runId,
-            Any? inputPayload,
-            string scriptRevision,
-            string definitionActorId,
-            string requestedEventType,
-            CancellationToken ct)
+        public ScriptServiceRunStartError? StartError { get; init; }
+
+        public async Task<CommandInteractionResult<ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, ScriptServiceRunCompletionStatus>> ExecuteAsync(
+            ScriptServiceRunCommand command,
+            Func<AGUIEvent, CancellationToken, ValueTask> emitAsync,
+            Func<ScriptServiceRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
+            CancellationToken ct = default)
         {
-            _ = runtimeActorId;
-            _ = runId;
-            _ = inputPayload;
-            _ = scriptRevision;
-            _ = definitionActorId;
-            _ = requestedEventType;
+            _ = emitAsync;
             ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
+            if (StartError != null)
+                return CommandInteractionResult<ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, ScriptServiceRunCompletionStatus>.Failure(StartError);
+
+            var receipt = new ScriptServiceRunAcceptedReceipt(
+                command.RuntimeActorId,
+                command.RunId,
+                command.CommandId,
+                command.CorrelationId);
+            if (onAcceptedAsync != null)
+                await onAcceptedAsync(receipt, ct);
+
+            return CommandInteractionResult<ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, ScriptServiceRunCompletionStatus>.Success(
+                receipt,
+                new CommandInteractionFinalizeResult<ScriptServiceRunCompletionStatus>(
+                    ScriptServiceRunCompletionStatus.Incomplete,
+                    false));
         }
     }
-
-    private sealed class ThrowingScriptRuntimeCommandPort(Exception exception) : IScriptRuntimeCommandPort
-    {
-        public Task RunRuntimeAsync(
-            string runtimeActorId,
-            string runId,
-            Any? inputPayload,
-            string scriptRevision,
-            string definitionActorId,
-            string requestedEventType,
-            CancellationToken ct)
-        {
-            _ = runtimeActorId;
-            _ = runId;
-            _ = inputPayload;
-            _ = scriptRevision;
-            _ = definitionActorId;
-            _ = requestedEventType;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromException(exception);
-        }
-    }
-
-    private sealed class NoOpScriptServiceAguiProjectionPort : IScriptServiceAguiProjectionPort
-    {
-        public bool ProjectionEnabled => true;
-
-        public Task<IScriptServiceAguiProjectionLease?> EnsureRunProjectionAsync(
-            string actorId,
-            string runId,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IScriptServiceAguiProjectionLease?>(new NoOpScriptServiceAguiProjectionLease(actorId, runId));
-        }
-
-        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
-            IScriptServiceAguiProjectionLease lease,
-            IEventSink<AGUIEvent> sink,
-            CancellationToken ct = default)
-        {
-            _ = lease;
-            _ = sink;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IAsyncDisposable?>(null);
-        }
-
-        public Task DetachLiveSinkAsync(
-            IAsyncDisposable? liveSinkLease,
-            CancellationToken ct = default)
-        {
-            _ = liveSinkLease;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task ReleaseActorProjectionAsync(
-            IScriptServiceAguiProjectionLease lease,
-            CancellationToken ct = default)
-        {
-            _ = lease;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed record NoOpScriptServiceAguiProjectionLease(string ActorId, string RunId) : IScriptServiceAguiProjectionLease;
 
     private sealed class AllowAllInvokeAdmissionAuthorizer : IInvokeAdmissionAuthorizer
     {

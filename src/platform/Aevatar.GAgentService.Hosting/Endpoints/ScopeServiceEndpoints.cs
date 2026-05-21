@@ -12,6 +12,7 @@ using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgentService.Abstractions.ScopeScripts;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Application.Workflows;
@@ -20,7 +21,6 @@ using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.Hosting;
 using Aevatar.Scripting.Abstractions.Queries;
-using Aevatar.Scripting.Core.Ports;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Serialization;
 using Aevatar.Presentation.AGUI;
@@ -574,8 +574,7 @@ public static class ScopeServiceEndpoints
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
         [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> gagentDraftRunService,
-        [FromServices] IScriptRuntimeCommandPort scriptRuntimeCommandPort,
-        [FromServices] IScriptServiceAguiProjectionPort scriptServiceAguiProjectionPort,
+        [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
@@ -599,8 +598,7 @@ public static class ScopeServiceEndpoints
                 serviceRunRegistrationPort,
                 chatRunService,
                 gagentDraftRunService,
-                scriptRuntimeCommandPort,
-                scriptServiceAguiProjectionPort,
+                scriptServiceRunService,
                 options,
                 ct);
             return;
@@ -698,8 +696,7 @@ public static class ScopeServiceEndpoints
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
         [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> gagentDraftRunService,
-        [FromServices] IScriptRuntimeCommandPort scriptRuntimeCommandPort,
-        [FromServices] IScriptServiceAguiProjectionPort scriptServiceAguiProjectionPort,
+        [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
@@ -726,8 +723,7 @@ public static class ScopeServiceEndpoints
                 serviceRunRegistrationPort,
                 chatRunService,
                 gagentDraftRunService,
-                scriptRuntimeCommandPort,
-                scriptServiceAguiProjectionPort,
+                scriptServiceRunService,
                 options,
                 ct);
         }
@@ -810,7 +806,6 @@ public static class ScopeServiceEndpoints
         HttpContext http,
         string scopeId,
         string runId,
-        string? actorId,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IServiceRunQueryPort serviceRunQueryPort,
         [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
@@ -821,7 +816,6 @@ public static class ScopeServiceEndpoints
             scopeId,
             ResolveDefaultScopeServiceId(options.Value),
             runId,
-            actorId,
             lifecycleQueryPort,
             serviceRunQueryPort,
             workflowExecutionQueryService,
@@ -832,7 +826,6 @@ public static class ScopeServiceEndpoints
         HttpContext http,
         string scopeId,
         string runId,
-        string? actorId,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IServiceRunQueryPort serviceRunQueryPort,
         [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
@@ -843,7 +836,6 @@ public static class ScopeServiceEndpoints
             scopeId,
             ResolveDefaultScopeServiceId(options.Value),
             runId,
-            actorId,
             lifecycleQueryPort,
             serviceRunQueryPort,
             workflowExecutionQueryService,
@@ -1299,7 +1291,6 @@ public static class ScopeServiceEndpoints
         string scopeId,
         string serviceId,
         string runId,
-        string? actorId,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IServiceRunQueryPort serviceRunQueryPort,
         [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
@@ -1333,7 +1324,6 @@ public static class ScopeServiceEndpoints
         string scopeId,
         string serviceId,
         string runId,
-        string? actorId,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IServiceRunQueryPort serviceRunQueryPort,
         [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
@@ -1451,8 +1441,7 @@ public static class ScopeServiceEndpoints
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
         [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> gagentDraftRunService,
-        [FromServices] IScriptRuntimeCommandPort scriptRuntimeCommandPort,
-        [FromServices] IScriptServiceAguiProjectionPort scriptServiceAguiProjectionPort,
+        [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
@@ -1538,10 +1527,8 @@ public static class ScopeServiceEndpoints
                         scopeId,
                         serviceId,
                         scopedHeaders,
-                        scriptRuntimeCommandPort,
-                        scriptServiceAguiProjectionPort,
+                        scriptServiceRunService,
                         invocationRequest,
-                        serviceRunRegistrationPort,
                         ct);
                     break;
 
@@ -1705,6 +1692,9 @@ public static class ScopeServiceEndpoints
         }
     }
 
+    // Refactor (iter25/cluster-026-scope-service-script-stream-inline-orchestration):
+    //   Old pattern: Scope service script stream inline orchestration in endpoints
+    //   New principle: use existing ICommandInteractionService skeleton with ScriptServiceRunCommand and Application-owned service-run registration decorator
     private static async Task HandleScriptingServiceChatStreamAsync(
         HttpContext http,
         ServiceInvocationResolvedTarget target,
@@ -1713,102 +1703,94 @@ public static class ScopeServiceEndpoints
         string scopeId,
         string serviceId,
         IReadOnlyDictionary<string, string>? headers,
-        IScriptRuntimeCommandPort scriptRuntimeCommandPort,
-        IScriptServiceAguiProjectionPort scriptServiceAguiProjectionPort,
+        ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> interactionService,
         ServiceInvocationRequest invocationRequest,
-        IServiceRunRegistrationPort serviceRunRegistrationPort,
         CancellationToken ct)
     {
         var actorId = target.Service.PrimaryActorId;
-        if (string.IsNullOrWhiteSpace(actorId))
-            throw new InvalidOperationException(
-                "Script runtime actor is not available. The service may not be activated.");
-
-        // Refactor (iter1/cluster-003):
-        //   Old pattern: Host pumped raw script EventEnvelope frames, mapped AGUI, and synthesized completion locally.
-        //   New principle: Host attaches the projection AGUI session stream and writes protocol frames only.
         var runId = Guid.NewGuid().ToString("N");
-        // Register the service run with the same id the SSE RunStarted frame will carry.
-        await RegisterStreamServiceRunAsync(
-            serviceRunRegistrationPort,
-            target,
-            invocationRequest,
-            scopeId,
-            serviceId,
-            runId: runId,
-            commandId: runId,
-            correlationId: runId,
-            targetActorId: actorId,
-            ct);
-        var chatRequest = new ChatRequestEvent
-        {
-            Prompt = prompt,
-            SessionId = sessionId ?? string.Empty,
-            ScopeId = scopeId,
-        };
-        CopyHeaders(headers, chatRequest.Metadata);
-        var inputPayload = Any.Pack(chatRequest);
-        var eventChannel = new EventChannel<AGUIEvent>();
-        var attachment = await scriptServiceAguiProjectionPort.EnsureAndAttachLeaseAsync(
-            token => scriptServiceAguiProjectionPort.EnsureRunProjectionAsync(actorId, runId, token),
-            eventChannel,
-            ct);
-        if (attachment == null)
-            throw new InvalidOperationException("Script execution projection pipeline is unavailable.");
+        var commandId = Guid.NewGuid().ToString("N");
+        var correlationId = Guid.NewGuid().ToString("N");
+        var writer = new AGUISseWriter(http.Response);
+        var responseStarted = false;
 
-        try
+        async Task EnsureSseStartedAsync(CancellationToken token)
         {
-            var writer = new AGUISseWriter(http.Response);
+            if (responseStarted)
+                return;
+
             http.Response.StatusCode = StatusCodes.Status200OK;
             http.Response.Headers.ContentType = "text/event-stream; charset=utf-8";
             http.Response.Headers.CacheControl = "no-store";
             http.Response.Headers["X-Accel-Buffering"] = "no";
-            await http.Response.StartAsync(ct);
+            await http.Response.StartAsync(token);
+            responseStarted = true;
+        }
+
+        async ValueTask EmitAsync(AGUIEvent aguiEvent, CancellationToken token)
+        {
+            await EnsureSseStartedAsync(token);
+            await writer.WriteAsync(aguiEvent, token);
+        }
+
+        async ValueTask OnAcceptedAsync(ScriptServiceRunAcceptedReceipt receipt, CancellationToken token)
+        {
+            http.Response.Headers["X-Correlation-Id"] = receipt.CorrelationId;
+            await EnsureSseStartedAsync(token);
             await writer.WriteAsync(new AGUIEvent
             {
-                RunStarted = new RunStartedEvent { ThreadId = actorId, RunId = runId },
-            }, ct);
+                RunStarted = new RunStartedEvent { ThreadId = receipt.ActorId, RunId = receipt.RunId },
+            }, token);
+        }
 
+        try
+        {
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(TimeSpan.FromMinutes(2));
-
-            await scriptRuntimeCommandPort.RunRuntimeAsync(
-                actorId,
-                runId,
-                inputPayload,
-                target.Artifact.DeploymentPlan.ScriptingPlan.Revision,
-                target.Artifact.DeploymentPlan.ScriptingPlan.DefinitionActorId,
-                inputPayload.TypeUrl,
-                scopeId,
+            var result = await interactionService.ExecuteAsync(
+                new ScriptServiceRunCommand(
+                    ScopeId: scopeId,
+                    ServiceId: serviceId,
+                    ServiceKey: target.Service.ServiceKey ?? string.Empty,
+                    EndpointId: target.Endpoint.EndpointId ?? string.Empty,
+                    RevisionId: target.Service.RevisionId ?? string.Empty,
+                    DeploymentId: target.Service.DeploymentId ?? string.Empty,
+                    RuntimeActorId: actorId ?? string.Empty,
+                    DefinitionActorId: target.Artifact.DeploymentPlan.ScriptingPlan.DefinitionActorId ?? string.Empty,
+                    ScriptRevision: target.Artifact.DeploymentPlan.ScriptingPlan.Revision ?? string.Empty,
+                    Prompt: prompt,
+                    SessionId: sessionId,
+                    RunId: runId,
+                    CommandId: commandId,
+                    CorrelationId: correlationId,
+                    Headers: headers,
+                    Identity: invocationRequest.Identity?.Clone()),
+                EmitAsync,
+                OnAcceptedAsync,
                 timeoutCts.Token);
-
-            await foreach (var aguiEvent in eventChannel.ReadAllAsync(timeoutCts.Token))
+            if (!result.Succeeded)
             {
-                await writer.WriteAsync(aguiEvent, timeoutCts.Token);
-
-                if (aguiEvent.EventCase is AGUIEvent.EventOneofCase.RunFinished
-                    or AGUIEvent.EventOneofCase.RunError)
-                {
-                    break;
-                }
+                throw result.Error?.ToException()
+                    ?? new InvalidOperationException("Script service run failed to start.");
             }
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            var writer = new AGUISseWriter(http.Response);
+            await EnsureSseStartedAsync(CancellationToken.None);
             await writer.WriteAsync(new AGUIEvent
             {
                 RunError = new RunErrorEvent { Message = "Script service chat stream timed out." },
             }, CancellationToken.None);
         }
-        finally
+        catch (Exception ex)
         {
-            await scriptServiceAguiProjectionPort.DetachReleaseAndDisposeAsync(
-                attachment.ProjectionLease,
-                attachment.LiveSinkLease,
-                eventChannel,
-                null,
-                CancellationToken.None);
+            if (!responseStarted)
+                throw;
+
+            await writer.WriteAsync(new AGUIEvent
+            {
+                RunError = new RunErrorEvent { Message = ex.Message },
+            }, CancellationToken.None);
         }
     }
 

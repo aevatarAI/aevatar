@@ -194,6 +194,40 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     [Fact]
+    public async Task RunRuntimeAsync_ShouldPropagateExplicitCommandAndCorrelationIds_WhenProvided()
+    {
+        RunScriptRequestedEvent? captured = null;
+        var runtime = new TestActorRuntime();
+        runtime.RegisterActor(new TestActor("runtime-1", (envelope, ct) =>
+        {
+            captured = envelope.Payload.Unpack<RunScriptRequestedEvent>();
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }));
+        var service = CreateRuntimeCommandService(runtime);
+
+        await service.RunRuntimeAsync(
+            runtimeActorId: "runtime-1",
+            runId: "run-1",
+            commandId: "explicit-command",
+            correlationId: "explicit-correlation",
+            inputPayload: Any.Pack(new SimpleTextCommand
+            {
+                CommandId = "command-1",
+                Value = "input",
+            }),
+            scriptRevision: "rev-1",
+            definitionActorId: "definition-1",
+            requestedEventType: "chat.requested",
+            scopeId: "scope-7",
+            ct: CancellationToken.None);
+
+        captured.Should().NotBeNull();
+        captured!.CommandId.Should().Be("explicit-command");
+        captured.CorrelationId.Should().Be("explicit-correlation");
+    }
+
+    [Fact]
     public async Task SpawnRuntimeAsync_ShouldPropagateScopeId_WhenProvided()
     {
         BindScriptBehaviorRequestedEvent? captured = null;
