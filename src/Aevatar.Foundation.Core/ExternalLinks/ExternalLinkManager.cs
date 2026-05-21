@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.ExternalLinks;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Core.Pipeline;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -158,6 +159,9 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
 
     // ── Reconnection ──────────────────────────────────────────
 
+    // Refactor (iter22/cluster-004):
+    //   Old pattern: reconnect scheduling created a background loop that slept and mutated link state outside actor handling.
+    //   New principle: scheduling records the expected attempt and asks the runtime callback scheduler to send a typed self signal.
     private async Task ScheduleReconnectAsync(ManagedLink link, int nextAttempt, CancellationToken ct)
     {
         if (link.IsClosed)
@@ -197,6 +201,9 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
             ct);
     }
 
+    // Refactor (iter22/cluster-004):
+    //   Old pattern: reconnect retry logic ran in a long-lived background task with stale in-memory access to ManagedLink.
+    //   New principle: each retry is a checked actor-turn signal; stale attempts are ignored before any transport mutation.
     private async Task HandleReconnectDueAsync(
         ExternalLinkReconnectDueSignal signal,
         CancellationToken ct)
@@ -341,20 +348,12 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
         IMessage signal,
         CancellationToken ct)
     {
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(signal),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication(_actorId, TopologyAudience.Self),
-        };
-
         return _callbackScheduler.ScheduleTimeoutAsync(
             new RuntimeCallbackTimeoutRequest
             {
                 ActorId = _actorId,
                 CallbackId = callbackId,
-                TriggerEnvelope = envelope,
+                TriggerEnvelope = SelfEventEnvelopeFactory.Create(_actorId, signal),
                 DueTime = delay,
             },
             ct);
@@ -400,27 +399,13 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
 
     private Task DispatchSignalAsync(IMessage signal, CancellationToken ct)
     {
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(signal),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication(_actorId, TopologyAudience.Self),
-        };
-
+        var envelope = SelfEventEnvelopeFactory.Create(_actorId, signal);
         return _dispatchPort.DispatchAsync(_actorId, envelope, ct);
     }
 
     private Task DispatchEventAsync(IMessage evt, CancellationToken ct)
     {
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(evt),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication(_actorId, TopologyAudience.Self),
-        };
-
+        var envelope = SelfEventEnvelopeFactory.Create(_actorId, evt);
         return _dispatchPort.DispatchAsync(_actorId, envelope, ct);
     }
 

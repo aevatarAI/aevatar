@@ -1,4 +1,6 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.ExternalLinks;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.ExternalLinks;
@@ -6,11 +8,23 @@ using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Foundation.Core.Tests;
 
 public sealed class ExternalLinkManagerTests
 {
+    [Fact]
+    public void CanHandle_ShouldRecognizeOnlyExternalLinkInternalSignals()
+    {
+        var manager = CreateManager(new RecordingDispatchPort(), new RecordingCallbackScheduler(), new RecordingTransport());
+
+        manager.CanHandle(Envelope(new ExternalLinkReconnectDueSignal())).Should().BeTrue();
+        manager.CanHandle(Envelope(new ExternalLinkTransportStateChangedSignal())).Should().BeTrue();
+        manager.CanHandle(new EventEnvelope()).Should().BeFalse();
+        manager.CanHandle(Envelope(new ExternalLinkConnectedEvent())).Should().BeFalse();
+    }
+
     [Fact]
     public async Task StartAsync_WhenInitialConnectFails_ShouldScheduleTypedReconnectSignal()
     {
@@ -78,6 +92,92 @@ public sealed class ExternalLinkManagerTests
         }));
 
         transport.ConnectCalls.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenTransportDisconnects_ShouldPublishDisconnectedAndScheduleReconnect()
+    {
+        var dispatch = new RecordingDispatchPort();
+        var callbacks = new RecordingCallbackScheduler();
+        var transport = new RecordingTransport();
+        var manager = CreateManager(dispatch, callbacks, transport);
+        await manager.StartAsync([Descriptor()]);
+        dispatch.Payloads.Clear();
+
+        await manager.HandleAsync(Envelope(new ExternalLinkTransportStateChangedSignal
+        {
+            LinkId = "link-1",
+            State = ExternalLinkTransportStateSignalKind.Disconnected,
+            Reason = "socket-lost",
+        }));
+
+        dispatch.Payloads.OfType<ExternalLinkDisconnectedEvent>()
+            .Should().ContainSingle(e =>
+                e.LinkId == "link-1" &&
+                e.Reason == "socket-lost" &&
+                e.WillReconnect);
+        dispatch.Payloads.OfType<ExternalLinkReconnectingEvent>()
+            .Should().ContainSingle(e => e.LinkId == "link-1" && e.Attempt == 1);
+        callbacks.Timeouts.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenTransportCloses_ShouldPublishDisconnectedWithoutReconnect()
+    {
+        var dispatch = new RecordingDispatchPort();
+        var callbacks = new RecordingCallbackScheduler();
+        var transport = new RecordingTransport();
+        var manager = CreateManager(dispatch, callbacks, transport);
+        await manager.StartAsync([Descriptor()]);
+        dispatch.Payloads.Clear();
+
+        await manager.HandleAsync(Envelope(new ExternalLinkTransportStateChangedSignal
+        {
+            LinkId = "link-1",
+            State = ExternalLinkTransportStateSignalKind.Closed,
+            Reason = "remote-closed",
+        }));
+
+        dispatch.Payloads.OfType<ExternalLinkDisconnectedEvent>()
+            .Should().ContainSingle(e =>
+                e.LinkId == "link-1" &&
+                e.Reason == "remote-closed" &&
+                !e.WillReconnect);
+        dispatch.Payloads.OfType<ExternalLinkReconnectingEvent>().Should().BeEmpty();
+        callbacks.Timeouts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GAgentBaseHandleEventAsync_WhenExternalLinkSignalArrives_ShouldBypassRegularPipeline()
+    {
+        var dispatch = new RecordingDispatchPort();
+        var callbacks = new RecordingCallbackScheduler();
+        var transport = new RecordingTransport();
+        var module = new TrackingModule();
+        var agent = new ExternalLinkAwareAgent();
+        agent.SetId("actor-1");
+        agent.Services = TestRuntimeServices.BuildProvider(services =>
+        {
+            services.AddSingleton<IActorDispatchPort>(dispatch);
+            services.AddSingleton<IActorRuntimeCallbackScheduler>(callbacks);
+            services.AddSingleton<IExternalLinkTransportFactory>(new RecordingTransportFactory(transport));
+        });
+        agent.RegisterModule(module);
+        await agent.ActivateAsync();
+        dispatch.Payloads.Clear();
+
+        await agent.HandleEventAsync(Envelope(new ExternalLinkTransportStateChangedSignal
+        {
+            LinkId = "link-1",
+            State = ExternalLinkTransportStateSignalKind.Disconnected,
+            Reason = "socket-lost",
+        }));
+
+        agent.AllEventHandlerCalls.Should().Be(0);
+        module.InvocationCount.Should().Be(0);
+        dispatch.Payloads.OfType<ExternalLinkDisconnectedEvent>()
+            .Should().ContainSingle(e => e.LinkId == "link-1" && e.WillReconnect);
+        callbacks.Timeouts.Should().ContainSingle();
     }
 
     private static ExternalLinkManager CreateManager(
@@ -148,6 +248,7 @@ public sealed class ExternalLinkManagerTests
     private sealed class RecordingCallbackScheduler : IActorRuntimeCallbackScheduler
     {
         public List<RuntimeCallbackTimeoutRequest> Timeouts { get; } = [];
+        public List<RuntimeCallbackLease> CancelledLeases { get; } = [];
 
         public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
             RuntimeCallbackTimeoutRequest request,
@@ -166,8 +267,11 @@ public sealed class ExternalLinkManagerTests
             CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
-            Task.CompletedTask;
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default)
+        {
+            CancelledLeases.Add(lease);
+            return Task.CompletedTask;
+        }
 
         public Task PurgeActorAsync(string actorId, CancellationToken ct = default) =>
             Task.CompletedTask;
@@ -202,5 +306,33 @@ public sealed class ExternalLinkManagerTests
         public Task SendAsync(ReadOnlyMemory<byte> payload, CancellationToken ct) => Task.CompletedTask;
         public Task DisconnectAsync(CancellationToken ct) => Task.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class TrackingModule : IEventModule<IEventHandlerContext>
+    {
+        public string Name => "tracking";
+        public int Priority => 0;
+        public int InvocationCount { get; private set; }
+        public bool CanHandle(EventEnvelope envelope) => true;
+
+        public Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
+        {
+            InvocationCount++;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ExternalLinkAwareAgent : GAgentBase, IExternalLinkAware
+    {
+        public int AllEventHandlerCalls { get; private set; }
+
+        public IReadOnlyList<ExternalLinkDescriptor> GetLinkDescriptors() => [Descriptor()];
+
+        [AllEventHandler(AllowSelfHandling = true)]
+        public Task HandleAny(EventEnvelope envelope)
+        {
+            AllEventHandlerCalls++;
+            return Task.CompletedTask;
+        }
     }
 }

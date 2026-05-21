@@ -126,6 +126,9 @@ public abstract class GAgentBase : IAgent, IEventModuleContainer<IEventHandlerCo
         try
         {
             var ctx = CreateHandlerContext(envelope);
+            // Refactor (iter22/cluster-004):
+            //   Old pattern: internal external-link callback envelopes could fall through the normal handler/module pipeline.
+            //   New principle: external-link self signals are consumed by the manager before user handlers observe them.
             if (_externalLinkManager?.CanHandle(envelope) == true)
             {
                 await _externalLinkManager.HandleAsync(envelope, ct);
