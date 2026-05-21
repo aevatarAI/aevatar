@@ -55,6 +55,12 @@ type StudioMemberBindPanelProps = {
   readonly initialServiceId?: string;
   readonly onContinueToInvoke?: (serviceId: string, endpointId: string) => void;
   readonly onBindPendingCandidate?: (() => Promise<PendingBindNotice | void>) | null;
+  readonly postBindEntryActions?: {
+    readonly busy?: boolean;
+    readonly memberId: string;
+    readonly onSetEntry: () => void;
+    readonly onSetEntryAndTest: () => void;
+  } | null;
   readonly onSelectionChange?: (selection: {
     serviceId: string;
     endpointId: string;
@@ -452,6 +458,7 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
   onSelectionChange,
   onContinueToInvoke,
   onBindPendingCandidate,
+  postBindEntryActions,
   pendingBindingCandidate,
   authSession,
   servicesLoading,
@@ -919,6 +926,35 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
                   type={currentBindingRunNotice.type}
                 />
               ) : null}
+              {postBindEntryActions ? (
+                <Alert
+                  showIcon
+                  type="success"
+                  message="This member can be the Team entry."
+                  description={
+                    <Space wrap size={8}>
+                      <Typography.Text>
+                        Bind 已完成，可以将当前成员设为 Team entry。
+                      </Typography.Text>
+                      <Button
+                        loading={postBindEntryActions.busy}
+                        onClick={postBindEntryActions.onSetEntry}
+                        size="small"
+                      >
+                        Set as Team entry
+                      </Button>
+                      <Button
+                        loading={postBindEntryActions.busy}
+                        onClick={postBindEntryActions.onSetEntryAndTest}
+                        size="small"
+                        type="primary"
+                      >
+                        Set as Team entry and Test Team
+                      </Button>
+                    </Space>
+                  }
+                />
+              ) : null}
               <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
                 <Button
                   loading={pendingBindBusy}
@@ -965,6 +1001,35 @@ const StudioMemberBindPanel: React.FC<StudioMemberBindPanelProps> = ({
             </Space>
           }
         >
+          {postBindEntryActions ? (
+            <Alert
+              showIcon
+              type="success"
+              message="This member can be the Team entry."
+              description={
+                <Space wrap size={8}>
+                  <Typography.Text>
+                    当前成员已发布，可以设为 Team entry 后返回 Team Detail 继续测试。
+                  </Typography.Text>
+                  <Button
+                    loading={postBindEntryActions.busy}
+                    onClick={postBindEntryActions.onSetEntry}
+                    size="small"
+                  >
+                    Set as Team entry
+                  </Button>
+                  <Button
+                    loading={postBindEntryActions.busy}
+                    onClick={postBindEntryActions.onSetEntryAndTest}
+                    size="small"
+                    type="primary"
+                  >
+                    Set as Team entry and Test Team
+                  </Button>
+                </Space>
+              }
+            />
+          ) : null}
           <div style={sourcePanelStyle}>
             <div style={sourceSummaryStyle}>
               <div style={sourceStatusStyle}>
