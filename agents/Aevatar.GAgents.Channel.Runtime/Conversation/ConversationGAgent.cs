@@ -159,7 +159,12 @@ public sealed partial class ConversationGAgent : GAgentBase<ConversationGAgentSt
         await HandleInboundActivityCoreAsync(activity, runtimeContext);
     }
 
-    [EventHandler]
+    // AllowSelfHandling + OnlySelfHandling are required: admission persists then self-sends
+    // NyxRelayCallbackTurnRequestedEvent via SendToAsync(Id, ...). EventHandlerAttribute defaults
+    // AllowSelfHandling=false, which causes the EventPublisher pipeline to drop the self-sourced
+    // envelope before this handler runs. Without the opt-in the turn never fires and the bot
+    // goes silent with zero log signature (2026-05-21 prod Lark outage).
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
     public async Task HandleNyxRelayCallbackTurnRequestedAsync(NyxRelayCallbackTurnRequestedEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);

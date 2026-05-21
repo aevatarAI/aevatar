@@ -1,5 +1,7 @@
+using System.Reflection;
 using System.Text;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -409,6 +411,31 @@ public sealed class ConversationGAgentDedupTests
         ContainsSubsequence(events[0].EventData.Value.ToByteArray(), Encoding.UTF8.GetBytes(sentinelUserAccessToken))
             .ShouldBeFalse("relay user access token must stay out of persisted admission event bytes");
         publisher.Sent.ShouldContain(message => message is NyxRelayCallbackTurnRequestedEvent);
+    }
+
+    [Fact]
+    public void HandleNyxRelayCallbackTurnRequestedAsync_MustOptInToSelfHandling()
+    {
+        // Regression guard for the 2026-05-21 prod Lark outage. The admit handler self-sends
+        // NyxRelayCallbackTurnRequestedEvent via SendToAsync(Id, ...); EventHandlerAttribute
+        // defaults AllowSelfHandling=false, so a bare [EventHandler] causes the EventPublisher
+        // pipeline to silently drop the envelope (source == target == this.Id) and the turn
+        // never fires. The RecordingEventPublisher used by the other tests in this file does
+        // not dispatch — it only records — so behavioral tests cannot catch this attribute drift.
+        // This reflection-level assertion is the cheapest reliable regression marker.
+        var method = typeof(ConversationGAgent).GetMethod(
+            nameof(ConversationGAgent.HandleNyxRelayCallbackTurnRequestedAsync),
+            BindingFlags.Instance | BindingFlags.Public);
+        method.ShouldNotBeNull();
+        var attr = method!.GetCustomAttribute<EventHandlerAttribute>();
+        attr.ShouldNotBeNull(
+            "HandleNyxRelayCallbackTurnRequestedAsync must be decorated with [EventHandler].");
+        attr!.AllowSelfHandling.ShouldBeTrue(
+            "Self-sent NyxRelayCallbackTurnRequestedEvent requires AllowSelfHandling=true; " +
+            "without it the pipeline drops the envelope and Lark/Telegram bots stop replying.");
+        attr.OnlySelfHandling.ShouldBeTrue(
+            "Only the admit handler should produce NyxRelayCallbackTurnRequestedEvent; " +
+            "OnlySelfHandling=true defends against accidental external routing of this event.");
     }
 
     [Fact]
