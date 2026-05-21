@@ -38,7 +38,7 @@ find .refactor-loop/logs -name "*.log" -mmin -60 -type f 2>/dev/null | while rea
   # Skip in-progress (no EXIT line)
   exit_line=$(grep "^EXIT=" "$f" 2>/dev/null | tail -1)
   [ -z "$exit_line" ] && continue
-  marker=$(grep -hE "^(AUDIT_DONE|AUDIT_INCOMPLETE|IMPLEMENT_DONE|IMPLEMENT_BLOCKED|FIX_DONE|FIX_BLOCKED|REVIEW_DONE|SOLVER_DONE|META_JUDGE_DONE|META_RESOLVED|TEST_ADD_DONE)" "$f" 2>/dev/null | tail -1 | head -c 100)
+  marker=$(grep -hE "^[+]?(AUDIT_DONE|AUDIT_INCOMPLETE|IMPLEMENT_DONE|IMPLEMENT_BLOCKED|FIX_DONE|FIX_BLOCKED|REVIEW_DONE|SOLVER_DONE|META_JUDGE_DONE|META_RESOLVED|TEST_ADD_DONE):" "$f" 2>/dev/null | sed -E 's/^[+]+//' | tail -1 | head -c 100)
   [ -z "$marker" ] && continue
   # Routing hint
   hint=""
@@ -91,7 +91,42 @@ tail -10 .refactor-loop/logs/concurrency-monitor.log 2>/dev/null | \
 zero_now=$(tail -1 .refactor-loop/logs/concurrency-monitor.log 2>/dev/null | grep -oE "zero_streak=[0-9]+" | head -1)
 [ -n "$zero_now" ] && echo "  当前: ${zero_now}"
 
-# 5. Open auto-loop issues + label state
+# 5. Mergeable PRs (per reviewer consensus + CI green)
+echo ""
+echo "▍可合并 PR(controller 应立即 merge):"
+gh pr list --label "auto-loop" --state open --json number,title --jq '.[].number' 2>/dev/null | while read pr_num; do
+  [ -z "$pr_num" ] && continue
+  # CI must have 0 fail + 0 pending
+  fail=$(gh pr checks "$pr_num" --json bucket --jq '[.[] | select(.bucket=="fail") | 1] | length' 2>/dev/null)
+  pending=$(gh pr checks "$pr_num" --json bucket --jq '[.[] | select(.bucket=="pending") | 1] | length' 2>/dev/null)
+  [ "$fail" != "0" ] || [ "$pending" != "0" ] && continue
+  state=$(gh pr view "$pr_num" --json mergeStateStatus --jq '.mergeStateStatus' 2>/dev/null)
+  # Reviewer consensus: latest round per role, count approve/reject/comment
+  # find latest round N for this PR
+  max_round=0
+  for r in 1 2 3 4 5 6; do
+    cnt=$(ls .refactor-loop/logs/review-pr${pr_num}-*-r${r}.log 2>/dev/null | wc -l | tr -d ' ')
+    [ "$cnt" -ge 3 ] && max_round=$r
+  done
+  [ "$max_round" = "0" ] && continue
+  approve=0; comment=0; reject=0
+  for role in architect tests quality; do
+    f=".refactor-loop/logs/review-pr${pr_num}-${role}-r${max_round}.log"
+    [ -f "$f" ] || continue
+    v=$(grep -hE "^[+]?REVIEW_DONE:" "$f" 2>/dev/null | sed -E 's/^[+]+//; s/.*:([a-z]+)\s*$/\1/' | tail -1)
+    case "$v" in
+      approve) approve=$((approve+1)) ;;
+      comment) comment=$((comment+1)) ;;
+      reject)  reject=$((reject+1)) ;;
+    esac
+  done
+  # Merge rule: 0 reject AND >= 2 approve (mixed comment OK)
+  if [ "$reject" = "0" ] && [ "$approve" -ge 2 ]; then
+    echo "  ✅ PR #${pr_num} [${state}] r${max_round}: approve=${approve} comment=${comment} reject=0 — gh pr merge ${pr_num} --admin --squash --delete-branch"
+  fi
+done
+
+# 6. Open auto-loop issues + label state
 echo ""
 echo "▍Open auto-loop issues:"
 gh issue list --label "auto-loop" --state open --json number,title,labels --jq '.[] | "  • #\(.number) labels=[\(.labels | map(.name) | map(select(. | startswith("🔍") or startswith("🛠") or startswith("⚙") or startswith("⏸") or startswith("🆘") or startswith("👤") or startswith("🤖"))) | join(", "))] — \(.title | .[0:55])"' 2>/dev/null
