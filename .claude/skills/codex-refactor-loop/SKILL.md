@@ -63,9 +63,16 @@ gh issue view <N> --json comments --jq '
 - **SKILL.md 历史 reference** `per Auric YYYY-MM-DD` 保留(只 controller 自己读,不输出到 GitHub)
 - **@-mention whitelist 不变**:loning / louis4li / eanzhao / jason-aelf / AbigailDeng / potter-sun(verbatim git blame 验证)
 
-### 0 codex + active task = bug(强制,per Auric 2026-05-20 "按说这个流程应该一直有 codex 工作的")
+### 0 codex + active task = bug(强制,per Auric 2026-05-20 "按说这个流程应该一直有 codex 工作的" + 2026-05-21 "没有并行 codex 就有问题")
 
-**铁律**:任何 active phase issue/PR(`🔍 design-solving` / `🔧 fixing` / `👀 reviewing` / `🛠️ implementing`)存在时,**应至少有 1 codex 在跑**。`ps codex exec | wc -l == 0` AND `gh issue list --label "🔍 design-solving"` non-empty → **bug**。
+**铁律**:任何 active phase issue/PR(`🔍 design-solving` / `🔧 fixing` / `👀 reviewing` / `🛠️ implementing`)存在时,**应至少有 1 codex 在跑**。`ps codex exec | wc -l == 0` AND `gh issue list --label "🔍 design-solving"` non-empty → **P0 bug**(no-gap-violation)。
+
+**Controller wakeup 第一动作**:`ps -ef | grep -E "timeout (3600|5400) codex" | grep -v grep | wc -l`。如果 == 0:
+1. **不允许** `ScheduleWakeup` 后 end-turn — 必须派下一步 codex 才允许 ScheduleWakeup
+2. **不允许**只看 marker 不 sweep:必须扫所有刚 finished marker(implement/judge/reviewer/fix/reflector)并按 marker→spawn-next 表派至少 1 codex
+3. 如果所有 active issue/PR 都真在等 maintainer(全是 `🆘 human:卡死` / `⏸️ phase:blocked`),那 0 codex 才 OK — 但仍要在 status 报告中说明 "0 codex by design:N issue 全等人"
+
+**concurrency_monitor.py** P0 alert:`expected > 0 AND actual == 0` → IMMEDIATE(streak=1 即写 alert + pending event,不等 2 tick)。controller 看到 alert → 立即 wake 自查。
 
 ### Controller 每 wakeup 必派"下一步"(no gap policy)
 
@@ -91,7 +98,9 @@ Controller wakeup 处理 markers 后,**必须在同 turn 内派出下一步 code
 300s 周期 daemon,监控 actual vs expected codex 并发数:
 - expected = active issue/PR 数(per phase 表)
 - actual = `ps codex exec`
-- actual < expected/2 持续 2 tick → 告警(写 `.refactor-loop/.concurrency-alert.log` + 通知 controller pending events)
+- **P0 规则(per Auric 2026-05-21 "没有并行 codex 就有问题")**:`expected > 0 AND actual == 0` → **IMMEDIATE** alert(streak=1 即触发,不等 2 tick)。这是 no-gap-violation。
+- low 规则:`actual < expected/2` 持续 2 tick → 告警
+- 写 `.refactor-loop/.concurrency-alert.log` + 通知 controller pending events
 - 不自动 spawn codex(business logic 在 controller)— controller 下次 wakeup 必派
 
 启动:
