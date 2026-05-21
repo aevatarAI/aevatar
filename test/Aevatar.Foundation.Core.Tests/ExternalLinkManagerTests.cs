@@ -240,6 +240,64 @@ public sealed class ExternalLinkManagerTests
     }
 
     [Fact]
+    public async Task HandleAsync_WhenTransportConnectsAfterScheduledReconnect_ShouldCancelLeaseAndIgnoreStaleReconnect()
+    {
+        var dispatch = new RecordingDispatchPort();
+        var callbacks = new RecordingCallbackScheduler();
+        var transport = new RecordingTransport { ConnectFailuresRemaining = 1 };
+        var manager = CreateManager(dispatch, callbacks, transport);
+        await manager.StartAsync([Descriptor()]);
+        callbacks.Timeouts.Should().ContainSingle();
+        dispatch.Payloads.Clear();
+
+        await manager.HandleAsync(Envelope(new ExternalLinkTransportStateChangedSignal
+        {
+            LinkId = "link-1",
+            State = ExternalLinkTransportStateSignalKind.Connected,
+        }));
+
+        callbacks.CancelledLeases.Should().ContainSingle(lease =>
+            lease.ActorId == "actor-1" &&
+            lease.CallbackId == "external-link-reconnect:link-1" &&
+            lease.Generation == 1);
+        dispatch.Payloads.OfType<ExternalLinkConnectedEvent>()
+            .Should().ContainSingle(e => e.LinkId == "link-1");
+
+        await manager.HandleAsync(Envelope(new ExternalLinkReconnectDueSignal
+        {
+            LinkId = "link-1",
+            ExpectedAttempt = 1,
+        }));
+
+        transport.ConnectCalls.Should().Be(1);
+        dispatch.Payloads.OfType<ExternalLinkConnectedEvent>()
+            .Should().ContainSingle(e => e.LinkId == "link-1");
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenTransportErrors_ShouldPublishExternalLinkErrorEvent()
+    {
+        var dispatch = new RecordingDispatchPort();
+        var callbacks = new RecordingCallbackScheduler();
+        var transport = new RecordingTransport();
+        var manager = CreateManager(dispatch, callbacks, transport);
+        await manager.StartAsync([Descriptor()]);
+        dispatch.Payloads.Clear();
+
+        await manager.HandleAsync(Envelope(new ExternalLinkTransportStateChangedSignal
+        {
+            LinkId = "link-1",
+            State = ExternalLinkTransportStateSignalKind.Error,
+            Reason = "socket-error",
+        }));
+
+        dispatch.Payloads.OfType<ExternalLinkErrorEvent>()
+            .Should().ContainSingle(e =>
+                e.LinkId == "link-1" &&
+                e.ErrorMessage == "socket-error");
+    }
+
+    [Fact]
     public async Task HandleAsync_WhenTransportCloses_ShouldPublishDisconnectedWithoutReconnect()
     {
         var dispatch = new RecordingDispatchPort();
@@ -300,6 +358,27 @@ public sealed class ExternalLinkManagerTests
         dispatch.Payloads.OfType<ExternalLinkDisconnectedEvent>()
             .Should().ContainSingle(e => e.LinkId == "link-1" && e.WillReconnect);
         callbacks.Timeouts.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task GAgentBaseActivateAsync_WhenCallbackSchedulerIsMissing_ShouldDisableExternalLinksWithoutThrowing()
+    {
+        var dispatch = new RecordingDispatchPort();
+        var transport = new RecordingTransport();
+        var agent = new ExternalLinkAwareAgent();
+        agent.SetId("actor-1");
+        var services = new ServiceCollection();
+        services.AddSingleton<IActorDispatchPort>(dispatch);
+        services.AddSingleton<IExternalLinkTransportFactory>(new RecordingTransportFactory(transport));
+        agent.Services = services.BuildServiceProvider();
+
+        var act = () => agent.ActivateAsync();
+
+        await act.Should().NotThrowAsync();
+        transport.ConnectCalls.Should().Be(0);
+        transport.HasStateChangedHandler.Should().BeFalse();
+        transport.HasMessageReceivedHandler.Should().BeFalse();
+        dispatch.Payloads.Should().BeEmpty();
     }
 
     [Fact]
@@ -436,6 +515,8 @@ public sealed class ExternalLinkManagerTests
         public string TransportType => "recording";
         public Func<ReadOnlyMemory<byte>, CancellationToken, Task>? OnMessageReceived { private get; set; }
         public Func<ExternalLinkStateChange, string?, CancellationToken, Task>? OnStateChanged { private get; set; }
+        public bool HasMessageReceivedHandler => OnMessageReceived != null;
+        public bool HasStateChangedHandler => OnStateChanged != null;
 
         public Task ConnectAsync(ExternalLinkDescriptor descriptor, CancellationToken ct)
         {
