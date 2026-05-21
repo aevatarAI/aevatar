@@ -14,6 +14,8 @@ public sealed class ScriptCatalogEntryMetadataProviderTests
     public async Task ElasticsearchIndexInitialization_ShouldIncludeSortableTimestampMappings()
     {
         var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, ""));
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{"found":false}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"result":"created"}"""));
@@ -42,10 +44,10 @@ public sealed class ScriptCatalogEntryMetadataProviderTests
             UpdatedAt = DateTimeOffset.Parse("2026-04-30T00:00:01Z"),
         });
 
-        handler.CapturedRequests.Should().HaveCount(3);
-        var indexInitialization = handler.CapturedRequests[0];
+        handler.CapturedRequests.Should().HaveCount(5);
+        var indexInitialization = GetIndexCreateRequest(handler);
         indexInitialization.Method.Should().Be("PUT");
-        indexInitialization.PathAndQuery.Should().Be("/aevatar-script-catalog-entries");
+        indexInitialization.PathAndQuery.Should().StartWith("/aevatar-script-catalog-entries-v");
         indexInitialization.Body.Should().Contain("\"created_at_utc_value\":{\"type\":\"date\"}");
         indexInitialization.Body.Should().Contain("\"updated_at_utc_value\":{\"type\":\"date\"}");
     }
@@ -56,6 +58,15 @@ public sealed class ScriptCatalogEntryMetadataProviderTests
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
+    }
+
+    private static CapturedRequest GetIndexCreateRequest(ScriptedHttpMessageHandler handler)
+    {
+        return handler.CapturedRequests.First(request =>
+            request.Method == "PUT" &&
+            !request.PathAndQuery.Contains("/_doc/", StringComparison.Ordinal) &&
+            !request.PathAndQuery.Contains("/_create/", StringComparison.Ordinal) &&
+            !request.PathAndQuery.Contains("/_aliases", StringComparison.Ordinal));
     }
 
     private sealed class ScriptedHttpMessageHandler : HttpMessageHandler
