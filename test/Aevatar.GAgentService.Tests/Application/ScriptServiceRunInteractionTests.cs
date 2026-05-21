@@ -125,6 +125,35 @@ public sealed class ScriptServiceRunInteractionTests
     }
 
     [Fact]
+    public async Task Interaction_ShouldReleaseProjection_WhenRuntimeDispatchFailsAfterAttach()
+    {
+        var projectionPort = new RecordingScriptServiceAguiProjectionPort();
+        var runtimePort = new RecordingScriptRuntimeCommandPort
+        {
+            DispatchException = new InvalidOperationException("runtime dispatch failed"),
+        };
+        var interaction = CreateInteraction(projectionPort, runtimePort);
+
+        var act = () => interaction.ExecuteAsync(
+            CreateCommand(),
+            (_, _) => ValueTask.CompletedTask,
+            null,
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("runtime dispatch failed");
+        runtimePort.Invocations.Should().ContainSingle(invocation =>
+            invocation.RuntimeActorId == "runtime-1" &&
+            invocation.RunId == "run-1");
+        projectionPort.EnsureCalls.Should().ContainSingle(call =>
+            call.ActorId == "runtime-1" && call.RunId == "run-1");
+        projectionPort.AttachCalls.Should().ContainSingle(call =>
+            call.ActorId == "runtime-1" && call.RunId == "run-1");
+        projectionPort.ReleaseCalls.Should().ContainSingle(call =>
+            call.ActorId == "runtime-1" && call.RunId == "run-1");
+    }
+
+    [Fact]
     public async Task Interaction_ShouldCompleteWithRunError_WhenRunErrorArrives()
     {
         var projectionPort = new RecordingScriptServiceAguiProjectionPort
@@ -400,6 +429,8 @@ public sealed class ScriptServiceRunInteractionTests
     {
         public List<RuntimeInvocation> Invocations { get; } = [];
 
+        public Exception? DispatchException { get; init; }
+
         public Task RunRuntimeAsync(
             string runtimeActorId,
             string runId,
@@ -433,6 +464,9 @@ public sealed class ScriptServiceRunInteractionTests
                 definitionActorId,
                 requestedEventType,
                 scopeId));
+            if (DispatchException != null)
+                throw DispatchException;
+
             return Task.CompletedTask;
         }
     }
