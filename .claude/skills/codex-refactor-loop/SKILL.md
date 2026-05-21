@@ -95,13 +95,18 @@ Controller wakeup 处理 markers 后,**必须在同 turn 内派出下一步 code
 
 ### Concurrency monitor:`tools/refactor-loop/concurrency_monitor.py`(强制)
 
-300s 周期 daemon,监控 actual vs expected codex 并发数:
+**60s** 周期 daemon(per Auric 2026-05-21 "60s 就扫描一次"),监控 actual vs expected codex 并发数:
 - expected = active issue/PR 数(per phase 表)
 - actual = `ps codex exec`
-- **P0 规则(per Auric 2026-05-21 "没有并行 codex 就有问题")**:`expected > 0 AND actual == 0` → **IMMEDIATE** alert(streak=1 即触发,不等 2 tick)。这是 no-gap-violation。
+- **P0 规则**:`expected > 0 AND actual == 0` → **IMMEDIATE** alert(streak=1 即触发,不等 2 tick)。这是 no-gap-violation。
 - low 规则:`actual < expected/2` 持续 2 tick → 告警
-- 写 `.refactor-loop/.concurrency-alert.log` + 通知 controller pending events
+- 写 `.refactor-loop/.concurrency-alert.log` + `.controller-pending-events.log`(controller 下次 wakeup 必读)
 - 不自动 spawn codex(business logic 在 controller)— controller 下次 wakeup 必派
+
+**Controller 每 wakeup 必读** `tail -20 .refactor-loop/.concurrency-alert.log`:
+- 看到 `P0 no-gap-violation: ...zero_streak=N` → 至少 N×60s 没 codex,**必须**先派 codex 才允许 ScheduleWakeup
+- zero_streak >= 5(>= 5 分钟 0 codex)= 严重失保 — 同时把 PushNotification 给 user "controller 失保 N min"
+- 看到 `recovered` 行 → 已自愈,正常推进
 
 启动:
 ```bash

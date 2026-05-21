@@ -39,7 +39,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-INTERVAL = int(os.environ.get("INTERVAL", "300"))
+INTERVAL = int(os.environ.get("INTERVAL", "60"))  # per Auric 2026-05-21 "60s 就扫描一次"
+MIN_PARALLEL = int(os.environ.get("MIN_PARALLEL", "1"))  # 任何 active task 都至少要 1 codex
 REPO_ROOT = Path(os.environ.get("REPO_ROOT", "/Users/auric/aevatar"))
 ALERT_LOG = REPO_ROOT / ".refactor-loop" / ".concurrency-alert.log"
 PENDING_EVENTS = REPO_ROOT / ".refactor-loop" / ".controller-pending-events.log"
