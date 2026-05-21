@@ -3,6 +3,7 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Workflow.Extensions.Bridge;
 using FluentAssertions;
 using Google.Protobuf;
@@ -230,6 +231,8 @@ public sealed class TelegramBridgeGAgentTests
             new NoopActorRuntime(),
             registry)
         {
+            EventSourcing = new RecordingEventSourcing<TelegramWaitReplyState>(
+                (state, evt) => TelegramWaitReplyStateTransitions.Apply(state, evt)),
             EventPublisher = publisher,
             Services = CreateAgentServices(),
         };
@@ -241,7 +244,12 @@ public sealed class TelegramBridgeGAgentTests
 
         await agent.HandleEventAsync(Envelope(command), CancellationToken.None);
 
-        connector.Received.Count.Should().BeGreaterThanOrEqualTo(4);
+        connector.Received.Should().BeEmpty();
+        publisher.Sent.Select(x => x.evt).Should().ContainSingle(x => x is TelegramWaitReplyBootstrapDueEvent);
+
+        await DrainWaitReplySelfEventsAsync(agent, publisher);
+
+        connector.Received.Count.Should().Be(4);
         connector.Received.Should().OnlyContain(x => x.Operation == "/getUpdates");
 
         var secondPayload = JsonDocument.Parse(connector.Received[1].Payload).RootElement;
@@ -324,6 +332,8 @@ public sealed class TelegramBridgeGAgentTests
             new NoopActorRuntime(),
             registry)
         {
+            EventSourcing = new RecordingEventSourcing<TelegramWaitReplyState>(
+                (state, evt) => TelegramWaitReplyStateTransitions.Apply(state, evt)),
             EventPublisher = publisher,
             Services = CreateAgentServices(),
         };
@@ -336,6 +346,7 @@ public sealed class TelegramBridgeGAgentTests
         command.SettlePollsAfterMatch = 2;
 
         await agent.HandleEventAsync(Envelope(command), CancellationToken.None);
+        await DrainWaitReplySelfEventsAsync(agent, publisher);
 
         var completed = publisher.Published.Select(x => x.evt).OfType<TelegramWaitReplyCompletedEvent>().Single();
         completed.SessionId.Should().Be("session-wait-collect-all");
@@ -359,6 +370,8 @@ public sealed class TelegramBridgeGAgentTests
             new NoopActorRuntime(),
             registry)
         {
+            EventSourcing = new RecordingEventSourcing<TelegramWaitReplyState>(
+                (state, evt) => TelegramWaitReplyStateTransitions.Apply(state, evt)),
             EventPublisher = publisher,
             Services = CreateAgentServices(),
         };
@@ -370,6 +383,9 @@ public sealed class TelegramBridgeGAgentTests
         command.StartFromLatest = true;
 
         await agent.HandleEventAsync(Envelope(command), CancellationToken.None);
+        connector.Received.Should().BeEmpty();
+
+        await DrainWaitReplySelfEventsAsync(agent, publisher);
 
         connector.Received.Should().ContainSingle();
         connector.Received[0].Operation.Should().Be("/getUpdates");
@@ -396,6 +412,8 @@ public sealed class TelegramBridgeGAgentTests
             new NoopActorRuntime(),
             registry)
         {
+            EventSourcing = new RecordingEventSourcing<TelegramWaitReplyState>(
+                (state, evt) => TelegramWaitReplyStateTransitions.Apply(state, evt)),
             EventPublisher = publisher,
             Services = CreateAgentServices(),
         };
@@ -407,10 +425,72 @@ public sealed class TelegramBridgeGAgentTests
         command.StartFromLatest = true;
 
         await agent.HandleEventAsync(Envelope(command), CancellationToken.None);
+        await DrainWaitReplySelfEventsAsync(agent, publisher);
 
         var completed = publisher.Published.Select(x => x.evt).OfType<TelegramWaitReplyCompletedEvent>().Single();
         completed.SessionId.Should().Be("session-wait-username-missing");
         completed.Content.Should().Be("[AEVATAR_STREAM_REPLY] no-username-reply");
+    }
+
+    [Fact]
+    public async Task TelegramWaitReplyGAgent_WhenConnectorReturnsOkFalse_ShouldPublishFailedEvent()
+    {
+        var connector = new RecordingConnector(new ConnectorResponse
+        {
+            Success = true,
+            Output = """{"ok":false,"description":"telegram denied getUpdates"}""",
+        });
+        var registry = new InMemoryConnectorRegistry();
+        registry.Register(connector);
+        var publisher = new RecordingEventPublisher();
+        var agent = new TelegramWaitReplyGAgent(
+            new NoopActorRuntime(),
+            registry)
+        {
+            EventSourcing = new RecordingEventSourcing<TelegramWaitReplyState>(
+                (state, evt) => TelegramWaitReplyStateTransitions.Apply(state, evt)),
+            EventPublisher = publisher,
+            Services = CreateAgentServices(),
+        };
+
+        var command = BuildWaitReplyCommand(
+            sessionId: "session-wait-failed",
+            expectedUsername: "openclaw_bot");
+
+        await agent.HandleEventAsync(Envelope(command), CancellationToken.None);
+        await DrainWaitReplySelfEventsAsync(agent, publisher);
+
+        var failed = publisher.Published.Select(x => x.evt).OfType<TelegramWaitReplyFailedEvent>().Single();
+        failed.SessionId.Should().Be("session-wait-failed");
+        failed.CommandId.Should().Be("cmd-session-wait-failed");
+        failed.Error.Should().Be("telegram getUpdates parse failed: telegram denied getUpdates");
+        failed.WaitActorId.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public async Task TelegramBridgeGAgent_WhenWaitReplyFailed_ShouldPublishFailureMarker()
+    {
+        var publisher = new RecordingEventPublisher();
+        var agent = new TelegramBridgeGAgent(
+            new NoopActorRuntime(),
+            new InMemoryConnectorRegistry())
+        {
+            EventPublisher = publisher,
+            Services = CreateAgentServices(),
+        };
+
+        await agent.HandleEventAsync(
+            Envelope(new TelegramWaitReplyFailedEvent
+            {
+                SessionId = "session-wait-failed",
+                Error = "telegram denied getUpdates",
+            }),
+            CancellationToken.None);
+
+        var textEnd = publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>().Single();
+        textEnd.SessionId.Should().Be("session-wait-failed");
+        textEnd.Content.Should().StartWith("[[AEVATAR_LLM_ERROR]]");
+        textEnd.Content.Should().Contain("telegram denied getUpdates");
     }
 
     [Fact]
@@ -494,6 +574,27 @@ public sealed class TelegramBridgeGAgentTests
             Payload = Any.Pack(evt),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
         };
+    }
+
+    private static async Task DrainWaitReplySelfEventsAsync(
+        TelegramWaitReplyGAgent agent,
+        RecordingEventPublisher publisher,
+        int maxTurns = 16)
+    {
+        for (var i = 0; i < maxTurns; i++)
+        {
+            var nextIndex = publisher.Sent.FindIndex(x =>
+                x.targetActorId == agent.Id &&
+                x.evt is TelegramWaitReplyBootstrapDueEvent or TelegramWaitReplyPollDueEvent or TelegramWaitReplyTimeoutDueEvent);
+            if (nextIndex < 0)
+                return;
+
+            var next = publisher.Sent[nextIndex];
+            publisher.Sent.RemoveAt(nextIndex);
+            await agent.HandleEventAsync(Envelope(next.evt), CancellationToken.None);
+        }
+
+        throw new InvalidOperationException("wait-reply self event drain exceeded max turns");
     }
 
     private static TelegramWaitForReplyCommand BuildWaitReplyCommand(
@@ -614,6 +715,76 @@ public sealed class TelegramBridgeGAgentTests
             _ = options;
             Sent.Add((targetActorId, evt));
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingEventSourcing<TState>(Func<TState, IMessage, TState> transition)
+        : IEventSourcingBehavior<TState>
+        where TState : class, IMessage<TState>, new()
+    {
+        private readonly List<IMessage> _pending = [];
+
+        public long CurrentVersion { get; private set; }
+
+        public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage
+        {
+            _pending.Add(evt);
+        }
+
+        public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
+        {
+            CurrentVersion += _pending.Count;
+            _pending.Clear();
+            return Task.FromResult(new EventStoreCommitResult
+            {
+                AgentId = "test-agent",
+                LatestVersion = CurrentVersion,
+            });
+        }
+
+        public Task PersistSnapshotAsync(TState currentState, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task<TState?> ReplayAsync(string agentId, CancellationToken ct = default) =>
+            Task.FromResult<TState?>(null);
+
+        public void DiscardPendingEvents()
+        {
+            _pending.Clear();
+        }
+
+        public TState TransitionState(TState current, IMessage evt) => transition(current, evt);
+    }
+
+    private static class TelegramWaitReplyStateTransitions
+    {
+        public static TelegramWaitReplyState Apply(TelegramWaitReplyState current, IMessage evt)
+        {
+            return evt switch
+            {
+                TelegramWaitReplyStartedEvent started => started.State.Clone(),
+                TelegramWaitReplyProgressedEvent progressed => progressed.State.Clone(),
+                TelegramWaitReplyClearedEvent cleared => ApplyCleared(current, cleared),
+                _ => current,
+            };
+        }
+
+        private static TelegramWaitReplyState ApplyCleared(
+            TelegramWaitReplyState current,
+            TelegramWaitReplyClearedEvent cleared)
+        {
+            if (!string.Equals(current.CommandId, cleared.CommandId, StringComparison.Ordinal) ||
+                current.Generation != cleared.Generation)
+            {
+                return current;
+            }
+
+            var next = current.Clone();
+            next.Active = false;
+            next.PendingMatchedUpdate = null;
+            next.CollectedReplies.Clear();
+            next.CollectedReplyOrder.Clear();
+            return next;
         }
     }
 

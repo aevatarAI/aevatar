@@ -3,6 +3,8 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Core;
+using Aevatar.Foundation.Core.EventSourcing;
+using Google.Protobuf;
 
 namespace Aevatar.Workflow.Extensions.Bridge;
 
@@ -11,18 +13,28 @@ namespace Aevatar.Workflow.Extensions.Bridge;
 /// </summary>
 // Refactor (iter25/cluster-027-telegram-wait-reply-actor-turn):
 //   Old pattern: Telegram bridge maintains in-process wait-reply state in dict; bridge owns wait + reply lifecycle inline
-//   New principle: New task-scoped TelegramWaitReplyGAgent owns wait state; bridge sends WaitForReplyCommand and resumes via WaitReplyCompleted/Failed event(reference lark stream actor architecture for unification)
-public sealed class TelegramWaitReplyGAgent : GAgentBase
+//   New principle: New task-scoped TelegramWaitReplyGAgent owns protobuf wait state; typed self-events advance one bounded poll per actor turn and resume bridge via WaitReplyCompleted/Failed.
+public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
 {
     private const int MaxPollTimeoutSeconds = 25;
     private readonly IConnectorRegistry _connectorRegistry;
+    private readonly TimeProvider _timeProvider;
 
     public TelegramWaitReplyGAgent(
         IActorRuntime runtime,
         IConnectorRegistry connectorRegistry)
+        : this(runtime, connectorRegistry, TimeProvider.System)
+    {
+    }
+
+    public TelegramWaitReplyGAgent(
+        IActorRuntime runtime,
+        IConnectorRegistry connectorRegistry,
+        TimeProvider timeProvider)
     {
         _ = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _connectorRegistry = connectorRegistry ?? throw new ArgumentNullException(nameof(connectorRegistry));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         InitializeId();
     }
 
@@ -31,88 +43,56 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase
     {
         // Refactor (iter25/cluster-027-telegram-wait-reply-actor-turn):
         //   Old pattern: Telegram bridge maintains in-process wait-reply state in dict; bridge owns wait + reply lifecycle inline
-        //   New principle: New task-scoped TelegramWaitReplyGAgent owns wait state; bridge sends WaitForReplyCommand and resumes via WaitReplyCompleted/Failed event(reference lark stream actor architecture for unification)
+        //   New principle: New task-scoped TelegramWaitReplyGAgent owns protobuf wait state; typed self-events advance one bounded poll per actor turn and resume bridge via WaitReplyCompleted/Failed.
         ArgumentNullException.ThrowIfNull(command);
+
+        var generation = State.Generation + 1;
+        var state = BuildStartedState(command, generation);
+        await PersistDomainEventAsync(new TelegramWaitReplyStartedEvent { State = state });
 
         if (!_connectorRegistry.TryGet(command.ConnectorName, out var connector) || connector == null)
         {
-            await PublishFailedAsync(command, $"telegram connector '{command.ConnectorName}' not found");
+            await CompleteFailureAsync($"telegram connector '{command.ConnectorName}' not found");
             return;
         }
 
-        var result = await WaitForReplyAsync(command, connector);
-        if (result.Success)
+        if (State.StartFromLatest && !State.HasNextOffset)
         {
-            await PublishAsync(
-                new TelegramWaitReplyCompletedEvent
-                {
-                    CommandId = command.CommandId,
-                    SessionId = command.SessionId,
-                    Content = result.Content,
-                    EmitChatResponse = command.EmitChatResponse,
-                    WaitActorId = Id,
-                },
-                TopologyAudience.Parent);
-            return;
-        }
-
-        await PublishFailedAsync(command, result.Error);
-    }
-
-    private Task PublishFailedAsync(TelegramWaitForReplyCommand command, string error)
-    {
-        return PublishAsync(
-            new TelegramWaitReplyFailedEvent
+            await SendToAsync(Id, new TelegramWaitReplyBootstrapDueEvent
             {
-                CommandId = command.CommandId,
-                SessionId = command.SessionId,
-                Error = error,
-                EmitChatResponse = command.EmitChatResponse,
-                WaitActorId = Id,
-            },
-            TopologyAudience.Parent);
-    }
-
-    private static async Task<TelegramWaitReplyResult> WaitForReplyAsync(
-        TelegramWaitForReplyCommand command,
-        IConnector connector)
-    {
-        var context = new TelegramWaitReplyRuntimeContext(command);
-
-        if (command.StartFromLatest && context.Offset == null)
-        {
-            var bootstrapResult = await BootstrapFromLatestAsync(command, connector, context);
-            if (!bootstrapResult.ShouldContinue)
-                return bootstrapResult.Result;
+                CommandId = State.CommandId,
+                Generation = State.Generation,
+            });
+            return;
         }
 
-        var deadline = DateTimeOffset.UtcNow.AddMilliseconds(command.WaitTimeoutMs);
-        while (DateTimeOffset.UtcNow < deadline)
+        await SendToAsync(Id, new TelegramWaitReplyPollDueEvent
         {
-            var pollResult = await PollOnceAsync(command, connector, context, deadline);
-            if (!pollResult.ShouldContinue)
-                return pollResult.Result;
-        }
-
-        return context.ToTerminalResult(command.WaitTimeoutMs);
+            CommandId = State.CommandId,
+            Generation = State.Generation,
+        });
     }
 
-    private static async Task<TelegramWaitReplyStepResult> BootstrapFromLatestAsync(
-        TelegramWaitForReplyCommand command,
-        IConnector connector,
-        TelegramWaitReplyRuntimeContext context)
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleBootstrapDue(TelegramWaitReplyBootstrapDueEvent evt)
     {
-        var bootstrap = await ExecuteGetUpdatesAsync(
-            command,
-            connector,
-            offset: null,
-            pollTimeoutSeconds: 0,
-            perCallTimeoutMs: 5_000);
+        ArgumentNullException.ThrowIfNull(evt);
+        if (!IsActiveContinuation(evt.CommandId, evt.Generation))
+            return;
+
+        if (!_connectorRegistry.TryGet(State.ConnectorName, out var connector) || connector == null)
+        {
+            await CompleteFailureAsync($"telegram connector '{State.ConnectorName}' not found");
+            return;
+        }
+
+        var bootstrap = await ExecuteGetUpdatesAsync(offset: null, pollTimeoutSeconds: 0, perCallTimeoutMs: 5_000, connector);
         if (!bootstrap.Success)
         {
-            return TelegramWaitReplyStepResult.Done(TelegramWaitReplyResult.Fail(string.IsNullOrWhiteSpace(bootstrap.Error)
+            await CompleteFailureAsync(string.IsNullOrWhiteSpace(bootstrap.Error)
                 ? "telegram bootstrap getUpdates failed"
-                : bootstrap.Error.Trim()));
+                : bootstrap.Error.Trim());
+            return;
         }
 
         if (!TryParseTelegramUpdates(
@@ -121,84 +101,248 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase
                 out var bootstrapMaxUpdateId,
                 out var bootstrapError))
         {
-            return TelegramWaitReplyStepResult.Done(
-                TelegramWaitReplyResult.Fail($"telegram bootstrap parse failed: {bootstrapError}"));
+            await CompleteFailureAsync($"telegram bootstrap parse failed: {bootstrapError}");
+            return;
         }
 
-        var bootstrapRecentCutoffUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
-            - Math.Max(30, Math.Min(600, command.WaitTimeoutMs / 1000 + 10));
-        var bootstrapMatchedUpdates = SelectMatchedUpdates(
+        var bootstrapRecentCutoffUnix = _timeProvider.GetUtcNow().ToUnixTimeSeconds()
+            - Math.Max(30, Math.Min(600, State.WaitTimeoutMs / 1000 + 10));
+        var matchedUpdates = SelectMatchedUpdates(
             bootstrapUpdates,
-            command,
             minimumUpdateId: null,
             minimumDateUnixExclusive: bootstrapRecentCutoffUnix);
-        if (bootstrapMatchedUpdates.Count > 0 && !command.CollectAllReplies)
+
+        if (matchedUpdates.Count > 0 && !State.CollectAllReplies)
         {
-            return TelegramWaitReplyStepResult.Done(
-                TelegramWaitReplyResult.Ok(bootstrapMatchedUpdates[^1].Content));
+            await CompleteSuccessAsync(matchedUpdates[^1].Content);
+            return;
         }
 
-        var matchedResult = context.ApplyMatches(command, bootstrapMatchedUpdates);
-        if (matchedResult.HasValue)
-            return TelegramWaitReplyStepResult.Done(matchedResult.Value);
-
+        var next = State.Clone();
         if (bootstrapMaxUpdateId.HasValue)
-            context.Offset = bootstrapMaxUpdateId.Value + 1;
-        return TelegramWaitReplyStepResult.Continue();
+            next.NextOffset = bootstrapMaxUpdateId.Value + 1;
+        ApplyMatches(next, matchedUpdates);
+
+        var result = ResolveCurrentResult(next, emptyPoll: matchedUpdates.Count == 0);
+        if (result.HasValue)
+        {
+            await CompleteResultAsync(result.Value);
+            return;
+        }
+
+        await PersistAndContinuePollAsync(next);
     }
 
-    private static async Task<TelegramWaitReplyStepResult> PollOnceAsync(
-        TelegramWaitForReplyCommand command,
-        IConnector connector,
-        TelegramWaitReplyRuntimeContext context,
-        DateTimeOffset deadline)
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandlePollDue(TelegramWaitReplyPollDueEvent evt)
     {
-        var remaining = deadline - DateTimeOffset.UtcNow;
-        var currentPollMaxSeconds = context.HasPendingMatch ? 1 : command.PollTimeoutSeconds;
-        var currentPollSeconds = Math.Clamp(
-            (int)Math.Ceiling(Math.Max(1, remaining.TotalSeconds)),
-            1,
-            currentPollMaxSeconds);
-        var perCallTimeoutMs = (currentPollSeconds + 3) * 1_000;
-        var requestedOffset = context.Offset;
+        ArgumentNullException.ThrowIfNull(evt);
+        if (!IsActiveContinuation(evt.CommandId, evt.Generation))
+            return;
 
+        if (!_connectorRegistry.TryGet(State.ConnectorName, out var connector) || connector == null)
+        {
+            await CompleteFailureAsync($"telegram connector '{State.ConnectorName}' not found");
+            return;
+        }
+
+        if (_timeProvider.GetUtcNow().ToUnixTimeMilliseconds() >= State.DeadlineUnixMs)
+        {
+            await CompleteTimeoutAsync();
+            return;
+        }
+
+        var currentPollSeconds = ResolveCurrentPollSeconds();
+        long? requestedOffset = State.HasNextOffset ? State.NextOffset : null;
         var poll = await ExecuteGetUpdatesAsync(
-            command,
-            connector,
-            context.Offset,
+            requestedOffset,
             currentPollSeconds,
-            perCallTimeoutMs);
+            perCallTimeoutMs: (currentPollSeconds + 3) * 1_000,
+            connector);
         if (!poll.Success)
         {
-            return TelegramWaitReplyStepResult.Done(TelegramWaitReplyResult.Fail(string.IsNullOrWhiteSpace(poll.Error)
+            await CompleteFailureAsync(string.IsNullOrWhiteSpace(poll.Error)
                 ? "telegram getUpdates failed"
-                : poll.Error.Trim()));
+                : poll.Error.Trim());
+            return;
         }
 
         if (!TryParseTelegramUpdates(poll.Output, out var updates, out var maxUpdateId, out var parseError))
         {
-            return TelegramWaitReplyStepResult.Done(
-                TelegramWaitReplyResult.Fail($"telegram getUpdates parse failed: {parseError}"));
+            await CompleteFailureAsync($"telegram getUpdates parse failed: {parseError}");
+            return;
         }
 
-        if (maxUpdateId.HasValue)
-            context.Offset = maxUpdateId.Value + 1;
-
-        var matchedUpdatesInBatch = SelectMatchedUpdates(
+        var matchedUpdates = SelectMatchedUpdates(
             updates,
-            command,
             minimumUpdateId: requestedOffset,
             minimumDateUnixExclusive: null);
-        var matchedResult = context.ApplyMatches(command, matchedUpdatesInBatch);
-        if (matchedResult.HasValue)
-            return TelegramWaitReplyStepResult.Done(matchedResult.Value);
+        var next = State.Clone();
+        if (maxUpdateId.HasValue)
+            next.NextOffset = maxUpdateId.Value + 1;
+        ApplyMatches(next, matchedUpdates);
 
-        return TelegramWaitReplyStepResult.Continue();
+        var result = ResolveCurrentResult(next, emptyPoll: matchedUpdates.Count == 0);
+        if (result.HasValue)
+        {
+            await CompleteResultAsync(result.Value);
+            return;
+        }
+
+        await PersistAndContinuePollAsync(next);
     }
 
-    private static List<TelegramInboundUpdate> SelectMatchedUpdates(
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleTimeoutDue(TelegramWaitReplyTimeoutDueEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        if (!IsActiveContinuation(evt.CommandId, evt.Generation))
+            return;
+
+        await CompleteTimeoutAsync();
+    }
+
+    protected override TelegramWaitReplyState TransitionState(TelegramWaitReplyState current, IMessage evt)
+    {
+        return StateTransitionMatcher
+            .Match(current, evt)
+            .On<TelegramWaitReplyStartedEvent>((_, started) => started.State.Clone())
+            .On<TelegramWaitReplyProgressedEvent>((_, progressed) => progressed.State.Clone())
+            .On<TelegramWaitReplyClearedEvent>((state, cleared) =>
+            {
+                if (string.Equals(state.CommandId, cleared.CommandId, StringComparison.Ordinal) &&
+                    state.Generation == cleared.Generation)
+                {
+                    var next = state.Clone();
+                    next.Active = false;
+                    next.PendingMatchedUpdate = null;
+                    next.CollectedReplies.Clear();
+                    next.CollectedReplyOrder.Clear();
+                    return next;
+                }
+
+                return state;
+            })
+            .OrCurrent();
+    }
+
+    private TelegramWaitReplyState BuildStartedState(TelegramWaitForReplyCommand command, long generation)
+    {
+        var state = new TelegramWaitReplyState
+        {
+            Active = true,
+            Generation = generation,
+            CommandId = command.CommandId,
+            SessionId = command.SessionId,
+            ConnectorName = command.ConnectorName,
+            ExpectedChatId = command.ExpectedChatId,
+            ExpectedFromUserId = command.ExpectedFromUserId,
+            ExpectedFromUsername = command.ExpectedFromUsername,
+            CorrelationContains = command.CorrelationContains,
+            WaitTimeoutMs = command.WaitTimeoutMs,
+            PollTimeoutSeconds = command.PollTimeoutSeconds,
+            SettlePollsAfterMatch = command.SettlePollsAfterMatch,
+            CollectAllReplies = command.CollectAllReplies,
+            StartFromLatest = command.StartFromLatest,
+            EmitChatResponse = command.EmitChatResponse,
+            DeadlineUnixMs = _timeProvider.GetUtcNow().AddMilliseconds(command.WaitTimeoutMs).ToUnixTimeMilliseconds(),
+        };
+        state.ConnectorParameters.Add(command.ConnectorParameters);
+        if (command.HasOffset)
+            state.NextOffset = command.Offset;
+        return state;
+    }
+
+    private bool IsActiveContinuation(string commandId, long generation) =>
+        State.Active &&
+        State.Generation == generation &&
+        string.Equals(State.CommandId, commandId, StringComparison.Ordinal);
+
+    private async Task PersistAndContinuePollAsync(TelegramWaitReplyState next)
+    {
+        await PersistDomainEventAsync(new TelegramWaitReplyProgressedEvent { State = next });
+        if (_timeProvider.GetUtcNow().ToUnixTimeMilliseconds() >= State.DeadlineUnixMs)
+        {
+            await CompleteTimeoutAsync();
+            return;
+        }
+
+        await SendToAsync(Id, new TelegramWaitReplyPollDueEvent
+        {
+            CommandId = State.CommandId,
+            Generation = State.Generation,
+        });
+    }
+
+    private async Task CompleteTimeoutAsync()
+    {
+        if (State.PendingMatchedUpdate != null)
+        {
+            await CompleteSuccessAsync(State.CollectAllReplies
+                ? BuildMatchedReplyContent()
+                : State.PendingMatchedUpdate.Content);
+            return;
+        }
+
+        await CompleteFailureAsync(
+            $"telegram group stream timeout after {State.WaitTimeoutMs}ms without matched reply");
+    }
+
+    private Task CompleteResultAsync(TelegramWaitReplyResult result) =>
+        result.Success ? CompleteSuccessAsync(result.Content) : CompleteFailureAsync(result.Error);
+
+    private async Task CompleteSuccessAsync(string content)
+    {
+        await PublishAsync(
+            new TelegramWaitReplyCompletedEvent
+            {
+                CommandId = State.CommandId,
+                SessionId = State.SessionId,
+                Content = content,
+                EmitChatResponse = State.EmitChatResponse,
+                WaitActorId = Id,
+            },
+            TopologyAudience.Parent);
+        await ClearActiveStateAsync();
+    }
+
+    private async Task CompleteFailureAsync(string error)
+    {
+        await PublishAsync(
+            new TelegramWaitReplyFailedEvent
+            {
+                CommandId = State.CommandId,
+                SessionId = State.SessionId,
+                Error = error,
+                EmitChatResponse = State.EmitChatResponse,
+                WaitActorId = Id,
+            },
+            TopologyAudience.Parent);
+        await ClearActiveStateAsync();
+    }
+
+    private Task ClearActiveStateAsync()
+    {
+        if (!State.Active)
+            return Task.CompletedTask;
+
+        return PersistDomainEventAsync(new TelegramWaitReplyClearedEvent
+        {
+            CommandId = State.CommandId,
+            Generation = State.Generation,
+        });
+    }
+
+    private int ResolveCurrentPollSeconds()
+    {
+        var remainingMs = State.DeadlineUnixMs - _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+        var remainingSeconds = (int)Math.Ceiling(Math.Max(1, remainingMs / 1000.0));
+        var currentPollMaxSeconds = State.PendingMatchedUpdate != null ? 1 : State.PollTimeoutSeconds;
+        return Math.Clamp(remainingSeconds, 1, currentPollMaxSeconds);
+    }
+
+    private List<TelegramInboundUpdate> SelectMatchedUpdates(
         IEnumerable<TelegramInboundUpdate> updates,
-        TelegramWaitForReplyCommand command,
         long? minimumUpdateId,
         long? minimumDateUnixExclusive)
     {
@@ -219,7 +363,7 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase
                 continue;
             }
 
-            if (!IsMatchedUpdate(update, command))
+            if (!IsMatchedUpdate(update))
                 continue;
 
             matches.Add(update);
@@ -228,23 +372,23 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase
         return matches;
     }
 
-    private static bool IsMatchedUpdate(TelegramInboundUpdate update, TelegramWaitForReplyCommand command)
+    private bool IsMatchedUpdate(TelegramInboundUpdate update)
     {
-        if (!string.Equals(update.ChatId, command.ExpectedChatId, StringComparison.Ordinal))
+        if (!string.Equals(update.ChatId, State.ExpectedChatId, StringComparison.Ordinal))
             return false;
 
-        if (!string.IsNullOrWhiteSpace(command.ExpectedFromUserId) &&
-            !string.Equals(update.FromUserId, command.ExpectedFromUserId, StringComparison.Ordinal))
+        if (!string.IsNullOrWhiteSpace(State.ExpectedFromUserId) &&
+            !string.Equals(update.FromUserId, State.ExpectedFromUserId, StringComparison.Ordinal))
         {
             return false;
         }
 
         // Some Telegram update variants omit username; keep other guards authoritative.
-        if (!string.IsNullOrWhiteSpace(command.ExpectedFromUsername))
+        if (!string.IsNullOrWhiteSpace(State.ExpectedFromUsername))
         {
             var actualUsername = NormalizeUsername(update.FromUsername);
             if (!string.IsNullOrWhiteSpace(actualUsername) &&
-                !string.Equals(actualUsername, command.ExpectedFromUsername, StringComparison.OrdinalIgnoreCase))
+                !string.Equals(actualUsername, State.ExpectedFromUsername, StringComparison.OrdinalIgnoreCase))
             {
                 return false;
             }
@@ -253,36 +397,62 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase
         if (string.IsNullOrWhiteSpace(update.Content))
             return false;
 
-        return string.IsNullOrWhiteSpace(command.CorrelationContains) ||
-               update.Content.IndexOf(command.CorrelationContains, StringComparison.OrdinalIgnoreCase) >= 0;
+        return string.IsNullOrWhiteSpace(State.CorrelationContains) ||
+               update.Content.IndexOf(State.CorrelationContains, StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
-    private static void MergeMatchedUpdates(
-        IEnumerable<TelegramInboundUpdate> matchedUpdates,
-        IDictionary<string, TelegramInboundUpdate> latestByIdentity,
-        IList<string> identityOrder)
+    private static void ApplyMatches(TelegramWaitReplyState state, IReadOnlyList<TelegramInboundUpdate> matchedUpdates)
     {
+        if (matchedUpdates.Count == 0)
+            return;
+
+        state.PendingMatchedUpdate = ToState(matchedUpdates[^1]);
+        state.PollsSinceLastMatch = 0;
+        if (!state.CollectAllReplies)
+            return;
+
         foreach (var update in matchedUpdates)
         {
             var identity = BuildMatchedReplyIdentity(update);
-            if (!latestByIdentity.ContainsKey(identity))
-                identityOrder.Add(identity);
-            latestByIdentity[identity] = update;
+            if (!state.CollectedReplies.ContainsKey(identity))
+                state.CollectedReplyOrder.Add(identity);
+            state.CollectedReplies[identity] = ToState(update);
         }
     }
 
-    private static string BuildMatchedReplyContent(
-        IReadOnlyDictionary<string, TelegramInboundUpdate> latestByIdentity,
-        IReadOnlyList<string> identityOrder,
-        TelegramInboundUpdate? fallback)
+    private TelegramWaitReplyResult? ResolveCurrentResult(TelegramWaitReplyState state, bool emptyPoll)
     {
-        if (latestByIdentity.Count == 0 || identityOrder.Count == 0)
-            return fallback?.Content ?? string.Empty;
+        if (state.PendingMatchedUpdate == null)
+            return null;
 
-        var orderedReplies = new List<string>(identityOrder.Count);
-        foreach (var identity in identityOrder)
+        if (emptyPoll)
+            state.PollsSinceLastMatch++;
+
+        if (!emptyPoll || state.PollsSinceLastMatch < state.SettlePollsAfterMatch)
+            return state.SettlePollsAfterMatch <= 0 ? BuildCurrentSuccess(state) : null;
+
+        return BuildCurrentSuccess(state);
+    }
+
+    private TelegramWaitReplyResult BuildCurrentSuccess(TelegramWaitReplyState state)
+    {
+        if (!state.CollectAllReplies)
+            return TelegramWaitReplyResult.Ok(state.PendingMatchedUpdate?.Content ?? string.Empty);
+
+        return TelegramWaitReplyResult.Ok(BuildMatchedReplyContent(state));
+    }
+
+    private string BuildMatchedReplyContent() => BuildMatchedReplyContent(State);
+
+    private static string BuildMatchedReplyContent(TelegramWaitReplyState state)
+    {
+        if (state.CollectedReplies.Count == 0 || state.CollectedReplyOrder.Count == 0)
+            return state.PendingMatchedUpdate?.Content ?? string.Empty;
+
+        var orderedReplies = new List<string>(state.CollectedReplyOrder.Count);
+        foreach (var identity in state.CollectedReplyOrder)
         {
-            if (!latestByIdentity.TryGetValue(identity, out var update))
+            if (!state.CollectedReplies.TryGetValue(identity, out var update))
                 continue;
             if (string.IsNullOrWhiteSpace(update.Content))
                 continue;
@@ -291,7 +461,7 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase
         }
 
         if (orderedReplies.Count == 0)
-            return fallback?.Content ?? string.Empty;
+            return state.PendingMatchedUpdate?.Content ?? string.Empty;
         if (orderedReplies.Count == 1)
             return orderedReplies[0];
 
@@ -308,14 +478,13 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase
         return $"raw:{update.ChatId}:{update.FromUserId}:{update.DateUnix}:{update.Content}";
     }
 
-    private static async Task<ConnectorResponse> ExecuteGetUpdatesAsync(
-        TelegramWaitForReplyCommand command,
-        IConnector connector,
+    private async Task<ConnectorResponse> ExecuteGetUpdatesAsync(
         long? offset,
         int pollTimeoutSeconds,
-        int perCallTimeoutMs)
+        int perCallTimeoutMs,
+        IConnector connector)
     {
-        var parameters = new Dictionary<string, string>(command.ConnectorParameters, StringComparer.OrdinalIgnoreCase)
+        var parameters = new Dictionary<string, string>(State.ConnectorParameters, StringComparer.OrdinalIgnoreCase)
         {
             ["method"] = "POST",
             ["content_type"] = "application/json",
@@ -324,9 +493,9 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase
 
         var connectorRequest = new ConnectorRequest
         {
-            RunId = command.CommandId,
-            StepId = command.SessionId,
-            Connector = command.ConnectorName,
+            RunId = State.CommandId,
+            StepId = State.SessionId,
+            Connector = State.ConnectorName,
             Operation = "/getUpdates",
             Payload = BuildGetUpdatesPayload(offset, pollTimeoutSeconds),
             Parameters = parameters,
@@ -499,82 +668,17 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase
         return normalized.StartsWith('@') ? normalized[1..] : normalized;
     }
 
-    private sealed class TelegramWaitReplyRuntimeContext
-    {
-        private readonly Dictionary<string, TelegramInboundUpdate>? _collectedByIdentity;
-        private readonly List<string>? _collectedIdentityOrder;
-        private TelegramInboundUpdate? _pendingMatchedUpdate;
-        private int _pollsSinceLastMatch;
-
-        public TelegramWaitReplyRuntimeContext(TelegramWaitForReplyCommand command)
+    private static TelegramInboundUpdateState ToState(TelegramInboundUpdate update) =>
+        new()
         {
-            Offset = command.HasOffset ? command.Offset : null;
-            if (!command.CollectAllReplies)
-                return;
-
-            _collectedByIdentity = new Dictionary<string, TelegramInboundUpdate>(StringComparer.Ordinal);
-            _collectedIdentityOrder = [];
-        }
-
-        public long? Offset { get; set; }
-        public bool HasPendingMatch => _pendingMatchedUpdate != null;
-
-        public TelegramWaitReplyResult? ApplyMatches(
-            TelegramWaitForReplyCommand command,
-            IReadOnlyList<TelegramInboundUpdate> matchedUpdates)
-        {
-            if (matchedUpdates.Count == 0)
-                return ApplyEmptyPoll(command);
-
-            _pendingMatchedUpdate = matchedUpdates[^1];
-            _pollsSinceLastMatch = 0;
-            if (command.CollectAllReplies)
-                MergeMatchedUpdates(matchedUpdates, _collectedByIdentity!, _collectedIdentityOrder!);
-
-            return command.SettlePollsAfterMatch <= 0
-                ? BuildCurrentSuccess(command)
-                : null;
-        }
-
-        public TelegramWaitReplyResult ToTerminalResult(int waitTimeoutMs)
-        {
-            if (_pendingMatchedUpdate == null)
-                return TelegramWaitReplyResult.Fail(
-                    $"telegram group stream timeout after {waitTimeoutMs}ms without matched reply");
-
-            return TelegramWaitReplyResult.Ok(_pendingMatchedUpdate.Content);
-        }
-
-        private TelegramWaitReplyResult? ApplyEmptyPoll(TelegramWaitForReplyCommand command)
-        {
-            if (_pendingMatchedUpdate == null)
-                return null;
-
-            _pollsSinceLastMatch++;
-            return _pollsSinceLastMatch >= command.SettlePollsAfterMatch
-                ? BuildCurrentSuccess(command)
-                : null;
-        }
-
-        private TelegramWaitReplyResult BuildCurrentSuccess(TelegramWaitForReplyCommand command)
-        {
-            if (!command.CollectAllReplies)
-                return TelegramWaitReplyResult.Ok(_pendingMatchedUpdate?.Content ?? string.Empty);
-
-            return TelegramWaitReplyResult.Ok(BuildMatchedReplyContent(
-                _collectedByIdentity!,
-                _collectedIdentityOrder!,
-                _pendingMatchedUpdate));
-        }
-    }
-
-    private readonly record struct TelegramWaitReplyStepResult(
-        bool ShouldContinue,
-        TelegramWaitReplyResult Result)
-    {
-        public static TelegramWaitReplyStepResult Continue() => new(true, default);
-        public static TelegramWaitReplyStepResult Done(TelegramWaitReplyResult result) => new(false, result);
-    }
+            UpdateId = update.UpdateId,
+            MessageId = update.MessageId,
+            DateUnix = update.DateUnix,
+            ChatId = update.ChatId,
+            FromUserId = update.FromUserId,
+            FromUsername = update.FromUsername,
+            Content = update.Content,
+        };
 
     private readonly record struct TelegramWaitReplyResult(bool Success, string Content, string Error)
     {
