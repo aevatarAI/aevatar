@@ -535,6 +535,31 @@ public sealed class ScopeServiceEndpointsStreamTests
     }
 
     [Fact]
+    public async Task HandleScriptingServiceChatStreamAsync_ShouldWriteRunError_WhenInteractionThrowsAfterAccepted()
+    {
+        var http = CreateHttpContext();
+        var interactionService = new StubScriptServiceRunInteractionService
+        {
+            ThrowAfterAccepted = new InvalidOperationException("runtime dispatch failed"),
+        };
+
+        await InvokeScriptingStreamAsync(
+            http,
+            CreateScriptingTarget(primaryActorId: "actor-1"),
+            "hello",
+            "session-1",
+            "scope-a",
+            null,
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http);
+        body.Should().Contain("runStarted");
+        body.Should().Contain("runError");
+        body.Should().Contain("runtime dispatch failed");
+    }
+
+    [Fact]
     public async Task HandleScriptingServiceChatStreamAsync_ShouldAvoidSyntheticDuplicateFinish_WhenRunFinishedArrives()
     {
         var http = CreateHttpContext();
@@ -1009,6 +1034,8 @@ public sealed class ScopeServiceEndpointsStreamTests
 
         public ScriptServiceRunStartError? StartError { get; init; }
 
+        public Exception? ThrowAfterAccepted { get; init; }
+
         public async Task<CommandInteractionResult<ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, ScriptServiceRunCompletionStatus>> ExecuteAsync(
             ScriptServiceRunCommand command,
             Func<AGUIEvent, CancellationToken, ValueTask> emitAsync,
@@ -1026,6 +1053,9 @@ public sealed class ScopeServiceEndpointsStreamTests
                 command.CorrelationId);
             if (onAcceptedAsync != null)
                 await onAcceptedAsync(receipt, ct);
+
+            if (ThrowAfterAccepted != null)
+                throw ThrowAfterAccepted;
 
             var completion = ScriptServiceRunCompletionStatus.Incomplete;
             var completed = false;

@@ -12,6 +12,7 @@ using Aevatar.Presentation.AGUI;
 using Aevatar.Scripting.Core.Ports;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgentService.Tests.Application;
 
@@ -231,6 +232,57 @@ public sealed class ScriptServiceRunInteractionTests
         registrationPort.Registered[0].CorrelationId.Should().Be("corr-1");
         registrationPort.Registered[0].ImplementationKind.Should().Be(ServiceImplementationKind.Scripting);
         order.Should().Equal("registered", "accepted");
+    }
+
+    [Fact]
+    public async Task AddScriptServiceRunInteraction_ShouldResolveDecoratedInteraction_AndExecute()
+    {
+        var projectionPort = new RecordingScriptServiceAguiProjectionPort
+        {
+            Messages =
+            {
+                new AGUIEvent
+                {
+                    RunFinished = new RunFinishedEvent { ThreadId = "runtime-1", RunId = "run-1" },
+                },
+            },
+        };
+        var runtimePort = new RecordingScriptRuntimeCommandPort();
+        var registrationPort = new RecordingServiceRunRegistrationPort();
+        await using var provider = new ServiceCollection()
+            .AddSingleton<IScriptServiceAguiProjectionPort>(projectionPort)
+            .AddSingleton<IScriptRuntimeCommandPort>(runtimePort)
+            .AddSingleton<IServiceRunRegistrationPort>(registrationPort)
+            .AddScriptServiceRunInteraction()
+            .BuildServiceProvider();
+        var interaction = provider.GetRequiredService<ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>>();
+        var accepted = new List<ScriptServiceRunAcceptedReceipt>();
+
+        var result = await interaction.ExecuteAsync(
+            CreateCommand(),
+            (_, _) => ValueTask.CompletedTask,
+            (receipt, _) =>
+            {
+                accepted.Add(receipt);
+                return ValueTask.CompletedTask;
+            },
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        runtimePort.Invocations.Should().ContainSingle(invocation =>
+            invocation.RuntimeActorId == "runtime-1" &&
+            invocation.RunId == "run-1" &&
+            invocation.CommandId == "cmd-1" &&
+            invocation.CorrelationId == "corr-1");
+        registrationPort.Registered.Should().ContainSingle(record =>
+            record.RunId == "run-1" &&
+            record.CommandId == "cmd-1" &&
+            record.CorrelationId == "corr-1" &&
+            record.ImplementationKind == ServiceImplementationKind.Scripting);
+        accepted.Should().ContainSingle(receipt =>
+            receipt.RunId == "run-1" &&
+            receipt.CommandId == "cmd-1" &&
+            receipt.CorrelationId == "corr-1");
     }
 
     private static ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> CreateInteraction(
