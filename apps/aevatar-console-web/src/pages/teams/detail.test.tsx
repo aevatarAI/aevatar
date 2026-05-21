@@ -1058,9 +1058,54 @@ describe("TeamDetailPage", () => {
     expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
     expect(screen.getByText("负责处理升级工单")).toBeTruthy();
     expect(screen.getByText("member-team-alpha")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Edit in Studio" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Build" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Test member" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "View runs" })).toBeNull();
     expect(screen.queryByText("参与者结构")).toBeNull();
     expect(screen.queryByText("运行时参与者身份")).toBeNull();
     expect(screen.queryByRole("button", { name: "打开 Services" })).toBeNull();
+  });
+
+  it("routes member build actions into Studio with Team context", async () => {
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("button", { name: "Edit Team" });
+    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    fireEvent.click(await screen.findByRole("link", { name: "Build" }));
+
+    expect(window.location.pathname).toBe("/studio");
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("scopeId")).toBe("scope-1");
+    expect(params.get("teamId")).toBe("t-alpha");
+    expect(params.get("member")).toBe("member:member-team-alpha");
+    expect(params.get("step")).toBe("build");
+    expect(params.get("tab")).toBeNull();
+    expect(params.get("returnTo")).toBe(
+      "/teams/scope-1/t-alpha?memberId=member-team-alpha&tab=members",
+    );
+  });
+
+  it("opens Studio create-member mode from an empty Team roster", async () => {
+    (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-1",
+      members: [],
+      nextPageToken: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("button", { name: "Edit Team" });
+    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    fireEvent.click(await screen.findByRole("link", { name: "Create first member" }));
+
+    expect(window.location.pathname).toBe("/studio");
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("scopeId")).toBe("scope-1");
+    expect(params.get("teamId")).toBe("t-alpha");
+    expect(params.get("tab")).toBe("studio");
+    expect(params.get("intent")).toBe("create-member");
+    expect(params.get("returnTo")).toBe("/teams/scope-1/t-alpha?tab=members");
   });
 
   it("uses the real Team roster when teamId is selected", async () => {

@@ -161,8 +161,8 @@ describe("TeamsHomePage", () => {
     expect(screen.queryByText("当前工作空间")).toBeNull();
     expect(screen.getByText("AI Team")).toBeTruthy();
     expect(screen.getByText("团队列表")).toBeTruthy();
-    expect(screen.getByText("运行正常")).toBeTruthy();
-    expect(screen.getByText("需要处理")).toBeTruthy();
+    expect(screen.queryByText("运行正常")).toBeNull();
+    expect(screen.queryByText("需要处理")).toBeNull();
     expect(screen.getByRole("button", { name: "组建新团队" })).toBeTruthy();
     expect(screen.getByRole("heading", { level: 3, name: "客服团队" })).toBeTruthy();
     expect(screen.getByText("Team 标识：t-support")).toBeTruthy();
