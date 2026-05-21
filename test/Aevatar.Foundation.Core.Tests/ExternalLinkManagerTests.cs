@@ -48,6 +48,30 @@ public sealed class ExternalLinkManagerTests
     }
 
     [Fact]
+    public async Task TransportCallback_WhenStateChanges_ShouldDispatchTypedSelfSignal()
+    {
+        var dispatch = new RecordingDispatchPort();
+        var callbacks = new RecordingCallbackScheduler();
+        var transport = new RecordingTransport();
+        var manager = CreateManager(dispatch, callbacks, transport);
+        await manager.StartAsync([Descriptor()]);
+        dispatch.Payloads.Clear();
+
+        await transport.EmitStateChangedAsync(
+            ExternalLinkStateChange.Disconnected,
+            "socket-lost",
+            CancellationToken.None);
+
+        dispatch.Payloads.OfType<ExternalLinkTransportStateChangedSignal>()
+            .Should().ContainSingle(signal =>
+                signal.LinkId == "link-1" &&
+                signal.State == ExternalLinkTransportStateSignalKind.Disconnected &&
+                signal.Reason == "socket-lost");
+        dispatch.Payloads.OfType<ExternalLinkDisconnectedEvent>().Should().BeEmpty();
+        callbacks.Timeouts.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleAsync_WhenReconnectSignalIsStale_ShouldNotReconnect()
     {
         var dispatch = new RecordingDispatchPort();
@@ -92,6 +116,62 @@ public sealed class ExternalLinkManagerTests
         }));
 
         transport.ConnectCalls.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenReconnectAttemptFails_ShouldPublishAndScheduleNextAttempt()
+    {
+        var dispatch = new RecordingDispatchPort();
+        var callbacks = new RecordingCallbackScheduler();
+        var transport = new RecordingTransport { ConnectFailuresRemaining = 2 };
+        var manager = CreateManager(dispatch, callbacks, transport);
+        await manager.StartAsync([Descriptor()]);
+        callbacks.Timeouts.Should().ContainSingle();
+        dispatch.Payloads.Clear();
+
+        await manager.HandleAsync(Envelope(new ExternalLinkReconnectDueSignal
+        {
+            LinkId = "link-1",
+            ExpectedAttempt = 1,
+        }));
+
+        transport.ConnectCalls.Should().Be(2);
+        callbacks.Timeouts.Should().HaveCount(2);
+        var nextRequest = callbacks.Timeouts[1];
+        nextRequest.CallbackId.Should().Be("external-link-reconnect:link-1");
+        var nextSignal = nextRequest.TriggerEnvelope.Payload.Unpack<ExternalLinkReconnectDueSignal>();
+        nextSignal.LinkId.Should().Be("link-1");
+        nextSignal.ExpectedAttempt.Should().Be(2);
+        dispatch.Payloads.OfType<ExternalLinkReconnectingEvent>()
+            .Should().ContainSingle(e => e.LinkId == "link-1" && e.Attempt == 2);
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenReconnectAttemptExceedsMaximum_ShouldPublishTerminalDisconnectedWithoutScheduling()
+    {
+        var dispatch = new RecordingDispatchPort();
+        var callbacks = new RecordingCallbackScheduler();
+        var transport = new RecordingTransport { ConnectFailuresRemaining = 4 };
+        var manager = CreateManager(dispatch, callbacks, transport);
+        await manager.StartAsync([Descriptor(maxReconnectAttempts: 1)]);
+        callbacks.Timeouts.Should().ContainSingle();
+        dispatch.Payloads.Clear();
+
+        await manager.HandleAsync(Envelope(new ExternalLinkReconnectDueSignal
+        {
+            LinkId = "link-1",
+            ExpectedAttempt = 1,
+        }));
+
+        transport.ConnectCalls.Should().Be(2);
+        callbacks.Timeouts.Should().ContainSingle();
+        dispatch.Payloads.OfType<ExternalLinkDisconnectedEvent>()
+            .Should().ContainSingle(e =>
+                e.LinkId == "link-1" &&
+                e.Reason == "max reconnect attempts reached" &&
+                !e.WillReconnect &&
+                e.ReconnectAttempt == 2);
+        dispatch.Payloads.OfType<ExternalLinkReconnectingEvent>().Should().BeEmpty();
     }
 
     [Fact]
@@ -191,7 +271,7 @@ public sealed class ExternalLinkManagerTests
             [new RecordingTransportFactory(transport)],
             NullLogger.Instance);
 
-    private static ExternalLinkDescriptor Descriptor() =>
+    private static ExternalLinkDescriptor Descriptor(int maxReconnectAttempts = 3) =>
         new(
             "link-1",
             "recording",
@@ -200,7 +280,7 @@ public sealed class ExternalLinkManagerTests
             {
                 ReconnectBaseDelay = TimeSpan.FromMilliseconds(100),
                 ReconnectMaxDelay = TimeSpan.FromMilliseconds(100),
-                MaxReconnectAttempts = 3,
+                MaxReconnectAttempts = maxReconnectAttempts,
             });
 
     private static EventEnvelope Envelope(IMessage payload) =>
@@ -306,6 +386,15 @@ public sealed class ExternalLinkManagerTests
         public Task SendAsync(ReadOnlyMemory<byte> payload, CancellationToken ct) => Task.CompletedTask;
         public Task DisconnectAsync(CancellationToken ct) => Task.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        public Task EmitStateChangedAsync(
+            ExternalLinkStateChange state,
+            string? reason,
+            CancellationToken ct)
+        {
+            OnStateChanged.Should().NotBeNull();
+            return OnStateChanged(state, reason, ct);
+        }
     }
 
     private sealed class TrackingModule : IEventModule<IEventHandlerContext>

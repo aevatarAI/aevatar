@@ -48,6 +48,9 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
         _logger = logger;
     }
 
+    // Refactor (iter22/cluster-004):
+    //   Old pattern: callback envelopes were indistinguishable from user-observable events in the normal handler pipeline.
+    //   New principle: the manager advertises only its typed internal callback signals for actor-turn short-circuiting.
     public bool CanHandle(EventEnvelope envelope)
     {
         if (envelope.Payload == null)
@@ -57,6 +60,9 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
                || envelope.Payload.Is(ExternalLinkTransportStateChangedSignal.Descriptor);
     }
 
+    // Refactor (iter22/cluster-004):
+    //   Old pattern: callback work could continue on background threads after transport callbacks or delayed reconnect loops.
+    //   New principle: internal callback envelopes are unpacked and handled as explicit actor-turn signals.
     public async Task HandleAsync(EventEnvelope envelope, CancellationToken ct = default)
     {
         if (envelope.Payload == null)
@@ -135,6 +141,9 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
 
     // ── Connection ────────────────────────────────────────────
 
+    // Refactor (iter22/cluster-004):
+    //   Old pattern: a failed connect started a background reconnect loop from inside the connection helper.
+    //   New principle: failed connects schedule one typed reconnect callback that must re-enter the actor turn.
     private async Task ConnectLinkAsync(ManagedLink link, CancellationToken ct)
     {
         try
@@ -262,6 +271,9 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
         await DispatchEventAsync(evt, ct);
     }
 
+    // Refactor (iter22/cluster-004):
+    //   Old pattern: transport state callbacks directly changed link state and started reconnect loops.
+    //   New principle: this state transition method is only reached after a typed state signal is consumed in the actor turn.
     private async Task OnStateChangedAsync(
         ManagedLink link, ExternalLinkStateChange state, string? reason, CancellationToken ct)
     {
