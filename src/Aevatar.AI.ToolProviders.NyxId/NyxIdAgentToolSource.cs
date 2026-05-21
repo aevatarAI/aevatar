@@ -13,29 +13,26 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
 {
     private readonly NyxIdToolOptions _options;
     private readonly NyxIdApiClient _client;
-    private readonly NyxIdSpecCatalog _specCatalog;
-    private readonly IServiceDiscoveryCache _cache;
     private readonly ILogger _logger;
     private readonly bool _toolApprovalHandlerAvailable;
 
     public NyxIdAgentToolSource(
         NyxIdToolOptions options,
         NyxIdApiClient client,
-        NyxIdSpecCatalog specCatalog,
-        IServiceDiscoveryCache? cache = null,
         IToolApprovalHandler? approvalHandler = null,
         ILogger<NyxIdAgentToolSource>? logger = null)
     {
         _options = options;
         _client = client;
-        _specCatalog = specCatalog;
-        _cache = cache ?? new InMemoryServiceDiscoveryCache();
         _toolApprovalHandlerAvailable = approvalHandler is not null;
         _logger = logger ?? NullLogger<NyxIdAgentToolSource>.Instance;
     }
 
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
+        // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
+        //   Old pattern: NyxIdSpecCatalog + SpecFetchToken + IServiceDiscoveryCache 在仓库内建第二 catalog(NyxID 真实源的影子)
+        //   New principle: NyxID 是唯一真实源;删除 in-process catalog 假权威面; routing 和 spec hints 请求时读取 live NyxID surface;保留 typed tools + live nyxid_proxy
         if (string.IsNullOrWhiteSpace(_options.BaseUrl))
         {
             _logger.LogDebug("NyxID base URL not configured, skipping NyxID tools");
@@ -51,7 +48,7 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdSessionsTool(_client),
             new NyxIdCatalogTool(_client),
             new NyxIdServicesTool(_client),
-            new NyxIdProxyTool(_client, _cache, _logger),
+            new NyxIdProxyTool(_client, _logger),
             new NyxIdCodeExecuteTool(_client, _logger),
             new NyxIdApiKeysTool(_client),
             new NyxIdNodesTool(_client),
@@ -65,8 +62,6 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdOrgTool(_client),
             new NyxIdChannelEventsTool(_client),
             new NyxIdAdminTool(_client),
-            new NyxIdSearchCapabilitiesTool(_specCatalog),
-            new NyxIdProxyExecuteTool(_specCatalog, _client, _logger as ILogger<NyxIdProxyExecuteTool>),
         };
 
         // Refactor (iter23/cluster-001-nyxid-tool-approval-polling):

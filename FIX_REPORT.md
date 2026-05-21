@@ -1,12 +1,14 @@
-# Fix report for PR 781 round 2
+# Fix report for PR 791 round 1
 
 ## Applied
-- (A) `src/Aevatar.AI.Abstractions/ToolProviders/AgentToolExecutionContextMapper.cs:74`: extracted `FromRequestWithCallId(...)` so the typed-context fallback plus call-id rule has one implementation (addresses reviewer:quality evidence #1).
-- (A) `src/Aevatar.AI.Core/Chat/ChatRuntime.cs:240`, `src/Aevatar.AI.Core/Chat/ChatRuntime.cs:423`, `src/Aevatar.AI.Core/Tools/ToolCallLoop.cs:88`, `src/Aevatar.AI.Core/Tools/ToolCallLoop.cs:218`: replaced the four repeated `(ToolContext ?? FromRequest).WithCallId(...)` call-building sites with the shared mapper helper (addresses reviewer:quality evidence #1).
-- (A) `src/Aevatar.AI.Core/Chat/ChatRuntime.cs:455`: final no-tools DSML fallback now passes `finalRequest.ToolContext` into `StreamingToolExecutor`, so typed control facts survive after owned metadata keys are stripped (addresses reviewer:tests evidence #1).
-- (A) `src/Aevatar.AI.Core/Chat/ChatRuntime.cs:471`: summary request now carries the same `CallerContext`, `ToolContext`, and `RoutingContext` as the final request, preserving the typed request contract through the post-tool summary call (addresses reviewer:tests evidence #1).
-- (A) `src/Aevatar.AI.Core/Tools/StreamingToolExecutor.cs:53`: executor construction now prefers explicit typed context, then current scoped typed context, and only falls back to legacy metadata decoding at the boundary (addresses reviewer:architect evidence #3 and reviewer:tests evidence #1).
-- (B) `test/Aevatar.AI.Tests/ChatRuntimeStreamingBufferTests.cs:300`: SCOPE_EXTEND reason: the reject blocks consensus and this existing test file is the behavior surface for the cited final no-tools DSML `ChatRuntime` branch. Added a regression test proving final DSML tools receive typed `NyxIdAccessToken`, `ScopeId`, `CallId`, and channel message id while provider metadata remains stripped (addresses reviewer:tests evidence #1-#2).
+- (A) `src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdProxyTool.cs:11`: removed the private `ActorToolServiceDiscoveryCache` field and helper type; `ResolveTokenForServiceAsync` now checks NyxID `/proxy/services` live on each route decision instead of holding token-hash slug facts in a process-local dictionary (addresses reviewer:architect evidence #1).
+- (A) `src/Aevatar.AI.ToolProviders.NyxId/ConnectedServiceSpecCache.cs:50`: removed `_snapshots`, `SpecSnapshot`, and cache TTL state; connected-service spec hints fetch the current OpenAPI document per request through the named HTTP client instead of returning singleton process snapshots (addresses reviewer:architect evidence #2).
+- (A) `agents/Aevatar.GAgents.NyxidChat/NyxIdRelayPromptConfiguration.cs:24`: added the required `Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache)` Old/New comment for the prompt-surface change (addresses reviewer:architect evidence #4).
+- (A) `src/Aevatar.AI.ToolProviders.Ornn/OrnnSearchSkillsTool.cs:17`: added the required `Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache)` Old/New comment for the tool-description change (addresses reviewer:architect evidence #4).
+- (A) `test/Aevatar.AI.Tests/ToolProviderHttpClientRegistrationTests.cs:34`: added a behavior test that builds DI, resolves `IAgentToolSource`, calls `DiscoverToolsAsync`, asserts `nyxid_proxy` is present, and asserts `nyxid_search_capabilities` / `nyxid_proxy_execute` plus deleted catalog/cache registrations stay absent (addresses reviewer:tests evidence #1 and #2).
+- (A) `test/Aevatar.GAgents.ChannelRuntime.Tests/NyxIdProxyToolDualTokenTests.cs:97`: updated the proxy routing test to assert route decisions perform live NyxID discovery on each call, proving the deleted tool-instance cache cannot mask token/service ownership changes (addresses reviewer:architect evidence #1).
+- (B) `test/Aevatar.AI.Tests/ConnectedServiceSpecCacheTests.cs:21`: SCOPE_EXTEND reason: existing touched test expectations encoded the removed process-local spec snapshot behavior; updated assertions to expect a live fetch on the second call.
+- (B) `test/Aevatar.AI.Tests/ToolProviderHttpClientOwnershipTests.cs:106`: SCOPE_EXTEND reason: existing touched factory-client test encoded the removed spec snapshot behavior; updated assertions to expect a named factory client and HTTP request per spec fetch.
 
 ## Rejected as false positive
 - None.
@@ -15,9 +17,9 @@
 - None.
 
 ## Build status
-- build: pass (`dotnet build aevatar.slnx --nologo 2>&1 | tail -20`, 48 existing warnings, 0 errors)
-- tests: pass (`dotnet test test/Aevatar.AI.Tests/Aevatar.AI.Tests.csproj --nologo --no-build --filter "FullyQualifiedName~ChatRuntimeStreamingBufferTests|FullyQualifiedName~AgentToolExecutionContextMapperTests" 2>&1 | tail -10`, 28 passed)
-- guards: pass (`bash tools/ci/test_stability_guards.sh`; `bash tools/ci/architecture_guards.sh`)
+- build: pass (`dotnet build aevatar.slnx --nologo`; existing warnings only)
+- tests: pass (`dotnet test test/Aevatar.AI.Tests/Aevatar.AI.Tests.csproj --nologo --no-build`: 592 passed; `dotnet test test/Aevatar.GAgents.ChannelRuntime.Tests/Aevatar.GAgents.ChannelRuntime.Tests.csproj --nologo --no-build`: 816 passed)
+- guards: pass (`bash tools/ci/test_stability_guards.sh`; `bash tools/ci/architecture_guards.sh`; playground asset drift guard skipped by script because `pnpm` is not installed)
 
 ## Recommendation for next round
 - expect unanimous
