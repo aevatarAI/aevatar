@@ -3871,6 +3871,28 @@ describe("StudioPage", () => {
     expect(searchParams.get("tab")).toBe("overview");
   });
 
+  it("returns to the explicit Team handoff target after Studio settles its route", async () => {
+    renderStudioPage(
+      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&step=build&tab=studio&returnTo=%2Fteams%2Fscope-1%2Ft-alpha%3FmemberId%3Dworkspace-demo%26tab%3Dmembers"
+    );
+
+    expect(await screen.findByTestId("studio-workflow-build-panel")).toBeTruthy();
+
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("returnTo")).toBe(
+        "/teams/scope-1/t-alpha?memberId=workspace-demo&tab=members"
+      );
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "返回团队" }));
+
+    expect(window.location.pathname).toBe("/teams/scope-1/t-alpha");
+    const searchParams = new URLSearchParams(window.location.search);
+    expect(searchParams.get("memberId")).toBe("workspace-demo");
+    expect(searchParams.get("tab")).toBe("members");
+  });
+
   it("moves focus from a Script draft to the new Workflow member after create", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,

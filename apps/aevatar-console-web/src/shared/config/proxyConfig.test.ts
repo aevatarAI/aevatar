@@ -143,4 +143,31 @@ describe('proxy config', () => {
       ws: true,
     });
   });
+
+  it('preserves auth host only for local Studio targets', () => {
+    process.env.AEVATAR_API_TARGET = 'http://127.0.0.1:5080';
+    process.env.AEVATAR_STUDIO_API_TARGET = 'http://127.0.0.1:5180';
+
+    const localProxyModule = require('../../../config/proxy');
+    const localDevProxy = localProxyModule.default.dev as Record<string, ProxyEntry>;
+
+    expect(resolveProxyEntry(localDevProxy, '/api/auth/me')).toEqual({
+      target: 'http://127.0.0.1:5180',
+      changeOrigin: false,
+      ws: true,
+    });
+
+    jest.resetModules();
+    process.env.AEVATAR_STUDIO_API_TARGET =
+      'https://aevatar-console-backend-api.aevatar.ai';
+
+    const remoteProxyModule = require('../../../config/proxy');
+    const remoteDevProxy = remoteProxyModule.default.dev as Record<string, ProxyEntry>;
+
+    expect(resolveProxyEntry(remoteDevProxy, '/api/auth/me')).toEqual({
+      target: 'https://aevatar-console-backend-api.aevatar.ai',
+      changeOrigin: true,
+      ws: true,
+    });
+  });
 });
