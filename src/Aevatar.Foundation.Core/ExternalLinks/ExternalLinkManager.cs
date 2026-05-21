@@ -135,7 +135,6 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
         var link = GetLink(linkId);
         link.IsClosed = true;
         await CancelReconnectAsync(link, ct);
-        link.LifetimeCts.Cancel();
         await link.Transport.DisconnectAsync(ct);
     }
 

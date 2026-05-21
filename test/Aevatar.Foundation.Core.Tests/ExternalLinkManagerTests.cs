@@ -108,6 +108,10 @@ public sealed class ExternalLinkManagerTests
         transport.ConnectCalls.Should().Be(2);
         dispatch.Payloads.OfType<ExternalLinkConnectedEvent>()
             .Should().ContainSingle(e => e.LinkId == "link-1");
+        callbacks.CancelledLeases.Should().ContainSingle(lease =>
+            lease.ActorId == "actor-1" &&
+            lease.CallbackId == "external-link-reconnect:link-1" &&
+            lease.Generation == 1);
 
         await manager.HandleAsync(Envelope(new ExternalLinkReconnectDueSignal
         {
@@ -116,6 +120,40 @@ public sealed class ExternalLinkManagerTests
         }));
 
         transport.ConnectCalls.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task DisconnectAsync_WhenReconnectIsScheduled_ShouldCancelReconnectLease()
+    {
+        var callbacks = new RecordingCallbackScheduler();
+        var transport = new RecordingTransport { ConnectFailuresRemaining = 1 };
+        var manager = CreateManager(new RecordingDispatchPort(), callbacks, transport);
+        await manager.StartAsync([Descriptor()]);
+        callbacks.Timeouts.Should().ContainSingle();
+
+        await manager.DisconnectAsync("link-1");
+
+        callbacks.CancelledLeases.Should().ContainSingle(lease =>
+            lease.ActorId == "actor-1" &&
+            lease.CallbackId == "external-link-reconnect:link-1" &&
+            lease.Generation == 1);
+    }
+
+    [Fact]
+    public async Task DisposeAsync_WhenReconnectIsScheduled_ShouldCancelReconnectLease()
+    {
+        var callbacks = new RecordingCallbackScheduler();
+        var transport = new RecordingTransport { ConnectFailuresRemaining = 1 };
+        var manager = CreateManager(new RecordingDispatchPort(), callbacks, transport);
+        await manager.StartAsync([Descriptor()]);
+        callbacks.Timeouts.Should().ContainSingle();
+
+        await manager.DisposeAsync();
+
+        callbacks.CancelledLeases.Should().ContainSingle(lease =>
+            lease.ActorId == "actor-1" &&
+            lease.CallbackId == "external-link-reconnect:link-1" &&
+            lease.Generation == 1);
     }
 
     [Fact]
@@ -206,9 +244,10 @@ public sealed class ExternalLinkManagerTests
     {
         var dispatch = new RecordingDispatchPort();
         var callbacks = new RecordingCallbackScheduler();
-        var transport = new RecordingTransport();
+        var transport = new RecordingTransport { ConnectFailuresRemaining = 1 };
         var manager = CreateManager(dispatch, callbacks, transport);
         await manager.StartAsync([Descriptor()]);
+        callbacks.Timeouts.Should().ContainSingle();
         dispatch.Payloads.Clear();
 
         await manager.HandleAsync(Envelope(new ExternalLinkTransportStateChangedSignal
@@ -224,7 +263,10 @@ public sealed class ExternalLinkManagerTests
                 e.Reason == "remote-closed" &&
                 !e.WillReconnect);
         dispatch.Payloads.OfType<ExternalLinkReconnectingEvent>().Should().BeEmpty();
-        callbacks.Timeouts.Should().BeEmpty();
+        callbacks.CancelledLeases.Should().ContainSingle(lease =>
+            lease.ActorId == "actor-1" &&
+            lease.CallbackId == "external-link-reconnect:link-1" &&
+            lease.Generation == 1);
     }
 
     [Fact]
@@ -258,6 +300,30 @@ public sealed class ExternalLinkManagerTests
         dispatch.Payloads.OfType<ExternalLinkDisconnectedEvent>()
             .Should().ContainSingle(e => e.LinkId == "link-1" && e.WillReconnect);
         callbacks.Timeouts.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task GAgentBaseDeactivateAsync_WhenReconnectIsScheduled_ShouldCancelReconnectLease()
+    {
+        var callbacks = new RecordingCallbackScheduler();
+        var transport = new RecordingTransport { ConnectFailuresRemaining = 1 };
+        var agent = new ExternalLinkAwareAgent();
+        agent.SetId("actor-1");
+        agent.Services = TestRuntimeServices.BuildProvider(services =>
+        {
+            services.AddSingleton<IActorDispatchPort>(new RecordingDispatchPort());
+            services.AddSingleton<IActorRuntimeCallbackScheduler>(callbacks);
+            services.AddSingleton<IExternalLinkTransportFactory>(new RecordingTransportFactory(transport));
+        });
+        await agent.ActivateAsync();
+        callbacks.Timeouts.Should().ContainSingle();
+
+        await agent.DeactivateAsync();
+
+        callbacks.CancelledLeases.Should().ContainSingle(lease =>
+            lease.ActorId == "actor-1" &&
+            lease.CallbackId == "external-link-reconnect:link-1" &&
+            lease.Generation == 1);
     }
 
     private static ExternalLinkManager CreateManager(

@@ -13,7 +13,6 @@ internal sealed class ManagedLink : IAsyncDisposable
 {
     public ExternalLinkDescriptor Descriptor { get; }
     public IExternalLinkTransport Transport { get; }
-    public CancellationTokenSource LifetimeCts { get; } = new();
     public int ReconnectAttempt { get; set; }
     public bool IsConnected { get; set; }
     public bool IsClosed { get; set; }
@@ -27,8 +26,6 @@ internal sealed class ManagedLink : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        LifetimeCts.Cancel();
-        LifetimeCts.Dispose();
         try
         {
             await Transport.DisposeAsync();
