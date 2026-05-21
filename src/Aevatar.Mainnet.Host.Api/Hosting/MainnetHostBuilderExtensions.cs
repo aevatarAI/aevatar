@@ -205,6 +205,7 @@ public static class MainnetHostBuilderExtensions
         app.MapChannelCallbackEndpoints();
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();
+        app.MapVoiceDemoBootstrapEndpoints();
         app.MapPolicyAwareVoiceEndpoint();
         app.MapVoicePresenceWebSocket("/ws/voice/{actorId}")
             .RequireAuthorization("voice-dev");
