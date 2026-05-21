@@ -430,6 +430,220 @@ public sealed class ScopeServiceEndpointsStreamTests
         sessionHub.Published.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task GAgentDraftRunSessionEventProjector_ShouldIgnoreEnvelope_WhenContextSessionIsMissing()
+    {
+        var sessionHub = new RecordingProjectionSessionEventHub();
+        var projector = new GAgentDraftRunSessionEventProjector(sessionHub);
+
+        await projector.ProjectAsync(
+            new GAgentDraftRunProjectionContext
+            {
+                RootActorId = "actor-1",
+                SessionId = " ",
+                ProjectionKind = "service-draft-run-session",
+            },
+            new EventEnvelope
+            {
+                Propagation = new EnvelopePropagation
+                {
+                    CorrelationId = "cmd-1",
+                },
+                Payload = Any.Pack(new AiTextContentEvent
+                {
+                    SessionId = "msg-1",
+                    Delta = "hello",
+                }),
+            },
+            CancellationToken.None);
+
+        sessionHub.Published.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GAgentDraftRunSessionEventProjector_ShouldIgnoreUnmappedEnvelope_ForMatchingSession()
+    {
+        var sessionHub = new RecordingProjectionSessionEventHub();
+        var projector = new GAgentDraftRunSessionEventProjector(sessionHub);
+
+        await projector.ProjectAsync(
+            new GAgentDraftRunProjectionContext
+            {
+                RootActorId = "actor-1",
+                SessionId = "cmd-1",
+                ProjectionKind = "service-draft-run-session",
+            },
+            new EventEnvelope
+            {
+                Propagation = new EnvelopePropagation
+                {
+                    CorrelationId = "cmd-1",
+                },
+                Payload = Any.Pack(new StringValue { Value = "ignored" }),
+            },
+            CancellationToken.None);
+
+        sessionHub.Published.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GAgentDraftRunSessionEventProjector_ShouldAppendRunFinished_ForLiveTextMessageEnd()
+    {
+        var sessionHub = new RecordingProjectionSessionEventHub();
+        var projector = new GAgentDraftRunSessionEventProjector(sessionHub);
+
+        await projector.ProjectAsync(
+            new GAgentDraftRunProjectionContext
+            {
+                RootActorId = "actor-1",
+                SessionId = "cmd-1",
+                ProjectionKind = "service-draft-run-session",
+            },
+            new EventEnvelope
+            {
+                Propagation = new EnvelopePropagation
+                {
+                    CorrelationId = "cmd-1",
+                },
+                Payload = Any.Pack(new AiTextEndEvent
+                {
+                    SessionId = "msg-1",
+                    Content = "done",
+                }),
+            },
+            CancellationToken.None);
+
+        sessionHub.Published.Should().HaveCount(2);
+        sessionHub.Published[0].Event.TextMessageEnd.Should().NotBeNull();
+        sessionHub.Published[0].Event.TextMessageEnd!.MessageId.Should().Be("msg-1");
+        sessionHub.Published[1].Event.RunFinished.Should().NotBeNull();
+        sessionHub.Published[1].Event.RunFinished!.ThreadId.Should().Be("actor-1");
+        sessionHub.Published[1].Event.RunFinished.RunId.Should().Be("cmd-1");
+    }
+
+    [Fact]
+    public async Task GAgentDraftRunSessionEventProjector_ShouldCompleteRunFinishedFrame_WhenIdsAreMissing()
+    {
+        var sessionHub = new RecordingProjectionSessionEventHub();
+        var projector = new GAgentDraftRunSessionEventProjector(sessionHub);
+
+        await projector.ProjectAsync(
+            new GAgentDraftRunProjectionContext
+            {
+                RootActorId = "actor-1",
+                SessionId = "cmd-1",
+                ProjectionKind = "service-draft-run-session",
+            },
+            new EventEnvelope
+            {
+                Propagation = new EnvelopePropagation
+                {
+                    CorrelationId = "cmd-1",
+                },
+                Payload = Any.Pack(new AGUIEvent
+                {
+                    RunFinished = new RunFinishedEvent(),
+                }),
+            },
+            CancellationToken.None);
+
+        var published = sessionHub.Published.Should().ContainSingle().Subject;
+        published.Event.RunFinished.Should().NotBeNull();
+        published.Event.RunFinished!.ThreadId.Should().Be("actor-1");
+        published.Event.RunFinished.RunId.Should().Be("cmd-1");
+    }
+
+    [Fact]
+    public async Task GAgentDraftRunSessionEventProjector_ShouldPreserveRunFinishedFrameIds_WhenPresent()
+    {
+        var sessionHub = new RecordingProjectionSessionEventHub();
+        var projector = new GAgentDraftRunSessionEventProjector(sessionHub);
+
+        await projector.ProjectAsync(
+            new GAgentDraftRunProjectionContext
+            {
+                RootActorId = "actor-1",
+                SessionId = "cmd-1",
+                ProjectionKind = "service-draft-run-session",
+            },
+            new EventEnvelope
+            {
+                Propagation = new EnvelopePropagation
+                {
+                    CorrelationId = "cmd-1",
+                },
+                Payload = Any.Pack(new AGUIEvent
+                {
+                    RunFinished = new RunFinishedEvent
+                    {
+                        ThreadId = "thread-existing",
+                        RunId = "run-existing",
+                    },
+                }),
+            },
+            CancellationToken.None);
+
+        var published = sessionHub.Published.Should().ContainSingle().Subject;
+        published.Event.RunFinished.Should().NotBeNull();
+        published.Event.RunFinished!.ThreadId.Should().Be("thread-existing");
+        published.Event.RunFinished.RunId.Should().Be("run-existing");
+    }
+
+    [Fact]
+    public async Task GAgentDraftRunSessionEventProjector_ShouldPublishTerminalFrames_FromCommittedEmptyCompletion()
+    {
+        var sessionHub = new RecordingProjectionSessionEventHub();
+        var projector = new GAgentDraftRunSessionEventProjector(sessionHub);
+
+        await projector.ProjectAsync(
+            new GAgentDraftRunProjectionContext
+            {
+                RootActorId = "actor-1",
+                SessionId = "cmd-1",
+                ProjectionKind = "service-draft-run-session",
+            },
+            WrapCommittedCompletion(
+                new RoleChatSessionCompletedEvent
+                {
+                    SessionId = " ",
+                    Content = string.Empty,
+                },
+                correlationId: "cmd-1"),
+            CancellationToken.None);
+
+        sessionHub.Published.Should().HaveCount(2);
+        sessionHub.Published[0].Event.TextMessageEnd.Should().NotBeNull();
+        sessionHub.Published[0].Event.TextMessageEnd!.MessageId.Should().Be("cmd-1");
+        sessionHub.Published[1].Event.RunFinished.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task GAgentDraftRunSessionEventProjector_ShouldPublishRunError_FromCommittedLlmRequestFailure()
+    {
+        var sessionHub = new RecordingProjectionSessionEventHub();
+        var projector = new GAgentDraftRunSessionEventProjector(sessionHub);
+
+        await projector.ProjectAsync(
+            new GAgentDraftRunProjectionContext
+            {
+                RootActorId = "actor-1",
+                SessionId = "cmd-1",
+                ProjectionKind = "service-draft-run-session",
+            },
+            WrapCommittedCompletion(
+                new RoleChatSessionCompletedEvent
+                {
+                    SessionId = "cmd-1",
+                    Content = "LLM request failed [tools=none]: upstream",
+                },
+                correlationId: "cmd-1"),
+            CancellationToken.None);
+
+        var published = sessionHub.Published.Should().ContainSingle().Subject;
+        published.Event.RunError.Should().NotBeNull();
+        published.Event.RunError!.Message.Should().Be("LLM request failed [tools=none]: upstream");
+    }
+
     private static EventEnvelope WrapCommittedCompletion(
         RoleChatSessionCompletedEvent evt,
         string correlationId) =>
