@@ -5,6 +5,9 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.StreamingProxy.Application.Rooms;
 
+// Refactor (iter23/cluster-002):
+//   Old pattern: Command ports synchronously activate projection scopes before dispatch and sometimes turn projection lease failure into command admission failure.
+//   New principle: Command ports dispatch accepted commands; projection activation is owned by committed-state hooks, explicit observation binders, startup activators, or background materializers.
 public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomCommandService
 {
     private const string DefaultRoomName = "Group Chat";
@@ -12,23 +15,17 @@ public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomComman
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _actorDispatchPort;
     private readonly IGAgentActorRegistryCommandPort _registryCommandPort;
-    private readonly IStreamingProxyRoomSessionProjectionPort _roomSessionProjectionPort;
     private readonly ILogger<StreamingProxyRoomCommandService> _logger;
 
     public StreamingProxyRoomCommandService(
         IActorRuntime actorRuntime,
         IActorDispatchPort actorDispatchPort,
         IGAgentActorRegistryCommandPort registryCommandPort,
-        IStreamingProxyRoomSessionProjectionPort roomSessionProjectionPort,
         ILogger<StreamingProxyRoomCommandService> logger)
     {
-        // Refactor (iter21/cluster-002-request-path-projection-session-priming):
-        //   Old pattern: request handlers synchronously ensure projection/session leases and wait on live sinks.
-        //   New principle: commands use accepted receipts; observation is owned by binders or attach-only sessions.
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _registryCommandPort = registryCommandPort ?? throw new ArgumentNullException(nameof(registryCommandPort));
-        _roomSessionProjectionPort = roomSessionProjectionPort ?? throw new ArgumentNullException(nameof(roomSessionProjectionPort));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -50,19 +47,6 @@ public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomComman
 
             var envelope = BuildRoomInitializedEnvelope(actor.Id, roomName);
             await DispatchRoomEnvelopeAsync(actor.Id, envelope, cancellationToken);
-
-            var subscriptionLease = await _roomSessionProjectionPort.EnsureSubscriptionProjectionAsync(
-                actor.Id,
-                StreamingProxyRoomSubscriptionObservationPort.RoomSubscriptionSessionId(actor.Id),
-                cancellationToken);
-            if (subscriptionLease == null)
-            {
-                await TryRollbackRoomCreationAsync(scopeId, roomId, CancellationToken.None);
-                return new StreamingProxyRoomCreateResult(
-                    StreamingProxyRoomCreateStatus.AdmissionUnavailable,
-                    roomId,
-                    roomName);
-            }
 
             var receipt = await _registryCommandPort.RegisterActorAsync(
                 new GAgentActorRegistration(scopeId, StreamingProxyDefaults.GAgentTypeName, roomId),
