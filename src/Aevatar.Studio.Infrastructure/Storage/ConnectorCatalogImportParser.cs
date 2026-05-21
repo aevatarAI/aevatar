@@ -7,5 +7,5 @@ internal sealed class ConnectorCatalogImportParser : IConnectorCatalogImportPars
     public Task<IReadOnlyList<StoredConnectorDefinition>> ParseCatalogAsync(
         Stream stream,
         CancellationToken cancellationToken = default) =>
-        ConnectorCatalogJsonSerializer.ReadCatalogAsync(stream, cancellationToken);
+        ConnectorCatalogStorageSerializer.ReadCatalogAsync(stream, cancellationToken);
 }
