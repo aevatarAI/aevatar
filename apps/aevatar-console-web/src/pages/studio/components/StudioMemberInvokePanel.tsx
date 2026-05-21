@@ -22,6 +22,7 @@ import {
 import { studioApi } from '@/shared/studio/api';
 import {
   describeStudioMemberBindingRevisionContext,
+  normalizeStudioMemberBindingImplementationKind,
   type StudioMemberBindingRevision,
 } from '@/shared/studio/models';
 import type { StudioObserveSessionSeed } from '@/shared/studio/observeSession';
@@ -54,6 +55,7 @@ type StudioMemberInvokePanelProps = {
   readonly scopeId: string;
   readonly memberId?: string;
   readonly memberRevision?: StudioMemberBindingRevision | null;
+  readonly teamId?: string;
   readonly services: readonly ScopeConsoleServiceOption[];
   readonly selectedMemberLabel?: string;
   readonly emptyState?: {
@@ -241,6 +243,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   scopeId,
   memberId,
   memberRevision,
+  teamId,
   services,
   selectedMemberLabel,
   emptyState,
@@ -311,10 +314,14 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const currentPublishedContext = describeStudioMemberBindingRevisionContext(
     currentMemberRevision,
   );
+  const currentImplementationKind = normalizeStudioMemberBindingImplementationKind(
+    currentMemberRevision?.implementationKind,
+  );
   const currentRevisionId =
     trimOptional(endpointContract?.revisionId) ||
     trimOptional(currentMemberRevision?.revisionId);
   const normalizedMemberId = trimOptional(memberId);
+  const normalizedTeamId = trimOptional(teamId);
   const currentMemberActorId = trimOptional(currentMemberRevision?.primaryActorId);
   const currentMemberLabel =
     trimOptional(selectedMemberLabel) ||
@@ -324,6 +331,10 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const canInvoke = Boolean(
     scopeId && normalizedMemberId && selectedService && selectedEndpoint,
   );
+  const invokeRouteTarget =
+    currentImplementationKind === 'gagent' && normalizedTeamId
+      ? { teamId: normalizedTeamId }
+      : { serviceId: selectedService?.serviceId };
   const visibleRequestHistory = useMemo(() => {
     const currentServiceId =
       trimOptional(selectedService?.serviceId) || trimOptional(initialServiceId);
@@ -730,10 +741,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
             prompt: trimmedPrompt,
           },
           controller.signal,
-          {
-            memberId: normalizedMemberId,
-            serviceId: selectedService.serviceId,
-          },
+          invokeRouteTarget,
         );
 
         for await (const event of parseBackendSSEStream(response, {
@@ -905,10 +913,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
           payloadTypeUrl: trimmedPayloadTypeUrl || undefined,
           prompt: trimmedPrompt,
         },
-        {
-          memberId: normalizedMemberId,
-          serviceId: selectedService.serviceId,
-        },
+        invokeRouteTarget,
       );
       const completedAt = Date.now();
       const {

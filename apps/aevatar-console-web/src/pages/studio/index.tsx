@@ -9355,6 +9355,7 @@ const StudioPage: React.FC = () => {
         }
         initialEndpointId={bindInitialEndpointId}
         memberId={workbenchStudioMemberId || undefined}
+        teamId={routeState.teamId || undefined}
         initialServiceId={bindPendingCandidate ? '' : bindSelectedMemberServiceId}
         onBindPendingCandidate={handleBindPendingCandidate}
         onContinueToInvoke={handleUseBindingEndpoint}
@@ -9377,6 +9378,7 @@ const StudioPage: React.FC = () => {
         returnTo={currentStudioReturnTo || undefined}
         selectedMemberLabel={invokeTargetLabel || undefined}
         scopeId={resolvedStudioScopeId}
+        teamId={routeState.teamId || undefined}
         initialEndpointId={invokeInitialEndpointId}
         initialServiceId={invokeTargetServiceId}
         services={invokeTargetServices}
