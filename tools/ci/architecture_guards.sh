@@ -520,7 +520,9 @@ function register_base(class_name, base_clause, parts, first_base)
   if (line ~ /^[[:space:]]*\/\//)
     next;
 
-  if (line ~ /(^|[[:space:](;])(this\.)?State\.[A-Za-z_][A-Za-z0-9_]*[[:space:]]*(\+\+|--|[+*%\/-]?=)/)
+  # match State.Foo = / += / -= / *= / /= / %= / ++ / -- (real mutations)
+  # exclude State.Foo == (comparison) — `=` must NOT be followed by another `=`
+  if (line ~ /(^|[[:space:](;])(this\.)?State\.[A-Za-z_][A-Za-z0-9_]*[[:space:]]*(\+\+|--|[+*%\/-]?=[^=])/)
   {
     state_mutation[FILENAME] = state_mutation[FILENAME] sprintf("%s:%d:%s\n", FILENAME, FNR, line);
   }
