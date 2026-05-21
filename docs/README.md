@@ -54,6 +54,7 @@ Immutable records of architectural choices and their rationale.
 - [0022 — OpenTelemetry semantic conventions for aevatar.* activities](adr/0022-otel-aevatar-semantic-conventions.md)
 - [0023 — Two-tier Inspector architecture (canonical readmodel vs observation OTel)](adr/0023-two-tier-inspector-architecture.md)
 - [Chat Route Policy — Config Actor + Boundary Resolver](adr/0024-chat-route-policy.md)
+- [Elasticsearch exact-match field resolution reads live index mapping](adr/0025-elasticsearch-exact-match-resolution-reads-index-truth.md)
 
 ## History
 

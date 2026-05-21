@@ -36,7 +36,7 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
     private readonly DocumentIndexMetadata _indexMetadata;
     private readonly Func<TReadModel, string?>? _indexScopeSelector;
     private readonly Func<string, string> _fieldPathResolver;
-    private readonly Func<ProjectionDocumentFilter, string, string> _exactMatchFieldPathResolver;
+    private readonly IReadOnlyDictionary<string, FieldDescriptor> _descriptorFieldMap;
     private readonly ILogger<ElasticsearchProjectionDocumentStore<TReadModel, TKey>> _logger;
 
     public ElasticsearchProjectionDocumentStore(
@@ -98,7 +98,7 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         _indexScopeSelector = indexScopeSelector;
         _defaultSortField = options.DefaultSortField?.Trim() ?? "";
         _fieldPathResolver = BuildFieldPathResolver(descriptor);
-        _exactMatchFieldPathResolver = BuildExactMatchFieldPathResolver(descriptor, _indexMetadata);
+        _descriptorFieldMap = BuildDescriptorFieldMap(descriptor);
         _logger = logger ?? NullLogger<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>.Instance;
 
         _indexManager = new ElasticsearchIndexLifecycleManager(_httpClient, _autoCreateIndex);
@@ -206,6 +206,7 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         ct.ThrowIfCancellationRequested();
         ThrowIfDynamicReadModelQueriesUnsupported("query");
         await _indexManager.EnsureIndexAsync(_indexName, _indexMetadata, ct);
+        var exactMatchFieldPathResolver = await BuildExactMatchFieldPathResolverAsync(ct);
         var boundedTake = Math.Clamp(query.Take <= 0 ? 50 : query.Take, 1, _queryTakeMax);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{_indexName}/_search")
@@ -216,7 +217,7 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
                     _defaultSortField,
                     boundedTake,
                     _fieldPathResolver,
-                    _exactMatchFieldPathResolver),
+                    exactMatchFieldPathResolver),
                 Encoding.UTF8,
                 "application/json"),
         };
@@ -284,11 +285,23 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         return fieldPath => ResolveFieldPath(descriptor, fieldPath);
     }
 
-    private static Func<ProjectionDocumentFilter, string, string> BuildExactMatchFieldPathResolver(
-        MessageDescriptor descriptor,
-        DocumentIndexMetadata indexMetadata)
+    private async Task<Func<ProjectionDocumentFilter, string, string>> BuildExactMatchFieldPathResolverAsync(
+        CancellationToken ct)
     {
-        var descriptorFieldMap = BuildDescriptorFieldMap(descriptor);
+        // Exact-match (term) filters must target the field path that physically exists in
+        // Elasticsearch. The resolver consults the live index `_mapping`, not the code-side
+        // augmented `DocumentIndexMetadata`: a string field that augmented metadata declares
+        // `keyword` may still be a dynamic `text` + `.keyword` multi-field on any index created
+        // before that declaration shipped. When the live mapping cannot be read, fall back to the
+        // declared metadata (pre-existing behaviour).
+        // See docs/adr/0025-elasticsearch-exact-match-resolution-reads-index-truth.md.
+        var actualFieldMappings = await _indexManager.GetActualFieldMappingsAsync(_indexName, ct);
+        return BuildExactMatchFieldPathResolver(actualFieldMappings ?? _indexMetadata.Mappings);
+    }
+
+    private Func<ProjectionDocumentFilter, string, string> BuildExactMatchFieldPathResolver(
+        IReadOnlyDictionary<string, object?> mappings)
+    {
         return (filter, resolvedFieldPath) =>
         {
             if (resolvedFieldPath.EndsWith(".keyword", StringComparison.Ordinal))
@@ -298,20 +311,20 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
                 return resolvedFieldPath;
 
             if (ElasticsearchProjectionDocumentStoreMetadataSupport.TryGetFieldMapping(
-                    indexMetadata.Mappings,
+                    mappings,
                     resolvedFieldPath,
-                    out var explicitMapping))
+                    out var fieldMapping))
             {
-                if (ElasticsearchProjectionDocumentStoreMetadataSupport.IsKeywordFieldMapping(explicitMapping))
+                if (ElasticsearchProjectionDocumentStoreMetadataSupport.IsKeywordFieldMapping(fieldMapping))
                     return resolvedFieldPath;
 
-                if (ElasticsearchProjectionDocumentStoreMetadataSupport.HasKeywordMultiField(explicitMapping))
+                if (ElasticsearchProjectionDocumentStoreMetadataSupport.HasKeywordMultiField(fieldMapping))
                     return $"{resolvedFieldPath}.keyword";
 
                 return resolvedFieldPath;
             }
 
-            return descriptorFieldMap.TryGetValue(resolvedFieldPath, out var field) &&
+            return _descriptorFieldMap.TryGetValue(resolvedFieldPath, out var field) &&
                    field.FieldType == FieldType.String
                 ? $"{resolvedFieldPath}.keyword"
                 : resolvedFieldPath;

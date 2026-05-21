@@ -95,6 +95,8 @@ owner: aevatar-core
 9. 重构语义必须诚实: 新 mapping 契约不兼容旧 index 时，直接要求清空 / 重建 projection index；不在应用读路径里偷偷修复，也不为未投产历史数据设计兼容层。
 10. 本设计不得引入内部泛化 `Metadata` bag；`DocumentIndexMetadata` 是 Elasticsearch index 边界元信息，允许保留该命名。
 
+> **修订（2026-05-22，ADR-0025）**：约束 #2、#9 适用于 index 初始化与 mapping augmentation helper。exact-match（`term`）查询的字段路径解析已改为读取目标 index 的实时 `_mapping`——augmented metadata 是代码意图，2026-05-18 之前创建的 index 的物理 mapping 才是事实，二者背离曾导致 #743 线上故障。读取 `_mapping` 不做 mutation / repair / replay，仍满足约束 #3。详见 `docs/adr/0025-elasticsearch-exact-match-resolution-reads-index-truth.md`。
+
 ## 6. 当前基线
 
 ### 6.1 当前正确部分

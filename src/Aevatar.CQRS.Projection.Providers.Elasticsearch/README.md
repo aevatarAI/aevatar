@@ -32,8 +32,16 @@ Elasticsearch Document Provider。
 - 新建索引时，provider 会基于 read model 的 protobuf descriptor 补齐低风险稳定字段映射：root-level `google.protobuf.Timestamp` 映射为 `date`，root-level 稳定字符串标识字段（如 `id`、`actor_id`、`last_event_id`、`*_id`、`*_key`、`*_hash`、`*_status`、`*_kind`、`*_type`、`*_type_url`）映射为 `keyword`
 - `DocumentIndexMetadata` 中显式声明的 mapping 优先，provider 不覆盖自定义 `text`、analyzer、object、nested 或其他业务 mapping
 - `google.protobuf.Any`、`google.protobuf.Struct`、map、repeated message 与 repeated scalar 字段默认保持开放，不由通用 helper 递归展开
-- mapping 契约变更不兼容旧 Elasticsearch index 时，直接清空或重建 projection index；provider 不做旧索引在线修复、双读 fallback 或 query-time mapping repair
+- mapping 契约变更不兼容旧 Elasticsearch index 时，index 初始化仍按当前契约创建**新** index；provider 不在读路径在线修复、重建或 mutate 旧 index
 - `AutoCreateIndex=true` 只会在缺失 index 时按当前契约创建新 index；如果需要保留数据，应通过 projection 重放或外部重建流程恢复数据
+
+## 精确匹配字段路径解析
+
+- 精确匹配（`term` / `terms`）过滤的 `keyword` / `text` 字段路径解析基于目标 index 的**实时** `_mapping`（`GET <index>/_mapping`），而非代码侧 augmented metadata
+- 原因：augmented metadata 是代码意图；2026-05-18 之前创建的 index 上 `*_id` 等字符串字段可能仍是 dynamic `text` + `.keyword` multi-field。二者背离会让 `term` 查询命中 analyzed `text` 字段并对 identifier 形态的值返回 0 命中（见 issue #743、ADR-0025）
+- 读取 `_mapping` 只读取 index schema，不做 mapping mutation / reindex / 文档回填 / event replay；成功的探测结果按 index 缓存
+- `_mapping` 探测失败（index 缺失、ES 不可达、超时、响应不可解析）时回退到 declared / augmented metadata，即 #743 之前的解析行为
+- 决策记录见 `docs/adr/0025-elasticsearch-exact-match-resolution-reads-index-truth.md`
 
 参考：
 

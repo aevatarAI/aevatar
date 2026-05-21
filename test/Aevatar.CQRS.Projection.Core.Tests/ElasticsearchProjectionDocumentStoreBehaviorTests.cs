@@ -70,7 +70,8 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
 
         _ = await store.QueryAsync(new ProjectionDocumentQuery());
 
-        var searchRequest = handler.CapturedRequests.Should().ContainSingle().Subject;
+        var searchRequest = handler.CapturedRequests
+            .Should().ContainSingle(r => r.PathAndQuery.EndsWith("/_search")).Subject;
         searchRequest.PathAndQuery.Should().EndWith("/_search");
         searchRequest.Body.Should().Contain("\"sort\"");
         searchRequest.Body.Should().Contain("\"CreatedAt\"");
@@ -85,6 +86,8 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     public async Task QueryAsync_WhenUsingClrFieldPaths_ShouldTranslateToProtoFieldNames()
     {
         var handler = new ScriptedHttpMessageHandler();
+        handler.SetMappingResponse(_ => CreateMappingResponse(
+            """{"actor_id":{"type":"keyword"}}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(
             HttpStatusCode.OK,
             """{"hits":{"hits":[]}}"""));
@@ -117,7 +120,8 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             ],
         });
 
-        var searchRequest = handler.CapturedRequests.Should().ContainSingle().Subject;
+        var searchRequest = handler.CapturedRequests
+            .Should().ContainSingle(r => r.PathAndQuery.EndsWith("/_search")).Subject;
         searchRequest.Body.Should().Contain("\"actor_id\":\"actor-1\"");
         searchRequest.Body.Should().Contain("\"updated_at_utc_value\"");
         searchRequest.Body.Should().NotContain("\"ActorId\"");
@@ -303,7 +307,8 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             ],
         });
 
-        var searchRequest = handler.CapturedRequests.Should().ContainSingle().Subject;
+        var searchRequest = handler.CapturedRequests
+            .Should().ContainSingle(r => r.PathAndQuery.EndsWith("/_search")).Subject;
         searchRequest.Body.Should().Contain("\"updated_at_utc_value\"");
         searchRequest.Body.Should().Contain("\"missing\":\"_last\"");
         searchRequest.Body.Should().Contain("\"unmapped_type\":\"date\"");
@@ -336,45 +341,29 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             ],
         });
 
-        var searchRequest = handler.CapturedRequests.Should().ContainSingle().Subject;
+        var searchRequest = handler.CapturedRequests
+            .Should().ContainSingle(r => r.PathAndQuery.EndsWith("/_search")).Subject;
         searchRequest.Body.Should().Contain("\"value\"");
         searchRequest.Body.Should().Contain("\"missing\":\"_last\"");
         searchRequest.Body.Should().Contain("\"unmapped_type\":\"keyword\"");
     }
 
     [Fact]
-    public async Task QueryAsync_WhenFieldHasExplicitKeywordMapping_ShouldNotAppendKeywordSuffix()
+    public async Task QueryAsync_WhenLiveIndexMappingIsKeyword_ShouldNotAppendKeywordSuffix()
     {
         var handler = new ScriptedHttpMessageHandler();
+        handler.SetMappingResponse(_ => CreateMappingResponse(
+            """{"value":{"type":"keyword"}}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(
             HttpStatusCode.OK,
             """{"hits":{"hits":[]}}"""));
 
-        var options = new ElasticsearchProjectionDocumentStoreOptions
-        {
-            AutoCreateIndex = false,
-        };
-        options.Endpoints = ["http://localhost:9200"];
-
-        using var store = new ElasticsearchProjectionDocumentStore<TestStoreReadModel, string>(
-            options,
-            new DocumentIndexMetadata(
-                IndexName: "projection-core-tests",
-                Mappings: new Dictionary<string, object?>
-                {
-                    ["properties"] = new Dictionary<string, object?>
-                    {
-                        ["value"] = new Dictionary<string, object?>
-                        {
-                            ["type"] = "keyword",
-                        },
-                    },
-                },
-                Settings: new Dictionary<string, object?>(),
-                Aliases: new Dictionary<string, object?>()),
-            keySelector: model => model.Id,
-            keyFormatter: key => key,
-            httpMessageHandler: handler);
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = false,
+            },
+            handler);
 
         _ = await store.QueryAsync(new ProjectionDocumentQuery
         {
@@ -389,44 +378,28 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             ],
         });
 
-        var searchRequest = handler.CapturedRequests.Should().ContainSingle().Subject;
+        var searchRequest = handler.CapturedRequests
+            .Should().ContainSingle(r => r.PathAndQuery.EndsWith("/_search")).Subject;
         searchRequest.Body.Should().Contain("\"value\":\"v1\"");
         searchRequest.Body.Should().NotContain("\"value.keyword\"");
     }
 
     [Fact]
-    public async Task QueryAsync_WhenFieldHasExplicitTextMappingWithoutKeyword_ShouldNotInventKeywordSuffix()
+    public async Task QueryAsync_WhenLiveIndexMappingIsTextWithoutKeyword_ShouldNotInventKeywordSuffix()
     {
         var handler = new ScriptedHttpMessageHandler();
+        handler.SetMappingResponse(_ => CreateMappingResponse(
+            """{"value":{"type":"text"}}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(
             HttpStatusCode.OK,
             """{"hits":{"hits":[]}}"""));
 
-        var options = new ElasticsearchProjectionDocumentStoreOptions
-        {
-            AutoCreateIndex = false,
-        };
-        options.Endpoints = ["http://localhost:9200"];
-
-        using var store = new ElasticsearchProjectionDocumentStore<TestStoreReadModel, string>(
-            options,
-            new DocumentIndexMetadata(
-                IndexName: "projection-core-tests",
-                Mappings: new Dictionary<string, object?>
-                {
-                    ["properties"] = new Dictionary<string, object?>
-                    {
-                        ["value"] = new Dictionary<string, object?>
-                        {
-                            ["type"] = "text",
-                        },
-                    },
-                },
-                Settings: new Dictionary<string, object?>(),
-                Aliases: new Dictionary<string, object?>()),
-            keySelector: model => model.Id,
-            keyFormatter: key => key,
-            httpMessageHandler: handler);
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = false,
+            },
+            handler);
 
         _ = await store.QueryAsync(new ProjectionDocumentQuery
         {
@@ -441,7 +414,8 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             ],
         });
 
-        var searchRequest = handler.CapturedRequests.Should().ContainSingle().Subject;
+        var searchRequest = handler.CapturedRequests
+            .Should().ContainSingle(r => r.PathAndQuery.EndsWith("/_search")).Subject;
         searchRequest.Body.Should().Contain("\"value\":\"v1\"");
         searchRequest.Body.Should().NotContain("\"value.keyword\"");
     }
@@ -484,8 +458,116 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             ],
         });
 
-        var searchRequest = handler.CapturedRequests.Should().ContainSingle().Subject;
+        var searchRequest = handler.CapturedRequests
+            .Should().ContainSingle(r => r.PathAndQuery.EndsWith("/_search")).Subject;
         searchRequest.Body.Should().Contain("\"value.keyword\":\"v1\"");
+    }
+
+    [Fact]
+    public async Task QueryAsync_WhenLiveIndexMapsAugmentedKeywordFieldAsTextMultiField_ShouldTargetKeywordSubfield()
+    {
+        // Regression for #743: `actor_id` is an `_id`-suffix field, so descriptor augmentation
+        // declares it `keyword` in code-side metadata. A projection index created before that
+        // augmentation shipped still carries ES's dynamic `text` + `.keyword` multi-field mapping.
+        // The exact-match term filter must target the physical `.keyword` sub-field, otherwise the
+        // term query hits the analyzed `text` field and never matches a UUID-shaped value.
+        var handler = new ScriptedHttpMessageHandler();
+        handler.SetMappingResponse(_ => CreateMappingResponse(
+            """{"actor_id":{"type":"text","fields":{"keyword":{"type":"keyword","ignore_above":256}}}}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"hits":{"hits":[]}}"""));
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = false,
+            },
+            handler);
+
+        _ = await store.QueryAsync(new ProjectionDocumentQuery
+        {
+            Filters =
+            [
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = nameof(TestStoreReadModel.ActorId),
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString("801667e9-772d-4bdf-8000-717ce331746c"),
+                },
+            ],
+        });
+
+        handler.CapturedRequests[0].Method.Should().Be("GET");
+        handler.CapturedRequests[0].PathAndQuery.Should().EndWith("/aevatar-projection-core-tests/_mapping");
+        var searchRequest = handler.CapturedRequests
+            .Should().ContainSingle(r => r.PathAndQuery.EndsWith("/_search")).Subject;
+        searchRequest.Body.Should().Contain(
+            "\"actor_id.keyword\":\"801667e9-772d-4bdf-8000-717ce331746c\"");
+        searchRequest.Body.Should().NotContain("\"actor_id\":\"801667e9");
+    }
+
+    [Fact]
+    public async Task QueryAsync_WhenLiveIndexMappingProbeFails_ShouldFallBackToDeclaredMetadata()
+    {
+        // When the `_mapping` probe cannot read physical truth (here: an Elasticsearch 500), the
+        // resolver falls back to declared/augmented metadata — `actor_id` is augmented to `keyword`,
+        // so the term targets the bare field. This preserves pre-#743 behaviour on probe failure.
+        var handler = new ScriptedHttpMessageHandler();
+        handler.SetMappingResponse(_ => CreateJsonResponse(
+            HttpStatusCode.InternalServerError,
+            """{"error":"mapping unavailable"}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"hits":{"hits":[]}}"""));
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = false,
+            },
+            handler);
+
+        _ = await store.QueryAsync(new ProjectionDocumentQuery
+        {
+            Filters =
+            [
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = nameof(TestStoreReadModel.ActorId),
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString("actor-1"),
+                },
+            ],
+        });
+
+        var searchRequest = handler.CapturedRequests
+            .Should().ContainSingle(r => r.PathAndQuery.EndsWith("/_search")).Subject;
+        searchRequest.Body.Should().Contain("\"actor_id\":\"actor-1\"");
+        searchRequest.Body.Should().NotContain("\"actor_id.keyword\"");
+    }
+
+    [Fact]
+    public async Task QueryAsync_WhenCalledRepeatedly_ShouldProbeLiveIndexMappingOnce()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.SetMappingResponse(_ => CreateMappingResponse(
+            """{"value":{"type":"keyword"}}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"hits":{"hits":[]}}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"hits":{"hits":[]}}"""));
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = false,
+            },
+            handler);
+
+        _ = await store.QueryAsync(new ProjectionDocumentQuery());
+        _ = await store.QueryAsync(new ProjectionDocumentQuery());
+
+        handler.CapturedRequests.Count(r => r.PathAndQuery.EndsWith("/_mapping")).Should().Be(1);
+        handler.CapturedRequests.Count(r => r.PathAndQuery.EndsWith("/_search")).Should().Be(2);
     }
 
     [Fact]
@@ -908,6 +990,19 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         return GetFieldMapping(indexPayload, fieldName).GetProperty("type").GetString();
     }
 
+    // CreateStore / the explicit-metadata stores all resolve to this concrete index name
+    // (default "aevatar" prefix + "projection-core-tests" scope).
+    private const string TestIndexName = "aevatar-projection-core-tests";
+
+    // Builds an Elasticsearch `GET <index>/_mapping` response body. `propertiesJson` is the raw
+    // JSON object placed under `mappings.properties` (e.g. {"value":{"type":"keyword"}}).
+    private static HttpResponseMessage CreateMappingResponse(string propertiesJson)
+    {
+        return CreateJsonResponse(
+            HttpStatusCode.OK,
+            "{\"" + TestIndexName + "\":{\"mappings\":{\"properties\":" + propertiesJson + "}}}");
+    }
+
     private static HttpResponseMessage CreateJsonResponse(HttpStatusCode statusCode, string json)
     {
         return new HttpResponseMessage(statusCode)
@@ -919,12 +1014,22 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     private sealed class ScriptedHttpMessageHandler : HttpMessageHandler
     {
         private readonly Queue<Func<HttpRequestMessage, HttpResponseMessage>> _responses = new();
+        private Func<HttpRequestMessage, HttpResponseMessage>? _mappingResponseFactory;
 
         public List<CapturedRequest> CapturedRequests { get; } = [];
 
         public void EnqueueResponse(Func<HttpRequestMessage, HttpResponseMessage> responseFactory)
         {
             _responses.Enqueue(responseFactory);
+        }
+
+        // `GET <index>/_mapping` is a transparent, idempotent probe issued by the query path to
+        // resolve keyword/text field paths from physical index truth. It is served from a dedicated
+        // slot so scripted `_search` sequences stay focused on the operation under test. Tests that
+        // exercise field-path resolution set an explicit mapping; the rest get an empty mapping.
+        public void SetMappingResponse(Func<HttpRequestMessage, HttpResponseMessage> responseFactory)
+        {
+            _mappingResponseFactory = responseFactory;
         }
 
         protected override async Task<HttpResponseMessage> SendAsync(
@@ -940,6 +1045,12 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
                 request.RequestUri?.PathAndQuery ?? "",
                 requestBody));
 
+            if (request.Method == HttpMethod.Get &&
+                (request.RequestUri?.PathAndQuery ?? "").EndsWith("/_mapping", StringComparison.Ordinal))
+            {
+                return (_mappingResponseFactory ?? DefaultMappingResponse).Invoke(request);
+            }
+
             if (_responses.Count == 0)
             {
                 throw new InvalidOperationException(
@@ -947,6 +1058,11 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             }
 
             return _responses.Dequeue().Invoke(request);
+        }
+
+        private static HttpResponseMessage DefaultMappingResponse(HttpRequestMessage request)
+        {
+            return CreateMappingResponse("{}");
         }
     }
 

@@ -99,7 +99,7 @@ internal static class ElasticsearchProjectionDocumentStoreMetadataSupport
             $"{context} contains unsupported value type '{value.GetType().FullName}'.");
     }
 
-    private static object? NormalizeJsonElement(JsonElement element, string context)
+    internal static object? NormalizeJsonElement(JsonElement element, string context)
     {
         return element.ValueKind switch
         {
@@ -248,6 +248,68 @@ internal static class ElasticsearchProjectionDocumentStoreMetadataSupport
             currentProperties = nestedProperties;
         }
 
+        return false;
+    }
+
+    /// <summary>
+    /// Extracts the field-mapping dictionary from an Elasticsearch <c>GET &lt;index&gt;/_mapping</c>
+    /// response so the query path can resolve keyword/text field paths from physical index truth.
+    /// The returned dictionary is shaped like <see cref="DocumentIndexMetadata.Mappings"/> (it carries
+    /// the <c>properties</c> map) and is safe to pass to <see cref="TryGetFieldMapping"/>.
+    /// Returns <c>null</c> when the payload is empty or not a recognizable mapping response.
+    /// </summary>
+    internal static IReadOnlyDictionary<string, object?>? TryExtractFieldMappingsFromMappingResponse(
+        string mappingResponseJson,
+        string indexName)
+    {
+        if (string.IsNullOrWhiteSpace(mappingResponseJson))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(mappingResponseJson);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return null;
+
+            // GET <index>/_mapping returns { "<concrete-index>": { "mappings": { "properties": {...} } } }.
+            if (!TryResolveIndexNode(document.RootElement, indexName, out var indexNode) ||
+                !indexNode.TryGetProperty("mappings", out var mappingsNode) ||
+                mappingsNode.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            return NormalizeJsonElement(mappingsNode, "Elasticsearch _mapping response")
+                as IReadOnlyDictionary<string, object?>;
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
+        {
+            return null;
+        }
+    }
+
+    private static bool TryResolveIndexNode(JsonElement root, string indexName, out JsonElement indexNode)
+    {
+        if (!string.IsNullOrWhiteSpace(indexName) &&
+            root.TryGetProperty(indexName, out var namedNode) &&
+            namedNode.ValueKind == JsonValueKind.Object)
+        {
+            indexNode = namedNode;
+            return true;
+        }
+
+        // A single-index _mapping request keys the body by the concrete index name; when the
+        // caller's logical name differs (prefix/normalization), fall back to the sole object entry.
+        foreach (var property in root.EnumerateObject())
+        {
+            if (property.Value.ValueKind == JsonValueKind.Object)
+            {
+                indexNode = property.Value;
+                return true;
+            }
+        }
+
+        indexNode = default;
         return false;
     }
 }
