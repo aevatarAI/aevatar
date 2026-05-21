@@ -53,15 +53,12 @@ public sealed class ToolCallLoop
         ILLMProvider provider, List<ChatMessage> messages,
         LLMRequest baseRequest, int maxRounds, CancellationToken ct)
     {
-        AgentToolRequestContext.CurrentMetadata = baseRequest.Metadata;
-        try
-        {
-            return await ExecuteCoreAsync(provider, messages, baseRequest, maxRounds, ct);
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
+        // Refactor (iter24/cluster-002-agent-tool-context-generic-metadata-bag):
+        //   Old pattern: ToolCallLoop pushed raw request Metadata into AsyncLocal.
+        //   New principle: tool control semantics are typed context fields; Metadata is not the internal control plane.
+        var toolContext = baseRequest.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest);
+        using var _ = AgentToolContextScope.Push(toolContext);
+        return await ExecuteCoreAsync(provider, messages, baseRequest, maxRounds, ct);
     }
 
     /// <summary>Max recovery attempts when the LLM response is truncated by output token limit.</summary>
@@ -86,7 +83,10 @@ public sealed class ToolCallLoop
             {
                 Messages = [..messages],
                 RequestId = baseRequest.RequestId,
-                Metadata = BuildPerCallMetadata(baseRequest.Metadata, callId),
+                Metadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(baseRequest.Metadata),
+                CallerContext = baseRequest.CallerContext,
+                ToolContext = (baseRequest.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest)).WithCallId(callId),
+                RoutingContext = baseRequest.RoutingContext,
                 Tools = baseRequest.Tools,
                 Model = baseRequest.Model,
                 Temperature = baseRequest.Temperature,
@@ -213,7 +213,10 @@ public sealed class ToolCallLoop
         {
             Messages = [..messages],
             RequestId = baseRequest.RequestId,
-            Metadata = BuildPerCallMetadata(baseRequest.Metadata, finalCallId),
+            Metadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(baseRequest.Metadata),
+            CallerContext = baseRequest.CallerContext,
+            ToolContext = (baseRequest.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest)).WithCallId(finalCallId),
+            RoutingContext = baseRequest.RoutingContext,
             Tools = null,
             Model = baseRequest.Model,
             Temperature = baseRequest.Temperature,
@@ -241,6 +244,9 @@ public sealed class ToolCallLoop
                     Messages = [..messages],
                     RequestId = finalRequest.RequestId,
                     Metadata = finalRequest.Metadata,
+                    CallerContext = finalRequest.CallerContext,
+                    ToolContext = finalRequest.ToolContext,
+                    RoutingContext = finalRequest.RoutingContext,
                     Tools = null,
                     Model = finalRequest.Model,
                     Temperature = finalRequest.Temperature,
@@ -266,15 +272,8 @@ public sealed class ToolCallLoop
         IReadOnlyDictionary<string, string>? metadata,
         CancellationToken ct)
     {
-        AgentToolRequestContext.CurrentMetadata = metadata;
-        try
-        {
-            await ExecuteToolCallsCoreAsync(toolCalls, messages, ct);
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = null;
-        }
+        using var _ = AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(metadata));
+        await ExecuteToolCallsCoreAsync(toolCalls, messages, ct);
     }
 
     private async Task<(LLMResponse Response, bool Terminated)> InvokeLlmAsync(
@@ -359,9 +358,8 @@ public sealed class ToolCallLoop
         if (!string.IsNullOrWhiteSpace(context.Request.RequestId))
             context.Items[LLMRequestMetadataKeys.RequestId] = context.Request.RequestId;
 
-        if (context.Request.Metadata != null &&
-            context.Request.Metadata.TryGetValue(LLMRequestMetadataKeys.CallId, out var callId) &&
-            !string.IsNullOrWhiteSpace(callId))
+        var callId = context.Request.ToolContext?.Request.CallId;
+        if (!string.IsNullOrWhiteSpace(callId))
         {
             context.Items[LLMRequestMetadataKeys.CallId] = callId;
         }

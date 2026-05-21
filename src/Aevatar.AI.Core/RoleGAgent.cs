@@ -91,54 +91,55 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
                 "[{Role}] Tool approval APPROVED. Executing tool={Tool} request={RequestId}",
                 RoleName, pending.ToolName, pending.RequestId);
 
-            // Restore metadata context (NyxID access token etc.) so tool execution can
-            // read AgentToolRequestContext.TryGet(NyxIdAccessToken).
-            var prevMetadata = AgentToolRequestContext.CurrentMetadata;
+            // Restore typed context (NyxID access token etc.) so tool execution can
+            // read AgentToolRequestContext typed accessors.
             try
             {
-                AgentToolRequestContext.CurrentMetadata = pending.Metadata.Count > 0
-                    ? new Dictionary<string, string>(pending.Metadata, StringComparer.Ordinal)
-                    : null;
-
-                // Execute the yielded tool call
-                var toolResult = await Tools.ExecuteToolCallAsync(
-                    new ToolCall
-                    {
-                        Id = pending.ToolCallId,
-                        Name = pending.ToolName,
-                        ArgumentsJson = pending.ArgumentsJson,
-                    },
-                    CancellationToken.None);
-
-                Logger.LogInformation(
-                    "[{Role}] Tool executed. result length={Len} request={RequestId}",
-                    RoleName, toolResult.Content?.Length ?? 0, pending.RequestId);
-
-                // Clear pending state
-                await PersistDomainEventAsync(new ClearPendingApprovalEvent { RequestId = pending.RequestId });
-
-                // Build continuation prompt with the actual tool result
-                var continuation = BuildContinuationPrompt(pending, toolResult.Content);
-
-                Logger.LogInformation(
-                    "[{Role}] Dispatching continuation chat. request={RequestId}",
-                    RoleName, pending.RequestId);
-
-                // Self-continuation: dispatch ChatRequestEvent to own inbox (new turn).
-                var continuationRequest = new ChatRequestEvent
+                using (AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(
+                           pending.Metadata.Count > 0
+                               ? new Dictionary<string, string>(pending.Metadata, StringComparer.Ordinal)
+                               : null)))
                 {
-                    Prompt = continuation,
-                    SessionId = Guid.NewGuid().ToString("N"),
-                    ScopeId = pending.SessionId,
-                };
-                foreach (var kv in pending.Metadata)
-                    continuationRequest.Metadata[kv.Key] = kv.Value;
+                    // Execute the yielded tool call
+                    var toolResult = await Tools.ExecuteToolCallAsync(
+                        new ToolCall
+                        {
+                            Id = pending.ToolCallId,
+                            Name = pending.ToolName,
+                            ArgumentsJson = pending.ArgumentsJson,
+                        },
+                        CancellationToken.None);
 
-                await SendToAsync(Id, continuationRequest);
+                    Logger.LogInformation(
+                        "[{Role}] Tool executed. result length={Len} request={RequestId}",
+                        RoleName, toolResult.Content?.Length ?? 0, pending.RequestId);
 
-                Logger.LogInformation(
-                    "[{Role}] Continuation dispatched. request={RequestId}",
-                    RoleName, pending.RequestId);
+                    // Clear pending state
+                    await PersistDomainEventAsync(new ClearPendingApprovalEvent { RequestId = pending.RequestId });
+
+                    // Build continuation prompt with the actual tool result
+                    var continuation = BuildContinuationPrompt(pending, toolResult.Content);
+
+                    Logger.LogInformation(
+                        "[{Role}] Dispatching continuation chat. request={RequestId}",
+                        RoleName, pending.RequestId);
+
+                    // Self-continuation: dispatch ChatRequestEvent to own inbox (new turn).
+                    var continuationRequest = new ChatRequestEvent
+                    {
+                        Prompt = continuation,
+                        SessionId = Guid.NewGuid().ToString("N"),
+                        ScopeId = pending.SessionId,
+                    };
+                    foreach (var kv in pending.Metadata)
+                        continuationRequest.Metadata[kv.Key] = kv.Value;
+
+                    await SendToAsync(Id, continuationRequest);
+
+                    Logger.LogInformation(
+                        "[{Role}] Continuation dispatched. request={RequestId}",
+                        RoleName, pending.RequestId);
+                }
             }
             catch (Exception ex)
             {
@@ -152,10 +153,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
                     ex.Message);
 
                 throw; // Re-throw so the SSE endpoint sees the error
-            }
-            finally
-            {
-                AgentToolRequestContext.CurrentMetadata = prevMetadata;
             }
         }
         else

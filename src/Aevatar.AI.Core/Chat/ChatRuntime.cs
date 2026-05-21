@@ -226,7 +226,7 @@ public sealed class ChatRuntime
                         // then dispatch after PostSampling approves.
                         using var streamingExecutor = new StreamingToolExecutor(
                             _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
-                            requestMetadata: baseRequest.Metadata);
+                            requestMetadata: baseRequest.ToolContext?.ToLegacyMetadata() ?? baseRequest.Metadata);
 
                         List<ToolCall>? deferredToolCalls = _hooks != null ? [] : null;
 
@@ -234,9 +234,11 @@ public sealed class ChatRuntime
                         {
                             Messages = [..messages],
                             RequestId = baseRequest.RequestId,
-                            Metadata = ToolCallLoop.BuildPerCallMetadata(
-                                baseRequest.Metadata,
-                                ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, round)),
+                            Metadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(baseRequest.Metadata),
+                            CallerContext = baseRequest.CallerContext,
+                            ToolContext = (baseRequest.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest))
+                                .WithCallId(ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, round)),
+                            RoutingContext = baseRequest.RoutingContext,
                             Tools = baseRequest.Tools,
                             Model = baseRequest.Model,
                             Temperature = baseRequest.Temperature,
@@ -413,9 +415,11 @@ public sealed class ChatRuntime
                         {
                             Messages = [..messages],
                             RequestId = baseRequest.RequestId,
-                            Metadata = ToolCallLoop.BuildPerCallMetadata(
-                                baseRequest.Metadata,
-                                ToolCallLoop.ComposeFinalCallId(baseRequest.RequestId)),
+                            Metadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(baseRequest.Metadata),
+                            CallerContext = baseRequest.CallerContext,
+                            ToolContext = (baseRequest.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest))
+                                .WithCallId(ToolCallLoop.ComposeFinalCallId(baseRequest.RequestId)),
+                            RoutingContext = baseRequest.RoutingContext,
                             Tools = null,
                             Model = baseRequest.Model,
                             Temperature = baseRequest.Temperature,
@@ -696,11 +700,17 @@ public sealed class ChatRuntime
         string? requestId,
         IReadOnlyDictionary<string, string>? metadata)
     {
+        // Refactor (iter24/cluster-002-agent-tool-context-generic-metadata-bag):
+        //   Old pattern: request identity and routing controls stayed in Metadata.
+        //   New principle: tool control semantics are typed context fields; Metadata is not the internal control plane.
         return new LLMRequest
         {
             Messages = baseRequest.Messages,
             RequestId = string.IsNullOrWhiteSpace(requestId) ? baseRequest.RequestId : requestId.Trim(),
-            Metadata = MergeMetadata(baseRequest.Metadata, metadata),
+            Metadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(MergeMetadata(baseRequest.Metadata, metadata)),
+            CallerContext = baseRequest.CallerContext,
+            ToolContext = AgentToolExecutionContextMapper.FromMetadata(MergeMetadata(baseRequest.ToolContext?.ToLegacyMetadata() ?? baseRequest.Metadata, metadata)),
+            RoutingContext = AgentToolExecutionContextMapper.FromMetadata(MergeMetadata(baseRequest.Metadata, metadata)).Routing,
             Tools = baseRequest.Tools,
             Model = baseRequest.Model,
             Temperature = baseRequest.Temperature,
@@ -740,9 +750,8 @@ public sealed class ChatRuntime
         if (!string.IsNullOrWhiteSpace(context.Request.RequestId))
             context.Items[LLMRequestMetadataKeys.RequestId] = context.Request.RequestId;
 
-        if (context.Request.Metadata != null &&
-            context.Request.Metadata.TryGetValue(LLMRequestMetadataKeys.CallId, out var callId) &&
-            !string.IsNullOrWhiteSpace(callId))
+        var callId = context.Request.ToolContext?.Request.CallId;
+        if (!string.IsNullOrWhiteSpace(callId))
         {
             context.Items[LLMRequestMetadataKeys.CallId] = callId;
         }

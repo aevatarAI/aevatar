@@ -30,7 +30,7 @@ public sealed class StreamingToolExecutor : IDisposable
     private readonly ToolManager _tools;
     private readonly AgentHookPipeline? _hooks;
     private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares;
-    private readonly IReadOnlyDictionary<string, string>? _requestMetadata;
+    private readonly AgentToolExecutionContext? _toolContext;
     private readonly Channel<CoordinatorSignal> _signals = Channel.CreateUnbounded<CoordinatorSignal>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     private readonly Channel<ToolExecutionResult> _readyResults = Channel.CreateUnbounded<ToolExecutionResult>(
@@ -43,10 +43,13 @@ public sealed class StreamingToolExecutor : IDisposable
         IReadOnlyList<IToolCallMiddleware>? toolMiddlewares = null,
         IReadOnlyDictionary<string, string>? requestMetadata = null)
     {
+        // Refactor (iter24/cluster-002-agent-tool-context-generic-metadata-bag):
+        //   Old pattern: streaming tool execution received raw request Metadata.
+        //   New principle: tool control semantics are typed context fields; Metadata is not the internal control plane.
         _tools = tools;
         _hooks = hooks;
         _toolMiddlewares = toolMiddlewares ?? [];
-        _requestMetadata = requestMetadata;
+        _toolContext = AgentToolExecutionContextMapper.FromMetadata(requestMetadata);
         _ = RunCoordinatorAsync();
     }
 
@@ -293,8 +296,7 @@ public sealed class StreamingToolExecutor : IDisposable
     {
         try
         {
-            // Propagate request metadata (e.g. NyxID access token) to the tool's AsyncLocal context.
-            AgentToolRequestContext.CurrentMetadata = _requestMetadata;
+            using var _ = AgentToolContextScope.Push(_toolContext?.WithCallId(tracked.Call.Id));
 
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(_discardCts.Token);
             var ct = linked.Token;
@@ -389,7 +391,6 @@ public sealed class StreamingToolExecutor : IDisposable
         }
         finally
         {
-            AgentToolRequestContext.CurrentMetadata = null;
         }
     }
 

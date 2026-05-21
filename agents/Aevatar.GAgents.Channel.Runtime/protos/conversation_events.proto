@@ -7,6 +7,7 @@ option csharp_namespace = "Aevatar.GAgents.Channel.Runtime";
 import "google/protobuf/empty.proto";
 import "chat_activity.proto";
 import "channel_contracts.proto";
+import "ai_messages.proto";
 
 message OutboundDeliveryReceipt {
   string reply_message_id = 1;
@@ -38,6 +39,10 @@ message NeedsLlmReplyEvent {
   // store, projection, or read model.
   string reply_token = 7;
   int64 reply_token_expires_at_unix_ms = 8;
+  // Refactor (iter24/cluster-002-agent-tool-context-generic-metadata-bag):
+  //   Old pattern: request credentials/routing/channel facts lived in Metadata.
+  //   New principle: tool control semantics are typed context fields; Metadata is not the internal control plane.
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 9;
 }
 
 // Transient actor-inbox envelope used by the NyxID relay endpoint to hand a single

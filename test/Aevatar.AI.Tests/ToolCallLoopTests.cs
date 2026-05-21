@@ -62,7 +62,7 @@ public class ToolCallLoopTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenBaseRequestIdPresent_ShouldKeepStableRequestIdAndEmitPerCallMetadata()
+    public async Task ExecuteAsync_WhenBaseRequestIdPresent_ShouldKeepStableRequestIdAndEmitPerCallTypedContext()
     {
         var provider = new QueueLLMProvider(
         [
@@ -100,8 +100,39 @@ public class ToolCallLoopTests
         provider.Requests[0].RequestId.Should().Be("session-99");
         provider.Requests[1].RequestId.Should().Be("session-99");
         provider.Requests.Should().OnlyContain(x => x.Metadata != null && x.Metadata["workflow.run_id"] == "run-99");
-        provider.Requests[0].Metadata![LLMRequestMetadataKeys.CallId].Should().Be("session-99");
-        provider.Requests[1].Metadata![LLMRequestMetadataKeys.CallId].Should().Be("session-99:tool-round:2");
+        provider.Requests.Should().OnlyContain(x => !x.Metadata!.ContainsKey(LLMRequestMetadataKeys.CallId));
+        provider.Requests[0].ToolContext!.Request.CallId.Should().Be("session-99");
+        provider.Requests[1].ToolContext!.Request.CallId.Should().Be("session-99:tool-round:2");
+    }
+
+    [Fact]
+    public void AgentToolExecutionContextMapper_ShouldPromoteOwnedKeysAndKeepExternalMetadataOnly()
+    {
+        var context = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "access-token",
+            [LLMRequestMetadataKeys.NyxIdOrgToken] = "org-token",
+            [LLMRequestMetadataKeys.ModelOverride] = "model-a",
+            [LLMRequestMetadataKeys.NyxIdRoutePreference] = "/preferred",
+            [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "7",
+            [LLMRequestMetadataKeys.ConnectedServicesContext] = "{\"services\":[]}",
+            ["scope_id"] = "scope-a",
+            ["channel.platform"] = "lark",
+            ["channel.sender_id"] = "ou_1",
+            ["trace-id"] = "trace-1",
+        });
+
+        context.Credentials.NyxIdAccessToken.Should().Be("access-token");
+        context.Credentials.NyxIdOrgToken.Should().Be("org-token");
+        context.Caller.ScopeId.Should().Be("scope-a");
+        context.Channel.Platform.Should().Be("lark");
+        context.Channel.SenderId.Should().Be("ou_1");
+        context.Routing.ModelOverride.Should().Be("model-a");
+        context.Routing.NyxIdRoutePreference.Should().Be("/preferred");
+        context.Routing.MaxToolRoundsOverride.Should().Be(7);
+        context.ConnectedServices.ContextJson.Should().Be("{\"services\":[]}");
+        context.ExternalMetadata.Should().ContainSingle();
+        context.ExternalMetadata["trace-id"].Should().Be("trace-1");
     }
 
     [Fact]
