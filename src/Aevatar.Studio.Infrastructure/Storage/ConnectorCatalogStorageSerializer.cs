@@ -29,6 +29,9 @@ internal static class ConnectorCatalogStorageSerializer
         return ParseConnectors(document.RootElement);
     }
 
+    // Refactor (iter22/cluster-001-studio-json-internal-catalog-storage):
+    //   Old pattern: Studio connector catalog writes emitted durable JSON.
+    //   New principle: Catalog writes emit the protobuf catalog state fact.
     public static async Task WriteCatalogAsync(
         Stream stream,
         IReadOnlyList<StoredConnectorDefinition> connectors,
@@ -39,6 +42,9 @@ internal static class ConnectorCatalogStorageSerializer
         await stream.WriteAsync(payload.ToByteArray(), cancellationToken);
     }
 
+    // Refactor (iter22/cluster-001-studio-json-internal-catalog-storage):
+    //   Old pattern: Studio connector draft reads treated JSON as the durable format.
+    //   New principle: Draft reads prefer protobuf and keep JSON only as a bounded legacy import fallback.
     public static async Task<ParsedConnectorDraft> ReadDraftAsync(
         Stream stream,
         DateTimeOffset fallbackUpdatedAtUtc,
@@ -66,6 +72,9 @@ internal static class ConnectorCatalogStorageSerializer
         return new ParsedConnectorDraft(updatedAtUtc, draft);
     }
 
+    // Refactor (iter22/cluster-001-studio-json-internal-catalog-storage):
+    //   Old pattern: Studio connector draft writes emitted durable JSON.
+    //   New principle: Draft writes emit the protobuf draft fact.
     public static async Task WriteDraftAsync(
         Stream stream,
         StoredConnectorDefinition? draft,

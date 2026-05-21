@@ -29,6 +29,9 @@ internal static class RoleCatalogStorageSerializer
         return ParseRoles(document.RootElement);
     }
 
+    // Refactor (iter22/cluster-001-studio-json-internal-catalog-storage):
+    //   Old pattern: Studio role catalog writes emitted durable JSON.
+    //   New principle: Catalog writes emit the protobuf catalog state fact.
     public static async Task WriteCatalogAsync(
         Stream stream,
         IReadOnlyList<StoredRoleDefinition> roles,
@@ -39,6 +42,9 @@ internal static class RoleCatalogStorageSerializer
         await stream.WriteAsync(payload.ToByteArray(), cancellationToken);
     }
 
+    // Refactor (iter22/cluster-001-studio-json-internal-catalog-storage):
+    //   Old pattern: Studio role draft reads treated JSON as the durable format.
+    //   New principle: Draft reads prefer protobuf and keep JSON only as a bounded legacy import fallback.
     public static async Task<ParsedRoleDraft> ReadDraftAsync(
         Stream stream,
         DateTimeOffset fallbackUpdatedAtUtc,
@@ -66,6 +72,9 @@ internal static class RoleCatalogStorageSerializer
         return new ParsedRoleDraft(updatedAtUtc, draft);
     }
 
+    // Refactor (iter22/cluster-001-studio-json-internal-catalog-storage):
+    //   Old pattern: Studio role draft writes emitted durable JSON.
+    //   New principle: Draft writes emit the protobuf draft fact.
     public static async Task WriteDraftAsync(
         Stream stream,
         StoredRoleDefinition? draft,
