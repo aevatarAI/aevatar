@@ -459,6 +459,13 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+async function requestAccepted(input: string, init?: RequestInit): Promise<void> {
+  const response = await studioHostFetch(input, init);
+  if (!response.ok) {
+    throw await createStudioApiError(response);
+  }
+}
+
 async function streamSse(
   input: string,
   body: unknown,
@@ -1094,6 +1101,11 @@ function decodeStudioTeamSummary(value: unknown): StudioTeamSummary {
       ["updatedAt", "UpdatedAt"],
       "StudioTeamSummary.updatedAt"
     ),
+    entryMemberId: readNullableString(
+      record,
+      ["entryMemberId", "EntryMemberId"],
+      "StudioTeamSummary.entryMemberId"
+    ),
   };
 }
 
@@ -1456,6 +1468,33 @@ export const studioApi = {
       decodeStudioTeamSummary,
       {
         method: "POST",
+        headers: JSON_HEADERS,
+      }
+    );
+  },
+
+  async setTeamEntryMember(
+    scopeId: string,
+    teamId: string,
+    memberId: string
+  ): Promise<void> {
+    await requestAccepted(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams/${encodeURIComponent(teamId.trim())}/entry-member`,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          memberId: memberId.trim(),
+        }),
+      }
+    );
+  },
+
+  async clearTeamEntryMember(scopeId: string, teamId: string): Promise<void> {
+    await requestAccepted(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams/${encodeURIComponent(teamId.trim())}/entry-member`,
+      {
+        method: "DELETE",
         headers: JSON_HEADERS,
       }
     );

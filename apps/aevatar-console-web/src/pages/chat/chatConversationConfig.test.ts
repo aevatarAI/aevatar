@@ -1,4 +1,5 @@
 import {
+  buildConversationRouteOptions,
   buildConversationModelGroups,
   resolveReadyConversationRoute,
   routePathFromProviderSlug,
@@ -34,6 +35,34 @@ describe("resolveReadyConversationRoute", () => {
         [{ providerSlug: "anthropic" }, { providerSlug: "openai" }]
       )
     ).toBe(routePathFromProviderSlug("anthropic"));
+  });
+});
+
+describe("buildConversationRouteOptions", () => {
+  it("keeps provider routes regardless of source or readiness", () => {
+    expect(
+      buildConversationRouteOptions({
+        gatewayUrl: "https://nyx.example/gateway",
+        modelsByProvider: {},
+        providers: [
+          {
+            providerName: "Anthropic API",
+            providerSlug: "anthropic",
+            proxyUrl: "https://nyx.example/gateway/anthropic",
+            source: "gateway_provider",
+            status: "ready",
+          },
+          {
+            providerName: "Draft Team Service",
+            providerSlug: "draft-team",
+            proxyUrl: "https://nyx.example/draft",
+            source: "user_service",
+            status: "unavailable",
+          },
+        ],
+        supportedModels: [],
+      }).map((option) => option.label)
+    ).toEqual(["NyxID Gateway", "Anthropic API", "Draft Team Service"]);
   });
 });
 

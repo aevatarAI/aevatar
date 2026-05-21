@@ -1,11 +1,10 @@
-import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { message } from "antd";
 import React from "react";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import { runtimeGAgentApi } from "@/shared/api/runtimeGAgentApi";
-import { history } from "@/shared/navigation/history";
 import { studioApi } from "@/shared/studio/api";
 import {
   createTestQueryClient,
@@ -216,6 +215,7 @@ function mockCreateTeamSummary() {
     memberCount: 3,
     createdAt: "2026-05-01T08:00:00Z",
     updatedAt: "2026-05-01T08:05:00Z",
+    entryMemberId: "member-team-alpha",
   };
 }
 
@@ -673,6 +673,8 @@ jest.mock("@/shared/studio/api", () => ({
       ...mockCreateTeamSummary(),
       lifecycleStage: "archived",
     })),
+    setTeamEntryMember: jest.fn(async () => undefined),
+    clearTeamEntryMember: jest.fn(async () => undefined),
     listTeamMembers: jest.fn(async () => mockCreateTeamMembersCatalog()),
     parseYaml: jest.fn(async () => ({
       document: {
@@ -745,6 +747,14 @@ describe("TeamDetailPage", () => {
       ...mockCreateTeamSummary(),
       lifecycleStage: "archived",
     }));
+    (studioApi.setTeamEntryMember as jest.Mock).mockReset();
+    (studioApi.setTeamEntryMember as jest.Mock).mockImplementation(
+      async () => undefined,
+    );
+    (studioApi.clearTeamEntryMember as jest.Mock).mockReset();
+    (studioApi.clearTeamEntryMember as jest.Mock).mockImplementation(
+      async () => undefined,
+    );
     (studioApi.listTeamMembers as jest.Mock).mockReset();
     (studioApi.listTeamMembers as jest.Mock).mockImplementation(
       async () => mockCreateTeamMembersCatalog(),
@@ -1065,6 +1075,84 @@ describe("TeamDetailPage", () => {
     expect(screen.queryByText("参与者结构")).toBeNull();
     expect(screen.queryByText("运行时参与者身份")).toBeNull();
     expect(screen.queryByRole("button", { name: "打开 Services" })).toBeNull();
+  });
+
+  it("shows the configured Team entry member without treating it as the service target", async () => {
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText(/入口成员/)).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getAllByText("Team Alpha Operator").length).toBeGreaterThan(0);
+    });
+    expect(screen.getByText("Team invoke routes through this member.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Clear entry" })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+
+    expect(await screen.findByText(/入口成员/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Set as entry" })).toBeNull();
+    expect(screen.getByText("alph...vice")).toBeTruthy();
+  });
+
+  it("sets a Team entry member from the members tab", async () => {
+    (studioApi.listTeamMembers as jest.Mock).mockImplementation(async () => ({
+      scopeId: "scope-1",
+      members: [
+        ...mockCreateTeamMembersCatalog().members,
+        {
+          memberId: "member-team-beta",
+          scopeId: "scope-1",
+          teamId: "t-alpha",
+          displayName: "Team Beta Operator",
+          description: "负责处理二线升级",
+          implementationKind: "workflow",
+          lifecycleStage: "bind_ready",
+          publishedServiceId: "beta-service",
+          lastBoundRevisionId: "rev-beta",
+          createdAt: "2026-04-09T08:00:00Z",
+          updatedAt: "2026-04-09T09:00:00Z",
+        },
+      ],
+      nextPageToken: null,
+    }));
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("button", { name: "Edit Team" });
+    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    expect(await screen.findByText("Team Beta Operator")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Set as entry" }));
+
+    await waitFor(() => {
+      expect(studioApi.setTeamEntryMember).toHaveBeenCalledWith(
+        "scope-1",
+        "t-alpha",
+        "member-team-beta",
+      );
+    });
+    expect(message.success).toHaveBeenCalledWith("Team entry member updated.");
+    await waitFor(() => {
+      expect(studioApi.getTeam).toHaveBeenCalledTimes(2);
+      expect(studioApi.listTeamMembers).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("clears the Team entry member from the overview", async () => {
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Clear entry" }));
+
+    await waitFor(() => {
+      expect(studioApi.clearTeamEntryMember).toHaveBeenCalledWith(
+        "scope-1",
+        "t-alpha",
+      );
+    });
+    expect(message.success).toHaveBeenCalledWith("Team entry member cleared.");
+    await waitFor(() => {
+      expect(studioApi.getTeam).toHaveBeenCalledTimes(2);
+      expect(studioApi.listTeamMembers).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("routes member build actions into Studio with Team context", async () => {

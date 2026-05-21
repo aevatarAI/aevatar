@@ -550,6 +550,7 @@ export interface StudioTeamSummary {
   readonly memberCount: number;
   readonly createdAt: string;
   readonly updatedAt: string;
+  readonly entryMemberId?: string | null;
 }
 
 export interface StudioTeamRoster {

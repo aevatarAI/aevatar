@@ -37,6 +37,7 @@ import { useTeamRuntimeLens } from "./runtime/useTeamRuntimeLens";
 const teamProjectionRetryLimit = 5;
 const teamProjectionRetryBaseMs = 500;
 const teamProjectionRetryMaxMs = 3_000;
+const entryMemberClearingId = "__clear_entry_member__";
 
 function isProjectionSyncing404(error: unknown): boolean {
   return isStudioApiStatus(error, 404);
@@ -347,6 +348,7 @@ const TeamDetailPage: React.FC = () => {
   const [teamEditorDescription, setTeamEditorDescription] = React.useState("");
   const [teamEditorSaving, setTeamEditorSaving] = React.useState(false);
   const [teamArchiving, setTeamArchiving] = React.useState(false);
+  const [entryMemberUpdatingId, setEntryMemberUpdatingId] = React.useState("");
   const { token } = theme.useToken();
 
   React.useEffect(() => {
@@ -433,9 +435,12 @@ const TeamDetailPage: React.FC = () => {
       queryClient.invalidateQueries({
         queryKey: teamSummaryQueryKey,
       }),
+      queryClient.invalidateQueries({
+        queryKey: teamMembersQueryKey,
+      }),
       queryClient.invalidateQueries({ queryKey: ["teams", "roster", scopeId] }),
     ]);
-  }, [queryClient, scopeId, teamSummaryQueryKey]);
+  }, [queryClient, scopeId, teamMembersQueryKey, teamSummaryQueryKey]);
 
   const fallbackWorkflowSummary = React.useMemo(() => {
     if (lens.activeRevision?.implementationKind !== "workflow") {
@@ -623,6 +628,18 @@ const TeamDetailPage: React.FC = () => {
       }),
     [scopeId, selectedTeamId],
   );
+  const entryMemberId = trimText(teamSummaryQuery.data?.entryMemberId);
+  const entryMemberSummary = React.useMemo(
+    () =>
+      entryMemberId
+        ? (teamMembersQuery.data?.members ?? []).find(
+            (member) => trimText(member.memberId) === entryMemberId,
+          ) ?? null
+        : null,
+    [entryMemberId, teamMembersQuery.data?.members],
+  );
+  const entryMemberLabel =
+    trimText(entryMemberSummary?.displayName) || entryMemberId;
   const teamRosterRows = React.useMemo(
     () =>
       (teamMembersQuery.data?.members ?? []).map((member) => ({
@@ -645,11 +662,19 @@ const TeamDetailPage: React.FC = () => {
         key: member.memberId,
         lifecycleLabel: formatStudioMemberLifecycleStage(member.lifecycleStage),
         lifecycleStyle: resolveStatusPillStyle(token, member.lifecycleStage),
+        isEntryMember: trimText(member.memberId) === entryMemberId,
         memberId: member.memberId,
         name: trimText(member.displayName) || member.memberId,
         serviceId: trimText(member.publishedServiceId) || "--",
       })),
-    [buildTeamReturnHref, scopeId, selectedTeamId, teamMembersQuery.data?.members, token],
+    [
+      buildTeamReturnHref,
+      entryMemberId,
+      scopeId,
+      selectedTeamId,
+      teamMembersQuery.data?.members,
+      token,
+    ],
   );
   const createMemberHref = React.useMemo(
     () =>
@@ -931,6 +956,73 @@ const TeamDetailPage: React.FC = () => {
     teamSummaryQuery.data,
   ]);
   const isTeamArchived = normalizeStatus(teamSummaryQuery.data?.lifecycleStage) === "archived";
+  const handleSetEntryMember = React.useCallback(
+    async (memberId: string) => {
+      const normalizedMemberId = trimText(memberId);
+      if (
+        !teamSummaryQuery.data ||
+        isTeamArchived ||
+        entryMemberUpdatingId ||
+        !normalizedMemberId ||
+        normalizedMemberId === entryMemberId
+      ) {
+        return;
+      }
+
+      setEntryMemberUpdatingId(normalizedMemberId);
+      try {
+        await studioApi.setTeamEntryMember(
+          scopeId,
+          selectedTeamId,
+          normalizedMemberId,
+        );
+        void message.success("Team entry member updated.");
+        await refreshTeamAuthority();
+      } catch (error) {
+        void message.error(describeError(error, "Entry member update failed."));
+      } finally {
+        setEntryMemberUpdatingId("");
+      }
+    },
+    [
+      entryMemberId,
+      entryMemberUpdatingId,
+      isTeamArchived,
+      refreshTeamAuthority,
+      scopeId,
+      selectedTeamId,
+      teamSummaryQuery.data,
+    ],
+  );
+  const handleClearEntryMember = React.useCallback(async () => {
+    if (
+      !teamSummaryQuery.data ||
+      isTeamArchived ||
+      entryMemberUpdatingId ||
+      !entryMemberId
+    ) {
+      return;
+    }
+
+    setEntryMemberUpdatingId(entryMemberClearingId);
+    try {
+      await studioApi.clearTeamEntryMember(scopeId, selectedTeamId);
+      void message.success("Team entry member cleared.");
+      await refreshTeamAuthority();
+    } catch (error) {
+      void message.error(describeError(error, "Entry member clear failed."));
+    } finally {
+      setEntryMemberUpdatingId("");
+    }
+  }, [
+    entryMemberId,
+    entryMemberUpdatingId,
+    isTeamArchived,
+    refreshTeamAuthority,
+    scopeId,
+    selectedTeamId,
+    teamSummaryQuery.data,
+  ]);
   const archiveTeamActionLabel = teamSummaryQuery.data && !isTeamArchived ? "Archive Team" : "";
   const archiveTeamHint = selectedTeamId
     ? "Team summary 读取完成后才能归档。"
@@ -1000,8 +1092,16 @@ const TeamDetailPage: React.FC = () => {
           color: token.colorInfo,
         }}
         currentServicePillText={currentServicePillText}
+        entryMemberId={entryMemberId || null}
+        entryMemberLabel={entryMemberLabel}
+        entryMemberUpdating={entryMemberUpdatingId === entryMemberClearingId}
         latestVisibleUpdateLabel={formatCompactTimestamp(latestVisibleUpdate)}
         latestVisibleUpdateNote={latestVisibleUpdateNote}
+        onClearEntryMember={
+          teamSummaryQuery.data && !isTeamArchived && entryMemberId
+            ? handleClearEntryMember
+            : undefined
+        }
       />
     );
   };
@@ -1010,7 +1110,11 @@ const TeamDetailPage: React.FC = () => {
     return (
       <TeamMembersTab
         createMemberHref={createMemberHref}
+        entryMemberUpdatingId={entryMemberUpdatingId}
         onNavigate={(href) => history.push(href)}
+        onSetEntryMember={
+          teamSummaryQuery.data && !isTeamArchived ? handleSetEntryMember : undefined
+        }
         rosterError={teamMembersQuery.isError && !isTeamMembersProjectionSyncing}
         rosterLoading={teamMembersQuery.isLoading}
         rosterSyncing={isTeamMembersProjectionSyncing}
