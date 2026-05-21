@@ -170,6 +170,24 @@ public sealed class AIAbstractionsProtoCoverageTests
             ConfigOverrides = overrides,
             EventModules = "demo",
             EventRoutes = "event.type == X -> demo",
+            PendingApproval = new PendingToolApprovalState
+            {
+                RequestId = "req-1",
+                SessionId = "session-approval",
+                ToolName = "ssh_exec",
+                ToolCallId = "call-1",
+                ArgumentsJson = "{}",
+                IsDestructive = true,
+                TimeoutCallbackId = "timeout-1",
+                RemoteApprovalId = "remote-1",
+                RemoteStatusCheckCallbackId = "remote-callback-1",
+                RemoteStatusCheckAttempt = 2,
+                RemoteApprovalExpiresAtUnixMs = 123456,
+                Metadata =
+                {
+                    ["trace-id"] = "trace-1",
+                },
+            },
             Sessions =
             {
                 ["session-1"] = new RoleChatSessionState
@@ -218,6 +236,11 @@ public sealed class AIAbstractionsProtoCoverageTests
         state.Sessions["session-1"].InputParts.Should().ContainSingle();
         state.Sessions["session-1"].OutputParts.Should().ContainSingle();
         state.Sessions["session-1"].ToolCalls.Should().ContainSingle();
+        state.PendingApproval.Should().NotBeNull();
+        state.PendingApproval!.RemoteApprovalId.Should().Be("remote-1");
+        state.PendingApproval.RemoteStatusCheckCallbackId.Should().Be("remote-callback-1");
+        state.PendingApproval.RemoteStatusCheckAttempt.Should().Be(2);
+        state.PendingApproval.RemoteApprovalExpiresAtUnixMs.Should().Be(123456);
     }
 
     [Fact]
@@ -341,6 +364,25 @@ public sealed class AIAbstractionsProtoCoverageTests
         };
         state.MergeFrom((RoleGAgentState)null!);
         state.Equals((object?)null).Should().BeFalse();
+
+        var submitted = RoundTrip(new RemoteToolApprovalSubmittedEvent
+        {
+            RequestId = "req-1",
+            RemoteApprovalId = "remote-1",
+            StatusCheckCallbackId = "callback-1",
+            StatusCheckAttempt = 1,
+            ExpiresAtUnixMs = 123456,
+        }, RemoteToolApprovalSubmittedEvent.Parser);
+        submitted.RemoteApprovalId.Should().Be("remote-1");
+
+        var statusCheck = RoundTrip(new ToolApprovalRemoteStatusCheckFiredEvent
+        {
+            RequestId = "req-1",
+            SessionId = "session-approval",
+            RemoteApprovalId = "remote-1",
+            Attempt = 1,
+        }, ToolApprovalRemoteStatusCheckFiredEvent.Parser);
+        statusCheck.RemoteApprovalId.Should().Be("remote-1");
 
         var parsedResponse = ChatResponseEvent.Parser.ParseFrom(new byte[]
         {

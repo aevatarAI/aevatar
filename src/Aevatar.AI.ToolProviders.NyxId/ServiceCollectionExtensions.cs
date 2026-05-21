@@ -10,9 +10,8 @@ public static class ServiceCollectionExtensions
     /// <summary>
     /// Registers the NyxID tool system. When BaseUrl is configured, all NyxID management
     /// tools are automatically available to any AIGAgentBase-derived agent.
-    /// Also registers <see cref="NyxIdToolApprovalHandler"/> as the
-    /// <see cref="IToolApprovalHandler"/> so agents can route tool approvals
-    /// through NyxID (Telegram / mobile app).
+    /// Also registers <see cref="NyxIdRemoteToolApprovalPort"/> so agents can
+    /// submit remote approval and resume from actor-owned status continuations.
     /// </summary>
     public static IServiceCollection AddNyxIdTools(
         this IServiceCollection services,
@@ -33,9 +32,10 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Transient<IAgentToolSource, NyxIdAgentToolSource>());
 
-        // Remote approval handler for timeout escalation (NyxID Telegram/app push).
-        services.TryAddTransient<IToolApprovalHandler>(sp =>
-            new NyxIdToolApprovalHandler(sp.GetRequiredService<NyxIdApiClient>()));
+        // Refactor (iter23/cluster-001-nyxid-tool-approval-polling):
+        //   Old pattern: NyxID was registered as a generic local approval handler that blocked while polling.
+        //   New principle: NyxID is a remote submit/status port; local approval/yield remains host-owned.
+        services.TryAddTransient<IRemoteToolApprovalPort, NyxIdRemoteToolApprovalPort>();
 
         return services;
     }

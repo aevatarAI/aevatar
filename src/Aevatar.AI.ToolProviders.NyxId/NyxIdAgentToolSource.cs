@@ -69,6 +69,9 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdProxyExecuteTool(_specCatalog, _client, _logger as ILogger<NyxIdProxyExecuteTool>),
         };
 
+        // Refactor (iter23/cluster-001-nyxid-tool-approval-polling):
+        //   Old pattern: NyxID remote fallback registration could be mistaken for local execution gating.
+        //   New principle: ssh_exec exposure requires a local approval handler/middleware; remote fallback is separate.
         // ssh_exec is opt-in. The tool's Auto/RequiresApproval=true contract relies on the
         // host wiring an approval middleware around tool execution; without that middleware,
         // a host would let the LLM run remote shell commands directly. Make hosts opt in
@@ -79,7 +82,7 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             {
                 throw new InvalidOperationException(
                     "NyxID ssh_exec is enabled but no IToolApprovalHandler is registered. " +
-                    "Call AddNyxIdTools or register an approval handler before exposing ssh_exec.");
+                    "Register a local approval handler before exposing ssh_exec.");
             }
 
             tools.Add(new NyxIdSshExecTool(_client, _logger));
