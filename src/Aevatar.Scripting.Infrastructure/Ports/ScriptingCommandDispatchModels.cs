@@ -75,11 +75,17 @@ public sealed record RunScriptRuntimeCommand(
     string ScriptRevision,
     string DefinitionActorId,
     string RequestedEventType,
-    string? ScopeId) : ICommandContextSeed
+    string? ScopeId,
+    string? ExplicitCommandId = null,
+    string? ExplicitCorrelationId = null) : ICommandContextSeed
 {
-    public string? CommandId => ScriptingCommandIds.Build("script-runtime", RuntimeActorId, RunId);
+    public string? CommandId => string.IsNullOrWhiteSpace(ExplicitCommandId)
+        ? ScriptingCommandIds.Build("script-runtime", RuntimeActorId, RunId)
+        : ExplicitCommandId;
 
-    public string? CorrelationId => RunId;
+    public string? CorrelationId => string.IsNullOrWhiteSpace(ExplicitCorrelationId)
+        ? RunId
+        : ExplicitCorrelationId;
 
     public IReadOnlyDictionary<string, string>? Headers => null;
 }
