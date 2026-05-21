@@ -10,6 +10,7 @@ import {
 import { buildScopeHref } from "@/shared/navigation/scopeRoutes";
 import {
   buildTeamDetailHref,
+  buildTeamStudioHref,
   readTeamDetailRouteState,
   type TeamDetailTab,
 } from "@/shared/navigation/teamRoutes";
@@ -600,10 +601,34 @@ const TeamDetailPage: React.FC = () => {
     ) : null;
   const activeWorkflowId =
     trimText(activeWorkflowSummary?.workflowId) || trimText(routeState.workflowId);
+  const buildTeamReturnHref = React.useCallback(
+    (memberId?: string) =>
+      buildTeamDetailHref({
+        memberId: trimText(memberId) || undefined,
+        scopeId,
+        tab: "members",
+        teamId: selectedTeamId,
+      }),
+    [scopeId, selectedTeamId],
+  );
   const teamRosterRows = React.useMemo(
     () =>
       (teamMembersQuery.data?.members ?? []).map((member) => ({
+        buildStudioHref: buildTeamStudioHref({
+          memberId: member.memberId,
+          mode: "build-member",
+          returnTo: buildTeamReturnHref(member.memberId),
+          scopeId,
+          teamId: selectedTeamId,
+        }),
         description: trimText(member.description),
+        editStudioHref: buildTeamStudioHref({
+          memberId: member.memberId,
+          mode: "edit-member",
+          returnTo: buildTeamReturnHref(member.memberId),
+          scopeId,
+          teamId: selectedTeamId,
+        }),
         implementationKind: formatCompositionKind(member.implementationKind),
         key: member.memberId,
         lifecycleLabel: formatStudioMemberLifecycleStage(member.lifecycleStage),
@@ -612,7 +637,17 @@ const TeamDetailPage: React.FC = () => {
         name: trimText(member.displayName) || member.memberId,
         serviceId: trimText(member.publishedServiceId) || "--",
       })),
-    [teamMembersQuery.data?.members, token],
+    [buildTeamReturnHref, scopeId, selectedTeamId, teamMembersQuery.data?.members, token],
+  );
+  const createMemberHref = React.useMemo(
+    () =>
+      buildTeamStudioHref({
+        mode: "create-member",
+        returnTo: buildTeamReturnHref(),
+        scopeId,
+        teamId: selectedTeamId,
+      }),
+    [buildTeamReturnHref, scopeId, selectedTeamId],
   );
   const latestVisibleUpdate =
     teamSummaryQuery.data?.updatedAt ||
@@ -957,6 +992,8 @@ const TeamDetailPage: React.FC = () => {
   const renderMembersTab = () => {
     return (
       <TeamMembersTab
+        createMemberHref={createMemberHref}
+        onNavigate={(href) => history.push(href)}
         rosterError={teamMembersQuery.isError && !isTeamMembersProjectionSyncing}
         rosterLoading={teamMembersQuery.isLoading}
         rosterSyncing={isTeamMembersProjectionSyncing}
