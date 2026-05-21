@@ -552,11 +552,13 @@ export interface StudioTeamSummary {
   readonly updatedAt: string;
 }
 
+export type StudioTeamCommandAckStage = 'accepted';
+
 export interface StudioTeamCommandAcceptedResponse {
   readonly scopeId: string;
   readonly teamId: string;
   readonly commandId?: string | null;
-  readonly ackStage: string;
+  readonly ackStage: StudioTeamCommandAckStage;
   readonly acceptedAtUtc: string;
 }
 

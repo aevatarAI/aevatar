@@ -44,6 +44,7 @@ import type {
   StudioSettings,
   StudioStartExecutionInput,
   StudioTeamCommandAcceptedResponse,
+  StudioTeamCommandAckStage,
   StudioTeamCreateInput,
   StudioTeamLifecycleStage,
   StudioTeamRoster,
@@ -1098,6 +1099,19 @@ function decodeStudioTeamSummary(value: unknown): StudioTeamSummary {
   };
 }
 
+function readStudioTeamCommandAckStage(record: Record<string, unknown>): StudioTeamCommandAckStage {
+  const value = readString(
+    record,
+    ["ackStage", "AckStage"],
+    "StudioTeamCommandAcceptedResponse.ackStage"
+  );
+  if (value !== "accepted") {
+    throw new Error("StudioTeamCommandAcceptedResponse.ackStage must be accepted.");
+  }
+
+  return value;
+}
+
 function decodeStudioTeamCommandAcceptedResponse(
   value: unknown
 ): StudioTeamCommandAcceptedResponse {
@@ -1119,11 +1133,7 @@ function decodeStudioTeamCommandAcceptedResponse(
         ["commandId", "CommandId"],
         "StudioTeamCommandAcceptedResponse.commandId"
       ) ?? null,
-    ackStage: readString(
-      record,
-      ["ackStage", "AckStage"],
-      "StudioTeamCommandAcceptedResponse.ackStage"
-    ),
+    ackStage: readStudioTeamCommandAckStage(record),
     acceptedAtUtc: readString(
       record,
       ["acceptedAtUtc", "AcceptedAtUtc"],

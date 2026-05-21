@@ -1167,7 +1167,7 @@ describe("TeamDetailPage", () => {
         description: null,
       });
     });
-    expect(message.success).toHaveBeenCalledWith("Team updated.");
+    expect(message.success).toHaveBeenCalledWith("Team update accepted.");
     await waitFor(() => {
       expect(studioApi.getTeam).toHaveBeenCalledTimes(2);
     });
@@ -1228,7 +1228,7 @@ describe("TeamDetailPage", () => {
     await waitFor(() => {
       expect(studioApi.archiveTeam).toHaveBeenCalledWith("scope-1", "t-alpha");
     });
-    expect(message.success).toHaveBeenCalledWith("Team archived.");
+    expect(message.success).toHaveBeenCalledWith("Team archive accepted.");
     expect(screen.getByRole("button", { name: "Edit Team" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "Archive Team" })).toBeNull();
   });

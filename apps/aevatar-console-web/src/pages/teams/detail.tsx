@@ -3208,7 +3208,7 @@ const TeamDetailPage: React.FC = () => {
         displayName,
         description: teamEditorDescription.trim() || null,
       });
-      void message.success("Team updated.");
+      void message.success("Team update accepted.");
       setTeamEditorOpen(false);
       await refreshTeamAuthority();
     } catch (error) {
@@ -3252,7 +3252,7 @@ const TeamDetailPage: React.FC = () => {
     setTeamArchiving(true);
     try {
       await studioApi.archiveTeam(scopeId, selectedTeamId);
-      void message.success("Team archived.");
+      void message.success("Team archive accepted.");
       setTeamArchiveOpen(false);
       await refreshTeamAuthority();
     } catch (error) {

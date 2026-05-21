@@ -1359,6 +1359,40 @@ describe('studioApi host-session requests', () => {
     );
   });
 
+  it('rejects unknown studio team command ACK stages', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => ({
+        scopeId: 'scope-1',
+        teamId: 't-alpha',
+        commandId: 'cmd-update',
+        ackStage: 'committed',
+        acceptedAtUtc: '2026-05-01T08:06:00Z',
+      }),
+    } as Response) as typeof global.fetch;
+
+    await expect(
+      studioApi.updateTeam({
+        scopeId: 'scope-1',
+        teamId: 't-alpha',
+        displayName: 'Alpha Ops',
+      }),
+    ).rejects.toThrow('StudioTeamCommandAcceptedResponse.ackStage must be accepted.');
+  });
+
   it('gets a studio member detail from the member authority endpoint', async () => {
     persistAuthSession({
       tokens: {
