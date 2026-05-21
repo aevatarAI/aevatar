@@ -830,9 +830,12 @@ public sealed class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         NeedsLlmReplyEvent request,
         CancellationToken ct)
     {
+        var routedModel = NormalizeOptional(request.TargetRef?.ForwardToModel?.ModelName);
         var metadata = new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal);
 
         await ApplyBotOwnerLlmConfigAsync(request, metadata, ct);
+        if (routedModel is not null)
+            metadata[LLMRequestMetadataKeys.ModelOverride] = routedModel;
 
         var userAccessToken = request.Activity?.TransportExtras?.NyxUserAccessToken?.Trim();
         if (!string.IsNullOrWhiteSpace(userAccessToken))

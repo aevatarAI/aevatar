@@ -420,6 +420,66 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleStartAsync_WhenTargetRefForwardsToModel_OverridesBotOwnerDefaultModel()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("conversation:c");
+        var actorRuntime = new DispatchingActorRuntime(("conversation:c", actor));
+        IReadOnlyDictionary<string, string>? observedMetadata = null;
+        var replyGenerator = new RecordingReplyGenerator(() => false)
+        {
+            ReplyText = "ok",
+            MetadataObserver = m => observedMetadata = m,
+        };
+
+        var scopeResolver = Substitute.For<INyxIdRelayScopeResolver>();
+        scopeResolver.ResolveScopeIdByApiKeyAsync("api-key-bot", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<string?>("scope-bot-owner"));
+        var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
+        userConfigQueryPort.GetAsync("scope-bot-owner", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new Aevatar.Studio.Application.Studio.Abstractions.UserConfig(
+                DefaultModel: "gpt-4o-bot-owner",
+                PreferredLlmRoute: "/api/v1/proxy/s/anthropic-via-bot-owner",
+                RuntimeMode: "local",
+                LocalRuntimeBaseUrl: "http://localhost",
+                RemoteRuntimeBaseUrl: "https://example.com",
+                GithubUsername: null,
+                MaxToolRounds: 11)));
+
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
+            scopeResolver,
+            userConfigQueryPort);
+
+        var activity = BuildRelayActivity();
+        activity.Bot = BotInstanceId.From("api-key-bot");
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-forward-model-owner",
+            TargetActorId = "conversation:c",
+            RegistrationId = "reg-1",
+            Activity = activity,
+            ReplyToken = "relay-token-forward-model-owner",
+            TargetRef = new ChatRouteAction
+            {
+                ForwardToModel = new ForwardToModel { ModelName = "anthropic/claude-sonnet-4-6" },
+            },
+        });
+
+        observedMetadata.Should().NotBeNull("the LLM provider must have been invoked");
+        observedMetadata![LLMRequestMetadataKeys.ModelOverride].Should().Be(
+            "anthropic/claude-sonnet-4-6",
+            "chat-route policy is more specific than the bot owner's default model");
+        observedMetadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be(
+            "/api/v1/proxy/s/anthropic-via-bot-owner",
+            "the route preference is independent from the model override");
+    }
+
+    [Fact]
     public async Task HandleStartAsync_WhenTargetRefIsNullOrNone_LeavesRequestUnchanged()
     {
         // Defense-in-depth: turns without a chat-route policy match must

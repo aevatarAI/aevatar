@@ -94,6 +94,9 @@ message ChatRouteInput {
   ToolMode tool_mode = 6;
   // Only meaningful when source_kind = CHAT_SOURCE_KIND_VOICE.
   VoiceInput voice = 7;
+  // Original model requested by the ingress caller before route policy rewrites
+  // it. Empty means "no model hint".
+  string model = 8;
 }
 
 // ─── Decision actions (oneof) ───
@@ -118,6 +121,24 @@ message Reject {
   string reason = 1;
 }
 
+// ForwardToTeam targets a Studio team entry-member's published GAgent service.
+// Ingress resolves (team_id, endpoint_id) into a concrete published_service_id
+// via ITeamEntryMemberResolver, then dispatches through
+// IStaticGAgentStreamInvocationPort<AGUIEvent>. v1 supports this only on
+// GAgent-native entries (NyxIdChat / Relay / Voice); LLM facade entries
+// (/v1/responses, /v1/messages) reject ForwardToTeam at the boundary because
+// their wire protocol can't carry an AGUI stream.
+message ForwardToTeam {
+  // Studio team id (REQUIRED).
+  string team_id = 1;
+  // Studio service endpoint id on the resolved entry member (REQUIRED).
+  string endpoint_id = 2;
+  // Optional override scope id. Empty means "use the ingress URL scope".
+  // Reserved for future cross-scope routing; v1 ingress endpoints stamp
+  // the URL scope and ignore non-empty values that disagree.
+  string scope_id = 3;
+}
+
 message ChatRouteAction {
   // tag 5 + name `bypass` were previously a `Bypass` oneof variant; removed
   // because the dev `/ws/voice/{actorId}` entry does not produce a
@@ -131,6 +152,7 @@ message ChatRouteAction {
     ForwardToGAgent forward_to_gagent = 2;
     ForwardToWorkflow forward_to_workflow = 3;
     Reject reject = 4;
+    ForwardToTeam forward_to_team = 6;
   }
 }
 
@@ -143,6 +165,7 @@ message ChatRouteMatch {
   string command_name = 3;
   string content_hint = 4;
   ToolMode tool_mode = 5;
+  string model = 6;
 }
 
 message ChatRouteRule {

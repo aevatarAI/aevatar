@@ -39,9 +39,10 @@ message NeedsLlmReplyEvent {
   // store, projection, or read model.
   string reply_token = 7;
   int64 reply_token_expires_at_unix_ms = 8;
-  // Transient routing target chosen at ingress. ConversationGAgent may persist a sanitized
-  // copy of the request for retry, but this field is a typed target reference, not the
-  // resolver decision object; reply_token and raw decision telemetry stay out of state.
+  // Transient run-command-only routing target chosen at ingress. ConversationGAgent MUST
+  // clear this field on the copy passed to PersistDomainEventAsync; only the run-bound
+  // command copy may carry it so AgentRunGAgent can apply the route before execution.
+  // Never persist to event store, projection, read model, or actor state.
   aevatar.chat_routing.v1.ChatRouteAction target_ref = 9;
 }
 

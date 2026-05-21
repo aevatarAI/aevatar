@@ -930,8 +930,10 @@ public sealed class ConversationGAgentDedupTests
         var events = await store.GetEventsAsync(agent.Id);
         events.ShouldHaveSingleItem();
         var parsed = NeedsLlmReplyEvent.Parser.ParseFrom(events[0].EventData.Value);
-        parsed.TargetRef.ForwardToGagent.ActorId.ShouldBe("target-gagent-1");
+        parsed.TargetRef.ShouldBeNull("route decisions are transient and must not be persisted with the pending LLM request");
         parsed.ReplyToken.ShouldBeEmpty();
+        agent.State.PendingLlmReplyRequests.Single().TargetRef.ShouldBeNull(
+            "actor state is rebuilt from the persisted event and must not retain the transient route decision");
     }
 
     [Fact]

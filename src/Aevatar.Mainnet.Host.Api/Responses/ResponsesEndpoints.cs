@@ -8,8 +8,11 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Responses;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.Presentation.AGUI;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -55,6 +58,8 @@ internal static class ResponsesApiEndpoints
         [FromServices] ILlmSessionQueryPort responseSessionQueryPort,
         [FromServices] IResponsesCompletionApplicationService completionService,
         [FromServices] IEnumerable<IResponsesToolProvider> toolProviders,
+        [FromServices] ITeamEntryMemberResolver teamEntryMemberResolver,
+        [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -68,6 +73,8 @@ internal static class ResponsesApiEndpoints
         ArgumentNullException.ThrowIfNull(responseSessionQueryPort);
         ArgumentNullException.ThrowIfNull(completionService);
         ArgumentNullException.ThrowIfNull(toolProviders);
+        ArgumentNullException.ThrowIfNull(teamEntryMemberResolver);
+        ArgumentNullException.ThrowIfNull(staticGAgentStreamInvocationPort);
         ArgumentNullException.ThrowIfNull(loggerFactory);
         ArgumentNullException.ThrowIfNull(request);
         var logger = loggerFactory.CreateLogger("Aevatar.Mainnet.Host.Api.Responses");
@@ -108,6 +115,8 @@ internal static class ResponsesApiEndpoints
             chatRouteResolver,
             callerScope,
             normalized.Model,
+            ResolveToolMode(normalized.DeclaredTools.Count, normalized.ToolResults.Count),
+            BuildContentHint(normalized.Prompt),
             ct);
         if (routeDecision.Action.Reject is not null)
             return ToErrorResult(
@@ -119,6 +128,23 @@ internal static class ResponsesApiEndpoints
         if (!string.IsNullOrWhiteSpace(routeDecision.Action.ForwardToModel?.ModelName))
         {
             routedModel = routeDecision.Action.ForwardToModel.ModelName.Trim();
+        }
+        else if (routeDecision.Action.ForwardToTeam is not null)
+        {
+            // Bypass the LLM session/provider path entirely: ForwardToTeam runs a
+            // Studio team entry-member as an ephemeral GAgent via
+            // IStaticGAgentStreamInvocationPort, then maps AGUI events back to
+            // OpenAI Responses SSE / JSON. The caller still sees Responses-shaped
+            // results so /v1/responses stays protocol-neutral as far as routing target.
+            return await HandleForwardToTeamAsync(
+                http,
+                normalized,
+                callerScope,
+                routeDecision.Action.ForwardToTeam,
+                teamEntryMemberResolver,
+                staticGAgentStreamInvocationPort,
+                logger,
+                ct);
         }
         else if (routeDecision.Action.ForwardToGagent is not null)
         {
@@ -719,6 +745,267 @@ internal static class ResponsesApiEndpoints
         }
     }
 
+    /// <summary>
+    /// Handle a <see cref="ChatRouteAction.ForwardToTeam"/> decision: resolve the
+    /// team's entry member to a Studio published service, invoke it as an
+    /// ephemeral GAgent run via <see cref="IStaticGAgentStreamInvocationPort{TFrame}"/>,
+    /// and map the AGUI event stream back to OpenAI Responses (SSE or JSON).
+    ///
+    /// Bypasses LLM session/provider/llmRequest entirely — the response id
+    /// the caller sees is the normalized response id; per-turn run lifecycle
+    /// belongs to the team entry member's actor.
+    /// </summary>
+    private static async Task<IResult> HandleForwardToTeamAsync(
+        HttpContext http,
+        NormalizedResponsesRequest normalized,
+        ResponsesCallerScope callerScope,
+        ForwardToTeam forwardToTeam,
+        ITeamEntryMemberResolver teamEntryMemberResolver,
+        IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        var teamId = forwardToTeam.TeamId?.Trim() ?? string.Empty;
+        var endpointId = forwardToTeam.EndpointId?.Trim() ?? string.Empty;
+        if (teamId.Length == 0)
+            return ToErrorResult(
+                StatusCodes.Status500InternalServerError,
+                "chat_route_invalid",
+                "ForwardToTeam decision missing team_id.");
+        if (endpointId.Length == 0)
+            return ToErrorResult(
+                StatusCodes.Status500InternalServerError,
+                "chat_route_invalid",
+                "ForwardToTeam decision missing endpoint_id.");
+
+        // ForwardToTeam.scope_id is reserved for future cross-scope routing;
+        // v1 stamps the caller's ingress scope and ignores conflicting overrides.
+        var scopeId = callerScope.ScopeId;
+
+        TeamEntryMemberResolution resolution;
+        try
+        {
+            resolution = await teamEntryMemberResolver.ResolveAsync(scopeId, teamId, ct);
+        }
+        catch (TeamEntryMemberResolutionException ex)
+        {
+            return ToErrorResult(
+                ResolveTeamEntryHttpStatusCode(ex.Code),
+                ex.Code,
+                ex.Message);
+        }
+
+        var identity = new ServiceIdentity
+        {
+            TenantId = resolution.ScopeId,
+            AppId = ScopeServiceIdentityDefaults.ServiceAppId,
+            Namespace = ScopeServiceIdentityDefaults.ServiceNamespace,
+            ServiceId = resolution.PublishedServiceId,
+        };
+        var input = new StaticGAgentStreamInvocationInput(
+            Prompt: normalized.Prompt ?? string.Empty,
+            SessionId: normalized.ResponseId,
+            Headers: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [LLMRequestMetadataKeys.RequestId] = normalized.ResponseId,
+                [ChannelMetadataKeys.RegistrationScopeId] = callerScope.ScopeId,
+            });
+        var invocationRequest = new StaticGAgentStreamInvocationRequest(identity, endpointId, input);
+        var createdAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        if (normalized.Stream)
+        {
+            await WriteForwardToTeamStreamAsync(
+                http.Response,
+                normalized,
+                createdAt,
+                invocationRequest,
+                staticGAgentStreamInvocationPort,
+                logger,
+                ct);
+            return Results.Empty;
+        }
+
+        return await CollectForwardToTeamAsync(
+            normalized,
+            createdAt,
+            invocationRequest,
+            staticGAgentStreamInvocationPort,
+            logger,
+            ct);
+    }
+
+    private static async Task WriteForwardToTeamStreamAsync(
+        HttpResponse response,
+        NormalizedResponsesRequest normalized,
+        long createdAt,
+        StaticGAgentStreamInvocationRequest invocationRequest,
+        IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        response.StatusCode = StatusCodes.Status200OK;
+        response.ContentType = "text/event-stream; charset=utf-8";
+        response.Headers.CacheControl = "no-store";
+        response.Headers.Pragma = "no-cache";
+        response.Headers["X-Accel-Buffering"] = "no";
+        await response.StartAsync(ct);
+
+        var adapter = new AGUIEventToResponsesSseAdapter(
+            response,
+            normalized.ResponseId,
+            normalized.MessageItemId,
+            JsonOptions);
+        await adapter.WriteCreatedAsync(
+            BuildCreatedResponse(normalized, createdAt),
+            BuildOutputMessage(normalized.MessageItemId, "in_progress", text: null),
+            ct);
+
+        try
+        {
+            var result = await staticGAgentStreamInvocationPort.InvokeAsync(
+                invocationRequest,
+                emitAsync: adapter.WriteAsync,
+                onAcceptedAsync: null,
+                ct);
+            if (!result.Succeeded)
+            {
+                await adapter.WriteFailureAsync(
+                    result.StartError.ToString().ToLowerInvariant(),
+                    "Team invocation could not be started.",
+                    ct);
+                return;
+            }
+
+            await adapter.WriteCompletedAsync(
+                buildCompletedMessageItem: text => BuildOutputMessage(normalized.MessageItemId, "completed", text),
+                buildFunctionCallItem: tool => BuildFunctionCallOutputItem(new ToolCall
+                {
+                    Id = tool.ToolCallId,
+                    Name = tool.ToolName,
+                    ArgumentsJson = tool.Result ?? "{}",
+                }),
+                buildCompletedResponse: text => BuildCompletedResponse(
+                    normalized,
+                    createdAt,
+                    DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                    text,
+                    adapter.CompletedToolCalls
+                        .Select(tc => new ToolCall
+                        {
+                            Id = tc.ToolCallId,
+                            Name = tc.ToolName,
+                            ArgumentsJson = tc.Result ?? "{}",
+                        })
+                        .ToArray(),
+                    usage: null),
+                ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Client aborted; nothing to forward.
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "ForwardToTeam stream invocation failed for response {ResponseId}", normalized.ResponseId);
+            await adapter.WriteFailureAsync(
+                "team_invocation_failed",
+                "Team invocation failed mid-stream.",
+                ct);
+        }
+    }
+
+    private static async Task<IResult> CollectForwardToTeamAsync(
+        NormalizedResponsesRequest normalized,
+        long createdAt,
+        StaticGAgentStreamInvocationRequest invocationRequest,
+        IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        var aggregatedText = new StringBuilder();
+        var completedToolCalls = new List<ToolCall>();
+        var toolCallNames = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        async ValueTask EmitAsync(AGUIEvent evt, CancellationToken token)
+        {
+            switch (evt.EventCase)
+            {
+                case AGUIEvent.EventOneofCase.TextMessageContent:
+                    var delta = evt.TextMessageContent?.Delta;
+                    if (!string.IsNullOrEmpty(delta))
+                        aggregatedText.Append(delta);
+                    break;
+                case AGUIEvent.EventOneofCase.ToolCallStart:
+                    if (!string.IsNullOrWhiteSpace(evt.ToolCallStart?.ToolCallId))
+                        toolCallNames[evt.ToolCallStart.ToolCallId] = evt.ToolCallStart.ToolName ?? string.Empty;
+                    break;
+                case AGUIEvent.EventOneofCase.ToolCallEnd:
+                    var endId = evt.ToolCallEnd?.ToolCallId;
+                    if (string.IsNullOrWhiteSpace(endId))
+                        break;
+                    var name = toolCallNames.GetValueOrDefault(endId!, string.Empty);
+                    completedToolCalls.Add(new ToolCall
+                    {
+                        Id = endId!,
+                        Name = name,
+                        ArgumentsJson = evt.ToolCallEnd?.Result ?? "{}",
+                    });
+                    break;
+            }
+            await ValueTask.CompletedTask;
+        }
+
+        try
+        {
+            var result = await staticGAgentStreamInvocationPort.InvokeAsync(
+                invocationRequest,
+                emitAsync: EmitAsync,
+                onAcceptedAsync: null,
+                ct);
+            if (!result.Succeeded)
+            {
+                return ToErrorResult(
+                    StatusCodes.Status502BadGateway,
+                    result.StartError.ToString().ToLowerInvariant(),
+                    "Team invocation could not be started.");
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return Results.StatusCode(StatusCodes.Status408RequestTimeout);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "ForwardToTeam sync invocation failed for response {ResponseId}", normalized.ResponseId);
+            return ToErrorResult(
+                StatusCodes.Status500InternalServerError,
+                "team_invocation_failed",
+                "Team invocation failed.");
+        }
+
+        var completed = BuildCompletedResponse(
+            normalized,
+            createdAt,
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            aggregatedText.ToString(),
+            completedToolCalls,
+            usage: null);
+        return Results.Json(completed, statusCode: StatusCodes.Status200OK);
+    }
+
+    private static int ResolveTeamEntryHttpStatusCode(string code) =>
+        code switch
+        {
+            TeamEntryMemberErrorCodes.TeamNotFound => StatusCodes.Status404NotFound,
+            TeamEntryMemberErrorCodes.EntryMemberNotFound => StatusCodes.Status404NotFound,
+            TeamEntryMemberErrorCodes.TeamArchived => StatusCodes.Status409Conflict,
+            TeamEntryMemberErrorCodes.EntryMemberNotConfigured => StatusCodes.Status409Conflict,
+            TeamEntryMemberErrorCodes.EntryMemberMismatch => StatusCodes.Status409Conflict,
+            TeamEntryMemberErrorCodes.EntryMemberNotReady => StatusCodes.Status503ServiceUnavailable,
+            _ => StatusCodes.Status400BadRequest,
+        };
+
     private static ResponsesResponseSnapshot BuildCreatedResponse(
         NormalizedResponsesRequest normalized,
         long createdAt)
@@ -1213,6 +1500,8 @@ internal static class ResponsesApiEndpoints
         ChatRouteResolver resolver,
         ResponsesCallerScope callerScope,
         string model,
+        ToolMode toolMode,
+        string contentHint,
         CancellationToken ct)
     {
         var ownerScope = OwnerScope.ForNyxIdNative(callerScope.ScopeId);
@@ -1229,9 +1518,28 @@ internal static class ResponsesApiEndpoints
             },
             Channel = string.Empty,
             CommandName = string.Empty,
-            ContentHint = string.Empty,
-            ToolMode = ToolMode.None,
+            ContentHint = contentHint,
+            ToolMode = toolMode,
+            Model = model,
         });
+    }
+
+    internal static ToolMode ResolveToolMode(int declaredToolCount, int inlineToolResultCount)
+    {
+        if (inlineToolResultCount > 0)
+            return ToolMode.Inline;
+        return declaredToolCount > 0 ? ToolMode.Declared : ToolMode.None;
+    }
+
+    internal static string BuildContentHint(string? content)
+    {
+        var normalized = content?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+            return string.Empty;
+        const int maxContentHintLength = 160;
+        return normalized.Length <= maxContentHintLength
+            ? normalized
+            : normalized[..maxContentHintLength];
     }
 
     private static LlmSessionRecord BuildResponseSessionRecord(

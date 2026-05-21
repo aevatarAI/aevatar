@@ -97,6 +97,8 @@ internal static class MessagesApiEndpoints
             chatRouteResolver,
             callerScope,
             normalized.Model,
+            ResponsesApiEndpoints.ResolveToolMode(normalized.DeclaredTools.Count, inlineToolResultCount: 0),
+            ResponsesApiEndpoints.BuildContentHint(BuildRouteContentHint(normalized)),
             ct);
         if (routeDecision.Action.Reject is not null)
             return ToErrorResult(
@@ -297,6 +299,13 @@ internal static class MessagesApiEndpoints
             return ToErrorResult(StatusCodes.Status500InternalServerError, "api_error", "Internal server error.");
         }
     }
+
+    private static string BuildRouteContentHint(NormalizedMessagesRequest normalized) =>
+        normalized.ChatMessages
+            .LastOrDefault(static message => string.Equals(message.Role, "user", StringComparison.OrdinalIgnoreCase))
+            ?.Content
+        ?? normalized.ChatMessages.LastOrDefault()?.Content
+        ?? string.Empty;
 
     private static async Task WriteStreamingMessageAsync(
         HttpResponse response,

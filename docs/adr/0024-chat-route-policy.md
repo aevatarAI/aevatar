@@ -17,7 +17,7 @@ policy:
 | Direct chat | `/api/scopes/{scopeId}/nyxid-chat/...` | hard-codes `NyxIdChatGAgent` |
 | NyxID relay (Lark / Telegram) | `/api/webhooks/nyxid-relay` → `ConversationGAgent` | runner picked via DI singleton; one path |
 | NyxID Responses | `/v1/responses` + `/v1/messages` | `ILLMProviderFactory.GetDefault()` directly; no GAgent |
-| Voice | `/ws/voice/{actorId}` (extension only, not yet mounted on Mainnet host) | client supplies `actorId`; zero routing decision |
+| Voice | `/ws/voice` + dev/admin `/ws/voice/{actorId}` | policy-aware entry resolves target; explicit actorId entry is gated bypass |
 
 Issues #672 + #674 introduce one user-configurable layer that decides which
 target GAgent or LLM model handles each inbound request. The earlier proposal
@@ -69,10 +69,14 @@ control flow, compatibility, or stable lookup is a typed proto field or typed
 sub-message. For routing this includes:
 
 - `ChatSourceKind` (enum), `ToolMode` (enum)
+- `ChatRouteInput.model` + `ChatRouteMatch.model` for stable model-based rules
 - `VoiceCodec`, `VoiceConversationMode`, `VadMode` (enums)
 - `VoiceInput` (sub-message) — only valid when `source_kind = VOICE`
-- `ForwardToModel`, `ForwardToGAgent`, `ForwardToWorkflow`, `Reject`
-  (oneof variants)
+- `ForwardToModel`, `ForwardToGAgent`, `ForwardToWorkflow`, `Reject`,
+  `ForwardToTeam` (oneof variants)
+- `ForwardToTeam.team_id` + `ForwardToTeam.endpoint_id` (typed strings) —
+  resolved at ingress to a Studio entry-member's `published_service_id` via
+  `ITeamEntryMemberResolver`, never persisted in the decision
 - `VoiceInput.voice_module_name` (typed string) — chooses among
   `voice_presence`, `voice_presence_openai`, `voice_presence_minicpm`,
   `voice_presence_minicpm_o` registered at bootstrap
@@ -93,11 +97,24 @@ scope in Phase 4 so prod traffic doesn't bypass policy.
 
 ### D5 — v1 scope reduction
 
-Only `ForwardToGAgent` and `ForwardToModel` are implemented in v1.
+`ForwardToGAgent`, `ForwardToModel`, and `ForwardToTeam` are implemented in v1.
 
 - `Reject` is declared on the wire but unused by v1 rule semantics — it lets
   endpoints uniformly return HTTP 403 when policy lookup fails closed.
 - `ForwardToWorkflow` is reserved on the wire only — no implementation.
+- `ForwardToTeam` is supported only on **GAgent-native ingress entries**
+  (NyxIdChat, Relay, Voice). LLM facade entries (`/v1/responses`,
+  `/v1/messages`) reject it with HTTP 501 the same way they reject
+  `ForwardToGAgent`: the LLM facade's wire format (OpenAI Responses /
+  Anthropic Messages) cannot carry the AGUI stream produced by a GAgent
+  invocation. Callers that want team-targeted invocation from those entries
+  should use the Studio team invoke surface
+  (`POST /api/scopes/{scopeId}/teams/{teamId}/invoke/{endpointId}[:stream]`)
+  directly, bypassing the LLM facade entirely. v1 includes ForwardToTeam
+  because the platform capability — `ITeamEntryMemberResolver` +
+  `IStaticGAgentStreamInvocationPort<AGUIEvent>` — already ships in the
+  same milestone, so the only addition is one resolver-call site per
+  GAgent-native entry.
 - No `Bypass` action exists on `ChatRouteAction`. The dev endpoint
   `/ws/voice/{actorId}` does not produce a `ChatRouteAction` at all — it
   reads the `actorId` from the route directly and short-circuits the
