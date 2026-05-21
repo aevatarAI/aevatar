@@ -196,6 +196,12 @@ public static class MainnetHostBuilderExtensions
     {
         ArgumentNullException.ThrowIfNull(app);
 
+        // Static files (demo wwwroot) must run before the auth fallback policy so the
+        // voice demo HTML/JS is reachable without a NyxID JWT — the bootstrap POST and
+        // /ws/voice still enforce their own auth. UseDefaultFiles rewrites /demo/voice/
+        // to /demo/voice/index.html before UseStaticFiles serves it.
+        app.UseDefaultFiles();
+        app.UseStaticFiles();
         app.UseAevatarDefaultHost();
         app.MapNyxIdChatEndpoints();
         app.MapChatRoutePolicyAdminEndpoints();
