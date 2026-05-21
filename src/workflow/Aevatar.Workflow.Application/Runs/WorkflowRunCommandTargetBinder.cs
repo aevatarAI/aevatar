@@ -23,9 +23,9 @@ internal sealed class WorkflowRunCommandTargetBinder
         CommandContext context,
         CancellationToken ct = default)
     {
-        // Refactor (iter18/cluster-005):
-        //   Old pattern: accepted-only dispatch reused interaction targets that owned live sinks
-        //   New principle: accepted-only target split + NoOp binder default + receipt-only(no live sink acquired)
+        // Refactor (iter25/cluster-002-observation-lifecycle-core):
+        //   Old pattern: DefaultCommandDispatchPipeline.PrepareAsync 内 attach projection/session binder(混 read-side 关注到 pre-dispatch command 准备)
+        //   New principle: 新 CQRS Core ObservationLifecycle port/phase:streaming observation attachment 移到 post-accepted dispatch 之后或独立 lifecycle;PrepareAsync 不再持有 projection/session 关注
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(context);

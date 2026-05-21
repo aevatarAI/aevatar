@@ -33,18 +33,31 @@ public sealed class DefaultCommandDispatchPipeline<TCommand, TTarget, TReceipt, 
         TCommand command,
         CancellationToken ct = default)
     {
+        // Refactor (iter25/cluster-002-observation-lifecycle-core):
+        //   Old pattern: DefaultCommandDispatchPipeline.PrepareAsync 内 attach projection/session binder(混 read-side 关注到 pre-dispatch command 准备)
+        //   New principle: 新 CQRS Core ObservationLifecycle port/phase:streaming observation attachment 移到 post-accepted dispatch 之后或独立 lifecycle;PrepareAsync 不再持有 projection/session 关注
         var prepared = await PrepareAsync(command, ct);
         if (!prepared.Succeeded || prepared.Target == null)
             return prepared;
 
-        await DispatchPreparedAsync(prepared.Target, ct);
-        return prepared;
+        var execution = prepared.Target;
+        await DispatchPreparedAsync(execution, ct);
+
+        var binding = await _targetBinder.BindAsync(command, execution.Target, execution.Context, ct);
+        if (!binding.Succeeded)
+            return CommandTargetResolution<CommandDispatchExecution<TTarget, TReceipt>, TError>.Failure(binding.Error);
+
+        return CommandTargetResolution<CommandDispatchExecution<TTarget, TReceipt>, TError>.Success(
+            execution with { Receipt = _receiptFactory.Create(execution.Target, execution.Context) });
     }
 
     public async Task<CommandTargetResolution<CommandDispatchExecution<TTarget, TReceipt>, TError>> PrepareAsync(
         TCommand command,
         CancellationToken ct = default)
     {
+        // Refactor (iter25/cluster-002-observation-lifecycle-core):
+        //   Old pattern: DefaultCommandDispatchPipeline.PrepareAsync 内 attach projection/session binder(混 read-side 关注到 pre-dispatch command 准备)
+        //   New principle: 新 CQRS Core ObservationLifecycle port/phase:streaming observation attachment 移到 post-accepted dispatch 之后或独立 lifecycle;PrepareAsync 不再持有 projection/session 关注
         var resolution = await _targetResolver.ResolveAsync(command, ct);
         if (!resolution.Succeeded || resolution.Target == null)
             return CommandTargetResolution<CommandDispatchExecution<TTarget, TReceipt>, TError>.Failure(resolution.Error);
@@ -58,10 +71,6 @@ public sealed class DefaultCommandDispatchPipeline<TCommand, TTarget, TReceipt, 
             seed?.Headers,
             seed?.CommandId,
             seed?.CorrelationId);
-        var binding = await _targetBinder.BindAsync(command, target, context, ct);
-        if (!binding.Succeeded)
-            return CommandTargetResolution<CommandDispatchExecution<TTarget, TReceipt>, TError>.Failure(binding.Error);
-
         var envelope = _envelopeFactory.CreateEnvelope(command, context);
         var receipt = _receiptFactory.Create(target, context);
         return CommandTargetResolution<CommandDispatchExecution<TTarget, TReceipt>, TError>.Success(
@@ -78,6 +87,9 @@ public sealed class DefaultCommandDispatchPipeline<TCommand, TTarget, TReceipt, 
         CommandDispatchExecution<TTarget, TReceipt> execution,
         CancellationToken ct = default)
     {
+        // Refactor (iter25/cluster-002-observation-lifecycle-core):
+        //   Old pattern: DefaultCommandDispatchPipeline.PrepareAsync 内 attach projection/session binder(混 read-side 关注到 pre-dispatch command 准备)
+        //   New principle: 新 CQRS Core ObservationLifecycle port/phase:streaming observation attachment 移到 post-accepted dispatch 之后或独立 lifecycle;PrepareAsync 不再持有 projection/session 关注
         ArgumentNullException.ThrowIfNull(execution);
         var target = execution.Target;
 
