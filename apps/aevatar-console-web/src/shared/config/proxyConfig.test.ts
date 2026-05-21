@@ -1,6 +1,8 @@
 describe('proxy config', () => {
   const originalApiTarget = process.env.AEVATAR_API_TARGET;
   const originalStudioApiTarget = process.env.AEVATAR_STUDIO_API_TARGET;
+  const originalPreserveAuthHost =
+    process.env.AEVATAR_PROXY_PRESERVE_AUTH_HOST;
   type ProxyEntry = {
     target: string;
     changeOrigin: boolean;
@@ -41,7 +43,58 @@ describe('proxy config', () => {
       process.env.AEVATAR_STUDIO_API_TARGET = originalStudioApiTarget;
     }
 
+    if (originalPreserveAuthHost === undefined) {
+      delete process.env.AEVATAR_PROXY_PRESERVE_AUTH_HOST;
+    } else {
+      process.env.AEVATAR_PROXY_PRESERVE_AUTH_HOST =
+        originalPreserveAuthHost;
+    }
+
     jest.resetModules();
+  });
+
+  it('keeps local auth proxy host preservation by default', () => {
+    process.env.AEVATAR_API_TARGET = 'http://127.0.0.1:5080';
+    process.env.AEVATAR_STUDIO_API_TARGET = 'http://127.0.0.1:5080';
+    delete process.env.AEVATAR_PROXY_PRESERVE_AUTH_HOST;
+
+    const proxyModule = require('../../../config/proxy');
+    const devProxy = proxyModule.default.dev as Record<string, ProxyEntry>;
+
+    expect(resolveProxyEntry(devProxy, '/api/auth/me')).toEqual({
+      target: 'http://127.0.0.1:5080',
+      changeOrigin: false,
+      ws: true,
+    });
+  });
+
+  it('allows hosted backend auth proxying from env.local', () => {
+    process.env.AEVATAR_API_TARGET =
+      'https://aevatar-console-backend-api.aevatar.ai';
+    process.env.AEVATAR_STUDIO_API_TARGET =
+      'https://aevatar-console-backend-api.aevatar.ai';
+    process.env.AEVATAR_PROXY_PRESERVE_AUTH_HOST = 'false';
+
+    const proxyModule = require('../../../config/proxy');
+    const devProxy = proxyModule.default.dev as Record<string, ProxyEntry>;
+
+    expect(resolveProxyEntry(devProxy, '/api/auth/me')).toEqual({
+      target: 'https://aevatar-console-backend-api.aevatar.ai',
+      changeOrigin: true,
+      ws: true,
+    });
+    expect(resolveProxyEntry(devProxy, '/api/scopes/scope-1/teams')).toEqual({
+      target: 'https://aevatar-console-backend-api.aevatar.ai',
+      changeOrigin: true,
+      ws: true,
+    });
+    expect(
+      resolveProxyEntry(devProxy, '/api/scopes/scope-1/members/m-alpha/runs'),
+    ).toEqual({
+      target: 'https://aevatar-console-backend-api.aevatar.ai',
+      changeOrigin: true,
+      ws: true,
+    });
   });
 
   it('routes scope script draft runs to the Studio host', () => {
@@ -79,6 +132,13 @@ describe('proxy config', () => {
       resolveProxyEntry(devProxy, '/api/scopes/scope-1/teams/t-alpha/archive'),
     ).toEqual({
       target: 'http://127.0.0.1:5180',
+      changeOrigin: true,
+      ws: true,
+    });
+    expect(
+      resolveProxyEntry(devProxy, '/api/scopes/scope-1/teams/t-alpha/invoke/chat:stream'),
+    ).toEqual({
+      target: 'http://127.0.0.1:5080',
       changeOrigin: true,
       ws: true,
     });

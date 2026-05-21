@@ -165,6 +165,7 @@ describe("runtimeGAgentApi", () => {
       actorTypeName: "Tests.OrdersGAgent, Tests",
       prompt: "hello agent",
       preferredActorId: "orders-1",
+      timeoutMs: undefined,
     });
     expect(init?.signal).toBe(controller.signal);
   });
