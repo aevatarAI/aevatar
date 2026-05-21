@@ -43,7 +43,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         IEnumerable<IAgentToolSource>? toolSources = null,
-        IToolApprovalHandler? approvalHandler = null)
+        IToolApprovalHandler? approvalHandler = null,
+        IRemoteToolApprovalPort? remoteToolApprovalPort = null)
         : base(
             llmProviderFactory,
             additionalHooks,
@@ -53,6 +54,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             toolSources,
             approvalHandler)
     {
+        RemoteToolApprovalPort = remoteToolApprovalPort;
     }
 
     /// <summary>Role name.</summary>
@@ -62,6 +64,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     //   Old pattern: workflow artifact facts derived role identity by parsing child actor id prefixes.
     //   New principle: role identity is a typed actor-owned fact persisted on RoleGAgent state.
     public string RoleId { get; private set; } = "";
+
+    protected IRemoteToolApprovalPort? RemoteToolApprovalPort { get; }
 
     [EventHandler]
     public async Task HandleInitializeRoleAgent(InitializeRoleAgentEvent evt)
@@ -165,12 +169,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         }
     }
 
-    /// <summary>
-    /// Handles local approval timeout: escalate to NyxID remote.
-    /// Calls the remote handler directly within the actor turn. This blocks the actor
-    /// for up to 45s while NyxID polls for a decision, but guarantees the call works
-    /// (background Task.Run cannot reliably call SendToAsync outside actor context).
-    /// </summary>
+    // Refactor (iter23/cluster-001-nyxid-tool-approval-polling):
+    //   Old pattern: local timeout called a remote approval handler that blocked this actor turn with polling.
+    //   New principle: submit once, persist remote binding, and resume from self status-check events.
+    /// <summary>Handles local approval timeout by submitting one remote approval request and scheduling status continuation.</summary>
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
     public async Task HandleToolApprovalTimeout(ToolApprovalTimeoutFiredEvent evt)
     {
@@ -182,79 +184,164 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             "[{Role}] Tool approval local timeout. Escalating to NyxID remote. request={RequestId}",
             RoleName, evt.RequestId);
 
-        var remoteHandler = ResolveRemoteApprovalHandler();
-        if (remoteHandler == null)
+        if (RemoteToolApprovalPort == null)
         {
-            Logger.LogWarning("[{Role}] No remote approval handler configured. Clearing pending. request={RequestId}",
+            Logger.LogWarning("[{Role}] No remote approval port configured. Clearing pending. request={RequestId}",
                 RoleName, evt.RequestId);
             await PersistApprovalTerminalFailureThenClearPendingAsync(
                 pending,
                 "approval_timeout",
-                "Tool approval timed out and no remote approval handler is configured.");
+                "Tool approval timed out and no remote approval port is configured.");
             return;
         }
 
-        // Restore metadata (NyxID access token) for the remote handler
-        var prevMetadata = AgentToolRequestContext.CurrentMetadata;
-        ToolApprovalResult? result = null;
         try
         {
-            AgentToolRequestContext.CurrentMetadata = pending.Metadata.Count > 0
-                ? new Dictionary<string, string>(pending.Metadata, StringComparer.Ordinal)
-                : null;
-
-            result = await remoteHandler.RequestApprovalAsync(
-                new ToolApprovalRequest
-                {
-                    RequestId = pending.RequestId,
-                    ToolName = pending.ToolName,
-                    ToolCallId = pending.ToolCallId,
-                    ArgumentsJson = pending.ArgumentsJson,
-                    ApprovalMode = ToolApprovalMode.Auto,
-                    IsDestructive = pending.IsDestructive,
-                },
+            var submission = await RemoteToolApprovalPort.SubmitAsync(
+                new RemoteToolApprovalRequest(
+                    pending.RequestId,
+                    pending.ToolName,
+                    pending.ToolCallId,
+                    pending.ArgumentsJson,
+                    ToolApprovalMode.Auto,
+                    pending.IsDestructive,
+                    new Dictionary<string, string>(pending.Metadata, StringComparer.Ordinal)),
                 CancellationToken.None);
 
-            if (result.Decision == ToolApprovalDecision.Approved)
+            var callbackId = BuildRemoteApprovalStatusCallbackId(pending.RequestId, submission.RemoteApprovalId, 1);
+            await PersistDomainEventAsync(new RemoteToolApprovalSubmittedEvent
             {
-                Logger.LogInformation("[{Role}] NyxID remote approved. request={RequestId}", RoleName, evt.RequestId);
-                await HandleToolApprovalDecision(new ToolApprovalDecisionEvent
-                {
-                    RequestId = pending.RequestId,
-                    Approved = true,
-                    Reason = result.Reason ?? "Approved via NyxID remote.",
-                });
-                return;
-            }
+                RequestId = pending.RequestId,
+                RemoteApprovalId = submission.RemoteApprovalId,
+                StatusCheckAttempt = 1,
+                ExpiresAtUnixMs = ResolveRemoteApprovalDeadlineUnixMs(submission.ExpiresAt),
+            });
 
-            Logger.LogWarning("[{Role}] NyxID remote denied/timed out: {Reason}. request={RequestId}",
-                RoleName, result.Reason, evt.RequestId);
+            await ScheduleRemoteApprovalStatusCheckAsync(
+                pending.RequestId,
+                pending.SessionId,
+                submission.RemoteApprovalId,
+                1,
+                callbackId);
         }
         catch (Exception ex)
         {
-            Logger.LogWarning(ex, "[{Role}] NyxID remote approval failed. request={RequestId}",
+            Logger.LogWarning(ex, "[{Role}] NyxID remote approval submit failed. request={RequestId}",
                 RoleName, evt.RequestId);
+            await PersistApprovalTerminalFailureThenClearPendingAsync(
+                pending,
+                "approval_timeout",
+                $"Remote approval submit failed: {ex.Message}");
         }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = prevMetadata;
-        }
-
-        // Remote failed/denied/timed out → persist terminal fact before clearing pending.
-        await PersistApprovalTerminalFailureThenClearPendingAsync(
-            pending,
-            ResolveApprovalTerminalReasonCode(result?.Decision),
-            string.IsNullOrWhiteSpace(result?.Reason)
-                ? "Tool approval timed out or was denied remotely."
-                : result.Reason);
     }
 
-    /// <summary>Override in subclasses to provide the NyxID remote approval handler for timeout escalation.</summary>
-    protected virtual IToolApprovalHandler? ResolveRemoteApprovalHandler() => null;
+    // Refactor (iter23/cluster-001-nyxid-tool-approval-polling):
+    //   Old pattern: remote approval status was polled inside one tool-call stack with Task.Delay.
+    //   New principle: each status read is one actor self-message turn with request/remote-id stale checks.
+    /// <summary>Handles one remote approval status check turn.</summary>
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleRemoteApprovalStatusCheck(ToolApprovalRemoteStatusCheckFiredEvent evt)
+    {
+        var pending = State.PendingApproval;
+        if (pending == null ||
+            pending.RequestId != evt.RequestId ||
+            pending.SessionId != evt.SessionId ||
+            pending.RemoteApprovalId != evt.RemoteApprovalId ||
+            pending.RemoteStatusCheckAttempt != evt.Attempt)
+        {
+            return;
+        }
+
+        if (RemoteToolApprovalPort == null)
+        {
+            await PersistApprovalTerminalFailureThenClearPendingAsync(
+                pending,
+                "approval_timeout",
+                "Tool approval timed out and no remote approval port is configured.");
+            return;
+        }
+
+        RemoteToolApprovalStatusSnapshot snapshot;
+        try
+        {
+            snapshot = await RemoteToolApprovalPort.GetStatusAsync(
+                new RemoteToolApprovalStatusQuery(
+                    pending.RequestId,
+                    pending.RemoteApprovalId,
+                    new Dictionary<string, string>(pending.Metadata, StringComparer.Ordinal)),
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "[{Role}] NyxID remote approval status check failed. request={RequestId}",
+                RoleName, evt.RequestId);
+            snapshot = new RemoteToolApprovalStatusSnapshot(
+                RemoteToolApprovalStatus.Unknown,
+                $"Remote approval status check failed: {ex.Message}");
+        }
+
+        switch (snapshot.Status)
+        {
+            case RemoteToolApprovalStatus.Approved:
+                await HandleToolApprovalDecision(new ToolApprovalDecisionEvent
+                {
+                    RequestId = pending.RequestId,
+                    SessionId = pending.SessionId,
+                    Approved = true,
+                    Reason = snapshot.Reason ?? "Approved via NyxID remote.",
+                });
+                return;
+
+            case RemoteToolApprovalStatus.Rejected:
+            case RemoteToolApprovalStatus.Expired:
+                await PersistApprovalTerminalFailureThenClearPendingAsync(
+                    pending,
+                    snapshot.Status == RemoteToolApprovalStatus.Expired ? "approval_timeout" : "approval_denied",
+                    string.IsNullOrWhiteSpace(snapshot.Reason)
+                        ? "Tool approval timed out or was denied remotely."
+                        : snapshot.Reason);
+                return;
+
+            case RemoteToolApprovalStatus.Pending:
+            case RemoteToolApprovalStatus.Unknown:
+                if (HasRemoteApprovalTimedOut(pending, evt.Attempt))
+                {
+                    await PersistApprovalTerminalFailureThenClearPendingAsync(
+                        pending,
+                        "approval_timeout",
+                        string.IsNullOrWhiteSpace(snapshot.Reason)
+                            ? "NyxID remote approval timed out."
+                            : snapshot.Reason);
+                    return;
+                }
+
+                var nextAttempt = evt.Attempt + 1;
+                var callbackId = BuildRemoteApprovalStatusCallbackId(pending.RequestId, pending.RemoteApprovalId, nextAttempt);
+                await PersistDomainEventAsync(new RemoteToolApprovalSubmittedEvent
+                {
+                    RequestId = pending.RequestId,
+                    RemoteApprovalId = pending.RemoteApprovalId,
+                    StatusCheckAttempt = nextAttempt,
+                    ExpiresAtUnixMs = snapshot.ExpiresAt?.ToUnixTimeMilliseconds() ??
+                                      pending.RemoteApprovalExpiresAtUnixMs,
+                });
+                await ScheduleRemoteApprovalStatusCheckAsync(
+                    pending.RequestId,
+                    pending.SessionId,
+                    pending.RemoteApprovalId,
+                    nextAttempt,
+                    callbackId);
+                return;
+        }
+    }
 
     // ─── Approval continuation constants ───
 
     private const int ApprovalLocalTimeoutSeconds = 15;
+    private const int RemoteApprovalStatusCheckSeconds = 2;
+    private const int RemoteApprovalWindowSeconds = 45;
+    private const int RemoteApprovalMaxStatusCheckAttempts =
+        (RemoteApprovalWindowSeconds + RemoteApprovalStatusCheckSeconds - 1) / RemoteApprovalStatusCheckSeconds;
 
     // ─── Approval helpers ───
 
@@ -361,6 +448,53 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         }
     }
 
+    private static string BuildRemoteApprovalStatusCallbackId(
+        string requestId,
+        string remoteApprovalId,
+        int attempt) =>
+        $"tool-approval-remote-status-{requestId}-{remoteApprovalId}-{attempt}";
+
+    private static long ResolveRemoteApprovalDeadlineUnixMs(DateTimeOffset? expiresAt)
+    {
+        return expiresAt?.ToUnixTimeMilliseconds() ??
+               DateTimeOffset.UtcNow.AddSeconds(RemoteApprovalWindowSeconds).ToUnixTimeMilliseconds();
+    }
+
+    private static bool HasRemoteApprovalTimedOut(PendingToolApprovalState pending, int currentAttempt)
+    {
+        if (currentAttempt >= RemoteApprovalMaxStatusCheckAttempts)
+            return true;
+
+        return pending.RemoteApprovalExpiresAtUnixMs > 0 &&
+               DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() >= pending.RemoteApprovalExpiresAtUnixMs;
+    }
+
+    private async Task ScheduleRemoteApprovalStatusCheckAsync(
+        string requestId,
+        string sessionId,
+        string remoteApprovalId,
+        int attempt,
+        string callbackId)
+    {
+        try
+        {
+            await ScheduleSelfDurableTimeoutAsync(
+                callbackId,
+                TimeSpan.FromSeconds(RemoteApprovalStatusCheckSeconds),
+                new ToolApprovalRemoteStatusCheckFiredEvent
+                {
+                    RequestId = requestId,
+                    SessionId = sessionId,
+                    RemoteApprovalId = remoteApprovalId,
+                    Attempt = attempt,
+                });
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "[{Role}] Failed to schedule remote approval status check", RoleName);
+        }
+    }
+
     private static string BuildContinuationPrompt(PendingToolApprovalState pending, string? toolResult)
     {
         return $"[System continuation] The user approved the tool call '{pending.ToolName}'. " +
@@ -395,6 +529,23 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         return next;
     }
 
+    private static RoleGAgentState ApplyRemoteApprovalSubmitted(
+        RoleGAgentState current,
+        RemoteToolApprovalSubmittedEvent evt)
+    {
+        if (current.PendingApproval == null ||
+            current.PendingApproval.RequestId != evt.RequestId)
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        next.PendingApproval.RemoteApprovalId = evt.RemoteApprovalId;
+        next.PendingApproval.RemoteStatusCheckAttempt = evt.StatusCheckAttempt;
+        next.PendingApproval.RemoteApprovalExpiresAtUnixMs = evt.ExpiresAtUnixMs;
+        return next;
+    }
+
     /// <summary>Returns agent description.</summary>
     public override Task<string> GetDescriptionAsync() =>
         Task.FromResult($"RoleGAgent[{RoleName}]:{Id}");
@@ -406,6 +557,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             .On<RoleChatSessionStartedEvent>(ApplyChatSessionStarted)
             .On<RoleChatSessionCompletedEvent>(ApplyChatSessionCompleted)
             .On<PendingToolApprovalPersistedEvent>(ApplyPendingApproval)
+            .On<RemoteToolApprovalSubmittedEvent>(ApplyRemoteApprovalSubmitted)
             .On<ClearPendingApprovalEvent>(ApplyClearPendingApproval)
             .OrCurrent();
 
@@ -800,11 +952,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             ContentEmitted = false,
         });
     }
-
-    private static string ResolveApprovalTerminalReasonCode(ToolApprovalDecision? decision) =>
-        decision == ToolApprovalDecision.Denied
-            ? "approval_denied"
-            : "approval_timeout";
 
     private async Task ReplayCompletedSessionAsync(string sessionId, RoleChatSessionState trackedSession)
     {

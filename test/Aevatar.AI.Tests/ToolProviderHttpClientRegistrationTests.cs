@@ -1,4 +1,5 @@
 using Aevatar.AI.ToolProviders.ChronoStorage;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Web;
 using FluentAssertions;
@@ -24,6 +25,9 @@ public sealed class ToolProviderHttpClientRegistrationTests
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<IHttpClientFactory>().Should().NotBeNull();
         provider.GetRequiredService<NyxIdApiClient>().Should().NotBeNull();
+        provider.GetRequiredService<IRemoteToolApprovalPort>().Should()
+            .BeOfType<NyxIdRemoteToolApprovalPort>();
+        provider.GetServices<IToolApprovalHandler>().Should().BeEmpty();
     }
 
     [Fact]
