@@ -738,9 +738,6 @@ public sealed class ScopeServiceEndpointsStreamTests
                 projectionPort,
                 terminalProjectionPort),
             new DefaultCommandContextPolicy(),
-            new GAgentDraftRunCommandTargetBinder(
-                projectionPort,
-                terminalProjectionPort),
             new GAgentDraftRunCommandEnvelopeFactory(),
             new ActorCommandTargetDispatcher<GAgentDraftRunCommandTarget>(new InlineActorDispatchPort(runtime)),
             new GAgentDraftRunAcceptedReceiptFactory());

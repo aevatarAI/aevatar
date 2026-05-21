@@ -59,7 +59,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScriptEvolutionRollbackService, RuntimeScriptEvolutionRollbackService>();
         services.TryAddSingleton<RuntimeScriptActorAccessor>();
         services.TryAddSingleton<ICommandTargetResolver<ScriptEvolutionProposal, ScriptEvolutionCommandTarget, ScriptEvolutionStartError>, ScriptEvolutionCommandTargetResolver>();
-        services.TryAddSingleton<ICommandTargetBinder<ScriptEvolutionProposal, ScriptEvolutionCommandTarget, ScriptEvolutionStartError>, ScriptEvolutionCommandTargetBinder>();
         services.TryAddSingleton<ICommandObservationLifecycle<ScriptEvolutionProposal, ScriptEvolutionCommandTarget, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError>, ScriptEvolutionObservationLifecycle>();
         services.TryAddSingleton<ICommandEnvelopeFactory<ScriptEvolutionProposal>, ScriptEvolutionEnvelopeFactory>();
         services.TryAddSingleton<ICommandTargetDispatcher<ScriptEvolutionCommandTarget>, ActorCommandTargetDispatcher<ScriptEvolutionCommandTarget>>();
@@ -119,7 +118,6 @@ public static class ServiceCollectionExtensions
         where TEnvelopeFactory : class, ICommandEnvelopeFactory<TCommand>
     {
         services.TryAddSingleton<ICommandTargetResolver<TCommand, ScriptingActorCommandTarget, ScriptingCommandStartError>, TResolver>();
-        services.TryAddSingleton<ICommandTargetBinder<TCommand, ScriptingActorCommandTarget, ScriptingCommandStartError>, NoOpCommandTargetBinder<TCommand, ScriptingActorCommandTarget, ScriptingCommandStartError>>();
         services.TryAddSingleton<ICommandEnvelopeFactory<TCommand>, TEnvelopeFactory>();
         services.TryAddSingleton<ICommandDispatchPipeline<TCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>, DefaultCommandDispatchPipeline<TCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>>();
         services.TryAddSingleton<ICommandDispatchService<TCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>, DefaultCommandDispatchService<TCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>>();

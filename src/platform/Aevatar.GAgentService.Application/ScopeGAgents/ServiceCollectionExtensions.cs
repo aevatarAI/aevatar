@@ -22,7 +22,6 @@ public static class ServiceCollectionExtensions
         services.AddCqrsCore();
         services.TryAddSingleton<IGAgentDraftRunActorPreparationPort, GAgentDraftRunActorPreparationService>();
         services.TryAddSingleton<ICommandTargetResolver<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunStartError>, GAgentDraftRunCommandTargetResolver>();
-        services.TryAddSingleton<ICommandTargetBinder<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunStartError>, GAgentDraftRunCommandTargetBinder>();
         services.TryAddSingleton<ICommandObservationLifecycle<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError>, GAgentDraftRunObservationLifecycle>();
         services.TryAddSingleton<ICommandEnvelopeFactory<GAgentDraftRunCommand>, GAgentDraftRunCommandEnvelopeFactory>();
         services.TryAddSingleton<ICommandTargetDispatcher<GAgentDraftRunCommandTarget>, ActorCommandTargetDispatcher<GAgentDraftRunCommandTarget>>();
@@ -44,7 +43,6 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<ICommandObservationLifecycle<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError>>(),
                 sp.GetRequiredService<ICommandReceiptFactory<GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt>>()));
         services.TryAddSingleton<ICommandTargetResolver<GAgentApprovalCommand, GAgentApprovalCommandTarget, GAgentApprovalStartError>, GAgentApprovalCommandTargetResolver>();
-        services.TryAddSingleton<ICommandTargetBinder<GAgentApprovalCommand, GAgentApprovalCommandTarget, GAgentApprovalStartError>, GAgentApprovalCommandTargetBinder>();
         services.TryAddSingleton<ICommandObservationLifecycle<GAgentApprovalCommand, GAgentApprovalCommandTarget, GAgentApprovalAcceptedReceipt, GAgentApprovalStartError>, GAgentApprovalObservationLifecycle>();
         services.TryAddSingleton<ICommandEnvelopeFactory<GAgentApprovalCommand>, GAgentApprovalCommandEnvelopeFactory>();
         services.TryAddSingleton<ICommandTargetDispatcher<GAgentApprovalCommandTarget>, ActorCommandTargetDispatcher<GAgentApprovalCommandTarget>>();

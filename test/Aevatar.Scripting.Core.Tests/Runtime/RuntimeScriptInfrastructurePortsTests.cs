@@ -22,7 +22,7 @@ using Google.Protobuf.WellKnownTypes;
 namespace Aevatar.Scripting.Core.Tests.Runtime;
 
 // Test-add (test-coverage/cluster-035):
-//   Covers refactor-introduced behavior in ScriptEvolutionCommandTarget.cs:74-132 and ScriptEvolutionCommandTargetBinder.cs:35-54.
+//   Covers refactor-introduced behavior in ScriptEvolutionCommandTarget.cs:74-132 and ScriptEvolutionObservationLifecycle.
 //   Cluster intent: script evolution carries explicit live-sink projection leases through target binding and cleanup.
 public class RuntimeScriptInfrastructurePortsTests
 {
@@ -875,7 +875,6 @@ public class RuntimeScriptInfrastructurePortsTests
         var dispatchPipeline = new DefaultCommandDispatchPipeline<ScriptEvolutionProposal, ScriptEvolutionCommandTarget, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError>(
             targetResolver,
             new DefaultCommandContextPolicy(),
-            new ScriptEvolutionCommandTargetBinder(projectionPort),
             new ScriptEvolutionEnvelopeFactory(),
             new ActorCommandTargetDispatcher<ScriptEvolutionCommandTarget>(runtime),
             new ScriptEvolutionAcceptedReceiptFactory());
@@ -966,7 +965,6 @@ public class RuntimeScriptInfrastructurePortsTests
             new DefaultCommandDispatchPipeline<TCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>(
                 resolver,
                 new DefaultCommandContextPolicy(),
-                new NoOpCommandTargetBinder<TCommand, ScriptingActorCommandTarget, ScriptingCommandStartError>(),
                 envelopeFactory,
                 new ActorCommandTargetDispatcher<ScriptingActorCommandTarget>(runtime),
                 new ScriptingCommandAcceptedReceiptFactory()));

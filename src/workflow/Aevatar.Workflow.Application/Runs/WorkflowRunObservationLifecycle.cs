@@ -7,33 +7,6 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Workflow.Application.Runs;
 
-internal sealed class WorkflowRunCommandTargetBinder
-    : ICommandTargetBinder<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunStartError>
-{
-    public WorkflowRunCommandTargetBinder(
-        IWorkflowExecutionProjectionPort projectionPort)
-    {
-        ArgumentNullException.ThrowIfNull(projectionPort);
-    }
-
-    public Task<CommandTargetBindingResult<WorkflowChatRunStartError>> BindAsync(
-        WorkflowChatRunRequest command,
-        WorkflowRunCommandTarget target,
-        CommandContext context,
-        CancellationToken ct = default)
-    {
-        // Refactor (iter25/cluster-002-observation-lifecycle-core):
-        //   Old pattern: command preparation could attach projection/session leases and mix read-side observation into dispatch admission.
-        //   New principle: live observation is an explicit interaction phase that starts before dispatch; PrepareAsync and dispatch-only callers stay free of read-side lifecycle work
-        ArgumentNullException.ThrowIfNull(command);
-        ArgumentNullException.ThrowIfNull(target);
-        ArgumentNullException.ThrowIfNull(context);
-        ct.ThrowIfCancellationRequested();
-
-        return Task.FromResult(CommandTargetBindingResult<WorkflowChatRunStartError>.Success());
-    }
-}
-
 internal sealed class WorkflowRunObservationLifecycle
     : ICommandObservationLifecycle<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
 {

@@ -1508,7 +1508,7 @@ run 创建后，继续复用现有查询端点：
 继续复用现有 workflow projection/live pipeline：
 
 - `POST /api/chat` 本身就是 SSE
-- `WorkflowRunCommandTargetBinder` 会在 dispatch 前挂好 projection session 与 live sink
+- `WorkflowRunObservationLifecycle` 会在 dispatch 前挂好 projection session 与 live sink
 - `WorkflowExecutionRunEventProjector` 会把 committed workflow events 投影成 `WorkflowRunEventEnvelope`
 
 #### 4.6.2 这次补的增强

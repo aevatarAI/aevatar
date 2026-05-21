@@ -53,9 +53,7 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<WorkflowRunBehaviorOptions>()));
         services.TryAddSingleton<ICommandContextPolicy, DefaultCommandContextPolicy>();
         services.AddSingleton<ICommandTargetResolver<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunStartError>, WorkflowRunCommandTargetResolver>();
-        services.AddSingleton<ICommandTargetBinder<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunStartError>, WorkflowRunCommandTargetBinder>();
         services.AddSingleton<ICommandTargetResolver<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunStartError>, WorkflowRunAcceptedCommandTargetResolver>();
-        services.AddSingleton<ICommandTargetBinder<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunStartError>, NoOpCommandTargetBinder<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunStartError>>();
         services.AddSingleton<ICommandEnvelopeFactory<WorkflowChatRunRequest>, WorkflowChatRequestEnvelopeFactory>();
         services.AddSingleton<ICommandTargetDispatcher<WorkflowRunCommandTarget>, ActorCommandTargetDispatcher<WorkflowRunCommandTarget>>();
         services.AddSingleton<ICommandTargetDispatcher<WorkflowRunAcceptedCommandTarget>, ActorCommandTargetDispatcher<WorkflowRunAcceptedCommandTarget>>();
@@ -101,17 +99,14 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ICommandTargetDispatcher<WorkflowRunControlCommandTarget>, ActorCommandTargetDispatcher<WorkflowRunControlCommandTarget>>();
         services.TryAddSingleton<ICommandReceiptFactory<WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt>, WorkflowRunControlAcceptedReceiptFactory>();
         services.TryAddSingleton<ICommandTargetResolver<WorkflowResumeCommand, WorkflowRunControlCommandTarget, WorkflowRunControlStartError>, WorkflowResumeCommandTargetResolver>();
-        services.TryAddSingleton<ICommandTargetBinder<WorkflowResumeCommand, WorkflowRunControlCommandTarget, WorkflowRunControlStartError>, NoOpCommandTargetBinder<WorkflowResumeCommand, WorkflowRunControlCommandTarget, WorkflowRunControlStartError>>();
         services.TryAddSingleton<ICommandEnvelopeFactory<WorkflowResumeCommand>, WorkflowResumeCommandEnvelopeFactory>();
         services.TryAddSingleton<ICommandDispatchPipeline<WorkflowResumeCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>, DefaultCommandDispatchPipeline<WorkflowResumeCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();
         services.TryAddSingleton<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>, DefaultCommandDispatchService<WorkflowResumeCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();
         services.TryAddSingleton<ICommandTargetResolver<WorkflowSignalCommand, WorkflowRunControlCommandTarget, WorkflowRunControlStartError>, WorkflowSignalCommandTargetResolver>();
-        services.TryAddSingleton<ICommandTargetBinder<WorkflowSignalCommand, WorkflowRunControlCommandTarget, WorkflowRunControlStartError>, NoOpCommandTargetBinder<WorkflowSignalCommand, WorkflowRunControlCommandTarget, WorkflowRunControlStartError>>();
         services.TryAddSingleton<ICommandEnvelopeFactory<WorkflowSignalCommand>, WorkflowSignalCommandEnvelopeFactory>();
         services.TryAddSingleton<ICommandDispatchPipeline<WorkflowSignalCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>, DefaultCommandDispatchPipeline<WorkflowSignalCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();
         services.TryAddSingleton<ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>, DefaultCommandDispatchService<WorkflowSignalCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();
         services.TryAddSingleton<ICommandTargetResolver<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlStartError>, WorkflowStopCommandTargetResolver>();
-        services.TryAddSingleton<ICommandTargetBinder<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlStartError>, NoOpCommandTargetBinder<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlStartError>>();
         services.TryAddSingleton<ICommandEnvelopeFactory<WorkflowStopCommand>, WorkflowStopCommandEnvelopeFactory>();
         services.TryAddSingleton<ICommandDispatchPipeline<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>, DefaultCommandDispatchPipeline<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();
         services.TryAddSingleton<ICommandDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>, DefaultCommandDispatchService<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();

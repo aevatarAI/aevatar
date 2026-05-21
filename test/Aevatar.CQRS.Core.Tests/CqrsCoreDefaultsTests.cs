@@ -58,19 +58,17 @@ public class DefaultCommandContextPolicyTests
 public class CommandDispatchPipelineTests
 {
     [Fact]
-    public async Task DispatchAsync_ShouldResolveBindDispatchAndCreateReceipt()
+    public async Task DispatchAsync_ShouldResolveDispatchAndCreateReceipt()
     {
         var order = new List<string>();
         var target = new FakeCommandTarget("actor-1");
         var resolver = new RecordingResolver(target, order);
-        var binder = new RecordingBinder(order);
         var envelopeFactory = new RecordingEnvelopeFactory(new EventEnvelope { Id = "evt-1" }, order);
         var dispatcher = new RecordingTargetDispatcher(order);
         var receiptFactory = new RecordingReceiptFactory("receipt-1", order);
         var pipeline = new DefaultCommandDispatchPipeline<string, FakeCommandTarget, string, FakeError>(
             resolver,
             new DefaultCommandContextPolicy(),
-            binder,
             envelopeFactory,
             dispatcher,
             receiptFactory);
@@ -83,7 +81,6 @@ public class CommandDispatchPipelineTests
         result.Target.Context.TargetId.Should().Be("actor-1");
         result.Target.Envelope.Id.Should().Be("evt-1");
         result.Target.Receipt.Should().Be("receipt-1");
-        binder.Calls.Should().BeEmpty();
         dispatcher.Calls.Should().ContainSingle(x => x.Target == target && x.Envelope.Id == "evt-1");
         receiptFactory.Calls.Should().ContainSingle(x => x.Target == target);
         order.Should().Equal("resolve", "envelope", "receipt", "dispatch");
@@ -94,12 +91,10 @@ public class CommandDispatchPipelineTests
     {
         var order = new List<string>();
         var target = new FakeCommandTarget("actor-1");
-        var binder = new RecordingBinder(order);
         var dispatcher = new RecordingTargetDispatcher(order);
         var pipeline = new DefaultCommandDispatchPipeline<string, FakeCommandTarget, string, FakeError>(
             new RecordingResolver(target, order),
             new DefaultCommandContextPolicy(),
-            binder,
             new RecordingEnvelopeFactory(new EventEnvelope { Id = "evt-1" }, order),
             dispatcher,
             new RecordingReceiptFactory("receipt-1", order));
@@ -107,30 +102,8 @@ public class CommandDispatchPipelineTests
         var result = await pipeline.PrepareAsync("hello");
 
         result.Succeeded.Should().BeTrue();
-        binder.Calls.Should().BeEmpty();
         dispatcher.Calls.Should().BeEmpty();
         order.Should().Equal("resolve", "envelope", "receipt");
-    }
-
-    [Fact]
-    public async Task DispatchAsync_ShouldNotCallTargetBinder()
-    {
-        var order = new List<string>();
-        var target = new FakeCommandTarget("actor-1");
-        var dispatcher = new RecordingTargetDispatcher(order);
-        var pipeline = new DefaultCommandDispatchPipeline<string, FakeCommandTarget, string, FakeError>(
-            new RecordingResolver(target, order),
-            new DefaultCommandContextPolicy(),
-            new FailingBinder(order),
-            new RecordingEnvelopeFactory(new EventEnvelope { Id = "evt-1" }, order),
-            dispatcher,
-            new RecordingReceiptFactory("receipt-1", order));
-
-        var result = await pipeline.DispatchAsync("hello");
-
-        result.Succeeded.Should().BeTrue();
-        dispatcher.Calls.Should().ContainSingle();
-        order.Should().Equal("resolve", "envelope", "receipt", "dispatch");
     }
 
     [Fact]
@@ -140,7 +113,6 @@ public class CommandDispatchPipelineTests
         var pipeline = new DefaultCommandDispatchPipeline<string, FakeCommandTarget, string, FakeError>(
             new RecordingResolver(target),
             new DefaultCommandContextPolicy(),
-            new RecordingBinder(),
             new RecordingEnvelopeFactory(new EventEnvelope { Id = "evt-1" }),
             new ThrowingTargetDispatcher(),
             new RecordingReceiptFactory("unused"));
@@ -163,13 +135,11 @@ public class CommandDispatchPipelineTests
             {
                 ["tenant"] = "t-1",
             });
-        var binder = new SeededCommandBinder();
         var envelopeFactory = new SeededCommandEnvelopeFactory(new EventEnvelope { Id = "evt-1" });
         var receiptFactory = new SeededCommandReceiptFactory("receipt-1");
         var pipeline = new DefaultCommandDispatchPipeline<SeededCommand, FakeCommandTarget, string, FakeError>(
             new SeededCommandResolver(target),
             new DefaultCommandContextPolicy(),
-            binder,
             envelopeFactory,
             new RecordingTargetDispatcher(),
             receiptFactory);
@@ -177,7 +147,6 @@ public class CommandDispatchPipelineTests
         var result = await pipeline.DispatchAsync(seeded);
 
         result.Succeeded.Should().BeTrue();
-        binder.Calls.Should().BeEmpty();
         envelopeFactory.Calls.Should().ContainSingle();
         envelopeFactory.Calls[0].Context.CommandId.Should().Be("cmd-seeded");
         receiptFactory.Calls.Should().ContainSingle();
@@ -191,7 +160,6 @@ public class CommandDispatchPipelineTests
         var pipeline = new DefaultCommandDispatchPipeline<string, FakeCommandTarget, string, FakeError>(
             new RecordingResolver(target),
             new DefaultCommandContextPolicy(),
-            new RecordingBinder(),
             new RecordingEnvelopeFactory(new EventEnvelope { Id = "evt-1" }),
             new RecordingTargetDispatcher(),
             new RecordingReceiptFactory("receipt-1"));
@@ -201,20 +169,6 @@ public class CommandDispatchPipelineTests
 
         result.Succeeded.Should().BeTrue();
         result.Receipt.Should().Be("receipt-1");
-    }
-
-    [Fact]
-    public async Task NoOpTargetBinder_ShouldAlwaysSucceed()
-    {
-        var binder = new NoOpCommandTargetBinder<string, FakeCommandTarget, FakeError>();
-
-        var result = await binder.BindAsync(
-            "hello",
-            new FakeCommandTarget("actor-1"),
-            new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>()),
-            CancellationToken.None);
-
-        result.Succeeded.Should().BeTrue();
     }
 }
 
@@ -281,8 +235,6 @@ public class CqrsCoreServiceCollectionExtensionsTests
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<ICommandContextPolicy>().Should().BeOfType<DefaultCommandContextPolicy>();
         provider.GetRequiredService<IEventOutputStream<int, string>>().Should().BeOfType<DefaultEventOutputStream<int, string>>();
-        provider.GetRequiredService<ICommandTargetBinder<string, FakeCommandTarget, FakeError>>()
-            .Should().BeOfType<NoOpCommandTargetBinder<string, FakeCommandTarget, FakeError>>();
         provider.GetRequiredService<ICommandObservationLifecycle<string, FakeCommandTarget, string, FakeError>>()
             .Should().BeOfType<NoOpCommandObservationLifecycle<string, FakeCommandTarget, string, FakeError>>();
     }
@@ -348,48 +300,6 @@ internal sealed class RecordingResolver : ICommandTargetResolver<string, FakeCom
         ct.ThrowIfCancellationRequested();
         _order?.Add("resolve");
         return Task.FromResult(CommandTargetResolution<FakeCommandTarget, FakeError>.Success(_target));
-    }
-}
-
-internal sealed class RecordingBinder : ICommandTargetBinder<string, FakeCommandTarget, FakeError>
-{
-    private readonly List<string>? _order;
-
-    public RecordingBinder(List<string>? order = null)
-    {
-        _order = order;
-    }
-
-    public List<(string Command, FakeCommandTarget Target, CommandContext Context)> Calls { get; } = [];
-
-    public Task<CommandTargetBindingResult<FakeError>> BindAsync(
-        string command,
-        FakeCommandTarget target,
-        CommandContext context,
-        CancellationToken ct = default)
-    {
-        ct.ThrowIfCancellationRequested();
-        _order?.Add("bind");
-        Calls.Add((command, target, context));
-        return Task.FromResult(CommandTargetBindingResult<FakeError>.Success());
-    }
-}
-
-internal sealed class FailingBinder(List<string>? order = null)
-    : ICommandTargetBinder<string, FakeCommandTarget, FakeError>
-{
-    public Task<CommandTargetBindingResult<FakeError>> BindAsync(
-        string command,
-        FakeCommandTarget target,
-        CommandContext context,
-        CancellationToken ct = default)
-    {
-        _ = command;
-        _ = target;
-        _ = context;
-        ct.ThrowIfCancellationRequested();
-        order?.Add("bind");
-        return Task.FromResult(CommandTargetBindingResult<FakeError>.Failure(FakeError.Failed));
     }
 }
 
@@ -482,22 +392,6 @@ internal sealed class SeededCommandResolver(FakeCommandTarget target)
         _ = command;
         ct.ThrowIfCancellationRequested();
         return Task.FromResult(CommandTargetResolution<FakeCommandTarget, FakeError>.Success(target));
-    }
-}
-
-internal sealed class SeededCommandBinder : ICommandTargetBinder<SeededCommand, FakeCommandTarget, FakeError>
-{
-    public List<(SeededCommand Command, FakeCommandTarget Target, CommandContext Context)> Calls { get; } = [];
-
-    public Task<CommandTargetBindingResult<FakeError>> BindAsync(
-        SeededCommand command,
-        FakeCommandTarget target,
-        CommandContext context,
-        CancellationToken ct = default)
-    {
-        ct.ThrowIfCancellationRequested();
-        Calls.Add((command, target, context));
-        return Task.FromResult(CommandTargetBindingResult<FakeError>.Success());
     }
 }
 

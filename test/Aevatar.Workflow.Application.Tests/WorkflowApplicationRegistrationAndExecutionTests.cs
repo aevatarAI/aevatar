@@ -206,7 +206,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
     }
 
     [Fact]
-    public void AddWorkflowApplication_ShouldRegisterAcceptedOnlyDispatchWithAcceptedTargetAndNoOpBinder()
+    public void AddWorkflowApplication_ShouldRegisterAcceptedOnlyDispatchWithAcceptedTarget()
     {
         var services = new ServiceCollection();
 
@@ -215,9 +215,6 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(ICommandTargetResolver<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunStartError>) &&
             x.ImplementationType == typeof(WorkflowRunAcceptedCommandTargetResolver));
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(ICommandTargetBinder<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunStartError>) &&
-            x.ImplementationType == typeof(NoOpCommandTargetBinder<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunStartError>));
         services.Should().Contain(x =>
             x.ServiceType == typeof(ICommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>) &&
             x.ImplementationType == typeof(DefaultCommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>));
@@ -230,7 +227,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
     }
 
     [Fact]
-    public void AddWorkflowApplication_ShouldKeepInteractionServiceOnCommandTargetAndBinder()
+    public void AddWorkflowApplication_ShouldKeepInteractionServiceOnCommandTargetAndObservationLifecycle()
     {
         var services = new ServiceCollection();
 
@@ -240,8 +237,8 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             x.ServiceType == typeof(ICommandTargetResolver<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunStartError>) &&
             x.ImplementationType == typeof(WorkflowRunCommandTargetResolver));
         services.Should().Contain(x =>
-            x.ServiceType == typeof(ICommandTargetBinder<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunStartError>) &&
-            x.ImplementationType == typeof(WorkflowRunCommandTargetBinder));
+            x.ServiceType == typeof(ICommandObservationLifecycle<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>) &&
+            x.ImplementationType == typeof(WorkflowRunObservationLifecycle));
         services.Should().Contain(x =>
             x.ServiceType == typeof(ICommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>) &&
             x.ImplementationType == typeof(DefaultCommandDispatchPipeline<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>));

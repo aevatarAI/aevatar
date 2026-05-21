@@ -15,14 +15,12 @@ public sealed class DefaultCommandDispatchPipeline<TCommand, TTarget, TReceipt, 
     public DefaultCommandDispatchPipeline(
         ICommandTargetResolver<TCommand, TTarget, TError> targetResolver,
         ICommandContextPolicy contextPolicy,
-        ICommandTargetBinder<TCommand, TTarget, TError> targetBinder,
         ICommandEnvelopeFactory<TCommand> envelopeFactory,
         ICommandTargetDispatcher<TTarget> targetDispatcher,
         ICommandReceiptFactory<TTarget, TReceipt> receiptFactory)
     {
         _targetResolver = targetResolver;
         _contextPolicy = contextPolicy;
-        _ = targetBinder ?? throw new ArgumentNullException(nameof(targetBinder));
         _envelopeFactory = envelopeFactory;
         _targetDispatcher = targetDispatcher;
         _receiptFactory = receiptFactory;

@@ -11,7 +11,6 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddCqrsCore(this IServiceCollection services)
     {
         services.TryAddSingleton<ICommandContextPolicy, DefaultCommandContextPolicy>();
-        services.TryAddSingleton(typeof(ICommandTargetBinder<,,>), typeof(NoOpCommandTargetBinder<,,>));
         services.TryAddSingleton(typeof(ICommandObservationLifecycle<,,,>), typeof(NoOpCommandObservationLifecycle<,,,>));
         services.TryAddTransient(typeof(IEventOutputStream<,>), typeof(DefaultEventOutputStream<,>));
 

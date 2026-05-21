@@ -130,8 +130,6 @@ public static class ServiceCollectionExtensions
         //   New principle: commands use accepted receipts; observation is owned by binders or attach-only sessions.
         services.TryAddSingleton(NyxIdChatInteractionFactories.CreateChatResolver);
         services.TryAddSingleton(NyxIdChatInteractionFactories.CreateApprovalResolver);
-        services.TryAddSingleton(NyxIdChatInteractionFactories.CreateChatBinder);
-        services.TryAddSingleton(NyxIdChatInteractionFactories.CreateApprovalBinder);
         services.TryAddSingleton(NyxIdChatInteractionFactories.CreateChatObservationLifecycle);
         services.TryAddSingleton(NyxIdChatInteractionFactories.CreateApprovalObservationLifecycle);
         services.TryAddSingleton<ICommandEnvelopeFactory<NyxIdChatCommand>, NyxIdChatCommandEnvelopeFactory>();

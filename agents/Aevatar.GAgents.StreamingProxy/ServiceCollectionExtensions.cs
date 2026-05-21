@@ -86,7 +86,6 @@ public static class ServiceCollectionExtensions
         //   Old pattern: request handlers synchronously ensure projection/session leases and wait on live sinks.
         //   New principle: commands use accepted receipts; observation is owned by binders or attach-only sessions.
         services.TryAddSingleton<ICommandTargetResolver<StreamingProxyRoomChatCommand, StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatStartError>, StreamingProxyRoomChatCommandTargetResolver>();
-        services.TryAddSingleton<ICommandTargetBinder<StreamingProxyRoomChatCommand, StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatStartError>, StreamingProxyRoomChatCommandTargetBinder>();
         services.TryAddSingleton<ICommandObservationLifecycle<StreamingProxyRoomChatCommand, StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError>, StreamingProxyRoomObservationLifecycle>();
         services.TryAddSingleton<ICommandEnvelopeFactory<StreamingProxyRoomChatCommand>, StreamingProxyRoomChatCommandEnvelopeFactory>();
         services.TryAddSingleton<ICommandTargetDispatcher<StreamingProxyRoomChatCommandTarget>, ActorCommandTargetDispatcher<StreamingProxyRoomChatCommandTarget>>();
