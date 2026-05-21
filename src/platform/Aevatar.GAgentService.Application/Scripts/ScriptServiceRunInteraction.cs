@@ -23,11 +23,17 @@ internal sealed class ScriptServiceRunCommandTarget
 {
     private readonly IScriptServiceAguiProjectionPort _projectionPort;
 
-    public ScriptServiceRunCommandTarget(string actorId, IScriptServiceAguiProjectionPort projectionPort)
+    public ScriptServiceRunCommandTarget(
+        string actorId,
+        string runId,
+        IScriptServiceAguiProjectionPort projectionPort)
     {
         ActorId = string.IsNullOrWhiteSpace(actorId)
             ? throw new ArgumentException("Runtime actor id is required.", nameof(actorId))
             : actorId.Trim();
+        RunId = string.IsNullOrWhiteSpace(runId)
+            ? throw new ArgumentException("Run id is required.", nameof(runId))
+            : runId;
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
     }
 
@@ -199,7 +205,7 @@ internal sealed class ScriptServiceRunCommandTargetResolver
 
         return Task.FromResult(
             CommandTargetResolution<ScriptServiceRunCommandTarget, ScriptServiceRunStartError>.Success(
-                new ScriptServiceRunCommandTarget(command.RuntimeActorId, _projectionPort)));
+                new ScriptServiceRunCommandTarget(command.RuntimeActorId, command.RunId, _projectionPort)));
     }
 }
 
