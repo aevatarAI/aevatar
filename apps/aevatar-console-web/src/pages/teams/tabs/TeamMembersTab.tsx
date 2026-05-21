@@ -1,4 +1,5 @@
-import { Typography } from "antd";
+import { EditOutlined, ToolOutlined } from "@ant-design/icons";
+import { Button, Space, Typography } from "antd";
 import React from "react";
 import {
   AevatarInspectorEmpty,
@@ -17,6 +18,8 @@ type TeamRosterMemberRow = {
   readonly key: string;
   readonly lifecycleLabel: string;
   readonly lifecycleStyle: React.CSSProperties;
+  readonly buildStudioHref: string;
+  readonly editStudioHref: string;
   readonly memberId: string;
   readonly name: string;
   readonly serviceId: string;
@@ -28,15 +31,31 @@ type TeamMembersTabProps = {
   readonly rosterRows?: readonly TeamRosterMemberRow[];
   readonly rosterSyncing?: boolean;
   readonly rosterTeamId?: string;
+  readonly createMemberHref?: string;
+  readonly onNavigate?: (href: string) => void;
 };
 
 const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
+  createMemberHref = "",
+  onNavigate,
   rosterError = false,
   rosterLoading = false,
   rosterRows = [],
   rosterSyncing = false,
   rosterTeamId = "",
 }) => {
+  const handleNavigate = React.useCallback(
+    (href: string) => (event: React.MouseEvent<HTMLElement>) => {
+      if (!href || !onNavigate) {
+        return;
+      }
+
+      event.preventDefault();
+      onNavigate(href);
+    },
+    [onNavigate],
+  );
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <AevatarPanel
@@ -74,7 +93,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
             }}
           >
             <div style={{ overflowX: "auto" }}>
-              <div style={{ minWidth: 820 }}>
+              <div style={{ minWidth: 980 }}>
                 <div
                   style={{
                     background: "var(--ant-colorBgContainerDisabled)",
@@ -85,7 +104,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                     fontWeight: 600,
                     gap: 16,
                     gridTemplateColumns:
-                      "minmax(160px, 1.2fr) minmax(220px, 1.4fr) minmax(120px, 0.8fr) minmax(120px, 0.8fr)",
+                      "minmax(160px, 1.1fr) minmax(220px, 1.4fr) minmax(120px, 0.7fr) minmax(120px, 0.7fr) minmax(190px, max-content)",
                     padding: "12px 16px",
                   }}
                 >
@@ -93,6 +112,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                   <span>职责</span>
                   <span>实现</span>
                   <span>服务</span>
+                  <span>操作</span>
                 </div>
                 {rosterRows.map((row, index) => (
                   <div
@@ -104,7 +124,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                       display: "grid",
                       gap: 16,
                       gridTemplateColumns:
-                        "minmax(160px, 1.2fr) minmax(220px, 1.4fr) minmax(120px, 0.8fr) minmax(120px, 0.8fr)",
+                        "minmax(160px, 1.1fr) minmax(220px, 1.4fr) minmax(120px, 0.7fr) minmax(120px, 0.7fr) minmax(190px, max-content)",
                       padding: "14px 16px",
                     }}
                   >
@@ -129,17 +149,49 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                       strong={false}
                       value={row.serviceId}
                     />
+                    <Space wrap size={8}>
+                      <Button
+                        href={row.editStudioHref}
+                        icon={<EditOutlined />}
+                        onClick={handleNavigate(row.editStudioHref)}
+                        size="small"
+                      >
+                        Edit in Studio
+                      </Button>
+                      <Button
+                        href={row.buildStudioHref}
+                        icon={<ToolOutlined />}
+                        onClick={handleNavigate(row.buildStudioHref)}
+                        size="small"
+                        type="primary"
+                      >
+                        Build
+                      </Button>
+                    </Space>
                   </div>
                 ))}
               </div>
             </div>
           </div>
         ) : rosterTeamId ? (
-          <AevatarInspectorEmpty
-            compact
-            title="这支 Team 还没有成员"
-            description="Team 已经是后端事实，但当前 roster 为空。新增 member 后会出现在这里。"
-          />
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <AevatarInspectorEmpty
+              compact
+              title="这支 Team 还没有成员"
+              description="Team 已经是后端事实，但当前 roster 为空。新增 member 后会出现在这里。"
+            />
+            {createMemberHref ? (
+              <div style={{ display: "flex", justifyContent: "center" }}>
+                <Button
+                  href={createMemberHref}
+                  onClick={handleNavigate(createMemberHref)}
+                  type="primary"
+                >
+                  Create first member
+                </Button>
+              </div>
+            ) : null}
+          </div>
         ) : (
           <AevatarInspectorEmpty
             compact
