@@ -23,7 +23,7 @@ public static class ServiceCollectionExtensions
 
         services.AddCqrsCore();
         services.TryAddSingleton<ICommandTargetResolver<ScriptServiceRunCommand, ScriptServiceRunCommandTarget, ScriptServiceRunStartError>, ScriptServiceRunCommandTargetResolver>();
-        services.TryAddSingleton<ICommandTargetBinder<ScriptServiceRunCommand, ScriptServiceRunCommandTarget, ScriptServiceRunStartError>, ScriptServiceRunCommandTargetBinder>();
+        services.TryAddSingleton<ICommandObservationLifecycle<ScriptServiceRunCommand, ScriptServiceRunCommandTarget, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError>, ScriptServiceRunCommandTargetBinder>();
         services.TryAddSingleton<ICommandEnvelopeFactory<ScriptServiceRunCommand>, ScriptServiceRunEnvelopeFactory>();
         services.TryAddSingleton<ICommandTargetDispatcher<ScriptServiceRunCommandTarget>, ScriptServiceRunCommandDispatcher>();
         services.TryAddSingleton<ICommandReceiptFactory<ScriptServiceRunCommandTarget, ScriptServiceRunAcceptedReceipt>, ScriptServiceRunAcceptedReceiptFactory>();
@@ -33,7 +33,16 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ICommandDurableCompletionResolver<ScriptServiceRunAcceptedReceipt, ScriptServiceRunCompletionStatus>, ScriptServiceRunDurableCompletionResolver>();
         services.TryAddSingleton<IEventFrameMapper<AGUIEvent, AGUIEvent>, IdentityEventFrameMapper<AGUIEvent>>();
         services.TryAddSingleton<IEventOutputStream<AGUIEvent, AGUIEvent>, DefaultEventOutputStream<AGUIEvent, AGUIEvent>>();
-        services.TryAddSingleton<DefaultCommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunCommandTarget, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, AGUIEvent, ScriptServiceRunCompletionStatus>>();
+        services.TryAddSingleton(sp =>
+            new DefaultCommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunCommandTarget, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, AGUIEvent, ScriptServiceRunCompletionStatus>(
+                sp.GetRequiredService<ICommandDispatchPipeline<ScriptServiceRunCommand, ScriptServiceRunCommandTarget, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError>>(),
+                sp.GetRequiredService<IEventOutputStream<AGUIEvent, AGUIEvent>>(),
+                sp.GetRequiredService<ICommandCompletionPolicy<AGUIEvent, ScriptServiceRunCompletionStatus>>(),
+                sp.GetRequiredService<ICommandFinalizeEmitter<ScriptServiceRunAcceptedReceipt, ScriptServiceRunCompletionStatus, AGUIEvent>>(),
+                sp.GetRequiredService<ICommandDurableCompletionResolver<ScriptServiceRunAcceptedReceipt, ScriptServiceRunCompletionStatus>>(),
+                sp.GetService<Microsoft.Extensions.Logging.ILogger<DefaultCommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunCommandTarget, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, AGUIEvent, ScriptServiceRunCompletionStatus>>>(),
+                sp.GetRequiredService<ICommandObservationLifecycle<ScriptServiceRunCommand, ScriptServiceRunCommandTarget, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError>>(),
+                sp.GetRequiredService<ICommandReceiptFactory<ScriptServiceRunCommandTarget, ScriptServiceRunAcceptedReceipt>>()));
         services.TryAddSingleton<ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>>(sp =>
             new ScriptServiceRunRegistrationInteraction(
                 sp.GetRequiredService<DefaultCommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunCommandTarget, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, AGUIEvent, ScriptServiceRunCompletionStatus>>(),

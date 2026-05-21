@@ -333,7 +333,6 @@ public sealed class ScriptServiceRunInteractionTests
         var pipeline = new DefaultCommandDispatchPipeline<ScriptServiceRunCommand, ScriptServiceRunCommandTarget, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError>(
             new ScriptServiceRunCommandTargetResolver(projectionPort),
             new DefaultCommandContextPolicy(),
-            new ScriptServiceRunCommandTargetBinder(projectionPort),
             new ScriptServiceRunEnvelopeFactory(),
             new ScriptServiceRunCommandDispatcher(runtimePort),
             new ScriptServiceRunAcceptedReceiptFactory());
@@ -343,7 +342,8 @@ public sealed class ScriptServiceRunInteractionTests
             new DefaultEventOutputStream<AGUIEvent, AGUIEvent>(new IdentityEventFrameMapper<AGUIEvent>()),
             new ScriptServiceRunCompletionPolicy(),
             new ScriptServiceRunFinalizeEmitter(),
-            new ScriptServiceRunDurableCompletionResolver());
+            new ScriptServiceRunDurableCompletionResolver(),
+            observationLifecycle: new ScriptServiceRunCommandTargetBinder(projectionPort));
     }
 
     private static ScriptServiceRunCommand CreateCommand(

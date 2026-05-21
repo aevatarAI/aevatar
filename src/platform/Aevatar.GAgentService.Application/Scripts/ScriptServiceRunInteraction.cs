@@ -207,7 +207,7 @@ internal sealed class ScriptServiceRunCommandTargetResolver
 //   Old pattern: Scope service script stream inline orchestration in endpoints
 //   New principle: use existing ICommandInteractionService skeleton with ScriptServiceRunCommand and Application-owned service-run registration decorator
 internal sealed class ScriptServiceRunCommandTargetBinder
-    : ICommandTargetBinder<ScriptServiceRunCommand, ScriptServiceRunCommandTarget, ScriptServiceRunStartError>
+    : ICommandObservationLifecycle<ScriptServiceRunCommand, ScriptServiceRunCommandTarget, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError>
 {
     private readonly IScriptServiceAguiProjectionPort _projectionPort;
 
@@ -219,15 +219,16 @@ internal sealed class ScriptServiceRunCommandTargetBinder
     // Refactor (iter25/cluster-026-scope-service-script-stream-inline-orchestration):
     //   Old pattern: Host endpoint built script runtime payload and attached projection leases inline
     //   New principle: Application binder owns payload construction, projection attachment, and target binding
-    public async Task<CommandTargetBindingResult<ScriptServiceRunStartError>> BindAsync(
+    public async Task<CommandObservationBindingResult<ScriptServiceRunStartError>> BindAsync(
         ScriptServiceRunCommand command,
-        ScriptServiceRunCommandTarget target,
-        CommandContext context,
+        CommandDispatchExecution<ScriptServiceRunCommandTarget, ScriptServiceRunAcceptedReceipt> execution,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(command);
-        ArgumentNullException.ThrowIfNull(target);
-        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(execution);
+
+        var target = execution.Target;
+        var context = execution.Context;
 
         var chatRequest = new ChatRequestEvent
         {
@@ -245,14 +246,14 @@ internal sealed class ScriptServiceRunCommandTargetBinder
             ct);
         if (attachment == null)
         {
-            return CommandTargetBindingResult<ScriptServiceRunStartError>.Failure(
+            return CommandObservationBindingResult<ScriptServiceRunStartError>.Failure(
                 ScriptServiceRunStartError.ProjectionUnavailable(
                     "Script execution projection pipeline is unavailable."));
         }
 
         target.BindRunInput(inputPayload, command, context);
         target.BindLiveObservation(attachment.ProjectionLease, attachment.LiveSinkLease, eventChannel);
-        return CommandTargetBindingResult<ScriptServiceRunStartError>.Success();
+        return CommandObservationBindingResult<ScriptServiceRunStartError>.Success();
     }
 
     private static void CopyHeaders(
