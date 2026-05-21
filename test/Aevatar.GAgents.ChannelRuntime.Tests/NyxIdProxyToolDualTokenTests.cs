@@ -94,7 +94,7 @@ public class NyxIdProxyToolDualTokenTests
     }
 
     [Fact]
-    public async Task ProxyExecution_UsesActorToolInstanceCacheAndFallsBackToLiveNyxId()
+    public async Task ProxyExecution_UsesLiveNyxIdDiscoveryForEachRouteDecision()
     {
         var handler = new RecordingNyxIdHandler();
         using var http = new HttpClient(handler);
@@ -116,7 +116,7 @@ public class NyxIdProxyToolDualTokenTests
 
         first.Should().Be("""{"ok":true,"token":"org-token"}""");
         second.Should().Be("""{"ok":true,"token":"org-token"}""");
-        handler.ServiceDiscoveryRequests.Should().Be(2, "user and org discovery should be fetched once then cached in the tool instance");
+        handler.ServiceDiscoveryRequests.Should().Be(4, "routing must read live NyxID service discovery instead of keeping slug facts in a tool-instance cache");
         handler.ProxyRequests.Should().Be(2);
     }
 

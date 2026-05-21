@@ -21,6 +21,9 @@ public static class NyxIdRelayPromptConfiguration
 
     public static string BuildChannelRuntimeConfigurationSection(global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? options)
     {
+        // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
+        //   Old pattern: NyxID relay prompt steered agents toward deleted generic capability-search/proxy-execute tools backed by Aevatar-side catalog state.
+        //   New principle: prompt guidance names durable typed tools and uses live nyxid_proxy only for explicit downstream proxy calls.
         var relayCallbackUrl = ResolveRelayCallbackUrl(options);
         return $"""
 

@@ -19,7 +19,7 @@ public static class ServiceCollectionExtensions
     {
         // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
         //   Old pattern: NyxIdSpecCatalog + SpecFetchToken + IServiceDiscoveryCache 在仓库内建第二 catalog(NyxID 真实源的影子)
-        //   New principle: NyxID 是唯一真实源;actor 内可短 TTL 缓存(过期 fallback NyxID live proxy);删除 in-process catalog 假权威面;保留 typed tools + live nyxid_proxy
+        //   New principle: NyxID 是唯一真实源;删除 in-process catalog 假权威面; routing 和 spec hints 请求时读取 live NyxID surface;保留 typed tools + live nyxid_proxy
         // Refactor (iter10/cluster-019):
         // Old: singleton tool clients constructed or pinned raw HttpClient instances.
         // New: stateless API calls use AddHttpClient<T>; stateful caches use named clients through IHttpClientFactory.
