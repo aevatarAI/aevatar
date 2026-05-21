@@ -63,6 +63,17 @@ gh issue view <N> --json comments --jq '
 - **SKILL.md 历史 reference** `per Auric YYYY-MM-DD` 保留(只 controller 自己读,不输出到 GitHub)
 - **@-mention whitelist 不变**:loning / louis4li / eanzhao / jason-aelf / AbigailDeng / potter-sun(verbatim git blame 验证)
 
+### Wakeup 第一动作:`bash tools/refactor-loop/peek.sh`(强制)
+
+减少人工 grep / parse 错误。一眼看全:
+- 活跃 codex 数(harness-tracked 和 detached 都算)
+- 最近 60 min 完成 codex marker + 推荐下一步(按 SKILL route table)
+- Open auto-loop PR 的 CI + state
+- Monitor zero_streak 当前 / max
+- Open auto-loop issue + phase label
+
+输出格式稳定,易于直接判断派什么。
+
 ### 0 codex + active task = bug(强制,per Auric 2026-05-20 "按说这个流程应该一直有 codex 工作的" + 2026-05-21 "没有并行 codex 就有问题")
 
 **铁律**:任何 active phase issue/PR(`🔍 design-solving` / `🔧 fixing` / `👀 reviewing` / `🛠️ implementing`)存在时,**应至少有 1 codex 在跑**。`ps codex exec | wc -l == 0` AND `gh issue list --label "🔍 design-solving"` non-empty → **P0 bug**(no-gap-violation)。
