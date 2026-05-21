@@ -36,13 +36,13 @@ public interface IStudioTeamService
         string teamId,
         CancellationToken ct = default);
 
-    Task<StudioTeamSummaryResponse> SetEntryMemberAsync(
+    Task SetEntryMemberAsync(
         string scopeId,
         string teamId,
         SetStudioTeamEntryMemberRequest request,
         CancellationToken ct = default);
 
-    Task<StudioTeamSummaryResponse> ClearEntryMemberAsync(
+    Task ClearEntryMemberAsync(
         string scopeId,
         string teamId,
         CancellationToken ct = default);

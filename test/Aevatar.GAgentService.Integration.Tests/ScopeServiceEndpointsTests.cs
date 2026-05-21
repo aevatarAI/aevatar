@@ -2048,12 +2048,137 @@ public sealed class ScopeServiceEndpointsTests
     }
 
     [Fact]
-    public async Task TeamInvokeStreamEndpoint_ShouldNotBeMappedByGAgentServiceHosting()
+    public async Task TeamInvokeStreamEndpoint_ShouldResolveEntryMemberAndDelegateToWorkflowPipeline()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.TeamEntryMemberResolver.Result = new TeamEntryMemberResolution(
+            "scope-a",
+            "team-a",
+            "member-a",
+            "member-a");
+        var service = BuildService("scope-a", "member-a", "definition-actor-member-a");
+        host.ServiceCatalogReader.Service = service;
+        host.TrafficViewReader.View = new ServiceTrafficViewSnapshot(
+            service.ServiceKey,
+            1,
+            string.Empty,
+            [
+                new ServiceTrafficEndpointSnapshot(
+                    "chat",
+                    [
+                        new ServiceTrafficTargetSnapshot(
+                            "dep-team-member-a-1",
+                            "rev-team-member-a-1",
+                            "definition-actor-member-a",
+                            100,
+                            ServiceServingState.Active.ToString()),
+                    ]),
+            ],
+            DateTimeOffset.UtcNow);
+        await host.ArtifactStore.SaveAsync(
+            service.ServiceKey,
+            "rev-team-member-a-1",
+            new PreparedServiceRevisionArtifact
+            {
+                Identity = new ServiceIdentity
+                {
+                    TenantId = "scope-a",
+                    AppId = "default",
+                    Namespace = "default",
+                    ServiceId = "member-a",
+                },
+                RevisionId = "rev-team-member-a-1",
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                Endpoints =
+                {
+                    new ServiceEndpointDescriptor
+                    {
+                        EndpointId = "chat",
+                        DisplayName = "chat",
+                        Kind = ServiceEndpointKind.Chat,
+                        RequestTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                        ResponseTypeUrl = Any.Pack(new ChatResponseEvent()).TypeUrl,
+                    },
+                },
+                DeploymentPlan = new ServiceDeploymentPlan
+                {
+                    WorkflowPlan = new WorkflowServiceDeploymentPlan
+                    {
+                        WorkflowName = "member-a",
+                        WorkflowYaml = "name: member_a\nsteps:\n  - run: echo member",
+                        DefinitionActorId = "definition-actor-member-a",
+                    },
+                },
+            },
+            CancellationToken.None);
+        host.InteractionService.ResultFactory = async (request, emitAsync, onAcceptedAsync, ct) =>
+        {
+            var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-team-a", "member-a", "cmd-team-a", "corr-team-a");
+            if (onAcceptedAsync != null)
+                await onAcceptedAsync(receipt, ct);
+            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+        };
 
-        host.RoutePatterns.Should().NotContain(
-            "/api/scopes/{scopeId}/teams/{teamId}/invoke/{endpointId}:stream");
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/teams/team-a/invoke/chat:stream", new
+        {
+            prompt = "hello team",
+            headers = new Dictionary<string, string> { ["channel"] = "team-tests" },
+        });
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
+        body.Should().Contain("aevatar.run.context");
+        host.TeamEntryMemberResolver.Calls.Should().ContainSingle().Which.Should().Be(("scope-a", "team-a"));
+        host.InteractionService.LastRequest.Should().NotBeNull();
+        host.InteractionService.LastRequest!.ActorId.Should().Be("definition-actor-member-a");
+        host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
+        host.InteractionService.LastRequest.Metadata.Should().ContainKey("channel").WhoseValue.Should().Be("team-tests");
+    }
+
+    [Fact]
+    public async Task TeamInvokeStreamEndpoint_ShouldMapMissingEntryToConflict()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.TeamEntryMemberResolver.Exception = new TeamEntryMemberResolutionException(
+            TeamEntryMemberErrorCodes.EntryMemberNotConfigured,
+            "scope-a",
+            "team-a",
+            "team 'team-a' has no entry member configured.");
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/teams/team-a/invoke/chat:stream", new
+        {
+            prompt = "hello team",
+        });
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be(TeamEntryMemberErrorCodes.EntryMemberNotConfigured);
+        host.InteractionService.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task TeamInvokeStreamEndpoint_ShouldReturnForbiddenBeforeResolvingEntry_WhenScopeClaimDoesNotMatch()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        using var request = CreateAuthenticatedJsonRequest(
+            HttpMethod.Post,
+            "/api/scopes/scope-a/teams/team-a/invoke/chat:stream",
+            new
+            {
+                prompt = "hello team",
+            },
+            "scope-b");
+
+        var response = await host.Client.SendAsync(request);
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("SCOPE_ACCESS_DENIED");
+        host.TeamEntryMemberResolver.Calls.Should().BeEmpty();
+        host.InteractionService.LastRequest.Should().BeNull();
     }
 
     [Fact]

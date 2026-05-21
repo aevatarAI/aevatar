@@ -1,17 +1,10 @@
-using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.Foundation.Abstractions.Connectors;
-using Aevatar.GAgentService.Abstractions.Ports;
-using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.Hosting;
-using Aevatar.Presentation.AGUI;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
-using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Studio.Hosting.Endpoints;
 
@@ -63,10 +56,6 @@ internal static class StudioTeamEndpoints
         app.MapGet(
                 "/api/scopes/{scopeId}/teams/{teamId}/members",
                 HandleListMembersAsync)
-            .WithTags("StudioTeams");
-        app.MapPost(
-                "/api/scopes/{scopeId}/teams/{teamId}/invoke/{endpointId}:stream",
-                HandleInvokeTeamStreamAsync)
             .WithTags("StudioTeams");
     }
 
@@ -261,7 +250,8 @@ internal static class StudioTeamEndpoints
 
         try
         {
-            return Results.Ok(await teamService.SetEntryMemberAsync(scopeId, teamId, request, ct));
+            await teamService.SetEntryMemberAsync(scopeId, teamId, request, ct);
+            return Results.Accepted(BuildTeamLocation(scopeId, teamId));
         }
         catch (StudioTeamNotFoundException ex)
         {
@@ -289,7 +279,8 @@ internal static class StudioTeamEndpoints
 
         try
         {
-            return Results.Ok(await teamService.ClearEntryMemberAsync(scopeId, teamId, ct));
+            await teamService.ClearEntryMemberAsync(scopeId, teamId, ct);
+            return Results.Accepted(BuildTeamLocation(scopeId, teamId));
         }
         catch (StudioTeamNotFoundException ex)
         {
@@ -298,126 +289,6 @@ internal static class StudioTeamEndpoints
         catch (InvalidOperationException ex)
         {
             return BadRequest("INVALID_STUDIO_TEAM_ENTRY_MEMBER_REQUEST", ex.Message);
-        }
-    }
-
-    internal static async Task HandleInvokeTeamStreamAsync(
-        HttpContext http,
-        string scopeId,
-        string teamId,
-        string endpointId,
-        StudioTeamGAgentStreamHttpRequest request,
-        [FromServices] IStudioTeamGAgentStreamInvocationService streamInvocationService,
-        CancellationToken ct)
-    {
-        try
-        {
-            if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
-                return;
-
-            var responseStarted = false;
-            var writer = new AGUISseWriter(http.Response);
-
-            async Task EnsureSseStartedAsync(CancellationToken token)
-            {
-                if (responseStarted)
-                    return;
-
-                http.Response.StatusCode = StatusCodes.Status200OK;
-                http.Response.Headers.ContentType = "text/event-stream; charset=utf-8";
-                http.Response.Headers.CacheControl = "no-store";
-                http.Response.Headers["X-Accel-Buffering"] = "no";
-                await http.Response.StartAsync(token);
-                responseStarted = true;
-            }
-
-            async ValueTask EmitAsync(AGUIEvent aguiEvent, CancellationToken token)
-            {
-                await EnsureSseStartedAsync(token);
-                await writer.WriteAsync(aguiEvent, token);
-            }
-
-            async ValueTask OnAcceptedAsync(StaticGAgentStreamAcceptedReceipt receipt, CancellationToken token)
-            {
-                http.Response.Headers["X-Correlation-Id"] = receipt.GAgentReceipt.CorrelationId;
-                await EnsureSseStartedAsync(token);
-                await writer.WriteAsync(
-                    new AGUIEvent
-                    {
-                        RunStarted = new RunStartedEvent
-                        {
-                            ThreadId = receipt.GAgentReceipt.ActorId,
-                            RunId = receipt.GAgentReceipt.CommandId,
-                        },
-                    },
-                    token);
-            }
-
-            try
-            {
-                await streamInvocationService.InvokeAsync(
-                    new StudioTeamGAgentStreamInvocationRequest(
-                        scopeId,
-                        teamId,
-                        endpointId,
-                        new StaticGAgentStreamInvocationInput(
-                            Prompt: request.Prompt?.Trim() ?? string.Empty,
-                            PreferredActorId: NormalizeOptional(request.ActorId),
-                            SessionId: request.SessionId,
-                            RevisionId: NormalizeOptional(request.RevisionId),
-                            Headers: await BuildScopedHeadersAsync(scopeId, request.Headers, http, ct),
-                            InputParts: MapInputParts(request.InputParts))),
-                    EmitAsync,
-                    OnAcceptedAsync,
-                    ct);
-            }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-            {
-                await EnsureSseStartedAsync(CancellationToken.None);
-                await writer.WriteAsync(
-                    new AGUIEvent
-                    {
-                        RunError = new RunErrorEvent
-                        {
-                            Message = "Studio team GAgent stream timed out.",
-                        },
-                    },
-                    CancellationToken.None);
-            }
-            catch (Exception ex) when (responseStarted)
-            {
-                var isAuthRequired = ex is NyxIdAuthenticationRequiredException;
-                await writer.WriteAsync(
-                    new AGUIEvent
-                    {
-                        RunError = new RunErrorEvent
-                        {
-                            Message = isAuthRequired
-                                ? "NyxID authentication required. Please sign in."
-                                : ex.Message,
-                            Code = isAuthRequired ? "authentication_required" : null,
-                        },
-                    },
-                    CancellationToken.None);
-            }
-        }
-        catch (TeamEntryMemberResolutionException ex)
-        {
-            await WriteJsonErrorResponseAsync(
-                http,
-                ResolveTeamEntryHttpStatusCode(ex.Code),
-                ex.Code,
-                ex.Message,
-                ct);
-        }
-        catch (InvalidOperationException ex)
-        {
-            await WriteJsonErrorResponseAsync(
-                http,
-                StatusCodes.Status400BadRequest,
-                "INVALID_STUDIO_TEAM_GAGENT_STREAM_REQUEST",
-                ex.Message,
-                ct);
         }
     }
 
@@ -504,133 +375,8 @@ internal static class StudioTeamEndpoints
     private static IResult BadRequest(string code, string message) =>
         Results.BadRequest(new { code, message });
 
-    private static async Task<Dictionary<string, string>> BuildScopedHeadersAsync(
-        string scopeId,
-        IReadOnlyDictionary<string, string>? headers,
-        HttpContext http,
-        CancellationToken ct)
-    {
-        var scopedHeaders = headers == null
-            ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
-        scopedHeaders.Remove("scope_id");
-        scopedHeaders.Remove(WorkflowRunCommandMetadataKeys.ScopeId);
-        InjectBearerToken(http, scopedHeaders);
-        await InjectUserLlmPreferencesAsync(http, scopedHeaders, ct);
-        return scopedHeaders;
-    }
-
-    private static void InjectBearerToken(HttpContext http, Dictionary<string, string> headers)
-    {
-        var auth = http.Request.Headers.Authorization.FirstOrDefault();
-        if (auth == null || !auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-            return;
-
-        var bearerToken = auth["Bearer ".Length..].Trim();
-        headers[LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken;
-        headers[ConnectorRequest.HttpAuthorizationMetadataKey] = $"Bearer {bearerToken}";
-    }
-
-    private static async Task InjectUserLlmPreferencesAsync(
-        HttpContext http,
-        Dictionary<string, string> headers,
-        CancellationToken ct)
-    {
-        var preferencesStore = http.RequestServices.GetService<INyxIdUserLlmPreferencesStore>();
-        if (preferencesStore != null)
-        {
-            try
-            {
-                var preferences = await preferencesStore.GetOwnerAsync(ct);
-                if (!headers.ContainsKey(LLMRequestMetadataKeys.ModelOverride) &&
-                    !string.IsNullOrWhiteSpace(preferences.DefaultModel))
-                    headers[LLMRequestMetadataKeys.ModelOverride] = preferences.DefaultModel.Trim();
-                if (!headers.ContainsKey(LLMRequestMetadataKeys.NyxIdRoutePreference) &&
-                    !string.IsNullOrWhiteSpace(preferences.PreferredRoute))
-                    headers[LLMRequestMetadataKeys.NyxIdRoutePreference] = preferences.PreferredRoute.Trim();
-            }
-            catch
-            {
-                // Best-effort; fall back to provider defaults if config unavailable.
-            }
-            return;
-        }
-
-        var userConfigStore = http.RequestServices.GetService<IUserConfigQueryPort>();
-        if (userConfigStore == null)
-            return;
-
-        try
-        {
-            var userConfig = await userConfigStore.GetAsync(ct);
-            if (!headers.ContainsKey(LLMRequestMetadataKeys.ModelOverride) &&
-                !string.IsNullOrWhiteSpace(userConfig.DefaultModel))
-                headers[LLMRequestMetadataKeys.ModelOverride] = userConfig.DefaultModel.Trim();
-            if (!headers.ContainsKey(LLMRequestMetadataKeys.NyxIdRoutePreference) &&
-                !string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute))
-                headers[LLMRequestMetadataKeys.NyxIdRoutePreference] = userConfig.PreferredLlmRoute.Trim();
-        }
-        catch
-        {
-            // Best-effort; fall back to provider defaults if config unavailable.
-        }
-    }
-
-    private static IReadOnlyList<GAgentDraftRunInputPart>? MapInputParts(
-        IReadOnlyList<StudioTeamStreamContentPartHttpRequest>? parts)
-    {
-        if (parts is not { Count: > 0 })
-            return null;
-
-        return parts
-            .Where(p => p != null)
-            .Select(p => new GAgentDraftRunInputPart
-            {
-                Kind = p.Type?.ToLowerInvariant() switch
-                {
-                    "image" => GAgentDraftRunInputPartKind.Image,
-                    "audio" => GAgentDraftRunInputPartKind.Audio,
-                    "video" => GAgentDraftRunInputPartKind.Video,
-                    "text" => GAgentDraftRunInputPartKind.Text,
-                    _ => GAgentDraftRunInputPartKind.Unspecified,
-                },
-                Text = p.Text,
-                DataBase64 = p.DataBase64,
-                MediaType = p.MediaType,
-                Uri = p.Uri,
-                Name = p.Name,
-            }).ToList();
-    }
-
-    private static string? NormalizeOptional(string? value)
-    {
-        var normalized = value?.Trim();
-        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
-    }
-
-    private static int ResolveTeamEntryHttpStatusCode(string code) =>
-        code switch
-        {
-            TeamEntryMemberErrorCodes.TeamNotFound => StatusCodes.Status404NotFound,
-            TeamEntryMemberErrorCodes.TeamArchived => StatusCodes.Status409Conflict,
-            TeamEntryMemberErrorCodes.EntryMemberNotConfigured => StatusCodes.Status409Conflict,
-            TeamEntryMemberErrorCodes.EntryMemberMismatch => StatusCodes.Status409Conflict,
-            TeamEntryMemberErrorCodes.EntryMemberNotReady => StatusCodes.Status409Conflict,
-            TeamEntryMemberErrorCodes.EntryMemberNotFound => StatusCodes.Status409Conflict,
-            _ => StatusCodes.Status400BadRequest,
-        };
-
-    private static async Task WriteJsonErrorResponseAsync(
-        HttpContext http,
-        int statusCode,
-        string code,
-        string message,
-        CancellationToken ct)
-    {
-        http.Response.StatusCode = statusCode;
-        http.Response.ContentType = "application/json";
-        await http.Response.WriteAsJsonAsync(new { code, message }, cancellationToken: ct);
-    }
+    private static string BuildTeamLocation(string scopeId, string teamId) =>
+        $"/api/scopes/{Uri.EscapeDataString(scopeId)}/teams/{Uri.EscapeDataString(teamId)}";
 
     private static IResult NotFound(StudioTeamNotFoundException ex) =>
         Results.Json(
@@ -654,19 +400,4 @@ internal static class StudioTeamEndpoints
             },
             statusCode: StatusCodes.Status404NotFound);
 
-    public sealed record StudioTeamGAgentStreamHttpRequest(
-        string? Prompt,
-        string? ActorId = null,
-        string? SessionId = null,
-        Dictionary<string, string>? Headers = null,
-        string? RevisionId = null,
-        IReadOnlyList<StudioTeamStreamContentPartHttpRequest>? InputParts = null);
-
-    public sealed record StudioTeamStreamContentPartHttpRequest(
-        string Type,
-        string? Text = null,
-        string? DataBase64 = null,
-        string? MediaType = null,
-        string? Uri = null,
-        string? Name = null);
 }

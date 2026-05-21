@@ -1,5 +1,7 @@
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Presentation.AGUI;
 using Aevatar.Studio.Application.Studio.Abstractions;
 
@@ -7,9 +9,6 @@ namespace Aevatar.Studio.Application.Studio.Services;
 
 public sealed class StudioTeamGAgentStreamInvocationService : IStudioTeamGAgentStreamInvocationService
 {
-    private const string ServiceAppId = "default";
-    private const string ServiceNamespace = "default";
-
     private readonly ITeamEntryMemberResolver _teamEntryMemberResolver;
     private readonly IStaticGAgentStreamInvocationPort<AGUIEvent> _staticInvocationPort;
 
@@ -23,10 +22,10 @@ public sealed class StudioTeamGAgentStreamInvocationService : IStudioTeamGAgentS
             ?? throw new ArgumentNullException(nameof(staticInvocationPort));
     }
 
-    public async Task<StaticGAgentStreamInvocationResult> InvokeAsync(
-        StudioTeamGAgentStreamInvocationRequest request,
+    public async Task<StudioTeamStreamInvocationResult> InvokeAsync(
+        StudioTeamStreamInvocationRequest request,
         Func<AGUIEvent, CancellationToken, ValueTask> emitAsync,
-        Func<StaticGAgentStreamAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
+        Func<StudioTeamStreamInvocationAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -40,17 +39,27 @@ public sealed class StudioTeamGAgentStreamInvocationService : IStudioTeamGAgentS
         var resolution = await _teamEntryMemberResolver.ResolveAsync(scopeId, teamId, ct);
         var identity = new ServiceIdentity
         {
-            TenantId = resolution.ScopeId,
-            AppId = ServiceAppId,
-            Namespace = ServiceNamespace,
-            ServiceId = resolution.PublishedServiceId,
+            TenantId = NormalizeRequired(resolution.ScopeId, nameof(resolution.ScopeId)),
+            AppId = ScopeServiceIdentityDefaults.ServiceAppId,
+            Namespace = ScopeServiceIdentityDefaults.ServiceNamespace,
+            ServiceId = NormalizeRequired(
+                resolution.PublishedServiceId,
+                nameof(resolution.PublishedServiceId)),
         };
 
-        return await _staticInvocationPort.InvokeAsync(
-            new StaticGAgentStreamInvocationRequest(identity, endpointId, input),
+        var result = await _staticInvocationPort.InvokeAsync(
+            new StaticGAgentStreamInvocationRequest(identity, endpointId, MapInput(input)),
             emitAsync,
-            onAcceptedAsync,
+            onAcceptedAsync == null
+                ? null
+                : (receipt, token) => onAcceptedAsync(MapAcceptedReceipt(receipt), token),
             ct);
+
+        return new StudioTeamStreamInvocationResult(
+            result.Accepted == null ? null : MapAcceptedReceipt(result.Accepted),
+            result.StartError.ToString(),
+            result.CompletionStatus.ToString(),
+            result.CompletionObserved);
     }
 
     private static string NormalizeRequired(string? value, string fieldName)
@@ -61,4 +70,57 @@ public sealed class StudioTeamGAgentStreamInvocationService : IStudioTeamGAgentS
 
         return normalized;
     }
+
+    private static StaticGAgentStreamInvocationInput MapInput(StudioTeamStreamInvocationInput input) =>
+        new(
+            Prompt: input.Prompt,
+            PreferredActorId: input.PreferredActorId,
+            SessionId: input.SessionId,
+            RevisionId: input.RevisionId,
+            Headers: input.Headers,
+            InputParts: MapInputParts(input.InputParts),
+            Timeout: input.Timeout);
+
+    private static IReadOnlyList<GAgentDraftRunInputPart>? MapInputParts(
+        IReadOnlyList<StudioTeamStreamInvocationInputPart>? inputParts)
+    {
+        if (inputParts == null)
+            return null;
+
+        var mapped = new List<GAgentDraftRunInputPart>(inputParts.Count);
+        foreach (var part in inputParts)
+        {
+            mapped.Add(new GAgentDraftRunInputPart
+            {
+                Kind = MapInputPartKind(part.Type),
+                Text = part.Text,
+                DataBase64 = part.DataBase64,
+                MediaType = part.MediaType,
+                Uri = part.Uri,
+                Name = part.Name,
+            });
+        }
+
+        return mapped;
+    }
+
+    private static GAgentDraftRunInputPartKind MapInputPartKind(string type)
+    {
+        var normalized = NormalizeRequired(type, nameof(StudioTeamStreamInvocationInputPart.Type));
+        return normalized.ToLowerInvariant() switch
+        {
+            "text" => GAgentDraftRunInputPartKind.Text,
+            "image" => GAgentDraftRunInputPartKind.Image,
+            "audio" => GAgentDraftRunInputPartKind.Audio,
+            "video" => GAgentDraftRunInputPartKind.Video,
+            _ => GAgentDraftRunInputPartKind.Unspecified,
+        };
+    }
+
+    private static StudioTeamStreamInvocationAcceptedReceipt MapAcceptedReceipt(
+        StaticGAgentStreamAcceptedReceipt receipt) =>
+        new(
+            receipt.GAgentReceipt.CommandId,
+            receipt.GAgentReceipt.ActorId,
+            receipt.GAgentReceipt.CorrelationId);
 }

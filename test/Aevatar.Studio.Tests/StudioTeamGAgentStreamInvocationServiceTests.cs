@@ -1,6 +1,7 @@
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Presentation.AGUI;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
@@ -22,20 +23,32 @@ public sealed class StudioTeamGAgentStreamInvocationServiceTests
         var staticPort = new RecordingStaticGAgentStreamInvocationPort();
         var service = CreateService(staticPort);
         var emitted = new List<AGUIEvent>();
-        StaticGAgentStreamAcceptedReceipt? accepted = null;
+        StudioTeamStreamInvocationAcceptedReceipt? accepted = null;
 
         var result = await service.InvokeAsync(
-            new StudioTeamGAgentStreamInvocationRequest(
+            new StudioTeamStreamInvocationRequest(
                 ScopeId,
                 TeamId,
                 "chat",
-                new StaticGAgentStreamInvocationInput(
+                new StudioTeamStreamInvocationInput(
                     Prompt: "hello team",
+                    PreferredActorId: "actor-preferred",
                     SessionId: "session-1",
+                    RevisionId: "rev-1",
                     Headers: new Dictionary<string, string>
                     {
                         ["x-trace"] = "trace-1",
-                    })),
+                    },
+                    InputParts:
+                    [
+                        new StudioTeamStreamInvocationInputPart("text", Text: "hello"),
+                        new StudioTeamStreamInvocationInputPart(
+                            "image",
+                            DataBase64: "aW1hZ2U=",
+                            MediaType: "image/png",
+                            Name: "image.png"),
+                    ],
+                    Timeout: TimeSpan.FromSeconds(15))),
             (frame, _) =>
             {
                 emitted.Add(frame);
@@ -47,21 +60,38 @@ public sealed class StudioTeamGAgentStreamInvocationServiceTests
                 return ValueTask.CompletedTask;
             });
 
-        result.Succeeded.Should().BeTrue();
-        accepted.Should().NotBeNull();
+        result.AcceptedReceipt.Should().NotBeNull();
+        result.AcceptedReceipt!.RunId.Should().Be("cmd-1");
+        result.AcceptedReceipt.ThreadId.Should().Be("actor-1");
+        result.AcceptedReceipt.CorrelationId.Should().Be("corr-1");
+        result.StartError.Should().Be(nameof(GAgentDraftRunStartError.None));
+        result.CompletionStatus.Should().Be(nameof(GAgentDraftRunCompletionStatus.RunFinished));
+        result.CompletionObserved.Should().BeTrue();
+        accepted.Should().BeEquivalentTo(result.AcceptedReceipt);
         emitted.Should().ContainSingle()
             .Which.RunStarted.RunId.Should().Be("cmd-1");
 
         staticPort.Requests.Should().ContainSingle();
         var delegated = staticPort.Requests[0];
         delegated.Identity.TenantId.Should().Be(ScopeId);
-        delegated.Identity.AppId.Should().Be("default");
-        delegated.Identity.Namespace.Should().Be("default");
+        delegated.Identity.AppId.Should().Be(ScopeServiceIdentityDefaults.ServiceAppId);
+        delegated.Identity.Namespace.Should().Be(ScopeServiceIdentityDefaults.ServiceNamespace);
         delegated.Identity.ServiceId.Should().Be(PublishedServiceId);
         delegated.EndpointId.Should().Be("chat");
         delegated.Input.Prompt.Should().Be("hello team");
+        delegated.Input.PreferredActorId.Should().Be("actor-preferred");
         delegated.Input.SessionId.Should().Be("session-1");
+        delegated.Input.RevisionId.Should().Be("rev-1");
         delegated.Input.Headers.Should().Contain("x-trace", "trace-1");
+        delegated.Input.Timeout.Should().Be(TimeSpan.FromSeconds(15));
+        delegated.Input.InputParts.Should().NotBeNull();
+        delegated.Input.InputParts!.Should().HaveCount(2);
+        delegated.Input.InputParts[0].Kind.Should().Be(GAgentDraftRunInputPartKind.Text);
+        delegated.Input.InputParts[0].Text.Should().Be("hello");
+        delegated.Input.InputParts[1].Kind.Should().Be(GAgentDraftRunInputPartKind.Image);
+        delegated.Input.InputParts[1].DataBase64.Should().Be("aW1hZ2U=");
+        delegated.Input.InputParts[1].MediaType.Should().Be("image/png");
+        delegated.Input.InputParts[1].Name.Should().Be("image.png");
     }
 
     [Fact]
@@ -132,15 +162,17 @@ public sealed class StudioTeamGAgentStreamInvocationServiceTests
         var resolver = new StudioTeamEntryMemberResolver(
             new TeamQueryPort(team ?? NewTeam()),
             new MemberQueryPort(member ?? NewMember()));
-        return new StudioTeamGAgentStreamInvocationService(resolver, staticPort);
+        return new StudioTeamGAgentStreamInvocationService(
+            resolver,
+            staticPort);
     }
 
-    private static StudioTeamGAgentStreamInvocationRequest NewRequest() =>
+    private static StudioTeamStreamInvocationRequest NewRequest() =>
         new(
             ScopeId,
             TeamId,
             "chat",
-            new StaticGAgentStreamInvocationInput("hello"));
+            new StudioTeamStreamInvocationInput("hello"));
 
     private static StudioTeamSummaryResponse NewTeam(
         string lifecycleStage = TeamLifecycleStageNames.Active,

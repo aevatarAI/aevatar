@@ -5,6 +5,7 @@ using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Hosting.Endpoints;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -263,7 +264,7 @@ public sealed class StudioTeamEndpointTests
     }
 
     [Fact]
-    public async Task HandleSetEntryMemberAsync_ShouldReturn200_WhenSuccessful()
+    public async Task HandleSetEntryMemberAsync_ShouldReturn202WithoutBody_WhenAccepted()
     {
         var service = new InMemoryTeamService(NewSummary());
         var result = await InvokeTeamHandle(
@@ -275,7 +276,8 @@ public sealed class StudioTeamEndpointTests
             service,
             CancellationToken.None);
 
-        GetStatusCode(result).Should().Be(StatusCodes.Status200OK);
+        var accepted = result.Should().BeOfType<Accepted>().Subject;
+        accepted.Location.Should().Be($"/api/scopes/{ScopeId}/teams/{TeamId}");
         service.SetEntryRequests.Should().ContainSingle()
             .Which.MemberId.Should().Be("m-1");
     }
@@ -329,7 +331,7 @@ public sealed class StudioTeamEndpointTests
     }
 
     [Fact]
-    public async Task HandleClearEntryMemberAsync_ShouldReturn200_WhenSuccessful()
+    public async Task HandleClearEntryMemberAsync_ShouldReturn202WithoutBody_WhenAccepted()
     {
         var service = new InMemoryTeamService(NewSummary());
         var result = await InvokeTeamHandle(
@@ -340,7 +342,8 @@ public sealed class StudioTeamEndpointTests
             service,
             CancellationToken.None);
 
-        GetStatusCode(result).Should().Be(StatusCodes.Status200OK);
+        var accepted = result.Should().BeOfType<Accepted>().Subject;
+        accepted.Location.Should().Be($"/api/scopes/{ScopeId}/teams/{TeamId}");
         service.ClearEntryCalls.Should().Be(1);
     }
 
@@ -485,23 +488,23 @@ public sealed class StudioTeamEndpointTests
             string scopeId, string teamId, CancellationToken ct = default) =>
             Task.FromResult(_summary);
 
-        public Task<StudioTeamSummaryResponse> SetEntryMemberAsync(
+        public Task SetEntryMemberAsync(
             string scopeId,
             string teamId,
             SetStudioTeamEntryMemberRequest request,
             CancellationToken ct = default)
         {
             SetEntryRequests.Add(request);
-            return Task.FromResult(_summary);
+            return Task.CompletedTask;
         }
 
-        public Task<StudioTeamSummaryResponse> ClearEntryMemberAsync(
+        public Task ClearEntryMemberAsync(
             string scopeId,
             string teamId,
             CancellationToken ct = default)
         {
             ClearEntryCalls++;
-            return Task.FromResult(_summary);
+            return Task.CompletedTask;
         }
     }
 
@@ -520,12 +523,12 @@ public sealed class StudioTeamEndpointTests
             string scopeId, string teamId, UpdateStudioTeamRequest request, CancellationToken ct = default) => throw _ex;
         public Task<StudioTeamSummaryResponse> ArchiveAsync(
             string scopeId, string teamId, CancellationToken ct = default) => throw _ex;
-        public Task<StudioTeamSummaryResponse> SetEntryMemberAsync(
+        public Task SetEntryMemberAsync(
             string scopeId,
             string teamId,
             SetStudioTeamEntryMemberRequest request,
             CancellationToken ct = default) => throw _ex;
-        public Task<StudioTeamSummaryResponse> ClearEntryMemberAsync(
+        public Task ClearEntryMemberAsync(
             string scopeId,
             string teamId,
             CancellationToken ct = default) => throw _ex;

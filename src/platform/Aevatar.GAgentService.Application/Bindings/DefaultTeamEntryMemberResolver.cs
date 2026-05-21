@@ -3,6 +3,14 @@ using Aevatar.GAgentService.Application.Workflows;
 
 namespace Aevatar.GAgentService.Application.Bindings;
 
+/// <summary>
+/// Transitional resolver kept only while team invoke still has a platform
+/// GAgentService route. It is not actor-owned team authority, and callers
+/// must not treat <c>teamId == entryMemberId == publishedServiceId</c> as a
+/// durable business fact. Once Team authority lives only in Studio, delete
+/// this resolver and require the owning module to provide
+/// <see cref="ITeamEntryMemberResolver"/>.
+/// </summary>
 public sealed class DefaultTeamEntryMemberResolver : ITeamEntryMemberResolver
 {
     public Task<TeamEntryMemberResolution> ResolveAsync(
@@ -15,8 +23,9 @@ public sealed class DefaultTeamEntryMemberResolver : ITeamEntryMemberResolver
         var normalizedScopeId = ScopeWorkflowCapabilityOptions.NormalizeRequired(scopeId, nameof(scopeId));
         var normalizedTeamId = NormalizeTeamId(teamId);
 
-        // TODO: replace this deterministic development resolver with an actor-owned team
-        // catalog that defines authoritative entry membership, ownership, and cleanup semantics.
+        // Transitional compatibility only. This deterministic mapping exists
+        // while Team is still migrating out of GAgentService; Studio replaces
+        // it with a read-model resolver when Studio owns the team authority.
         return Task.FromResult(new TeamEntryMemberResolution(
             normalizedScopeId,
             normalizedTeamId,

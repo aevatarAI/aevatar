@@ -49,6 +49,9 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Should().Contain(x => x.ServiceType == typeof(IScopeBindingReadinessQueryPort));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceInvocationPort));
         services.Should().Contain(x => x.ServiceType == typeof(IStaticGAgentStreamInvocationPort<AGUIEvent>));
+        // Transitional platform fallback only. Studio registration replaces it
+        // with the actor-readmodel resolver; remove this assertion when Team
+        // invoke no longer needs a GAgentService compatibility resolver.
         services.Should().Contain(x =>
             x.ServiceType == typeof(ITeamEntryMemberResolver) &&
             x.ImplementationType != null &&
@@ -192,7 +195,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         endpoints.Should().Contain("/api/scopes/{scopeId}/workflow/draft-run");
         endpoints.Should().Contain("/api/scopes/{scopeId}/invoke/chat:stream");
         endpoints.Should().Contain("/api/scopes/{scopeId}/invoke/{endpointId}");
-        endpoints.Should().NotContain("/api/scopes/{scopeId}/teams/{teamId}/invoke/{endpointId}:stream");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/teams/{teamId}/invoke/{endpointId}:stream");
         endpoints.Should().Contain("/api/scopes/{scopeId}/teams/{teamId}/invoke/{endpointId}");
         endpoints.Should().Contain("/api/scopes/{scopeId}/runs");
         endpoints.Should().Contain("/api/scopes/{scopeId}/runs/{runId}");

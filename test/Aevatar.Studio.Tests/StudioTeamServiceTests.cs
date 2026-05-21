@@ -158,24 +158,24 @@ public sealed class StudioTeamServiceTests
     }
 
     [Fact]
-    public async Task SetEntryMemberAsync_ShouldValidateTeamAndMemberThenDelegateAndReRead()
+    public async Task SetEntryMemberAsync_ShouldValidateTeamAndMemberThenDelegateWithoutPostDispatchRead()
     {
         var commandPort = new RecordingCommandPort();
-        var summary = NewSummary();
+        var queryPort = new InMemoryQueryPort(NewSummary());
         var member = NewMember(TeamId);
         var service = new StudioTeamService(
             commandPort,
-            new InMemoryQueryPort(summary),
+            queryPort,
             new InMemoryMemberQueryPort(member));
 
-        var result = await service.SetEntryMemberAsync(
+        await service.SetEntryMemberAsync(
             ScopeId,
             TeamId,
             new SetStudioTeamEntryMemberRequest(EntryMemberId));
 
         commandPort.SetEntryCalls.Should().Be(1);
         commandPort.LastEntryMemberId.Should().Be(EntryMemberId);
-        result.Should().NotBeNull();
+        queryPort.GetCalls.Should().Be(1);
     }
 
     [Fact]
@@ -262,18 +262,19 @@ public sealed class StudioTeamServiceTests
     }
 
     [Fact]
-    public async Task ClearEntryMemberAsync_ShouldValidateTeamThenDelegateAndReRead()
+    public async Task ClearEntryMemberAsync_ShouldValidateTeamThenDelegateWithoutPostDispatchRead()
     {
         var commandPort = new RecordingCommandPort();
+        var queryPort = new InMemoryQueryPort(NewSummary());
         var service = new StudioTeamService(
             commandPort,
-            new InMemoryQueryPort(NewSummary()),
+            queryPort,
             new InMemoryMemberQueryPort(NewMember(TeamId)));
 
-        var result = await service.ClearEntryMemberAsync(ScopeId, TeamId);
+        await service.ClearEntryMemberAsync(ScopeId, TeamId);
 
         commandPort.ClearEntryCalls.Should().Be(1);
-        result.Should().NotBeNull();
+        queryPort.GetCalls.Should().Be(1);
     }
 
     [Fact]
@@ -361,6 +362,7 @@ public sealed class StudioTeamServiceTests
     private sealed class InMemoryQueryPort : IStudioTeamQueryPort
     {
         private readonly StudioTeamSummaryResponse? _summary;
+        public int GetCalls { get; private set; }
 
         public InMemoryQueryPort(StudioTeamSummaryResponse? summary) => _summary = summary;
 
@@ -369,8 +371,11 @@ public sealed class StudioTeamServiceTests
             Task.FromResult(new StudioTeamRosterResponse(scopeId, _summary == null ? [] : [_summary]));
 
         public Task<StudioTeamSummaryResponse?> GetAsync(
-            string scopeId, string teamId, CancellationToken ct = default) =>
-            Task.FromResult(_summary);
+            string scopeId, string teamId, CancellationToken ct = default)
+        {
+            GetCalls++;
+            return Task.FromResult(_summary);
+        }
     }
 
     private sealed class RecordingCommandPort : IStudioTeamCommandPort

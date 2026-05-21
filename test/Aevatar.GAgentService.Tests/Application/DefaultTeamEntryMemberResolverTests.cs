@@ -7,7 +7,7 @@ namespace Aevatar.GAgentService.Tests.Application;
 public sealed class DefaultTeamEntryMemberResolverTests
 {
     [Fact]
-    public async Task ResolveAsync_ShouldMapTeamToStableEntryMemberAndPublishedServiceId()
+    public async Task ResolveAsync_ShouldKeepTransitionalDeterministicMappingUntilTeamMigratesToStudio()
     {
         var resolver = new DefaultTeamEntryMemberResolver();
 

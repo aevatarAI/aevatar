@@ -104,7 +104,7 @@ public sealed class StudioTeamService : IStudioTeamService
         return await GetAsync(scopeId, teamId, ct);
     }
 
-    public async Task<StudioTeamSummaryResponse> SetEntryMemberAsync(
+    public async Task SetEntryMemberAsync(
         string scopeId,
         string teamId,
         SetStudioTeamEntryMemberRequest request,
@@ -126,10 +126,9 @@ public sealed class StudioTeamService : IStudioTeamService
         }
 
         await _commandPort.SetEntryMemberAsync(scopeId, team.TeamId, normalizedMemberId, ct);
-        return await GetAsync(scopeId, team.TeamId, ct);
     }
 
-    public async Task<StudioTeamSummaryResponse> ClearEntryMemberAsync(
+    public async Task ClearEntryMemberAsync(
         string scopeId,
         string teamId,
         CancellationToken ct = default)
@@ -138,7 +137,6 @@ public sealed class StudioTeamService : IStudioTeamService
         EnsureTeamWritable(team);
 
         await _commandPort.ClearEntryMemberAsync(scopeId, team.TeamId, ct);
-        return await GetAsync(scopeId, team.TeamId, ct);
     }
 
     private static void EnsureTeamWritable(StudioTeamSummaryResponse team)

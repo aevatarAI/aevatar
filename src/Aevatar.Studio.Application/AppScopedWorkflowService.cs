@@ -5,6 +5,7 @@ using System.Text.Json;
 using Aevatar.Configuration;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
@@ -249,8 +250,8 @@ public sealed class AppScopedWorkflowService
                         var identity = new ServiceIdentity
                         {
                             TenantId = normalizedScopeId,
-                            AppId = "default",
-                            Namespace = "default",
+                            AppId = ScopeServiceIdentityDefaults.ServiceAppId,
+                            Namespace = ScopeServiceIdentityDefaults.ServiceNamespace,
                             ServiceId = normalizedWorkflowId,
                         };
                         var svc = await _serviceLifecycleQueryPort.GetServiceAsync(identity, ct);
