@@ -444,6 +444,39 @@ For every cluster with `requires_design: true`:
 
 Update state, advance to Phase 2 (with requires_design clusters excluded).
 
+### Stale-worktree audit pollution(强制 pre-audit cleanup)
+
+**Bug 来源**:audit codex 默认在 `--cd /Users/auric/aevatar` 下扫描,但 `find` / `rg` 会无视 git boundary 扫到 sibling worktrees(`/Users/auric/aevatar-wt-iter15-cluster-*` 等)。已 merge 但未清理的 worktree 里仍保留 pre-refactor src 文件,audit 把那些当成"现状"出 evidence,导致 cluster 描述指向 main 中**已删除**的文件路径(file:line 在 main 不存在)。
+
+**已发生事故**:iter22 audit r1 出的 cluster-001 `WorkflowGenerateActorService.cs:10` 在 main 早已删除(iter21 cluster-001 / PR #754),evidence 实际来自 `/Users/auric/aevatar-wt-iter15-cluster-025/src/...`。三个 cluster 中 1 个完全 bogus,1 个 file path 错(pattern 真存在于新路径)。
+
+**强制 pre-audit 步骤**(每次派 audit codex 前 controller 执行):
+
+```bash
+# 1. List worktrees,标记 main + active 之外的 stale
+git worktree list
+
+# 2. 对每个非 main / 非 active(active = in-flight cluster impl 用的)worktree:
+#    - 若对应 PR 已 merged → 删
+#    - 若对应 PR 已 closed(superseded / drop)→ 删
+#    - 若对应 branch 已不在 origin → 删
+git worktree remove <stale-wt> --force
+git worktree prune
+git branch -D <stale-branch>  # 同 step 一起清
+
+# 3. 验收:`git worktree list` 只剩 main + dev-sync + 当前 in-flight cluster wt
+```
+
+**反面禁止**:
+- ❌ 派 audit codex 前不 clean worktrees → bogus evidence + 浪费 5400s codex 时间
+- ❌ 见 audit-iter-N 的 cluster 直接 trust → 必须 controller 抽查 3 个 evidence file:line 真存在(且不在 stale wt)
+- ❌ "可能下次还要用" → worktree 是 disposable;branch 在 git history,需要时 `git worktree add -b <new-branch> <path> <commit>` 重建
+
+如果发现 audit 输出含 stale-worktree evidence(典型征兆:file path 在 main `git ls-files` 中找不到):
+1. archive 该 audit md/ndjson 加 `.STALE-WORKTREES.md` 后缀
+2. clean worktrees(per 上)
+3. 重派 audit(同 prompt)
+
 ---
 
 ## Phase 2 — Implement (parallel codexes, one per cluster in current batch)
