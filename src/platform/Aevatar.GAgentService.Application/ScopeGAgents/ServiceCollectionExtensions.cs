@@ -23,6 +23,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IGAgentDraftRunActorPreparationPort, GAgentDraftRunActorPreparationService>();
         services.TryAddSingleton<ICommandTargetResolver<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunStartError>, GAgentDraftRunCommandTargetResolver>();
         services.TryAddSingleton<ICommandTargetBinder<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunStartError>, GAgentDraftRunCommandTargetBinder>();
+        services.TryAddSingleton<ICommandObservationLifecycle<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError>, GAgentDraftRunObservationLifecycle>();
         services.TryAddSingleton<ICommandEnvelopeFactory<GAgentDraftRunCommand>, GAgentDraftRunCommandEnvelopeFactory>();
         services.TryAddSingleton<ICommandTargetDispatcher<GAgentDraftRunCommandTarget>, ActorCommandTargetDispatcher<GAgentDraftRunCommandTarget>>();
         services.TryAddSingleton<ICommandReceiptFactory<GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt>, GAgentDraftRunAcceptedReceiptFactory>();
@@ -39,9 +40,12 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<ICommandCompletionPolicy<AGUIEvent, GAgentDraftRunCompletionStatus>>(),
                 sp.GetRequiredService<ICommandFinalizeEmitter<GAgentDraftRunAcceptedReceipt, GAgentDraftRunCompletionStatus, AGUIEvent>>(),
                 sp.GetRequiredService<ICommandDurableCompletionResolver<GAgentDraftRunAcceptedReceipt, GAgentDraftRunCompletionStatus>>(),
-                sp.GetService<Microsoft.Extensions.Logging.ILogger<DefaultCommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, AGUIEvent, GAgentDraftRunCompletionStatus>>>()));
+                sp.GetService<Microsoft.Extensions.Logging.ILogger<DefaultCommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, AGUIEvent, GAgentDraftRunCompletionStatus>>>(),
+                sp.GetRequiredService<ICommandObservationLifecycle<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError>>(),
+                sp.GetRequiredService<ICommandReceiptFactory<GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt>>()));
         services.TryAddSingleton<ICommandTargetResolver<GAgentApprovalCommand, GAgentApprovalCommandTarget, GAgentApprovalStartError>, GAgentApprovalCommandTargetResolver>();
         services.TryAddSingleton<ICommandTargetBinder<GAgentApprovalCommand, GAgentApprovalCommandTarget, GAgentApprovalStartError>, GAgentApprovalCommandTargetBinder>();
+        services.TryAddSingleton<ICommandObservationLifecycle<GAgentApprovalCommand, GAgentApprovalCommandTarget, GAgentApprovalAcceptedReceipt, GAgentApprovalStartError>, GAgentApprovalObservationLifecycle>();
         services.TryAddSingleton<ICommandEnvelopeFactory<GAgentApprovalCommand>, GAgentApprovalCommandEnvelopeFactory>();
         services.TryAddSingleton<ICommandTargetDispatcher<GAgentApprovalCommandTarget>, ActorCommandTargetDispatcher<GAgentApprovalCommandTarget>>();
         services.TryAddSingleton<ICommandReceiptFactory<GAgentApprovalCommandTarget, GAgentApprovalAcceptedReceipt>, GAgentApprovalAcceptedReceiptFactory>();
@@ -56,7 +60,9 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<ICommandCompletionPolicy<AGUIEvent, GAgentApprovalCompletionStatus>>(),
                 sp.GetRequiredService<ICommandFinalizeEmitter<GAgentApprovalAcceptedReceipt, GAgentApprovalCompletionStatus, AGUIEvent>>(),
                 sp.GetRequiredService<ICommandDurableCompletionResolver<GAgentApprovalAcceptedReceipt, GAgentApprovalCompletionStatus>>(),
-                sp.GetService<Microsoft.Extensions.Logging.ILogger<DefaultCommandInteractionService<GAgentApprovalCommand, GAgentApprovalCommandTarget, GAgentApprovalAcceptedReceipt, GAgentApprovalStartError, AGUIEvent, AGUIEvent, GAgentApprovalCompletionStatus>>>()));
+                sp.GetService<Microsoft.Extensions.Logging.ILogger<DefaultCommandInteractionService<GAgentApprovalCommand, GAgentApprovalCommandTarget, GAgentApprovalAcceptedReceipt, GAgentApprovalStartError, AGUIEvent, AGUIEvent, GAgentApprovalCompletionStatus>>>(),
+                sp.GetRequiredService<ICommandObservationLifecycle<GAgentApprovalCommand, GAgentApprovalCommandTarget, GAgentApprovalAcceptedReceipt, GAgentApprovalStartError>>(),
+                sp.GetRequiredService<ICommandReceiptFactory<GAgentApprovalCommandTarget, GAgentApprovalAcceptedReceipt>>()));
         return services;
     }
 }

@@ -1,14 +1,12 @@
-# Fix report for PR 791 round 1
+# Fix report for PR 795 round 1
 
 ## Applied
-- (A) `src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdProxyTool.cs:11`: removed the private `ActorToolServiceDiscoveryCache` field and helper type; `ResolveTokenForServiceAsync` now checks NyxID `/proxy/services` live on each route decision instead of holding token-hash slug facts in a process-local dictionary (addresses reviewer:architect evidence #1).
-- (A) `src/Aevatar.AI.ToolProviders.NyxId/ConnectedServiceSpecCache.cs:50`: removed `_snapshots`, `SpecSnapshot`, and cache TTL state; connected-service spec hints fetch the current OpenAPI document per request through the named HTTP client instead of returning singleton process snapshots (addresses reviewer:architect evidence #2).
-- (A) `agents/Aevatar.GAgents.NyxidChat/NyxIdRelayPromptConfiguration.cs:24`: added the required `Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache)` Old/New comment for the prompt-surface change (addresses reviewer:architect evidence #4).
-- (A) `src/Aevatar.AI.ToolProviders.Ornn/OrnnSearchSkillsTool.cs:17`: added the required `Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache)` Old/New comment for the tool-description change (addresses reviewer:architect evidence #4).
-- (A) `test/Aevatar.AI.Tests/ToolProviderHttpClientRegistrationTests.cs:34`: added a behavior test that builds DI, resolves `IAgentToolSource`, calls `DiscoverToolsAsync`, asserts `nyxid_proxy` is present, and asserts `nyxid_search_capabilities` / `nyxid_proxy_execute` plus deleted catalog/cache registrations stay absent (addresses reviewer:tests evidence #1 and #2).
-- (A) `test/Aevatar.GAgents.ChannelRuntime.Tests/NyxIdProxyToolDualTokenTests.cs:97`: updated the proxy routing test to assert route decisions perform live NyxID discovery on each call, proving the deleted tool-instance cache cannot mask token/service ownership changes (addresses reviewer:architect evidence #1).
-- (B) `test/Aevatar.AI.Tests/ConnectedServiceSpecCacheTests.cs:21`: SCOPE_EXTEND reason: existing touched test expectations encoded the removed process-local spec snapshot behavior; updated assertions to expect a live fetch on the second call.
-- (B) `test/Aevatar.AI.Tests/ToolProviderHttpClientOwnershipTests.cs:106`: SCOPE_EXTEND reason: existing touched factory-client test encoded the removed spec snapshot behavior; updated assertions to expect a named factory client and HTTP request per spec fetch.
+- (A) `src/Aevatar.CQRS.Core/Interactions/DefaultCommandInteractionService.cs:51`: moved interactive command execution to `Prepare -> Observe -> DispatchPrepared -> Receipt refresh -> Accepted callback -> Pump -> Release`, so observation binding failure prevents dispatch and accepted is only emitted after mailbox admission (addresses reviewer:architect evidence #1 and #2).
+- (A) `src/Aevatar.CQRS.Core.Abstractions/Interactions/ICommandObservationLifecycle.cs:5`: added explicit `ICommandObservationLifecycle<TCommand,TTarget,TReceipt,TError>` and `CommandObservationBindingResult<TError>` contracts, separating live projection/session observation from `ICommandTargetBinder` and dispatch-only command admission (addresses reviewer:architect evidence #4).
+- (A) `src/Aevatar.CQRS.Core/Commands/DefaultCommandDispatchPipeline.cs:31`: kept `DispatchAsync` honest for dispatch-only callers by making it prepare and dispatch only; it no longer starts projection/read-model activation or returns post-dispatch observation failures as command-start failures (addresses reviewer:architect evidence #1).
+- (B) `docs/canon/cqrs-projection.md:71`: SCOPE_EXTEND reason: architect reject cited missing canonical documentation for the changed CQRS command lifecycle; documented `Observe Result`, the pre-dispatch observation lifecycle rule, and the ban on live projection/session attach in `ICommandTargetBinder`.
+- (B) `test/Aevatar.CQRS.Core.Tests/CqrsCoreDefaultsTests.cs:93`: SCOPE_EXTEND reason: tests reject required direct CQRS core regression coverage; added tests proving `PrepareAsync` creates target/context/envelope/receipt without binding or dispatching, and `DispatchAsync` does not call target binders.
+- (B) `test/Aevatar.CQRS.Core.Tests/DefaultCommandInteractionServiceTests.cs:14`: SCOPE_EXTEND reason: tests reject required direct coverage of the new shared interaction lifecycle; added tests proving observation binds before dispatch, accepted uses the refreshed receipt, and observation bind failure returns failure without dispatch or accepted callback.
 
 ## Rejected as false positive
 - None.
@@ -18,8 +16,8 @@
 
 ## Build status
 - build: pass (`dotnet build aevatar.slnx --nologo`; existing warnings only)
-- tests: pass (`dotnet test test/Aevatar.AI.Tests/Aevatar.AI.Tests.csproj --nologo --no-build`: 592 passed; `dotnet test test/Aevatar.GAgents.ChannelRuntime.Tests/Aevatar.GAgents.ChannelRuntime.Tests.csproj --nologo --no-build`: 816 passed)
-- guards: pass (`bash tools/ci/test_stability_guards.sh`; `bash tools/ci/architecture_guards.sh`; playground asset drift guard skipped by script because `pnpm` is not installed)
+- tests: pass (`dotnet test test/Aevatar.CQRS.Core.Tests/Aevatar.CQRS.Core.Tests.csproj --nologo --no-build`: 42 passed; `dotnet test test/Aevatar.AI.Tests/Aevatar.AI.Tests.csproj --nologo --no-build`: 592 passed; `dotnet test test/Aevatar.Workflow.Application.Tests/Aevatar.Workflow.Application.Tests.csproj --nologo --no-build`: 182 passed; `dotnet test test/Aevatar.Scripting.Core.Tests/Aevatar.Scripting.Core.Tests.csproj --nologo --no-build`: 389 passed; `dotnet test test/Aevatar.GAgentService.Tests/Aevatar.GAgentService.Tests.csproj --nologo --no-build`: 523 passed; `dotnet test test/Aevatar.GAgentService.Integration.Tests/Aevatar.GAgentService.Integration.Tests.csproj --nologo --no-build`: 274 passed)
+- guards: pass (`bash tools/ci/test_stability_guards.sh`; `bash tools/ci/query_projection_priming_guard.sh`)
 
 ## Recommendation for next round
 - expect unanimous

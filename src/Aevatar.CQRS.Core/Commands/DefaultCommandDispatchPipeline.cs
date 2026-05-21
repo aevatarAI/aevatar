@@ -8,7 +8,6 @@ public sealed class DefaultCommandDispatchPipeline<TCommand, TTarget, TReceipt, 
 {
     private readonly ICommandTargetResolver<TCommand, TTarget, TError> _targetResolver;
     private readonly ICommandContextPolicy _contextPolicy;
-    private readonly ICommandTargetBinder<TCommand, TTarget, TError> _targetBinder;
     private readonly ICommandEnvelopeFactory<TCommand> _envelopeFactory;
     private readonly ICommandTargetDispatcher<TTarget> _targetDispatcher;
     private readonly ICommandReceiptFactory<TTarget, TReceipt> _receiptFactory;
@@ -23,7 +22,7 @@ public sealed class DefaultCommandDispatchPipeline<TCommand, TTarget, TReceipt, 
     {
         _targetResolver = targetResolver;
         _contextPolicy = contextPolicy;
-        _targetBinder = targetBinder;
+        _ = targetBinder ?? throw new ArgumentNullException(nameof(targetBinder));
         _envelopeFactory = envelopeFactory;
         _targetDispatcher = targetDispatcher;
         _receiptFactory = receiptFactory;
@@ -34,21 +33,15 @@ public sealed class DefaultCommandDispatchPipeline<TCommand, TTarget, TReceipt, 
         CancellationToken ct = default)
     {
         // Refactor (iter25/cluster-002-observation-lifecycle-core):
-        //   Old pattern: DefaultCommandDispatchPipeline.PrepareAsync 内 attach projection/session binder(混 read-side 关注到 pre-dispatch command 准备)
-        //   New principle: 新 CQRS Core ObservationLifecycle port/phase:streaming observation attachment 移到 post-accepted dispatch 之后或独立 lifecycle;PrepareAsync 不再持有 projection/session 关注
+        //   Old pattern: command preparation could attach projection/session leases and mix read-side observation into dispatch admission.
+        //   New principle: live observation is an explicit interaction phase that starts before dispatch; PrepareAsync and dispatch-only callers stay free of read-side lifecycle work
         var prepared = await PrepareAsync(command, ct);
         if (!prepared.Succeeded || prepared.Target == null)
             return prepared;
 
         var execution = prepared.Target;
         await DispatchPreparedAsync(execution, ct);
-
-        var binding = await _targetBinder.BindAsync(command, execution.Target, execution.Context, ct);
-        if (!binding.Succeeded)
-            return CommandTargetResolution<CommandDispatchExecution<TTarget, TReceipt>, TError>.Failure(binding.Error);
-
-        return CommandTargetResolution<CommandDispatchExecution<TTarget, TReceipt>, TError>.Success(
-            execution with { Receipt = _receiptFactory.Create(execution.Target, execution.Context) });
+        return prepared;
     }
 
     public async Task<CommandTargetResolution<CommandDispatchExecution<TTarget, TReceipt>, TError>> PrepareAsync(
@@ -56,8 +49,8 @@ public sealed class DefaultCommandDispatchPipeline<TCommand, TTarget, TReceipt, 
         CancellationToken ct = default)
     {
         // Refactor (iter25/cluster-002-observation-lifecycle-core):
-        //   Old pattern: DefaultCommandDispatchPipeline.PrepareAsync 内 attach projection/session binder(混 read-side 关注到 pre-dispatch command 准备)
-        //   New principle: 新 CQRS Core ObservationLifecycle port/phase:streaming observation attachment 移到 post-accepted dispatch 之后或独立 lifecycle;PrepareAsync 不再持有 projection/session 关注
+        //   Old pattern: command preparation could attach projection/session leases and mix read-side observation into dispatch admission.
+        //   New principle: live observation is an explicit interaction phase that starts before dispatch; PrepareAsync and dispatch-only callers stay free of read-side lifecycle work
         var resolution = await _targetResolver.ResolveAsync(command, ct);
         if (!resolution.Succeeded || resolution.Target == null)
             return CommandTargetResolution<CommandDispatchExecution<TTarget, TReceipt>, TError>.Failure(resolution.Error);
@@ -88,8 +81,8 @@ public sealed class DefaultCommandDispatchPipeline<TCommand, TTarget, TReceipt, 
         CancellationToken ct = default)
     {
         // Refactor (iter25/cluster-002-observation-lifecycle-core):
-        //   Old pattern: DefaultCommandDispatchPipeline.PrepareAsync 内 attach projection/session binder(混 read-side 关注到 pre-dispatch command 准备)
-        //   New principle: 新 CQRS Core ObservationLifecycle port/phase:streaming observation attachment 移到 post-accepted dispatch 之后或独立 lifecycle;PrepareAsync 不再持有 projection/session 关注
+        //   Old pattern: command preparation could attach projection/session leases and mix read-side observation into dispatch admission.
+        //   New principle: live observation is an explicit interaction phase that starts before dispatch; PrepareAsync and dispatch-only callers stay free of read-side lifecycle work
         ArgumentNullException.ThrowIfNull(execution);
         var target = execution.Target;
 

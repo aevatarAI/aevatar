@@ -53,23 +53,23 @@ public sealed class GAgentApprovalInteractionTests
     }
 
     [Fact]
-    public async Task Binder_ShouldBindProjectionLeaseAndLiveSink_WhenProjectionIsAvailable()
+    public async Task ObservationLifecycle_ShouldBindProjectionLeaseAndLiveSink_WhenProjectionIsAvailable()
     {
         var projectionPort = new ApprovalProjectionPort
         {
             LeaseToReturn = new ApprovalProjectionLease("actor-1", "cmd-1"),
         };
         var terminalPort = new ApprovalTerminalProjectionPort();
-        var binder = new GAgentApprovalCommandTargetBinder(projectionPort, terminalPort);
+        var lifecycle = new GAgentApprovalObservationLifecycle(projectionPort, terminalPort);
         var target = new GAgentApprovalCommandTarget(
             new ApprovalStubActor("actor-1", new ApprovalStubAgent()),
             projectionPort,
             terminalPort);
+        var context = new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>());
 
-        var result = await binder.BindAsync(
+        var result = await lifecycle.BindAsync(
             new GAgentApprovalCommand("actor-1", "req-1"),
-            target,
-            new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>()),
+            CreateExecution(target, context),
             CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
@@ -85,23 +85,23 @@ public sealed class GAgentApprovalInteractionTests
     }
 
     [Fact]
-    public async Task Binder_ShouldThrow_WhenProjectionPipelineIsUnavailable()
+    public async Task ObservationLifecycle_ShouldThrow_WhenProjectionPipelineIsUnavailable()
     {
         var projectionPort = new ApprovalProjectionPort
         {
             LeaseToReturn = null,
         };
         var terminalPort = new ApprovalTerminalProjectionPort();
-        var binder = new GAgentApprovalCommandTargetBinder(projectionPort, terminalPort);
+        var lifecycle = new GAgentApprovalObservationLifecycle(projectionPort, terminalPort);
         var target = new GAgentApprovalCommandTarget(
             new ApprovalStubActor("actor-1", new ApprovalStubAgent()),
             projectionPort,
             terminalPort);
+        var context = new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>());
 
-        var act = async () => await binder.BindAsync(
+        var act = async () => await lifecycle.BindAsync(
             new GAgentApprovalCommand("actor-1", "req-1"),
-            target,
-            new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>()),
+            CreateExecution(target, context),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -113,6 +113,17 @@ public sealed class GAgentApprovalInteractionTests
             x.interactionKind == GAgentRunTerminalInteractionKind.Approval);
         terminalPort.ReleaseCalls.Should().ContainSingle();
     }
+
+    private static CommandDispatchExecution<GAgentApprovalCommandTarget, GAgentApprovalAcceptedReceipt> CreateExecution(
+        GAgentApprovalCommandTarget target,
+        CommandContext context) =>
+        new()
+        {
+            Target = target,
+            Context = context,
+            Envelope = new EventEnvelope { Id = "evt-1" },
+            Receipt = new GAgentApprovalAcceptedReceipt(target.ActorId, context.CommandId, context.CorrelationId, string.Empty),
+        };
 
     [Fact]
     public async Task CleanupAfterDispatchFailureAsync_ShouldDetachReleaseAndDisposeBoundObservation()

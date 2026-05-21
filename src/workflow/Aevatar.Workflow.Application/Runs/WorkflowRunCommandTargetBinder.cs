@@ -1,5 +1,6 @@
 using System.Runtime.ExceptionServices;
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -9,27 +10,54 @@ namespace Aevatar.Workflow.Application.Runs;
 internal sealed class WorkflowRunCommandTargetBinder
     : ICommandTargetBinder<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunStartError>
 {
-    private readonly IWorkflowExecutionProjectionPort _projectionPort;
-
     public WorkflowRunCommandTargetBinder(
         IWorkflowExecutionProjectionPort projectionPort)
     {
-        _projectionPort = projectionPort;
+        ArgumentNullException.ThrowIfNull(projectionPort);
     }
 
-    public async Task<CommandTargetBindingResult<WorkflowChatRunStartError>> BindAsync(
+    public Task<CommandTargetBindingResult<WorkflowChatRunStartError>> BindAsync(
         WorkflowChatRunRequest command,
         WorkflowRunCommandTarget target,
         CommandContext context,
         CancellationToken ct = default)
     {
         // Refactor (iter25/cluster-002-observation-lifecycle-core):
-        //   Old pattern: DefaultCommandDispatchPipeline.PrepareAsync 内 attach projection/session binder(混 read-side 关注到 pre-dispatch command 准备)
-        //   New principle: 新 CQRS Core ObservationLifecycle port/phase:streaming observation attachment 移到 post-accepted dispatch 之后或独立 lifecycle;PrepareAsync 不再持有 projection/session 关注
+        //   Old pattern: command preparation could attach projection/session leases and mix read-side observation into dispatch admission.
+        //   New principle: live observation is an explicit interaction phase that starts before dispatch; PrepareAsync and dispatch-only callers stay free of read-side lifecycle work
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(context);
+        ct.ThrowIfCancellationRequested();
 
+        return Task.FromResult(CommandTargetBindingResult<WorkflowChatRunStartError>.Success());
+    }
+}
+
+internal sealed class WorkflowRunObservationLifecycle
+    : ICommandObservationLifecycle<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+{
+    private readonly IWorkflowExecutionProjectionPort _projectionPort;
+
+    public WorkflowRunObservationLifecycle(
+        IWorkflowExecutionProjectionPort projectionPort)
+    {
+        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
+    }
+
+    public async Task<CommandObservationBindingResult<WorkflowChatRunStartError>> BindAsync(
+        WorkflowChatRunRequest command,
+        CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt> execution,
+        CancellationToken ct = default)
+    {
+        // Refactor (iter25/cluster-002-observation-lifecycle-core):
+        //   Old pattern: workflow binder activated materialization and live projections during command preparation.
+        //   New principle: interaction observation lifecycle starts read-side observation before dispatch without affecting dispatch-only command admission.
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(execution);
+
+        var target = execution.Target;
+        var context = execution.Context;
         var sink = new EventChannel<WorkflowRunEventEnvelope>();
 
         try
@@ -37,7 +65,7 @@ internal sealed class WorkflowRunCommandTargetBinder
             if (!await target.ActivateMaterializationAsync(ct))
             {
                 await target.RollbackCreatedActorsAsync(CancellationToken.None);
-                return CommandTargetBindingResult<WorkflowChatRunStartError>.Failure(
+                return CommandObservationBindingResult<WorkflowChatRunStartError>.Failure(
                     WorkflowChatRunStartError.ProjectionDisabled);
             }
 
@@ -52,12 +80,12 @@ internal sealed class WorkflowRunCommandTargetBinder
             if (attachment == null)
             {
                 await target.RollbackCreatedActorsAsync(CancellationToken.None);
-                return CommandTargetBindingResult<WorkflowChatRunStartError>.Failure(
+                return CommandObservationBindingResult<WorkflowChatRunStartError>.Failure(
                     WorkflowChatRunStartError.ProjectionDisabled);
             }
 
             target.BindLiveObservation(attachment.ProjectionLease, attachment.LiveSinkLease, sink);
-            return CommandTargetBindingResult<WorkflowChatRunStartError>.Success();
+            return CommandObservationBindingResult<WorkflowChatRunStartError>.Success();
         }
         catch (Exception ex)
         {

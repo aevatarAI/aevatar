@@ -103,8 +103,8 @@ internal sealed class NyxIdChatCommandTarget
         string sessionId)
     {
         // Refactor (iter25/cluster-002-observation-lifecycle-core):
-        //   Old pattern: DefaultCommandDispatchPipeline.PrepareAsync 内 attach projection/session binder(混 read-side 关注到 pre-dispatch command 准备)
-        //   New principle: 新 CQRS Core ObservationLifecycle port/phase:streaming observation attachment 移到 post-accepted dispatch 之后或独立 lifecycle;PrepareAsync 不再持有 projection/session 关注
+        //   Old pattern: command preparation could attach projection/session leases and mix read-side observation into dispatch admission.
+        //   New principle: live observation is an explicit interaction phase that starts before dispatch; PrepareAsync and dispatch-only callers stay free of read-side lifecycle work
         ProjectionLease = projectionLease ?? throw new ArgumentNullException(nameof(projectionLease));
         LiveSinkLease = liveSinkLease;
         LiveSink = sink ?? throw new ArgumentNullException(nameof(sink));
@@ -212,10 +212,39 @@ internal sealed class NyxIdChatCommandTargetResolver<TCommand>
 internal sealed class NyxIdChatCommandTargetBinder<TCommand>
     : ICommandTargetBinder<TCommand, NyxIdChatCommandTarget, NyxIdChatStartError>
 {
+    public NyxIdChatCommandTargetBinder(
+        INyxIdChatSessionProjectionPort projectionPort,
+        Func<TCommand, string> sessionIdResolver)
+    {
+        ArgumentNullException.ThrowIfNull(projectionPort);
+        ArgumentNullException.ThrowIfNull(sessionIdResolver);
+    }
+
+    public Task<CommandTargetBindingResult<NyxIdChatStartError>> BindAsync(
+        TCommand command,
+        NyxIdChatCommandTarget target,
+        CommandContext context,
+        CancellationToken ct = default)
+    {
+        // Refactor (iter25/cluster-002-observation-lifecycle-core):
+        //   Old pattern: command preparation could attach projection/session leases and mix read-side observation into dispatch admission.
+        //   New principle: live observation is an explicit interaction phase that starts before dispatch; PrepareAsync and dispatch-only callers stay free of read-side lifecycle work
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(context);
+        ct.ThrowIfCancellationRequested();
+
+        return Task.FromResult(CommandTargetBindingResult<NyxIdChatStartError>.Success());
+    }
+}
+
+internal sealed class NyxIdChatObservationLifecycle<TCommand>
+    : ICommandObservationLifecycle<TCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>
+{
     private readonly INyxIdChatSessionProjectionPort _projectionPort;
     private readonly Func<TCommand, string> _sessionIdResolver;
 
-    public NyxIdChatCommandTargetBinder(
+    public NyxIdChatObservationLifecycle(
         INyxIdChatSessionProjectionPort projectionPort,
         Func<TCommand, string> sessionIdResolver)
     {
@@ -223,19 +252,18 @@ internal sealed class NyxIdChatCommandTargetBinder<TCommand>
         _sessionIdResolver = sessionIdResolver ?? throw new ArgumentNullException(nameof(sessionIdResolver));
     }
 
-    public async Task<CommandTargetBindingResult<NyxIdChatStartError>> BindAsync(
+    public async Task<CommandObservationBindingResult<NyxIdChatStartError>> BindAsync(
         TCommand command,
-        NyxIdChatCommandTarget target,
-        CommandContext context,
+        CommandDispatchExecution<NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt> execution,
         CancellationToken ct = default)
     {
         // Refactor (iter25/cluster-002-observation-lifecycle-core):
-        //   Old pattern: DefaultCommandDispatchPipeline.PrepareAsync 内 attach projection/session binder(混 read-side 关注到 pre-dispatch command 准备)
-        //   New principle: 新 CQRS Core ObservationLifecycle port/phase:streaming observation attachment 移到 post-accepted dispatch 之后或独立 lifecycle;PrepareAsync 不再持有 projection/session 关注
+        //   Old pattern: target binder attached projection/session leases during command preparation.
+        //   New principle: interaction observation lifecycle attaches live sinks before dispatch and keeps dispatch-only PrepareAsync free of read-side work.
         ArgumentNullException.ThrowIfNull(command);
-        ArgumentNullException.ThrowIfNull(target);
-        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(execution);
 
+        var target = execution.Target;
         var sessionId = _sessionIdResolver(command);
         var sink = new EventChannel<AGUIEvent>();
         try
@@ -251,11 +279,11 @@ internal sealed class NyxIdChatCommandTargetBinder<TCommand>
             {
                 sink.Complete();
                 await sink.DisposeAsync();
-                return CommandTargetBindingResult<NyxIdChatStartError>.Failure(NyxIdChatStartError.ProjectionUnavailable);
+                return CommandObservationBindingResult<NyxIdChatStartError>.Failure(NyxIdChatStartError.ProjectionUnavailable);
             }
 
             target.BindLiveObservation(attachment.ProjectionLease, attachment.LiveSinkLease, sink, sessionId);
-            return CommandTargetBindingResult<NyxIdChatStartError>.Success();
+            return CommandObservationBindingResult<NyxIdChatStartError>.Success();
         }
         catch
         {
@@ -451,6 +479,18 @@ internal static class NyxIdChatInteractionFactories
     public static ICommandTargetBinder<NyxIdApprovalCommand, NyxIdChatCommandTarget, NyxIdChatStartError> CreateApprovalBinder(
         IServiceProvider sp) =>
         new NyxIdChatCommandTargetBinder<NyxIdApprovalCommand>(
+            sp.GetRequiredService<INyxIdChatSessionProjectionPort>(),
+            static command => command.SessionId);
+
+    public static ICommandObservationLifecycle<NyxIdChatCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError> CreateChatObservationLifecycle(
+        IServiceProvider sp) =>
+        new NyxIdChatObservationLifecycle<NyxIdChatCommand>(
+            sp.GetRequiredService<INyxIdChatSessionProjectionPort>(),
+            static command => command.SessionId);
+
+    public static ICommandObservationLifecycle<NyxIdApprovalCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError> CreateApprovalObservationLifecycle(
+        IServiceProvider sp) =>
+        new NyxIdChatObservationLifecycle<NyxIdApprovalCommand>(
             sp.GetRequiredService<INyxIdChatSessionProjectionPort>(),
             static command => command.SessionId);
 }

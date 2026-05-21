@@ -51,8 +51,8 @@ internal sealed class GAgentApprovalCommandTarget
         string sessionId)
     {
         // Refactor (iter25/cluster-002-observation-lifecycle-core):
-        //   Old pattern: DefaultCommandDispatchPipeline.PrepareAsync 内 attach projection/session binder(混 read-side 关注到 pre-dispatch command 准备)
-        //   New principle: 新 CQRS Core ObservationLifecycle port/phase:streaming observation attachment 移到 post-accepted dispatch 之后或独立 lifecycle;PrepareAsync 不再持有 projection/session 关注
+        //   Old pattern: command preparation could attach projection/session leases and mix read-side observation into dispatch admission.
+        //   New principle: live observation is an explicit interaction phase that starts before dispatch; PrepareAsync and dispatch-only callers stay free of read-side lifecycle work
         ProjectionLease = lease ?? throw new ArgumentNullException(nameof(lease));
         LiveSinkLease = liveSinkLease;
         LiveSink = sink ?? throw new ArgumentNullException(nameof(sink));
@@ -189,10 +189,39 @@ internal sealed class GAgentApprovalCommandTargetResolver
 internal sealed class GAgentApprovalCommandTargetBinder
     : ICommandTargetBinder<GAgentApprovalCommand, GAgentApprovalCommandTarget, GAgentApprovalStartError>
 {
+    public GAgentApprovalCommandTargetBinder(
+        IGAgentDraftRunProjectionPort projectionPort,
+        IGAgentRunTerminalProjectionPort terminalProjectionPort)
+    {
+        ArgumentNullException.ThrowIfNull(projectionPort);
+        ArgumentNullException.ThrowIfNull(terminalProjectionPort);
+    }
+
+    public Task<CommandTargetBindingResult<GAgentApprovalStartError>> BindAsync(
+        GAgentApprovalCommand command,
+        GAgentApprovalCommandTarget target,
+        CommandContext context,
+        CancellationToken ct = default)
+    {
+        // Refactor (iter25/cluster-002-observation-lifecycle-core):
+        //   Old pattern: command preparation could attach projection/session leases and mix read-side observation into dispatch admission.
+        //   New principle: live observation is an explicit interaction phase that starts before dispatch; PrepareAsync and dispatch-only callers stay free of read-side lifecycle work
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(context);
+        ct.ThrowIfCancellationRequested();
+
+        return Task.FromResult(CommandTargetBindingResult<GAgentApprovalStartError>.Success());
+    }
+}
+
+internal sealed class GAgentApprovalObservationLifecycle
+    : ICommandObservationLifecycle<GAgentApprovalCommand, GAgentApprovalCommandTarget, GAgentApprovalAcceptedReceipt, GAgentApprovalStartError>
+{
     private readonly IGAgentDraftRunProjectionPort _projectionPort;
     private readonly IGAgentRunTerminalProjectionPort _terminalProjectionPort;
 
-    public GAgentApprovalCommandTargetBinder(
+    public GAgentApprovalObservationLifecycle(
         IGAgentDraftRunProjectionPort projectionPort,
         IGAgentRunTerminalProjectionPort terminalProjectionPort)
     {
@@ -200,19 +229,19 @@ internal sealed class GAgentApprovalCommandTargetBinder
         _terminalProjectionPort = terminalProjectionPort ?? throw new ArgumentNullException(nameof(terminalProjectionPort));
     }
 
-    public async Task<CommandTargetBindingResult<GAgentApprovalStartError>> BindAsync(
+    public async Task<CommandObservationBindingResult<GAgentApprovalStartError>> BindAsync(
         GAgentApprovalCommand command,
-        GAgentApprovalCommandTarget target,
-        CommandContext context,
+        CommandDispatchExecution<GAgentApprovalCommandTarget, GAgentApprovalAcceptedReceipt> execution,
         CancellationToken ct = default)
     {
         // Refactor (iter25/cluster-002-observation-lifecycle-core):
-        //   Old pattern: DefaultCommandDispatchPipeline.PrepareAsync 内 attach projection/session binder(混 read-side 关注到 pre-dispatch command 准备)
-        //   New principle: 新 CQRS Core ObservationLifecycle port/phase:streaming observation attachment 移到 post-accepted dispatch 之后或独立 lifecycle;PrepareAsync 不再持有 projection/session 关注
+        //   Old pattern: approval binder attached terminal/live projections during command preparation.
+        //   New principle: interaction observation lifecycle starts read-side observation before dispatch without affecting dispatch-only command admission.
         ArgumentNullException.ThrowIfNull(command);
-        ArgumentNullException.ThrowIfNull(target);
-        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(execution);
 
+        var target = execution.Target;
+        var context = execution.Context;
         var sink = new EventChannel<AGUIEvent>();
         IGAgentRunTerminalProjectionLease? terminalProjectionLease = null;
 
@@ -245,7 +274,7 @@ internal sealed class GAgentApprovalCommandTargetBinder
                 attachment.LiveSinkLease,
                 sink,
                 command.SessionId?.Trim() ?? string.Empty);
-            return CommandTargetBindingResult<GAgentApprovalStartError>.Success();
+            return CommandObservationBindingResult<GAgentApprovalStartError>.Success();
         }
         catch
         {

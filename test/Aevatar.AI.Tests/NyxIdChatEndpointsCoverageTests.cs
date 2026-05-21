@@ -1041,7 +1041,7 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
-    public async Task NyxIdChatInteraction_ShouldNotAttachObservation_WhenDispatchFails()
+    public async Task NyxIdChatInteraction_ShouldCleanupBoundObservation_WhenDispatchFails()
     {
         var actor = new StubActor("actor-1");
         var runtime = new StubActorRuntime();
@@ -1063,9 +1063,9 @@ public class NyxIdChatEndpointsCoverageTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("dispatch failed");
-        projectionPort.AttachCount.Should().Be(0);
-        projectionPort.DetachCount.Should().Be(0);
-        projectionPort.ReleaseCount.Should().Be(0);
+        projectionPort.AttachCount.Should().Be(1);
+        projectionPort.DetachCount.Should().Be(1);
+        projectionPort.ReleaseCount.Should().Be(1);
     }
 
     [Fact]

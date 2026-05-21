@@ -69,19 +69,20 @@ CQRS 不应只提供零散 helper，而应定义所有 capability 复用的标�
 6. `Create Accepted Receipt`
    统一返回 `Accepted + commandId (+ actorId/correlationId)`，只承诺可追踪，不承诺 committed / observed。
 7. `Observe Result`
-   后续完成态统一走 read model 或 actor/session stream 观察，而不是在 command API 内私自拼装会话生命周期。
+   只有交互式 SSE/WS 等需要实时输出的入口才启动 `ICommandObservationLifecycle<TCommand,TTarget,TReceipt,TError>`。该阶段在 dispatch 前附着 live projection/session sink，以避免错过早期事件；若 observation 启动失败，命令不得进入 actor inbox，也不得发出 accepted receipt。dispatch-only 命令不启动 live observation，后续完成态统一走 read model 或 actor/session stream 观察，而不是在 command API 内私自拼装会话生命周期。
 
 职责归属：
 
 1. CQRS Core 应拥有 `Resolve Target / Context / Envelope / Dispatch / Receipt` 的通用抽象与默认实现。
-2. Capability 只提供领域命令模型、目标解析规则、payload 映射与领域特有的观察模型。
+2. Capability 只提供领域命令模型、目标解析规则、payload 映射与领域特有的观察模型。`ICommandTargetBinder` 只能做目标语义绑定，不得启动 projection/read-model activation、live sink attach 或 session lease；这些 live observation 职责必须放在 `ICommandObservationLifecycle`。
 3. Projection Core 只负责写后传播、读模型与实时观察，不回流承担命令入口语义。
 
 现状映射：
 
 1. `ICommandContextPolicy`、`ICommandEnvelopeFactory<TCommand>` 已经是 CQRS Core 抽象。
-2. `DefaultCommandDispatchPipeline<TCommand, TTarget, TReceipt, TError>` 已把 `Resolve Target -> Context -> Envelope -> Dispatch via IActorDispatchPort -> Accepted Receipt` 串成标准命令骨架。
-3. `ActorCommandTargetDispatcher<TTarget>` 通过 `IActorDispatchPort` 落地 runtime-neutral envelope 投递；`IActorRuntime` 继续负责目标 actor 的获取/创建与拓扑语义；对外交互入口统一收敛为 target-erased 的 `ICommandInteractionService<...>`。
+2. `DefaultCommandDispatchPipeline<TCommand, TTarget, TReceipt, TError>` 已把 `Resolve Target -> Context -> Envelope -> Dispatch via IActorDispatchPort -> Accepted Receipt` 串成标准命令骨架；`PrepareAsync` 不做 projection/session attach。
+3. `DefaultCommandInteractionService<TCommand,...>` 已把交互式入口串成 `Prepare -> Observe -> DispatchPrepared -> Accepted callback -> Pump -> Release`。`Observe` 使用 `ICommandObservationLifecycle<,,,>`，失败时返回 start failure 且不 dispatch；dispatch 失败时由 target cleanup 释放已经附着的 observation。
+4. `ActorCommandTargetDispatcher<TTarget>` 通过 `IActorDispatchPort` 落地 runtime-neutral envelope 投递；`IActorRuntime` 继续负责目标 actor 的获取/创建与拓扑语义；对外交互入口统一收敛为 target-erased 的 `ICommandInteractionService<...>`。
 
 ### 4.2 下一阶段蓝图（IActorDispatchPort 投递 + CQRS Core 统一命令骨架）
 
@@ -117,12 +118,14 @@ CQRS 不应只提供零散 helper，而应定义所有 capability 复用的标�
    `ICommandDispatchService<TCommand, TReceipt, TError>`（宿主入口） +  
    `DefaultCommandDispatchPipeline<TCommand, TTarget, TReceipt, TError>`（标准骨架） +  
    `ICommandTargetResolver<TCommand, TTarget, TError>`（目标解析） +  
-   `ICommandTargetBinder<TCommand, TTarget, TError>`（target 绑定） +  
+   `ICommandTargetBinder<TCommand, TTarget, TError>`（target 绑定，不做 projection/session attach） +  
+   `ICommandObservationLifecycle<TCommand, TTarget, TReceipt, TError>`（交互式 live observation 启动） +  
    `ActorCommandTargetDispatcher<TTarget>`（`IActorDispatchPort` dispatch） +  
    `ICommandReceiptFactory<TTarget, TReceipt>`（accepted receipt）。
 2. Workflow 命令侧在此骨架上提供领域特化：
    `WorkflowRunCommandTargetResolver`（workflow source 解析） +  
-   `WorkflowRunCommandTargetBinder`（projection/live sink 绑定） +  
+   `WorkflowRunCommandTargetBinder`（target-only 绑定） +  
+   `WorkflowRunObservationLifecycle`（materialization activation + projection/live sink 绑定） +  
    `WorkflowRunAcceptedCommandTargetResolver` / `NoOpCommandTargetBinder<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunStartError>`（accepted-only receipt 路径） +
    `WorkflowRunAcceptedReceiptFactory`（receipt） +  
    `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>`（SSE/WS 交互入口） +  
@@ -131,7 +134,7 @@ CQRS 不应只提供零散 helper，而应定义所有 capability 复用的标�
 3. Scripting 命令侧已形成同一套 CQRS 接入模型：
    `RuntimeScriptEvolutionInteractionService`（generic interaction facade） +  
    `ICommandInteractionService<ScriptEvolutionProposal, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError, ScriptEvolutionSessionCompletedEvent, ScriptEvolutionInteractionCompletion>`（演化提案入口） +  
-   `ScriptEvolutionCommandTargetResolver` / `ScriptEvolutionCommandTargetBinder` / `ScriptEvolutionEnvelopeFactory` / `ScriptEvolutionDurableCompletionResolver`（领域特化策略） +  
+   `ScriptEvolutionCommandTargetResolver` / `ScriptEvolutionCommandTargetBinder` / `ScriptEvolutionObservationLifecycle` / `ScriptEvolutionEnvelopeFactory` / `ScriptEvolutionDurableCompletionResolver`（领域特化策略） +  
    `ScriptingActorCommandTarget + AddSimpleScriptingCommandDispatch<...>`（definition/runtime/catalog 命令统一骨架） +  
    `IScriptRuntimeProvisioningPort + RuntimeScriptProvisioningService`（runtime lifecycle 归 runtime 端口，命令链只负责 dispatch）。
 4. Projection 端口实现已拆分为：
