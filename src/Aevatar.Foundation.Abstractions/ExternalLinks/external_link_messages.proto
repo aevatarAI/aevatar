@@ -45,3 +45,24 @@ message ExternalLinkMessageReceivedEvent {
   bytes raw_payload = 3;
   google.protobuf.Timestamp received_at = 4;
 }
+
+// --- Internal callback signals (Infrastructure → Actor turn) ---
+
+message ExternalLinkReconnectDueSignal {
+  string link_id = 1;
+  int32 expected_attempt = 2;
+}
+
+enum ExternalLinkTransportStateSignalKind {
+  EXTERNAL_LINK_TRANSPORT_STATE_SIGNAL_KIND_UNSPECIFIED = 0;
+  EXTERNAL_LINK_TRANSPORT_STATE_SIGNAL_KIND_CONNECTED = 1;
+  EXTERNAL_LINK_TRANSPORT_STATE_SIGNAL_KIND_DISCONNECTED = 2;
+  EXTERNAL_LINK_TRANSPORT_STATE_SIGNAL_KIND_ERROR = 3;
+  EXTERNAL_LINK_TRANSPORT_STATE_SIGNAL_KIND_CLOSED = 4;
+}
+
+message ExternalLinkTransportStateChangedSignal {
+  string link_id = 1;
+  ExternalLinkTransportStateSignalKind state = 2;
+  string reason = 3;
+}

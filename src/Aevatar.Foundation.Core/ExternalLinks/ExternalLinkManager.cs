@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.ExternalLinks;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -18,10 +19,16 @@ namespace Aevatar.Foundation.Core.ExternalLinks;
 /// - No authentication credential refresh.
 /// - Outbound SendAsync failures are surfaced as exceptions to the caller.
 /// </summary>
+// Refactor (iter22/cluster-004):
+//   Old pattern: External link reconnect loop ran on Task.Run, slept with Task.Delay, and mutated ManagedLink outside the actor turn.
+//   New principle: callbacks dispatch typed signals with link id and attempt; actor-turn code validates current state before mutating.
 internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
 {
+    private const string ReconnectCallbackPrefix = "external-link-reconnect";
+
     private readonly string _actorId;
     private readonly IActorDispatchPort _dispatchPort;
+    private readonly IActorRuntimeCallbackScheduler _callbackScheduler;
     private readonly IEnumerable<IExternalLinkTransportFactory> _transportFactories;
     private readonly ILogger _logger;
     private readonly Dictionary<string, ManagedLink> _links = new();
@@ -29,13 +36,39 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
     public ExternalLinkManager(
         string actorId,
         IActorDispatchPort dispatchPort,
+        IActorRuntimeCallbackScheduler callbackScheduler,
         IEnumerable<IExternalLinkTransportFactory> transportFactories,
         ILogger logger)
     {
         _actorId = actorId;
         _dispatchPort = dispatchPort;
+        _callbackScheduler = callbackScheduler;
         _transportFactories = transportFactories;
         _logger = logger;
+    }
+
+    public bool CanHandle(EventEnvelope envelope)
+    {
+        if (envelope.Payload == null)
+            return false;
+
+        return envelope.Payload.Is(ExternalLinkReconnectDueSignal.Descriptor)
+               || envelope.Payload.Is(ExternalLinkTransportStateChangedSignal.Descriptor);
+    }
+
+    public async Task HandleAsync(EventEnvelope envelope, CancellationToken ct = default)
+    {
+        if (envelope.Payload == null)
+            return;
+
+        if (envelope.Payload.Is(ExternalLinkReconnectDueSignal.Descriptor))
+        {
+            await HandleReconnectDueAsync(envelope.Payload.Unpack<ExternalLinkReconnectDueSignal>(), ct);
+            return;
+        }
+
+        if (envelope.Payload.Is(ExternalLinkTransportStateChangedSignal.Descriptor))
+            await HandleTransportStateChangedAsync(envelope.Payload.Unpack<ExternalLinkTransportStateChangedSignal>(), ct);
     }
 
     // ── Lifecycle ─────────────────────────────────────────────
@@ -57,7 +90,8 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
             _links[descriptor.LinkId] = link;
 
             transport.OnMessageReceived = (data, innerCt) => OnMessageReceivedAsync(link, data, innerCt);
-            transport.OnStateChanged = (state, reason, innerCt) => OnStateChangedAsync(link, state, reason, innerCt);
+            transport.OnStateChanged = (state, reason, innerCt) =>
+                OnTransportStateChangedSignalAsync(link.Descriptor.LinkId, state, reason, innerCt);
 
             await ConnectLinkAsync(link, ct);
         }
@@ -66,7 +100,10 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         foreach (var link in _links.Values)
+        {
+            await CancelReconnectAsync(link, CancellationToken.None);
             await link.DisposeAsync();
+        }
 
         _links.Clear();
     }
@@ -90,6 +127,7 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
     {
         var link = GetLink(linkId);
         link.IsClosed = true;
+        await CancelReconnectAsync(link, ct);
         link.LifetimeCts.Cancel();
         await link.Transport.DisconnectAsync(ct);
     }
@@ -103,6 +141,7 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
             await link.Transport.ConnectAsync(link.Descriptor, ct);
             link.IsConnected = true;
             link.ReconnectAttempt = 0;
+            await CancelReconnectAsync(link, ct);
             await DispatchEventAsync(new ExternalLinkConnectedEvent
             {
                 LinkId = link.Descriptor.LinkId,
@@ -113,68 +152,82 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
         {
             _logger.LogWarning(ex, "Failed to connect link '{LinkId}'", link.Descriptor.LinkId);
             link.IsConnected = false;
-            StartReconnectLoop(link);
+            await ScheduleReconnectAsync(link, nextAttempt: 1, ct);
         }
     }
 
     // ── Reconnection ──────────────────────────────────────────
 
-    private void StartReconnectLoop(ManagedLink link)
+    private async Task ScheduleReconnectAsync(ManagedLink link, int nextAttempt, CancellationToken ct)
     {
-        if (link.IsClosed) return;
-        var ct = link.LifetimeCts.Token;
-        _ = Task.Run(async () => await ReconnectLoopAsync(link, ct), ct);
-    }
+        if (link.IsClosed)
+            return;
 
-    private async Task ReconnectLoopAsync(ManagedLink link, CancellationToken ct)
-    {
+        link.ReconnectAttempt = nextAttempt;
         var options = link.Descriptor.Options ?? new ExternalLinkOptions();
-
-        while (!ct.IsCancellationRequested && !link.IsClosed)
+        if (options.MaxReconnectAttempts > 0 && nextAttempt > options.MaxReconnectAttempts)
         {
-            link.ReconnectAttempt++;
-            if (options.MaxReconnectAttempts > 0 && link.ReconnectAttempt > options.MaxReconnectAttempts)
-            {
-                await DispatchEventAsync(new ExternalLinkDisconnectedEvent
-                {
-                    LinkId = link.Descriptor.LinkId,
-                    Reason = "max reconnect attempts reached",
-                    WillReconnect = false,
-                    ReconnectAttempt = link.ReconnectAttempt,
-                }, ct);
-                return;
-            }
-
-            var delay = CalculateBackoff(link.ReconnectAttempt, options);
-            await DispatchEventAsync(new ExternalLinkReconnectingEvent
+            await DispatchEventAsync(new ExternalLinkDisconnectedEvent
             {
                 LinkId = link.Descriptor.LinkId,
-                Attempt = link.ReconnectAttempt,
-                DelayMs = (int)delay.TotalMilliseconds,
+                Reason = "max reconnect attempts reached",
+                WillReconnect = false,
+                ReconnectAttempt = nextAttempt,
             }, ct);
+            return;
+        }
 
-            try
+        var delay = CalculateBackoff(nextAttempt, options);
+        await DispatchEventAsync(new ExternalLinkReconnectingEvent
+        {
+            LinkId = link.Descriptor.LinkId,
+            Attempt = nextAttempt,
+            DelayMs = (int)delay.TotalMilliseconds,
+        }, ct);
+
+        var signal = new ExternalLinkReconnectDueSignal
+        {
+            LinkId = link.Descriptor.LinkId,
+            ExpectedAttempt = nextAttempt,
+        };
+        link.ReconnectLease = await ScheduleSignalAfterDelayAsync(
+            BuildReconnectCallbackId(link.Descriptor.LinkId),
+            delay,
+            signal,
+            ct);
+    }
+
+    private async Task HandleReconnectDueAsync(
+        ExternalLinkReconnectDueSignal signal,
+        CancellationToken ct)
+    {
+        if (!_links.TryGetValue(signal.LinkId, out var link))
+            return;
+
+        if (link.IsClosed || link.IsConnected || signal.ExpectedAttempt != link.ReconnectAttempt)
+            return;
+
+        try
+        {
+            await link.Transport.ConnectAsync(link.Descriptor, ct);
+            link.IsConnected = true;
+            link.ReconnectAttempt = 0;
+            await CancelReconnectAsync(link, ct);
+            await DispatchEventAsync(new ExternalLinkConnectedEvent
             {
-                await Task.Delay(delay, ct);
-                await link.Transport.ConnectAsync(link.Descriptor, ct);
-                link.IsConnected = true;
-                link.ReconnectAttempt = 0;
-                await DispatchEventAsync(new ExternalLinkConnectedEvent
-                {
-                    LinkId = link.Descriptor.LinkId,
-                    ConnectedAt = Timestamp.FromDateTime(DateTime.UtcNow),
-                }, ct);
-                return; // connected
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Reconnect attempt {Attempt} failed for link '{LinkId}'",
-                    link.ReconnectAttempt, link.Descriptor.LinkId);
-            }
+                LinkId = link.Descriptor.LinkId,
+                ConnectedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            }, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "Reconnect attempt {Attempt} failed for link '{LinkId}'",
+                signal.ExpectedAttempt, link.Descriptor.LinkId);
+            await ScheduleReconnectAsync(link, signal.ExpectedAttempt + 1, ct);
         }
     }
 
@@ -210,6 +263,7 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
             case ExternalLinkStateChange.Connected:
                 link.IsConnected = true;
                 link.ReconnectAttempt = 0;
+                await CancelReconnectAsync(link, ct);
                 await DispatchEventAsync(new ExternalLinkConnectedEvent
                 {
                     LinkId = link.Descriptor.LinkId,
@@ -228,7 +282,7 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
                     ReconnectAttempt = link.ReconnectAttempt,
                 }, ct);
                 if (willReconnect)
-                    StartReconnectLoop(link);
+                    await ScheduleReconnectAsync(link, link.ReconnectAttempt + 1, ct);
                 break;
 
             case ExternalLinkStateChange.Error:
@@ -242,6 +296,7 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
             case ExternalLinkStateChange.Closed:
                 link.IsClosed = true;
                 link.IsConnected = false;
+                await CancelReconnectAsync(link, ct);
                 await DispatchEventAsync(new ExternalLinkDisconnectedEvent
                 {
                     LinkId = link.Descriptor.LinkId,
@@ -249,6 +304,78 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
                     WillReconnect = false,
                 }, ct);
                 break;
+        }
+    }
+
+    private async Task HandleTransportStateChangedAsync(
+        ExternalLinkTransportStateChangedSignal signal,
+        CancellationToken ct)
+    {
+        if (!_links.TryGetValue(signal.LinkId, out var link))
+            return;
+
+        await OnStateChangedAsync(link, ToTransportStateChange(signal.State), EmptyToNull(signal.Reason), ct);
+    }
+
+    // Refactor (iter22/cluster-004):
+    //   Old pattern: transport callbacks directly mutated ManagedLink or started reconnect loops from I/O callback threads.
+    //   New principle: callbacks only signal the actor inbox; state changes happen when the signal is handled in the actor turn.
+    private Task OnTransportStateChangedSignalAsync(
+        string linkId,
+        ExternalLinkStateChange state,
+        string? reason,
+        CancellationToken ct)
+    {
+        var signal = new ExternalLinkTransportStateChangedSignal
+        {
+            LinkId = linkId,
+            State = ToSignalKind(state),
+            Reason = reason ?? string.Empty,
+        };
+        return DispatchSignalAsync(signal, ct);
+    }
+
+    private Task<RuntimeCallbackLease> ScheduleSignalAfterDelayAsync(
+        string callbackId,
+        TimeSpan delay,
+        IMessage signal,
+        CancellationToken ct)
+    {
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(signal),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(_actorId, TopologyAudience.Self),
+        };
+
+        return _callbackScheduler.ScheduleTimeoutAsync(
+            new RuntimeCallbackTimeoutRequest
+            {
+                ActorId = _actorId,
+                CallbackId = callbackId,
+                TriggerEnvelope = envelope,
+                DueTime = delay,
+            },
+            ct);
+    }
+
+    private async Task CancelReconnectAsync(ManagedLink link, CancellationToken ct)
+    {
+        if (link.ReconnectLease == null)
+            return;
+
+        try
+        {
+            await _callbackScheduler.CancelAsync(link.ReconnectLease, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogDebug(ex, "Failed to cancel reconnect callback for link '{LinkId}'", link.Descriptor.LinkId);
+        }
+        finally
+        {
+            link.ReconnectLease = null;
         }
     }
 
@@ -271,6 +398,19 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
         return null;
     }
 
+    private Task DispatchSignalAsync(IMessage signal, CancellationToken ct)
+    {
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(signal),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(_actorId, TopologyAudience.Self),
+        };
+
+        return _dispatchPort.DispatchAsync(_actorId, envelope, ct);
+    }
+
     private Task DispatchEventAsync(IMessage evt, CancellationToken ct)
     {
         var envelope = new EventEnvelope
@@ -283,4 +423,29 @@ internal sealed class ExternalLinkManager : IExternalLinkPort, IAsyncDisposable
 
         return _dispatchPort.DispatchAsync(_actorId, envelope, ct);
     }
+
+    private static string BuildReconnectCallbackId(string linkId) => $"{ReconnectCallbackPrefix}:{linkId}";
+
+    private static string? EmptyToNull(string value) =>
+        string.IsNullOrEmpty(value) ? null : value;
+
+    private static ExternalLinkTransportStateSignalKind ToSignalKind(ExternalLinkStateChange state) =>
+        state switch
+        {
+            ExternalLinkStateChange.Connected => ExternalLinkTransportStateSignalKind.Connected,
+            ExternalLinkStateChange.Disconnected => ExternalLinkTransportStateSignalKind.Disconnected,
+            ExternalLinkStateChange.Error => ExternalLinkTransportStateSignalKind.Error,
+            ExternalLinkStateChange.Closed => ExternalLinkTransportStateSignalKind.Closed,
+            _ => ExternalLinkTransportStateSignalKind.Unspecified,
+        };
+
+    private static ExternalLinkStateChange ToTransportStateChange(ExternalLinkTransportStateSignalKind state) =>
+        state switch
+        {
+            ExternalLinkTransportStateSignalKind.Connected => ExternalLinkStateChange.Connected,
+            ExternalLinkTransportStateSignalKind.Disconnected => ExternalLinkStateChange.Disconnected,
+            ExternalLinkTransportStateSignalKind.Error => ExternalLinkStateChange.Error,
+            ExternalLinkTransportStateSignalKind.Closed => ExternalLinkStateChange.Closed,
+            _ => ExternalLinkStateChange.Error,
+        };
 }

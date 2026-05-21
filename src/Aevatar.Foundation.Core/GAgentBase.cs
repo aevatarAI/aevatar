@@ -126,6 +126,12 @@ public abstract class GAgentBase : IAgent, IEventModuleContainer<IEventHandlerCo
         try
         {
             var ctx = CreateHandlerContext(envelope);
+            if (_externalLinkManager?.CanHandle(envelope) == true)
+            {
+                await _externalLinkManager.HandleAsync(envelope, ct);
+                return;
+            }
+
             var pipeline = GetOrBuildPipeline();
 
             foreach (var handler in pipeline)
@@ -496,8 +502,18 @@ public abstract class GAgentBase : IAgent, IEventModuleContainer<IEventHandlerCo
             return;
         }
 
+        var callbackScheduler = Services.GetService<IActorRuntimeCallbackScheduler>();
+        if (callbackScheduler == null)
+        {
+            Logger.LogWarning("IActorRuntimeCallbackScheduler not available, external links disabled for {AgentId}", Id);
+            return;
+        }
+
         var factories = Services.GetServices<IExternalLinkTransportFactory>();
-        _externalLinkManager = new ExternalLinkManager(Id, dispatchPort, factories, Logger);
+        _externalLinkManager = new ExternalLinkManager(Id, dispatchPort, callbackScheduler, factories, Logger);
+        // Refactor (iter22/cluster-004):
+        //   Old pattern: External link reconnect callbacks mutated runtime state from background threads.
+        //   New principle: reconnect callback signals are short-circuited into the manager during the actor event turn.
         await _externalLinkManager.StartAsync(descriptors, ct);
     }
 
