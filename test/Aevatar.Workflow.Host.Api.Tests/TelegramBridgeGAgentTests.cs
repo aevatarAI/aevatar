@@ -154,26 +154,15 @@ public sealed class TelegramBridgeGAgentTests
     }
 
     [Fact]
-    public async Task HandleChatRequest_WhenWaitReplyOperation_ShouldPollTelegramGroupStream()
+    public async Task HandleChatRequest_WhenWaitReplyOperation_ShouldDispatchTaskScopedWaitActor()
     {
-        var connector = new RecordingConnector(
-            new ConnectorResponse
-            {
-                Success = true,
-                Output =
-                    """{"ok":true,"result":[{"update_id":100,"message":{"chat":{"id":"10001"},"from":{"id":"1000","username":"aevatar_bot"},"text":"old-message"}}]}""",
-            },
-            new ConnectorResponse
-            {
-                Success = true,
-                Output =
-                    """{"ok":true,"result":[{"update_id":101,"message":{"chat":{"id":"10001"},"from":{"id":"2002","username":"openclaw_bot"},"text":"openclaw-reply"}}]}""",
-            });
+        var connector = new RecordingConnector();
         var registry = new InMemoryConnectorRegistry();
         registry.Register(connector);
+        var runtime = new NoopActorRuntime();
         var publisher = new RecordingEventPublisher();
         var agent = new TelegramBridgeGAgent(
-            new NoopActorRuntime(),
+            runtime,
             registry)
         {
             EventPublisher = publisher,
@@ -193,19 +182,22 @@ public sealed class TelegramBridgeGAgentTests
 
         await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
 
-        connector.Received.Count.Should().BeGreaterThanOrEqualTo(2);
-        connector.Received.Should().OnlyContain(x => x.Operation == "/getUpdates");
+        connector.Received.Should().BeEmpty();
+        runtime.CreatedActorTypes.Should().ContainSingle().Which.Should().Be(typeof(TelegramWaitReplyGAgent));
+        publisher.Sent.Should().ContainSingle();
+        publisher.Sent[0].targetActorId.Should().StartWith("telegram-wait-reply-session-wait");
 
-        var secondPayload = JsonDocument.Parse(connector.Received[1].Payload).RootElement;
-        secondPayload.GetProperty("offset").GetInt64().Should().Be(101);
-
-        var textEnd = publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>().Single();
-        textEnd.SessionId.Should().Be("session-wait");
-        textEnd.Content.Should().Be("openclaw-reply");
+        var command = publisher.Sent[0].evt.Should().BeOfType<TelegramWaitForReplyCommand>().Subject;
+        command.SessionId.Should().Be("session-wait");
+        command.ConnectorName.Should().Be("telegram");
+        command.ExpectedChatId.Should().Be("10001");
+        command.ExpectedFromUsername.Should().Be("openclaw_bot");
+        command.WaitTimeoutMs.Should().Be(5000);
+        command.PollTimeoutSeconds.Should().Be(1);
     }
 
     [Fact]
-    public async Task HandleChatRequest_WhenWaitReplyGetsEditedMessage_ShouldReturnLatestMatchedContent()
+    public async Task TelegramWaitReplyGAgent_WhenWaitReplyGetsEditedMessage_ShouldReturnLatestMatchedContent()
     {
         var connector = new RecordingConnector(
             new ConnectorResponse
@@ -234,7 +226,7 @@ public sealed class TelegramBridgeGAgentTests
         var registry = new InMemoryConnectorRegistry();
         registry.Register(connector);
         var publisher = new RecordingEventPublisher();
-        var agent = new TelegramBridgeGAgent(
+        var agent = new TelegramWaitReplyGAgent(
             new NoopActorRuntime(),
             registry)
         {
@@ -242,19 +234,12 @@ public sealed class TelegramBridgeGAgentTests
             Services = CreateAgentServices(),
         };
 
-        var request = new ChatRequestEvent
-        {
-            Prompt = "wait-edited",
-            SessionId = "session-wait-edited",
-        };
-        request.Headers["chat_id"] = "10001";
-        request.Headers["operation"] = "/waitReply";
-        request.Headers["expected_from_username"] = "openclaw_bot";
-        request.Headers["wait_timeout_ms"] = "5000";
-        request.Headers["poll_timeout_sec"] = "1";
-        request.Headers["start_from_latest"] = "true";
+        var command = BuildWaitReplyCommand(
+            sessionId: "session-wait-edited",
+            expectedUsername: "openclaw_bot");
+        command.StartFromLatest = true;
 
-        await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
+        await agent.HandleEventAsync(Envelope(command), CancellationToken.None);
 
         connector.Received.Count.Should().BeGreaterThanOrEqualTo(4);
         connector.Received.Should().OnlyContain(x => x.Operation == "/getUpdates");
@@ -264,13 +249,38 @@ public sealed class TelegramBridgeGAgentTests
         var thirdPayload = JsonDocument.Parse(connector.Received[2].Payload).RootElement;
         thirdPayload.GetProperty("offset").GetInt64().Should().Be(402);
 
+        var completed = publisher.Published.Select(x => x.evt).OfType<TelegramWaitReplyCompletedEvent>().Single();
+        completed.SessionId.Should().Be("session-wait-edited");
+        completed.Content.Should().Be("openclaw-reply-final");
+    }
+
+    [Fact]
+    public async Task TelegramBridgeGAgent_WhenWaitReplyCompleted_ShouldPublishTextMessageEnd()
+    {
+        var publisher = new RecordingEventPublisher();
+        var agent = new TelegramBridgeGAgent(
+            new NoopActorRuntime(),
+            new InMemoryConnectorRegistry())
+        {
+            EventPublisher = publisher,
+            Services = CreateAgentServices(),
+        };
+
+        await agent.HandleEventAsync(
+            Envelope(new TelegramWaitReplyCompletedEvent
+            {
+                SessionId = "session-wait-edited",
+                Content = "openclaw-reply-final",
+            }),
+            CancellationToken.None);
+
         var textEnd = publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>().Single();
         textEnd.SessionId.Should().Be("session-wait-edited");
         textEnd.Content.Should().Be("openclaw-reply-final");
     }
 
     [Fact]
-    public async Task HandleChatRequest_WhenCollectAllRepliesEnabled_ShouldReturnMergedReplies()
+    public async Task TelegramWaitReplyGAgent_WhenCollectAllRepliesEnabled_ShouldReturnMergedReplies()
     {
         var connector = new RecordingConnector(
             new ConnectorResponse
@@ -310,7 +320,7 @@ public sealed class TelegramBridgeGAgentTests
         var registry = new InMemoryConnectorRegistry();
         registry.Register(connector);
         var publisher = new RecordingEventPublisher();
-        var agent = new TelegramBridgeGAgent(
+        var agent = new TelegramWaitReplyGAgent(
             new NoopActorRuntime(),
             registry)
         {
@@ -318,29 +328,22 @@ public sealed class TelegramBridgeGAgentTests
             Services = CreateAgentServices(),
         };
 
-        var request = new ChatRequestEvent
-        {
-            Prompt = "wait-collect-all",
-            SessionId = "session-wait-collect-all",
-        };
-        request.Headers["chat_id"] = "10001";
-        request.Headers["operation"] = "/waitReply";
-        request.Headers["expected_from_username"] = "openclaw_bot";
-        request.Headers["wait_timeout_ms"] = "5000";
-        request.Headers["poll_timeout_sec"] = "1";
-        request.Headers["start_from_latest"] = "true";
-        request.Headers["collect_all_replies"] = "true";
-        request.Headers["settle_polls_after_match"] = "2";
+        var command = BuildWaitReplyCommand(
+            sessionId: "session-wait-collect-all",
+            expectedUsername: "openclaw_bot");
+        command.StartFromLatest = true;
+        command.CollectAllReplies = true;
+        command.SettlePollsAfterMatch = 2;
 
-        await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
+        await agent.HandleEventAsync(Envelope(command), CancellationToken.None);
 
-        var textEnd = publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>().Single();
-        textEnd.SessionId.Should().Be("session-wait-collect-all");
-        textEnd.Content.Should().Be("openclaw-reply-part-1\n\n---\n\nopenclaw-reply-part-2-final");
+        var completed = publisher.Published.Select(x => x.evt).OfType<TelegramWaitReplyCompletedEvent>().Single();
+        completed.SessionId.Should().Be("session-wait-collect-all");
+        completed.Content.Should().Be("openclaw-reply-part-1\n\n---\n\nopenclaw-reply-part-2-final");
     }
 
     [Fact]
-    public async Task HandleChatRequest_WhenWaitReplyMatchAppearsInBootstrapBatch_ShouldReturnImmediately()
+    public async Task TelegramWaitReplyGAgent_WhenWaitReplyMatchAppearsInBootstrapBatch_ShouldReturnImmediately()
     {
         var connector = new RecordingConnector(
             new ConnectorResponse
@@ -352,7 +355,7 @@ public sealed class TelegramBridgeGAgentTests
         var registry = new InMemoryConnectorRegistry();
         registry.Register(connector);
         var publisher = new RecordingEventPublisher();
-        var agent = new TelegramBridgeGAgent(
+        var agent = new TelegramWaitReplyGAgent(
             new NoopActorRuntime(),
             registry)
         {
@@ -360,31 +363,24 @@ public sealed class TelegramBridgeGAgentTests
             Services = CreateAgentServices(),
         };
 
-        var request = new ChatRequestEvent
-        {
-            Prompt = "wait-bootstrap",
-            SessionId = "session-wait-bootstrap",
-        };
-        request.Headers["chat_id"] = "10001";
-        request.Headers["operation"] = "/waitReply";
-        request.Headers["expected_from_username"] = "openclaw_bot";
-        request.Headers["correlation_contains"] = "[AEVATAR_STREAM_REPLY]";
-        request.Headers["wait_timeout_ms"] = "5000";
-        request.Headers["poll_timeout_sec"] = "1";
-        request.Headers["start_from_latest"] = "true";
+        var command = BuildWaitReplyCommand(
+            sessionId: "session-wait-bootstrap",
+            expectedUsername: "openclaw_bot",
+            correlationContains: "[AEVATAR_STREAM_REPLY]");
+        command.StartFromLatest = true;
 
-        await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
+        await agent.HandleEventAsync(Envelope(command), CancellationToken.None);
 
         connector.Received.Should().ContainSingle();
         connector.Received[0].Operation.Should().Be("/getUpdates");
 
-        var textEnd = publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>().Single();
-        textEnd.SessionId.Should().Be("session-wait-bootstrap");
-        textEnd.Content.Should().Be("[AEVATAR_STREAM_REPLY] bootstrap-reply");
+        var completed = publisher.Published.Select(x => x.evt).OfType<TelegramWaitReplyCompletedEvent>().Single();
+        completed.SessionId.Should().Be("session-wait-bootstrap");
+        completed.Content.Should().Be("[AEVATAR_STREAM_REPLY] bootstrap-reply");
     }
 
     [Fact]
-    public async Task HandleChatRequest_WhenWaitReplyUsernameMissing_ShouldFallbackToCorrelationMatch()
+    public async Task TelegramWaitReplyGAgent_WhenWaitReplyUsernameMissing_ShouldFallbackToCorrelationMatch()
     {
         var connector = new RecordingConnector(
             new ConnectorResponse
@@ -396,7 +392,7 @@ public sealed class TelegramBridgeGAgentTests
         var registry = new InMemoryConnectorRegistry();
         registry.Register(connector);
         var publisher = new RecordingEventPublisher();
-        var agent = new TelegramBridgeGAgent(
+        var agent = new TelegramWaitReplyGAgent(
             new NoopActorRuntime(),
             registry)
         {
@@ -404,24 +400,17 @@ public sealed class TelegramBridgeGAgentTests
             Services = CreateAgentServices(),
         };
 
-        var request = new ChatRequestEvent
-        {
-            Prompt = "wait-username-missing",
-            SessionId = "session-wait-username-missing",
-        };
-        request.Headers["chat_id"] = "10001";
-        request.Headers["operation"] = "/waitReply";
-        request.Headers["expected_from_username"] = "openclaw_bot";
-        request.Headers["correlation_contains"] = "[AEVATAR_STREAM_REPLY]";
-        request.Headers["wait_timeout_ms"] = "5000";
-        request.Headers["poll_timeout_sec"] = "1";
-        request.Headers["start_from_latest"] = "true";
+        var command = BuildWaitReplyCommand(
+            sessionId: "session-wait-username-missing",
+            expectedUsername: "openclaw_bot",
+            correlationContains: "[AEVATAR_STREAM_REPLY]");
+        command.StartFromLatest = true;
 
-        await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
+        await agent.HandleEventAsync(Envelope(command), CancellationToken.None);
 
-        var textEnd = publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>().Single();
-        textEnd.SessionId.Should().Be("session-wait-username-missing");
-        textEnd.Content.Should().Be("[AEVATAR_STREAM_REPLY] no-username-reply");
+        var completed = publisher.Published.Select(x => x.evt).OfType<TelegramWaitReplyCompletedEvent>().Single();
+        completed.SessionId.Should().Be("session-wait-username-missing");
+        completed.Content.Should().Be("[AEVATAR_STREAM_REPLY] no-username-reply");
     }
 
     [Fact]
@@ -507,6 +496,29 @@ public sealed class TelegramBridgeGAgentTests
         };
     }
 
+    private static TelegramWaitForReplyCommand BuildWaitReplyCommand(
+        string sessionId,
+        string expectedUsername,
+        string correlationContains = "")
+    {
+        var command = new TelegramWaitForReplyCommand
+        {
+            CommandId = $"cmd-{sessionId}",
+            SessionId = sessionId,
+            ConnectorName = "telegram",
+            ExpectedChatId = "10001",
+            ExpectedFromUsername = expectedUsername,
+            CorrelationContains = correlationContains,
+            WaitTimeoutMs = 5000,
+            PollTimeoutSeconds = 1,
+            SettlePollsAfterMatch = 1,
+            StartFromLatest = false,
+        };
+        command.ConnectorParameters["method"] = "POST";
+        command.ConnectorParameters["content_type"] = "application/json";
+        return command;
+    }
+
     private sealed class RecordingConnector : IConnector
     {
         private readonly IReadOnlyList<ConnectorResponse> _responses;
@@ -574,6 +586,7 @@ public sealed class TelegramBridgeGAgentTests
     private sealed class RecordingEventPublisher : IEventPublisher
     {
         public List<(IMessage evt, TopologyAudience direction)> Published { get; } = [];
+        public List<(string targetActorId, IMessage evt)> Sent { get; } = [];
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
@@ -594,8 +607,14 @@ public sealed class TelegramBridgeGAgentTests
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
-            where TEvent : IMessage =>
-            Task.CompletedTask;
+            where TEvent : IMessage
+        {
+            _ = ct;
+            _ = sourceEnvelope;
+            _ = options;
+            Sent.Add((targetActorId, evt));
+            return Task.CompletedTask;
+        }
     }
 
     private static IServiceProvider CreateAgentServices()
@@ -634,12 +653,18 @@ public sealed class TelegramBridgeGAgentTests
 
     private sealed class NoopActorRuntime : IActorRuntime
     {
+        public List<System.Type> CreatedActorTypes { get; } = [];
+
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
             where TAgent : IAgent =>
-            Task.FromResult<IActor>(new NoopActor(id ?? Guid.NewGuid().ToString("N")));
+            CreateAsync(typeof(TAgent), id, ct);
 
-        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default) =>
-            Task.FromResult<IActor>(new NoopActor(id ?? Guid.NewGuid().ToString("N")));
+        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default)
+        {
+            _ = ct;
+            CreatedActorTypes.Add(agentType);
+            return Task.FromResult<IActor>(new NoopActor(id ?? Guid.NewGuid().ToString("N")));
+        }
 
         public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
         public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(null);

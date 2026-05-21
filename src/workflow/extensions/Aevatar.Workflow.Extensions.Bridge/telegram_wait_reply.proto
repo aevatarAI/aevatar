@@ -1,0 +1,37 @@
+syntax = "proto3";
+package aevatar.workflow.extensions.bridge;
+option csharp_namespace = "Aevatar.Workflow.Extensions.Bridge";
+
+message TelegramWaitForReplyCommand {
+  string command_id = 1;
+  string session_id = 2;
+  string connector_name = 3;
+  string expected_chat_id = 4;
+  string expected_from_user_id = 5;
+  string expected_from_username = 6;
+  string correlation_contains = 7;
+  int32 wait_timeout_ms = 8;
+  int32 poll_timeout_seconds = 9;
+  int32 settle_polls_after_match = 10;
+  bool collect_all_replies = 11;
+  bool start_from_latest = 12;
+  optional int64 offset = 13;
+  map<string, string> connector_parameters = 14;
+  bool emit_chat_response = 15;
+}
+
+message TelegramWaitReplyCompletedEvent {
+  string command_id = 1;
+  string session_id = 2;
+  string content = 3;
+  bool emit_chat_response = 4;
+  string wait_actor_id = 5;
+}
+
+message TelegramWaitReplyFailedEvent {
+  string command_id = 1;
+  string session_id = 2;
+  string error = 3;
+  bool emit_chat_response = 4;
+  string wait_actor_id = 5;
+}
