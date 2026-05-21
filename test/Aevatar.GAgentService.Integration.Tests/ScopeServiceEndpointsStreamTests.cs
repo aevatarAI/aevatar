@@ -476,9 +476,18 @@ public sealed class ScopeServiceEndpointsStreamTests
         command.Headers.Should().Contain("trace-id", "abc");
         command.ScopeId.Should().Be("scope-a");
         command.SessionId.Should().Be("session-1");
+        command.RunId.Should().NotBeNullOrWhiteSpace();
+        command.CommandId.Should().NotBeNullOrWhiteSpace();
+        command.CorrelationId.Should().NotBeNullOrWhiteSpace();
+        command.CommandId.Should().NotBe(command.RunId);
+        command.CorrelationId.Should().NotBe(command.RunId);
+        command.CorrelationId.Should().NotBe(command.CommandId);
 
         var body = await ReadBodyAsync(http);
         body.Should().Contain("runStarted");
+        body.Should().Contain(command.RunId);
+        body.Should().NotContain(command.CommandId);
+        body.Should().NotContain(command.CorrelationId);
         body.Should().Contain("textMessageEnd");
         body.Should().Contain("runFinished");
     }

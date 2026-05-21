@@ -45,6 +45,9 @@ public sealed class ScriptServiceRunInteractionTests
             CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
+        result.Receipt!.RunId.Should().Be("run-1");
+        result.Receipt.CommandId.Should().Be("cmd-1");
+        result.Receipt.CorrelationId.Should().Be("corr-1");
         result.FinalizeResult!.Completed.Should().BeTrue();
         runtimePort.Invocations.Should().ContainSingle(invocation =>
             invocation.RuntimeActorId == "runtime-1" &&

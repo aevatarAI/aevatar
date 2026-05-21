@@ -159,6 +159,9 @@ internal sealed class ScriptServiceRunCommandTarget
     }
 }
 
+// Refactor (iter25/cluster-026-scope-service-script-stream-inline-orchestration):
+//   Old pattern: Scope service script stream resolved runtime targets inside endpoint code
+//   New principle: resolve the command target in Application before binding projection and dispatch state
 internal sealed class ScriptServiceRunCommandTargetResolver
     : ICommandTargetResolver<ScriptServiceRunCommand, ScriptServiceRunCommandTarget, ScriptServiceRunStartError>
 {
@@ -261,6 +264,9 @@ internal sealed class ScriptServiceRunCommandTargetBinder
     }
 }
 
+// Refactor (iter25/cluster-026-scope-service-script-stream-inline-orchestration):
+//   Old pattern: Scope service script stream built runtime envelopes inline in the Host endpoint
+//   New principle: keep envelope construction in the command interaction pipeline
 internal sealed class ScriptServiceRunEnvelopeFactory : ICommandEnvelopeFactory<ScriptServiceRunCommand>
 {
     public EventEnvelope CreateEnvelope(ScriptServiceRunCommand command, CommandContext context)
@@ -314,6 +320,9 @@ internal sealed class ScriptServiceRunCommandDispatcher
     }
 }
 
+// Refactor (iter25/cluster-026-scope-service-script-stream-inline-orchestration):
+//   Old pattern: Scope service script stream accepted state was implicit in endpoint-local variables
+//   New principle: return an honest accepted receipt with separate run, command, and correlation identities
 internal sealed class ScriptServiceRunAcceptedReceiptFactory
     : ICommandReceiptFactory<ScriptServiceRunCommandTarget, ScriptServiceRunAcceptedReceipt>
 {
@@ -325,14 +334,17 @@ internal sealed class ScriptServiceRunAcceptedReceiptFactory
         ArgumentNullException.ThrowIfNull(context);
 
         return new ScriptServiceRunAcceptedReceipt(
-            target.ActorId,
-            context.CorrelationId,
-            context.CommandId,
-            context.CorrelationId,
-            DateTimeOffset.UtcNow);
+            ActorId: target.ActorId,
+            RunId: target.RunId,
+            CommandId: context.CommandId,
+            CorrelationId: context.CorrelationId,
+            AcceptedAt: DateTimeOffset.UtcNow);
     }
 }
 
+// Refactor (iter25/cluster-026-scope-service-script-stream-inline-orchestration):
+//   Old pattern: Scope service script stream terminal-frame checks lived in endpoint helpers
+//   New principle: completion is resolved by the shared interaction policy
 internal sealed class ScriptServiceRunCompletionPolicy
     : ICommandCompletionPolicy<AGUIEvent, ScriptServiceRunCompletionStatus>
 {
@@ -359,6 +371,9 @@ internal sealed class ScriptServiceRunCompletionPolicy
     }
 }
 
+// Refactor (iter25/cluster-026-scope-service-script-stream-inline-orchestration):
+//   Old pattern: Scope service script stream emitted synthetic failures from Host-local orchestration
+//   New principle: finalization is an Application interaction concern after dispatch observation completes
 internal sealed class ScriptServiceRunFinalizeEmitter
     : ICommandFinalizeEmitter<ScriptServiceRunAcceptedReceipt, ScriptServiceRunCompletionStatus, AGUIEvent>
 {
@@ -387,6 +402,9 @@ internal sealed class ScriptServiceRunFinalizeEmitter
     }
 }
 
+// Refactor (iter25/cluster-026-scope-service-script-stream-inline-orchestration):
+//   Old pattern: Scope service script stream had no typed durable completion hook
+//   New principle: keep the durable completion extension point in the shared interaction skeleton
 internal sealed class ScriptServiceRunDurableCompletionResolver
     : ICommandDurableCompletionResolver<ScriptServiceRunAcceptedReceipt, ScriptServiceRunCompletionStatus>
 {

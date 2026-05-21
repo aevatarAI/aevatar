@@ -806,7 +806,6 @@ public static class ScopeServiceEndpoints
         HttpContext http,
         string scopeId,
         string runId,
-        string? actorId,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IServiceRunQueryPort serviceRunQueryPort,
         [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
@@ -817,7 +816,6 @@ public static class ScopeServiceEndpoints
             scopeId,
             ResolveDefaultScopeServiceId(options.Value),
             runId,
-            actorId,
             lifecycleQueryPort,
             serviceRunQueryPort,
             workflowExecutionQueryService,
@@ -828,7 +826,6 @@ public static class ScopeServiceEndpoints
         HttpContext http,
         string scopeId,
         string runId,
-        string? actorId,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IServiceRunQueryPort serviceRunQueryPort,
         [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
@@ -839,7 +836,6 @@ public static class ScopeServiceEndpoints
             scopeId,
             ResolveDefaultScopeServiceId(options.Value),
             runId,
-            actorId,
             lifecycleQueryPort,
             serviceRunQueryPort,
             workflowExecutionQueryService,
@@ -1295,7 +1291,6 @@ public static class ScopeServiceEndpoints
         string scopeId,
         string serviceId,
         string runId,
-        string? actorId,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IServiceRunQueryPort serviceRunQueryPort,
         [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
@@ -1329,7 +1324,6 @@ public static class ScopeServiceEndpoints
         string scopeId,
         string serviceId,
         string runId,
-        string? actorId,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IServiceRunQueryPort serviceRunQueryPort,
         [FromServices] IWorkflowExecutionQueryApplicationService workflowExecutionQueryService,
@@ -1715,6 +1709,8 @@ public static class ScopeServiceEndpoints
         //   Old pattern: Scope service script stream inline orchestration in endpoints
         //   New principle: use existing ICommandInteractionService skeleton with ScriptServiceRunCommand and Application-owned service-run registration decorator
         var runId = Guid.NewGuid().ToString("N");
+        var commandId = Guid.NewGuid().ToString("N");
+        var correlationId = Guid.NewGuid().ToString("N");
         var writer = new AGUISseWriter(http.Response);
         var responseStarted = false;
 
@@ -1765,8 +1761,8 @@ public static class ScopeServiceEndpoints
                     Prompt: prompt,
                     SessionId: sessionId,
                     RunId: runId,
-                    CommandId: runId,
-                    CorrelationId: runId,
+                    CommandId: commandId,
+                    CorrelationId: correlationId,
                     Headers: headers,
                     Identity: invocationRequest.Identity?.Clone()),
                 EmitAsync,
