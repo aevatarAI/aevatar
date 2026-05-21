@@ -41,7 +41,8 @@ public sealed class StreamingToolExecutor : IDisposable
         ToolManager tools,
         AgentHookPipeline? hooks = null,
         IReadOnlyList<IToolCallMiddleware>? toolMiddlewares = null,
-        IReadOnlyDictionary<string, string>? requestMetadata = null)
+        IReadOnlyDictionary<string, string>? requestMetadata = null,
+        AgentToolExecutionContext? toolContext = null)
     {
         // Refactor (iter24/cluster-002-agent-tool-context-generic-metadata-bag):
         //   Old pattern: streaming tool execution received raw request Metadata.
@@ -49,7 +50,9 @@ public sealed class StreamingToolExecutor : IDisposable
         _tools = tools;
         _hooks = hooks;
         _toolMiddlewares = toolMiddlewares ?? [];
-        _toolContext = AgentToolExecutionContextMapper.FromMetadata(requestMetadata);
+        _toolContext = toolContext
+            ?? AgentToolRequestContext.Current
+            ?? AgentToolExecutionContextMapper.FromMetadata(requestMetadata);
         _ = RunCoordinatorAsync();
     }
 

@@ -43,6 +43,9 @@ public static class AgentToolExecutionContextMapper
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        if (request.ToolContext is { } typedContext)
+            return typedContext;
+
         var mapped = FromMetadata(request.Metadata);
         var caller = request.CallerContext;
         return mapped with
@@ -66,6 +69,13 @@ public static class AgentToolExecutionContextMapper
             Routing = request.RoutingContext ?? mapped.Routing,
             ExternalMetadata = StripOwnedControlKeys(request.Metadata),
         };
+    }
+
+    public static AgentToolExecutionContext FromRequestWithCallId(LLMRequest request, string? callId)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return FromRequest(request).WithCallId(callId);
     }
 
     public static AgentToolExecutionContext FromMetadata(IReadOnlyDictionary<string, string>? metadata)

@@ -226,7 +226,8 @@ public sealed class ChatRuntime
                         // then dispatch after PostSampling approves.
                         using var streamingExecutor = new StreamingToolExecutor(
                             _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
-                            requestMetadata: baseRequest.ToolContext?.ToLegacyMetadata() ?? baseRequest.Metadata);
+                            requestMetadata: baseRequest.Metadata,
+                            toolContext: baseRequest.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest));
 
                         List<ToolCall>? deferredToolCalls = _hooks != null ? [] : null;
 
@@ -236,8 +237,9 @@ public sealed class ChatRuntime
                             RequestId = baseRequest.RequestId,
                             Metadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(baseRequest.Metadata),
                             CallerContext = baseRequest.CallerContext,
-                            ToolContext = (baseRequest.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest))
-                                .WithCallId(ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, round)),
+                            ToolContext = AgentToolExecutionContextMapper.FromRequestWithCallId(
+                                baseRequest,
+                                ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, round)),
                             RoutingContext = baseRequest.RoutingContext,
                             Tools = baseRequest.Tools,
                             Model = baseRequest.Model,
@@ -318,7 +320,8 @@ public sealed class ChatRuntime
                                     // Execute parsed tool calls via a fresh executor
                                     using var textToolExecutor = new StreamingToolExecutor(
                                         _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
-                                        requestMetadata: baseRequest.Metadata);
+                                        requestMetadata: baseRequest.Metadata,
+                                        toolContext: AgentToolExecutionContextMapper.FromRequest(roundRequest));
                                     foreach (var tc in parsed.ToolCalls)
                                         textToolExecutor.AddTool(tc);
                                     await foreach (var result in textToolExecutor.GetRemainingResultsAsync(runToken))
@@ -417,8 +420,9 @@ public sealed class ChatRuntime
                             RequestId = baseRequest.RequestId,
                             Metadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(baseRequest.Metadata),
                             CallerContext = baseRequest.CallerContext,
-                            ToolContext = (baseRequest.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest))
-                                .WithCallId(ToolCallLoop.ComposeFinalCallId(baseRequest.RequestId)),
+                            ToolContext = AgentToolExecutionContextMapper.FromRequestWithCallId(
+                                baseRequest,
+                                ToolCallLoop.ComposeFinalCallId(baseRequest.RequestId)),
                             RoutingContext = baseRequest.RoutingContext,
                             Tools = null,
                             Model = baseRequest.Model,
@@ -450,7 +454,8 @@ public sealed class ChatRuntime
 
                             using var finalToolExecutor = new StreamingToolExecutor(
                                 _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
-                                requestMetadata: baseRequest.Metadata);
+                                requestMetadata: baseRequest.Metadata,
+                                toolContext: finalRequest.ToolContext);
                             foreach (var tc in finalParsed.ToolCalls)
                                 finalToolExecutor.AddTool(tc);
                             await foreach (var result in finalToolExecutor.GetRemainingResultsAsync(runToken))
@@ -468,6 +473,9 @@ public sealed class ChatRuntime
                                 Messages = [..messages],
                                 RequestId = finalRequest.RequestId,
                                 Metadata = finalRequest.Metadata,
+                                CallerContext = finalRequest.CallerContext,
+                                ToolContext = finalRequest.ToolContext,
+                                RoutingContext = finalRequest.RoutingContext,
                                 Tools = null,
                                 Model = finalRequest.Model,
                                 Temperature = finalRequest.Temperature,
