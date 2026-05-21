@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Core.Chat;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Configuration;
 using FluentAssertions;
@@ -60,7 +61,10 @@ public class AIFeatureBootstrapRealProviderIntegrationTests
         };
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-        var response = await llmFactory.GetDefault().ChatAsync(request, cts.Token);
+        var response = await ChatStreamContentAggregator.AggregateResponseAsync(
+            llmFactory.GetDefault(),
+            request,
+            cts.Token);
 
         response.Content.Should().NotBeNullOrWhiteSpace();
     }

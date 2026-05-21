@@ -12,6 +12,9 @@ using System.Runtime.CompilerServices;
 
 namespace Aevatar.GAgentService.Tests.Application;
 
+// Test-add (test-coverage/cluster-035):
+//   Covers refactor-introduced behavior in GAgentApprovalInteraction.cs:75-147.
+//   Cluster intent: approval cleanup owns typed live-sink leases and detaches without a process registry.
 public sealed class GAgentApprovalInteractionTests
 {
     [Fact]
@@ -71,6 +74,7 @@ public sealed class GAgentApprovalInteractionTests
 
         result.Succeeded.Should().BeTrue();
         target.ProjectionLease.Should().BeSameAs(projectionPort.LeaseToReturn);
+        target.LiveSinkLease.Should().BeSameAs(projectionPort.LiveSinkLeaseToReturn);
         target.LiveSink.Should().NotBeNull();
         projectionPort.EnsureCalls.Should().ContainSingle(x => x.actorId == "actor-1" && x.commandId == "corr-1");
         projectionPort.AttachCalls.Should().ContainSingle();
@@ -126,11 +130,13 @@ public sealed class GAgentApprovalInteractionTests
             "corr-1",
             GAgentRunTerminalInteractionKind.Approval);
         target.BindTerminalProjection(terminalLease);
-        target.BindLiveObservation(lease, sink, "session-1");
+        var liveSinkLease = new RecordingLiveSinkLease();
+        target.BindLiveObservation(lease, liveSinkLease, sink, "session-1");
 
         await target.CleanupAfterDispatchFailureAsync(CancellationToken.None);
 
-        projectionPort.DetachCalls.Should().ContainSingle(x => ReferenceEquals(x.lease, lease));
+        projectionPort.DetachedLiveSinkLeases.Should().ContainSingle(x => ReferenceEquals(x, liveSinkLease));
+        liveSinkLease.DisposeCount.Should().Be(1);
         projectionPort.ReleaseCalls.Should().ContainSingle(x => ReferenceEquals(x, lease));
         sink.Completed.Should().BeTrue();
         sink.DisposeCalls.Should().Be(1);
@@ -138,6 +144,62 @@ public sealed class GAgentApprovalInteractionTests
         target.LiveSink.Should().BeNull();
         terminalPort.ReleaseCalls.Should().ContainSingle(x => ReferenceEquals(x, terminalLease));
         target.TerminalProjectionLease.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CleanupAfterDispatchFailureAsync_WhenOnlySinkIsBound_ShouldCompleteDisposeAndSkipProjectionDetach()
+    {
+        var projectionPort = new ApprovalProjectionPort();
+        var terminalPort = new ApprovalTerminalProjectionPort();
+        var target = new GAgentApprovalCommandTarget(
+            new ApprovalStubActor("actor-1", new ApprovalStubAgent()),
+            projectionPort,
+            terminalPort);
+        var sink = new RecordingAguiEventSink();
+        var terminalLease = new ApprovalTerminalProjectionLease(
+            "actor-1",
+            "corr-1",
+            GAgentRunTerminalInteractionKind.Approval);
+        target.BindTerminalProjection(terminalLease);
+        target.BindLiveObservation(new ApprovalProjectionLease("actor-1", "cmd-1"), new RecordingLiveSinkLease(), sink, "session-1");
+        SetProperty(target, nameof(GAgentApprovalCommandTarget.ProjectionLease), null);
+
+        await target.CleanupAfterDispatchFailureAsync(CancellationToken.None);
+
+        projectionPort.DetachedLiveSinkLeases.Should().BeEmpty();
+        projectionPort.ReleaseCalls.Should().BeEmpty();
+        sink.Completed.Should().BeTrue();
+        sink.DisposeCalls.Should().Be(1);
+        target.LiveSink.Should().BeNull();
+        target.LiveSinkLease.Should().BeNull();
+        terminalPort.ReleaseCalls.Should().ContainSingle(x => ReferenceEquals(x, terminalLease));
+    }
+
+    [Fact]
+    public async Task CleanupAfterDispatchFailureAsync_WhenOnlyProjectionLeaseIsBound_ShouldReleaseLeaseAndSkipProjectionDetach()
+    {
+        var projectionPort = new ApprovalProjectionPort();
+        var terminalPort = new ApprovalTerminalProjectionPort();
+        var target = new GAgentApprovalCommandTarget(
+            new ApprovalStubActor("actor-1", new ApprovalStubAgent()),
+            projectionPort,
+            terminalPort);
+        var lease = new ApprovalProjectionLease("actor-1", "cmd-1");
+        var terminalLease = new ApprovalTerminalProjectionLease(
+            "actor-1",
+            "corr-1",
+            GAgentRunTerminalInteractionKind.Approval);
+        target.BindTerminalProjection(terminalLease);
+        target.BindLiveObservation(lease, new RecordingLiveSinkLease(), new RecordingAguiEventSink(), "session-1");
+        SetProperty(target, nameof(GAgentApprovalCommandTarget.LiveSink), null);
+
+        await target.CleanupAfterDispatchFailureAsync(CancellationToken.None);
+
+        projectionPort.DetachedLiveSinkLeases.Should().BeEmpty();
+        projectionPort.ReleaseCalls.Should().ContainSingle(x => ReferenceEquals(x, lease));
+        target.ProjectionLease.Should().BeNull();
+        target.LiveSinkLease.Should().BeNull();
+        terminalPort.ReleaseCalls.Should().ContainSingle(x => ReferenceEquals(x, terminalLease));
     }
 
     [Fact]
@@ -359,10 +421,11 @@ public sealed class GAgentApprovalInteractionTests
     private sealed class ApprovalProjectionPort : IGAgentDraftRunProjectionPort
     {
         public ApprovalProjectionLease? LeaseToReturn { get; init; } = new("actor-1", "cmd-1");
+        public RecordingLiveSinkLease LiveSinkLeaseToReturn { get; } = new();
         public bool ProjectionEnabled => true;
         public List<(string actorId, string commandId)> EnsureCalls { get; } = [];
         public List<(IGAgentDraftRunProjectionLease lease, IEventSink<AGUIEvent> sink)> AttachCalls { get; } = [];
-        public List<(IGAgentDraftRunProjectionLease lease, IEventSink<AGUIEvent> sink)> DetachCalls { get; } = [];
+        public List<IAsyncDisposable?> DetachedLiveSinkLeases { get; } = [];
         public List<IGAgentDraftRunProjectionLease> ReleaseCalls { get; } = [];
 
         public Task<IGAgentDraftRunProjectionLease?> EnsureActorProjectionAsync(
@@ -374,21 +437,25 @@ public sealed class GAgentApprovalInteractionTests
             return Task.FromResult<IGAgentDraftRunProjectionLease?>(LeaseToReturn);
         }
 
-        public Task AttachLiveSinkAsync(
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IGAgentDraftRunProjectionLease lease,
             IEventSink<AGUIEvent> sink,
             CancellationToken ct = default)
         {
             AttachCalls.Add((lease, sink));
-            return Task.CompletedTask;
+            return Task.FromResult<IAsyncDisposable?>(LiveSinkLeaseToReturn);
         }
 
         public Task DetachLiveSinkAsync(
-            IGAgentDraftRunProjectionLease lease,
-            IEventSink<AGUIEvent> sink,
+            IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default)
         {
-            DetachCalls.Add((lease, sink));
+            DetachedLiveSinkLeases.Add(liveSinkLease);
+            if (liveSinkLease != null)
+            {
+                return liveSinkLease.DisposeAsync().AsTask();
+            }
+
             return Task.CompletedTask;
         }
 
@@ -402,6 +469,17 @@ public sealed class GAgentApprovalInteractionTests
     }
 
     private sealed record ApprovalProjectionLease(string ActorId, string CommandId) : IGAgentDraftRunProjectionLease;
+
+    private sealed class RecordingLiveSinkLease : IAsyncDisposable
+    {
+        public int DisposeCount { get; private set; }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCount++;
+            return ValueTask.CompletedTask;
+        }
+    }
 
     private sealed class ApprovalTerminalProjectionPort : IGAgentRunTerminalProjectionPort
     {
@@ -528,5 +606,14 @@ public sealed class GAgentApprovalInteractionTests
             DisposeCalls++;
             return ValueTask.CompletedTask;
         }
+    }
+
+    private static void SetProperty(object instance, string propertyName, object? value)
+    {
+        var property = instance.GetType().GetProperty(
+            propertyName,
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+        property.Should().NotBeNull();
+        property!.SetValue(instance, value);
     }
 }

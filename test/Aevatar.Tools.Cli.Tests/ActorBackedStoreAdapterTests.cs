@@ -1434,7 +1434,7 @@ public sealed class ActorBackedStoreAdapterTests
     }
 
     [Fact]
-    public async Task ConnectorCatalogStore_SaveDraft_SendsEventAndSyncsWorkspace()
+    public async Task ConnectorCatalogStore_SaveDraft_SendsEvent()
     {
         var runtime = new FakeActorRuntime();
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "scope-1" };
@@ -1457,7 +1457,6 @@ public sealed class ActorBackedStoreAdapterTests
         var saved = await store.SaveConnectorDraftAsync(draft);
 
         saved.FileExists.Should().BeTrue();
-        workspaceStore.LastSavedConnectorDraft.Should().BeEquivalentTo(draft);
         var evt = runtime.Actors["connector-catalog-scope-1"].ReceivedEnvelopes[0].Payload.Unpack<ConnectorDraftSavedEvent>();
         evt.Draft.Name.Should().Be("draft-conn");
         evt.Draft.Http.Auth.Type.Should().Be("oauth");
@@ -1466,7 +1465,7 @@ public sealed class ActorBackedStoreAdapterTests
     }
 
     [Fact]
-    public async Task ConnectorCatalogStore_DeleteDraft_SendsEventAndSyncsWorkspace()
+    public async Task ConnectorCatalogStore_DeleteDraft_SendsEvent()
     {
         var runtime = new FakeActorRuntime();
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "scope-1" };
@@ -1480,7 +1479,6 @@ public sealed class ActorBackedStoreAdapterTests
         var actor = runtime.Actors["connector-catalog-scope-1"];
         actor.ReceivedEnvelopes.Should().ContainSingle();
         actor.ReceivedEnvelopes[0].Payload.Is(ConnectorDraftDeletedEvent.Descriptor).Should().BeTrue();
-        workspaceStore.ConnectorDraftDeleted.Should().BeTrue();
     }
 
     // ════════════════════════════════════════════════════════════
@@ -1518,7 +1516,7 @@ public sealed class ActorBackedStoreAdapterTests
     }
 
     [Fact]
-    public async Task RoleCatalogStore_DeleteDraft_SyncsToWorkspace()
+    public async Task RoleCatalogStore_DeleteDraft_SendsEvent()
     {
         var runtime = new FakeActorRuntime();
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "scope-1" };
@@ -1529,7 +1527,8 @@ public sealed class ActorBackedStoreAdapterTests
 
         await store.DeleteRoleDraftAsync();
 
-        workspaceStore.RoleDraftDeleted.Should().BeTrue();
+        runtime.Actors["role-catalog-scope-1"].ReceivedEnvelopes.Should().ContainSingle(envelope =>
+            envelope.Payload.Is(RoleDraftDeletedEvent.Descriptor));
     }
 
     [Fact]
@@ -1740,7 +1739,7 @@ public sealed class ActorBackedStoreAdapterTests
     // ════════════════════════════════════════════════════════════
 
     [Fact]
-    public async Task RoleCatalogStore_SaveDraft_SyncsToWorkspace()
+    public async Task RoleCatalogStore_SaveDraft_SendsEvent()
     {
         var runtime = new FakeActorRuntime();
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "scope-1" };
@@ -1759,8 +1758,6 @@ public sealed class ActorBackedStoreAdapterTests
 
         await store.SaveRoleDraftAsync(draft);
 
-        workspaceStore.LastSavedRoleDraft.Should().NotBeNull();
-        workspaceStore.LastSavedRoleDraft!.Draft!.Name.Should().Be("My Role");
         var evt = runtime.Actors["role-catalog-scope-1"].ReceivedEnvelopes[0].Payload.Unpack<RoleDraftSavedEvent>();
         evt.Draft.Name.Should().Be("My Role");
     }
@@ -1818,7 +1815,7 @@ public sealed class ActorBackedStoreAdapterTests
     }
 
     [Fact]
-    public async Task RoleCatalogStore_DeleteDraft_SendsEventAndSyncsWorkspace()
+    public async Task RoleCatalogStore_DeleteDraft_SendsEventWithoutWorkspaceSync()
     {
         var runtime = new FakeActorRuntime();
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "scope-1" };
@@ -1834,7 +1831,6 @@ public sealed class ActorBackedStoreAdapterTests
         var actor = runtime.Actors[actorId];
         actor.ReceivedEnvelopes.Should().HaveCount(1);
         actor.ReceivedEnvelopes[0].Payload.Is(RoleDraftDeletedEvent.Descriptor).Should().BeTrue();
-        workspaceStore.RoleDraftDeleted.Should().BeTrue();
     }
 
     [Fact]
@@ -2152,74 +2148,21 @@ public sealed class ActorBackedStoreAdapterTests
     }
 
     // ════════════════════════════════════════════════════════════
-    // Helper: stub IStudioWorkspaceStore for catalog tests
+    // Helper: stub local catalog import readers for catalog tests
     // ════════════════════════════════════════════════════════════
 
-    private sealed class StubWorkspaceStore : IStudioWorkspaceStore
+    private sealed class StubWorkspaceStore : IStudioLocalConnectorCatalogImportReader, IStudioLocalRoleCatalogImportReader
     {
-        public bool RoleDraftDeleted { get; private set; }
-        public bool ConnectorDraftDeleted { get; private set; }
-        public StoredRoleDraft? LastSavedRoleDraft { get; private set; }
-        public StoredConnectorDraft? LastSavedConnectorDraft { get; private set; }
         public StoredConnectorCatalog ConnectorCatalogToReturn { get; set; } =
             new("", "", false, []);
         public StoredRoleCatalog RoleCatalogToReturn { get; set; } =
             new("", "", false, []);
-        public StoredConnectorDraft ConnectorDraftToReturn { get; set; } =
-            new("", "", false, null, null);
-        public StoredRoleDraft RoleDraftToReturn { get; set; } =
-            new("", "", false, null, null);
 
-        public Task<StudioWorkspaceSettings> GetSettingsAsync(CancellationToken ct = default) =>
-            Task.FromResult(new StudioWorkspaceSettings("", [], "", ""));
-        public Task SaveSettingsAsync(StudioWorkspaceSettings settings, CancellationToken ct = default) =>
-            Task.CompletedTask;
-        public Task<IReadOnlyList<StoredWorkflowFile>> ListWorkflowFilesAsync(CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<StoredWorkflowFile>>([]);
-        public Task<StoredWorkflowFile?> GetWorkflowFileAsync(string workflowId, CancellationToken ct = default) =>
-            Task.FromResult<StoredWorkflowFile?>(null);
-        public Task<StoredWorkflowFile> SaveWorkflowFileAsync(StoredWorkflowFile f, CancellationToken ct = default) =>
-            Task.FromResult(f);
-        public Task DeleteWorkflowFileAsync(string workflowId, CancellationToken ct = default) =>
-            Task.CompletedTask;
-        public Task<IReadOnlyList<StoredExecutionRecord>> ListExecutionsAsync(CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<StoredExecutionRecord>>([]);
-        public Task<StoredExecutionRecord?> GetExecutionAsync(string executionId, CancellationToken ct = default) =>
-            Task.FromResult<StoredExecutionRecord?>(null);
-        public Task<StoredExecutionRecord> SaveExecutionAsync(StoredExecutionRecord r, CancellationToken ct = default) =>
-            Task.FromResult(r);
-        public Task<StoredConnectorCatalog> GetConnectorCatalogAsync(CancellationToken ct = default) =>
+        Task<StoredConnectorCatalog> IStudioLocalConnectorCatalogImportReader.ReadAsync(CancellationToken ct) =>
             Task.FromResult(ConnectorCatalogToReturn);
-        public Task<StoredConnectorCatalog> SaveConnectorCatalogAsync(StoredConnectorCatalog c, CancellationToken ct = default) =>
-            Task.FromResult(c);
-        public Task<StoredConnectorDraft> GetConnectorDraftAsync(CancellationToken ct = default) =>
-            Task.FromResult(ConnectorDraftToReturn);
-        public Task<StoredConnectorDraft> SaveConnectorDraftAsync(StoredConnectorDraft d, CancellationToken ct = default)
-        {
-            LastSavedConnectorDraft = d;
-            return Task.FromResult(d);
-        }
-        public Task DeleteConnectorDraftAsync(CancellationToken ct = default)
-        {
-            ConnectorDraftDeleted = true;
-            return Task.CompletedTask;
-        }
-        public Task<StoredRoleCatalog> GetRoleCatalogAsync(CancellationToken ct = default) =>
+
+        Task<StoredRoleCatalog> IStudioLocalRoleCatalogImportReader.ReadAsync(CancellationToken ct) =>
             Task.FromResult(RoleCatalogToReturn);
-        public Task<StoredRoleCatalog> SaveRoleCatalogAsync(StoredRoleCatalog c, CancellationToken ct = default) =>
-            Task.FromResult(c);
-        public Task<StoredRoleDraft> GetRoleDraftAsync(CancellationToken ct = default) =>
-            Task.FromResult(RoleDraftToReturn);
-        public Task<StoredRoleDraft> SaveRoleDraftAsync(StoredRoleDraft d, CancellationToken ct = default)
-        {
-            LastSavedRoleDraft = d;
-            return Task.FromResult(d);
-        }
-        public Task DeleteRoleDraftAsync(CancellationToken ct = default)
-        {
-            RoleDraftDeleted = true;
-            return Task.CompletedTask;
-        }
     }
 
 }

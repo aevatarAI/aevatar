@@ -146,6 +146,7 @@
     <Project Path="src/workflow/Aevatar.Workflow.Application/Aevatar.Workflow.Application.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Host.Api/Aevatar.Workflow.Host.Api.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Infrastructure/Aevatar.Workflow.Infrastructure.csproj" />
+    <Project Path="src/workflow/Aevatar.Workflow.Studio/Aevatar.Workflow.Studio.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Sdk/Aevatar.Workflow.Sdk.csproj" />
     <Project Path="src\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
     <Project Path="src\workflow\Aevatar.Workflow.Presentation.AGUIAdapter\Aevatar.Workflow.Presentation.AGUIAdapter.csproj" />

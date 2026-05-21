@@ -224,6 +224,28 @@ public class VoicePresenceWhipEndpointsTests
     }
 
     [Fact]
+    public async Task Post_should_return_service_unavailable_and_dispose_transport_when_remote_audio_is_unavailable()
+    {
+        var transport = new StubVoiceTransport();
+        var factory = new FakeWebRtcVoiceTransportFactory(new WebRtcVoiceTransportSession(transport, "answer", Task.CompletedTask));
+        var session = new VoicePresenceSession(
+            isInitialized: static () => true,
+            isTransportAttached: static () => false,
+            attachTransportAsync: static (_, _) => throw new VoiceRemoteAudioTransportUnavailableException(),
+            detachTransportAsync: static (_, _) => Task.CompletedTask,
+            pcmSampleRateHz: 24000);
+        using var app = CreateApp((_, _) => Task.FromResult<VoicePresenceSession?>(session), factory);
+        var context = CreateContext(app, HttpMethods.Post, "v=0\r\noffer");
+        context.Request.RouteValues["actorId"] = "agent-1";
+
+        await GetWhipEndpoint(app, HttpMethods.Post).RequestDelegate!(context);
+
+        context.Response.StatusCode.ShouldBe(StatusCodes.Status503ServiceUnavailable);
+        (await ReadBodyAsync(context)).ShouldBe(VoiceRemoteAudioTransportUnavailableException.Reason);
+        transport.Disposed.ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task Delete_should_reject_missing_actor_id()
     {
         using var app = CreateApp(static (_, _) => Task.FromResult<VoicePresenceSession?>(null));

@@ -27,6 +27,7 @@ type StudioRouteOptions = {
   prompt?: string;
   executionId?: string;
   logsMode?: 'popout';
+  returnTo?: string;
 } & Record<string, unknown>;
 
 function trimOptional(value: string | null | undefined): string {
@@ -196,6 +197,9 @@ export function buildStudioRoute(options?: StudioRouteOptions): string {
   }
   if (options?.logsMode === 'popout') {
     params.set('logs', 'popout');
+  }
+  if (options?.returnTo?.trim()) {
+    params.set('returnTo', options.returnTo.trim());
   }
 
   const query = params.toString();

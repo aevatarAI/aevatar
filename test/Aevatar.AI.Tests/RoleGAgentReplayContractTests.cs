@@ -649,17 +649,6 @@ public class RoleGAgentReplayContractTests
 
         public IReadOnlyList<string> GetAvailableProviders() => [Name];
 
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new LLMResponse
-            {
-                Content = response,
-                FinishReason = "stop",
-                Usage = new TokenUsage(1, 1, 2),
-            });
-        }
-
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
@@ -726,13 +715,6 @@ public class RoleGAgentReplayContractTests
         public ILLMProvider GetDefault() => this;
 
         public IReadOnlyList<string> GetAvailableProviders() => [Name];
-
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            _ = request;
-            ct.ThrowIfCancellationRequested();
-            throw exception;
-        }
 
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,

@@ -12,7 +12,7 @@ This directory keeps CI gate scripts and smoke tests.
 - `tools/ci/fetch_latest_ci_failure.sh`: downloads the latest failed GitHub Actions run metadata and failed logs into `artifacts/ci-failures/latest/` via `gh`.
 - `tools/ci/test_stability_guards.sh`: polling/unstable test pattern guard.
 - `tools/ci/solution_split_guards.sh`: split build guard.
-- `tools/ci/solution_split_test_guards.sh`: split test guard.
+- `tools/ci/test_solution_ownership_guard.sh`: verifies every `test/*.csproj` is owned by `aevatar.slnx` or the single slow-test project.
 - `tools/ci/projection_route_mapping_guard.sh`: projection reducer routing static guard.
 - `tools/ci/playground_asset_drift_guard.sh`: playground static asset drift guard between CLI and demo web UI.
 - `tools/ci/restore_and_build.sh`: shared restore/build entry used by CI jobs.
@@ -34,9 +34,10 @@ This directory keeps CI gate scripts and smoke tests.
     - Uses path filters to detect whether projection-provider or Kafka-runtime integration jobs must run.
   - Job `fast-gates`
     - Runs static architecture and test-stability guards.
-  - Job `split-test-guards` (matrix)
-    - Runs `dotnet test` for each split solution filter (`foundation/ai/cqrs/workflow/hosting/distributed`).
-    - Triggered on `main/dev` pushes, nightly schedule, or manual dispatch.
+  - Test authority
+    - Job `coverage-quality` runs restore/build + `tools/ci/coverage_quality_guard.sh`, which validates test ownership and runs full `dotnet test aevatar.slnx` with coverage.
+    - Job `slow-test-guards` runs `tools/ci/slow_test_guards.sh` for the independent slow-test project.
+    - `.slnf` files are build-boundary inputs only; tests are not executed through split solution filters.
   - Job `projection-provider-e2e`
     - Runs `tools/ci/projection_provider_e2e_smoke.sh`.
     - Triggered on projection-provider related changes, `main/dev` pushes, or manual dispatch.

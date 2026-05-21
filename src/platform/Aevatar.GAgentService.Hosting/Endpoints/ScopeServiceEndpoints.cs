@@ -1749,11 +1749,11 @@ public static class ScopeServiceEndpoints
         CopyHeaders(headers, chatRequest.Metadata);
         var inputPayload = Any.Pack(chatRequest);
         var eventChannel = new EventChannel<AGUIEvent>();
-        var projectionLease = await scriptServiceAguiProjectionPort.EnsureAndAttachAsync(
+        var attachment = await scriptServiceAguiProjectionPort.EnsureAndAttachLeaseAsync(
             token => scriptServiceAguiProjectionPort.EnsureRunProjectionAsync(actorId, runId, token),
             eventChannel,
             ct);
-        if (projectionLease == null)
+        if (attachment == null)
             throw new InvalidOperationException("Script execution projection pipeline is unavailable.");
 
         try
@@ -1804,7 +1804,8 @@ public static class ScopeServiceEndpoints
         finally
         {
             await scriptServiceAguiProjectionPort.DetachReleaseAndDisposeAsync(
-                projectionLease,
+                attachment.ProjectionLease,
+                attachment.LiveSinkLease,
                 eventChannel,
                 null,
                 CancellationToken.None);

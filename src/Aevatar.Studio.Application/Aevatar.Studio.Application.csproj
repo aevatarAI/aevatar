@@ -32,9 +32,11 @@
     <Protobuf Include="Protos/app_script_protocol.proto"
               GrpcServices="None"
               AdditionalImportDirs="..\Aevatar.Scripting.Abstractions\Protos" />
+    <Protobuf Include="Protos/scoped_workflow_draft.proto" GrpcServices="None" />
   </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="Aevatar.Studio.Tests" />
+    <InternalsVisibleTo Include="Aevatar.Tools.Cli.Tests" />
   </ItemGroup>
 </Project>

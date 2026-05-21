@@ -23,6 +23,9 @@ internal sealed class WorkflowRunCommandTargetBinder
         CommandContext context,
         CancellationToken ct = default)
     {
+        // Refactor (iter18/cluster-005):
+        //   Old pattern: accepted-only dispatch reused interaction targets that owned live sinks
+        //   New principle: accepted-only target split + NoOp binder default + receipt-only(no live sink acquired)
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(context);
@@ -38,7 +41,7 @@ internal sealed class WorkflowRunCommandTargetBinder
                     WorkflowChatRunStartError.ProjectionDisabled);
             }
 
-            var projectionLease = await _projectionPort.EnsureAndAttachAsync(
+            var attachment = await _projectionPort.EnsureAndAttachLeaseAsync(
                 token => _projectionPort.EnsureActorProjectionAsync(
                     target.ActorId,
                     context.CommandId,
@@ -46,14 +49,14 @@ internal sealed class WorkflowRunCommandTargetBinder
                 sink,
                 ct);
 
-            if (projectionLease == null)
+            if (attachment == null)
             {
                 await target.RollbackCreatedActorsAsync(CancellationToken.None);
                 return CommandTargetBindingResult<WorkflowChatRunStartError>.Failure(
                     WorkflowChatRunStartError.ProjectionDisabled);
             }
 
-            target.BindLiveObservation(projectionLease, sink);
+            target.BindLiveObservation(attachment.ProjectionLease, attachment.LiveSinkLease, sink);
             return CommandTargetBindingResult<WorkflowChatRunStartError>.Success();
         }
         catch (Exception ex)

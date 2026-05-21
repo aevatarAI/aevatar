@@ -23,7 +23,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     public async Task GetSettings_WhenScopeIsResolved_ReturnsScopedDirectoryOnly()
     {
         var controller = CreateController(
-            new WorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath()), new StubWorkflowYamlDocumentService()),
+            CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
             CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
             new StubScopeResolver { ScopeIdToReturn = "scope-1" });
 
@@ -41,7 +41,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     public async Task GetSettings_WhenRequestedScopeMismatchesAmbientScope_ReturnsForbidden()
     {
         var controller = CreateController(
-            new WorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath()), new StubWorkflowYamlDocumentService()),
+            CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
             CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
             new StubScopeResolver { ScopeIdToReturn = "scope-1" });
 
@@ -59,7 +59,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     public async Task GetSettings_WhenQueryFallbackIsEnabledOutsideDevelopment_ReturnsUnauthorized()
     {
         var controller = CreateController(
-            new WorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath()), new StubWorkflowYamlDocumentService()),
+            CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
             CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
             new StubScopeResolver(),
             new StudioHostingOptions
@@ -83,7 +83,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     {
         var store = new RecordingWorkspaceStore(Path.GetTempPath());
         var controller = CreateController(
-            new WorkspaceService(store, new StubWorkflowYamlDocumentService()),
+            CreateWorkspaceService(store),
             CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
             new StubScopeResolver());
 
@@ -102,11 +102,12 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
         var workspaceRoot = Path.Combine(Path.GetTempPath(), $"workspace-delete-{Guid.NewGuid():N}");
         var store = new RecordingWorkspaceStore(workspaceRoot);
         var controller = CreateController(
-            new WorkspaceService(store, new StubWorkflowYamlDocumentService()),
+            CreateWorkspaceService(store),
             CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
             new StubScopeResolver());
         var workflowPath = Path.Combine(workspaceRoot, "drafts", "hello.yaml");
         var workflowId = WorkspaceService.CreateStableId(workflowPath);
+        store.SavedWorkflowFile = store.CreateWorkflowDraft(workflowId);
 
         var result = await controller.DeleteDraft(workflowId, null, CancellationToken.None);
 
@@ -120,7 +121,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
         var storagePort = new RecordingWorkflowDraftStore();
         var workflowId = $"workflow-{Guid.NewGuid():N}";
         var controller = CreateController(
-            new WorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath()), new StubWorkflowYamlDocumentService()),
+            CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
             CreateScopeWorkflowService(storagePort),
             new StubScopeResolver { ScopeIdToReturn = "scope-1" });
 
@@ -138,7 +139,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
         var storagePort = new RecordingWorkflowDraftStore();
         var workflowId = $"workflow-{Guid.NewGuid():N}";
         var controller = CreateController(
-            new WorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath()), new StubWorkflowYamlDocumentService()),
+            CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
             CreateScopeWorkflowService(storagePort),
             new StubScopeResolver(),
             new StudioHostingOptions
@@ -162,7 +163,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     {
         var storagePort = new RecordingWorkflowDraftStore();
         var controller = CreateController(
-            new WorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath()), new StubWorkflowYamlDocumentService()),
+            CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
             CreateScopeWorkflowService(storagePort),
             new StubScopeResolver(),
             new StudioHostingOptions
@@ -186,7 +187,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     {
         var storagePort = new RecordingWorkflowDraftStore();
         var controller = CreateController(
-            new WorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath()), new StubWorkflowYamlDocumentService()),
+            CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
             CreateScopeWorkflowService(storagePort),
             new StubScopeResolver(),
             new StudioHostingOptions
@@ -217,7 +218,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     {
         var storagePort = new RecordingWorkflowDraftStore();
         var controller = CreateController(
-            new WorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath()), new StubWorkflowYamlDocumentService()),
+            CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
             CreateScopeWorkflowService(storagePort),
             new StubScopeResolver(),
             new StudioHostingOptions
@@ -252,7 +253,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
             AppApiErrors.BackendInvalidResponseCode,
             "delete failed");
         var controller = CreateController(
-            new WorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath()), new StubWorkflowYamlDocumentService()),
+            CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
             CreateScopeWorkflowService(new ThrowingWorkflowStoragePort(exception)),
             new StubScopeResolver { ScopeIdToReturn = "scope-1" });
 
@@ -269,7 +270,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     public async Task DeleteDraft_WhenDeleteThrowsInvalidOperationException_ReturnsBadRequest()
     {
         var controller = CreateController(
-            new WorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath()), new StubWorkflowYamlDocumentService()),
+            CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
             CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
             new StubScopeResolver());
 
@@ -284,7 +285,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     public async Task CreateDraft_WhenDirectoryIdIsUnknown_ReturnsBadRequest()
     {
         var controller = CreateController(
-            new WorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath()), new StubWorkflowYamlDocumentService()),
+            CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
             CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
             new StubScopeResolver());
 
@@ -309,7 +310,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     public async Task AddDirectory_WhenScopeIsResolved_ReturnsBadRequest()
     {
         var controller = CreateController(
-            new WorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath()), new StubWorkflowYamlDocumentService()),
+            CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
             CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
             new StubScopeResolver { ScopeIdToReturn = "scope-1" });
 
@@ -330,7 +331,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     public async Task AddDirectory_WhenQueryFallbackIsEnabled_ReturnsUnauthorizedForScopedWrites()
     {
         var controller = CreateController(
-            new WorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath()), new StubWorkflowYamlDocumentService()),
+            CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
             CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
             new StubScopeResolver(),
             new StudioHostingOptions
@@ -355,7 +356,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     public async Task RemoveDirectory_WhenScopeIsResolved_ReturnsBadRequest()
     {
         var controller = CreateController(
-            new WorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath()), new StubWorkflowYamlDocumentService()),
+            CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
             CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
             new StubScopeResolver { ScopeIdToReturn = "scope-1" });
 
@@ -373,7 +374,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     public async Task RemoveDirectory_WhenQueryFallbackIsEnabled_ReturnsUnauthorizedForScopedWrites()
     {
         var controller = CreateController(
-            new WorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath()), new StubWorkflowYamlDocumentService()),
+            CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
             CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
             new StubScopeResolver(),
             new StudioHostingOptions
@@ -405,7 +406,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
             AppearanceTheme: "default",
             ColorMode: "system"));
         var controller = CreateController(
-            new WorkspaceService(store, new StubWorkflowYamlDocumentService()),
+            CreateWorkspaceService(store),
             CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
             new StubScopeResolver());
 
@@ -421,7 +422,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     {
         var store = new RecordingWorkspaceStore(Path.Combine(Path.GetTempPath(), $"workspace-legacy-{Guid.NewGuid():N}"));
         var controller = CreateController(
-            new WorkspaceService(store, new StubWorkflowYamlDocumentService()),
+            CreateWorkspaceService(store),
             CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
             new StubScopeResolver());
 
@@ -447,7 +448,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     {
         var store = new RecordingWorkspaceStore(Path.Combine(Path.GetTempPath(), $"workspace-legacy-update-{Guid.NewGuid():N}"));
         store.SetWorkflowFiles([
-            new StoredWorkflowFile(
+            store.CreateWorkflowDraft(
                 WorkflowId: "workflow-1",
                 Name: "legacy-save",
                 FileName: "legacy-save.yaml",
@@ -459,7 +460,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
                 UpdatedAtUtc: DateTimeOffset.UtcNow),
         ]);
         var controller = CreateController(
-            new WorkspaceService(store, new StubWorkflowYamlDocumentService()),
+            CreateWorkspaceService(store),
             CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
             new StubScopeResolver());
 
@@ -484,7 +485,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     public async Task LegacyGetWorkflowRoute_ReturnsWorkflowFileResponse()
     {
         var store = new RecordingWorkspaceStore(Path.Combine(Path.GetTempPath(), $"workspace-legacy-{Guid.NewGuid():N}"));
-        store.SavedWorkflowFile = new StoredWorkflowFile(
+        store.SavedWorkflowFile = store.CreateWorkflowDraft(
             WorkflowId: "workflow-1",
             Name: "legacy-get",
             FileName: "legacy-get.yaml",
@@ -495,7 +496,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
             Layout: null,
             UpdatedAtUtc: DateTimeOffset.UtcNow);
         var controller = CreateController(
-            new WorkspaceService(store, new StubWorkflowYamlDocumentService()),
+            CreateWorkspaceService(store),
             CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
             new StubScopeResolver());
 
@@ -511,12 +512,9 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     [Fact]
     public async Task UpdateDraft_WhenWorkspaceDraftIsMissing_ReturnsNotFound()
     {
-        var store = new RecordingWorkspaceStore(Path.GetTempPath())
-        {
-            ReturnFallbackWorkflowFile = false,
-        };
+        var store = new RecordingWorkspaceStore(Path.GetTempPath());
         var controller = CreateController(
-            new WorkspaceService(store, new StubWorkflowYamlDocumentService()),
+            CreateWorkspaceService(store),
             CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
             new StubScopeResolver());
 
@@ -538,7 +536,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     {
         var store = new RecordingWorkspaceStore(Path.Combine(Path.GetTempPath(), $"workspace-update-conflict-{Guid.NewGuid():N}"));
         store.SetWorkflowFiles(
-            new StoredWorkflowFile(
+            store.CreateWorkflowDraft(
                 WorkflowId: "workflow-1",
                 Name: "first-workflow",
                 FileName: "first.yaml",
@@ -548,7 +546,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
                 Yaml: "name: first-workflow\nsteps: []\n",
                 Layout: null,
                 UpdatedAtUtc: DateTimeOffset.UtcNow),
-            new StoredWorkflowFile(
+            store.CreateWorkflowDraft(
                 WorkflowId: "workflow-2",
                 Name: "second-workflow",
                 FileName: "second.yaml",
@@ -559,7 +557,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
                 Layout: null,
                 UpdatedAtUtc: DateTimeOffset.UtcNow));
         var controller = CreateController(
-            new WorkspaceService(store, new StubWorkflowYamlDocumentService()),
+            CreateWorkspaceService(store),
             CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
             new StubScopeResolver());
 
@@ -586,7 +584,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     public async Task LegacyListWorkflowsRoute_ReturnsWorkflowSummaries()
     {
         var store = new RecordingWorkspaceStore(Path.Combine(Path.GetTempPath(), $"workspace-legacy-{Guid.NewGuid():N}"));
-        store.SavedWorkflowFile = new StoredWorkflowFile(
+        store.SavedWorkflowFile = store.CreateWorkflowDraft(
             WorkflowId: "workflow-1",
             Name: "legacy-list",
             FileName: "legacy-list.yaml",
@@ -597,7 +595,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
             Layout: null,
             UpdatedAtUtc: DateTimeOffset.UtcNow);
         var controller = CreateController(
-            new WorkspaceService(store, new StubWorkflowYamlDocumentService()),
+            CreateWorkspaceService(store),
             CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
             new StubScopeResolver());
 
@@ -667,6 +665,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
             " workflow-1 ",
             "workflow-1",
             "name: workflow-1\nsteps: []\n",
+            null,
             CancellationToken.None);
 
         var request = handler.Requests.Should().ContainSingle().Subject;
@@ -685,6 +684,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
             "workflow-1",
             "workflow-1",
             "name: workflow-1\nsteps: []\n",
+            null,
             CancellationToken.None);
 
         (await act.Should().ThrowAsync<InvalidOperationException>())
@@ -718,6 +718,9 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
         };
         return controller;
     }
+
+    private static WorkspaceService CreateWorkspaceService(RecordingWorkspaceStore store) =>
+        new(store, store, new StubWorkflowYamlDocumentService());
 
     private sealed class TestHostEnvironment : IHostEnvironment
     {
@@ -820,7 +823,13 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
         public List<ScopedWorkflowSave> SavedWorkflows { get; } = [];
         public List<ScopedWorkflowDelete> DeletedWorkflows { get; } = [];
 
-        public Task SaveDraftAsync(string scopeId, string workflowId, string workflowName, string yaml, CancellationToken ct)
+        public Task SaveDraftAsync(
+            string scopeId,
+            string workflowId,
+            string workflowName,
+            string yaml,
+            WorkflowLayoutDocument? layout,
+            CancellationToken ct)
         {
             SavedWorkflows.Add(new ScopedWorkflowSave(scopeId, workflowId, workflowName, yaml));
             return Task.CompletedTask;
@@ -854,7 +863,13 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
             _exception = exception;
         }
 
-        public Task SaveDraftAsync(string scopeId, string workflowId, string workflowName, string yaml, CancellationToken ct) =>
+        public Task SaveDraftAsync(
+            string scopeId,
+            string workflowId,
+            string workflowName,
+            string yaml,
+            WorkflowLayoutDocument? layout,
+            CancellationToken ct) =>
             Task.CompletedTask;
 
         public Task<IReadOnlyList<WorkflowDraft>> ListDraftsAsync(string scopeId, CancellationToken ct) =>
@@ -876,10 +891,11 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     private sealed record ScopedWorkflowSave(string ScopeId, string WorkflowId, string WorkflowName, string Yaml);
     private sealed record ScopedWorkflowDelete(string ScopeId, string WorkflowId);
 
-    private sealed class RecordingWorkspaceStore : IStudioWorkspaceStore
+    private sealed class RecordingWorkspaceStore : IStudioWorkspaceQueryPort, IStudioWorkspaceCommandPort
     {
         private StudioWorkspaceSettings _settings;
-        private readonly List<StoredWorkflowFile> _workflowFiles = [];
+        private readonly List<StudioWorkflowDraftRecord> _workflowFiles = [];
+        private long _stateVersion;
 
         public RecordingWorkspaceStore(string rootDirectory)
         {
@@ -898,27 +914,95 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
 
         public List<string> DeletedWorkflowIds { get; } = [];
 
-        public bool ReturnFallbackWorkflowFile { get; set; } = true;
-
-        public StoredWorkflowFile? SavedWorkflowFile
+        public StudioWorkflowDraftRecord? SavedWorkflowFile
         {
             get => _workflowFiles.LastOrDefault();
             set => SetWorkflowFiles(value is null ? [] : [value]);
         }
 
-        public void SetWorkflowFiles(params StoredWorkflowFile[] workflowFiles)
+        public void SetWorkflowFiles(params StudioWorkflowDraftRecord[] workflowFiles)
         {
             _workflowFiles.Clear();
             _workflowFiles.AddRange(workflowFiles);
         }
 
+        public Task<StudioWorkspaceSnapshot> GetAsync(CancellationToken ct = default) =>
+            Task.FromResult(new StudioWorkspaceSnapshot(
+                "workspace-test",
+                "scope-test",
+                _settings,
+                _settings.Directories,
+                _workflowFiles.ToList(),
+                _stateVersion,
+                DateTimeOffset.UtcNow));
+
         public Task<StudioWorkspaceSettings> GetSettingsAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(_settings);
 
-        public Task DeleteWorkflowFileAsync(string workflowId, CancellationToken cancellationToken = default)
+        public Task<StudioWorkspaceCommandReceipt> DeleteDraftAsync(
+            string workflowId,
+            long? expectedVersion = null,
+            CancellationToken ct = default)
         {
             DeletedWorkflowIds.Add(workflowId);
-            return Task.CompletedTask;
+            _workflowFiles.RemoveAll(file => string.Equals(file.WorkflowId, workflowId, StringComparison.Ordinal));
+            _stateVersion++;
+            return Task.FromResult(Receipt(expectedVersion));
+        }
+
+        public Task<StudioWorkspaceCommandReceipt> UpdateSettingsAsync(
+            StudioWorkspaceSettings settings,
+            long? expectedVersion = null,
+            CancellationToken ct = default)
+        {
+            _settings = settings;
+            _stateVersion++;
+            return Task.FromResult(Receipt(expectedVersion));
+        }
+
+        public Task<StudioWorkspaceCommandReceipt> AddDirectoryAsync(
+            StudioWorkspaceDirectory directory,
+            long? expectedVersion = null,
+            CancellationToken ct = default)
+        {
+            _settings = _settings with { Directories = _settings.Directories.Append(directory).ToList() };
+            _stateVersion++;
+            return Task.FromResult(Receipt(expectedVersion));
+        }
+
+        public Task<StudioWorkspaceCommandReceipt> RemoveDirectoryAsync(
+            string directoryId,
+            long? expectedVersion = null,
+            CancellationToken ct = default)
+        {
+            _settings = _settings with
+            {
+                Directories = _settings.Directories
+                    .Where(directory => directory.IsBuiltIn || !string.Equals(directory.DirectoryId, directoryId, StringComparison.Ordinal))
+                    .ToList(),
+            };
+            _stateVersion++;
+            return Task.FromResult(Receipt(expectedVersion));
+        }
+
+        public Task<StudioWorkspaceCommandReceipt> SaveDraftAsync(
+            StudioWorkflowDraftRecord draft,
+            long? expectedVersion = null,
+            CancellationToken ct = default)
+        {
+            var existingIndex = _workflowFiles.FindIndex(item =>
+                string.Equals(item.WorkflowId, draft.WorkflowId, StringComparison.Ordinal));
+            if (existingIndex >= 0)
+            {
+                _workflowFiles[existingIndex] = draft;
+            }
+            else
+            {
+                _workflowFiles.Add(draft);
+            }
+
+            _stateVersion++;
+            return Task.FromResult(Receipt(expectedVersion));
         }
 
         public Task SaveSettingsAsync(StudioWorkspaceSettings settings, CancellationToken cancellationToken = default)
@@ -927,93 +1011,43 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
             return Task.CompletedTask;
         }
 
-        public Task<IReadOnlyList<StoredWorkflowFile>> ListWorkflowFilesAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<StoredWorkflowFile>>(_workflowFiles.ToList());
+        private static StudioWorkspaceCommandReceipt Receipt(long? expectedVersion) =>
+            new("workspace-test", "workspace-test", Guid.NewGuid().ToString("N"), expectedVersion);
 
-        public Task<StoredWorkflowFile?> GetWorkflowFileAsync(string workflowId, CancellationToken cancellationToken = default)
-        {
-            if (string.IsNullOrWhiteSpace(workflowId))
-            {
-                return Task.FromResult<StoredWorkflowFile?>(null);
-            }
-
-            var workflowFile = _workflowFiles.FirstOrDefault(file =>
-                string.Equals(file.WorkflowId, workflowId, StringComparison.Ordinal));
-            if (workflowFile is not null)
-            {
-                return Task.FromResult<StoredWorkflowFile?>(workflowFile);
-            }
-
-            if (!ReturnFallbackWorkflowFile)
-            {
-                return Task.FromResult<StoredWorkflowFile?>(null);
-            }
-
-            return Task.FromResult<StoredWorkflowFile?>(new StoredWorkflowFile(
-                WorkflowId: workflowId,
-                Name: Path.GetFileNameWithoutExtension(workflowId),
-                FileName: "hello.yaml",
-                FilePath: Path.Combine(RootDirectory, "drafts", "hello.yaml"),
-                DirectoryId: "dir-1",
-                DirectoryLabel: "Drafts",
-                Yaml: "name: hello\nsteps: []\n",
+        public StudioWorkflowDraftRecord CreateWorkflowDraft(
+            string WorkflowId) =>
+            CreateWorkflowDraft(
+                WorkflowId,
+                Path.GetFileNameWithoutExtension(WorkflowId),
+                "hello.yaml",
+                Path.Combine(RootDirectory, "drafts", "hello.yaml"),
+                "dir-1",
+                "Drafts",
+                "name: hello\nsteps: []\n",
                 Layout: null,
-                UpdatedAtUtc: DateTimeOffset.UtcNow));
-        }
+                DateTimeOffset.UtcNow);
 
-        public Task<StoredWorkflowFile> SaveWorkflowFileAsync(StoredWorkflowFile workflowFile, CancellationToken cancellationToken = default)
-        {
-            var existingIndex = _workflowFiles.FindIndex(item =>
-                string.Equals(item.WorkflowId, workflowFile.WorkflowId, StringComparison.Ordinal));
-            if (existingIndex >= 0)
-            {
-                _workflowFiles[existingIndex] = workflowFile;
-            }
-            else
-            {
-                _workflowFiles.Add(workflowFile);
-            }
-
-            return Task.FromResult(workflowFile);
-        }
-
-        public Task<IReadOnlyList<StoredExecutionRecord>> ListExecutionsAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<StoredExecutionRecord?> GetExecutionAsync(string executionId, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<StoredExecutionRecord> SaveExecutionAsync(StoredExecutionRecord execution, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<StoredConnectorCatalog> GetConnectorCatalogAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<StoredConnectorCatalog> SaveConnectorCatalogAsync(StoredConnectorCatalog catalog, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<StoredConnectorDraft> GetConnectorDraftAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<StoredConnectorDraft> SaveConnectorDraftAsync(StoredConnectorDraft draft, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task DeleteConnectorDraftAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<StoredRoleCatalog> GetRoleCatalogAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<StoredRoleCatalog> SaveRoleCatalogAsync(StoredRoleCatalog catalog, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<StoredRoleDraft> GetRoleDraftAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<StoredRoleDraft> SaveRoleDraftAsync(StoredRoleDraft draft, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task DeleteRoleDraftAsync(CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+        public StudioWorkflowDraftRecord CreateWorkflowDraft(
+            string WorkflowId,
+            string Name,
+            string FileName,
+            string FilePath,
+            string DirectoryId,
+            string DirectoryLabel,
+            string Yaml,
+            WorkflowLayoutDocument? Layout,
+            DateTimeOffset UpdatedAtUtc) =>
+            new(
+                WorkflowId,
+                Name,
+                FileName,
+                FilePath,
+                DirectoryId,
+                DirectoryLabel,
+                Yaml,
+                Layout,
+                UpdatedAtUtc,
+                UpdatedAtUtc,
+                Version: 1);
     }
 }

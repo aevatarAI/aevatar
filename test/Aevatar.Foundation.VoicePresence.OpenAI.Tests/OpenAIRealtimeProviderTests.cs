@@ -178,12 +178,18 @@ public class OpenAIRealtimeProviderTests
             VoiceProviderEvent.EventOneofCase.Error,
             VoiceProviderEvent.EventOneofCase.Disconnected,
         ]);
-        events[1].ResponseStarted.ResponseId.ShouldBe(1);
+        events[1].ResponseStarted.ResponseId.ShouldBe(0);
+        events[1].ResponseStarted.ProviderResponseId.ShouldBe("resp-1");
         events[2].AudioReceived.SampleRateHz.ShouldBe(24000);
-        events[3].FunctionCall.ResponseId.ShouldBe(1);
-        events[4].ResponseDone.ResponseId.ShouldBe(1);
-        events[5].ResponseStarted.ResponseId.ShouldBe(2);
-        events[6].ResponseCancelled.ResponseId.ShouldBe(2);
+        events[2].AudioReceived.ProviderResponseId.ShouldBe("resp-1");
+        events[3].FunctionCall.ResponseId.ShouldBe(0);
+        events[3].FunctionCall.ProviderResponseId.ShouldBe("resp-1");
+        events[4].ResponseDone.ResponseId.ShouldBe(0);
+        events[4].ResponseDone.ProviderResponseId.ShouldBe("resp-1");
+        events[5].ResponseStarted.ResponseId.ShouldBe(0);
+        events[5].ResponseStarted.ProviderResponseId.ShouldBe("resp-2");
+        events[6].ResponseCancelled.ResponseId.ShouldBe(0);
+        events[6].ResponseCancelled.ProviderResponseId.ShouldBe("resp-2");
         events[7].Error.ErrorCode.ShouldBe("rate_limit");
     }
 

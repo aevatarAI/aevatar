@@ -641,9 +641,6 @@ public sealed class ConversationReplyGeneratorTests
         public ILLMProvider GetDefault() => this;
         public IReadOnlyList<string> GetAvailableProviders() => [Name];
 
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default) =>
-            Task.FromResult(new LLMResponse { Content = "non-streaming path should not be used" });
-
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [EnumeratorCancellation] CancellationToken ct = default)
@@ -673,12 +670,6 @@ public sealed class ConversationReplyGeneratorTests
         public ILLMProvider GetDefault() => this;
 
         public IReadOnlyList<string> GetAvailableProviders() => [Name];
-
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default) =>
-            Task.FromResult(new LLMResponse
-            {
-                Content = "non-streaming path should not be used",
-            });
 
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
@@ -711,9 +702,6 @@ public sealed class ConversationReplyGeneratorTests
         public ILLMProvider GetDefault() => this;
 
         public IReadOnlyList<string> GetAvailableProviders() => [Name];
-
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default) =>
-            Task.FromResult(new LLMResponse { Content = "non-streaming path should not be used" });
 
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,

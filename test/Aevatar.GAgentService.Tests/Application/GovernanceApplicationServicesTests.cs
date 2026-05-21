@@ -285,16 +285,14 @@ public sealed class GovernanceApplicationServicesTests
     }
 
     [Fact]
-    public async Task ServiceGovernanceCommandApplicationService_ShouldEnsureTargetProjectionAndDispatchCommands()
+    public async Task ServiceGovernanceCommandApplicationService_ShouldDispatchCommandsWithoutProjectionPriming()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var targetProvisioner = new RecordingGovernanceCommandTargetProvisioner();
         var dispatchPort = new RecordingDispatchPort();
-        var projectionPort = new RecordingGovernanceProjectionPort();
         var service = new ServiceGovernanceCommandApplicationService(
             dispatchPort,
-            targetProvisioner,
-            projectionPort);
+            targetProvisioner);
 
         var bindingSpec = CreateServiceBindingSpec(identity, "binding-a", ServiceBindingKind.Service);
         var endpointSpec = CreateEndpointCatalogSpec(identity, "invoke");
@@ -310,7 +308,6 @@ public sealed class GovernanceApplicationServicesTests
         await service.RetirePolicyAsync(new RetireServicePolicyCommand { Identity = identity.Clone(), PolicyId = "policy-a" });
 
         targetProvisioner.ConfigurationRequests.Should().HaveCount(8);
-        projectionPort.ActorIds.Should().HaveCount(8);
         dispatchPort.Calls.Should().HaveCount(8);
         dispatchPort.Calls.Select(x => x.actorId).Should().OnlyContain(x => x == ServiceActorIds.Configuration(identity));
         dispatchPort.Calls.Select(x => x.envelope.Propagation.CorrelationId).Should().Contain($"{ServiceKeys.Build(identity)}:binding:binding-a");
@@ -328,8 +325,7 @@ public sealed class GovernanceApplicationServicesTests
         };
         var failingService = new ServiceGovernanceCommandApplicationService(
             new RecordingDispatchPort(),
-            targetProvisioner,
-            new RecordingGovernanceProjectionPort());
+            targetProvisioner);
 
         var failingProvision = () => failingService.CreateEndpointCatalogAsync(new CreateServiceEndpointCatalogCommand
         {
@@ -560,17 +556,6 @@ public sealed class GovernanceApplicationServicesTests
                 throw ConfigurationException;
 
             return Task.FromResult(ServiceActorIds.Configuration(identity));
-        }
-    }
-
-    private sealed class RecordingGovernanceProjectionPort : IServiceConfigurationProjectionPort
-    {
-        public List<string> ActorIds { get; } = [];
-
-        public Task EnsureProjectionAsync(string actorId, CancellationToken ct = default)
-        {
-            ActorIds.Add(actorId);
-            return Task.CompletedTask;
         }
     }
 

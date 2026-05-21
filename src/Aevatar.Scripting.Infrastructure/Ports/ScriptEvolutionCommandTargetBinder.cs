@@ -39,7 +39,7 @@ public sealed class ScriptEvolutionCommandTargetBinder
                     ScriptEvolutionStartError.ProjectionDisabled);
             }
 
-            var projectionLease = await _projectionPort.EnsureAndAttachAsync(
+            var attachment = await _projectionPort.EnsureAndAttachLeaseAsync(
                 token => _projectionPort.EnsureActorProjectionAsync(
                     target.SessionActorId,
                     target.ProposalId,
@@ -47,14 +47,14 @@ public sealed class ScriptEvolutionCommandTargetBinder
                 sink,
                 ct);
 
-            if (projectionLease == null)
+            if (attachment == null)
             {
                 await sink.DisposeAsync();
                 return CommandTargetBindingResult<ScriptEvolutionStartError>.Failure(
                     ScriptEvolutionStartError.ProjectionDisabled);
             }
 
-            target.BindLiveObservation(projectionLease, sink);
+            target.BindLiveObservation(attachment.ProjectionLease, attachment.LiveSinkLease, sink);
             return CommandTargetBindingResult<ScriptEvolutionStartError>.Success();
         }
         catch

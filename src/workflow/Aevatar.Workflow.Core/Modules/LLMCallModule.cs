@@ -330,24 +330,36 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         return true;
     }
 
-    private static readonly string[] PropagatedMetadataKeys =
-    [
-        LLMRequestMetadataKeys.NyxIdAccessToken,
-        LLMRequestMetadataKeys.ModelOverride,
-    ];
-
+    // Refactor (iter16/cluster-031):
+    //   Old pattern: WorkflowRunGAgent kept Dictionary<string, object?> _executionItems
+    //                bag for request metadata, LLM overrides, authorization, secure values
+    //   New principle: typed non-durable actor-owned WorkflowExecutionRuntimeContext;
+    //                  runtime-only values stay non-durable, with no proto/state migration in this cluster.
     private static void CopyPropagatedMetadata(
         IWorkflowExecutionContext ctx,
         MapField<string, string> metadata)
     {
-        foreach (var key in PropagatedMetadataKeys)
-        {
-            if (WorkflowExecutionItemsAccess.TryGetItem<string>(ctx, key, out var value) &&
-                !string.IsNullOrWhiteSpace(value))
-            {
-                metadata[key] = value;
-            }
-        }
+        if (ctx is not IWorkflowExecutionRuntimeContextAccessor runtimeAccessor)
+            return;
+
+        var overrides = runtimeAccessor.RuntimeContext.LlmOverrides;
+        CopyOverride(metadata, LLMRequestMetadataKeys.NyxIdAccessToken, overrides.NyxIdAccessToken);
+        CopyOverride(metadata, LLMRequestMetadataKeys.ModelOverride, overrides.ModelOverride);
+        CopyOverride(metadata, LLMRequestMetadataKeys.NyxIdRoutePreference, overrides.NyxIdRoutePreference);
+    }
+
+    // Refactor (iter16/cluster-031):
+    //   Old pattern: LLM override metadata was forwarded from generic execution
+    //                item values after string-key lookup.
+    //   New principle: LLM override metadata is copied from typed runtime
+    //                  override fields after blank-value filtering.
+    private static void CopyOverride(
+        MapField<string, string> metadata,
+        string key,
+        string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+            metadata[key] = value.Trim();
     }
 
     private static void CopyParametersToChatMetadata(
@@ -435,7 +447,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         };
         CopyPropagatedMetadata(ctx, chatRequest.Metadata);
         CopyParametersToChatMetadata(request.Parameters, chatRequest.Metadata);
-        WorkflowRequestMetadataItemsAccess.CopyRequestMetadata(ctx, chatRequest.Metadata);
+        WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(ctx, chatRequest.Metadata);
         var dispatchOptions = BuildDispatchOptions(dispatchDedupId);
 
         if (!target.UseSelf)

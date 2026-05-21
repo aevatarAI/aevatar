@@ -78,6 +78,21 @@ describe('buildStudioRoute', () => {
     ).toBe('/studio?scopeId=scope-1&teamId=t-alpha&tab=studio&intent=create-member');
   });
 
+  it('carries a return target for Team handoffs', () => {
+    expect(
+      buildStudioRoute({
+        scopeId: 'scope-1',
+        teamId: 't-alpha',
+        memberId: 'member-alpha',
+        step: 'build',
+        tab: 'studio',
+        returnTo: '/teams/scope-1/t-alpha?tab=members',
+      }),
+    ).toBe(
+      '/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Amember-alpha&step=build&tab=studio&returnTo=%2Fteams%2Fscope-1%2Ft-alpha%3Ftab%3Dmembers',
+    );
+  });
+
   it('drops invalid Studio intent values', () => {
     expect(
       buildStudioRoute({

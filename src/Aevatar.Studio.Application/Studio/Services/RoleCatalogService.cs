@@ -4,6 +4,9 @@ using System.Text.Json;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
+// Refactor (iter16/cluster-meta-studio-actor-substrate):
+//   Old: role catalog import/save paths were centered on local catalog files as the durable catalog.
+//   New principle: this service validates DTOs and delegates catalog facts to the injected catalog store; local files are import sources only.
 public sealed class RoleCatalogService
 {
     private readonly IRoleCatalogStore _store;

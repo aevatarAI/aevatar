@@ -188,7 +188,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
                 CancellationToken.None);
             lease.Should().NotBeNull();
             await using var sink = new EventChannel<EventEnvelope>(capacity: 32);
-            await executionProjectionNode1.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);
+            var liveSinkLease = await executionProjectionNode1.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);
 
             try
             {
@@ -232,7 +232,7 @@ public sealed class ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests
             }
             finally
             {
-                await executionProjectionNode1.DetachLiveSinkAsync(lease!, sink, CancellationToken.None);
+                await executionProjectionNode1.DetachLiveSinkAsync(liveSinkLease, CancellationToken.None);
                 await executionProjectionNode1.ReleaseActorProjectionAsync(lease!, CancellationToken.None);
             }
 

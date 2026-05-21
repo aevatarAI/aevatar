@@ -244,26 +244,28 @@ public class MakerRunReportVerificationTests
     {
         public string Name => "atomic-only";
 
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
+        private static LLMResponse BuildResponse(LLMRequest request)
         {
             var userMessage = request.Messages.LastOrDefault(x => x.Role == "user")?.Content ?? "";
             var content = Resolve(userMessage);
-            return Task.FromResult(new LLMResponse
+            return new LLMResponse
             {
                 Content = content,
                 FinishReason = "stop",
                 Usage = new TokenUsage(16, 16, 32),
-            });
+            };
         }
 
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
         {
-            var full = await ChatAsync(request, ct);
+            ct.ThrowIfCancellationRequested();
+            var full = BuildResponse(request);
             foreach (var ch in full.Content ?? "")
                 yield return new LLMStreamChunk { DeltaContent = ch.ToString() };
             yield return new LLMStreamChunk { IsLast = true, Usage = full.Usage };
+            await Task.CompletedTask;
         }
 
         public ILLMProvider GetProvider(string name) => this;

@@ -28,7 +28,7 @@ public class ChatbotClassifierGAgentTests
     }
 
     [Fact]
-    public async Task HandleChatRequest_ShouldPublishClassifierResponseFromChatAsync()
+    public async Task HandleChatRequest_ShouldPublishClassifierResponseFromStreamAggregation()
     {
         const string responseJson =
             """{"intent":"faq","intent_type":"faq","reply":"Here is the answer.","context_summary":"faq","params":{}}""";
@@ -37,7 +37,7 @@ public class ChatbotClassifierGAgentTests
         var agent = CreateAgent(
             provider,
             "chatbot-classifier-success",
-            new StubChatProviderFactory((request, ct) =>
+            new StubStreamingProviderFactory((request, ct) =>
             {
                 request.Messages.Should().NotBeEmpty();
                 ct.ThrowIfCancellationRequested();
@@ -66,13 +66,13 @@ public class ChatbotClassifierGAgentTests
     }
 
     [Fact]
-    public async Task HandleChatRequest_ShouldEmitFallbackJsonWhenChatAsyncFails()
+    public async Task HandleChatRequest_ShouldEmitFallbackJsonWhenChatStreamAsyncFails()
     {
         using var provider = AgentCoverageTestSupport.BuildServiceProvider();
         var agent = CreateAgent(
             provider,
             "chatbot-classifier-failure",
-            new StubChatProviderFactory((_, _) => throw new InvalidOperationException("synthetic failure")));
+            new StubStreamingProviderFactory((_, _) => throw new InvalidOperationException("synthetic failure")));
         var publisher = new TestRecordingEventPublisher();
         agent.EventPublisher = publisher;
 
@@ -119,5 +119,38 @@ public class ChatbotClassifierGAgentTests
 
         AgentCoverageTestSupport.AssignActorId(agent, actorId);
         return agent;
+    }
+
+    private sealed class StubStreamingProviderFactory(
+        Func<LLMRequest, CancellationToken, Task<LLMResponse>> onChatStreamAsync)
+        : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "test-provider";
+
+        public ILLMProvider GetProvider(string name)
+        {
+            _ = name;
+            return this;
+        }
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            var response = await onChatStreamAsync(request, ct);
+            if (!string.IsNullOrEmpty(response.Content))
+                yield return new LLMStreamChunk { DeltaContent = response.Content };
+
+            yield return new LLMStreamChunk
+            {
+                IsLast = true,
+                Usage = response.Usage,
+                FinishReason = response.FinishReason,
+            };
+        }
     }
 }

@@ -95,7 +95,6 @@ public sealed class MainnetResponsesEndpointsTests
         root.GetProperty("usage").GetProperty("output_tokens").GetInt32().Should().Be(2);
         root.GetProperty("usage").GetProperty("total_tokens").GetInt32().Should().Be(5);
 
-        provider.ChatCallCount.Should().Be(0);
         provider.StreamCallCount.Should().Be(1);
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.Model.Should().Be("gpt-5.4");
@@ -1630,11 +1629,7 @@ public sealed class MainnetResponsesEndpointsTests
 
         public LLMRequest? LastRequest { get; private set; }
 
-        public int ChatCallCount { get; private set; }
-
         public int StreamCallCount { get; private set; }
-
-        public LLMResponse ChatResponse { get; init; } = new() { Content = "ok" };
 
         public IReadOnlyList<LLMStreamChunk> StreamChunks { get; init; } = [];
 
@@ -1645,13 +1640,6 @@ public sealed class MainnetResponsesEndpointsTests
         public ILLMProvider GetDefault() => this;
 
         public IReadOnlyList<string> GetAvailableProviders() => [Name];
-
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            LastRequest = request;
-            ChatCallCount++;
-            return Task.FromResult(ChatResponse);
-        }
 
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,

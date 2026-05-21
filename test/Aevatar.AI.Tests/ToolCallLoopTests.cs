@@ -145,6 +145,46 @@ public class ToolCallLoopTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenLlmMiddlewareRuns_ShouldExposeStreamingContextAndAggregateProviderStream()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                Content = "stream-answer",
+                ReasoningContent = "stream-reasoning",
+                FinishReason = "stop",
+            },
+        ]);
+        bool? observedIsStreaming = null;
+        var middleware = new DelegateLlmCallMiddleware(async (context, next) =>
+        {
+            observedIsStreaming = context.IsStreaming;
+            await next();
+            context.Response.Should().NotBeNull();
+            context.Response!.Content.Should().Be("stream-answer");
+            context.Response.ReasoningContent.Should().Be("stream-reasoning");
+        });
+        var loop = new ToolCallLoop(
+            new ToolManager(),
+            hooks: null,
+            toolMiddlewares: [],
+            llmMiddlewares: [middleware]);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 1, CancellationToken.None);
+
+        result.Should().Be("stream-answer");
+        observedIsStreaming.Should().BeTrue();
+        provider.Requests.Should().HaveCount(1);
+        messages.Should().ContainSingle(m =>
+            m.Role == "assistant" &&
+            m.Content == "stream-answer" &&
+            m.ReasoningContent == "stream-reasoning");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenHookMutatesToolCall_ShouldUseMutatedNameAndArguments()
     {
         var provider = new QueueLLMProvider(
@@ -749,21 +789,33 @@ public class ToolCallLoopTests
         public string Name => "queue";
         public List<LLMRequest> Requests { get; } = [];
 
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Requests.Add(request);
-            return Task.FromResult(_responses.Count > 0 ? _responses.Dequeue() : new LLMResponse());
-        }
-
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [EnumeratorCancellation] CancellationToken ct = default)
         {
-            _ = request;
             ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            var response = _responses.Count > 0 ? _responses.Dequeue() : new LLMResponse();
+
+            if (!string.IsNullOrEmpty(response.ReasoningContent))
+                yield return new LLMStreamChunk { DeltaReasoningContent = response.ReasoningContent };
+
+            if (!string.IsNullOrEmpty(response.Content))
+                yield return new LLMStreamChunk { DeltaContent = response.Content };
+
+            if (response.ToolCalls is { Count: > 0 })
+            {
+                foreach (var toolCall in response.ToolCalls)
+                    yield return new LLMStreamChunk { DeltaToolCall = toolCall };
+            }
+
+            yield return new LLMStreamChunk
+            {
+                IsLast = true,
+                Usage = response.Usage,
+                FinishReason = response.FinishReason,
+            };
             await Task.CompletedTask;
-            yield break;
         }
     }
 

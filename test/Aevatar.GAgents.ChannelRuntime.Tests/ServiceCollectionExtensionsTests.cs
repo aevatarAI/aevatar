@@ -1,4 +1,6 @@
 using Aevatar.AI.ToolProviders.Channel;
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
@@ -32,6 +34,13 @@ public sealed class ServiceCollectionExtensionsTests
         result.Should().BeSameAs(services);
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ProjectionScopeStatusDocument>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionDocumentReader<ProjectionScopeStatusDocument, string>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionScopeWatermarkQueryPort) &&
+            descriptor.ImplementationType == typeof(ProjectionScopeStatusQueryPort));
         services.Should().NotContain(descriptor =>
             descriptor.ServiceType.Name.Contains("AevatarSecretsStore", StringComparison.Ordinal));
         services.Should().Contain(descriptor =>
@@ -40,14 +49,17 @@ public sealed class ServiceCollectionExtensionsTests
             descriptor.ServiceType == typeof(IChannelBotRegistrationQueryByNyxIdentityPort));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(INyxIdRelayScopeResolver));
-        services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(INyxIdRelayReplayGuard));
+        services.Any(descriptor =>
+                descriptor.ServiceType.FullName is { } name &&
+                name.Contains("NyxIdRelayReplayGuard", StringComparison.Ordinal))
+            .Should().BeFalse();
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(ChannelBotRegistrationStartupService));
-        services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(IHostedService) &&
-            descriptor.ImplementationType == typeof(LarkConversationInboxHostedService));
+        // Refactor (iter20/cluster-003):
+        //   Old pattern: Lark-local durable inbox subscriber worker stream path(orphan)
+        //   New principle: delete orphan path,NyxID relay 唯一 ingress
+        AssertNoRetiredLarkConversationInboxRegistration(services);
         registry.Get(ChannelId.From("lark")).Should().BeOfType<LarkMessageComposer>();
         services.Count(descriptor => descriptor.ServiceType == typeof(IPlatformAdapter))
             .Should().Be(0);
@@ -98,6 +110,13 @@ public sealed class ServiceCollectionExtensionsTests
         result.Should().BeSameAs(services);
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionDocumentMetadataProvider<ProjectionScopeStatusDocument>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionDocumentReader<ProjectionScopeStatusDocument, string>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionScopeWatermarkQueryPort) &&
+            descriptor.ImplementationType == typeof(ProjectionScopeStatusQueryPort));
         services.Should().NotContain(descriptor =>
             descriptor.ServiceType.Name.Contains("AevatarSecretsStore", StringComparison.Ordinal));
         services.Should().Contain(descriptor =>
@@ -106,16 +125,27 @@ public sealed class ServiceCollectionExtensionsTests
             descriptor.ServiceType == typeof(IChannelBotRegistrationQueryByNyxIdentityPort));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(INyxIdRelayScopeResolver));
-        services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(INyxIdRelayReplayGuard));
+        services.Any(descriptor =>
+                descriptor.ServiceType.FullName is { } name &&
+                name.Contains("NyxIdRelayReplayGuard", StringComparison.Ordinal))
+            .Should().BeFalse();
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(ChannelBotRegistrationStartupService));
-        services.Should().Contain(descriptor =>
-            descriptor.ServiceType == typeof(IHostedService) &&
-            descriptor.ImplementationType == typeof(LarkConversationInboxHostedService));
+        AssertNoRetiredLarkConversationInboxRegistration(services);
         registry.Get(ChannelId.From("lark")).Should().BeOfType<LarkMessageComposer>();
         services.Should().NotContain(descriptor =>
             descriptor.ServiceType.Name.Contains("ChannelBotDirectCallbackBinding", StringComparison.Ordinal));
     }
+
+    private static void AssertNoRetiredLarkConversationInboxRegistration(IServiceCollection services)
+    {
+        services.Any(descriptor =>
+            ContainsLarkConversationInboxName(descriptor.ServiceType.FullName) ||
+            ContainsLarkConversationInboxName(descriptor.ImplementationType?.FullName))
+            .Should().BeFalse();
+    }
+
+    private static bool ContainsLarkConversationInboxName(string? name) =>
+        name is not null && name.Contains("LarkConversationInbox", StringComparison.Ordinal);
 }

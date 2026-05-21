@@ -1,0 +1,62 @@
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Workflow.Core;
+
+namespace Aevatar.Workflow.Projection.Orchestration;
+
+/// <summary>
+/// Maps workflow committed state events to existing durable projection scopes.
+/// </summary>
+// Refactor (iter18/cluster-006):
+//   Old pattern: command-path projection activation facade with new actor/lifecycle phase
+//   New principle: committed-state publication hook activates existing projection scopes; no new actor/lifecycle phase
+public sealed class WorkflowCommittedStateProjectionActivationPlanProvider : IProjectionActivationPlanProvider
+{
+    // Refactor (iter18/cluster-006):
+    //   Old pattern: command-path projection activation facade with new actor/lifecycle phase
+    //   New principle: committed-state publication hook activates existing projection scopes; no new actor/lifecycle phase
+    public IEnumerable<ProjectionActivationPlan> GetPlans(CommittedStatePublicationContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (context.Published.StateEvent?.EventData == null)
+            yield break;
+
+        if (context.ActorType == typeof(WorkflowGAgent) &&
+            context.Published.StateEvent.EventData.Is(BindWorkflowDefinitionEvent.Descriptor))
+        {
+            yield return DurablePlan<WorkflowBindingRuntimeLease>(
+                context.ActorId,
+                WorkflowProjectionKinds.Binding);
+            yield break;
+        }
+
+        if (context.ActorType != typeof(WorkflowRunGAgent))
+            yield break;
+
+        if (context.Published.StateEvent.EventData.Is(BindWorkflowRunDefinitionEvent.Descriptor))
+        {
+            yield return DurablePlan<WorkflowBindingRuntimeLease>(
+                context.ActorId,
+                WorkflowProjectionKinds.Binding);
+        }
+
+        yield return DurablePlan<WorkflowExecutionMaterializationRuntimeLease>(
+            context.ActorId,
+            WorkflowProjectionKinds.ExecutionMaterialization);
+    }
+
+    private static ProjectionActivationPlan DurablePlan<TLease>(
+        string actorId,
+        string projectionKind)
+        where TLease : class, IProjectionRuntimeLease =>
+        new()
+        {
+            LeaseType = typeof(TLease),
+            StartRequest = new ProjectionScopeStartRequest
+            {
+                RootActorId = actorId,
+                ProjectionKind = projectionKind,
+                Mode = ProjectionRuntimeMode.DurableMaterialization,
+            },
+        };
+}
