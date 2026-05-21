@@ -223,6 +223,10 @@ message StudioTeamCurrentStateDocument {
 
   // ── Aggregate (derived from StudioTeamState.member_ids.size()). ──
   int32 member_count = 30;
+
+  // Optional team-owned entry member selection. Binding readiness and
+  // published service identity stay on StudioMemberCurrentStateDocument.
+  optional string entry_member_id = 40;
 }
 
 // ─── StudioWorkspace Current State ReadModel ───

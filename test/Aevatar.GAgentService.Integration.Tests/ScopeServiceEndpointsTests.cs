@@ -37,6 +37,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
@@ -2047,6 +2048,140 @@ public sealed class ScopeServiceEndpointsTests
     }
 
     [Fact]
+    public async Task TeamInvokeStreamEndpoint_ShouldResolveEntryMemberAndDelegateToWorkflowPipeline()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.TeamEntryMemberResolver.Result = new TeamEntryMemberResolution(
+            "scope-a",
+            "team-a",
+            "member-a",
+            "member-a");
+        var service = BuildService("scope-a", "member-a", "definition-actor-member-a");
+        host.ServiceCatalogReader.Service = service;
+        host.TrafficViewReader.View = new ServiceTrafficViewSnapshot(
+            service.ServiceKey,
+            1,
+            string.Empty,
+            [
+                new ServiceTrafficEndpointSnapshot(
+                    "chat",
+                    [
+                        new ServiceTrafficTargetSnapshot(
+                            "dep-team-member-a-1",
+                            "rev-team-member-a-1",
+                            "definition-actor-member-a",
+                            100,
+                            ServiceServingState.Active.ToString()),
+                    ]),
+            ],
+            DateTimeOffset.UtcNow);
+        await host.ArtifactStore.SaveAsync(
+            service.ServiceKey,
+            "rev-team-member-a-1",
+            new PreparedServiceRevisionArtifact
+            {
+                Identity = new ServiceIdentity
+                {
+                    TenantId = "scope-a",
+                    AppId = "default",
+                    Namespace = "default",
+                    ServiceId = "member-a",
+                },
+                RevisionId = "rev-team-member-a-1",
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                Endpoints =
+                {
+                    new ServiceEndpointDescriptor
+                    {
+                        EndpointId = "chat",
+                        DisplayName = "chat",
+                        Kind = ServiceEndpointKind.Chat,
+                        RequestTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                        ResponseTypeUrl = Any.Pack(new ChatResponseEvent()).TypeUrl,
+                    },
+                },
+                DeploymentPlan = new ServiceDeploymentPlan
+                {
+                    WorkflowPlan = new WorkflowServiceDeploymentPlan
+                    {
+                        WorkflowName = "member-a",
+                        WorkflowYaml = "name: member_a\nsteps:\n  - run: echo member",
+                        DefinitionActorId = "definition-actor-member-a",
+                    },
+                },
+            },
+            CancellationToken.None);
+        host.InteractionService.ResultFactory = async (request, emitAsync, onAcceptedAsync, ct) =>
+        {
+            var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-team-a", "member-a", "cmd-team-a", "corr-team-a");
+            if (onAcceptedAsync != null)
+                await onAcceptedAsync(receipt, ct);
+            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+        };
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/teams/team-a/invoke/chat:stream", new
+        {
+            prompt = "hello team",
+            headers = new Dictionary<string, string> { ["channel"] = "team-tests" },
+        });
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
+        body.Should().Contain("aevatar.run.context");
+        host.TeamEntryMemberResolver.Calls.Should().ContainSingle().Which.Should().Be(("scope-a", "team-a"));
+        host.InteractionService.LastRequest.Should().NotBeNull();
+        host.InteractionService.LastRequest!.ActorId.Should().Be("definition-actor-member-a");
+        host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
+        host.InteractionService.LastRequest.Metadata.Should().ContainKey("channel").WhoseValue.Should().Be("team-tests");
+    }
+
+    [Fact]
+    public async Task TeamInvokeStreamEndpoint_ShouldMapMissingEntryToConflict()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.TeamEntryMemberResolver.Exception = new TeamEntryMemberResolutionException(
+            TeamEntryMemberErrorCodes.EntryMemberNotConfigured,
+            "scope-a",
+            "team-a",
+            "team 'team-a' has no entry member configured.");
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/teams/team-a/invoke/chat:stream", new
+        {
+            prompt = "hello team",
+        });
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be(TeamEntryMemberErrorCodes.EntryMemberNotConfigured);
+        host.InteractionService.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task TeamInvokeStreamEndpoint_ShouldReturnForbiddenBeforeResolvingEntry_WhenScopeClaimDoesNotMatch()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        using var request = CreateAuthenticatedJsonRequest(
+            HttpMethod.Post,
+            "/api/scopes/scope-a/teams/team-a/invoke/chat:stream",
+            new
+            {
+                prompt = "hello team",
+            },
+            "scope-b");
+
+        var response = await host.Client.SendAsync(request);
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("SCOPE_ACCESS_DENIED");
+        host.TeamEntryMemberResolver.Calls.Should().BeEmpty();
+        host.InteractionService.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task InvokeStreamEndpoint_WhenAuthenticationIsDisabled_ShouldExecuteExplicitServiceFlowWithoutClaims()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync(authenticationEnabled: false);
@@ -2435,6 +2570,83 @@ public sealed class ScopeServiceEndpointsTests
             ServiceId = "member-a",
         });
         host.InvocationPort.LastRequest.EndpointId.Should().Be("chat");
+    }
+
+    [Fact]
+    public async Task TeamInvokeEndpoint_ShouldMapTeamEntryToPublishedServiceIdentity()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.TeamEntryMemberResolver.Result = new TeamEntryMemberResolution(
+            "scope-a",
+            "team-a",
+            "member-a",
+            "member-a");
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/teams/team-a/invoke/chat", new
+        {
+            payloadTypeUrl = "type.googleapis.com/google.protobuf.Empty",
+            payloadBase64 = "",
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.Headers.Location.Should().NotBeNull();
+        response.Headers.Location!.OriginalString.Should().Be("/api/scopes/scope-a/teams/team-a");
+        host.TeamEntryMemberResolver.Calls.Should().ContainSingle().Which.Should().Be(("scope-a", "team-a"));
+        host.InvocationPort.LastRequest.Should().NotBeNull();
+        host.InvocationPort.LastRequest!.Identity.Should().BeEquivalentTo(new ServiceIdentity
+        {
+            TenantId = "scope-a",
+            AppId = "default",
+            Namespace = "default",
+            ServiceId = "member-a",
+        });
+        host.InvocationPort.LastRequest.EndpointId.Should().Be("chat");
+    }
+
+    [Fact]
+    public async Task TeamInvokeEndpoint_ShouldMapMissingTeamToNotFound()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.TeamEntryMemberResolver.Exception = new TeamEntryMemberResolutionException(
+            TeamEntryMemberErrorCodes.TeamNotFound,
+            "scope-a",
+            "team-missing",
+            "team 'team-missing' not found.");
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/teams/team-missing/invoke/chat", new
+        {
+            payloadTypeUrl = "type.googleapis.com/google.protobuf.Empty",
+            payloadBase64 = "",
+        });
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be(TeamEntryMemberErrorCodes.TeamNotFound);
+        host.InvocationPort.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task TeamInvokeEndpoint_ShouldMapEntryMemberFailureToConflict()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.TeamEntryMemberResolver.Exception = new TeamEntryMemberResolutionException(
+            TeamEntryMemberErrorCodes.EntryMemberNotReady,
+            "scope-a",
+            "team-a",
+            "entry member 'member-a' is not bind-ready.");
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/teams/team-a/invoke/chat", new
+        {
+            payloadTypeUrl = "type.googleapis.com/google.protobuf.Empty",
+            payloadBase64 = "",
+        });
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be(TeamEntryMemberErrorCodes.EntryMemberNotReady);
+        host.InvocationPort.LastRequest.Should().BeNull();
     }
 
     [Fact]
@@ -4134,6 +4346,7 @@ public sealed class ScopeServiceEndpointsTests
             FakeServiceCatalogQueryReader serviceCatalogReader,
             FakeServiceTrafficViewQueryReader trafficViewReader,
             FakeServiceRevisionArtifactStore artifactStore,
+            FakeTeamEntryMemberResolver teamEntryMemberResolver,
             FakeCommandInteractionService interactionService,
             FakeWorkflowExecutionQueryApplicationService workflowQueryService,
             FakeWorkflowRunBindingReader runBindingReader,
@@ -4155,6 +4368,7 @@ public sealed class ScopeServiceEndpointsTests
             ServiceCatalogReader = serviceCatalogReader;
             TrafficViewReader = trafficViewReader;
             ArtifactStore = artifactStore;
+            TeamEntryMemberResolver = teamEntryMemberResolver;
             InteractionService = interactionService;
             WorkflowQueryService = workflowQueryService;
             RunBindingReader = runBindingReader;
@@ -4166,6 +4380,14 @@ public sealed class ScopeServiceEndpointsTests
         }
 
         public HttpClient Client { get; }
+
+        public IReadOnlyList<string> RoutePatterns => ((IEndpointRouteBuilder)_app).DataSources
+            .SelectMany(x => x.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Select(x => x.RoutePattern.RawText)
+            .Where(x => x != null)
+            .Select(x => x!)
+            .ToList();
 
         public RecordingServiceGovernanceCommandPort CommandPort { get; }
 
@@ -4186,6 +4408,8 @@ public sealed class ScopeServiceEndpointsTests
         public FakeServiceTrafficViewQueryReader TrafficViewReader { get; }
 
         public FakeServiceRevisionArtifactStore ArtifactStore { get; }
+
+        public FakeTeamEntryMemberResolver TeamEntryMemberResolver { get; }
 
         public FakeCommandInteractionService InteractionService { get; }
 
@@ -4222,6 +4446,7 @@ public sealed class ScopeServiceEndpointsTests
             var serviceCatalogReader = new FakeServiceCatalogQueryReader();
             var trafficViewReader = new FakeServiceTrafficViewQueryReader();
             var artifactStore = new FakeServiceRevisionArtifactStore();
+            var teamEntryMemberResolver = new FakeTeamEntryMemberResolver();
             var interactionService = new FakeCommandInteractionService();
             var gagentDraftRunInteractionService = new FakeGAgentDraftRunInteractionService();
             var scriptRuntimeCommandPort = new NoOpScriptRuntimeCommandPort();
@@ -4258,6 +4483,7 @@ public sealed class ScopeServiceEndpointsTests
             builder.Services.AddSingleton<IServiceCatalogQueryReader>(serviceCatalogReader);
             builder.Services.AddSingleton<IServiceTrafficViewQueryReader>(trafficViewReader);
             builder.Services.AddSingleton<IServiceRevisionArtifactStore>(artifactStore);
+            builder.Services.AddSingleton<ITeamEntryMemberResolver>(teamEntryMemberResolver);
             builder.Services.AddSingleton<ServiceInvocationResolutionService>();
             builder.Services.AddSingleton<IInvokeAdmissionAuthorizer, AllowAllInvokeAdmissionAuthorizer>();
             builder.Services.AddSingleton<ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>(interactionService);
@@ -4375,6 +4601,7 @@ public sealed class ScopeServiceEndpointsTests
                 serviceCatalogReader,
                 trafficViewReader,
                 artifactStore,
+                teamEntryMemberResolver,
                 interactionService,
                 workflowQueryService,
                 runBindingReader,
@@ -4726,6 +4953,28 @@ public sealed class ScopeServiceEndpointsTests
                 LastEventId: binding.SourceEventId ?? string.Empty,
                 CreatedAt: binding.CreatedAt ?? DateTimeOffset.UtcNow,
                 UpdatedAt: binding.UpdatedAt ?? DateTimeOffset.UtcNow);
+    }
+
+    private sealed class FakeTeamEntryMemberResolver : ITeamEntryMemberResolver
+    {
+        public List<(string ScopeId, string TeamId)> Calls { get; } = [];
+
+        public TeamEntryMemberResolution Result { get; set; } =
+            new("scope-a", "team-a", "member-a", "member-a");
+
+        public TeamEntryMemberResolutionException? Exception { get; set; }
+
+        public Task<TeamEntryMemberResolution> ResolveAsync(
+            string scopeId,
+            string teamId,
+            CancellationToken ct = default)
+        {
+            Calls.Add((scopeId, teamId));
+            if (Exception != null)
+                throw Exception;
+
+            return Task.FromResult(Result);
+        }
     }
 
     private sealed class RecordingServiceInvocationPort : IServiceInvocationPort

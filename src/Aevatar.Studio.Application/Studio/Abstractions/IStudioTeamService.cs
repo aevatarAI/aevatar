@@ -35,6 +35,17 @@ public interface IStudioTeamService
         string scopeId,
         string teamId,
         CancellationToken ct = default);
+
+    Task SetEntryMemberAsync(
+        string scopeId,
+        string teamId,
+        SetStudioTeamEntryMemberRequest request,
+        CancellationToken ct = default);
+
+    Task ClearEntryMemberAsync(
+        string scopeId,
+        string teamId,
+        CancellationToken ct = default);
 }
 
 /// <summary>

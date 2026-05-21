@@ -22,6 +22,7 @@ using Aevatar.GAgentService.Hosting.Demo;
 using Aevatar.GAgentService.Governance.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Projection.ReadModels;
+using Aevatar.Presentation.AGUI;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Scripting.Hosting.DependencyInjection;
@@ -72,6 +73,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceLifecycleQueryPort, ServiceLifecycleQueryApplicationService>();
         services.TryAddSingleton<IServiceServingQueryPort, ServiceServingQueryApplicationService>();
         services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
+        services.TryAddSingleton<IStaticGAgentStreamInvocationPort<AGUIEvent>, StaticGAgentStreamInvocationApplicationService>();
         services.AddScopeGAgentDraftRunInteraction();
         services.AddOptions<ScopeWorkflowCapabilityOptions>()
             .Bind(configuration.GetSection(ScopeWorkflowCapabilityOptions.SectionName));
@@ -81,6 +83,10 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScopeBindingCommandPort, ScopeBindingCommandApplicationService>();
         services.TryAddSingleton<IScopeBindingReadinessQueryPort, ScopeBindingReadinessQueryService>();
         services.TryAddSingleton<IMemberPublishedServiceResolver, DefaultMemberPublishedServiceResolver>();
+        // Transitional platform fallback. It is replaced by Studio's
+        // actor-readmodel resolver when Studio is registered, and should be
+        // removed once Team authority no longer lives in GAgentService.
+        services.TryAddSingleton<ITeamEntryMemberResolver, DefaultTeamEntryMemberResolver>();
         services.AddOptions<ScopeScriptCapabilityOptions>()
             .Bind(configuration.GetSection(ScopeScriptCapabilityOptions.SectionName));
         services.TryAddSingleton<ScopeScriptQueryApplicationService>();
