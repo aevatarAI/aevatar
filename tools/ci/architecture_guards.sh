@@ -660,6 +660,18 @@ if rg -n "Dictionary<|ConcurrentDictionary<|HashSet<|Queue<" src/workflow/Aevata
   exit 1
 fi
 
+tool_context_metadata_hits="$(
+  rg -n "AgentToolRequestContext\\.(CurrentMetadata|TryGet\\()" src agents \
+    -g '*.cs' \
+    -g '!src/Aevatar.AI.Abstractions/ToolProviders/AgentToolRequestContext.cs' || true
+)"
+
+if [ -n "${tool_context_metadata_hits}" ]; then
+  echo "${tool_context_metadata_hits}"
+  echo "Agent tool control facts must use typed AgentToolExecutionContext accessors. CurrentMetadata/TryGet are legacy mapper shims only."
+  exit 1
+fi
+
 transition_override_without_matcher=""
 while IFS= read -r transition_file; do
   [ -z "${transition_file}" ] && continue

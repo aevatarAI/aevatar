@@ -25,7 +25,7 @@ public sealed class NyxIdNativeCallerScopeResolver : ICallerScopeResolver
 
     public async Task<OwnerScope?> TryResolveAsync(CancellationToken ct = default)
     {
-        var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
+        var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
         {
             // Not authenticated; the upstream tool layer should already have rejected the

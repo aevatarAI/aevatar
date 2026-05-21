@@ -307,7 +307,8 @@ public sealed class ConversationReplyGeneratorTests
 
         var request = providerFactory.Requests.Should().ContainSingle().Subject;
         request.Metadata.Should().NotBeNull();
-        var metadata = request.Metadata!;
+        request.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+        var metadata = request.ToolContext!.ToLegacyMetadata();
         // Sender's model wins (non-empty).
         metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("sender-model");
         // Sender left route blank → owner's upstream-pinned route stays.
@@ -344,7 +345,8 @@ public sealed class ConversationReplyGeneratorTests
 
         var request = providerFactory.Requests.Should().ContainSingle().Subject;
         request.Metadata.Should().NotBeNull();
-        var metadata = request.Metadata!;
+        request.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+        var metadata = request.ToolContext!.ToLegacyMetadata();
         metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("owner-only-model");
         metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("owner-route");
         metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("4");
@@ -381,7 +383,8 @@ public sealed class ConversationReplyGeneratorTests
 
         var request = providerFactory.Requests.Should().ContainSingle().Subject;
         request.Metadata.Should().NotBeNull();
-        var metadata = request.Metadata!;
+        request.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+        var metadata = request.ToolContext!.ToLegacyMetadata();
         metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("owner-fallback-model");
         metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("owner-route");
         metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("5");
@@ -428,7 +431,9 @@ public sealed class ConversationReplyGeneratorTests
 
         reply.Text.Should().Be("ok");
         providerFactory.Requests.Should().HaveCount(2);
-        var senderMetadata = providerFactory.Requests[0].Metadata!;
+        var senderRequest = providerFactory.Requests[0];
+        senderRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+        var senderMetadata = senderRequest.ToolContext!.ToLegacyMetadata();
         senderMetadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("sender-model");
         senderMetadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/api/v1/proxy/s/sender");
         senderMetadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("7");
@@ -436,7 +441,9 @@ public sealed class ConversationReplyGeneratorTests
         senderMetadata[LLMRequestMetadataKeys.NyxIdOrgToken].Should().Be("sender-token");
         senderMetadata.Should().NotContainKey(LLMRequestMetadataKeys.SenderNyxIdAccessToken);
 
-        var ownerMetadata = providerFactory.Requests[1].Metadata!;
+        var ownerRequest = providerFactory.Requests[1];
+        ownerRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+        var ownerMetadata = ownerRequest.ToolContext!.ToLegacyMetadata();
         ownerMetadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("owner-model");
         ownerMetadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/api/v1/proxy/s/owner");
         ownerMetadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("5");
@@ -481,7 +488,9 @@ public sealed class ConversationReplyGeneratorTests
             streamingSink: null,
             CancellationToken.None);
 
-        var ownerMetadata = providerFactory.Requests.Should().ContainSingle().Subject.Metadata!;
+        var ownerRequest = providerFactory.Requests.Should().ContainSingle().Subject;
+        ownerRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+        var ownerMetadata = ownerRequest.ToolContext!.ToLegacyMetadata();
         ownerMetadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("owner-model");
         ownerMetadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/api/v1/proxy/s/owner");
         ownerMetadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("5");
@@ -573,7 +582,8 @@ public sealed class ConversationReplyGeneratorTests
             CancellationToken.None);
 
         var request = providerFactory.Requests.Should().ContainSingle().Subject;
-        var effective = request.Metadata!;
+        request.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
+        var effective = request.ToolContext!.ToLegacyMetadata();
 
         AssertKey(effective, LLMRequestMetadataKeys.ModelOverride, expectedModel);
         AssertKey(effective, LLMRequestMetadataKeys.NyxIdRoutePreference, expectedRoute);

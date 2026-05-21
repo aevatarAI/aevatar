@@ -1,15 +1,12 @@
-# Fix report for PR 773 round 1
+# Fix report for PR 781 round 2
 
 ## Applied
-- (A) `src/Aevatar.AI.Core/RoleGAgent.cs:211`: bounded the remote approval lifecycle by persisting a 45s default deadline when NyxID does not return one, and by deriving a max status-check attempt count from the 2s interval plus 45s window (addresses reviewer:architect evidence #1 and #2).
-- (A) `src/Aevatar.AI.Core/RoleGAgent.cs:305`: terminally fails and clears pending approval with `approval_timeout` once a `Pending` or `Unknown` status reaches the persisted deadline or max attempt count, while preserving stale-event checks for `request_id + session_id + remote_approval_id + attempt` (addresses reviewer:architect evidence #1).
-- (A) `src/Aevatar.AI.Core/RoleGAgent.cs:953`: deleted the now-dead `ResolveApprovalTerminalReasonCode` helper after explicit timeout/denied branches replaced its only old caller (addresses reviewer:quality evidence #1).
-- (A) `src/Aevatar.AI.Abstractions/ai_messages.proto:146`: removed and reserved `remote_status_check_callback_id` from `PendingToolApprovalState`; production still builds the scheduler callback id locally from request/remote/attempt and no longer persists unused state surface (addresses reviewer:quality evidence #2).
-- (A) `src/Aevatar.AI.Abstractions/ai_messages.proto:171`: removed and reserved `status_check_callback_id` from `RemoteToolApprovalSubmittedEvent`, then removed all test assertions and production assignments for that unused event field (addresses reviewer:quality evidence #2).
-- (A) `test/Aevatar.AI.Tests/RoleGAgentStateCoverageTests.cs:391`: added submit-exception coverage proving remote submit failure persists an `approval_timeout` terminal result and clears pending approval (addresses reviewer:tests evidence #1).
-- (A) `test/Aevatar.AI.Tests/RoleGAgentStateCoverageTests.cs:465`: added status-callback missing-port coverage proving the callback branch persists timeout failure and clears pending approval (addresses reviewer:tests evidence #2).
-- (A) `test/Aevatar.AI.Tests/RoleGAgentStateCoverageTests.cs:496`: added status-exception coverage proving `GetStatusAsync` exceptions become `Unknown`, preserve pending approval binding, advance exactly one attempt, and schedule exactly one next durable self-check (addresses reviewer:tests evidence #3).
-- (A) `test/Aevatar.AI.Tests/RoleGAgentStateCoverageTests.cs:536`: added max-attempt `Unknown` coverage proving unending unknown status terminally times out, clears pending approval, and does not schedule another callback (addresses reviewer:architect evidence #1 and reviewer:tests evidence #3).
+- (A) `src/Aevatar.AI.Abstractions/ToolProviders/AgentToolExecutionContextMapper.cs:74`: extracted `FromRequestWithCallId(...)` so the typed-context fallback plus call-id rule has one implementation (addresses reviewer:quality evidence #1).
+- (A) `src/Aevatar.AI.Core/Chat/ChatRuntime.cs:240`, `src/Aevatar.AI.Core/Chat/ChatRuntime.cs:423`, `src/Aevatar.AI.Core/Tools/ToolCallLoop.cs:88`, `src/Aevatar.AI.Core/Tools/ToolCallLoop.cs:218`: replaced the four repeated `(ToolContext ?? FromRequest).WithCallId(...)` call-building sites with the shared mapper helper (addresses reviewer:quality evidence #1).
+- (A) `src/Aevatar.AI.Core/Chat/ChatRuntime.cs:455`: final no-tools DSML fallback now passes `finalRequest.ToolContext` into `StreamingToolExecutor`, so typed control facts survive after owned metadata keys are stripped (addresses reviewer:tests evidence #1).
+- (A) `src/Aevatar.AI.Core/Chat/ChatRuntime.cs:471`: summary request now carries the same `CallerContext`, `ToolContext`, and `RoutingContext` as the final request, preserving the typed request contract through the post-tool summary call (addresses reviewer:tests evidence #1).
+- (A) `src/Aevatar.AI.Core/Tools/StreamingToolExecutor.cs:53`: executor construction now prefers explicit typed context, then current scoped typed context, and only falls back to legacy metadata decoding at the boundary (addresses reviewer:architect evidence #3 and reviewer:tests evidence #1).
+- (B) `test/Aevatar.AI.Tests/ChatRuntimeStreamingBufferTests.cs:300`: SCOPE_EXTEND reason: the reject blocks consensus and this existing test file is the behavior surface for the cited final no-tools DSML `ChatRuntime` branch. Added a regression test proving final DSML tools receive typed `NyxIdAccessToken`, `ScopeId`, `CallId`, and channel message id while provider metadata remains stripped (addresses reviewer:tests evidence #1-#2).
 
 ## Rejected as false positive
 - None.
@@ -18,9 +15,9 @@
 - None.
 
 ## Build status
-- build: pass (`dotnet build aevatar.slnx --nologo 2>&1 | tail -20`; 0 errors, existing warnings only).
-- tests: pass (`dotnet test test/Aevatar.AI.Tests/Aevatar.AI.Tests.csproj --nologo --no-build 2>&1 | tail -10`; 585 passed, 0 failed, 0 skipped).
-- guard: pass (`bash tools/ci/test_stability_guards.sh`).
+- build: pass (`dotnet build aevatar.slnx --nologo 2>&1 | tail -20`, 48 existing warnings, 0 errors)
+- tests: pass (`dotnet test test/Aevatar.AI.Tests/Aevatar.AI.Tests.csproj --nologo --no-build --filter "FullyQualifiedName~ChatRuntimeStreamingBufferTests|FullyQualifiedName~AgentToolExecutionContextMapperTests" 2>&1 | tail -10`, 28 passed)
+- guards: pass (`bash tools/ci/test_stability_guards.sh`; `bash tools/ci/architecture_guards.sh`)
 
 ## Recommendation for next round
 - expect unanimous

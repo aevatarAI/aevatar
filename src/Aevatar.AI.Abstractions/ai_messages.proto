@@ -27,8 +27,63 @@ message ChatRequestEvent  {
   string scope_id = 5;
   repeated ChatContentPart input_parts = 6;
   map<string, string> metadata = 7;
+  AgentToolExecutionContextPayload tool_context = 8;
 }
 message ChatResponseEvent { string content = 1; string session_id = 2; }
+
+// Refactor (iter24/cluster-002-agent-tool-context-generic-metadata-bag):
+//   Old pattern: tool credentials, caller, routing and channel facts lived in Metadata.
+//   New principle: tool control semantics are typed context fields; Metadata is not the internal control plane.
+message AgentToolExecutionContextPayload {
+  AgentToolRequestIdentityPayload request = 1;
+  AgentToolCredentialsPayload credentials = 2;
+  AgentToolCallerContextPayload caller = 3;
+  AgentToolChannelContextPayload channel = 4;
+  AgentToolSenderBindingContextPayload sender_binding = 5;
+  LLMRequestRoutingContextPayload routing = 6;
+  AgentToolConnectedServicesContextPayload connected_services = 7;
+  map<string, string> external_metadata = 8;
+}
+
+message AgentToolRequestIdentityPayload {
+  string request_id = 1;
+  string call_id = 2;
+}
+
+message AgentToolCredentialsPayload {
+  string nyx_id_access_token = 1;
+  string nyx_id_org_token = 2;
+  string sender_nyx_id_access_token = 3;
+}
+
+message AgentToolCallerContextPayload {
+  string scope_id = 1;
+  string owner_subject = 2;
+  string response_id = 3;
+}
+
+message AgentToolChannelContextPayload {
+  string platform = 1;
+  string sender_id = 2;
+  string registration_scope_id = 3;
+  string message_id = 4;
+  string platform_message_id = 5;
+}
+
+message AgentToolSenderBindingContextPayload {
+  string binding_id = 1;
+}
+
+message LLMRequestRoutingContextPayload {
+  string model_override = 1;
+  string nyx_id_route_preference = 2;
+  optional int32 max_tool_rounds_override = 3;
+  string user_memory_prompt = 4;
+}
+
+message AgentToolConnectedServicesContextPayload {
+  string context_json = 1;
+}
 
 message TextMessageStartEvent   { string session_id = 1; string agent_id = 2; }
 message TextMessageContentEvent { string delta = 1; string session_id = 2; }

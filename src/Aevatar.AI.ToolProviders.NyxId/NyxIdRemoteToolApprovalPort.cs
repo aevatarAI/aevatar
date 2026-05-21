@@ -73,7 +73,7 @@ public sealed class NyxIdRemoteToolApprovalPort : IRemoteToolApprovalPort
     {
         return items.TryGetValue(LLMRequestMetadataKeys.NyxIdAccessToken, out var token)
             ? token
-            : AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
+            : AgentToolRequestContext.NyxIdAccessToken;
     }
 
     private static RemoteToolApprovalStatus MapStatus(string? status)
