@@ -1,6 +1,7 @@
 import {
   buildTeamCreateHref,
   buildTeamDetailHref,
+  buildTeamStudioHref,
   buildTeamsHref,
   readTeamDetailRouteState,
 } from "./teamRoutes";
@@ -15,10 +16,10 @@ describe("teamRoutes", () => {
         workflowId: "workflow-1",
         serviceId: "service-1",
         runId: "run-1",
-        tab: "events",
+        tab: "members",
       }),
     ).toBe(
-      "/teams/scope-alpha/t-alpha?memberId=member-alpha&workflowId=workflow-1&tab=events&serviceId=service-1&runId=run-1",
+      "/teams/scope-alpha/t-alpha?memberId=member-alpha&workflowId=workflow-1&tab=members&serviceId=service-1&runId=run-1",
     );
   });
 
@@ -39,6 +40,31 @@ describe("teamRoutes", () => {
         serviceId: "service-1",
       }),
     ).toBe("/teams?scopeId=scope-alpha");
+  });
+
+  it("builds a Team-scoped Studio create-member handoff", () => {
+    expect(
+      buildTeamStudioHref({
+        mode: "create-member",
+        scopeId: " scope-alpha ",
+        teamId: " t-alpha ",
+      }),
+    ).toBe(
+      "/studio?scopeId=scope-alpha&teamId=t-alpha&tab=studio&intent=create-member&returnTo=%2Fteams%2Fscope-alpha%2Ft-alpha%3Ftab%3Dmembers",
+    );
+  });
+
+  it("builds a Team-scoped Studio member build handoff", () => {
+    expect(
+      buildTeamStudioHref({
+        memberId: " member-alpha ",
+        mode: "build-member",
+        scopeId: "scope-alpha",
+        teamId: "t-alpha",
+      }),
+    ).toBe(
+      "/studio?scopeId=scope-alpha&teamId=t-alpha&member=member%3Amember-alpha&step=build&returnTo=%2Fteams%2Fscope-alpha%2Ft-alpha%3FmemberId%3Dmember-alpha%26tab%3Dmembers",
+    );
   });
 
   it("preserves draft team names when returning to the create page", () => {
@@ -84,22 +110,25 @@ describe("teamRoutes", () => {
     });
   });
 
-  it("falls back legacy connectors deep links to the overview tab", () => {
-    expect(
-      readTeamDetailRouteState(
-        "?workflowId=wf-1&tab=connectors",
-        "/teams/scope-alpha",
-      ),
-    ).toEqual({
-      memberId: "",
-      runId: "",
-      scopeId: "scope-alpha",
-      serviceId: "",
-      tab: "overview",
-      teamId: "",
-      workflowId: "wf-1",
-    });
-  });
+  it.each(["connectors", "events", "topology"])(
+    "falls back legacy %s deep links to the overview tab",
+    (tab) => {
+      expect(
+        readTeamDetailRouteState(
+          `?workflowId=wf-1&tab=${tab}`,
+          "/teams/scope-alpha",
+        ),
+      ).toEqual({
+        memberId: "",
+        runId: "",
+        scopeId: "scope-alpha",
+        serviceId: "",
+        tab: "overview",
+        teamId: "",
+        workflowId: "wf-1",
+      });
+    },
+  );
 
   it("defaults canonical team routes to the overview tab", () => {
     expect(

@@ -2,7 +2,9 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Application.Bindings;
 using Aevatar.GAgentService.Application.Services;
+using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
@@ -10,6 +12,7 @@ using Aevatar.GAgentService.Governance.Application.Services;
 using Aevatar.GAgentService.Infrastructure.Artifacts;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgentService.Tests.Application;
 
@@ -126,6 +129,41 @@ public sealed class ApplicationServiceGuardTests
         nullServingReader.Should().Throw<ArgumentNullException>();
         nullObservationReader.Should().Throw<ArgumentNullException>();
         nullTrafficReader.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void ScopeBindingReadinessQueryService_ShouldValidateConstructorArguments()
+    {
+        Action nullLifecyclePort = () => new ScopeBindingReadinessQueryService(
+            null!,
+            new ServiceServingQueryApplicationService(
+                new NoOpServingSetQueryReader(),
+                new NoOpRolloutQueryReader(),
+                new NoOpRolloutCommandObservationQueryReader(),
+                new NoOpTrafficViewQueryReader()),
+            Options.Create(new ScopeWorkflowCapabilityOptions()));
+        Action nullServingPort = () => new ScopeBindingReadinessQueryService(
+            new ServiceLifecycleQueryApplicationService(
+                new NoOpCatalogQueryReader(),
+                new NoOpRevisionCatalogQueryReader(),
+                new NoOpDeploymentCatalogQueryReader()),
+            null!,
+            Options.Create(new ScopeWorkflowCapabilityOptions()));
+        Action nullOptions = () => new ScopeBindingReadinessQueryService(
+            new ServiceLifecycleQueryApplicationService(
+                new NoOpCatalogQueryReader(),
+                new NoOpRevisionCatalogQueryReader(),
+                new NoOpDeploymentCatalogQueryReader()),
+            new ServiceServingQueryApplicationService(
+                new NoOpServingSetQueryReader(),
+                new NoOpRolloutQueryReader(),
+                new NoOpRolloutCommandObservationQueryReader(),
+                new NoOpTrafficViewQueryReader()),
+            null!);
+
+        nullLifecyclePort.Should().Throw<ArgumentNullException>();
+        nullServingPort.Should().Throw<ArgumentNullException>();
+        nullOptions.Should().Throw<ArgumentNullException>();
     }
 
     [Fact]

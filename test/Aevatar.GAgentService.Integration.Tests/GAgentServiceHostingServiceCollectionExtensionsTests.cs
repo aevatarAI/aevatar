@@ -45,6 +45,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Should().Contain(x => x.ServiceType == typeof(IServiceCommandPort));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceLifecycleQueryPort));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceServingQueryPort));
+        services.Should().Contain(x => x.ServiceType == typeof(IScopeBindingReadinessQueryPort));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceInvocationPort));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceGovernanceCommandPort));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceGovernanceQueryPort));
@@ -63,6 +64,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Should().Contain(x => x.ImplementationType == typeof(WorkflowServiceImplementationAdapter));
 
         using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IScopeBindingReadinessQueryPort>().Should().NotBeNull();
         provider.GetRequiredService<IServiceRolloutCommandObservationQueryReader>().Should().NotBeNull();
         provider.GetRequiredService<IGAgentRunTerminalQueryPort>().Should().NotBeNull();
     }

@@ -1,8 +1,10 @@
+import { buildStudioRoute } from '@/shared/studio/navigation';
+
 type TeamDetailTab =
   | 'overview'
-  | 'topology'
-  | 'events'
   | 'members';
+
+type TeamToStudioMode = 'create-member' | 'edit-member' | 'build-member';
 
 type QueryValue = string | undefined;
 type TeamDetailRouteState = {
@@ -33,8 +35,6 @@ function parseTeamTab(
 ): TeamDetailTab {
   switch (trimOptional(value).toLowerCase()) {
     case 'overview':
-    case 'topology':
-    case 'events':
     case 'members':
       return trimOptional(value).toLowerCase() as TeamDetailTab;
     default:
@@ -111,6 +111,57 @@ export function buildTeamDetailHref(options: {
       runId: options.runId,
     },
   );
+}
+
+export function buildTeamStudioHref(options: {
+  memberId?: string;
+  mode: TeamToStudioMode;
+  returnTo?: string;
+  scopeId: string;
+  teamId: string;
+}): string {
+  const scopeId = trimOptional(options.scopeId);
+  const teamId = trimOptional(options.teamId);
+  if (!scopeId || !teamId) {
+    return buildTeamsHref();
+  }
+
+  const memberId = trimOptional(options.memberId);
+  const returnTo =
+    trimOptional(options.returnTo) ||
+    buildTeamDetailHref({
+      memberId: memberId || undefined,
+      scopeId,
+      tab: 'members',
+      teamId,
+    });
+
+  if (options.mode === 'create-member') {
+    return buildStudioRoute({
+      scopeId,
+      teamId,
+      tab: 'studio',
+      intent: 'create-member',
+      returnTo,
+    });
+  }
+
+  if (!memberId) {
+    return buildTeamDetailHref({
+      scopeId,
+      tab: 'members',
+      teamId,
+    });
+  }
+
+  return buildStudioRoute({
+    scopeId,
+    teamId,
+    memberId,
+    step: 'build',
+    tab: options.mode === 'edit-member' ? 'studio' : undefined,
+    returnTo,
+  });
 }
 
 export function readTeamDetailRouteState(

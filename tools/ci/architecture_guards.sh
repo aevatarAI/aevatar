@@ -290,6 +290,7 @@ bash "${SCRIPT_DIR}/channel_relay_nyx_chat_direct_create_guard.sh"
 bash "${SCRIPT_DIR}/channel_tombstone_proto_field_guard.sh"
 bash "${SCRIPT_DIR}/agent_tool_delivery_target_reader_guard.sh"
 bash "${SCRIPT_DIR}/studio_projection_readmodel_registration_guard.sh"
+bash "${SCRIPT_DIR}/frontend_static_boundary_guard.sh"
 
 secret_store_scan_roots=()
 while IFS= read -r host_dir; do
@@ -558,7 +559,7 @@ END {
     exit 1;
   }
 }
-' 
+'
 )"
 state_direct_mutation_status=$?
 set -e

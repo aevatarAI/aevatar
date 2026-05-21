@@ -34,7 +34,7 @@ internal static class StudioHostingServiceCollectionExtensions
         services.AddStudioApplication();
         services.TryAddSingleton<IUserLlmCatalogPort, NyxIdLlmCatalogHttpClient>();
         services.AddStudioInfrastructure(configuration);
-        services.AddStudioProjectionComponents();
+        services.AddStudioProjectionComponents(configuration);
         services.AddStudioProjectionReadModelProviders(configuration);
         return services;
     }
