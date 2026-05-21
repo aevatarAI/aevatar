@@ -63,9 +63,27 @@ gh issue view <N> --json comments --jq '
 - **SKILL.md 历史 reference** `per Auric YYYY-MM-DD` 保留(只 controller 自己读,不输出到 GitHub)
 - **@-mention whitelist 不变**:loning / louis4li / eanzhao / jason-aelf / AbigailDeng / potter-sun(verbatim git blame 验证)
 
-### 0 codex + active task = bug(强制,per Auric 2026-05-20 "按说这个流程应该一直有 codex 工作的")
+### Wakeup 第一动作:`bash tools/refactor-loop/peek.sh`(强制)
 
-**铁律**:任何 active phase issue/PR(`🔍 design-solving` / `🔧 fixing` / `👀 reviewing` / `🛠️ implementing`)存在时,**应至少有 1 codex 在跑**。`ps codex exec | wc -l == 0` AND `gh issue list --label "🔍 design-solving"` non-empty → **bug**。
+减少人工 grep / parse 错误。一眼看全:
+- 活跃 codex 数(harness-tracked 和 detached 都算)
+- 最近 60 min 完成 codex marker + 推荐下一步(按 SKILL route table)
+- Open auto-loop PR 的 CI + state
+- Monitor zero_streak 当前 / max
+- Open auto-loop issue + phase label
+
+输出格式稳定,易于直接判断派什么。
+
+### 0 codex + active task = bug(强制,per Auric 2026-05-20 "按说这个流程应该一直有 codex 工作的" + 2026-05-21 "没有并行 codex 就有问题")
+
+**铁律**:任何 active phase issue/PR(`🔍 design-solving` / `🔧 fixing` / `👀 reviewing` / `🛠️ implementing`)存在时,**应至少有 1 codex 在跑**。`ps codex exec | wc -l == 0` AND `gh issue list --label "🔍 design-solving"` non-empty → **P0 bug**(no-gap-violation)。
+
+**Controller wakeup 第一动作**:`ps -ef | grep -E "timeout (3600|5400) codex" | grep -v grep | wc -l`。如果 == 0:
+1. **不允许** `ScheduleWakeup` 后 end-turn — 必须派下一步 codex 才允许 ScheduleWakeup
+2. **不允许**只看 marker 不 sweep:必须扫所有刚 finished marker(implement/judge/reviewer/fix/reflector)并按 marker→spawn-next 表派至少 1 codex
+3. 如果所有 active issue/PR 都真在等 maintainer(全是 `🆘 human:卡死` / `⏸️ phase:blocked`),那 0 codex 才 OK — 但仍要在 status 报告中说明 "0 codex by design:N issue 全等人"
+
+**concurrency_monitor.py** P0 alert:`expected > 0 AND actual == 0` → IMMEDIATE(streak=1 即写 alert + pending event,不等 2 tick)。controller 看到 alert → 立即 wake 自查。
 
 ### Controller 每 wakeup 必派"下一步"(no gap policy)
 
@@ -88,11 +106,18 @@ Controller wakeup 处理 markers 后,**必须在同 turn 内派出下一步 code
 
 ### Concurrency monitor:`tools/refactor-loop/concurrency_monitor.py`(强制)
 
-300s 周期 daemon,监控 actual vs expected codex 并发数:
+**60s** 周期 daemon(per Auric 2026-05-21 "60s 就扫描一次"),监控 actual vs expected codex 并发数:
 - expected = active issue/PR 数(per phase 表)
 - actual = `ps codex exec`
-- actual < expected/2 持续 2 tick → 告警(写 `.refactor-loop/.concurrency-alert.log` + 通知 controller pending events)
+- **P0 规则**:`expected > 0 AND actual == 0` → **IMMEDIATE** alert(streak=1 即触发,不等 2 tick)。这是 no-gap-violation。
+- low 规则:`actual < expected/2` 持续 2 tick → 告警
+- 写 `.refactor-loop/.concurrency-alert.log` + `.controller-pending-events.log`(controller 下次 wakeup 必读)
 - 不自动 spawn codex(business logic 在 controller)— controller 下次 wakeup 必派
+
+**Controller 每 wakeup 必读** `tail -20 .refactor-loop/.concurrency-alert.log`:
+- 看到 `P0 no-gap-violation: ...zero_streak=N` → 至少 N×60s 没 codex,**必须**先派 codex 才允许 ScheduleWakeup
+- zero_streak >= 5(>= 5 分钟 0 codex)= 严重失保 — 同时把 PushNotification 给 user "controller 失保 N min"
+- 看到 `recovered` 行 → 已自愈,正常推进
 
 启动:
 ```bash
@@ -109,26 +134,38 @@ disown
 - ❌ 看到 concurrency-alert.log 有 entry 但 controller 不读
 - ❌ active issue 0 codex 跑 >= 1 wakeup 周期(说明 controller 漏派)
 
-### Spawn helper:`spawn_with_banner.py`(强制,per Auric 2026-05-20 "#741 也看不到运行状态. 你继续修 skills 吧. 然后需要写脚本你可以写脚本")
+### Spawn pattern — Bash `run_in_background: true`(强制,per Auric 2026-05-21 "codex 可以执行得很好,为什么你做不到")
 
-Controller 经常 spawn codex 时**忘 post banner**,GitHub 看不到运行状态。强制用 helper:
+**关键架构铁律**:codex spawn 必须用 **Bash tool with `run_in_background: true`** 跑 `spawn-codex.sh`。这样 harness 会跟踪 Bash → codex 进程链,**codex exit 时 harness 立即 fire `<task-notification>` 唤醒 controller**,不用等 ScheduleWakeup。
 
-```bash
-python3 tools/refactor-loop/spawn_with_banner.py \
-  --cd <worktree> --add-dir /Users/auric/aevatar \
-  --prompt <prompt-file> --log <log-file> --timeout 5400 \
-  --banner-target <issue-or-pr-num> --banner-kind <issue|pr> \
-  --banner-role <test-add|fix|reviewer|implement|solver|judge|reflector> \
-  --banner-detail "<short context>"
-```
+**两步流程**(per spawn):
 
-Helper 行为:
-1. **先 Post 状态卡片**到 target issue/PR(`## 📊 状态卡片 — <role> 派出`)立即可见
-2. Spawn codex(nohup + start_new_session,后台跑)
-3. timeout < 3600 拒绝 spawn(per CLAUDE.md floor)
-4. Banner 含 codex log 名 / 工作目录 / timeout / role-specific "下一步自动会做" / 不需介入
+1. **先 post banner**(blocking Bash,几秒):
+   ```bash
+   python3 tools/refactor-loop/post_banner.py \
+     --banner-target <num> --banner-kind <issue|pr> \
+     --banner-role <role> --banner-detail "..." \
+     --log <log-path> --cd <worktree> --timeout <s>
+   ```
 
-**禁止**直接调 `spawn-codex.sh`(绕过 banner)— 强制走 `spawn_with_banner.py`。例外只:audit / bootstrap 等完全独立任务(不绑 issue/PR)可不带 banner。
+2. **再 spawn codex**(Bash `run_in_background: true`):
+   ```bash
+   .claude/skills/codex-refactor-loop/scripts/spawn-codex.sh \
+     --cd <worktree> --add-dir /Users/auric/aevatar \
+     --prompt <prompt-file> --log <log-file> --timeout 5400
+   ```
+
+**反模式(❌ 已废)`spawn_with_banner.py + Popen 自 detach`**:
+- 用 `Popen + start_new_session` 把 codex 脱离 python parent → harness 看不见 codex
+- 结果:codex done 1-13 分钟后 controller 才在下次 ScheduleWakeup 时才发现(0 codex 期间监控告警但 controller 在睡)
+- Auric 2026-05-21 "你连这种傻逼问题都处理不好么":zero_streak=13 = 13 分钟 0 codex,monitor 一直 alert,我没醒。原因正是 detached spawn 让 harness 失去追踪
+
+**正确语义**:codex = harness-tracked Bash task = automatic task-notification on exit。spawn_with_banner.py 旧 detached 模式仅在 audit / bootstrap 等无 banner 场景可用(且仍要 Bash `run_in_background: true` 包裹)。
+
+**禁止**:
+- ❌ 用 `nohup ... &` 或 `Popen + start_new_session` detach codex
+- ❌ 用 blocking Bash 跑 codex(同步等 60 分钟 → conversation 卡死)
+- ❌ 漏 post banner → GitHub 看不到运行状态(per `post_banner.py` 强制)
 
 ### Controller 自检(每次 wakeup)
 

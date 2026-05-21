@@ -1,9 +1,7 @@
-#pragma warning disable CS0618 // Tests exercise legacy migration utilities pending removal
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Hosting.DependencyInjection;
-using Aevatar.GAgentService.Governance.Hosting.Migration;
 using Aevatar.GAgentService.Governance.Projection.DependencyInjection;
 using Aevatar.GAgentService.Governance.Projection.ReadModels;
 using Aevatar.GAgentService.Projection.ReadModels;
@@ -60,9 +58,16 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Should().Contain(x => x.ServiceType == typeof(IServiceGovernanceQueryPort));
         services.Should().Contain(x => x.ServiceType == typeof(IActivationCapabilityViewReader));
         services.Should().Contain(x => x.ServiceType == typeof(IInvokeAdmissionAuthorizer));
-        services.Should().Contain(x =>
+        // Refactor (iter23/cluster-003-governance-legacy-startup-eventstore-fold):
+        //   Old pattern: capability registration added a startup hosted service that folded legacy events.
+        //   New principle: startup must not own migration replay; only explicit runtime services are composed.
+        services.Should().NotContain(x =>
             x.ServiceType == typeof(IHostedService) &&
-            x.ImplementationType == typeof(ServiceGovernanceLegacyMigrationHostedService));
+            x.ImplementationType != null &&
+            string.Equals(
+                x.ImplementationType.FullName,
+                "Aevatar.GAgentService.Governance.Hosting.Migration.ServiceGovernanceLegacyMigrationHostedService",
+                StringComparison.Ordinal));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType != null &&

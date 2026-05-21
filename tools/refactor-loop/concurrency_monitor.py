@@ -39,7 +39,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-INTERVAL = int(os.environ.get("INTERVAL", "300"))
+INTERVAL = int(os.environ.get("INTERVAL", "60"))  # per Auric 2026-05-21 "60s 就扫描一次"
+MIN_PARALLEL = int(os.environ.get("MIN_PARALLEL", "1"))  # 任何 active task 都至少要 1 codex
 REPO_ROOT = Path(os.environ.get("REPO_ROOT", "/Users/auric/aevatar"))
 ALERT_LOG = REPO_ROOT / ".refactor-loop" / ".concurrency-alert.log"
 PENDING_EVENTS = REPO_ROOT / ".refactor-loop" / ".controller-pending-events.log"
@@ -143,12 +144,34 @@ def write_alert(msg: str, detail: dict) -> None:
 def tick() -> None:
     state = load_state()
     low_streak = int(state.get("low_streak", 0))
+    zero_streak = int(state.get("zero_streak", 0))
 
     items = list_auto_loop_issues()
     expected, breakdown = compute_expected(items)
     actual = count_in_flight_codex()
 
-    log(f"actual={actual} expected={expected} low_streak={low_streak}")
+    log(f"actual={actual} expected={expected} low_streak={low_streak} zero_streak={zero_streak}")
+
+    # P0 规则:有 active task 但 actual==0 → IMMEDIATE alert
+    # per Auric 2026-05-21 "没有并行 codex 就有问题"。controller 必须立刻 no-gap 补派。
+    if expected > 0 and actual == 0:
+        zero_streak += 1
+        state["zero_streak"] = zero_streak
+        detail = {
+            "actual": 0,
+            "expected": expected,
+            "breakdown": breakdown,
+            "zero_streak": zero_streak,
+            "severity": "P0",
+            "rule": "no-gap-violation",
+        }
+        write_alert(f"P0 no-gap-violation: 0 codex with {expected} active task(s)", detail)
+        log(f"P0 ALERT: 0 codex but {expected} active task(s);streak={zero_streak};see {ALERT_LOG}")
+        # 0 streak 不阻止其他逻辑,return
+        save_state(state)
+        return
+    else:
+        state["zero_streak"] = 0
 
     # 阈值:实际 < ceil(expected/2) 算 low
     threshold = max(1, (expected + 1) // 2) if expected > 0 else 0

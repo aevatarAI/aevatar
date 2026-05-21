@@ -1,0 +1,3 @@
+SCOPE_EXTEND: tools/ci/query_projection_priming_guard.sh add static guard required by cluster spec to block command ports from reintroducing projection activation before dispatch
+
+⟦AI:AUTO-LOOP⟧

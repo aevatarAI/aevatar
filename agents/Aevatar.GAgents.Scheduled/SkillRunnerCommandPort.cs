@@ -4,22 +4,22 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.Scheduled;
 
+// Refactor (iter23/cluster-002):
+//   Old pattern: Command ports synchronously activate projection scopes before dispatch and sometimes turn projection lease failure into command admission failure.
+//   New principle: Command ports dispatch accepted commands; projection activation is owned by committed-state hooks, explicit observation binders, startup activators, or background materializers.
 internal sealed class SkillRunnerCommandPort : ISkillRunnerCommandPort
 {
     private const string PublisherActorId = "scheduled.skill-runner";
 
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _actorDispatchPort;
-    private readonly UserAgentCatalogProjectionPort _catalogProjectionPort;
 
     public SkillRunnerCommandPort(
         IActorRuntime actorRuntime,
-        IActorDispatchPort actorDispatchPort,
-        UserAgentCatalogProjectionPort catalogProjectionPort)
+        IActorDispatchPort actorDispatchPort)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
-        _catalogProjectionPort = catalogProjectionPort ?? throw new ArgumentNullException(nameof(catalogProjectionPort));
     }
 
     public async Task InitializeAsync(
@@ -32,15 +32,6 @@ internal sealed class SkillRunnerCommandPort : ISkillRunnerCommandPort
         ArgumentNullException.ThrowIfNull(command);
 
         await EnsureSkillRunnerActorAsync(agentId, ct);
-        // Refactor (iter1/cluster-001):
-        //   Old pattern: initialize only primed the catalog actor stream because runners pushed execution updates there.
-        //   New principle: prime both membership and runner streams before dispatch so runner committed facts project directly.
-        //
-        // Prime projection scopes BEFORE dispatch — a late prime can't recover
-        // committed events the projector already missed.
-        await _catalogProjectionPort.EnsureProjectionForActorAsync(UserAgentCatalogGAgent.WellKnownId, ct);
-        await _catalogProjectionPort.EnsureProjectionForActorAsync(agentId, ct);
-
         await DispatchAsync(agentId, command, ct);
 
         if (runImmediately)
@@ -53,7 +44,6 @@ internal sealed class SkillRunnerCommandPort : ISkillRunnerCommandPort
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
         await EnsureSkillRunnerActorAsync(agentId, ct);
-        await _catalogProjectionPort.EnsureProjectionForActorAsync(agentId, ct);
         await DispatchAsync(agentId, new TriggerSkillRunnerExecutionCommand { Reason = reason ?? string.Empty }, ct);
     }
 
@@ -61,7 +51,6 @@ internal sealed class SkillRunnerCommandPort : ISkillRunnerCommandPort
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
         await EnsureSkillRunnerActorAsync(agentId, ct);
-        await _catalogProjectionPort.EnsureProjectionForActorAsync(agentId, ct);
         await DispatchAsync(agentId, new DisableSkillRunnerCommand { Reason = reason ?? string.Empty }, ct);
     }
 
@@ -69,7 +58,6 @@ internal sealed class SkillRunnerCommandPort : ISkillRunnerCommandPort
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
         await EnsureSkillRunnerActorAsync(agentId, ct);
-        await _catalogProjectionPort.EnsureProjectionForActorAsync(agentId, ct);
         await DispatchAsync(agentId, new EnableSkillRunnerCommand { Reason = reason ?? string.Empty }, ct);
     }
 

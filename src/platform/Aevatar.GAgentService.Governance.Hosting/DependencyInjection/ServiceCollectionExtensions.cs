@@ -8,7 +8,6 @@ using Aevatar.GAgentService.Governance.Application.Services;
 using Aevatar.GAgentService.Governance.Hosting.Identity;
 using Aevatar.GAgentService.Governance.Infrastructure.Activation;
 using Aevatar.GAgentService.Governance.Infrastructure.Admission;
-using Aevatar.GAgentService.Governance.Hosting.Migration;
 using Aevatar.GAgentService.Governance.Projection.DependencyInjection;
 using Aevatar.GAgentService.Governance.Projection.ReadModels;
 using Microsoft.Extensions.Configuration;
@@ -40,9 +39,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceGovernanceCommandPort, ServiceGovernanceCommandApplicationService>();
         services.TryAddSingleton<ServiceGovernanceQueryApplicationService>();
         services.TryAddSingleton<IServiceGovernanceQueryPort>(sp => sp.GetRequiredService<ServiceGovernanceQueryApplicationService>());
-#pragma warning disable CS0618 // Legacy migration — remove after all deployments complete governance migration
-        services.AddHostedService<ServiceGovernanceLegacyMigrationHostedService>();
-#pragma warning restore CS0618
+        // Refactor (iter23/cluster-003-governance-legacy-startup-eventstore-fold):
+        //   Old pattern: host startup replayed legacy event streams and folded state in process.
+        //   New principle: normal startup composes ports only; migrations are explicit operator jobs.
         return services;
     }
 

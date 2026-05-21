@@ -1,45 +1,65 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
+using Aevatar.GAgents.RoleCatalog;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Studio.Infrastructure.Storage;
 
-internal static class RoleCatalogJsonSerializer
+internal static class RoleCatalogStorageSerializer
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-    };
-
+    // Refactor (iter22/cluster-001-studio-json-internal-catalog-storage):
+    //   Old pattern: Studio role catalog and draft facts were durable JSON documents.
+    //   New principle: Durable storage payloads are protobuf facts; JSON is only import fallback.
     public static async Task<IReadOnlyList<StoredRoleDefinition>> ReadCatalogAsync(
         Stream stream,
         CancellationToken cancellationToken)
     {
-        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        var payload = await ReadPayloadAsync(stream, cancellationToken);
+        if (!IsJsonPayload(payload))
+        {
+            var state = RoleCatalogState.Parser.ParseFrom(payload);
+            return state.Roles
+                .Select(ToStoredRoleDefinition)
+                .ToList()
+                .AsReadOnly();
+        }
+
+        using var document = JsonDocument.Parse(payload);
         return ParseRoles(document.RootElement);
     }
 
+    // Refactor (iter22/cluster-001-studio-json-internal-catalog-storage):
+    //   Old pattern: Studio role catalog writes emitted durable JSON.
+    //   New principle: Catalog writes emit the protobuf catalog state fact.
     public static async Task WriteCatalogAsync(
         Stream stream,
         IReadOnlyList<StoredRoleDefinition> roles,
         CancellationToken cancellationToken)
     {
-        var payload = new RoleJsonDocument
-        {
-            Roles = roles
-                .Select(ToRoleJsonEntry)
-                .ToList(),
-        };
-
-        await JsonSerializer.SerializeAsync(stream, payload, JsonOptions, cancellationToken);
+        var payload = new RoleCatalogState();
+        payload.Roles.AddRange(roles.Select(ToProtoRoleDefinition));
+        await stream.WriteAsync(payload.ToByteArray(), cancellationToken);
     }
 
+    // Refactor (iter22/cluster-001-studio-json-internal-catalog-storage):
+    //   Old pattern: Studio role draft reads treated JSON as the durable format.
+    //   New principle: Draft reads prefer protobuf and keep JSON only as a bounded legacy import fallback.
     public static async Task<ParsedRoleDraft> ReadDraftAsync(
         Stream stream,
         DateTimeOffset fallbackUpdatedAtUtc,
         CancellationToken cancellationToken)
     {
-        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        var payload = await ReadPayloadAsync(stream, cancellationToken);
+        if (!IsJsonPayload(payload))
+        {
+            var draftEntry = RoleDraftEntry.Parser.ParseFrom(payload);
+            var protobufUpdatedAtUtc = draftEntry.UpdatedAtUtc?.ToDateTimeOffset() ?? fallbackUpdatedAtUtc;
+            var protobufDraft = draftEntry.Draft is not null ? ToStoredRoleDefinition(draftEntry.Draft) : null;
+            return new ParsedRoleDraft(protobufUpdatedAtUtc, protobufDraft);
+        }
+
+        using var document = JsonDocument.Parse(payload);
         var root = document.RootElement;
         var updatedAtUtc = TryGetPropertyIgnoreCase(root, "updatedAtUtc", out var updatedAtNode) &&
                            updatedAtNode.ValueKind == JsonValueKind.String &&
@@ -52,35 +72,72 @@ internal static class RoleCatalogJsonSerializer
         return new ParsedRoleDraft(updatedAtUtc, draft);
     }
 
+    // Refactor (iter22/cluster-001-studio-json-internal-catalog-storage):
+    //   Old pattern: Studio role draft writes emitted durable JSON.
+    //   New principle: Draft writes emit the protobuf draft fact.
     public static async Task WriteDraftAsync(
         Stream stream,
         StoredRoleDefinition? draft,
         DateTimeOffset updatedAtUtc,
         CancellationToken cancellationToken)
     {
-        var payload = new RoleDraftJsonDocument
+        var payload = new RoleDraftEntry
         {
-            UpdatedAtUtc = updatedAtUtc,
-            Role = draft is null ? new RoleJsonEntry() : ToRoleJsonEntry(draft),
+            Draft = draft is not null ? ToProtoRoleDefinition(draft) : null,
+            UpdatedAtUtc = Timestamp.FromDateTimeOffset(updatedAtUtc),
         };
 
-        await JsonSerializer.SerializeAsync(stream, payload, JsonOptions, cancellationToken);
+        await stream.WriteAsync(payload.ToByteArray(), cancellationToken);
     }
 
     internal sealed record ParsedRoleDraft(
         DateTimeOffset UpdatedAtUtc,
         StoredRoleDefinition? Draft);
 
-    private static RoleJsonEntry ToRoleJsonEntry(StoredRoleDefinition role) =>
-        new()
+    private static async Task<byte[]> ReadPayloadAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        using var buffer = new MemoryStream();
+        await stream.CopyToAsync(buffer, cancellationToken);
+        return buffer.ToArray();
+    }
+
+    private static bool IsJsonPayload(ReadOnlySpan<byte> payload)
+    {
+        foreach (var value in payload)
+        {
+            if (value is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n')
+            {
+                continue;
+            }
+
+            return value is (byte)'{' or (byte)'[';
+        }
+
+        return false;
+    }
+
+    private static StoredRoleDefinition ToStoredRoleDefinition(RoleDefinitionEntry entry) =>
+        new(
+            Id: entry.Id,
+            Name: entry.Name,
+            SystemPrompt: entry.SystemPrompt,
+            Provider: entry.Provider,
+            Model: entry.Model,
+            Connectors: entry.Connectors.ToList().AsReadOnly());
+
+    private static RoleDefinitionEntry ToProtoRoleDefinition(StoredRoleDefinition role)
+    {
+        var entry = new RoleDefinitionEntry
         {
             Id = role.Id,
             Name = role.Name,
             SystemPrompt = role.SystemPrompt,
             Provider = role.Provider,
             Model = role.Model,
-            Connectors = role.Connectors.ToArray(),
         };
+        entry.Connectors.AddRange(role.Connectors);
+        return entry;
+    }
 
     private static IReadOnlyList<StoredRoleDefinition> ParseRoles(JsonElement root)
     {
@@ -223,39 +280,4 @@ internal static class RoleCatalogJsonSerializer
             .ToList();
     }
 
-    private sealed class RoleJsonDocument
-    {
-        [JsonPropertyName("roles")]
-        public List<RoleJsonEntry> Roles { get; set; } = [];
-    }
-
-    private sealed class RoleDraftJsonDocument
-    {
-        [JsonPropertyName("updatedAtUtc")]
-        public DateTimeOffset UpdatedAtUtc { get; set; }
-
-        [JsonPropertyName("role")]
-        public RoleJsonEntry Role { get; set; } = new();
-    }
-
-    private sealed class RoleJsonEntry
-    {
-        [JsonPropertyName("id")]
-        public string Id { get; set; } = string.Empty;
-
-        [JsonPropertyName("name")]
-        public string Name { get; set; } = string.Empty;
-
-        [JsonPropertyName("systemPrompt")]
-        public string SystemPrompt { get; set; } = string.Empty;
-
-        [JsonPropertyName("provider")]
-        public string Provider { get; set; } = string.Empty;
-
-        [JsonPropertyName("model")]
-        public string Model { get; set; } = string.Empty;
-
-        [JsonPropertyName("connectors")]
-        public string[] Connectors { get; set; } = [];
-    }
 }
