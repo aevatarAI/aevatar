@@ -72,6 +72,17 @@ public sealed class ExternalLinkManagerTests
     }
 
     [Fact]
+    public void ExternalLinkManagerSource_ShouldNotUseBackgroundReconnectLoopPrimitives()
+    {
+        var sourcePath = FindRepositoryFile("src/Aevatar.Foundation.Core/ExternalLinks/ExternalLinkManager.cs");
+
+        var source = File.ReadAllText(sourcePath);
+
+        source.Should().NotContain("Task." + "Run(");
+        source.Should().NotContain("Task." + "Delay(");
+    }
+
+    [Fact]
     public async Task HandleAsync_WhenReconnectSignalIsStale_ShouldNotReconnect()
     {
         var dispatch = new RecordingDispatchPort();
@@ -436,6 +447,21 @@ public sealed class ExternalLinkManagerTests
             Payload = Any.Pack(payload),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("actor-1", TopologyAudience.Self),
         };
+
+    private static string FindRepositoryFile(string relativePath)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory != null)
+        {
+            var candidate = Path.Combine(directory.FullName, relativePath);
+            if (File.Exists(candidate))
+                return candidate;
+
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException($"Could not find repository file '{relativePath}'.");
+    }
 
     private sealed class RecordingDispatchPort : IActorDispatchPort
     {
