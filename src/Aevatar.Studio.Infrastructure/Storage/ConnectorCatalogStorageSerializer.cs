@@ -1,45 +1,65 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
+using Aevatar.GAgents.ConnectorCatalog;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Studio.Infrastructure.Storage;
 
-internal static class ConnectorCatalogJsonSerializer
+internal static class ConnectorCatalogStorageSerializer
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-    };
-
+    // Refactor (iter22/cluster-001-studio-json-internal-catalog-storage):
+    //   Old pattern: Studio connector catalog and draft facts were durable JSON documents.
+    //   New principle: Durable storage payloads are protobuf facts; JSON is only import fallback.
     public static async Task<IReadOnlyList<StoredConnectorDefinition>> ReadCatalogAsync(
         Stream stream,
         CancellationToken cancellationToken)
     {
-        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        var payload = await ReadPayloadAsync(stream, cancellationToken);
+        if (!IsJsonPayload(payload))
+        {
+            var state = ConnectorCatalogState.Parser.ParseFrom(payload);
+            return state.Connectors
+                .Select(ToStoredConnectorDefinition)
+                .ToList()
+                .AsReadOnly();
+        }
+
+        using var document = JsonDocument.Parse(payload);
         return ParseConnectors(document.RootElement);
     }
 
+    // Refactor (iter22/cluster-001-studio-json-internal-catalog-storage):
+    //   Old pattern: Studio connector catalog writes emitted durable JSON.
+    //   New principle: Catalog writes emit the protobuf catalog state fact.
     public static async Task WriteCatalogAsync(
         Stream stream,
         IReadOnlyList<StoredConnectorDefinition> connectors,
         CancellationToken cancellationToken)
     {
-        var payload = new ConnectorJsonDocument
-        {
-            Connectors = connectors
-                .Select(ToConnectorJsonEntry)
-                .ToList(),
-        };
-
-        await JsonSerializer.SerializeAsync(stream, payload, JsonOptions, cancellationToken);
+        var payload = new ConnectorCatalogState();
+        payload.Connectors.AddRange(connectors.Select(ToProtoConnectorDefinition));
+        await stream.WriteAsync(payload.ToByteArray(), cancellationToken);
     }
 
+    // Refactor (iter22/cluster-001-studio-json-internal-catalog-storage):
+    //   Old pattern: Studio connector draft reads treated JSON as the durable format.
+    //   New principle: Draft reads prefer protobuf and keep JSON only as a bounded legacy import fallback.
     public static async Task<ParsedConnectorDraft> ReadDraftAsync(
         Stream stream,
         DateTimeOffset fallbackUpdatedAtUtc,
         CancellationToken cancellationToken)
     {
-        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        var payload = await ReadPayloadAsync(stream, cancellationToken);
+        if (!IsJsonPayload(payload))
+        {
+            var draftEntry = ConnectorDraftEntry.Parser.ParseFrom(payload);
+            var protobufUpdatedAtUtc = draftEntry.UpdatedAtUtc?.ToDateTimeOffset() ?? fallbackUpdatedAtUtc;
+            var protobufDraft = draftEntry.Draft is not null ? ToStoredConnectorDefinition(draftEntry.Draft) : null;
+            return new ParsedConnectorDraft(protobufUpdatedAtUtc, protobufDraft);
+        }
+
+        using var document = JsonDocument.Parse(payload);
         var root = document.RootElement;
         var updatedAtUtc = TryGetPropertyIgnoreCase(root, "updatedAtUtc", out var updatedAtNode) &&
                            updatedAtNode.ValueKind == JsonValueKind.String &&
@@ -52,77 +72,164 @@ internal static class ConnectorCatalogJsonSerializer
         return new ParsedConnectorDraft(updatedAtUtc, draft);
     }
 
+    // Refactor (iter22/cluster-001-studio-json-internal-catalog-storage):
+    //   Old pattern: Studio connector draft writes emitted durable JSON.
+    //   New principle: Draft writes emit the protobuf draft fact.
     public static async Task WriteDraftAsync(
         Stream stream,
         StoredConnectorDefinition? draft,
         DateTimeOffset updatedAtUtc,
         CancellationToken cancellationToken)
     {
-        var payload = new ConnectorDraftJsonDocument
+        var payload = new ConnectorDraftEntry
         {
-            UpdatedAtUtc = updatedAtUtc,
-            Connector = draft is null ? new ConnectorJsonEntry() : ToConnectorJsonEntry(draft),
+            Draft = draft is not null ? ToProtoConnectorDefinition(draft) : null,
+            UpdatedAtUtc = Timestamp.FromDateTimeOffset(updatedAtUtc),
         };
 
-        await JsonSerializer.SerializeAsync(stream, payload, JsonOptions, cancellationToken);
+        await stream.WriteAsync(payload.ToByteArray(), cancellationToken);
     }
 
     internal sealed record ParsedConnectorDraft(
         DateTimeOffset UpdatedAtUtc,
         StoredConnectorDefinition? Draft);
 
-    private static ConnectorJsonEntry ToConnectorJsonEntry(StoredConnectorDefinition connector) =>
-        new()
+    private static async Task<byte[]> ReadPayloadAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        using var buffer = new MemoryStream();
+        await stream.CopyToAsync(buffer, cancellationToken);
+        return buffer.ToArray();
+    }
+
+    private static bool IsJsonPayload(ReadOnlySpan<byte> payload)
+    {
+        foreach (var value in payload)
         {
-            Name = connector.Name,
-            Type = connector.Type,
-            Enabled = connector.Enabled,
-            TimeoutMs = connector.TimeoutMs,
-            Retry = connector.Retry,
-            Http = new HttpConnectorJsonConfig
+            if (value is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n')
             {
-                BaseUrl = connector.Http.BaseUrl,
-                AllowedMethods = connector.Http.AllowedMethods.ToArray(),
-                AllowedPaths = connector.Http.AllowedPaths.ToArray(),
-                AllowedInputKeys = connector.Http.AllowedInputKeys.ToArray(),
-                DefaultHeaders = connector.Http.DefaultHeaders.ToDictionary(
-                    item => item.Key,
-                    item => item.Value,
-                    StringComparer.OrdinalIgnoreCase),
-                Auth = ToConnectorAuthJsonConfig(connector.Http.Auth),
+                continue;
+            }
+
+            return value is (byte)'{' or (byte)'[';
+        }
+
+        return false;
+    }
+
+    private static StoredConnectorDefinition ToStoredConnectorDefinition(ConnectorDefinitionEntry entry) =>
+        new(
+            Name: entry.Name,
+            Type: entry.Type,
+            Enabled: entry.Enabled,
+            TimeoutMs: entry.TimeoutMs,
+            Retry: entry.Retry,
+            Http: entry.Http is not null ? ToStoredHttpConfig(entry.Http) : EmptyHttpConfig(),
+            Cli: entry.Cli is not null ? ToStoredCliConfig(entry.Cli) : EmptyCliConfig(),
+            Mcp: entry.Mcp is not null ? ToStoredMcpConfig(entry.Mcp) : EmptyMcpConfig());
+
+    private static StoredHttpConnectorConfig ToStoredHttpConfig(HttpConnectorConfigEntry entry) =>
+        new(
+            BaseUrl: entry.BaseUrl,
+            AllowedMethods: entry.AllowedMethods.ToList().AsReadOnly(),
+            AllowedPaths: entry.AllowedPaths.ToList().AsReadOnly(),
+            AllowedInputKeys: entry.AllowedInputKeys.ToList().AsReadOnly(),
+            DefaultHeaders: new Dictionary<string, string>(entry.DefaultHeaders, StringComparer.OrdinalIgnoreCase),
+            Auth: entry.Auth is not null ? ToStoredAuthConfig(entry.Auth) : EmptyAuthConfig());
+
+    private static StoredCliConnectorConfig ToStoredCliConfig(CliConnectorConfigEntry entry) =>
+        new(
+            Command: entry.Command,
+            FixedArguments: entry.FixedArguments.ToList().AsReadOnly(),
+            AllowedOperations: entry.AllowedOperations.ToList().AsReadOnly(),
+            AllowedInputKeys: entry.AllowedInputKeys.ToList().AsReadOnly(),
+            WorkingDirectory: entry.WorkingDirectory,
+            Environment: new Dictionary<string, string>(entry.Environment, StringComparer.OrdinalIgnoreCase));
+
+    private static StoredMcpConnectorConfig ToStoredMcpConfig(McpConnectorConfigEntry entry) =>
+        new(
+            ServerName: entry.ServerName,
+            Command: entry.Command,
+            Url: entry.Url,
+            Arguments: entry.Arguments.ToList().AsReadOnly(),
+            Environment: new Dictionary<string, string>(entry.Environment, StringComparer.OrdinalIgnoreCase),
+            AdditionalHeaders: new Dictionary<string, string>(entry.AdditionalHeaders, StringComparer.OrdinalIgnoreCase),
+            Auth: entry.Auth is not null ? ToStoredAuthConfig(entry.Auth) : EmptyAuthConfig(),
+            DefaultTool: entry.DefaultTool,
+            AllowedTools: entry.AllowedTools.ToList().AsReadOnly(),
+            AllowedInputKeys: entry.AllowedInputKeys.ToList().AsReadOnly());
+
+    private static StoredConnectorAuthConfig ToStoredAuthConfig(ConnectorAuthEntry entry) =>
+        new(
+            Type: entry.Type,
+            TokenUrl: entry.TokenUrl,
+            ClientId: entry.ClientId,
+            ClientSecret: entry.ClientSecret,
+            Scope: entry.Scope);
+
+    private static ConnectorDefinitionEntry ToProtoConnectorDefinition(StoredConnectorDefinition def)
+    {
+        var entry = new ConnectorDefinitionEntry
+        {
+            Name = def.Name,
+            Type = def.Type,
+            Enabled = def.Enabled,
+            TimeoutMs = def.TimeoutMs,
+            Retry = def.Retry,
+            Http = new HttpConnectorConfigEntry
+            {
+                BaseUrl = def.Http.BaseUrl,
+                Auth = ToProtoAuthConfig(def.Http.Auth),
             },
-            Cli = new CliConnectorJsonConfig
+            Cli = new CliConnectorConfigEntry
             {
-                Command = connector.Cli.Command,
-                FixedArguments = connector.Cli.FixedArguments.ToArray(),
-                AllowedOperations = connector.Cli.AllowedOperations.ToArray(),
-                AllowedInputKeys = connector.Cli.AllowedInputKeys.ToArray(),
-                WorkingDirectory = connector.Cli.WorkingDirectory,
-                Environment = connector.Cli.Environment.ToDictionary(
-                    item => item.Key,
-                    item => item.Value,
-                    StringComparer.OrdinalIgnoreCase),
+                Command = def.Cli.Command,
+                WorkingDirectory = def.Cli.WorkingDirectory,
             },
-            Mcp = new McpConnectorJsonConfig
+            Mcp = new McpConnectorConfigEntry
             {
-                ServerName = connector.Mcp.ServerName,
-                Command = connector.Mcp.Command,
-                Url = connector.Mcp.Url,
-                Arguments = connector.Mcp.Arguments.ToArray(),
-                Environment = connector.Mcp.Environment.ToDictionary(
-                    item => item.Key,
-                    item => item.Value,
-                    StringComparer.OrdinalIgnoreCase),
-                AdditionalHeaders = connector.Mcp.AdditionalHeaders.ToDictionary(
-                    item => item.Key,
-                    item => item.Value,
-                    StringComparer.OrdinalIgnoreCase),
-                Auth = ToConnectorAuthJsonConfig(connector.Mcp.Auth),
-                DefaultTool = connector.Mcp.DefaultTool,
-                AllowedTools = connector.Mcp.AllowedTools.ToArray(),
-                AllowedInputKeys = connector.Mcp.AllowedInputKeys.ToArray(),
+                ServerName = def.Mcp.ServerName,
+                Command = def.Mcp.Command,
+                Url = def.Mcp.Url,
+                Auth = ToProtoAuthConfig(def.Mcp.Auth),
+                DefaultTool = def.Mcp.DefaultTool,
             },
         };
+
+        entry.Http.AllowedMethods.AddRange(def.Http.AllowedMethods);
+        entry.Http.AllowedPaths.AddRange(def.Http.AllowedPaths);
+        entry.Http.AllowedInputKeys.AddRange(def.Http.AllowedInputKeys);
+        AddMapEntries(entry.Http.DefaultHeaders, def.Http.DefaultHeaders);
+        entry.Cli.FixedArguments.AddRange(def.Cli.FixedArguments);
+        entry.Cli.AllowedOperations.AddRange(def.Cli.AllowedOperations);
+        entry.Cli.AllowedInputKeys.AddRange(def.Cli.AllowedInputKeys);
+        AddMapEntries(entry.Cli.Environment, def.Cli.Environment);
+        entry.Mcp.Arguments.AddRange(def.Mcp.Arguments);
+        AddMapEntries(entry.Mcp.Environment, def.Mcp.Environment);
+        AddMapEntries(entry.Mcp.AdditionalHeaders, def.Mcp.AdditionalHeaders);
+        entry.Mcp.AllowedTools.AddRange(def.Mcp.AllowedTools);
+        entry.Mcp.AllowedInputKeys.AddRange(def.Mcp.AllowedInputKeys);
+        return entry;
+    }
+
+    private static ConnectorAuthEntry ToProtoAuthConfig(StoredConnectorAuthConfig auth) =>
+        new()
+        {
+            Type = auth.Type,
+            TokenUrl = auth.TokenUrl,
+            ClientId = auth.ClientId,
+            ClientSecret = auth.ClientSecret,
+            Scope = auth.Scope,
+        };
+
+    private static void AddMapEntries(
+        Google.Protobuf.Collections.MapField<string, string> target,
+        IReadOnlyDictionary<string, string> source)
+    {
+        foreach (var item in source)
+        {
+            target[item.Key] = item.Value;
+        }
+    }
 
     private static IReadOnlyList<StoredConnectorDefinition> ParseConnectors(JsonElement root)
     {
@@ -394,148 +501,4 @@ internal static class ConnectorCatalogJsonSerializer
         return result;
     }
 
-    private static ConnectorAuthJsonConfig ToConnectorAuthJsonConfig(StoredConnectorAuthConfig auth) =>
-        new()
-        {
-            Type = auth.Type,
-            TokenUrl = auth.TokenUrl,
-            ClientId = auth.ClientId,
-            ClientSecret = auth.ClientSecret,
-            Scope = auth.Scope,
-        };
-
-    private sealed class ConnectorJsonDocument
-    {
-        [JsonPropertyName("connectors")]
-        public List<ConnectorJsonEntry> Connectors { get; set; } = [];
-    }
-
-    private sealed class ConnectorDraftJsonDocument
-    {
-        [JsonPropertyName("updatedAtUtc")]
-        public DateTimeOffset UpdatedAtUtc { get; set; }
-
-        [JsonPropertyName("connector")]
-        public ConnectorJsonEntry Connector { get; set; } = new();
-    }
-
-    private sealed class ConnectorJsonEntry
-    {
-        [JsonPropertyName("name")]
-        public string Name { get; set; } = string.Empty;
-
-        [JsonPropertyName("type")]
-        public string Type { get; set; } = string.Empty;
-
-        [JsonPropertyName("enabled")]
-        public bool Enabled { get; set; } = true;
-
-        [JsonPropertyName("timeoutMs")]
-        public int TimeoutMs { get; set; } = 30_000;
-
-        [JsonPropertyName("retry")]
-        public int Retry { get; set; }
-
-        [JsonPropertyName("http")]
-        public HttpConnectorJsonConfig Http { get; set; } = new();
-
-        [JsonPropertyName("cli")]
-        public CliConnectorJsonConfig Cli { get; set; } = new();
-
-        [JsonPropertyName("mcp")]
-        public McpConnectorJsonConfig Mcp { get; set; } = new();
-    }
-
-    private sealed class HttpConnectorJsonConfig
-    {
-        [JsonPropertyName("baseUrl")]
-        public string BaseUrl { get; set; } = string.Empty;
-
-        [JsonPropertyName("allowedMethods")]
-        public string[] AllowedMethods { get; set; } = [];
-
-        [JsonPropertyName("allowedPaths")]
-        public string[] AllowedPaths { get; set; } = [];
-
-        [JsonPropertyName("allowedInputKeys")]
-        public string[] AllowedInputKeys { get; set; } = [];
-
-        [JsonPropertyName("defaultHeaders")]
-        public Dictionary<string, string> DefaultHeaders { get; set; } = new(StringComparer.OrdinalIgnoreCase);
-
-        [JsonPropertyName("auth")]
-        public ConnectorAuthJsonConfig Auth { get; set; } = new();
-    }
-
-    private sealed class CliConnectorJsonConfig
-    {
-        [JsonPropertyName("command")]
-        public string Command { get; set; } = string.Empty;
-
-        [JsonPropertyName("fixedArguments")]
-        public string[] FixedArguments { get; set; } = [];
-
-        [JsonPropertyName("allowedOperations")]
-        public string[] AllowedOperations { get; set; } = [];
-
-        [JsonPropertyName("allowedInputKeys")]
-        public string[] AllowedInputKeys { get; set; } = [];
-
-        [JsonPropertyName("workingDirectory")]
-        public string WorkingDirectory { get; set; } = string.Empty;
-
-        [JsonPropertyName("environment")]
-        public Dictionary<string, string> Environment { get; set; } = new(StringComparer.OrdinalIgnoreCase);
-    }
-
-    private sealed class McpConnectorJsonConfig
-    {
-        [JsonPropertyName("serverName")]
-        public string ServerName { get; set; } = string.Empty;
-
-        [JsonPropertyName("command")]
-        public string Command { get; set; } = string.Empty;
-
-        [JsonPropertyName("url")]
-        public string Url { get; set; } = string.Empty;
-
-        [JsonPropertyName("arguments")]
-        public string[] Arguments { get; set; } = [];
-
-        [JsonPropertyName("environment")]
-        public Dictionary<string, string> Environment { get; set; } = new(StringComparer.OrdinalIgnoreCase);
-
-        [JsonPropertyName("additionalHeaders")]
-        public Dictionary<string, string> AdditionalHeaders { get; set; } = new(StringComparer.OrdinalIgnoreCase);
-
-        [JsonPropertyName("auth")]
-        public ConnectorAuthJsonConfig Auth { get; set; } = new();
-
-        [JsonPropertyName("defaultTool")]
-        public string DefaultTool { get; set; } = string.Empty;
-
-        [JsonPropertyName("allowedTools")]
-        public string[] AllowedTools { get; set; } = [];
-
-        [JsonPropertyName("allowedInputKeys")]
-        public string[] AllowedInputKeys { get; set; } = [];
-    }
-
-    private sealed class ConnectorAuthJsonConfig
-    {
-        [JsonPropertyName("type")]
-        public string Type { get; set; } = string.Empty;
-
-        [JsonPropertyName("tokenUrl")]
-        public string TokenUrl { get; set; } = string.Empty;
-
-        [JsonPropertyName("clientId")]
-        public string ClientId { get; set; } = string.Empty;
-
-        [JsonPropertyName("clientSecret")]
-        public string ClientSecret { get; set; } = string.Empty;
-
-        [JsonPropertyName("scope")]
-        public string Scope { get; set; } = string.Empty;
-    }
 }

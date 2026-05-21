@@ -27,7 +27,7 @@ internal sealed class StudioLocalCatalogImportReader :
         }
 
         await using var stream = File.OpenRead(path);
-        var connectors = await ConnectorCatalogJsonSerializer.ReadCatalogAsync(stream, ct);
+        var connectors = await ConnectorCatalogStorageSerializer.ReadCatalogAsync(stream, ct);
         return new StoredConnectorCatalog(
             HomeDirectory: _options.RootDirectory,
             FilePath: path,
@@ -48,7 +48,7 @@ internal sealed class StudioLocalCatalogImportReader :
         }
 
         await using var stream = File.OpenRead(path);
-        var roles = await RoleCatalogJsonSerializer.ReadCatalogAsync(stream, ct);
+        var roles = await RoleCatalogStorageSerializer.ReadCatalogAsync(stream, ct);
         return new StoredRoleCatalog(
             HomeDirectory: _options.RootDirectory,
             FilePath: path,
