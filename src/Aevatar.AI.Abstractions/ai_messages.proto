@@ -143,7 +143,8 @@ message PendingToolApprovalState {
   // field 8 reserved (was timeout_lease bytes, removed — lease kept in-memory only)
   map<string, string> metadata = 9;
   string remote_approval_id = 10;
-  string remote_status_check_callback_id = 11;
+  reserved 11;
+  reserved "remote_status_check_callback_id";
   int32 remote_status_check_attempt = 12;
   int64 remote_approval_expires_at_unix_ms = 13;
 }
@@ -167,7 +168,8 @@ message ToolApprovalTimeoutFiredEvent {
 message RemoteToolApprovalSubmittedEvent {
   string request_id = 1;
   string remote_approval_id = 2;
-  string status_check_callback_id = 3;
+  reserved 3;
+  reserved "status_check_callback_id";
   int32 status_check_attempt = 4;
   int64 expires_at_unix_ms = 5;
 }

@@ -180,7 +180,6 @@ public sealed class AIAbstractionsProtoCoverageTests
                 IsDestructive = true,
                 TimeoutCallbackId = "timeout-1",
                 RemoteApprovalId = "remote-1",
-                RemoteStatusCheckCallbackId = "remote-callback-1",
                 RemoteStatusCheckAttempt = 2,
                 RemoteApprovalExpiresAtUnixMs = 123456,
                 Metadata =
@@ -238,7 +237,6 @@ public sealed class AIAbstractionsProtoCoverageTests
         state.Sessions["session-1"].ToolCalls.Should().ContainSingle();
         state.PendingApproval.Should().NotBeNull();
         state.PendingApproval!.RemoteApprovalId.Should().Be("remote-1");
-        state.PendingApproval.RemoteStatusCheckCallbackId.Should().Be("remote-callback-1");
         state.PendingApproval.RemoteStatusCheckAttempt.Should().Be(2);
         state.PendingApproval.RemoteApprovalExpiresAtUnixMs.Should().Be(123456);
     }
@@ -369,7 +367,6 @@ public sealed class AIAbstractionsProtoCoverageTests
         {
             RequestId = "req-1",
             RemoteApprovalId = "remote-1",
-            StatusCheckCallbackId = "callback-1",
             StatusCheckAttempt = 1,
             ExpiresAtUnixMs = 123456,
         }, RemoteToolApprovalSubmittedEvent.Parser);

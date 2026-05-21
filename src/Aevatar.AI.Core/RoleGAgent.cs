@@ -213,9 +213,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             {
                 RequestId = pending.RequestId,
                 RemoteApprovalId = submission.RemoteApprovalId,
-                StatusCheckCallbackId = callbackId,
                 StatusCheckAttempt = 1,
-                ExpiresAtUnixMs = submission.ExpiresAt?.ToUnixTimeMilliseconds() ?? 0,
+                ExpiresAtUnixMs = ResolveRemoteApprovalDeadlineUnixMs(submission.ExpiresAt),
             });
 
             await ScheduleRemoteApprovalStatusCheckAsync(
@@ -305,13 +304,23 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
 
             case RemoteToolApprovalStatus.Pending:
             case RemoteToolApprovalStatus.Unknown:
+                if (HasRemoteApprovalTimedOut(pending, evt.Attempt))
+                {
+                    await PersistApprovalTerminalFailureThenClearPendingAsync(
+                        pending,
+                        "approval_timeout",
+                        string.IsNullOrWhiteSpace(snapshot.Reason)
+                            ? "NyxID remote approval timed out."
+                            : snapshot.Reason);
+                    return;
+                }
+
                 var nextAttempt = evt.Attempt + 1;
                 var callbackId = BuildRemoteApprovalStatusCallbackId(pending.RequestId, pending.RemoteApprovalId, nextAttempt);
                 await PersistDomainEventAsync(new RemoteToolApprovalSubmittedEvent
                 {
                     RequestId = pending.RequestId,
                     RemoteApprovalId = pending.RemoteApprovalId,
-                    StatusCheckCallbackId = callbackId,
                     StatusCheckAttempt = nextAttempt,
                     ExpiresAtUnixMs = snapshot.ExpiresAt?.ToUnixTimeMilliseconds() ??
                                       pending.RemoteApprovalExpiresAtUnixMs,
@@ -330,6 +339,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
 
     private const int ApprovalLocalTimeoutSeconds = 15;
     private const int RemoteApprovalStatusCheckSeconds = 2;
+    private const int RemoteApprovalWindowSeconds = 45;
+    private const int RemoteApprovalMaxStatusCheckAttempts =
+        (RemoteApprovalWindowSeconds + RemoteApprovalStatusCheckSeconds - 1) / RemoteApprovalStatusCheckSeconds;
 
     // ─── Approval helpers ───
 
@@ -442,6 +454,21 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         int attempt) =>
         $"tool-approval-remote-status-{requestId}-{remoteApprovalId}-{attempt}";
 
+    private static long ResolveRemoteApprovalDeadlineUnixMs(DateTimeOffset? expiresAt)
+    {
+        return expiresAt?.ToUnixTimeMilliseconds() ??
+               DateTimeOffset.UtcNow.AddSeconds(RemoteApprovalWindowSeconds).ToUnixTimeMilliseconds();
+    }
+
+    private static bool HasRemoteApprovalTimedOut(PendingToolApprovalState pending, int currentAttempt)
+    {
+        if (currentAttempt >= RemoteApprovalMaxStatusCheckAttempts)
+            return true;
+
+        return pending.RemoteApprovalExpiresAtUnixMs > 0 &&
+               DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() >= pending.RemoteApprovalExpiresAtUnixMs;
+    }
+
     private async Task ScheduleRemoteApprovalStatusCheckAsync(
         string requestId,
         string sessionId,
@@ -514,7 +541,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
 
         var next = current.Clone();
         next.PendingApproval.RemoteApprovalId = evt.RemoteApprovalId;
-        next.PendingApproval.RemoteStatusCheckCallbackId = evt.StatusCheckCallbackId;
         next.PendingApproval.RemoteStatusCheckAttempt = evt.StatusCheckAttempt;
         next.PendingApproval.RemoteApprovalExpiresAtUnixMs = evt.ExpiresAtUnixMs;
         return next;
@@ -926,11 +952,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             ContentEmitted = false,
         });
     }
-
-    private static string ResolveApprovalTerminalReasonCode(ToolApprovalDecision? decision) =>
-        decision == ToolApprovalDecision.Denied
-            ? "approval_denied"
-            : "approval_timeout";
 
     private async Task ReplayCompletedSessionAsync(string sessionId, RoleChatSessionState trackedSession)
     {
