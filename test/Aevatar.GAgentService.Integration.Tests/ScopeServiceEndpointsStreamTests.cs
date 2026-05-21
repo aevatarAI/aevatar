@@ -771,15 +771,13 @@ public sealed class ScopeServiceEndpointsStreamTests
         StubActorRuntime runtime,
         StubDraftRunProjectionPort projectionPort)
     {
+        var terminalProjectionPort = new StubGAgentRunTerminalProjectionPort();
         var pipeline = new DefaultCommandDispatchPipeline<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError>(
             new GAgentDraftRunCommandTargetResolver(
                 runtime,
                 projectionPort,
-                new StubGAgentRunTerminalProjectionPort()),
+                terminalProjectionPort),
             new DefaultCommandContextPolicy(),
-            new GAgentDraftRunCommandTargetBinder(
-                projectionPort,
-                new StubGAgentRunTerminalProjectionPort()),
             new GAgentDraftRunCommandEnvelopeFactory(),
             new ActorCommandTargetDispatcher<GAgentDraftRunCommandTarget>(new InlineActorDispatchPort(runtime)),
             new GAgentDraftRunAcceptedReceiptFactory());
@@ -790,7 +788,9 @@ public sealed class ScopeServiceEndpointsStreamTests
             new GAgentDraftRunCompletionPolicy(),
             new GAgentDraftRunFinalizeEmitter(),
             new GAgentDraftRunDurableCompletionResolver(new StubGAgentRunTerminalQueryPort()),
-            NullLogger<DefaultCommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, AGUIEvent, GAgentDraftRunCompletionStatus>>.Instance);
+            NullLogger<DefaultCommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, AGUIEvent, GAgentDraftRunCompletionStatus>>.Instance,
+            new GAgentDraftRunObservationLifecycle(projectionPort, terminalProjectionPort),
+            new GAgentDraftRunAcceptedReceiptFactory());
     }
 
     private sealed class StubActorRuntime : IActorRuntime

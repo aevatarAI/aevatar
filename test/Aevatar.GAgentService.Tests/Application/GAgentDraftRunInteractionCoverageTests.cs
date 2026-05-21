@@ -276,21 +276,21 @@ public sealed class GAgentDraftRunInteractionCoverageTests
     }
 
     [Fact]
-    public async Task Binder_ShouldThrow_WhenProjectionPipelineIsUnavailable()
+    public async Task ObservationLifecycle_ShouldThrow_WhenProjectionPipelineIsUnavailable()
     {
         var projectionPort = new DraftRunProjectionPort { LeaseToReturn = null };
         var terminalPort = new RecordingGAgentRunTerminalProjectionPort();
-        var binder = new GAgentDraftRunCommandTargetBinder(projectionPort, terminalPort);
+        var lifecycle = new GAgentDraftRunObservationLifecycle(projectionPort, terminalPort);
         var target = new GAgentDraftRunCommandTarget(
             new DraftRunStubActor("actor-1", new DraftRunExpectedAgent()),
             typeof(DraftRunExpectedAgent).AssemblyQualifiedName!,
             projectionPort,
             terminalPort);
+        var context = new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>());
 
-        var act = async () => await binder.BindAsync(
+        var act = async () => await lifecycle.BindAsync(
             new GAgentDraftRunCommand("scope-a", typeof(DraftRunExpectedAgent).AssemblyQualifiedName!, "hello"),
-            target,
-            new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>()),
+            CreateExecution(target, context),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -525,21 +525,21 @@ public sealed class GAgentDraftRunInteractionCoverageTests
     }
 
     [Fact]
-    public async Task Binder_ShouldActivateTerminalMaterialization_BeforeLiveObservation()
+    public async Task ObservationLifecycle_ShouldActivateTerminalMaterialization_BeforeLiveObservation()
     {
         var projectionPort = new DraftRunProjectionPort();
         var terminalPort = new RecordingGAgentRunTerminalProjectionPort();
-        var binder = new GAgentDraftRunCommandTargetBinder(projectionPort, terminalPort);
+        var lifecycle = new GAgentDraftRunObservationLifecycle(projectionPort, terminalPort);
         var target = new GAgentDraftRunCommandTarget(
             new DraftRunStubActor("actor-1", new DraftRunExpectedAgent()),
             typeof(DraftRunExpectedAgent).AssemblyQualifiedName!,
             projectionPort,
             terminalPort);
+        var context = new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>());
 
-        var result = await binder.BindAsync(
+        var result = await lifecycle.BindAsync(
             new GAgentDraftRunCommand("scope-a", typeof(DraftRunExpectedAgent).AssemblyQualifiedName!, "hello"),
-            target,
-            new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>()),
+            CreateExecution(target, context),
             CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
@@ -550,6 +550,22 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         projectionPort.EnsureCalls.Should().ContainSingle(x => x.actorId == "actor-1" && x.commandId == "cmd-1");
         projectionPort.AttachCalls.Should().ContainSingle();
     }
+
+    private static CommandDispatchExecution<GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt> CreateExecution(
+        GAgentDraftRunCommandTarget target,
+        CommandContext context) =>
+        new()
+        {
+            Target = target,
+            Context = context,
+            Envelope = new EventEnvelope { Id = "evt-1" },
+            Receipt = new GAgentDraftRunAcceptedReceipt(
+                target.ActorId,
+                target.ActorTypeName,
+                context.CommandId,
+                context.CorrelationId,
+                string.Empty),
+        };
 
     private sealed class DraftRunProjectionPort : IGAgentDraftRunProjectionPort
     {

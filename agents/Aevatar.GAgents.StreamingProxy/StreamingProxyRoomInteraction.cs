@@ -73,6 +73,9 @@ internal sealed class StreamingProxyRoomChatCommandTarget
         IEventSink<StreamingProxyRoomSessionEnvelope> sink,
         string sessionId)
     {
+        // Refactor (iter25/cluster-002-observation-lifecycle-core):
+        //   Old pattern: command preparation could attach projection/session leases and mix read-side observation into dispatch admission.
+        //   New principle: live observation is an explicit interaction phase that starts before dispatch; PrepareAsync and dispatch-only callers stay free of read-side lifecycle work
         ProjectionLease = projectionLease ?? throw new ArgumentNullException(nameof(projectionLease));
         LiveSinkLease = liveSinkLease;
         LiveSink = sink ?? throw new ArgumentNullException(nameof(sink));
@@ -175,30 +178,29 @@ internal sealed class StreamingProxyRoomChatCommandTargetResolver
     }
 }
 
-internal sealed class StreamingProxyRoomChatCommandTargetBinder
-    : ICommandTargetBinder<StreamingProxyRoomChatCommand, StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatStartError>
+internal sealed class StreamingProxyRoomObservationLifecycle
+    : ICommandObservationLifecycle<StreamingProxyRoomChatCommand, StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError>
 {
     private readonly IStreamingProxyRoomSessionProjectionPort _projectionPort;
 
-    public StreamingProxyRoomChatCommandTargetBinder(
+    public StreamingProxyRoomObservationLifecycle(
         IStreamingProxyRoomSessionProjectionPort projectionPort)
     {
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
     }
 
-    public async Task<CommandTargetBindingResult<StreamingProxyRoomChatStartError>> BindAsync(
+    public async Task<CommandObservationBindingResult<StreamingProxyRoomChatStartError>> BindAsync(
         StreamingProxyRoomChatCommand command,
-        StreamingProxyRoomChatCommandTarget target,
-        CommandContext context,
+        CommandDispatchExecution<StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatAcceptedReceipt> execution,
         CancellationToken ct = default)
     {
-        // Refactor (iter21/cluster-002-request-path-projection-session-priming):
-        //   Old pattern: request handlers synchronously ensure projection/session leases and wait on live sinks.
-        //   New principle: commands use accepted receipts; observation is owned by binders or attach-only sessions.
+        // Refactor (iter25/cluster-002-observation-lifecycle-core):
+        //   Old pattern: target binder attached projection/session leases during command preparation.
+        //   New principle: interaction observation lifecycle attaches live sinks before dispatch and keeps dispatch-only PrepareAsync free of read-side work.
         ArgumentNullException.ThrowIfNull(command);
-        ArgumentNullException.ThrowIfNull(target);
-        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(execution);
 
+        var target = execution.Target;
         var sink = new EventChannel<StreamingProxyRoomSessionEnvelope>();
         try
         {
@@ -213,7 +215,7 @@ internal sealed class StreamingProxyRoomChatCommandTargetBinder
             {
                 sink.Complete();
                 await sink.DisposeAsync();
-                return CommandTargetBindingResult<StreamingProxyRoomChatStartError>.Failure(
+                return CommandObservationBindingResult<StreamingProxyRoomChatStartError>.Failure(
                     StreamingProxyRoomChatStartError.ProjectionUnavailable);
             }
 
@@ -222,7 +224,7 @@ internal sealed class StreamingProxyRoomChatCommandTargetBinder
                 attachment.LiveSinkLease,
                 sink,
                 command.SessionId);
-            return CommandTargetBindingResult<StreamingProxyRoomChatStartError>.Success();
+            return CommandObservationBindingResult<StreamingProxyRoomChatStartError>.Success();
         }
         catch
         {

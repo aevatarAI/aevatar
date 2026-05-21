@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Definitions;
@@ -7,26 +8,28 @@ using Aevatar.Scripting.Application;
 
 namespace Aevatar.Scripting.Infrastructure.Ports;
 
-public sealed class ScriptEvolutionCommandTargetBinder
-    : ICommandTargetBinder<ScriptEvolutionProposal, ScriptEvolutionCommandTarget, ScriptEvolutionStartError>
+public sealed class ScriptEvolutionObservationLifecycle
+    : ICommandObservationLifecycle<ScriptEvolutionProposal, ScriptEvolutionCommandTarget, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError>
 {
     private readonly IScriptEvolutionProjectionPort _projectionPort;
 
-    public ScriptEvolutionCommandTargetBinder(IScriptEvolutionProjectionPort projectionPort)
+    public ScriptEvolutionObservationLifecycle(IScriptEvolutionProjectionPort projectionPort)
     {
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
     }
 
-    public async Task<CommandTargetBindingResult<ScriptEvolutionStartError>> BindAsync(
+    public async Task<CommandObservationBindingResult<ScriptEvolutionStartError>> BindAsync(
         ScriptEvolutionProposal command,
-        ScriptEvolutionCommandTarget target,
-        CommandContext context,
+        CommandDispatchExecution<ScriptEvolutionCommandTarget, ScriptEvolutionAcceptedReceipt> execution,
         CancellationToken ct = default)
     {
+        // Refactor (iter25/cluster-002-observation-lifecycle-core):
+        //   Old pattern: script binder activated readmodel and live projections during command preparation.
+        //   New principle: interaction observation lifecycle starts read-side observation before dispatch without affecting dispatch-only command admission.
         ArgumentNullException.ThrowIfNull(command);
-        ArgumentNullException.ThrowIfNull(target);
-        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(execution);
 
+        var target = execution.Target;
         var channel = new EventChannel<ScriptEvolutionSessionCompletedEvent>(capacity: 256);
         var sink = new ScriptEvolutionScopedEventSink(target.ProposalId, channel);
 
@@ -35,7 +38,7 @@ public sealed class ScriptEvolutionCommandTargetBinder
             if (!await target.ActivateReadModelAsync(ct))
             {
                 await sink.DisposeAsync();
-                return CommandTargetBindingResult<ScriptEvolutionStartError>.Failure(
+                return CommandObservationBindingResult<ScriptEvolutionStartError>.Failure(
                     ScriptEvolutionStartError.ProjectionDisabled);
             }
 
@@ -50,12 +53,12 @@ public sealed class ScriptEvolutionCommandTargetBinder
             if (attachment == null)
             {
                 await sink.DisposeAsync();
-                return CommandTargetBindingResult<ScriptEvolutionStartError>.Failure(
+                return CommandObservationBindingResult<ScriptEvolutionStartError>.Failure(
                     ScriptEvolutionStartError.ProjectionDisabled);
             }
 
             target.BindLiveObservation(attachment.ProjectionLease, attachment.LiveSinkLease, sink);
-            return CommandTargetBindingResult<ScriptEvolutionStartError>.Success();
+            return CommandObservationBindingResult<ScriptEvolutionStartError>.Success();
         }
         catch
         {

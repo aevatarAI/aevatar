@@ -22,7 +22,7 @@ using Google.Protobuf.WellKnownTypes;
 namespace Aevatar.Scripting.Core.Tests.Runtime;
 
 // Test-add (test-coverage/cluster-035):
-//   Covers refactor-introduced behavior in ScriptEvolutionCommandTarget.cs:74-132 and ScriptEvolutionCommandTargetBinder.cs:35-54.
+//   Covers refactor-introduced behavior in ScriptEvolutionCommandTarget.cs:74-132 and ScriptEvolutionObservationLifecycle.
 //   Cluster intent: script evolution carries explicit live-sink projection leases through target binding and cleanup.
 public class RuntimeScriptInfrastructurePortsTests
 {
@@ -803,17 +803,22 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     [Fact]
-    public async Task ScriptEvolutionCommandTargetBinder_ShouldReturnProjectionDisabled_WhenActivationFails()
+    public async Task ScriptEvolutionObservationLifecycle_ShouldReturnProjectionDisabled_WhenActivationFails()
     {
         var projectionPort = new TestProjectionPort { ReturnNullLease = true };
-        var binder = new ScriptEvolutionCommandTargetBinder(projectionPort);
+        var lifecycle = new ScriptEvolutionObservationLifecycle(projectionPort);
         var target = new ScriptEvolutionCommandTarget(
             new TestActor("script-evolution-session:proposal-disabled"),
             "proposal-disabled",
             projectionPort,
             projectionPort);
+        var context = new CommandContext(
+            "script-evolution-session:proposal-disabled",
+            "cmd-1",
+            "corr-1",
+            new Dictionary<string, string>());
 
-        var result = await binder.BindAsync(
+        var result = await lifecycle.BindAsync(
             new ScriptEvolutionProposal(
                 ProposalId: "proposal-disabled",
                 ScriptId: "script-1",
@@ -822,12 +827,13 @@ public class RuntimeScriptInfrastructurePortsTests
                 CandidateSource: "source-rev-2",
                 CandidateSourceHash: "hash-rev-2",
                 Reason: "rollout"),
-            target,
-            new CommandContext(
-                "script-evolution-session:proposal-disabled",
-                "cmd-1",
-                "corr-1",
-                new Dictionary<string, string>()),
+            new CommandDispatchExecution<ScriptEvolutionCommandTarget, ScriptEvolutionAcceptedReceipt>
+            {
+                Target = target,
+                Context = context,
+                Envelope = new EventEnvelope { Id = "evt-1" },
+                Receipt = new ScriptEvolutionAcceptedReceipt(target.SessionActorId, target.ProposalId, context.CommandId, context.CorrelationId),
+            },
             CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
@@ -903,7 +909,6 @@ public class RuntimeScriptInfrastructurePortsTests
         var dispatchPipeline = new DefaultCommandDispatchPipeline<ScriptEvolutionProposal, ScriptEvolutionCommandTarget, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError>(
             targetResolver,
             new DefaultCommandContextPolicy(),
-            new ScriptEvolutionCommandTargetBinder(projectionPort),
             new ScriptEvolutionEnvelopeFactory(),
             new ActorCommandTargetDispatcher<ScriptEvolutionCommandTarget>(runtime),
             new ScriptEvolutionAcceptedReceiptFactory());
@@ -912,7 +917,9 @@ public class RuntimeScriptInfrastructurePortsTests
             new ScriptEvolutionTimedEventOutputStream(resolvedInteractionTimeoutOptions),
             new ScriptEvolutionCompletionPolicy(),
             new NoOpCommandFinalizeEmitter<ScriptEvolutionAcceptedReceipt, ScriptEvolutionInteractionCompletion, ScriptEvolutionSessionCompletedEvent>(),
-            new ScriptEvolutionDurableCompletionResolver(decisionReadPort));
+            new ScriptEvolutionDurableCompletionResolver(decisionReadPort),
+            observationLifecycle: new ScriptEvolutionObservationLifecycle(projectionPort),
+            receiptFactory: new ScriptEvolutionAcceptedReceiptFactory());
 
         return new RuntimeScriptEvolutionInteractionService(interactionService);
     }
@@ -992,7 +999,6 @@ public class RuntimeScriptInfrastructurePortsTests
             new DefaultCommandDispatchPipeline<TCommand, ScriptingActorCommandTarget, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError>(
                 resolver,
                 new DefaultCommandContextPolicy(),
-                new NoOpCommandTargetBinder<TCommand, ScriptingActorCommandTarget, ScriptingCommandStartError>(),
                 envelopeFactory,
                 new ActorCommandTargetDispatcher<ScriptingActorCommandTarget>(runtime),
                 new ScriptingCommandAcceptedReceiptFactory()));

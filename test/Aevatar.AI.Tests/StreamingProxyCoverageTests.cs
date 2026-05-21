@@ -80,8 +80,8 @@ public class StreamingProxyCoverageTests
             .Should().NotBeNull();
         services.GetRequiredService<ICommandEnvelopeFactory<StreamingProxyRoomChatCommand>>()
             .Should().BeOfType<StreamingProxyRoomChatCommandEnvelopeFactory>();
-        services.GetRequiredService<ICommandTargetBinder<StreamingProxyRoomChatCommand, StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatStartError>>()
-            .Should().BeOfType<StreamingProxyRoomChatCommandTargetBinder>();
+        services.GetRequiredService<ICommandObservationLifecycle<StreamingProxyRoomChatCommand, StreamingProxyRoomChatCommandTarget, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError>>()
+            .Should().BeOfType<StreamingProxyRoomObservationLifecycle>();
         services.GetRequiredService<IStreamingProxyRoomSubscriptionObservationPort>()
             .Should().BeOfType<StreamingProxyRoomSubscriptionObservationPort>();
     }
@@ -687,7 +687,7 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
-    public async Task StreamingProxyRoomInteraction_ShouldCleanupBoundLease_WhenDispatchFails()
+    public async Task StreamingProxyRoomInteraction_ShouldCleanupBoundObservation_WhenDispatchFails()
     {
         var actor = new StubActor("room-a");
         var runtime = new StubActorRuntime([actor]);

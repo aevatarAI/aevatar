@@ -1041,7 +1041,7 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
-    public async Task NyxIdChatInteraction_ShouldCleanupBoundLease_WhenDispatchFails()
+    public async Task NyxIdChatInteraction_ShouldCleanupBoundObservation_WhenDispatchFails()
     {
         var actor = new StubActor("actor-1");
         var runtime = new StubActorRuntime();
@@ -1137,8 +1137,8 @@ public class NyxIdChatEndpointsCoverageTests
             .Should().NotBeNull();
         services.GetRequiredService<ICommandEnvelopeFactory<NyxIdChatCommand>>()
             .Should().BeOfType<NyxIdChatCommandEnvelopeFactory>();
-        services.GetRequiredService<ICommandTargetBinder<NyxIdChatCommand, NyxIdChatCommandTarget, NyxIdChatStartError>>()
-            .Should().BeOfType<NyxIdChatCommandTargetBinder<NyxIdChatCommand>>();
+        services.GetRequiredService<ICommandObservationLifecycle<NyxIdChatCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>>()
+            .Should().BeOfType<NyxIdChatObservationLifecycle<NyxIdChatCommand>>();
     }
 
     [Fact]
