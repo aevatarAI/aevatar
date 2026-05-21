@@ -70,40 +70,7 @@ public static class ScopeGAgentAguiEventMapper
         if (payload.Is(AiTextEnd.Descriptor))
         {
             var ai = payload.Unpack<AiTextEnd>();
-            if (!string.IsNullOrEmpty(ai.Content))
-            {
-                const string llmErrorPrefix = "[[AEVATAR_LLM_ERROR]]";
-                const string llmFailedPrefix = "LLM request failed:";
-                if (ai.Content.StartsWith(llmErrorPrefix, StringComparison.Ordinal))
-                {
-                    return new AGUIEvent
-                    {
-                        RunError = new RunErrorEvent
-                        {
-                            Message = ai.Content[llmErrorPrefix.Length..].Trim(),
-                        },
-                    };
-                }
-
-                if (ai.Content.StartsWith(llmFailedPrefix, StringComparison.Ordinal))
-                {
-                    return new AGUIEvent
-                    {
-                        RunError = new RunErrorEvent
-                        {
-                            Message = ai.Content.Trim(),
-                        },
-                    };
-                }
-            }
-
-            return new AGUIEvent
-            {
-                TextMessageEnd = new Aevatar.Presentation.AGUI.TextMessageEndEvent
-                {
-                    MessageId = ai.SessionId,
-                },
-            };
+            return MapTextCompletion(ai.SessionId, ai.Content);
         }
 
         if (payload.Is(AiToolCall.Descriptor))
@@ -160,6 +127,44 @@ public static class ScopeGAgentAguiEventMapper
             return payload.Unpack<AGUIEvent>();
 
         return null;
+    }
+
+    private static AGUIEvent MapTextCompletion(string sessionId, string? content)
+    {
+        if (!string.IsNullOrEmpty(content))
+        {
+            const string llmErrorPrefix = "[[AEVATAR_LLM_ERROR]]";
+            const string llmFailedPrefix = "LLM request failed";
+            if (content.StartsWith(llmErrorPrefix, StringComparison.Ordinal))
+            {
+                return new AGUIEvent
+                {
+                    RunError = new RunErrorEvent
+                    {
+                        Message = content[llmErrorPrefix.Length..].Trim(),
+                    },
+                };
+            }
+
+            if (content.StartsWith(llmFailedPrefix, StringComparison.Ordinal))
+            {
+                return new AGUIEvent
+                {
+                    RunError = new RunErrorEvent
+                    {
+                        Message = content.Trim(),
+                    },
+                };
+            }
+        }
+
+        return new AGUIEvent
+        {
+            TextMessageEnd = new Aevatar.Presentation.AGUI.TextMessageEndEvent
+            {
+                MessageId = sessionId,
+            },
+        };
     }
 
     public static Struct BuildToolApprovalStruct(Any payload)
