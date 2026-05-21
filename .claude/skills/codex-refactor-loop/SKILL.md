@@ -134,6 +134,51 @@ disown
 - ❌ 看到 concurrency-alert.log 有 entry 但 controller 不读
 - ❌ active issue 0 codex 跑 >= 1 wakeup 周期(说明 controller 漏派)
 
+### Controller helper 库:`tools/refactor-loop/controller_lib.sh`(强制,per Auric 2026-05-21 "搞错了吧 #690" + "改一下脚本")
+
+7 个曾发生的 bug 都来自 controller boilerplate 重复 + bash 变量传值 bug。统一抽 helper:
+
+```bash
+source tools/refactor-loop/controller_lib.sh
+
+safe_worktree iter25 cluster-026 origin/auto-refact-dev   # → exports WT_PATH + BRANCH
+open_pr_with_label "iter25 cluster-XXX: title" body.md    # → exports PR_NUM(原地传值,无 grep subshell bug)
+merge_pr 781                                              # auto-close linked issue + cleanup labels
+render_template implement.md out.md                       # 处理 {{var}} 和 $VAR 两种语法
+sweep_stale_labels                                        # 清 closed but 仍挂 in-flight label
+validate_prompt out.md                                    # check 0 unresolved {{var}}
+```
+
+**强制**:
+- 派 codex 前必须 `validate_prompt` — 防 codex blocked on unresolved placeholder(iter25 #784 事故)
+- merge PR 必须用 `merge_pr <pr>` — auto-close + label cleanup,不留尾巴
+- worktree 创建必须用 `safe_worktree` — 处理 "already exists" race
+- PR 号捕获必须用 `open_pr_with_label`(直接 export PR_NUM)— **禁止** `pr_num=$(...grep -oE...)` 这种 subshell 变量(iter22 #690 误发事故)
+
+**Label 生命周期(强制状态机)**:
+
+```
+issue/PR 状态 → 期望 label
+
+design issue:
+  open + 🤖 ai → 🔍 design-solving       (solver/judge 跑)
+  open + 🤖 ai → 🛠 implementing         (implement 派出)
+  open + 🆘 human:卡死-需-rework         (escalate philosophy/split)
+  closed       → 🎉 phase:merged          (via PR merge)
+  closed       → wontfix                  (per maintainer drop directive)
+
+cluster PR:
+  open + 🤖 ai → 🚀 phase:pr-open + 👀 reviewing  (reviewer 派出)
+  open + 🤖 ai → 🚀 phase:pr-open + 🔧 fixing     (fix codex)
+  open + 🆘 human:卡死-需-rework                  (reflector escalate-human)
+  closed merged → 🎉 phase:merged                  (via merge_pr)
+  closed       → (no phase, branch deleted)
+
+rollup PR(#690-style):
+  open → 🚀 phase:pr-open + 🤖 human:auto-推进     (passive integration)
+  注:rollup 即使 BLOCKED 也是 🤖 auto-推进,不是 maintainer 决策点
+```
+
 ### Spawn pattern — Bash `run_in_background: true`(强制,per Auric 2026-05-21 "codex 可以执行得很好,为什么你做不到")
 
 **关键架构铁律**:codex spawn 必须用 **Bash tool with `run_in_background: true`** 跑 `spawn-codex.sh`。这样 harness 会跟踪 Bash → codex 进程链,**codex exit 时 harness 立即 fire `<task-notification>` 唤醒 controller**,不用等 ScheduleWakeup。

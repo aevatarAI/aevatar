@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+# controller_lib.sh — bash library for codex-refactor-loop controller actions
+#
+# per Auric 2026-05-21 "你完整分析一下,改一下脚本":
+# 7 个系统性问题中的 1/2/3/5/6 都源于 controller 每次手工写 boilerplate
+# (post_banner + spawn + commit + push + close issue + cleanup labels)。
+# 这个库统一抽象,消除 bash 变量传值 bug、重复 sed、worktree race。
+#
+# Usage(在 controller 里):
+#   source tools/refactor-loop/controller_lib.sh
+#   merge_pr 781 778   # PR #781 merge + close #778 + cleanup labels
+#   safe_worktree iter25 cluster-026 origin/auto-refact-dev
+#   open_pr_with_label "iter25 cluster-NNN: ..." pr-body.md auto-refact-dev
+#
+# ⟦AI:AUTO-LOOP⟧
+
+set -u
+
+REPO_ROOT="${REPO_ROOT:-/Users/auric/aevatar}"
+
+# Fixes "git worktree add already exists" — detect-or-create
+# Usage: safe_worktree <iter> <cluster-id> <base-ref>
+# Sets WT_PATH and BRANCH env vars on success.
+safe_worktree() {
+  local iter="$1" cluster="$2" base="$3"
+  WT_PATH="${REPO_ROOT}-wt-iter${iter}-${cluster}"
+  BRANCH="refactor/iter${iter}-${cluster}"
+  if [ -d "$WT_PATH" ]; then
+    echo "  ✓ worktree exists: $WT_PATH" >&2
+    return 0
+  fi
+  if git -C "$REPO_ROOT" show-ref --quiet "refs/heads/$BRANCH"; then
+    git -C "$REPO_ROOT" worktree add "$WT_PATH" "$BRANCH" 2>&1 | tail -2 >&2
+  else
+    git -C "$REPO_ROOT" worktree add -b "$BRANCH" "$WT_PATH" "$base" 2>&1 | tail -2 >&2
+  fi
+  export WT_PATH BRANCH
+}
+
+# Post-merge cleanup: merge PR + close linked issue + cleanup labels on both
+# Usage: merge_pr <pr-number> [linked-issue]
+merge_pr() {
+  local pr="$1" linked_issue="${2:-}"
+  if [ -z "$pr" ]; then
+    echo "merge_pr: missing pr number" >&2
+    return 1
+  fi
+  # Auto-extract Closes #N if linked_issue not provided
+  if [ -z "$linked_issue" ]; then
+    linked_issue=$(gh pr view "$pr" --json body --jq '.body' 2>/dev/null | grep -oE "Closes #[0-9]+" | head -1 | grep -oE "[0-9]+")
+  fi
+  gh pr merge "$pr" --admin --squash --delete-branch 2>&1 | tail -1
+  # Cleanup PR labels: in-flight → merged
+  gh pr edit "$pr" \
+    --remove-label "🚀 phase:pr-open" \
+    --remove-label "👀 phase:reviewing" \
+    --remove-label "🔧 phase:fixing" \
+    --remove-label "⏸️ phase:blocked" \
+    --remove-label "auto-loop-stuck" \
+    --add-label "🎉 phase:merged" 2>&1 >/dev/null
+  # Close linked issue + cleanup its labels
+  if [ -n "$linked_issue" ]; then
+    gh issue close "$linked_issue" --reason "completed" --comment "✅ Auto-merged via PR #${pr}。⟦AI:AUTO-LOOP⟧" 2>&1 | tail -1
+    gh issue edit "$linked_issue" \
+      --remove-label "🔍 phase:design-solving" \
+      --remove-label "🛠️ phase:implementing" \
+      --remove-label "🤖 human:auto-推进" \
+      --remove-label "⏸️ phase:blocked" \
+      --remove-label "auto-loop-stuck" \
+      --remove-label "🆘 human:卡死-需-rework" \
+      --add-label "🎉 phase:merged" 2>&1 >/dev/null
+  fi
+  # Remove worktree if exists
+  local wt
+  wt=$(git -C "$REPO_ROOT" worktree list --porcelain | awk -v b="$(gh pr view "$pr" --json headRefName --jq '.headRefName' 2>/dev/null)" '
+    $1 == "worktree" { path=$2 }
+    $1 == "branch" && $2 == "refs/heads/"b { print path; exit }
+  ')
+  [ -n "$wt" ] && [ "$wt" != "$REPO_ROOT" ] && git -C "$REPO_ROOT" worktree remove "$wt" --force 2>&1 | tail -1
+}
+
+# Open PR + add auto-loop label atomically + capture PR number into PR_NUM
+# Usage: open_pr_with_label <title> <body-file> [base]
+# Sets PR_NUM env var.
+open_pr_with_label() {
+  local title="$1" body_file="$2" base="${3:-auto-refact-dev}"
+  local pr_url
+  pr_url=$(gh pr create --base "$base" --title "$title" --body-file "$body_file" 2>&1 | tail -1)
+  PR_NUM=$(echo "$pr_url" | grep -oE "pull/[0-9]+" | grep -oE "[0-9]+")
+  if [ -z "$PR_NUM" ]; then
+    echo "open_pr_with_label: failed to extract PR num from: $pr_url" >&2
+    return 1
+  fi
+  gh pr edit "$PR_NUM" --add-label "auto-loop,🚀 phase:pr-open,👀 phase:reviewing,🤖 human:auto-推进" 2>&1 >/dev/null
+  echo "$pr_url"
+  export PR_NUM
+}
+
+# Substitute {{handlebars}} placeholders in a template using current env vars
+# Usage: render_template <template-file> <output-file>
+# Reads $CLUSTER_ID, $ITERATION, $WORKTREE_PATH, $BRANCH, $OLD_PATTERN, $NEW_PRINCIPLE, $SCOPE_PATHS, $VERIFICATION_HINTS, and $VAR in template.
+render_template() {
+  local in="$1" out="$2"
+  perl -pe '
+    s/\{\{cluster_id\}\}/$ENV{CLUSTER_ID}/g;
+    s/\{\{iteration\}\}/$ENV{ITERATION}/g;
+    s/\{\{worktree_path\}\}/$ENV{WORKTREE_PATH}/g;
+    s/\{\{branch\}\}/$ENV{BRANCH}/g;
+    s/\{\{old_pattern\}\}/$ENV{OLD_PATTERN}/g;
+    s/\{\{new_principle\}\}/$ENV{NEW_PRINCIPLE}/g;
+    s/\{\{scope_paths\}\}/$ENV{SCOPE_PATHS}/g;
+    s/\{\{verification_hints\}\}/$ENV{VERIFICATION_HINTS}/g;
+  ' < "$in" | envsubst > "$out"
+}
+
+# Sweep all closed auto-loop issues/PRs and clean stale in-flight phase labels
+# Usage: sweep_stale_labels
+sweep_stale_labels() {
+  local n_fixed=0
+  for kind in issue pr; do
+    gh "$kind" list --label "auto-loop" --state closed --limit 50 --json number,labels 2>/dev/null | \
+      python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+stale = ['🚀 phase:pr-open', '👀 phase:reviewing', '🔧 phase:fixing', '⏸️ phase:blocked', 'auto-loop-stuck', '🆘 human:卡死-需-rework', '🔍 phase:design-solving', '🛠️ phase:implementing', '🤖 human:auto-推进']
+for x in d:
+    bad = [l['name'] for l in x['labels'] if l['name'] in stale]
+    if bad:
+        print(x['number'], ','.join(bad))
+" | while read num bad; do
+        [ -z "$num" ] && continue
+        local args=""
+        old_IFS="$IFS"; IFS=,
+        for l in $bad; do
+          args="$args --remove-label \"$l\""
+        done
+        IFS="$old_IFS"
+        # Add 🎉 phase:merged if it's MERGED
+        if [ "$kind" = "pr" ]; then
+          local state
+          state=$(gh pr view "$num" --json state --jq '.state' 2>/dev/null)
+          [ "$state" = "MERGED" ] && args="$args --add-label '🎉 phase:merged'"
+        else
+          args="$args --add-label '🎉 phase:merged'"
+        fi
+        eval "gh $kind edit $num $args" 2>&1 >/dev/null && n_fixed=$((n_fixed+1)) && echo "  cleaned $kind #$num: $bad"
+      done
+  done
+  echo "  total fixed: $n_fixed"
+}
+
+# Validate prompt file has no unresolved {{var}}
+# Usage: validate_prompt <prompt-file>
+validate_prompt() {
+  local f="$1"
+  local n
+  n=$(grep -c "{{" "$f" 2>/dev/null || echo 0)
+  if [ "$n" -gt 0 ]; then
+    echo "❌ prompt $f 仍有 $n 个未解析 {{var}}:" >&2
+    grep -n "{{" "$f" | head -5 >&2
+    return 1
+  fi
+  return 0
+}
+
+# ⟦AI:AUTO-LOOP⟧
