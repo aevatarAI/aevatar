@@ -1146,6 +1146,43 @@ jest.mock("@/shared/studio/api", () => ({
         memberId: input.memberId,
       };
     }),
+    bindMemberGAgent: jest.fn(async (input: {
+      scopeId: string;
+      memberId: string;
+      displayName?: string;
+      actorTypeName: string;
+      endpoints: Array<{
+        endpointId: string;
+        displayName?: string;
+        kind?: string;
+        requestTypeUrl?: string;
+        responseTypeUrl?: string;
+        description?: string;
+      }>;
+    }) => {
+      const existingMember = mockStudioMembers.find(
+        (member) => member.memberId === input.memberId
+      );
+      const serviceId = existingMember?.publishedServiceId || `member-${input.memberId}`;
+      mockStudioMembers = mockStudioMembers.map((member) =>
+        member.memberId === input.memberId
+          ? {
+              ...member,
+              lifecycleStage: "bind_ready",
+              publishedServiceId: serviceId,
+              lastBoundRevisionId: "rev-gagent-1",
+              updatedAt: "2026-04-27T08:15:00Z",
+            }
+          : member
+      );
+
+      return {
+        status: "accepted",
+        bindingRunId: "bind-member-gagent-1",
+        scopeId: input.scopeId,
+        memberId: input.memberId,
+      };
+    }),
     getMemberBindingRun: jest.fn(async (scopeId: string, memberId: string, bindingRunId: string) => ({
       bindingRunId,
       scopeId,
@@ -1781,7 +1818,15 @@ jest.mock("./components/StudioBuildPanels", () => {
         {
           key: "bind",
           type: "button",
-          onClick: () => props.onContinueToBind?.(),
+          onClick: () =>
+            props.onContinueToBind?.({
+              actorTypeName: props.selectedGAgentTypeName || "Tests.OrdersGAgent, Tests",
+              displayName: props.currentMemberLabel || "orders-gagent",
+              initialPrompt: "You are the team member gagent.",
+              persistenceMode: "grain",
+              role: "intake-classifier",
+              tools: ["classify_intent", "detect_language"],
+            }),
         },
         "Continue to Bind"
       ),
@@ -1872,8 +1917,19 @@ jest.mock("./components/StudioBuildPanels", () => {
     ]);
   };
 
-  const StudioGAgentBuildPanel = (props: any) =>
-    mockReact.createElement("div", { "data-testid": "studio-gagent-build-panel" }, [
+  const StudioGAgentBuildPanel = (props: any) => {
+    mockReact.useEffect(() => {
+      props.onBuildStateChange?.({
+        actorTypeName: props.selectedGAgentTypeName || "Tests.OrdersGAgent, Tests",
+        displayName: props.currentMemberLabel || "orders-gagent",
+        initialPrompt: "You are the team member gagent.",
+        persistenceMode: "grain",
+        role: "intake-classifier",
+        tools: ["classify_intent", "detect_language"],
+      });
+    }, [props.currentMemberLabel, props.onBuildStateChange, props.selectedGAgentTypeName]);
+
+    return mockReact.createElement("div", { "data-testid": "studio-gagent-build-panel" }, [
       mockReact.createElement("div", { key: "title" }, "GAgent definition"),
       mockReact.createElement("div", { key: "provenance" }, "template · seeded"),
       mockReact.createElement("input", {
@@ -1938,6 +1994,7 @@ jest.mock("./components/StudioBuildPanels", () => {
         "Continue to Bind"
       ),
     ]);
+  };
 
   return {
     __esModule: true,
@@ -4277,6 +4334,140 @@ describe("StudioPage", () => {
     });
   });
 
+  it("restores an unbound GAgent member from the backend roster after refresh", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    mockStudioMembers = [
+      {
+        memberId: "orders-worker",
+        scopeId: "scope-1",
+        displayName: "Orders Worker",
+        description: "Unbound GAgent member",
+        implementationKind: "gagent",
+        lifecycleStage: "created",
+        publishedServiceId: "member-orders-worker",
+        lastBoundRevisionId: null,
+        createdAt: "2026-04-27T08:10:00Z",
+        updatedAt: "2026-04-27T08:10:00Z",
+      },
+      ...mockStudioMembers,
+    ];
+
+    renderStudioPage(
+      "/studio?scopeId=scope-1&member=member%3Aorders-worker&step=build&tab=gagents",
+    );
+
+    expect(await screen.findByTestId("studio-gagent-build-panel")).toBeTruthy();
+    const rail = await screen.findByLabelText("Team members");
+    expect(
+      await within(rail).findByRole("button", { name: "Orders Worker" }),
+    ).toBeTruthy();
+    expect(screen.getByTestId("studio-context-title")).toHaveTextContent(
+      "Orders Worker",
+    );
+
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("member")).toBe("member:orders-worker");
+      expect(searchParams.get("tab")).toBe("gagents");
+      expect(searchParams.get("step")).toBe("build");
+      expect(searchParams.get("focus")).toBeNull();
+    });
+  });
+
+  it("binds an unbound GAgent member from Build and keeps the member route", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    mockStudioMembers = [
+      {
+        memberId: "orders-worker",
+        scopeId: "scope-1",
+        displayName: "Orders Worker",
+        description: "Unbound GAgent member",
+        implementationKind: "gagent",
+        lifecycleStage: "created",
+        publishedServiceId: "member-orders-worker",
+        lastBoundRevisionId: null,
+        createdAt: "2026-04-27T08:10:00Z",
+        updatedAt: "2026-04-27T08:10:00Z",
+      },
+      ...mockStudioMembers,
+    ];
+    mockScopeRuntimeApi.listServices.mockReset();
+    mockScopeRuntimeApi.listServices
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([
+        {
+          serviceId: "member-orders-worker",
+          displayName: "Orders Worker",
+          deploymentStatus: "Active",
+          primaryActorId: "actor-orders-worker",
+          endpoints: [
+            {
+              endpointId: "run",
+              displayName: "Run",
+              kind: "command",
+              description: "Run the bound GAgent member.",
+              requestTypeUrl: "type.googleapis.com/google.protobuf.StringValue",
+              responseTypeUrl: "",
+            },
+          ],
+        },
+      ]);
+
+    renderStudioPage(
+      "/studio?scopeId=scope-1&member=member%3Aorders-worker&step=build&tab=gagents",
+    );
+
+    expect(await screen.findByTestId("studio-gagent-build-panel")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Continue to Bind" }));
+
+    expect(await screen.findByTestId("studio-bind-surface")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("candidate:Orders Worker")).toBeTruthy();
+      expect(screen.getByText("service:no-service")).toBeTruthy();
+      expect(screen.getByText("services:none")).toBeTruthy();
+      expect(screen.getByText("member:orders-worker")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Bind current member" }));
+
+    await waitFor(() => {
+      expect(studioApi.bindMemberGAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scopeId: "scope-1",
+          memberId: "orders-worker",
+          displayName: "Orders Worker",
+          actorTypeName: "Tests.OrdersGAgent, Tests",
+          endpoints: expect.arrayContaining([
+            expect.objectContaining({
+              endpointId: "run",
+              kind: "command",
+            }),
+          ]),
+        })
+      );
+    });
+    expect(studioApi.bindScopeGAgent).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.getByText("service:member-orders-worker")).toBeTruthy();
+      expect(screen.getByText("services:member-orders-worker")).toBeTruthy();
+      expect(screen.getByText("candidate:none")).toBeTruthy();
+    });
+
+    const searchParams = new URLSearchParams(window.location.search);
+    expect(searchParams.get("member")).toBe("member:orders-worker");
+    expect(searchParams.get("step")).toBe("bind");
+    expect(searchParams.get("tab")).toBe("bindings");
+    expect(searchParams.get("focus")).toBeNull();
+  });
+
   it("renames a workflow member from the inventory actions", async () => {
     jest.spyOn(window, "prompt").mockReturnValue("orders-router");
 
@@ -5189,7 +5380,7 @@ describe("StudioPage", () => {
         updatedAt: "2026-04-27T08:05:00Z",
       },
     ];
-    mockScopeRuntimeApi.listServices.mockResolvedValueOnce([
+    mockScopeRuntimeApi.listServices.mockResolvedValue([
       {
         serviceId: "default",
         displayName: "workspace-demo",
