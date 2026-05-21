@@ -21,10 +21,13 @@ git fetch origin --quiet 2>/dev/null
 
 echo "═══════════════ peek $(date -u +%H:%M:%SZ) ═══════════════"
 
-# 0. CRITICAL: 最近 6h maintainer 评论(non-AI 即非 sentinel)
-# per Auric 2026-05-21 漏读 #720 4h+ "如果没什么用就删了吧" directive 事故
+# 0. CRITICAL: maintainer 评论(non-AI 即非 sentinel)
+# per Auric 2026-05-21 漏读 #720 4h+ + 2026-05-22 #779 8h 漏读事故
+# 规则:
+#   (a) 最近 12h 任何 issue/PR 的 maintainer 评论 — 显示
+#   (b) stuck-label issue 的 LATEST maintainer 评论 — 无论多久都显示(避免漏读)
 echo ""
-echo "▍🚨 最近 6h maintainer 评论(read first!):"
+echo "▍🚨 maintainer 评论(read first — 漏读 = controller bug):"
 {
   gh issue list --label "auto-loop" --state open --json number 2>/dev/null | python3 -c "import json,sys; [print(f'i{x[\"number\"]}') for x in json.load(sys.stdin)]" 2>/dev/null
   gh pr list --label "auto-loop" --state open --json number 2>/dev/null | python3 -c "import json,sys; [print(f'p{x[\"number\"]}') for x in json.load(sys.stdin)]" 2>/dev/null
@@ -44,18 +47,27 @@ try:
     data = json.load(sys.stdin)
     cs = data.get('comments', [])
 except: sys.exit(0)
-non_ai = [c for c in cs if '⟦AI:AUTO-LOOP⟧' not in (c.get('body','') or '') and not (c.get('body','') or '').lstrip().startswith(('## 📊', '## 🤖', '## ✅', '## 🆘'))]
+# non-AI = not AI sentinel, not status banner prefix, not codecov bot
+non_ai = [c for c in cs if '⟦AI:AUTO-LOOP⟧' not in (c.get('body','') or '')
+          and not (c.get('body','') or '').lstrip().startswith(('## 📊', '## 🤖', '## ✅', '## 🆘'))
+          and not (c.get('author',{}) or {}).get('login','').endswith('[bot]')]
 if not non_ai: sys.exit(0)
 last = max(non_ai, key=lambda c: c.get('createdAt',''))
+# Find latest AI reply (any AI sentinel or status banner)
+ai = [c for c in cs if c.get('createdAt','') > last.get('createdAt','') and
+      ('⟦AI:AUTO-LOOP⟧' in (c.get('body','') or '') or (c.get('body','') or '').lstrip().startswith(('## 📊', '## 🤖', '## ✅', '## 🆘')))]
+has_ai_reply = bool(ai)
 ts_str = last.get('createdAt','').rstrip('Z')
 try:
     ts = datetime.fromisoformat(ts_str).replace(tzinfo=timezone.utc)
 except: sys.exit(0)
 delta_h = (datetime.now(timezone.utc) - ts).total_seconds() / 3600
-if delta_h > 6: sys.exit(0)
+# 12h cutoff OR no AI reply since(无回应必显示,无论多久)
+if delta_h > 12 and has_ai_reply: sys.exit(0)
+flag = '⏰ no-AI-reply' if not has_ai_reply else ''
 author = (last.get('author', {}) or {}).get('login', '?')
 body = (last.get('body','') or '').replace('\n',' ')[:200]
-print(f'  [{author}] ${num} ${kind} ({delta_h:.1f}h ago): {body}')
+print(f'  {flag} [{author}] ${num} ${kind} ({delta_h:.1f}h ago): {body}')
 " 2>/dev/null
 done
 
