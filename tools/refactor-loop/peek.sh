@@ -194,6 +194,25 @@ gh issue list --label "🛠️ phase:implementing" --state open --json number,ti
   fi
 done
 
+# 5d. Spawn drop detection: 3 solver artifact 完整但对应 judge log 没有
+echo ""
+echo "▍Spawn drop(solver 完成 N 但 judge 漏派):"
+for f in .refactor-loop/runs/phase9-issue*-r*-minimal.md; do
+  [ -f "$f" ] || continue
+  base=$(basename "$f" -minimal.md)
+  issue=$(echo "$base" | sed -E 's/phase9-issue([0-9]+)-r.*/\1/')
+  round=$(echo "$base" | sed -E 's/.*-r([0-9]+)/\1/')
+  s_min="$f"
+  s_str=".refactor-loop/runs/${base}-structural.md"
+  s_del=".refactor-loop/runs/${base}-delete.md"
+  judge_log=".refactor-loop/logs/${base}-judge.log"
+  if [ -f "$s_str" ] && [ -f "$s_del" ] && [ ! -f "$judge_log" ]; then
+    issue_state=$(gh issue view "$issue" --json state --jq '.state' 2>/dev/null)
+    [ "$issue_state" = "OPEN" ] || continue  # only flag if issue still open
+    echo "  ⚠️ issue #${issue} r${round} 3 solver done 但 judge log 不存在(需重派 judge)"
+  fi
+done
+
 # 6. Drift detection: phase:* label set but no log file being actively written for that issue/PR
 echo ""
 echo "▍Drift(label vs codex 不一致):"
