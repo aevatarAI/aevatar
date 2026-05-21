@@ -1031,12 +1031,6 @@ const TeamsHomePage: React.FC = () => {
     manualRosterView ??
     (visibleTeamCount >= compactTeamRosterThreshold ? "list" : "cards");
   const useCompactRoster = resolvedRosterView === "list";
-  const healthyTeamCount = teamPreviews.filter(
-    (preview) => preview.attention === "healthy",
-  ).length;
-  const attentionTeamCount = teamPreviews.filter(
-    (preview) => preview.attention !== "healthy",
-  ).length;
   const emptyRosterHint =
     scopeId.length > 0
       ? "当前账号还没有创建任何 Team。创建后，这里会展示你的 AI 团队列表。"
@@ -1137,8 +1131,6 @@ const TeamsHomePage: React.FC = () => {
               }}
             >
               <SummaryStatCard accent label="AI Team" value={visibleTeamCount} />
-              <SummaryStatCard label="运行正常" value={healthyTeamCount} />
-              <SummaryStatCard label="需要处理" value={attentionTeamCount} />
             </div>
 
             {teamsQuery.isLoading ? (

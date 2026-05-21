@@ -25,6 +25,14 @@ const buildHostPreservingProxyTarget = (target: string) => ({
   ws: true,
 });
 
+const shouldPreserveHost = (target: string) =>
+  /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::|\/|$)/i.test(target);
+
+const buildAuthProxyTarget = (target: string) =>
+  shouldPreserveHost(target)
+    ? buildHostPreservingProxyTarget(target)
+    : buildProxyTarget(target);
+
 const studioProxyEntries = [
   '/api/app',
   '/api/auth',
@@ -37,7 +45,7 @@ const studioProxyEntries = [
   '/api/workspace',
 ].reduce<Record<string, ReturnType<typeof buildProxyTarget>>>((entries, path) => {
   const proxyFactory = path === '/api/auth'
-    ? buildHostPreservingProxyTarget
+    ? buildAuthProxyTarget
     : buildProxyTarget;
   entries[`^${path}$`] = proxyFactory(studioApiTarget);
   entries[`${path}/`] = proxyFactory(studioApiTarget);

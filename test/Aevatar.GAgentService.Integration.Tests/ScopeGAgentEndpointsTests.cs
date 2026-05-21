@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Json;
 using System.Reflection;
 using System.Security.Claims;
 using System.Text;
@@ -15,6 +16,9 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Google.Protobuf;
 using Type = System.Type;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
@@ -205,6 +209,82 @@ public sealed class ScopeGAgentEndpointsTests
         var body = await ReadResponseBodyAsync(context);
         body.Should().Contain("runStarted");
         body.Should().Contain("runFinished");
+    }
+
+    [Fact]
+    public async Task DraftRunEndpoint_ShouldStreamRunStartedBeforeTerminalFrames()
+    {
+        var releaseTerminalFrames = new TaskCompletionSource<object?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var acceptedObserved = new TaskCompletionSource<object?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var interactionService = new FakeGAgentDraftRunInteractionService
+        {
+            ResultFactory = async (_, emitAsync, onAcceptedAsync, ct) =>
+            {
+                var receipt = new GAgentDraftRunAcceptedReceipt("existing-actor", "RoleGAgent", "cmd-early", "corr-early");
+                if (onAcceptedAsync != null)
+                {
+                    await onAcceptedAsync(receipt, ct);
+                    acceptedObserved.TrySetResult(null);
+                }
+
+                await releaseTerminalFrames.Task.WaitAsync(ct);
+
+                await emitAsync(new AGUIEvent
+                {
+                    RunFinished = new RunFinishedEvent
+                    {
+                        ThreadId = "existing-actor",
+                        RunId = "cmd-early",
+                    },
+                }, ct);
+
+                return CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>.Success(
+                    receipt,
+                    new CommandInteractionFinalizeResult<GAgentDraftRunCompletionStatus>(
+                        GAgentDraftRunCompletionStatus.RunFinished,
+                        true));
+            }
+        };
+        var actorPreparationPort = new FakeGAgentDraftRunActorPreparationPort
+        {
+            Result = GAgentDraftRunPreparationResult.Success(
+                new GAgentDraftRunPreparedActor("scope-a", "Aevatar.AI.Core.RoleGAgent, Aevatar.AI.Core", "existing-actor", false))
+        };
+
+        await using var host = await ScopeGAgentEndpointHostedTestHost.StartAsync(interactionService, actorPreparationPort);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/scopes/scope-a/gagent/draft-run")
+        {
+            Content = JsonContent.Create(new
+            {
+                actorTypeName = "Aevatar.AI.Core.RoleGAgent, Aevatar.AI.Core",
+                prompt = "hello",
+                preferredActorId = "existing-actor",
+                timeoutMs = 2000,
+            }),
+        };
+
+        using var response = await host.Client.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Content.Headers.ContentType!.MediaType.Should().Be("text/event-stream");
+        response.Headers.GetValues("X-Correlation-Id").Single().Should().Be("corr-early");
+
+        await acceptedObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await using var stream = await response.Content.ReadAsStreamAsync();
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        var firstFrame = await ReadUntilContainsAsync(reader, "\"runStarted\"", TimeSpan.FromSeconds(5));
+        firstFrame.Should().Contain("\"runStarted\"");
+        firstFrame.Should().NotContain("\"runFinished\"");
+
+        releaseTerminalFrames.TrySetResult(null);
+
+        var remainder = await reader.ReadToEndAsync();
+        remainder.Should().Contain("\"runFinished\"");
     }
 
     [Fact]
@@ -897,6 +977,86 @@ public sealed class ScopeGAgentEndpointsTests
         context.Response.Body.Position = 0;
         using var reader = new StreamReader(context.Response.Body, Encoding.UTF8, leaveOpen: true);
         return await reader.ReadToEndAsync();
+    }
+
+    private static async Task<string> ReadUntilContainsAsync(
+        StreamReader reader,
+        string expected,
+        TimeSpan timeout)
+    {
+        using var cts = new CancellationTokenSource(timeout);
+        var buffer = new char[256];
+        var builder = new StringBuilder();
+
+        while (true)
+        {
+            var read = await reader.ReadAsync(buffer.AsMemory(0, buffer.Length), cts.Token);
+            read.Should().BeGreaterThan(0, $"expected stream to contain {expected}");
+            builder.Append(buffer, 0, read);
+            if (builder.ToString().Contains(expected, StringComparison.Ordinal))
+                return builder.ToString();
+        }
+    }
+
+    private sealed class ScopeGAgentEndpointHostedTestHost : IAsyncDisposable
+    {
+        private readonly WebApplication _app;
+
+        private ScopeGAgentEndpointHostedTestHost(WebApplication app, HttpClient client)
+        {
+            _app = app;
+            Client = client;
+        }
+
+        public HttpClient Client { get; }
+
+        public static async Task<ScopeGAgentEndpointHostedTestHost> StartAsync(
+            FakeGAgentDraftRunInteractionService interactionService,
+            FakeGAgentDraftRunActorPreparationPort actorPreparationPort)
+        {
+            var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+            {
+                EnvironmentName = Environments.Development,
+            });
+            builder.WebHost.UseUrls("http://127.0.0.1:0");
+            builder.Configuration["Aevatar:Authentication:Enabled"] = "true";
+            builder.Services.AddAuthorization();
+            builder.Services.AddSingleton<
+                ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus>>(
+                interactionService);
+            builder.Services.AddSingleton<IGAgentDraftRunActorPreparationPort>(actorPreparationPort);
+
+            var app = builder.Build();
+            app.Use(async (http, next) =>
+            {
+                http.User = new ClaimsPrincipal(new ClaimsIdentity(
+                [
+                    new Claim("scope_id", "scope-a"),
+                ], authenticationType: "Test"));
+                await next();
+            });
+            app.UseAuthorization();
+            app.MapScopeGAgentCapabilityEndpoints();
+            await app.StartAsync();
+
+            var addressFeature = app.Services
+                .GetRequiredService<IServer>()
+                .Features
+                .Get<IServerAddressesFeature>()
+                ?? throw new InvalidOperationException("Server addresses are unavailable.");
+            var client = new HttpClient
+            {
+                BaseAddress = new Uri(addressFeature.Addresses.Single()),
+            };
+
+            return new ScopeGAgentEndpointHostedTestHost(app, client);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            Client.Dispose();
+            await _app.DisposeAsync();
+        }
     }
 
     private static string GetScopeGAgentEndpointsSourcePath()
