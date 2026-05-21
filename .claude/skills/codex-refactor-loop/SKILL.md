@@ -615,6 +615,23 @@ Verify output marker: `VERIFY_DONE:<cluster-id>:<verdict>` where verdict ∈ `{p
 
 ## Phase 4 — Merge & Push (controller, not codex)
 
+### Post-merge trunk build verify(强制,per Auric 2026-05-22 "#779 8h 漏读" + iter25 #788/#795 trunk break 事故)
+
+两个 PR 单独 merge OK,**顺序 merge 后 trunk 可能 build 挂**(API 重命名 + 第二 PR 引用旧名)。merge 后必须:
+
+```bash
+cd $REPO_ROOT
+git pull --ff-only origin auto-refact-dev
+dotnet build src/<top-level-project-or-slnx> --nologo 2>&1 | tail -3
+```
+
+若 trunk build 错 → 立即派 **hotfix codex**(直接 push 到 auto-refact-dev,不开 PR):
+- 在 `aevatar-wt-hotfix-trunk` worktree 跑 codex 修
+- 用 `.refactor-loop/prompts/hotfix-trunk-*.md` 模板(参考 iter25 hotfix 模板)
+- IMPLEMENT_DONE marker + controller commit/push 到 auto-refact-dev 直接
+
+事故记忆:#788(iter25-cluster-026)用 `ICommandTargetBinder<,,>`/`CommandTargetBindingResult<>`,#795(iter25-cluster-002 observation-lifecycle)把这两个名字重构成 `ICommandObservationLifecycle<,,,,>`/`CommandObservationBindingResult<>`。各自 PR 都 CI 绿,但 merge 顺序后 main trunk 编译挂。
+
 **cwd discipline (critical)**: `git merge`, `git push`, and `gh pr create` MUST run from `$REPO_ROOT`, never from a worktree directory. Cwd persists across Bash invocations in the harness, so chained commands that include `cd .refactor-loop/worktrees/<id>` leak cwd into the next call. Always either start the trunk-side command with `cd "$REPO_ROOT" && …` or run it in a separate Bash invocation after the worktree-scoped commit. If you see `Already up to date.` after a merge, that is the signature of cwd leak — diagnose and redo from `$REPO_ROOT`.
 
 For each `pass` cluster, serially:

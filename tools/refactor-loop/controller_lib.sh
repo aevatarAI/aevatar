@@ -167,4 +167,21 @@ validate_prompt() {
   return 0
 }
 
+# Verify trunk builds after merge — call after merge_pr to catch cross-PR API breaks
+# Usage: verify_trunk_build
+# per Auric 2026-05-22 iter25 #788+#795 trunk break(both green独立 PR,合并后 API mismatch)
+verify_trunk_build() {
+  cd "$REPO_ROOT" || return 1
+  git pull --ff-only origin auto-refact-dev 2>&1 | tail -1
+  local err
+  err=$(dotnet build aevatar.slnx --nologo 2>&1 | tail -3 | grep -oE "[0-9]+ Error" | head -1)
+  if [ "$err" != "0 Error" ]; then
+    echo "❌ trunk build broken after merge: $err — 派 hotfix codex(参考 SKILL Phase 4 hotfix 段)" >&2
+    dotnet build aevatar.slnx --nologo 2>&1 | grep -E "error CS" | head -5 >&2
+    return 2
+  fi
+  echo "✓ trunk build green"
+  return 0
+}
+
 # ⟦AI:AUTO-LOOP⟧
