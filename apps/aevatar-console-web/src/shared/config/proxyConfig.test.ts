@@ -136,6 +136,13 @@ describe('proxy config', () => {
       ws: true,
     });
     expect(
+      resolveProxyEntry(devProxy, '/api/scopes/scope-1/teams/t-alpha/invoke/chat:stream'),
+    ).toEqual({
+      target: 'http://127.0.0.1:5080',
+      changeOrigin: true,
+      ws: true,
+    });
+    expect(
       resolveProxyEntry(devProxy, '/api/scopes/scope-1/members/m-alpha/runs'),
     ).toEqual({
       target: 'http://127.0.0.1:5080',
