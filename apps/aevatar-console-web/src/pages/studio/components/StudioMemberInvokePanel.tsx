@@ -331,10 +331,13 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const canInvoke = Boolean(
     scopeId && normalizedMemberId && selectedService && selectedEndpoint,
   );
-  const invokeRouteTarget =
-    currentImplementationKind === 'gagent' && normalizedTeamId
-      ? { teamId: normalizedTeamId }
-      : { serviceId: selectedService?.serviceId };
+  const invokeRouteTarget = useMemo(
+    () =>
+      normalizedTeamId
+        ? { teamId: normalizedTeamId }
+        : { serviceId: selectedService?.serviceId },
+    [normalizedTeamId, selectedService?.serviceId],
+  );
   const visibleRequestHistory = useMemo(() => {
     const currentServiceId =
       trimOptional(selectedService?.serviceId) || trimOptional(initialServiceId);
@@ -1030,6 +1033,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     payloadBase64,
     payloadTypeUrl,
     prompt,
+    invokeRouteTarget,
     scopeId,
     selectedEndpoint,
     selectedService,

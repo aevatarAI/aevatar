@@ -339,6 +339,85 @@ describe('StudioMemberInvokePanel', () => {
     });
   });
 
+  it('routes workflow chat invokes through the team stream endpoint when team context is present', async () => {
+    (runtimeRunsApi.streamChat as jest.Mock).mockResolvedValue({});
+
+    render(
+      React.createElement(StudioMemberInvokePanel, {
+        memberId: 'workspace-demo',
+        memberRevision: {
+          allocationWeight: 100,
+          artifactHash: 'hash-workflow',
+          createdAt: '2026-03-26T07:00:00Z',
+          deploymentId: 'dep-workflow',
+          failureReason: '',
+          implementationKind: 'workflow',
+          inlineWorkflowCount: 1,
+          isActiveServing: true,
+          isDefaultServing: true,
+          isServingTarget: true,
+          preparedAt: '2026-03-26T07:01:00Z',
+          primaryActorId: 'actor-workflow',
+          publishedAt: '2026-03-26T07:02:00Z',
+          retiredAt: null,
+          revisionId: 'rev-workflow',
+          scriptDefinitionActorId: '',
+          scriptId: '',
+          scriptRevision: '',
+          scriptSourceHash: '',
+          servingState: 'Active',
+          staticActorTypeName: '',
+          status: 'Published',
+          workflowDefinitionActorId: 'scope-workflow:scope-1:workspace-demo',
+          workflowName: 'workspace-demo',
+        },
+        scopeId: 'scope-1',
+        services: [
+          {
+            deploymentStatus: 'Active',
+            displayName: 'workspace-demo',
+            endpoints: [
+              {
+                description: 'Chat with the member.',
+                displayName: 'Chat',
+                endpointId: 'chat',
+                kind: 'invoke',
+                requestTypeUrl: '',
+                responseTypeUrl: '',
+              },
+            ],
+            kind: 'service',
+            namespace: 'default',
+            primaryActorId: 'actor-workflow',
+            serviceId: 'member-workspace-demo',
+          },
+        ],
+        teamId: 'team-1',
+      }),
+    );
+
+    fireEvent.change(await screen.findByLabelText('调用请求输入'), {
+      target: {
+        value: 'Run the team member.',
+      },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => {
+      expect(runtimeRunsApi.streamChat).toHaveBeenCalledWith(
+        'scope-1',
+        {
+          prompt: 'Run the team member.',
+        },
+        expect.any(AbortSignal),
+        {
+          teamId: 'team-1',
+        },
+      );
+    });
+  });
+
   it('records runs into the merged Runs area and shows technical detail inline', async () => {
     const onObserveSessionChange = jest.fn();
 

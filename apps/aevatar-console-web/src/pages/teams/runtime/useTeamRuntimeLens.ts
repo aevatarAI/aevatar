@@ -7,11 +7,13 @@ import { deriveTeamRuntimeLens, selectCurrentTeamRun } from "./teamRuntimeLens";
 
 const scopeServiceAppId = "default";
 type UseTeamRuntimeLensOptions = {
+  allowScopeServiceFallback?: boolean;
   enabled?: boolean;
   includeCatalogSignals?: boolean;
   preferredMemberId?: string;
   preferredRunId?: string;
   preferredServiceId?: string;
+  teamMemberServiceIds?: readonly string[];
 };
 
 function trimOptional(value: string | null | undefined): string {
@@ -45,10 +47,22 @@ export function useTeamRuntimeLens(
 ) {
   const normalizedScopeId = scopeId.trim();
   const enabled = options?.enabled ?? true;
+  const allowScopeServiceFallback = options?.allowScopeServiceFallback ?? true;
   const includeCatalogSignals = options?.includeCatalogSignals ?? true;
   const preferredMemberId = options?.preferredMemberId?.trim() ?? "";
   const preferredServiceId = options?.preferredServiceId?.trim() ?? "";
   const preferredRunId = options?.preferredRunId?.trim() ?? "";
+  const teamMemberServiceIds = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          (options?.teamMemberServiceIds ?? [])
+            .map((serviceId) => serviceId.trim())
+            .filter(Boolean),
+        ),
+      ),
+    [options?.teamMemberServiceIds],
+  );
 
   const workflowsQuery = useQuery({
     enabled: enabled && normalizedScopeId.length > 0 && includeCatalogSignals,
@@ -106,13 +120,18 @@ export function useTeamRuntimeLens(
     [membersQuery.data?.members, preferredMemberId, preferredServiceId],
   );
   const preferredServiceHint =
-    preferredServiceId || trimOptional(preferredMemberSummary?.publishedServiceId);
+    preferredServiceId ||
+    trimOptional(preferredMemberSummary?.publishedServiceId) ||
+    teamMemberServiceIds[0] ||
+    "";
   const serviceId = preferredServiceHint
     ? services.find((service) => service.serviceId === preferredServiceHint)?.serviceId ||
       preferredServiceHint
     : preferredMemberId.length > 0
       ? ""
-      : services[0]?.serviceId || "";
+      : allowScopeServiceFallback
+        ? services[0]?.serviceId || ""
+        : "";
   const serviceRevisionsQuery = useQuery({
     enabled: enabled && normalizedScopeId.length > 0 && serviceId.length > 0,
     queryKey: ["teams", "service-revisions", normalizedScopeId, serviceId],
@@ -159,9 +178,11 @@ export function useTeamRuntimeLens(
         services,
         runs: runsQuery.data?.runs ?? [],
         currentRun,
+        allowServiceFallback: allowScopeServiceFallback,
         workflowCount: workflowsQuery.data?.length ?? 0,
       }),
     [
+      allowScopeServiceFallback,
       currentRun,
       normalizedScopeId,
       runsQuery.data?.runs,
