@@ -164,6 +164,36 @@ gh pr list --label "auto-loop" --state open --json number,title --jq '.[].number
   fi
 done
 
+# 5b. Stale-label detection on CLOSED issues/PRs(per Auric 2026-05-21 "状态、PR跟issues的关联状态有问题")
+echo ""
+echo "▍Stale labels(已 CLOSED 但还挂 in-flight phase 标签):"
+gh issue list --label "auto-loop" --state closed --limit 30 --json number,labels --jq '.[] | "\(.number)|\(.labels | map(.name) | map(select(. | startswith("🔍") or startswith("🛠") or startswith("🔧") or startswith("👀") or startswith("⏸") or startswith("auto-loop-stuck") or startswith("🆘"))) | join(","))"' 2>/dev/null | while IFS='|' read -r num labels; do
+  [ -z "$num" ] || [ -z "$labels" ] && continue
+  echo "  ⚠️ closed issue #${num} 仍挂: ${labels}  → controller 应清理 + 加 🎉 phase:merged"
+done
+gh pr list --label "auto-loop" --state closed --limit 30 --json number,labels --jq '.[] | "\(.number)|\(.labels | map(.name) | map(select(. | startswith("🔍") or startswith("🛠") or startswith("🔧") or startswith("👀") or startswith("⏸") or startswith("auto-loop-stuck") or startswith("🆘") or startswith("🚀"))) | join(","))"' 2>/dev/null | while IFS='|' read -r num labels; do
+  [ -z "$num" ] || [ -z "$labels" ] && continue
+  echo "  ⚠️ closed PR #${num} 仍挂: ${labels}"
+done
+
+# 5c. Linkage check:open issues phase:implementing 但没对应 in-flight PR / open PRs 没对应 design issue
+echo ""
+echo "▍Issue/PR linkage 不一致:"
+gh issue list --label "🛠️ phase:implementing" --state open --json number,title --jq '.[] | "\(.number)|\(.title)"' 2>/dev/null | while IFS='|' read -r num title; do
+  [ -z "$num" ] && continue
+  # 找 closes #num 的 open PR
+  pr_count=$(gh pr list --label "auto-loop" --state open --search "in:body Closes #${num}" --json number --jq 'length' 2>/dev/null || echo 0)
+  if [ "$pr_count" = "0" ]; then
+    # 还要找 closed PR 是否已 merge
+    merged_pr=$(gh pr list --label "auto-loop" --state merged --search "in:body Closes #${num}" --json number --jq '.[0].number' 2>/dev/null)
+    if [ -z "$merged_pr" ] || [ "$merged_pr" = "null" ]; then
+      echo "  ⚠️ issue #${num} [🛠️ implementing] 无对应 in-flight 或 merged PR(implement codex 失败/未派?)"
+    else
+      echo "  ⚠️ issue #${num} [🛠️ implementing] PR #${merged_pr} 已 merged 但 issue 未关 — controller 应 gh issue close"
+    fi
+  fi
+done
+
 # 6. Drift detection: phase:* label set but no log file being actively written for that issue/PR
 echo ""
 echo "▍Drift(label vs codex 不一致):"
