@@ -314,27 +314,6 @@ public sealed class ToolCallLoop
         return (response, llmCallContext.Terminate);
     }
 
-    internal static IReadOnlyDictionary<string, string>? BuildPerCallMetadata(
-        IReadOnlyDictionary<string, string>? baseMetadata,
-        string? callId)
-    {
-        if (baseMetadata == null || baseMetadata.Count == 0)
-        {
-            if (string.IsNullOrWhiteSpace(callId))
-                return null;
-
-            return new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [LLMRequestMetadataKeys.CallId] = callId,
-            };
-        }
-
-        var metadata = new Dictionary<string, string>(baseMetadata, StringComparer.Ordinal);
-        if (!string.IsNullOrWhiteSpace(callId))
-            metadata[LLMRequestMetadataKeys.CallId] = callId;
-        return metadata;
-    }
-
     internal static string? ComposeRoundCallId(string? baseRequestId, int round)
     {
         if (string.IsNullOrWhiteSpace(baseRequestId))

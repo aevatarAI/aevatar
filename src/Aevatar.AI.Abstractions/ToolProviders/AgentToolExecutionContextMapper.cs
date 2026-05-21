@@ -119,8 +119,6 @@ public static class AgentToolExecutionContextMapper
         return result;
     }
 
-    public static bool IsOwnedControlKey(string key) => OwnedControlKeys.Contains(key);
-
     private static string? TryGet(IReadOnlyDictionary<string, string> metadata, string key) =>
         metadata.TryGetValue(key, out var value) ? AgentToolExecutionContext.Normalize(value) : null;
 }
