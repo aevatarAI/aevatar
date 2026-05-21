@@ -557,7 +557,8 @@ const SettingsPage: React.FC = () => {
     [readyProviders],
   );
   const readyServiceProviders = React.useMemo(
-    () => readyProviders,
+    () =>
+      readyProviders.filter((provider) => isServiceProviderSource(provider.source)),
     [readyProviders],
   );
   const routeOptions = React.useMemo(

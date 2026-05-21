@@ -184,6 +184,12 @@ export function buildConversationRouteOptions(
   const seen = new Set(options.map((option) => option.value));
 
   for (const provider of getReadyProviders(models?.providers ?? [])) {
+    const source =
+      provider.source || USER_CONFIG_PROVIDER_SOURCE_GATEWAY;
+    if (source !== USER_CONFIG_PROVIDER_SOURCE_SERVICE) {
+      continue;
+    }
+
     const route = routePathFromProviderSlug(provider.providerSlug);
     if (!provider.providerSlug || seen.has(route)) {
       continue;
