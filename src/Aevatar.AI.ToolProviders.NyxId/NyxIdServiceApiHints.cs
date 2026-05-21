@@ -159,6 +159,9 @@ Use the code_execute tool for a simpler interface.
         string accessToken,
         CancellationToken ct = default)
     {
+        // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
+        //   Old pattern: NyxIdSpecCatalog + SpecFetchToken + IServiceDiscoveryCache 在仓库内建第二 catalog(NyxID 真实源的影子)
+        //   New principle: NyxID 是唯一真实源;actor 内可短 TTL 缓存(过期 fallback NyxID live proxy);删除 in-process catalog 假权威面;保留 typed tools + live nyxid_proxy
         var sb = new StringBuilder();
         var seenSlugs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var seenTitles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -217,7 +220,7 @@ Use the code_execute tool for a simpler interface.
         }
 
         if (operations.Length > maxEndpoints)
-            sb.AppendLine($"... and {operations.Length - maxEndpoints} more. Use nyxid_search_capabilities to discover them.");
+            sb.AppendLine($"... and {operations.Length - maxEndpoints} more. Use nyxid_proxy with the service slug for uncovered endpoints.");
 
         return sb.ToString();
     }

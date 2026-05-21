@@ -19,7 +19,6 @@ public sealed class ToolProviderHttpClientRegistrationTests
         services.AddNyxIdTools(options => options.BaseUrl = "https://nyx.test");
 
         services.ShouldContainTypedHttpClient<NyxIdApiClient>();
-        services.ShouldContainNamedHttpClient(NyxIdSpecCatalog.HttpClientName);
         services.ShouldContainNamedHttpClient(ConnectedServiceSpecCache.HttpClientName);
 
         using var provider = services.BuildServiceProvider();

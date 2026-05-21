@@ -17,11 +17,10 @@ public sealed class ConnectedServiceSpecCache : IConnectedServiceSpecSource, IDi
     private readonly HttpClient? _manualHttpClient;
     private readonly NyxIdToolOptions _options;
     private readonly ILogger _logger;
-    private readonly ConcurrentDictionary<string, CacheEntry> _cache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, SpecSnapshot> _snapshots = new(StringComparer.OrdinalIgnoreCase);
     private readonly bool _ownsHttpClient;
     private int _disposed;
 
-    // Fix (remote-ci/host-composition-smoke): see NyxIdSpecCatalog.cs for rationale.
     // Internal manual ctor avoids DI ambiguity while remaining callable from tests via
     // InternalsVisibleTo("Aevatar.AI.Tests").
     internal ConnectedServiceSpecCache(
@@ -58,6 +57,9 @@ public sealed class ConnectedServiceSpecCache : IConnectedServiceSpecSource, IDi
         string accessToken,
         CancellationToken ct = default)
     {
+        // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
+        //   Old pattern: NyxIdSpecCatalog + SpecFetchToken + IServiceDiscoveryCache 在仓库内建第二 catalog(NyxID 真实源的影子)
+        //   New principle: NyxID 是唯一真实源;actor 内可短 TTL 缓存(过期 fallback NyxID live proxy);删除 in-process catalog 假权威面;保留 typed tools + live nyxid_proxy
         if (string.IsNullOrWhiteSpace(slug))
             return null;
 
@@ -66,8 +68,8 @@ public sealed class ConnectedServiceSpecCache : IConnectedServiceSpecSource, IDi
             return null;
 
         var cacheKey = $"{slug}|{url}";
-        if (_cache.TryGetValue(cacheKey, out var entry) && !entry.IsExpired)
-            return entry.Operations;
+        if (_snapshots.TryGetValue(cacheKey, out var snapshot) && !snapshot.IsExpired)
+            return snapshot.Operations;
 
         try
         {
@@ -96,7 +98,7 @@ public sealed class ConnectedServiceSpecCache : IConnectedServiceSpecSource, IDi
                 var json = await response.Content.ReadAsStringAsync(cts.Token);
                 var operations = OpenApiSpecParser.ParseSpec(json, slug);
 
-                _cache[cacheKey] = new CacheEntry(operations, DateTime.UtcNow + CacheTtl);
+                _snapshots[cacheKey] = new SpecSnapshot(operations, DateTime.UtcNow + CacheTtl);
                 _logger.LogInformation(
                     "ConnectedServiceSpecCache: cached {Count} operations for '{Slug}'",
                     operations.Length, slug);
@@ -163,7 +165,11 @@ public sealed class ConnectedServiceSpecCache : IConnectedServiceSpecSource, IDi
             _manualHttpClient?.Dispose();
     }
 
-    private sealed record CacheEntry(OperationCard[] Operations, DateTime ExpiresAt)
+    // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
+    //   Old pattern: NyxIdSpecCatalog + SpecFetchToken + IServiceDiscoveryCache 在仓库内建第二 catalog(NyxID 真实源的影子)
+    //   New principle: NyxID 是唯一真实源;actor 内可短 TTL 缓存(过期 fallback NyxID live proxy);删除 in-process catalog 假权威面;保留 typed tools + live nyxid_proxy
+    // refactor helper, no behavior change: short-lived parsed spec snapshot, never a NyxID catalog authority.
+    private sealed record SpecSnapshot(OperationCard[] Operations, DateTime ExpiresAt)
     {
         public bool IsExpired => DateTime.UtcNow >= ExpiresAt;
     }

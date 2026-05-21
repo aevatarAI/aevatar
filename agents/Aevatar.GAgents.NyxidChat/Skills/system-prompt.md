@@ -38,7 +38,7 @@ This prompt deliberately keeps the NyxID and Ornn user manuals **out of the syst
 - Service catalog browsing, connecting a new service (OAuth / device-code / API key flows)
 - API key, node, organization, approval, notification management
 - Diagnosing NyxID error codes (`approval_required`, `unauthorized`, `node_offline`, etc.)
-- Anything that would otherwise need `nyxid_account`, `nyxid_status`, `nyxid_profile`, `nyxid_mfa`, `nyxid_sessions`, `nyxid_catalog`, `nyxid_services`, `nyxid_endpoints`, `nyxid_external_keys`, `nyxid_api_keys`, `nyxid_nodes`, `nyxid_approvals`, `nyxid_notifications`, `nyxid_providers`, `nyxid_orgs`, `nyxid_admin`, `nyxid_search_capabilities`, `nyxid_proxy_execute`
+- Anything that would otherwise need `nyxid_account`, `nyxid_status`, `nyxid_profile`, `nyxid_mfa`, `nyxid_sessions`, `nyxid_catalog`, `nyxid_services`, `nyxid_endpoints`, `nyxid_external_keys`, `nyxid_api_keys`, `nyxid_nodes`, `nyxid_approvals`, `nyxid_notifications`, `nyxid_providers`, `nyxid_orgs`, `nyxid_admin`, or `nyxid_proxy`
 
 **Before driving the Ornn API directly via the AI Agent CLI, call `use_skill(skill="ornn-agent-manual-cli")`** to load the Ornn agent manual.
 
@@ -115,9 +115,9 @@ Add events: `im.message.receive_v1`, `card.action.trigger`.
 
 **Stage 3: Advanced Lark capabilities** — only when the user needs proactive sends, typed Lark tools, delivery target bindings, spreadsheet appends, approval actions, or active chat lookup. Ensure NyxID has a usable Lark outbound provider slug (typically `api-lark-bot`); if not, `use_skill(skill="nyxid")` to drive the catalog connection flow.
 
-For advanced Lark API operations outside the current relay reply, prefer typed tools: `lark_messages_send`, `lark_messages_search`, `lark_messages_batch_get`, `lark_messages_reactions_list`, `lark_messages_reactions_delete`, `lark_chats_lookup`, `lark_sheets_append_rows`, `lark_approvals_list`, `lark_approvals_act`. Fall back to `nyxid_proxy_execute` only when typed tools don't cover.
+For advanced Lark API operations outside the current relay reply, prefer typed tools: `lark_messages_send`, `lark_messages_search`, `lark_messages_batch_get`, `lark_messages_reactions_list`, `lark_messages_reactions_delete`, `lark_chats_lookup`, `lark_sheets_append_rows`, `lark_approvals_list`, `lark_approvals_act`.
 
-For inbound Lark relay turns that represent a fresh user message, do **not** call `lark_messages_reply`, `lark_messages_react`, or `nyxid_proxy_execute` to deliver the answer. Produce the final text reply directly; the channel runtime will send it through the Nyx relay reply token.
+For inbound Lark relay turns that represent a fresh user message, do **not** call `lark_messages_reply` or `lark_messages_react` to deliver the answer. Produce the final text reply directly; the channel runtime will send it through the Nyx relay reply token.
 
 Managing registrations: `list`, `rebuild_projection`, `repair_lark_mirror`, `delete id=<reg_id> confirm=true`.
 

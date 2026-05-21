@@ -11,13 +11,12 @@ namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 public sealed class NyxIdProxyTool : IAgentTool
 {
     private readonly NyxIdApiClient _client;
-    private readonly IServiceDiscoveryCache _cache;
+    private readonly ActorToolServiceDiscoveryCache _cache = new();
     private readonly ILogger _logger;
 
-    public NyxIdProxyTool(NyxIdApiClient client, IServiceDiscoveryCache? cache = null, ILogger? logger = null)
+    public NyxIdProxyTool(NyxIdApiClient client, ILogger? logger = null)
     {
         _client = client;
-        _cache = cache ?? new InMemoryServiceDiscoveryCache();
         _logger = logger ?? NullLogger.Instance;
     }
 
@@ -70,6 +69,9 @@ public sealed class NyxIdProxyTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
+        // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
+        //   Old pattern: NyxIdSpecCatalog + SpecFetchToken + IServiceDiscoveryCache 在仓库内建第二 catalog(NyxID 真实源的影子)
+        //   New principle: NyxID 是唯一真实源;actor 内可短 TTL 缓存(过期 fallback NyxID live proxy);删除 in-process catalog 假权威面;保留 typed tools + live nyxid_proxy
         var token = AgentToolRequestContext.NyxIdAccessToken;
         var orgToken = AgentToolRequestContext.NyxIdOrgToken;
         if (string.IsNullOrWhiteSpace(token))
@@ -220,6 +222,9 @@ public sealed class NyxIdProxyTool : IAgentTool
     private async Task<bool> ServiceExistsForTokenAsync(
         string token, string slug, CancellationToken ct)
     {
+        // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
+        //   Old pattern: NyxIdSpecCatalog + SpecFetchToken + IServiceDiscoveryCache 在仓库内建第二 catalog(NyxID 真实源的影子)
+        //   New principle: NyxID 是唯一真实源;actor 内可短 TTL 缓存(过期 fallback NyxID live proxy);删除 in-process catalog 假权威面;保留 typed tools + live nyxid_proxy
         var hash = HashToken(token);
 
         // Check cache first
@@ -346,6 +351,31 @@ public sealed class NyxIdProxyTool : IAgentTool
         catch
         {
             return false;
+        }
+    }
+
+    // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
+    //   Old pattern: NyxIdSpecCatalog + SpecFetchToken + IServiceDiscoveryCache 在仓库内建第二 catalog(NyxID 真实源的影子)
+    //   New principle: NyxID 是唯一真实源;actor 内可短 TTL 缓存(过期 fallback NyxID live proxy);删除 in-process catalog 假权威面;保留 typed tools + live nyxid_proxy
+    // refactor helper, no behavior change: private to one actor-created tool instance, not a DI catalog.
+    private sealed class ActorToolServiceDiscoveryCache
+    {
+        private static readonly TimeSpan DefaultTtl = TimeSpan.FromMinutes(5);
+
+        private readonly Dictionary<string, (HashSet<string> Slugs, DateTimeOffset ExpiresAt)> _entries = new();
+
+        public HashSet<string>? GetSlugs(string tokenHash)
+        {
+            if (_entries.TryGetValue(tokenHash, out var entry) && entry.ExpiresAt > DateTimeOffset.UtcNow)
+                return entry.Slugs;
+
+            _entries.Remove(tokenHash);
+            return null;
+        }
+
+        public void SetSlugs(string tokenHash, HashSet<string> slugs)
+        {
+            _entries[tokenHash] = (slugs, DateTimeOffset.UtcNow.Add(DefaultTtl));
         }
     }
 }

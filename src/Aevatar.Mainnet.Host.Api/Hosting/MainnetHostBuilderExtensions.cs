@@ -131,7 +131,6 @@ public static class MainnetHostBuilderExtensions
             o.BaseUrl = builder.Configuration["Aevatar:NyxId:Authority"]
                         ?? builder.Configuration["Cli:App:NyxId:Authority"]
                         ?? builder.Configuration["Aevatar:Authentication:Authority"];
-            o.SpecFetchToken = builder.Configuration["Aevatar:NyxId:SpecFetchToken"];
             // Opt-in: only the mainnet host (which runs the channel relay's approval-aware
             // tool execution pipeline) advertises ssh_exec to the LLM. Other hosts that pull
             // in NyxId tools (CLI, workflow runner) leave this off so a generic agent can't
