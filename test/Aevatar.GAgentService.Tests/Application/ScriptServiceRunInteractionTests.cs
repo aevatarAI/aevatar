@@ -62,6 +62,148 @@ public sealed class ScriptServiceRunInteractionTests
     }
 
     [Fact]
+    public async Task Interaction_ShouldFailWithRuntimeActorUnavailable_WhenRuntimeActorIdMissing()
+    {
+        var projectionPort = new RecordingScriptServiceAguiProjectionPort();
+        var runtimePort = new RecordingScriptRuntimeCommandPort();
+        var interaction = CreateInteraction(projectionPort, runtimePort);
+
+        var result = await interaction.ExecuteAsync(
+            CreateCommand(runtimeActorId: " "),
+            (_, _) => ValueTask.CompletedTask,
+            null,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Code.Should().Be(ScriptServiceRunStartErrorCode.RuntimeActorUnavailable);
+        result.Error.FieldName.Should().Be("runtimeActorId");
+        projectionPort.EnsureCalls.Should().BeEmpty();
+        runtimePort.Invocations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Interaction_ShouldFailWithInvalidArgument_WhenRunIdMissing()
+    {
+        var projectionPort = new RecordingScriptServiceAguiProjectionPort();
+        var runtimePort = new RecordingScriptRuntimeCommandPort();
+        var interaction = CreateInteraction(projectionPort, runtimePort);
+
+        var result = await interaction.ExecuteAsync(
+            CreateCommand(runId: " "),
+            (_, _) => ValueTask.CompletedTask,
+            null,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Code.Should().Be(ScriptServiceRunStartErrorCode.InvalidArgument);
+        result.Error.FieldName.Should().Be("runId");
+        projectionPort.EnsureCalls.Should().BeEmpty();
+        runtimePort.Invocations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Interaction_ShouldFailWithProjectionUnavailable_AndNotDispatchRuntime_WhenProjectionAttachFails()
+    {
+        var projectionPort = new RecordingScriptServiceAguiProjectionPort { ReturnNullLease = true };
+        var runtimePort = new RecordingScriptRuntimeCommandPort();
+        var interaction = CreateInteraction(projectionPort, runtimePort);
+
+        var result = await interaction.ExecuteAsync(
+            CreateCommand(),
+            (_, _) => ValueTask.CompletedTask,
+            null,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Code.Should().Be(ScriptServiceRunStartErrorCode.ProjectionUnavailable);
+        projectionPort.EnsureCalls.Should().ContainSingle(call =>
+            call.ActorId == "runtime-1" && call.RunId == "run-1");
+        projectionPort.AttachCalls.Should().BeEmpty();
+        projectionPort.ReleaseCalls.Should().BeEmpty();
+        runtimePort.Invocations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Interaction_ShouldCompleteWithRunError_WhenRunErrorArrives()
+    {
+        var projectionPort = new RecordingScriptServiceAguiProjectionPort
+        {
+            Messages =
+            {
+                new AGUIEvent
+                {
+                    RunError = new RunErrorEvent { Message = "failed" },
+                },
+            },
+        };
+        var runtimePort = new RecordingScriptRuntimeCommandPort();
+        var interaction = CreateInteraction(projectionPort, runtimePort);
+        var emitted = new List<AGUIEvent>();
+
+        var result = await interaction.ExecuteAsync(
+            CreateCommand(),
+            (evt, _) =>
+            {
+                emitted.Add(evt);
+                return ValueTask.CompletedTask;
+            },
+            null,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.FinalizeResult!.Completed.Should().BeTrue();
+        result.FinalizeResult.Completion.Should().Be(ScriptServiceRunCompletionStatus.RunError);
+        emitted.Should().ContainSingle(evt => evt.EventCase == AGUIEvent.EventOneofCase.RunError);
+        runtimePort.Invocations.Should().ContainSingle();
+        projectionPort.ReleaseCalls.Should().ContainSingle(call =>
+            call.ActorId == "runtime-1" && call.RunId == "run-1");
+    }
+
+    [Fact]
+    public async Task Interaction_ShouldEmitSyntheticRunError_WhenStreamEndsWithoutTerminalEvent()
+    {
+        var projectionPort = new RecordingScriptServiceAguiProjectionPort
+        {
+            CompleteAfterMessages = true,
+            Messages =
+            {
+                new AGUIEvent
+                {
+                    TextMessageContent = new TextMessageContentEvent
+                    {
+                        MessageId = "msg-1",
+                        Delta = "partial",
+                    },
+                },
+            },
+        };
+        var runtimePort = new RecordingScriptRuntimeCommandPort();
+        var interaction = CreateInteraction(projectionPort, runtimePort);
+        var emitted = new List<AGUIEvent>();
+
+        var result = await interaction.ExecuteAsync(
+            CreateCommand(),
+            (evt, _) =>
+            {
+                emitted.Add(evt);
+                return ValueTask.CompletedTask;
+            },
+            null,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.FinalizeResult!.Completed.Should().BeFalse();
+        result.FinalizeResult.Completion.Should().Be(ScriptServiceRunCompletionStatus.Incomplete);
+        emitted.Should().Contain(evt => evt.EventCase == AGUIEvent.EventOneofCase.TextMessageContent);
+        emitted.Should().ContainSingle(evt =>
+            evt.EventCase == AGUIEvent.EventOneofCase.RunError &&
+            evt.RunError.Message.Contains("ended before a terminal event", StringComparison.Ordinal));
+        runtimePort.Invocations.Should().ContainSingle();
+        projectionPort.ReleaseCalls.Should().ContainSingle(call =>
+            call.ActorId == "runtime-1" && call.RunId == "run-1");
+    }
+
+    [Fact]
     public async Task RegistrationDecorator_ShouldRegisterServiceRunBeforeAcceptedCallback()
     {
         var inner = new RecordingScriptServiceRunInteraction();
@@ -111,7 +253,9 @@ public sealed class ScriptServiceRunInteractionTests
             new ScriptServiceRunDurableCompletionResolver());
     }
 
-    private static ScriptServiceRunCommand CreateCommand() =>
+    private static ScriptServiceRunCommand CreateCommand(
+        string runtimeActorId = "runtime-1",
+        string runId = "run-1") =>
         new(
             ScopeId: "scope-a",
             ServiceId: "svc-a",
@@ -119,12 +263,12 @@ public sealed class ScriptServiceRunInteractionTests
             EndpointId: "chat",
             RevisionId: "rev-1",
             DeploymentId: "dep-1",
-            RuntimeActorId: "runtime-1",
+            RuntimeActorId: runtimeActorId,
             DefinitionActorId: "definition-1",
             ScriptRevision: "script-rev-1",
             Prompt: "hello",
             SessionId: "session-1",
-            RunId: "run-1",
+            RunId: runId,
             CommandId: "cmd-1",
             CorrelationId: "corr-1",
             Headers: new Dictionary<string, string> { ["trace-id"] = "trace-1" },
@@ -140,7 +284,10 @@ public sealed class ScriptServiceRunInteractionTests
     {
         public List<AGUIEvent> Messages { get; } = [];
         public List<(string ActorId, string RunId)> EnsureCalls { get; } = [];
+        public List<(string ActorId, string RunId)> AttachCalls { get; } = [];
         public List<(string ActorId, string RunId)> ReleaseCalls { get; } = [];
+        public bool ReturnNullLease { get; init; }
+        public bool CompleteAfterMessages { get; init; }
         public bool ProjectionEnabled => true;
 
         public Task<IScriptServiceAguiProjectionLease?> EnsureRunProjectionAsync(
@@ -150,31 +297,34 @@ public sealed class ScriptServiceRunInteractionTests
         {
             ct.ThrowIfCancellationRequested();
             EnsureCalls.Add((actorId, runId));
-            return Task.FromResult<IScriptServiceAguiProjectionLease?>(new Lease(actorId, runId));
+            return Task.FromResult<IScriptServiceAguiProjectionLease?>(
+                ReturnNullLease ? null : new Lease(actorId, runId));
         }
 
-        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
+        public async Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IScriptServiceAguiProjectionLease lease,
             IEventSink<AGUIEvent> sink,
             CancellationToken ct = default)
         {
-            _ = lease;
             ct.ThrowIfCancellationRequested();
-            _ = Task.Run(async () =>
+            AttachCalls.Add((lease.ActorId, lease.RunId));
+
+            foreach (var message in Messages)
             {
-                foreach (var message in Messages)
+                try
                 {
-                    try
-                    {
-                        await sink.PushAsync(message, CancellationToken.None);
-                    }
-                    catch (EventSinkCompletedException)
-                    {
-                        break;
-                    }
+                    await sink.PushAsync(message, ct);
                 }
-            }, CancellationToken.None);
-            return Task.FromResult<IAsyncDisposable?>(null);
+                catch (EventSinkCompletedException)
+                {
+                    break;
+                }
+            }
+
+            if (CompleteAfterMessages)
+                sink.Complete();
+
+            return null;
         }
 
         public Task DetachLiveSinkAsync(IAsyncDisposable? liveSinkLease, CancellationToken ct = default)

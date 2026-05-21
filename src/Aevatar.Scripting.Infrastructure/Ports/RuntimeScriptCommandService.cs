@@ -56,6 +56,9 @@ public sealed class RuntimeScriptCommandService : IScriptRuntimeCommandPort
             scopeId,
             ct);
 
+    // Refactor (iter25/cluster-026-scope-service-script-stream-inline-orchestration):
+    //   Old pattern: runtime command dispatch collapsed tracking identity onto the run id
+    //   New principle: preserve distinct run, command, and correlation identities through the scripting dispatch port
     public async Task RunRuntimeAsync(
         string runtimeActorId,
         string runId,

@@ -49,6 +49,15 @@ public sealed class ScopeServiceEndpointsStreamTests
 
         methods.Should().NotContain("PumpScriptEventsAsync");
         methods.Should().NotContain("ShouldEmitSyntheticRunFinished");
+
+        var source = File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory,
+            "../../../../../src/platform/Aevatar.GAgentService.Hosting/Endpoints/ScopeServiceEndpoints.cs"));
+        source.Should().NotContain("IScriptRuntimeCommandPort");
+        source.Should().NotContain("IScriptServiceAguiProjectionPort");
+        source.Should().NotContain("EnsureRunProjectionAsync");
+        source.Should().NotContain("EnsureAndAttachLeaseAsync");
+        source.Should().NotContain("RunRuntimeAsync");
     }
 
     [Fact]

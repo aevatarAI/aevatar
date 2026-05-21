@@ -31,6 +31,9 @@ public interface IScriptRuntimeCommandPort
             requestedEventType,
             ct);
 
+    // Refactor (iter25/cluster-026-scope-service-script-stream-inline-orchestration):
+    //   Old pattern: script runtime dispatch derived command and correlation ids from the run id
+    //   New principle: callers can pass explicit command and correlation ids while keeping run identity separate
     Task RunRuntimeAsync(
         string runtimeActorId,
         string runId,

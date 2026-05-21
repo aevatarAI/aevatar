@@ -31,6 +31,9 @@ public sealed record ScriptServiceRunCommand(
     IReadOnlyDictionary<string, string>? ICommandContextSeed.Headers => Headers;
 }
 
+// Refactor (iter25/cluster-026-scope-service-script-stream-inline-orchestration):
+//   Old pattern: Scope service script stream accepted state was assembled in endpoint-local variables
+//   New principle: expose the accepted ACK as a typed receipt with separate actor, run, command, and correlation identities
 public sealed record ScriptServiceRunAcceptedReceipt(
     string ActorId,
     string RunId,
@@ -38,6 +41,9 @@ public sealed record ScriptServiceRunAcceptedReceipt(
     string CorrelationId,
     DateTimeOffset AcceptedAt = default);
 
+// Refactor (iter25/cluster-026-scope-service-script-stream-inline-orchestration):
+//   Old pattern: Scope service script stream start failures surfaced as endpoint exceptions
+//   New principle: model start-failure categories as typed command interaction errors
 public enum ScriptServiceRunStartErrorCode
 {
     None = 0,
@@ -46,6 +52,9 @@ public enum ScriptServiceRunStartErrorCode
     ProjectionUnavailable = 3,
 }
 
+// Refactor (iter25/cluster-026-scope-service-script-stream-inline-orchestration):
+//   Old pattern: Scope service script stream mixed validation, runtime, and projection failures in Host code
+//   New principle: carry Application-owned failure semantics through a typed start error
 public sealed record ScriptServiceRunStartError(
     ScriptServiceRunStartErrorCode Code,
     string FieldName,
@@ -95,10 +104,12 @@ public sealed record ScriptServiceRunStartError(
         };
 }
 
+// Refactor (iter25/cluster-026-scope-service-script-stream-inline-orchestration):
+//   Old pattern: Scope service script stream terminal state was inferred by endpoint-local stream helpers
+//   New principle: represent interaction completion with typed Application statuses
 public enum ScriptServiceRunCompletionStatus
 {
     Incomplete = 0,
     RunFinished = 1,
     RunError = 2,
 }
-
