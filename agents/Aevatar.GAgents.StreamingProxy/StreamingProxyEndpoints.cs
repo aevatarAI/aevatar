@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
@@ -176,7 +177,7 @@ public static class StreamingProxyEndpoints
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] IActorDispatchPort actorDispatchPort,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
-        [FromServices] IStreamingProxyRoomSessionProjectionPort roomSessionProjectionPort,
+        [FromServices] ICommandInteractionService<StreamingProxyRoomChatCommand, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyRoomSessionEnvelope, StreamingProxyProjectionCompletionStatus> interactionService,
         [FromServices] StreamingProxyChatDurableCompletionResolver durableCompletionResolver,
         [FromServices] IStreamingProxyParticipantStore participantStore,
         [FromServices] StreamingProxyNyxParticipantCoordinator participantCoordinator,
@@ -186,10 +187,13 @@ public static class StreamingProxyEndpoints
         var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
         var writer = new StreamingProxySseWriter(http.Response);
         IActor? actor = null;
-        string? sessionId = null;
+        var sessionId = request.SessionId ?? Guid.NewGuid().ToString("N");
 
         try
         {
+            // Refactor (iter21/cluster-002-request-path-projection-session-priming):
+        //   Old pattern: request handlers synchronously ensure projection/session leases and wait on live sinks.
+        //   New principle: commands use accepted receipts; observation is owned by binders or attach-only sessions.
             if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
@@ -219,159 +223,68 @@ public static class StreamingProxyEndpoints
             // Set up SSE response
             await writer.StartAsync(ct);
 
-            var activityChannel = Channel.CreateUnbounded<StreamingProxyStreamSignal>();
-            sessionId = request.SessionId ?? Guid.NewGuid().ToString("N");
-            var eventChannel = new EventChannel<StreamingProxyRoomSessionEnvelope>();
-            var attachment = await roomSessionProjectionPort.EnsureAndAttachLeaseAsync(
-                token => roomSessionProjectionPort.EnsureChatProjectionAsync(actor.Id, sessionId, token),
-                eventChannel,
-                ct);
-            if (attachment == null)
-                throw new InvalidOperationException("StreamingProxy room session projection pipeline is unavailable.");
-
-            Task? pumpTask = null;
-
-            try
-            {
-                pumpTask = PumpRoomSessionEventsAsync(
-                    eventChannel,
-                    writer,
-                    activityChannel.Writer);
-
-                var accessToken = ExtractBearerToken(http);
-                var preferredRoute = request.LlmRoute?.Trim();
-                var defaultModel = request.LlmModel?.Trim();
-
-                // Emit the room topic immediately so the client sees visible progress
-                // even when Nyx participant discovery is slow.
-                var chatRequest = new ChatRequestEvent
+            var accessToken = ExtractBearerToken(http);
+            var preferredRoute = request.LlmRoute?.Trim();
+            var defaultModel = request.LlmModel?.Trim();
+            var result = await interactionService.ExecuteAsync(
+                new StreamingProxyRoomChatCommand(roomId, scopeId, prompt, sessionId),
+                async (frame, token) =>
                 {
-                    Prompt = prompt,
-                    SessionId = sessionId,
-                    ScopeId = scopeId,
-                };
-                var envelope = new EventEnvelope
+                    await MapAndWriteRoomSessionEventAsync(frame, writer);
+                },
+                async (_, token) =>
                 {
-                    Id = Guid.NewGuid().ToString("N"),
-                    Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                    Payload = Any.Pack(chatRequest),
-                    Route = new EnvelopeRoute { Direct = new DirectRoute { TargetActorId = actor.Id } },
-                };
-                await DispatchRoomEnvelopeAsync(actorDispatchPort, actor.Id, envelope, ct);
+                    IReadOnlyList<StreamingProxyNyxParticipantDefinition> participants = string.IsNullOrWhiteSpace(accessToken)
+                        ? Array.Empty<StreamingProxyNyxParticipantDefinition>()
+                        : await participantCoordinator.EnsureParticipantsJoinedAsync(
+                            scopeId,
+                            roomId,
+                            actor,
+                            participantStore,
+                            accessToken,
+                            token,
+                            preferredRoute,
+                            defaultModel);
 
-                IReadOnlyList<StreamingProxyNyxParticipantDefinition> participants = string.IsNullOrWhiteSpace(accessToken)
-                    ? Array.Empty<StreamingProxyNyxParticipantDefinition>()
-                    : await participantCoordinator.EnsureParticipantsJoinedAsync(
-                        scopeId,
-                        roomId,
-                        actor,
-                        participantStore,
-                        accessToken,
-                        ct,
-                        preferredRoute,
-                        defaultModel);
+                    if (participants.Count == 0 || string.IsNullOrWhiteSpace(accessToken))
+                        return;
 
-                if (participants.Count > 0 && !string.IsNullOrWhiteSpace(accessToken))
-                {
-                    var successfulReplies = await participantCoordinator.GenerateRepliesAsync(
+                    var terminalState = DetermineParticipantTerminalState(await participantCoordinator.GenerateRepliesAsync(
                         participants,
                         actor,
                         prompt,
                         sessionId,
                         accessToken,
-                        ct,
+                        token,
                         participantStore,
-                        roomId);
-                    var participantTerminalState = DetermineParticipantTerminalState(successfulReplies);
+                        roomId));
                     await PublishTerminalStateAsync(
                         actorDispatchPort,
                         actor.Id,
                         sessionId,
-                        participantTerminalState.Status,
-                        participantTerminalState.ErrorMessage,
-                        ct);
-                    await FinalizeFromLiveOrDurableCompletionAsync(
-                        actor.Id,
-                        sessionId,
-                        activityChannel.Reader,
-                        durableCompletionResolver,
-                        writer,
-                        null,
-                        ct);
-                    return;
-                }
+                        terminalState.Status,
+                        terminalState.ErrorMessage,
+                        token);
+                },
+                ct);
 
-                var sawActivity = false;
-                var sawAgentMessage = false;
-                while (!ct.IsCancellationRequested)
-                {
-                    using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                    idleCts.CancelAfter(sawAgentMessage
-                        ? StreamingProxyDefaults.IdleCompletionTimeoutMs
-                        : sawActivity
-                            ? StreamingProxyDefaults.PostTopicTimeoutMs
-                            : StreamingProxyDefaults.InitialResponseTimeoutMs);
-
-                    try
-                    {
-                        if (!await activityChannel.Reader.WaitToReadAsync(idleCts.Token))
-                            break;
-                    }
-                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-                    {
-                        break;
-                    }
-
-                    while (activityChannel.Reader.TryRead(out var signal))
-                    {
-                        sawActivity = true;
-                        if (signal == StreamingProxyStreamSignal.AgentMessage)
-                            sawAgentMessage = true;
-                        if (signal is StreamingProxyStreamSignal.RunFinished or StreamingProxyStreamSignal.RunFailed)
-                            return;
-                    }
-                }
-
-                var idleTerminalState = DetermineIdleTerminalState(sawAgentMessage);
-                await PublishTerminalStateAsync(
-                    actorDispatchPort,
-                    actor.Id,
-                    sessionId,
-                    idleTerminalState.Status,
-                    idleTerminalState.ErrorMessage,
-                    ct);
-                await FinalizeFromLiveOrDurableCompletionAsync(
-                    actor.Id,
-                    sessionId,
-                    activityChannel.Reader,
-                    durableCompletionResolver,
-                    writer,
-                    null,
-                    ct);
-            }
-            finally
+            if (!result.Succeeded)
             {
-                await roomSessionProjectionPort.DetachReleaseAndDisposeAsync(
-                    attachment.ProjectionLease,
-                    attachment.LiveSinkLease,
-                    eventChannel,
-                    () =>
-                    {
-                        activityChannel.Writer.TryComplete();
-                        return Task.CompletedTask;
-                    },
-                    CancellationToken.None);
-
-                if (pumpTask != null)
+                switch (result.Error)
                 {
-                    try
-                    {
-                        await pumpTask;
-                    }
-                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                    {
-                        // Client disconnected.
-                    }
+                    case StreamingProxyRoomChatStartError.RoomNotFound:
+                        http.Response.StatusCode = StatusCodes.Status404NotFound;
+                        return;
+                    case StreamingProxyRoomChatStartError.ProjectionUnavailable:
+                        await writer.WriteRunErrorAsync(
+                            "StreamingProxy room session projection pipeline is unavailable.",
+                            CancellationToken.None);
+                        return;
+                    default:
+                        await writer.WriteRunErrorAsync(
+                            "StreamingProxy chat failed before completion.",
+                            CancellationToken.None);
+                        return;
                 }
             }
         }
@@ -457,7 +370,7 @@ public static class StreamingProxyEndpoints
         string roomId,
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
-        [FromServices] IStreamingProxyRoomSessionProjectionPort roomSessionProjectionPort,
+        [FromServices] IStreamingProxyRoomSubscriptionObservationPort subscriptionObservationPort,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -486,14 +399,8 @@ public static class StreamingProxyEndpoints
             }
 
             await writer.StartAsync(ct);
-            var sessionId = Guid.NewGuid().ToString("N");
             var eventChannel = new EventChannel<StreamingProxyRoomSessionEnvelope>();
-            var attachment = await roomSessionProjectionPort.EnsureAndAttachLeaseAsync(
-                token => roomSessionProjectionPort.EnsureSubscriptionProjectionAsync(actor.Id, sessionId, token),
-                eventChannel,
-                ct);
-            if (attachment == null)
-                throw new InvalidOperationException("StreamingProxy room session projection pipeline is unavailable.");
+            var attachment = await subscriptionObservationPort.AttachAsync(actor.Id, eventChannel, ct);
 
             Task? pumpTask = null;
 
@@ -508,11 +415,9 @@ public static class StreamingProxyEndpoints
             }
             finally
             {
-                await roomSessionProjectionPort.DetachReleaseAndDisposeAsync(
-                    attachment.ProjectionLease,
-                    attachment.LiveSinkLease,
+                await subscriptionObservationPort.DetachAndDisposeAsync(
+                    attachment,
                     eventChannel,
-                    null,
                     CancellationToken.None);
 
                 if (pumpTask != null)
@@ -748,17 +653,7 @@ public static class StreamingProxyEndpoints
     private static bool TryGetObservedTerminalEvent(
         EventEnvelope envelope,
         out StreamingProxyChatSessionTerminalStateChanged terminalEvent)
-    {
-        terminalEvent = new StreamingProxyChatSessionTerminalStateChanged();
-        if (!CommittedStateEventEnvelope.TryGetObservedPayload(envelope, out var payload, out _, out _) ||
-            payload?.Is(StreamingProxyChatSessionTerminalStateChanged.Descriptor) != true)
-        {
-            return false;
-        }
-
-        terminalEvent = payload.Unpack<StreamingProxyChatSessionTerminalStateChanged>();
-        return !string.IsNullOrWhiteSpace(terminalEvent.SessionId);
-    }
+        => StreamingProxyRoomInteractionHelpers.TryGetTerminalEvent(envelope, out terminalEvent);
 
     private static async Task PublishTerminalStateAsync(
         IActorDispatchPort actorDispatchPort,
