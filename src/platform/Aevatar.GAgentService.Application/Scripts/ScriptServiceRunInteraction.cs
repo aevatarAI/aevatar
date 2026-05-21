@@ -55,6 +55,9 @@ internal sealed class ScriptServiceRunCommandTarget
 
     public IEventSink<AGUIEvent>? LiveSink { get; private set; }
 
+    // Refactor (iter25/cluster-026-scope-service-script-stream-inline-orchestration):
+    //   Old pattern: endpoint-local variables carried script runtime payload and dispatch identities
+    //   New principle: bind runtime payload and separated run/command/correlation identities onto the command target
     public void BindRunInput(
         Any inputPayload,
         ScriptServiceRunCommand command,
@@ -213,6 +216,9 @@ internal sealed class ScriptServiceRunCommandTargetBinder
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
     }
 
+    // Refactor (iter25/cluster-026-scope-service-script-stream-inline-orchestration):
+    //   Old pattern: Host endpoint built script runtime payload and attached projection leases inline
+    //   New principle: Application binder owns payload construction, projection attachment, and target binding
     public async Task<CommandTargetBindingResult<ScriptServiceRunStartError>> BindAsync(
         ScriptServiceRunCommand command,
         ScriptServiceRunCommandTarget target,

@@ -1692,6 +1692,9 @@ public static class ScopeServiceEndpoints
         }
     }
 
+    // Refactor (iter25/cluster-026-scope-service-script-stream-inline-orchestration):
+    //   Old pattern: Scope service script stream inline orchestration in endpoints
+    //   New principle: use existing ICommandInteractionService skeleton with ScriptServiceRunCommand and Application-owned service-run registration decorator
     private static async Task HandleScriptingServiceChatStreamAsync(
         HttpContext http,
         ServiceInvocationResolvedTarget target,
@@ -1705,9 +1708,6 @@ public static class ScopeServiceEndpoints
         CancellationToken ct)
     {
         var actorId = target.Service.PrimaryActorId;
-        // Refactor (iter25/cluster-026-scope-service-script-stream-inline-orchestration):
-        //   Old pattern: Scope service script stream inline orchestration in endpoints
-        //   New principle: use existing ICommandInteractionService skeleton with ScriptServiceRunCommand and Application-owned service-run registration decorator
         var runId = Guid.NewGuid().ToString("N");
         var commandId = Guid.NewGuid().ToString("N");
         var correlationId = Guid.NewGuid().ToString("N");
