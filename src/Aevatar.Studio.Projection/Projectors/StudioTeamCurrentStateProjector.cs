@@ -72,6 +72,8 @@ public sealed class StudioTeamCurrentStateProjector
             // a counter field that drifts independently of the set of ids.
             MemberCount = state.MemberIds.Count,
         };
+        if (state.HasEntryMemberId)
+            document.EntryMemberId = state.EntryMemberId;
 
         await _writeDispatcher.UpsertAsync(document, ct);
     }
