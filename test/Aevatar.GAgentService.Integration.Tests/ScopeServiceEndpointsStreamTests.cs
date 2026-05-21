@@ -23,6 +23,9 @@ using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using AiTextContentEvent = Aevatar.AI.Abstractions.TextMessageContentEvent;
 using AiTextEndEvent = Aevatar.AI.Abstractions.TextMessageEndEvent;
@@ -38,6 +41,10 @@ public sealed class ScopeServiceEndpointsStreamTests
     private static readonly MethodInfo HandleScriptingStreamMethod = typeof(ScopeServiceEndpoints)
         .GetMethod("HandleScriptingServiceChatStreamAsync", BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new InvalidOperationException("HandleScriptingServiceChatStreamAsync not found.");
+
+    private static readonly MethodInfo HandleDraftRunMethod = typeof(ScopeGAgentEndpoints)
+        .GetMethod("HandleDraftRunAsync", BindingFlags.NonPublic | BindingFlags.Static)
+        ?? throw new InvalidOperationException("HandleDraftRunAsync not found.");
 
     [Fact]
     public void ScopeServiceEndpoints_ShouldNotContainHostAguiMappingPump()
@@ -228,6 +235,33 @@ public sealed class ScopeServiceEndpointsStreamTests
         var body = await ReadBodyAsync(http);
         body.Should().Contain("runError");
         body.Should().NotContain("runFinished");
+    }
+
+    [Fact]
+    public async Task HandleDraftRunAsync_ShouldRollbackPreparedActor_WhenFailureOccursAfterAcceptedFrame()
+    {
+        var http = CreateHttpContext();
+        var preparedActor = new GAgentDraftRunPreparedActor(
+            "scope-a",
+            typeof(StreamTestAgent).AssemblyQualifiedName!,
+            "actor-1",
+            RequiresRollbackOnFailure: true);
+        var actorPreparationPort = new RecordingDraftRunActorPreparationPort(preparedActor);
+
+        await InvokeDraftRunAsync(
+            http,
+            "scope-a",
+            new ScopeGAgentEndpoints.GAgentDraftRunHttpRequest(
+                typeof(StreamTestAgent).AssemblyQualifiedName!,
+                "hello"),
+            new FailingAfterAcceptedDraftRunInteractionService(),
+            actorPreparationPort,
+            CancellationToken.None);
+
+        actorPreparationPort.RollbackCalls.Should().ContainSingle(x => ReferenceEquals(x, preparedActor));
+        var body = await ReadBodyAsync(http);
+        body.Should().Contain("runStarted");
+        body.Should().Contain("runError");
     }
 
     [Fact]
@@ -677,7 +711,24 @@ public sealed class ScopeServiceEndpointsStreamTests
     {
         var http = new DefaultHttpContext();
         http.Response.Body = new MemoryStream();
+        http.RequestServices = new ServiceCollection()
+            .AddSingleton<IConfiguration>(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Aevatar:Authentication:Enabled"] = "false",
+                })
+                .Build())
+            .AddSingleton<IHostEnvironment>(new TestHostEnvironment())
+            .BuildServiceProvider();
         return http;
+    }
+
+    private sealed class TestHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Development;
+        public string ApplicationName { get; set; } = "Aevatar.GAgentService.Integration.Tests";
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+        public Microsoft.Extensions.FileProviders.IFileProvider ContentRootFileProvider { get; set; } = null!;
     }
 
     private static ServiceInvocationResolvedTarget CreateStaticTarget(string actorTypeName, string primaryActorId)
@@ -768,6 +819,23 @@ public sealed class ScopeServiceEndpointsStreamTests
             artifact.Endpoints[0]);
     }
 
+    private static Task InvokeDraftRunAsync(
+        HttpContext http,
+        string scopeId,
+        ScopeGAgentEndpoints.GAgentDraftRunHttpRequest request,
+        ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> interactionService,
+        IGAgentDraftRunActorPreparationPort actorPreparationPort,
+        CancellationToken ct) =>
+        InvokePrivateTaskAsync(
+            HandleDraftRunMethod,
+            http,
+            scopeId,
+            request,
+            interactionService,
+            actorPreparationPort,
+            NullLoggerFactory.Instance,
+            ct);
+
     private static Task InvokeStaticStreamAsync(
         HttpContext http,
         ServiceInvocationResolvedTarget target,
@@ -827,6 +895,57 @@ public sealed class ScopeServiceEndpointsStreamTests
 
         public Task UpdateStatusAsync(string runActorId, string runId, ServiceRunStatus status, CancellationToken ct = default) =>
             Task.CompletedTask;
+    }
+
+    private sealed class RecordingDraftRunActorPreparationPort(GAgentDraftRunPreparedActor preparedActor)
+        : IGAgentDraftRunActorPreparationPort
+    {
+        public List<GAgentDraftRunPreparedActor> RollbackCalls { get; } = [];
+
+        public Task<GAgentDraftRunPreparationResult> PrepareAsync(
+            GAgentDraftRunPreparationRequest request,
+            CancellationToken ct = default)
+        {
+            _ = request;
+            _ = ct;
+            return Task.FromResult(GAgentDraftRunPreparationResult.Success(preparedActor));
+        }
+
+        public Task RollbackAsync(
+            GAgentDraftRunPreparedActor preparedActor,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            RollbackCalls.Add(preparedActor);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class FailingAfterAcceptedDraftRunInteractionService
+        : ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus>
+    {
+        public async Task<CommandInteractionResult<GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, GAgentDraftRunCompletionStatus>> ExecuteAsync(
+            GAgentDraftRunCommand command,
+            Func<AGUIEvent, CancellationToken, ValueTask> emitAsync,
+            Func<GAgentDraftRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(command);
+            ArgumentNullException.ThrowIfNull(emitAsync);
+
+            if (onAcceptedAsync != null)
+            {
+                await onAcceptedAsync(
+                    new GAgentDraftRunAcceptedReceipt(
+                        command.PreferredActorId!,
+                        command.ActorTypeName,
+                        "cmd-1",
+                        "corr-1"),
+                    ct);
+            }
+
+            throw new InvalidOperationException("dispatch failed");
+        }
     }
 
     private static async Task InvokePrivateTaskAsync(MethodInfo method, params object?[] args)
