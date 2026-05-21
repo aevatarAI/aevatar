@@ -10,8 +10,10 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Authentication.Abstractions;
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
@@ -940,6 +942,203 @@ public class NyxIdChatEndpointsCoverageTests
         body.Should().Contain("RUN_STARTED");
         body.Should().Contain("RUN_ERROR");
         body.Should().Contain("The approval continuation failed. Please try again.");
+    }
+
+    [Fact]
+    public async Task NyxIdChatInteraction_ShouldBindDispatchEmitFinalizeAndCleanup()
+    {
+        var actor = new StubActor("actor-1");
+        var runtime = new StubActorRuntime();
+        runtime.Actors[actor.Id] = actor;
+        var projectionPort = new StubNyxIdChatSessionProjectionPort
+        {
+            Messages =
+            {
+                new AGUIEvent { TextMessageContent = new AguiTextMessageContentEvent { Delta = "hi" } },
+                new AGUIEvent { RunFinished = new RunFinishedEvent() },
+            },
+        };
+        var dispatchPort = new StubActorDispatchPort(runtime);
+        var services = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<IActorRuntime>(runtime)
+            .AddSingleton<IActorDispatchPort>(dispatchPort)
+            .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
+            .AddNyxIdChat()
+            .BuildServiceProvider();
+        var interaction = services.GetRequiredService<
+            ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>();
+        var emitted = new List<AGUIEvent>();
+
+        var result = await interaction.ExecuteAsync(
+            new NyxIdChatCommand(
+                actor.Id,
+                "scope-a",
+                "hello",
+                "session-1",
+                "access-token",
+                null,
+                new Dictionary<string, string> { [" custom "] = " value " }),
+            (evt, _) =>
+            {
+                emitted.Add(evt);
+                return ValueTask.CompletedTask;
+            },
+            null,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.Receipt.Should().Be(new NyxIdChatAcceptedReceipt(actor.Id, "session-1", "session-1", "session-1"));
+        result.FinalizeResult.Should().NotBeNull();
+        result.FinalizeResult!.Completed.Should().BeTrue();
+        result.FinalizeResult.Completion.Should().Be(NyxIdChatCompletionStatus.Completed);
+        projectionPort.EnsureCalls.Should().ContainSingle(x => x.ActorId == actor.Id && x.SessionId == "session-1");
+        projectionPort.AttachCount.Should().Be(1);
+        projectionPort.DetachCount.Should().Be(1);
+        projectionPort.ReleaseCount.Should().Be(1);
+        dispatchPort.Dispatches.Should().ContainSingle();
+        var envelope = dispatchPort.Dispatches.Single().Envelope;
+        envelope.Route?.Direct?.TargetActorId.Should().Be(actor.Id);
+        envelope.Propagation?.CorrelationId.Should().Be("session-1");
+        var request = envelope.Payload.Unpack<ChatRequestEvent>();
+        request.Prompt.Should().Be("hello");
+        request.SessionId.Should().Be("session-1");
+        request.ScopeId.Should().Be("scope-a");
+        request.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("access-token");
+        request.Metadata["scope_id"].Should().Be("scope-a");
+        request.Metadata["custom"].Should().Be("value");
+        emitted.Select(x => x.EventCase).Should().ContainInOrder(
+            AGUIEvent.EventOneofCase.TextMessageContent,
+            AGUIEvent.EventOneofCase.RunFinished);
+    }
+
+    [Fact]
+    public async Task NyxIdChatInteraction_ShouldReturnProjectionUnavailableAndDisposeSink_WhenBinderCannotAttach()
+    {
+        var actor = new StubActor("actor-1");
+        var runtime = new StubActorRuntime();
+        runtime.Actors[actor.Id] = actor;
+        var projectionPort = new StubNyxIdChatSessionProjectionPort { ReturnNullLease = true };
+        var services = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<IActorRuntime>(runtime)
+            .AddSingleton<IActorDispatchPort>(new StubActorDispatchPort(runtime))
+            .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
+            .AddNyxIdChat()
+            .BuildServiceProvider();
+        var interaction = services.GetRequiredService<
+            ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>();
+
+        var result = await interaction.ExecuteAsync(
+            new NyxIdChatCommand(actor.Id, "scope-a", "hello", "session-1", "token", null, null),
+            (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(NyxIdChatStartError.ProjectionUnavailable);
+        projectionPort.AttachCount.Should().Be(0);
+        projectionPort.DetachCount.Should().Be(0);
+        projectionPort.ReleaseCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task NyxIdChatInteraction_ShouldCleanupBoundLease_WhenDispatchFails()
+    {
+        var actor = new StubActor("actor-1");
+        var runtime = new StubActorRuntime();
+        runtime.Actors[actor.Id] = actor;
+        var projectionPort = new StubNyxIdChatSessionProjectionPort();
+        var services = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<IActorRuntime>(runtime)
+            .AddSingleton<IActorDispatchPort>(new ThrowingActorDispatchPort(new InvalidOperationException("dispatch failed")))
+            .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
+            .AddNyxIdChat()
+            .BuildServiceProvider();
+        var interaction = services.GetRequiredService<
+            ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>();
+
+        var act = async () => await interaction.ExecuteAsync(
+            new NyxIdChatCommand(actor.Id, "scope-a", "hello", "session-1", "token", null, null),
+            (_, _) => ValueTask.CompletedTask);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("dispatch failed");
+        projectionPort.AttachCount.Should().Be(1);
+        projectionPort.DetachCount.Should().Be(1);
+        projectionPort.ReleaseCount.Should().Be(1);
+    }
+
+    [Fact]
+    public void NyxIdApprovalEnvelopeFactory_ShouldBuildTypedDecisionEnvelope()
+    {
+        var factory = new NyxIdApprovalCommandEnvelopeFactory();
+        var envelope = factory.CreateEnvelope(
+            new NyxIdApprovalCommand("actor-1", "request-1", false, "deny", "session-1"),
+            new CommandContext("actor-1", "command-1", "correlation-1", new Dictionary<string, string>()));
+
+        envelope.Route?.Direct?.TargetActorId.Should().Be("actor-1");
+        envelope.Propagation?.CorrelationId.Should().Be("correlation-1");
+        var decision = envelope.Payload.Unpack<ToolApprovalDecisionEvent>();
+        decision.RequestId.Should().Be("request-1");
+        decision.SessionId.Should().Be("session-1");
+        decision.Approved.Should().BeFalse();
+        decision.Reason.Should().Be("deny");
+    }
+
+    [Fact]
+    public async Task NyxIdFinalizeEmitter_ShouldEmitTimeoutOnlyWhenCompletionMissing()
+    {
+        var emitter = new NyxIdChatFinalizeEmitter();
+        var emitted = new List<AGUIEvent>();
+
+        await emitter.EmitAsync(
+            new NyxIdChatAcceptedReceipt("actor-1", "command-1", "correlation-1", "session-1"),
+            NyxIdChatCompletionStatus.Unknown,
+            completed: false,
+            (evt, _) =>
+            {
+                emitted.Add(evt);
+                return ValueTask.CompletedTask;
+            });
+
+        emitted.Should().ContainSingle();
+        emitted[0].RunError.Message.Should().Be("Request timed out.");
+
+        await emitter.EmitAsync(
+            new NyxIdChatAcceptedReceipt("actor-1", "command-1", "correlation-1", "session-1"),
+            NyxIdChatCompletionStatus.Completed,
+            completed: true,
+            (evt, _) =>
+            {
+                emitted.Add(evt);
+                return ValueTask.CompletedTask;
+            });
+
+        emitted.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public void AddNyxIdChat_ShouldResolveRealInteractionServices()
+    {
+        var runtime = new StubActorRuntime();
+        var services = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<IActorRuntime>(runtime)
+            .AddSingleton<IActorDispatchPort>(new StubActorDispatchPort(runtime))
+            .AddSingleton<INyxIdChatSessionProjectionPort>(new StubNyxIdChatSessionProjectionPort())
+            .AddNyxIdChat()
+            .BuildServiceProvider();
+
+        services.GetRequiredService<
+            ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>()
+            .Should().NotBeNull();
+        services.GetRequiredService<
+            ICommandInteractionService<NyxIdApprovalCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>()
+            .Should().NotBeNull();
+        services.GetRequiredService<ICommandEnvelopeFactory<NyxIdChatCommand>>()
+            .Should().BeOfType<NyxIdChatCommandEnvelopeFactory>();
+        services.GetRequiredService<ICommandTargetBinder<NyxIdChatCommand, NyxIdChatCommandTarget, NyxIdChatStartError>>()
+            .Should().BeOfType<NyxIdChatCommandTargetBinder<NyxIdChatCommand>>();
     }
 
     [Fact]
@@ -2217,6 +2416,17 @@ public class NyxIdChatEndpointsCoverageTests
         }
     }
 
+    private sealed class ThrowingActorDispatchPort(Exception exception) : IActorDispatchPort
+    {
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            _ = actorId;
+            _ = envelope;
+            _ = ct;
+            return Task.FromException(exception);
+        }
+    }
+
     private sealed class StubAgent : IAgent
     {
         public string Id => "agent";
@@ -2304,6 +2514,10 @@ public class NyxIdChatEndpointsCoverageTests
         public List<AGUIEvent> Messages { get; } = [];
         public List<(string ActorId, string SessionId)> EnsureCalls { get; } = [];
         public bool ProjectionEnabled => true;
+        public bool ReturnNullLease { get; init; }
+        public int AttachCount { get; private set; }
+        public int DetachCount { get; private set; }
+        public int ReleaseCount { get; private set; }
 
         public async Task<INyxIdChatSessionProjectionLease?> EnsureChatProjectionAsync(
             string actorId,
@@ -2312,8 +2526,10 @@ public class NyxIdChatEndpointsCoverageTests
         {
             ct.ThrowIfCancellationRequested();
             EnsureCalls.Add((actorId, sessionId));
+            if (ReturnNullLease)
+                return null;
+
             _lease = new StubNyxIdChatSessionProjectionLease(actorId, sessionId);
-            await PublishBufferedMessagesAsync(ct);
             return _lease;
         }
 
@@ -2323,6 +2539,7 @@ public class NyxIdChatEndpointsCoverageTests
             CancellationToken ct = default)
         {
             _ = lease;
+            AttachCount++;
             _sink = sink;
             await PublishBufferedMessagesAsync(ct);
             return null;
@@ -2334,6 +2551,7 @@ public class NyxIdChatEndpointsCoverageTests
         {
             _ = liveSinkLease;
             ct.ThrowIfCancellationRequested();
+            DetachCount++;
             return Task.CompletedTask;
         }
 
@@ -2343,6 +2561,7 @@ public class NyxIdChatEndpointsCoverageTests
         {
             _ = lease;
             ct.ThrowIfCancellationRequested();
+            ReleaseCount++;
             return Task.CompletedTask;
         }
 

@@ -34,8 +34,8 @@ public static partial class NyxIdChatEndpoints
         try
         {
             // Refactor (iter21/cluster-002-request-path-projection-session-priming):
-        //   Old pattern: request handlers synchronously ensure projection/session leases and wait on live sinks.
-        //   New principle: commands use accepted receipts; observation is owned by binders or attach-only sessions.
+            //   Old pattern: request handlers synchronously ensure projection/session leases and wait on live sinks.
+            //   New principle: commands use accepted receipts; observation is owned by binders or attach-only sessions.
             if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
@@ -140,8 +140,8 @@ public static partial class NyxIdChatEndpoints
         try
         {
             // Refactor (iter21/cluster-002-request-path-projection-session-priming):
-        //   Old pattern: request handlers synchronously ensure projection/session leases and wait on live sinks.
-        //   New principle: commands use accepted receipts; observation is owned by binders or attach-only sessions.
+            //   Old pattern: request handlers synchronously ensure projection/session leases and wait on live sinks.
+            //   New principle: commands use accepted receipts; observation is owned by binders or attach-only sessions.
             if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 

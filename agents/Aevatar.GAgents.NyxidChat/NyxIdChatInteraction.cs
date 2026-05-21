@@ -12,6 +12,9 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgents.NyxidChat;
 
+// Refactor (iter21/cluster-002-request-path-projection-session-priming):
+//   Old pattern: request handlers synchronously ensured projection/session leases and waited on live sinks.
+//   New principle: commands carry stable identity into a shared interaction pipeline; binders own observation.
 public sealed record NyxIdChatCommand(
     string ActorId,
     string ScopeId,
@@ -27,6 +30,9 @@ public sealed record NyxIdChatCommand(
     public IReadOnlyDictionary<string, string>? Headers => null;
 }
 
+// Refactor (iter21/cluster-002-request-path-projection-session-priming):
+//   Old pattern: approval endpoints built their own dispatch and projection wait flow.
+//   New principle: approval uses the same command interaction contract as chat execution.
 public sealed record NyxIdApprovalCommand(
     string ActorId,
     string RequestId,
@@ -40,6 +46,9 @@ public sealed record NyxIdApprovalCommand(
     public IReadOnlyDictionary<string, string>? Headers => null;
 }
 
+// Refactor (iter21/cluster-002-request-path-projection-session-priming):
+//   Old pattern: streaming endpoints implied completion from local live-sink progress.
+//   New principle: accepted receipts expose only dispatch identity; completion is observed separately.
 public sealed record NyxIdChatAcceptedReceipt(
     string ActorId,
     string CommandId,

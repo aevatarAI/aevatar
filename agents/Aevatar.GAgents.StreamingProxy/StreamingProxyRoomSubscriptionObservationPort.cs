@@ -15,7 +15,9 @@ public interface IStreamingProxyRoomSubscriptionObservationPort
         CancellationToken ct = default);
 }
 
-// refactor helper, no behavior change
+// Refactor (iter21/cluster-002-request-path-projection-session-priming):
+//   Old pattern: passive room streams ensured projection sessions through endpoint-local priming.
+//   New principle: attach-only observation carries explicit leases for deterministic stream cleanup.
 public sealed record StreamingProxyRoomSubscriptionObservationAttachment(
     IStreamingProxyRoomSessionProjectionLease ProjectionLease,
     IAsyncDisposable? LiveSinkLease);

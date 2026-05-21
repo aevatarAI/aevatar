@@ -9,12 +9,24 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.StreamingProxy;
 
+// Refactor (iter21/cluster-002-request-path-projection-session-priming):
+//   Old pattern: room chat endpoints created projection leases and inferred completion in handler code.
+//   New principle: room chat commands enter a shared interaction pipeline and bind observation by session.
 public sealed record StreamingProxyRoomChatCommand(
     string RoomId,
     string ScopeId,
     string Prompt,
-    string SessionId);
+    string SessionId)
+    : ICommandContextSeed
+{
+    public string? CommandId => SessionId;
+    public string? CorrelationId => SessionId;
+    public IReadOnlyDictionary<string, string>? Headers => null;
+}
 
+// Refactor (iter21/cluster-002-request-path-projection-session-priming):
+//   Old pattern: endpoint-local state mixed accepted dispatch with terminal observation.
+//   New principle: receipt exposes accepted dispatch identity; projection/durable completion stays separate.
 public sealed record StreamingProxyRoomChatAcceptedReceipt(
     string ActorId,
     string CommandId,
@@ -374,42 +386,56 @@ internal sealed class StreamingProxyRoomChatOutputStream
 
         var sawActivity = false;
         var sawAgentMessage = false;
-        await using var enumerator = events.GetAsyncEnumerator(ct);
-        while (!ct.IsCancellationRequested)
+        var enumerator = events.GetAsyncEnumerator(ct);
+        try
         {
-            using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            idleCts.CancelAfter(sawAgentMessage
-                ? StreamingProxyDefaults.IdleCompletionTimeoutMs
-                : sawActivity
-                    ? StreamingProxyDefaults.PostTopicTimeoutMs
-                    : StreamingProxyDefaults.InitialResponseTimeoutMs);
+            while (!ct.IsCancellationRequested)
+            {
+                using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                idleCts.CancelAfter(sawAgentMessage
+                    ? StreamingProxyDefaults.IdleCompletionTimeoutMs
+                    : sawActivity
+                        ? StreamingProxyDefaults.PostTopicTimeoutMs
+                        : StreamingProxyDefaults.InitialResponseTimeoutMs);
 
-            bool hasNext;
+                bool hasNext;
+                try
+                {
+                    hasNext = await enumerator.MoveNextAsync().AsTask().WaitAsync(idleCts.Token);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                if (!hasNext)
+                    return;
+
+                var evt = enumerator.Current;
+                var signal = StreamingProxyRoomInteractionHelpers.ResolveSignal(evt);
+                if (signal.HasValue)
+                {
+                    sawActivity = true;
+                    if (signal == StreamingProxyEndpoints.StreamingProxyStreamSignal.AgentMessage)
+                        sawAgentMessage = true;
+                }
+
+                await emitAsync(evt, ct);
+
+                if (shouldStop?.Invoke(evt) == true)
+                    return;
+            }
+        }
+        finally
+        {
             try
             {
-                hasNext = await enumerator.MoveNextAsync().AsTask().WaitAsync(idleCts.Token);
+                await enumerator.DisposeAsync();
             }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            catch (NotSupportedException)
             {
-                return;
+                // ChannelReader.ReadAllAsync may not support async enumerator disposal after an idle timeout.
             }
-
-            if (!hasNext)
-                return;
-
-            var evt = enumerator.Current;
-            var signal = StreamingProxyRoomInteractionHelpers.ResolveSignal(evt);
-            if (signal.HasValue)
-            {
-                sawActivity = true;
-                if (signal == StreamingProxyEndpoints.StreamingProxyStreamSignal.AgentMessage)
-                    sawAgentMessage = true;
-            }
-
-            await emitAsync(evt, ct);
-
-            if (shouldStop?.Invoke(evt) == true)
-                return;
         }
     }
 }
