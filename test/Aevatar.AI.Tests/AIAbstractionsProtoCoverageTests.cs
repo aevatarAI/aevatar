@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.Foundation.VoicePresence.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
 
@@ -185,6 +186,18 @@ public sealed class AIAbstractionsProtoCoverageTests
                     ["trace-id"] = "trace-1",
                 },
             },
+            VoicePresence =
+            {
+                ["voice_presence"] = new VoicePresenceRuntimeState
+                {
+                    Status = VoicePresenceRuntimeStatus.AudioDraining,
+                    CurrentResponseId = 12,
+                    LastDrainAckResponseId = 11,
+                    LastDrainAckPlayoutSequence = 3400,
+                    NextResponseId = 13,
+                    ActiveProviderResponseId = "provider-response-12",
+                },
+            },
             Sessions =
             {
                 ["session-1"] = new RoleChatSessionState
@@ -237,6 +250,8 @@ public sealed class AIAbstractionsProtoCoverageTests
         state.PendingApproval!.RemoteApprovalId.Should().Be("remote-1");
         state.PendingApproval.RemoteStatusCheckAttempt.Should().Be(2);
         state.PendingApproval.RemoteApprovalExpiresAtUnixMs.Should().Be(123456);
+        state.VoicePresence["voice_presence"].CurrentResponseId.Should().Be(12);
+        state.VoicePresence["voice_presence"].ActiveProviderResponseId.Should().Be("provider-response-12");
     }
 
     [Fact]

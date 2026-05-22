@@ -2,6 +2,8 @@ syntax = "proto3";
 package aevatar.ai;
 option csharp_namespace = "Aevatar.AI.Abstractions";
 
+import "Protos/voice_presence.proto";
+
 enum ChatContentPartKind {
   CHAT_CONTENT_PART_KIND_UNSPECIFIED = 0;
   CHAT_CONTENT_PART_KIND_TEXT = 1;
@@ -190,6 +192,7 @@ message RoleGAgentState {
   string event_routes = 6;
   PendingToolApprovalState pending_approval = 7;
   string role_id = 8;
+  map<string, aevatar.voice.VoicePresenceRuntimeState> voice_presence = 9;
 }
 
 // ─── Multi-turn tool approval continuation ───

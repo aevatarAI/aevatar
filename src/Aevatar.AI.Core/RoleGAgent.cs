@@ -21,6 +21,7 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.VoicePresence.Abstractions;
 using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 namespace Aevatar.AI.Core;
@@ -28,7 +29,7 @@ namespace Aevatar.AI.Core;
 /// <summary>
 /// Role-based AI GAgent. Receives ChatRequestEvent and streams LLM response.
 /// </summary>
-public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
+public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePresenceRuntimeStateOwner
 {
     private const string LlmFailureContentPrefix = "[[AEVATAR_LLM_ERROR]]";
     private const int MaxTrackedSessions = 128;
@@ -66,6 +67,41 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     public string RoleId { get; private set; } = "";
 
     protected IRemoteToolApprovalPort? RemoteToolApprovalPort { get; }
+
+    // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
+    //   Old pattern: VoicePresenceModule 在 module 内持有 process-local background state(unbounded channels / TaskCompletionSource waiters / 静态字段持 lifecycle),还保留 disabled remote voice fallback shell.
+    //   New principle: Reuse existing RoleGAgent state for voice runtime facts(typed protobuf sub-state in RoleGAgent state); transport handles 仅作 volatile process-local lease.
+    public bool TryGetVoicePresenceRuntimeState(string moduleName, out VoicePresenceRuntimeState runtimeState)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
+
+        if (State.VoicePresence.TryGetValue(moduleName, out var stored))
+        {
+            runtimeState = stored.Clone();
+            return true;
+        }
+
+        runtimeState = new VoicePresenceRuntimeState();
+        return false;
+    }
+
+    // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
+    //   Old pattern: VoicePresenceModule 在 module 内持有 process-local background state(unbounded channels / TaskCompletionSource waiters / 静态字段持 lifecycle),还保留 disabled remote voice fallback shell.
+    //   New principle: Reuse existing RoleGAgent state for voice runtime facts(typed protobuf sub-state in RoleGAgent state); transport handles 仅作 volatile process-local lease.
+    public async Task PersistVoicePresenceRuntimeStateAsync(
+        string moduleName,
+        VoicePresenceRuntimeState runtimeState,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
+        ArgumentNullException.ThrowIfNull(runtimeState);
+
+        await PersistDomainEventAsync(new VoicePresenceRuntimeStateChangedEvent
+        {
+            ModuleName = moduleName,
+            State = runtimeState.Clone(),
+        }, ct);
+    }
 
     [EventHandler]
     public async Task HandleInitializeRoleAgent(InitializeRoleAgentEvent evt)
@@ -543,6 +579,21 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         return next;
     }
 
+    // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
+    //   Old pattern: VoicePresenceModule 在 module 内持有 process-local background state(unbounded channels / TaskCompletionSource waiters / 静态字段持 lifecycle),还保留 disabled remote voice fallback shell.
+    //   New principle: Reuse existing RoleGAgent state for voice runtime facts(typed protobuf sub-state in RoleGAgent state); transport handles 仅作 volatile process-local lease.
+    private static RoleGAgentState ApplyVoicePresenceRuntimeStateChanged(
+        RoleGAgentState current,
+        VoicePresenceRuntimeStateChangedEvent evt)
+    {
+        if (string.IsNullOrWhiteSpace(evt.ModuleName))
+            return current;
+
+        var next = current.Clone();
+        next.VoicePresence[evt.ModuleName] = evt.State?.Clone() ?? new VoicePresenceRuntimeState();
+        return next;
+    }
+
     /// <summary>Returns agent description.</summary>
     public override Task<string> GetDescriptionAsync() =>
         Task.FromResult($"RoleGAgent[{RoleName}]:{Id}");
@@ -556,6 +607,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             .On<PendingToolApprovalPersistedEvent>(ApplyPendingApproval)
             .On<RemoteToolApprovalSubmittedEvent>(ApplyRemoteApprovalSubmitted)
             .On<ClearPendingApprovalEvent>(ApplyClearPendingApproval)
+            .On<VoicePresenceRuntimeStateChangedEvent>(ApplyVoicePresenceRuntimeStateChanged)
             .OrCurrent();
 
     protected override async Task OnStateChangedAfterConfigAppliedAsync(RoleGAgentState state, CancellationToken ct)

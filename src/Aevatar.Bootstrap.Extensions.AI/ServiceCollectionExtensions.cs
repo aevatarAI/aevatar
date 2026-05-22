@@ -142,9 +142,7 @@ public static class ServiceCollectionExtensions
         if (registrations.Count == 0)
             return;
 
-        services.TryAddSingleton<InProcessActorVoicePresenceSessionResolver>();
-        services.TryAddSingleton<RemoteActorVoicePresenceSessionResolver>();
-        services.TryAddSingleton<IVoicePresenceSessionResolver, CompositeVoicePresenceSessionResolver>();
+        services.TryAddSingleton<IVoicePresenceSessionResolver, InProcessActorVoicePresenceSessionResolver>();
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IEventModuleFactory<IEventHandlerContext>, VoicePresenceModuleFactory>());
         foreach (var registration in registrations)
