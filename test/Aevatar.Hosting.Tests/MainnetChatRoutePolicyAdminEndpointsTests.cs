@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Text.RegularExpressions;
 using System.Text;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
@@ -170,6 +171,28 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
         body.Should().Contain("\"actorId\": \"agent-x\"");
     }
 
+    [Fact]
+    public void RequestPathSources_ShouldNotContainProjectionPrimingOutsideRefactorComments()
+    {
+        // Refactor (iter32/cluster-034-chat-route-policy-request-path-projection-activation):
+        //   Old pattern: tests only proved endpoint business responses, not absence of projection priming calls.
+        //   New principle: source-regression assertion locks request paths to dispatch-only behavior.
+        var adminSource = StripLineComments(File.ReadAllText(GetSourcePath(
+            "src",
+            "Aevatar.Mainnet.Host.Api",
+            "ChatRouting",
+            "ChatRoutePolicyAdminEndpoints.cs")));
+        var voiceSource = StripLineComments(File.ReadAllText(GetSourcePath(
+            "src",
+            "Aevatar.Mainnet.Host.Api",
+            "Voice",
+            "VoiceDemoBootstrapEndpoints.cs")));
+        var requestPathSource = adminSource + voiceSource;
+
+        requestPathSource.Should().NotContain("ChatRoutePolicyProjectionPort");
+        requestPathSource.Should().NotContain("EnsureProjectionForActorAsync");
+    }
+
     // ----- Test fixtures -------------------------------------------------------
 
     private static async Task<WebApplication> CreateAppAsync(
@@ -199,6 +222,24 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
         app.MapChatRoutePolicyAdminEndpoints();
         await app.StartAsync();
         return app;
+    }
+
+    private static string StripLineComments(string source) =>
+        Regex.Replace(source, @"^\s*//.*$", string.Empty, RegexOptions.Multiline);
+
+    private static string GetSourcePath(params string[] relativePath)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine([directory.FullName, .. relativePath]);
+            if (File.Exists(candidate))
+                return candidate;
+
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException($"Could not locate {Path.Combine(relativePath)} from test output directory.");
     }
 
     private sealed class RecordingActorRuntime : IActorRuntime

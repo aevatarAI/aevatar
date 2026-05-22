@@ -53,6 +53,9 @@ internal static class VoiceDemoBootstrapEndpoints
         [FromServices] IVoicePresenceSessionResolver voiceSessionResolver,
         CancellationToken ct)
     {
+        // Refactor (iter32/cluster-034-chat-route-policy-request-path-projection-activation):
+        //   Old pattern: bootstrap request path injected ChatRoutePolicyProjectionPort and primed projection.
+        //   New principle: bootstrap dispatches accepted commands; committed-state hook activates route-policy projection.
         if (!TryResolveScopeId(http.User, out var scopeId))
         {
             return Results.Json(

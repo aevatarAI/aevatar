@@ -75,6 +75,9 @@ internal static class ChatRoutePolicyAdminEndpoints
         [FromServices] IActorDispatchPort actorDispatchPort,
         CancellationToken ct)
     {
+        // Refactor (iter32/cluster-034-chat-route-policy-request-path-projection-activation):
+        //   Old pattern: write endpoint injected ChatRoutePolicyProjectionPort and primed projection before dispatch.
+        //   New principle: endpoint only builds/dispatches the command; committed-state hook activates projection.
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return denied;
 
@@ -134,6 +137,9 @@ internal static class ChatRoutePolicyAdminEndpoints
         [FromServices] IActorDispatchPort actorDispatchPort,
         CancellationToken ct)
     {
+        // Refactor (iter32/cluster-034-chat-route-policy-request-path-projection-activation):
+        //   Old pattern: delete endpoint injected ChatRoutePolicyProjectionPort and primed projection before dispatch.
+        //   New principle: endpoint only builds/dispatches the command; committed-state hook activates projection.
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return denied;
 
