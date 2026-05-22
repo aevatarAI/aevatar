@@ -25,6 +25,7 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [Role 与工作流、Connector 配置指南](canon/role-model.md)
 - [Aevatar.Scripting 架构文档](canon/scripting.md)
 - [.NET Workflow SDK Quick Start](canon/sdk-dotnet.md)
+- [Aevatar /status 状态面板架构](canon/status-dashboard.md)
 - [Workflow Primitives 参考手册](canon/workflow-primitives.md)
 - [工作流引擎设计与实践](canon/workflow-runtime.md)
 
@@ -54,6 +55,7 @@ Immutable records of architectural choices and their rationale.
 - [0022 — OpenTelemetry semantic conventions for aevatar.* activities](adr/0022-otel-aevatar-semantic-conventions.md)
 - [0023 — Two-tier Inspector architecture (canonical readmodel vs observation OTel)](adr/0023-two-tier-inspector-architecture.md)
 - [Chat Route Policy — Config Actor + Boundary Resolver](adr/0024-chat-route-policy.md)
+- [Voice Router Integration - Policy-Aware WebSocket Boundary](adr/0025-voice-router-integration.md)
 
 ## History
 
