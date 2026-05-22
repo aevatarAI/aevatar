@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.AgentCatalog;
+using Aevatar.AI.ToolProviders.AevatarInvocation;
 using Aevatar.AI.ToolProviders.Channel;
 using Aevatar.AI.ToolProviders.ChannelAdmin;
 using Aevatar.AI.ToolProviders.ChronoStorage;
@@ -155,6 +156,7 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddChannelInteractiveReplyTools();
         builder.Services.AddChannelAdminTools();
         builder.Services.AddAgentCatalogTools();
+        builder.Services.AddAevatarInvocationTools();
         builder.Services.Configure<DeviceEventOptions>(
             builder.Configuration.GetSection("Aevatar:DeviceEvents"));
         builder.Services.AddNyxIdTools(o =>
