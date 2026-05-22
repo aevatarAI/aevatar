@@ -98,9 +98,9 @@ public sealed class WorkflowExecutionReadModelMapper
         };
     }
 
-    public WorkflowActorTimelineItem ToActorTimelineItem(WorkflowExecutionTimelineEvent source)
+    public WorkflowRunTimelineExportItem ToWorkflowRunTimelineExportItem(WorkflowExecutionTimelineEvent source)
     {
-        var item = new WorkflowActorTimelineItem
+        var item = new WorkflowRunTimelineExportItem
         {
             Timestamp = source.Timestamp,
             Stage = source.Stage,
@@ -114,9 +114,9 @@ public sealed class WorkflowExecutionReadModelMapper
         return item;
     }
 
-    public WorkflowActorGraphNode ToActorGraphNode(ProjectionGraphNode source)
+    public WorkflowRunGraphExportNode ToWorkflowRunGraphExportNode(ProjectionGraphNode source)
     {
-        var node = new WorkflowActorGraphNode
+        var node = new WorkflowRunGraphExportNode
         {
             NodeId = source.NodeId,
             NodeType = source.NodeType,
@@ -126,9 +126,9 @@ public sealed class WorkflowExecutionReadModelMapper
         return node;
     }
 
-    public WorkflowActorGraphEdge ToActorGraphEdge(ProjectionGraphEdge source)
+    public WorkflowRunGraphExportEdge ToWorkflowRunGraphExportEdge(ProjectionGraphEdge source)
     {
-        var edge = new WorkflowActorGraphEdge
+        var edge = new WorkflowRunGraphExportEdge
         {
             EdgeId = source.EdgeId,
             FromNodeId = source.FromNodeId,
@@ -140,16 +140,16 @@ public sealed class WorkflowExecutionReadModelMapper
         return edge;
     }
 
-    public WorkflowActorGraphSubgraph ToActorGraphSubgraph(
+    public WorkflowRunGraphExportSubgraph ToWorkflowRunGraphExportSubgraph(
         string rootNodeId,
         ProjectionGraphSubgraph source)
     {
-        var subgraph = new WorkflowActorGraphSubgraph
+        var subgraph = new WorkflowRunGraphExportSubgraph
         {
             RootNodeId = rootNodeId,
         };
-        subgraph.Nodes.Add(source.Nodes.Select(ToActorGraphNode));
-        subgraph.Edges.Add(source.Edges.Select(ToActorGraphEdge));
+        subgraph.Nodes.Add(source.Nodes.Select(ToWorkflowRunGraphExportNode));
+        subgraph.Edges.Add(source.Edges.Select(ToWorkflowRunGraphExportEdge));
         return subgraph;
     }
 

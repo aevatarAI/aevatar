@@ -102,8 +102,8 @@ public sealed class EventQueryTool : IAgentTool
         var stageFilter = args.Str("stage_filter");
         var eventTypeFilter = args.Str("event_type_filter");
 
-        var timeline = await _queryService.ListActorTimelineAsync(actorId, take, ct);
-        IEnumerable<WorkflowActorTimelineItem> filtered = timeline;
+        var timeline = await _queryService.ListWorkflowRunTimelineExportAsync(actorId, take, ct);
+        IEnumerable<WorkflowRunTimelineExportItem> filtered = timeline;
 
         if (!string.IsNullOrWhiteSpace(stageFilter))
             filtered = filtered.Where(t => t.Stage.Contains(stageFilter, StringComparison.OrdinalIgnoreCase));
@@ -131,10 +131,10 @@ public sealed class EventQueryTool : IAgentTool
         var edgeTypes = args.StrArray("edge_types");
 
         var options = edgeTypes.Length > 0
-            ? new WorkflowActorGraphQueryOptions { EdgeTypes = edgeTypes }
+            ? new WorkflowRunGraphExportQueryOptions { EdgeTypes = edgeTypes }
             : null;
 
-        var edges = await _queryService.ListActorGraphEdgesAsync(actorId, take, options, ct);
+        var edges = await _queryService.ListWorkflowRunGraphExportEdgesAsync(actorId, take, options, ct);
 
         return JsonSerializer.Serialize(new
         {

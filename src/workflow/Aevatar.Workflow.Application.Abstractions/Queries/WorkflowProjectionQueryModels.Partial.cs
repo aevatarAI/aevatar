@@ -32,7 +32,7 @@ public sealed partial class WorkflowActorProjectionState
     }
 }
 
-public sealed partial class WorkflowActorTimelineItem
+public sealed partial class WorkflowRunTimelineExportItem
 {
     public DateTimeOffset Timestamp
     {
@@ -41,7 +41,7 @@ public sealed partial class WorkflowActorTimelineItem
     }
 }
 
-public sealed partial class WorkflowActorGraphNode
+public sealed partial class WorkflowRunGraphExportNode
 {
     public DateTimeOffset UpdatedAt
     {
@@ -50,7 +50,7 @@ public sealed partial class WorkflowActorGraphNode
     }
 }
 
-public sealed partial class WorkflowActorGraphEdge
+public sealed partial class WorkflowRunGraphExportEdge
 {
     public DateTimeOffset UpdatedAt
     {

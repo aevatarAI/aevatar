@@ -464,41 +464,6 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             null);
     }
 
-    public static WorkflowRunTimelineDocument BuildTimelineDocument(WorkflowRunInsightReportDocument report)
-    {
-        ArgumentNullException.ThrowIfNull(report);
-
-        return new WorkflowRunTimelineDocument
-        {
-            Id = report.Id,
-            RootActorId = report.RootActorId,
-            CommandId = report.CommandId,
-            StateVersion = report.StateVersion,
-            LastEventId = report.LastEventId,
-            UpdatedAt = report.UpdatedAt,
-            Timeline = report.Timeline.Select(CloneTimelineEvent).ToList(),
-        };
-    }
-
-    public static WorkflowRunGraphArtifactDocument BuildGraphDocument(WorkflowRunInsightReportDocument report)
-    {
-        ArgumentNullException.ThrowIfNull(report);
-
-        return new WorkflowRunGraphArtifactDocument
-        {
-            Id = report.Id,
-            RootActorId = report.RootActorId,
-            CommandId = report.CommandId,
-            WorkflowName = report.WorkflowName,
-            Input = report.Input,
-            StateVersion = report.StateVersion,
-            LastEventId = report.LastEventId,
-            UpdatedAt = report.UpdatedAt,
-            Topology = report.Topology.Select(edge => new WorkflowExecutionTopologyEdge(edge.Parent, edge.Child)).ToList(),
-            Steps = report.Steps.Select(CloneStepTrace).ToList(),
-        };
-    }
-
     private static WorkflowExecutionStepTrace GetOrCreateStep(
         IList<WorkflowExecutionStepTrace> steps,
         string? stepId)

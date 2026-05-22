@@ -78,16 +78,16 @@ public sealed class WorkflowCatalogItemDetail
     public WorkflowCatalogDefinition Definition { get; set; } = new();
     public List<WorkflowCatalogEdge> Edges { get; set; } = [];
 }
-public enum WorkflowActorGraphDirection
+public enum WorkflowRunGraphExportDirection
 {
     Outbound = 0,
     Inbound = 1,
     Both = 2,
 }
 
-public sealed class WorkflowActorGraphQueryOptions
+public sealed class WorkflowRunGraphExportQueryOptions
 {
-    public WorkflowActorGraphDirection Direction { get; set; } = WorkflowActorGraphDirection.Both;
+    public WorkflowRunGraphExportDirection Direction { get; set; } = WorkflowRunGraphExportDirection.Both;
 
     public IReadOnlyList<string> EdgeTypes { get; set; } = [];
 }

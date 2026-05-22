@@ -127,7 +127,7 @@ public sealed class WorkflowStatusTool : IAgentTool
         if (string.IsNullOrWhiteSpace(actorId))
             return """{"error":"'actor_id' is required for 'status' action. Use action='list' to find available workflows."}""";
 
-        var report = await _queryService.GetActorReportAsync(actorId, ct);
+        var report = await _queryService.GetWorkflowRunReportArtifactAsync(actorId, ct);
         if (report == null)
             return JsonSerializer.Serialize(new { error = $"No workflow run found for actor '{actorId}'" });
 
@@ -162,7 +162,7 @@ public sealed class WorkflowStatusTool : IAgentTool
             return """{"error":"'actor_id' is required for 'timeline' action"}""";
 
         var take = Math.Clamp(args.Int("take") ?? _options.MaxTimelineItems, 1, 200);
-        var timeline = await _queryService.ListActorTimelineAsync(actorId, take, ct);
+        var timeline = await _queryService.ListWorkflowRunTimelineExportAsync(actorId, take, ct);
 
         return JsonSerializer.Serialize(new
         {

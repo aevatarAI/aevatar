@@ -121,7 +121,7 @@ public sealed class ActorInspectTool : IAgentTool
         var depth = Math.Clamp(args.Int("graph_depth") ?? _options.MaxGraphDepth, 1, 5);
         var take = Math.Clamp(args.Int("take") ?? 200, 1, 500);
 
-        var subgraph = await _queryService.GetActorGraphSubgraphAsync(actorId, depth, take, ct: ct);
+        var subgraph = await _queryService.GetWorkflowRunGraphExportSubgraphAsync(actorId, depth, take, ct: ct);
 
         return JsonSerializer.Serialize(new
         {

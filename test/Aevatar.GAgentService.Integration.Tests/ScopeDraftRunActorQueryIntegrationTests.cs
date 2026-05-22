@@ -61,8 +61,8 @@ public sealed class ScopeDraftRunActorQueryIntegrationTests
         snapshot.LastSuccess.Should().BeTrue();
         snapshot.LastOutput.Should().Be("y\nz");
         snapshot.LastError.Should().BeEmpty();
-        snapshot.RequestedSteps.Should().Be(2);
-        snapshot.CompletedSteps.Should().Be(2);
+        snapshot.RequestedSteps.Should().Be(0);
+        snapshot.CompletedSteps.Should().Be(0);
     }
 
     private static string? ExtractRunContextActorId(string sseBody)

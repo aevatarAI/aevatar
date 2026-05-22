@@ -5185,21 +5185,21 @@ public sealed class ScopeServiceEndpointsTests
             return Task.FromResult<WorkflowActorSnapshot?>(snapshot);
         }
 
-        public Task<WorkflowRunReport?> GetActorReportAsync(string actorId, CancellationToken ct = default)
+        public Task<WorkflowRunReport?> GetWorkflowRunReportArtifactAsync(string actorId, CancellationToken ct = default)
         {
             ReportCalls.Add(actorId);
             ReportsByActorId.TryGetValue(actorId, out var report);
             return Task.FromResult<WorkflowRunReport?>(report);
         }
 
-        public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(string actorId, int take = 200, CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<WorkflowActorTimelineItem>>([]);
+        public Task<IReadOnlyList<WorkflowRunTimelineExportItem>> ListWorkflowRunTimelineExportAsync(string actorId, int take = 200, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowRunTimelineExportItem>>([]);
 
-        public Task<IReadOnlyList<WorkflowActorGraphEdge>> ListActorGraphEdgesAsync(string actorId, int take = 200, WorkflowActorGraphQueryOptions? options = null, CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<WorkflowActorGraphEdge>>([]);
+        public Task<IReadOnlyList<WorkflowRunGraphExportEdge>> ListWorkflowRunGraphExportEdgesAsync(string actorId, int take = 200, WorkflowRunGraphExportQueryOptions? options = null, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowRunGraphExportEdge>>([]);
 
-        public Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(string actorId, int depth = 2, int take = 200, WorkflowActorGraphQueryOptions? options = null, CancellationToken ct = default) =>
-            Task.FromResult(new WorkflowActorGraphSubgraph());
+        public Task<WorkflowRunGraphExportSubgraph> GetWorkflowRunGraphExportSubgraphAsync(string actorId, int depth = 2, int take = 200, WorkflowRunGraphExportQueryOptions? options = null, CancellationToken ct = default) =>
+            Task.FromResult(new WorkflowRunGraphExportSubgraph());
     }
 
     private sealed class FakeCommandInteractionService
