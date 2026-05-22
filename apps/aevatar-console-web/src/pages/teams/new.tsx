@@ -6,9 +6,10 @@ import { loadRestorableAuthSession } from '@/shared/auth/session';
 import { history } from '@/shared/navigation/history';
 import { buildTeamDetailHref, buildTeamsHref } from '@/shared/navigation/teamRoutes';
 import { studioApi } from '@/shared/studio/api';
+import { describeError } from '@/shared/ui/errorText';
 import { AevatarPanel } from '@/shared/ui/aevatarPageShells';
 import ConsoleMenuPageShell from '@/shared/ui/ConsoleMenuPageShell';
-import { describeError } from '@/shared/ui/errorText';
+import { rememberPendingTeamRosterSummary } from './pendingTeamRoster';
 import { resolveStudioScopeContext } from '../scopes/components/resolvedScope';
 import {
   buildScopeHref,
@@ -136,6 +137,7 @@ const TeamCreatePage: React.FC = () => {
         ['teams', 'team-summary', team.scopeId, team.teamId],
         team,
       );
+      rememberPendingTeamRosterSummary(team);
       await queryClient.invalidateQueries({
         queryKey: ['teams', 'roster', team.scopeId],
       });
