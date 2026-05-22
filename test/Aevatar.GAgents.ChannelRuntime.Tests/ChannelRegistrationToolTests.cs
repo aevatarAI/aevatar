@@ -23,7 +23,7 @@ public sealed class ChannelRegistrationToolTests
         tool.Name.Should().Be("channel_registrations");
         tool.Description.Should().Contain("register_lark_via_nyx");
         tool.Description.Should().Contain("rebuild_projection");
-        tool.Description.Should().Contain("repair_lark_mirror");
+        tool.Description.Should().NotContain("repair_lark_mirror");
         JsonDocument.Parse(tool.ParametersSchema).RootElement
             .GetProperty("properties")
             .GetProperty("action")
@@ -31,7 +31,7 @@ public sealed class ChannelRegistrationToolTests
             .EnumerateArray()
             .Select(static value => value.GetString())
             .Should()
-            .Equal("list", "register_lark_via_nyx", "rebuild_projection", "repair_lark_mirror", "delete");
+            .Equal("list", "register_lark_via_nyx", "rebuild_projection", "delete");
     }
 
     [Fact]
@@ -129,18 +129,6 @@ public sealed class ChannelRegistrationToolTests
     [Fact]
     public async Task ExecuteAsync_RebuildProjection_DispatchesRefreshCommand()
     {
-        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(
-            [
-                new ChannelBotRegistrationEntry
-                {
-                    Id = "reg-1",
-                    Platform = "lark",
-                    NyxAgentApiKeyId = "key-1",
-                },
-            ]));
-
         List<EventEnvelope> capturedEnvelopes = [];
         var actor = Substitute.For<IActor>();
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
@@ -151,57 +139,7 @@ public sealed class ChannelRegistrationToolTests
                 Arg.Do<EventEnvelope>(envelope => capturedEnvelopes.Add(envelope)),
                 Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
-        var verifier = new RecordingOwnershipVerifier();
-
-        using var serviceProvider = new ServiceCollection()
-            .AddSingleton(queryPort)
-            .AddSingleton(actorRuntime)
-            .AddSingleton((IActorDispatchPort)actorRuntime)
-            .AddSingleton<INyxRelayApiKeyOwnershipVerifier>(verifier)
-            .BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(serviceProvider);
-
-        using var scope = PushNyxToken();
-        var json = await tool.ExecuteAsync("""{"action":"rebuild_projection","reason":"manual-debug","registration_id":"reg-1"}""");
-        using var doc = JsonDocument.Parse(json);
-
-        doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-        doc.RootElement.GetProperty("observed_registrations_before_rebuild").GetInt32().Should().Be(1);
-        doc.RootElement.GetProperty("empty_scope_registrations_backfilled").GetInt32().Should().Be(1);
-        doc.RootElement.GetProperty("backfill_status").GetString().Should().Be("dispatched");
-        doc.RootElement.GetProperty("warnings").GetArrayLength().Should().Be(0);
-        capturedEnvelopes.Should().HaveCount(2);
-        var repair = capturedEnvelopes[0].Payload.Unpack<ChannelBotRepairScopeIdCommand>();
-        repair.RegistrationId.Should().Be("reg-1");
-        repair.ScopeId.Should().Be("scope-1");
-        capturedEnvelopes[1].Payload.Unpack<ChannelBotRebuildProjectionCommand>().Reason.Should().Be("manual-debug");
-        verifier.Calls.Should().ContainSingle()
-            .Which.Should().Be(("test-token", "scope-1", "key-1"));
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_RebuildProjection_DoesNotBackfillEmptyScopeRegistrationWithoutSelector()
-    {
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(
-            [
-                new ChannelBotRegistrationEntry
-                {
-                    Id = "reg-1",
-                    Platform = "lark",
-                },
-            ]));
-
-        List<EventEnvelope> capturedEnvelopes = [];
-        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
-        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
-        ((IActorDispatchPort)actorRuntime).DispatchAsync(
-                ChannelBotRegistrationGAgent.WellKnownId,
-                Arg.Do<EventEnvelope>(envelope => capturedEnvelopes.Add(envelope)),
-                Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
 
         using var serviceProvider = new ServiceCollection()
             .AddSingleton(queryPort)
@@ -211,115 +149,14 @@ public sealed class ChannelRegistrationToolTests
         var tool = new ChannelRegistrationTool(serviceProvider);
 
         using var scope = PushNyxToken();
-        var json = await tool.ExecuteAsync("""{"action":"rebuild_projection","reason":"manual-debug"}""");
+        var json = await tool.ExecuteAsync("""{"action":"rebuild_projection","reason":"manual-debug","registration_id":"reg-1","force":true}""");
         using var doc = JsonDocument.Parse(json);
 
         doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-        doc.RootElement.GetProperty("observed_registrations_before_rebuild").GetInt32().Should().Be(1);
-        doc.RootElement.GetProperty("empty_scope_registrations_observed").GetInt32().Should().Be(1);
-        doc.RootElement.GetProperty("empty_scope_registrations_backfilled").GetInt32().Should().Be(0);
-        doc.RootElement.GetProperty("backfill_status").GetString().Should().Be("skipped");
-        doc.RootElement.GetProperty("warnings")
-            .EnumerateArray()
-            .Select(static value => value.GetString())
-            .Should()
-            .ContainSingle(message => message != null && message.Contains("pass registration_id", StringComparison.Ordinal));
-        doc.RootElement.GetProperty("note").GetString().Should().Contain("pass registration_id");
-        capturedEnvelopes.Should().HaveCount(1);
-        capturedEnvelopes[0].Payload.Unpack<ChannelBotRebuildProjectionCommand>().Reason.Should().Be("manual-debug");
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_RebuildProjection_ReportsUnavailable_WhenQuerySideThrows()
-    {
-        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromException<IReadOnlyList<ChannelBotRegistrationEntry>>(
-                new InvalidOperationException("projection reader unavailable")));
-
-        List<EventEnvelope> capturedEnvelopes = [];
-        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
-        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
-        ((IActorDispatchPort)actorRuntime).DispatchAsync(
-                ChannelBotRegistrationGAgent.WellKnownId,
-                Arg.Do<EventEnvelope>(envelope => capturedEnvelopes.Add(envelope)),
-                Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
-
-        using var serviceProvider = new ServiceCollection()
-            .AddSingleton(queryPort)
-            .AddSingleton(actorRuntime)
-            .AddSingleton((IActorDispatchPort)actorRuntime)
-            .BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(serviceProvider);
-
-        using var scope = PushNyxToken();
-        var json = await tool.ExecuteAsync("""{"action":"rebuild_projection","reason":"manual-debug"}""");
-        using var doc = JsonDocument.Parse(json);
-
-        doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-        doc.RootElement.GetProperty("backfill_status").GetString().Should().Be("unavailable");
-        doc.RootElement.GetProperty("warnings")
-            .EnumerateArray()
-            .Select(static value => value.GetString())
-            .Should()
-            .ContainSingle(message => message != null && message.Contains("projection reader unavailable", StringComparison.Ordinal));
+        doc.RootElement.TryGetProperty("backfill_status", out _).Should().BeFalse();
         capturedEnvelopes.Should().ContainSingle();
         capturedEnvelopes[0].Payload.Unpack<ChannelBotRebuildProjectionCommand>().Reason.Should().Be("manual-debug");
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_RebuildProjection_DoesNotBackfillEmptyScopeRegistrationsWhenForceHasNoSelector()
-    {
-        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(
-            [
-                new ChannelBotRegistrationEntry
-                {
-                    Id = "reg-1",
-                    Platform = "lark",
-                    NyxAgentApiKeyId = "key-1",
-                },
-                new ChannelBotRegistrationEntry
-                {
-                    Id = "reg-2",
-                    Platform = "lark",
-                    NyxAgentApiKeyId = "key-2",
-                },
-            ]));
-
-        List<EventEnvelope> capturedEnvelopes = [];
-        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
-        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
-        ((IActorDispatchPort)actorRuntime).DispatchAsync(
-                ChannelBotRegistrationGAgent.WellKnownId,
-                Arg.Do<EventEnvelope>(envelope => capturedEnvelopes.Add(envelope)),
-                Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
-        var verifier = new RecordingOwnershipVerifier();
-
-        using var serviceProvider = new ServiceCollection()
-            .AddSingleton(queryPort)
-            .AddSingleton(actorRuntime)
-            .AddSingleton((IActorDispatchPort)actorRuntime)
-            .AddSingleton<INyxRelayApiKeyOwnershipVerifier>(verifier)
-            .BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(serviceProvider);
-
-        using var scope = PushNyxToken();
-        var json = await tool.ExecuteAsync("""{"action":"rebuild_projection","reason":"manual-debug","force":true}""");
-        using var doc = JsonDocument.Parse(json);
-
-        doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-        doc.RootElement.GetProperty("empty_scope_registrations_observed").GetInt32().Should().Be(2);
-        doc.RootElement.GetProperty("empty_scope_registrations_backfilled").GetInt32().Should().Be(0);
-        doc.RootElement.GetProperty("note").GetString().Should().Contain("force=true only applies");
-        capturedEnvelopes.Should().HaveCount(1);
-        capturedEnvelopes[0].Payload.Unpack<ChannelBotRebuildProjectionCommand>().Reason.Should().Be("manual-debug");
-        verifier.Calls.Should().BeEmpty();
+        await queryPort.DidNotReceive().QueryAllAsync(Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -351,195 +188,8 @@ public sealed class ChannelRegistrationToolTests
         using var doc = JsonDocument.Parse(json);
 
         doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-        doc.RootElement.GetProperty("observed_registrations_before_rebuild").ValueKind.Should().Be(JsonValueKind.Null);
-        doc.RootElement.GetProperty("backfill_status").GetString().Should().Be("unavailable");
-        doc.RootElement.GetProperty("note").GetString().Should().Contain("backfill outcome could not be decided");
         capturedEnvelope.Should().NotBeNull();
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_RepairLarkMirror_ReturnsMirrorRepairResult()
-    {
-        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>([]));
-
-        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
-        provisioningService.RepairLocalMirrorAsync(Arg.Any<NyxLarkMirrorRepairRequest>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new NyxLarkMirrorRepairResult(
-                Succeeded: true,
-                Status: "accepted",
-                RegistrationId: "reg-restore-1",
-                NyxChannelBotId: "bot-1",
-                NyxAgentApiKeyId: "key-1",
-                NyxConversationRouteId: "route-1",
-                WebhookUrl: "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-1")));
-
-        using var serviceProvider = new ServiceCollection()
-            .AddSingleton(queryPort)
-            .AddSingleton(provisioningService)
-            .BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(serviceProvider);
-
-        using var scope = PushNyxToken();
-        var json = await tool.ExecuteAsync(
-            """{"action":"repair_lark_mirror","registration_id":"reg-restore-1","webhook_base_url":"https://aevatar.example.com","nyx_channel_bot_id":"bot-1","nyx_agent_api_key_id":"key-1","nyx_conversation_route_id":"route-1"}""");
-        using var doc = JsonDocument.Parse(json);
-
-        doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-        doc.RootElement.GetProperty("registration_id").GetString().Should().Be("reg-restore-1");
-        await provisioningService.Received(1).RepairLocalMirrorAsync(
-            Arg.Is<NyxLarkMirrorRepairRequest>(request =>
-                request.AccessToken == "test-token" &&
-                request.RequestedRegistrationId == "reg-restore-1" &&
-                request.ScopeId == "scope-1" &&
-                request.WebhookBaseUrl == "https://aevatar.example.com" &&
-                request.NyxChannelBotId == "bot-1" &&
-                request.NyxAgentApiKeyId == "key-1" &&
-                request.NyxConversationRouteId == "route-1"),
-            Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_RepairLarkMirror_StillRepairsWhenQuerySideIsUnavailable()
-    {
-        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromException<IReadOnlyList<ChannelBotRegistrationEntry>>(new InvalidOperationException("projection reader unavailable")));
-
-        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
-        provisioningService.RepairLocalMirrorAsync(Arg.Any<NyxLarkMirrorRepairRequest>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new NyxLarkMirrorRepairResult(
-                Succeeded: true,
-                Status: "accepted",
-                RegistrationId: "reg-restore-1",
-                NyxChannelBotId: "bot-1",
-                NyxAgentApiKeyId: "key-1",
-                NyxConversationRouteId: "route-1",
-                WebhookUrl: "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-1")));
-
-        using var serviceProvider = new ServiceCollection()
-            .AddSingleton(queryPort)
-            .AddSingleton(provisioningService)
-            .BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(serviceProvider);
-
-        using var scope = PushNyxToken();
-        var json = await tool.ExecuteAsync(
-            """{"action":"repair_lark_mirror","registration_id":"reg-restore-1","webhook_base_url":"https://aevatar.example.com","nyx_channel_bot_id":"bot-1","nyx_agent_api_key_id":"key-1","nyx_conversation_route_id":"route-1"}""");
-        using var doc = JsonDocument.Parse(json);
-
-        doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-        await provisioningService.Received(1).RepairLocalMirrorAsync(
-            Arg.Is<NyxLarkMirrorRepairRequest>(request =>
-                request.RequestedRegistrationId == "reg-restore-1" &&
-                request.ScopeId == "scope-1" &&
-                request.NyxChannelBotId == "bot-1" &&
-                request.NyxAgentApiKeyId == "key-1" &&
-                request.NyxConversationRouteId == "route-1"),
-            Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_RepairLarkMirror_DoesNotShortCircuitOnPartialNyxIdentityMatch()
-    {
-        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(
-            [
-                new ChannelBotRegistrationEntry
-                {
-                    Id = "reg-stale",
-                    Platform = "lark",
-                    NyxProviderSlug = "api-lark-bot",
-                    WebhookUrl = "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-1",
-                    NyxChannelBotId = "bot-1",
-                    NyxAgentApiKeyId = "key-stale",
-                    NyxConversationRouteId = "route-stale",
-                },
-            ]));
-
-        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
-        provisioningService.RepairLocalMirrorAsync(Arg.Any<NyxLarkMirrorRepairRequest>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new NyxLarkMirrorRepairResult(
-                Succeeded: true,
-                Status: "accepted",
-                RegistrationId: "reg-restore-1",
-                NyxChannelBotId: "bot-1",
-                NyxAgentApiKeyId: "key-1",
-                NyxConversationRouteId: "route-1",
-                WebhookUrl: "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-1")));
-
-        using var serviceProvider = new ServiceCollection()
-            .AddSingleton(queryPort)
-            .AddSingleton(provisioningService)
-            .BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(serviceProvider);
-
-        using var scope = PushNyxToken();
-        var json = await tool.ExecuteAsync(
-            """{"action":"repair_lark_mirror","registration_id":"reg-restore-1","webhook_base_url":"https://aevatar.example.com","nyx_channel_bot_id":"bot-1","nyx_agent_api_key_id":"key-1","nyx_conversation_route_id":"route-1"}""");
-        using var doc = JsonDocument.Parse(json);
-
-        doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-        doc.RootElement.GetProperty("registration_id").GetString().Should().Be("reg-restore-1");
-        await provisioningService.Received(1).RepairLocalMirrorAsync(
-            Arg.Is<NyxLarkMirrorRepairRequest>(request =>
-                request.ScopeId == "scope-1" &&
-                request.NyxChannelBotId == "bot-1" &&
-                request.NyxAgentApiKeyId == "key-1" &&
-                request.NyxConversationRouteId == "route-1"),
-            Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_RepairLarkMirror_BackfillsExistingEmptyScopeMirror()
-    {
-        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(
-            [
-                new ChannelBotRegistrationEntry
-                {
-                    Id = "reg-empty-scope",
-                    Platform = "lark",
-                    NyxProviderSlug = "api-lark-bot",
-                    WebhookUrl = "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-1",
-                    NyxChannelBotId = "bot-1",
-                    NyxAgentApiKeyId = "key-1",
-                    NyxConversationRouteId = "route-1",
-                },
-            ]));
-
-        var provisioningService = Substitute.For<INyxLarkProvisioningService>();
-        provisioningService.RepairLocalMirrorAsync(Arg.Any<NyxLarkMirrorRepairRequest>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new NyxLarkMirrorRepairResult(
-                Succeeded: true,
-                Status: "accepted",
-                RegistrationId: "reg-empty-scope",
-                NyxChannelBotId: "bot-1",
-                NyxAgentApiKeyId: "key-1",
-                NyxConversationRouteId: "route-1",
-                WebhookUrl: "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-1")));
-
-        using var serviceProvider = new ServiceCollection()
-            .AddSingleton(queryPort)
-            .AddSingleton(provisioningService)
-            .BuildServiceProvider();
-        var tool = new ChannelRegistrationTool(serviceProvider);
-
-        using var scope = PushNyxToken();
-        var json = await tool.ExecuteAsync(
-            """{"action":"repair_lark_mirror","webhook_base_url":"https://aevatar.example.com","nyx_channel_bot_id":"bot-1","nyx_agent_api_key_id":"key-1","nyx_conversation_route_id":"route-1"}""");
-        using var doc = JsonDocument.Parse(json);
-
-        doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-        doc.RootElement.GetProperty("registration_id").GetString().Should().Be("reg-empty-scope");
-        await provisioningService.Received(1).RepairLocalMirrorAsync(
-            Arg.Is<NyxLarkMirrorRepairRequest>(request =>
-                request.RequestedRegistrationId == "reg-empty-scope" &&
-                request.ScopeId == "scope-1"),
-            Arg.Any<CancellationToken>());
+        await queryPort.DidNotReceive().QueryAllAsync(Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -671,21 +321,6 @@ public sealed class ChannelRegistrationToolTests
         AgentToolRequestContext.CurrentMetadata = next;
 
         return new ResetMetadataScope(previous);
-    }
-
-    private sealed class RecordingOwnershipVerifier : INyxRelayApiKeyOwnershipVerifier
-    {
-        public List<(string AccessToken, string ExpectedScopeId, string NyxAgentApiKeyId)> Calls { get; } = [];
-
-        public Task<NyxRelayApiKeyOwnershipVerification> VerifyAsync(
-            string accessToken,
-            string expectedScopeId,
-            string nyxAgentApiKeyId,
-            CancellationToken ct)
-        {
-            Calls.Add((accessToken, expectedScopeId, nyxAgentApiKeyId));
-            return Task.FromResult(new NyxRelayApiKeyOwnershipVerification(true, "verified"));
-        }
     }
 
     private sealed class ResetMetadataScope(IReadOnlyDictionary<string, string>? previous) : IDisposable
