@@ -85,6 +85,18 @@ public sealed class ResponsesForwardToTeamStatusProbeOptions
     public string AccessTokenConfigurationKey { get; set; } =
         "Aevatar:Status:ResponsesForwardToTeam:BearerToken";
 
+    public string AuthMode { get; set; } = "static_bearer";
+
+    public string ClientIdConfigurationKey { get; set; } =
+        "Aevatar:Status:ResponsesForwardToTeam:ClientId";
+
+    public string ClientSecretConfigurationKey { get; set; } =
+        "Aevatar:Status:ResponsesForwardToTeam:ClientSecret";
+
+    public string ClientCredentialsScope { get; set; } = "proxy:* llm:proxy";
+
+    public string TokenEndpoint { get; set; } = string.Empty;
+
     public string ScopeId { get; set; } = string.Empty;
 
     public string TeamId { get; set; } = string.Empty;

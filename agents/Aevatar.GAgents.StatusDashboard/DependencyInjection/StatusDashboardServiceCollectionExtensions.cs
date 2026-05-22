@@ -35,6 +35,7 @@ public static class StatusDashboardServiceCollectionExtensions
         // registered with TryAddEnumerable by other modules without touching
         // this extension.
         services.AddHttpClient();
+        services.TryAddSingleton<StatusProbeAuthorizationResolver>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHealthProbeExecutor, HttpStatusProbeExecutor>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHealthProbeExecutor, ReadmodelFreshnessProbeExecutor>());
         services.TryAddSingleton<IHealthProbeExecutorRegistry, HealthProbeExecutorRegistry>();

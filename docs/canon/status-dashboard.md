@@ -120,6 +120,15 @@ tick 通过 `ScheduleSelfDurableTimeoutAsync` 调度，回到同一个 actor inb
 | `ExpectedBodyContains` / `ExpectedBodyRegex` | 成功响应必须包含的 body 条件 |
 | `ForbiddenBodyContains` / `ForbiddenBodyRegex` | 成功响应不得包含的 body 条件 |
 | `DegradedOnNon2xx` | unexpected non-2xx 是否标为 degraded，而不是 down |
+| `Auth.Mode` | 可选认证模式：`none`、`static_bearer`、`client_credentials`、`auto` |
+| `Auth.StaticBearerConfigurationKey` | `static_bearer` 使用的配置键 |
+| `Auth.TokenEndpoint` | `client_credentials` 使用的 OAuth token endpoint |
+| `Auth.ClientIdConfigurationKey` / `Auth.ClientSecretConfigurationKey` | `client_credentials` 使用的 client id / secret 配置键 |
+| `Auth.ClientCredentialsScope` | `client_credentials` 请求的 OAuth scope |
+
+`static_bearer` 用于长期机器 bearer，例如 NyxID API key / Agent Key。不要把人工登录产生的短期 access token 配成这里的生产值；它会过期，过期后整组探针会一起 401。
+
+`client_credentials` 用于 NyxID service account token。注意：当前 Mainnet `/v1/responses` 会用 bearer 去 NyxID `/api/v1/users/me` 解析 caller scope，而该 NyxID 接口是 human-only surface，不适合作为 service account token 的 scope 解析路径。因此 `ResponsesForwardToTeam` 当前生产推荐使用长期 Agent Key / API key；只有在 Aevatar 明确支持 service-account caller scope 后，才把这组端到端 HTTP 探针切到 `client_credentials`。
 
 `readmodel_freshness` 支持的参数：
 
@@ -185,6 +194,50 @@ tick 通过 `ScheduleSelfDurableTimeoutAsync` 调度，回到同一个 actor inb
 5. 可选的 `ResponsesForwardToTeam` 分阶段探针，用于验证 NyxID proxy 到 `/v1/responses`、chat-route、Studio Team、member binding 与 e2e invoke 链路。
 
 生产环境可以显式配置 `Targets` 覆盖内置集合，也可以保留内置集合并只通过配置项调整 base URL、token、timeout 与 interval。
+
+### 9.1 ResponsesForwardToTeam 分阶段探针
+
+`Aevatar:Status:ResponsesForwardToTeam:Enabled=true` 时，内置 manifest 会生成 `responses-forward-team-00` 到 `responses-forward-team-08`。每个阶段都是独立 target，方便定位是哪一段断了。
+
+| Stage | Kind | 检查内容 |
+|---|---|---|
+| `00-nyxid-identity` | `http_status` | 用配置里的生产 bearer 调 NyxID `/api/v1/users/me`，确认该 bearer 能解析出 caller id。它专门防止短期 token 过期、错误 key、service-account token 打 human-only surface 等问题混到后续阶段。 |
+| `01-nyxid-service` | `http_status` | 调 NyxID `/api/v1/proxy/services`，确认 `NyxIdServiceSlug` 对应的 service proxy 注册存在。 |
+| `02-nyxid-proxy-models` | `http_status` | 调 NyxID `/api/v1/proxy/s/{slug}/v1/models`，确认 NyxID proxy 到 Aevatar models surface 可达。 |
+| `03-direct-responses` | `http_status` | 直连 Aevatar `/v1/responses`，确认 Aevatar Responses HTTP 面、caller scope 解析、路由与完成事件能返回 `response.completed`。 |
+| `04-route-policy` | `responses_forward_team_internal` | 读取 chat route policy readmodel，并用 `ChatSourceKind.NyxResponses` 解析，确认目标是配置中的 `ForwardToTeam(teamId, endpointId)`。 |
+| `05-team-entry-member` | `responses_forward_team_internal` | 读取 Studio team readmodel，并通过 `ITeamEntryMemberResolver` 确认 entry member 和 published service。 |
+| `06-member-binding` | `responses_forward_team_internal` | 读取 Studio member readmodel，确认 member 是 `BindReady`，且最近完成 binding 的 published service 符合配置。 |
+| `07-direct-team-invoke` | `responses_forward_team_internal` | 不走 `/api/scopes/*` HTTP guard，直接用 `IStaticGAgentStreamInvocationPort<AGUIEvent>` 调 team entry member 的 endpoint；如果配置了认证，会把 bearer 注入 `nyxid.access_token` 和 `connector.http.authorization`，给下游工具/LLM/connector 调用使用。 |
+| `08-nyxid-proxy-e2e` | `http_status` | 从 NyxID proxy `/api/v1/proxy/s/{slug}/v1/responses` 进入，完整验证 NyxID -> Aevatar `/v1/responses` -> route policy -> Studio team invoke -> SSE completed。 |
+
+这组探针的边界选择是：两头保留真实 HTTP，证明外部可访问路径；中间业务事实走内部 readmodel/port，避免拿 NyxID bearer 去打 `/api/scopes/*` 这类 Studio 管理 API guard。旧实现里 04-07 也是 HTTP，因此一个过期 bearer 会把 8 个阶段全部打成 401；新实现把 route、team、member、invoke 拆成各自真实的业务探针。
+
+生产配置必须落到 GitOps / developer-platform 管理的声明式配置源中。手工 `kubectl patch deployment`、`kubectl set env` 或直接改运行中 pod 只会被 Argo reconciliation 还原，不能作为修复方案。推荐配置项：
+
+```json
+{
+  "Aevatar": {
+    "Status": {
+      "ResponsesForwardToTeam": {
+        "Enabled": true,
+        "DirectBaseUrl": "https://aevatar-console-backend-api.aevatar.ai",
+        "NyxIdBaseUrl": "https://nyx-api.chrono-ai.fun",
+        "NyxIdServiceSlug": "aevatar",
+        "AuthMode": "static_bearer",
+        "AccessTokenConfigurationKey": "Aevatar:Status:ResponsesForwardToTeam:BearerToken",
+        "ScopeId": "<nyxid-caller-id-resolved-by-stage-00>",
+        "TeamId": "<studio-team-id>",
+        "MemberId": "<entry-member-id>",
+        "PublishedServiceId": "<member-published-service-id>",
+        "EndpointId": "chat"
+      }
+    }
+  }
+}
+```
+
+Kubernetes 环境变量使用 .NET 配置约定，例如 `Aevatar__Status__ResponsesForwardToTeam__BearerToken`。这个值必须是长期 NyxID API key / Agent Key，并且要和 `ScopeId` 指向同一个 NyxID caller。不要把短期 access token 或 refresh token 放进这里；refresh token rotation 需要持久化新 refresh token，pod 多副本和重启场景下无法靠本服务安全维护。
 
 ## 10. 扩展新探针
 

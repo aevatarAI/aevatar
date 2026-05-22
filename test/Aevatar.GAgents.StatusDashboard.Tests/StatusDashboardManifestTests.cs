@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Aevatar.GAgents.StatusDashboard.Configuration;
 using FluentAssertions;
 
@@ -62,6 +61,7 @@ public sealed class StatusDashboardManifestTests
 
         var stageSlugs = new[]
         {
+            "responses-forward-team-00-nyxid-identity",
             "responses-forward-team-01-nyxid-service",
             "responses-forward-team-02-nyxid-proxy-models",
             "responses-forward-team-03-direct-responses",
@@ -78,12 +78,37 @@ public sealed class StatusDashboardManifestTests
 
         stages.Select(d => d.Slug).Should().Equal(stageSlugs);
         stages.Should().OnlyContain(d => d.Category == "feature");
-        stages.Should().OnlyContain(d => d.ProbeKind == "http_status");
         stages.Should().OnlyContain(d => d.IntervalSeconds == 300);
         stages.Should().OnlyContain(d => d.TimeoutMs == 45_000);
-        stages.Should().OnlyContain(d =>
+        stages.Where(d => d.ProbeKind == "http_status").Should().OnlyContain(d =>
             d.Parameters["Header.Authorization"] ==
             "Bearer ${configuration:Aevatar:Status:ResponsesForwardToTeam:BearerToken}");
+        stages.Where(d => d.ProbeKind == "http_status").Should().OnlyContain(d =>
+            d.Parameters["Auth.Mode"] == "static_bearer" &&
+            d.Parameters["Auth.TokenEndpoint"] == "https://nyx.example/oauth/token" &&
+            d.Parameters["Auth.ClientIdConfigurationKey"] == "Aevatar:Status:ResponsesForwardToTeam:ClientId" &&
+            d.Parameters["Auth.ClientSecretConfigurationKey"] == "Aevatar:Status:ResponsesForwardToTeam:ClientSecret" &&
+            d.Parameters["Auth.ClientCredentialsScope"] == "proxy:* llm:proxy");
+
+        stages.Where(d => d.Slug is
+                "responses-forward-team-00-nyxid-identity" or
+                "responses-forward-team-01-nyxid-service" or
+                "responses-forward-team-02-nyxid-proxy-models" or
+                "responses-forward-team-03-direct-responses" or
+                "responses-forward-team-08-nyxid-proxy-e2e")
+            .Should()
+            .OnlyContain(d => d.ProbeKind == "http_status");
+        stages.Where(d => d.Slug is
+                "responses-forward-team-04-route-policy" or
+                "responses-forward-team-05-team-entry-member" or
+                "responses-forward-team-06-member-binding" or
+                "responses-forward-team-07-direct-team-invoke")
+            .Should()
+            .OnlyContain(d => d.ProbeKind == "responses_forward_team_internal");
+
+        var identity = stages.Single(d => d.Slug == "responses-forward-team-00-nyxid-identity");
+        identity.Parameters["Url"].Should().Be("https://nyx.example/api/v1/users/me");
+        identity.Parameters["ExpectedBodyRegex"].Should().Contain("\"(id|user_id|sub)\"");
 
         var nyxService = stages.Single(d => d.Slug == "responses-forward-team-01-nyxid-service");
         nyxService.Parameters["ExpectedBodyRegex"].Should().Contain("\"proxy_url_slug\"");
@@ -93,20 +118,30 @@ public sealed class StatusDashboardManifestTests
         nyxProxy.Parameters["Url"].Should().Be("https://nyx.example/api/v1/proxy/s/aevatar/v1/models");
         nyxProxy.Parameters["ExpectedBodyRegex"].Should().Contain("\"data\"");
 
+        var routePolicy = stages.Single(d => d.Slug == "responses-forward-team-04-route-policy");
+        routePolicy.Parameters["Stage"].Should().Be("route-policy");
+        routePolicy.Parameters["ScopeId"].Should().Be("scope-1");
+        routePolicy.Parameters["TeamId"].Should().Be("team-1");
+        routePolicy.Parameters["EndpointId"].Should().Be("chat");
+        routePolicy.Parameters.Should().NotContainKey("Auth.TokenEndpoint");
+
+        var teamEntryMember = stages.Single(d => d.Slug == "responses-forward-team-05-team-entry-member");
+        teamEntryMember.Parameters["Stage"].Should().Be("team-entry-member");
+        teamEntryMember.Parameters["MemberId"].Should().Be("member-1");
+        teamEntryMember.Parameters["PublishedServiceId"].Should().Be("member-member-1");
+        teamEntryMember.Parameters.Should().NotContainKey("Auth.TokenEndpoint");
+
         var memberBinding = stages.Single(d => d.Slug == "responses-forward-team-06-member-binding");
         memberBinding.DisplayName.Should().Be("Responses -> Studio Team 06 member binding");
-        memberBinding.Parameters["ExpectedBodyRegex"].Should().Contain("\"lastBinding\"");
-        memberBinding.Parameters["ExpectedBodyRegex"].Should().Contain("member-member-1");
-        memberBinding.Parameters["ExpectedBodyRegex"].Should().NotContain("\"status\"");
-        Regex.IsMatch(
-                """
-                {"lastBinding":{"publishedServiceId":"member-member-1","revisionId":"rev-1","implementationKind":"gagent"},"currentBindingRun":{"status":"failed"}}
-                """,
-                memberBinding.Parameters["ExpectedBodyRegex"],
-                RegexOptions.None,
-                TimeSpan.FromMilliseconds(250))
-            .Should()
-            .BeTrue();
+        memberBinding.Parameters["Stage"].Should().Be("member-binding");
+        memberBinding.Parameters.Should().NotContainKey("BearerTokenConfigurationKey");
+        memberBinding.Parameters.Should().NotContainKey("Auth.TokenEndpoint");
+        memberBinding.Parameters.Should().NotContainKey("Auth.Mode");
+
+        var directInvoke = stages.Single(d => d.Slug == "responses-forward-team-07-direct-team-invoke");
+        directInvoke.Parameters["Stage"].Should().Be("direct-team-invoke");
+        directInvoke.Parameters["Prompt"].Should().Be("status probe");
+        directInvoke.Parameters["Auth.TokenEndpoint"].Should().Be("https://nyx.example/oauth/token");
 
         var e2e = stages.Single(d => d.Slug == "responses-forward-team-08-nyxid-proxy-e2e");
         e2e.Parameters["Url"].Should().Be("https://nyx.example/api/v1/proxy/s/aevatar/v1/responses");

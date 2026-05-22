@@ -12,6 +12,7 @@ public sealed class StatusDashboardManifest
 {
     private const string HttpStatusProbe = "http_status";
     private const string ReadmodelFreshnessProbe = "readmodel_freshness";
+    private const string ResponsesForwardTeamInternalProbe = "responses_forward_team_internal";
     private const string NyxIdAuthorityPlaceholder = "${configuration:Aevatar:NyxId:Authority}";
 
     public StatusDashboardManifest(IReadOnlyList<HealthProbeTargetDescriptor> descriptors)
@@ -195,6 +196,25 @@ public sealed class StatusDashboardManifest
         return targets;
     }
 
+    private static StatusProbeTargetConfig ResponsesForwardToTeamIdentityTarget(
+        string nyxBaseUrl,
+        string category,
+        int intervalSeconds,
+        int timeoutMs,
+        IReadOnlyDictionary<string, string> auth)
+    {
+        return HttpTarget(
+            slug: "responses-forward-team-00-nyxid-identity",
+            name: "Responses -> Studio Team 00 NyxID identity",
+            category: category,
+            url: $"{nyxBaseUrl}/api/v1/users/me",
+            expectedStatuses: "200",
+            intervalSeconds: intervalSeconds,
+            timeoutMs: timeoutMs,
+            parameters: AuthenticatedParameters(auth,
+                expectedBodyRegex: """(?s)"(id|user_id|sub)"\s*:"""));
+    }
+
     private static IReadOnlyList<StatusProbeTargetConfig> ResponsesForwardToTeamTargets(
         string selfBaseUrl,
         ResponsesForwardToTeamStatusProbeOptions options)
@@ -216,7 +236,7 @@ public sealed class StatusDashboardManifest
             : options.Prompt.Trim();
         var intervalSeconds = options.IntervalSeconds > 0 ? options.IntervalSeconds : 300;
         var timeoutMs = options.TimeoutMs > 0 ? options.TimeoutMs : 45_000;
-        var authHeader = $"Bearer {ConfigurationPlaceholder(options.AccessTokenConfigurationKey)}";
+        var auth = BuildAuthParameters(options, nyxBaseUrl);
         var scopeId = options.ScopeId.Trim();
         var teamId = options.TeamId.Trim();
         var memberId = options.MemberId.Trim();
@@ -225,8 +245,14 @@ public sealed class StatusDashboardManifest
             : options.PublishedServiceId.Trim();
         var category = "feature";
 
-        return
-        [
+        var targets = new List<StatusProbeTargetConfig>
+        {
+            ResponsesForwardToTeamIdentityTarget(
+                nyxBaseUrl: nyxBaseUrl,
+                category: category,
+                intervalSeconds: intervalSeconds,
+                timeoutMs: timeoutMs,
+                auth: auth),
             HttpTarget(
                 slug: "responses-forward-team-01-nyxid-service",
                 name: "Responses -> Studio Team 01 NyxID service",
@@ -235,11 +261,13 @@ public sealed class StatusDashboardManifest
                 expectedStatuses: "200",
                 intervalSeconds: intervalSeconds,
                 timeoutMs: timeoutMs,
-                parameters: AuthenticatedParameters(authHeader,
+                parameters: AuthenticatedParameters(auth,
                     expectedBodyRegex:
                     "\"proxy_url_slug\"\\s*:\\s*\"[^\"]*/s/" +
                     Regex.Escape(serviceSlug) +
-                    "/\\{path\\}\"")),
+                    "/\\{path\\}\""))
+        };
+        targets.Add(
             HttpTarget(
                 slug: "responses-forward-team-02-nyxid-proxy-models",
                 name: "Responses -> Studio Team 02 NyxID proxy",
@@ -248,8 +276,9 @@ public sealed class StatusDashboardManifest
                 expectedStatuses: "200",
                 intervalSeconds: intervalSeconds,
                 timeoutMs: timeoutMs,
-                parameters: AuthenticatedParameters(authHeader,
-                    expectedBodyRegex: """(?s)"data"\s*:""")),
+                parameters: AuthenticatedParameters(auth,
+                    expectedBodyRegex: """(?s)"data"\s*:""")));
+        targets.Add(
             HttpTarget(
                 slug: "responses-forward-team-03-direct-responses",
                 name: "Responses -> Studio Team 03 direct /v1/responses",
@@ -259,58 +288,72 @@ public sealed class StatusDashboardManifest
                 expectedStatuses: "200",
                 intervalSeconds: intervalSeconds,
                 timeoutMs: timeoutMs,
-                parameters: AuthenticatedParameters(authHeader,
+                parameters: AuthenticatedParameters(auth,
                     body: ResponsesBody(model, prompt),
                     expectedBodyContains: "event: response.completed",
-                    forbiddenBodyContains: "event: response.failed")),
-            HttpTarget(
+                    forbiddenBodyContains: "event: response.failed")));
+        targets.Add(
+            InternalForwardTeamTarget(
                 slug: "responses-forward-team-04-route-policy",
                 name: "Responses -> Studio Team 04 route policy",
                 category: category,
-                url: $"{directBaseUrl}/api/scopes/{Uri.EscapeDataString(scopeId)}/chat-route-policy",
-                expectedStatuses: "200",
+                stage: "route-policy",
                 intervalSeconds: intervalSeconds,
                 timeoutMs: timeoutMs,
-                parameters: AuthenticatedParameters(authHeader,
-                    expectedBodyRegex:
-                    $$"""(?s)(?=.*"sourceKind"\s*:\s*"CHAT_SOURCE_KIND_NYX_RESPONSES")(?=.*"forwardToTeam")(?=.*"teamId"\s*:\s*"{{Regex.Escape(teamId)}}")(?=.*"endpointId"\s*:\s*"{{Regex.Escape(endpointId)}}").*""")),
-            HttpTarget(
+                scopeId: scopeId,
+                teamId: teamId,
+                memberId: memberId,
+                publishedServiceId: publishedServiceId,
+                endpointId: endpointId,
+                model: model,
+                prompt: prompt));
+        targets.Add(
+            InternalForwardTeamTarget(
                 slug: "responses-forward-team-05-team-entry-member",
                 name: "Responses -> Studio Team 05 team entry member",
                 category: category,
-                url: $"{directBaseUrl}/api/scopes/{Uri.EscapeDataString(scopeId)}/teams/{Uri.EscapeDataString(teamId)}",
-                expectedStatuses: "200",
+                stage: "team-entry-member",
                 intervalSeconds: intervalSeconds,
                 timeoutMs: timeoutMs,
-                parameters: AuthenticatedParameters(authHeader,
-                    expectedBodyRegex:
-                    $$"""(?s)(?=.*"teamId"\s*:\s*"{{Regex.Escape(teamId)}}")(?=.*"entryMemberId"\s*:\s*"{{Regex.Escape(memberId)}}").*""")),
-            HttpTarget(
+                scopeId: scopeId,
+                teamId: teamId,
+                memberId: memberId,
+                publishedServiceId: publishedServiceId,
+                endpointId: endpointId,
+                model: model,
+                prompt: prompt));
+        targets.Add(
+            InternalForwardTeamTarget(
                 slug: "responses-forward-team-06-member-binding",
                 name: "Responses -> Studio Team 06 member binding",
                 category: category,
-                url: $"{directBaseUrl}/api/scopes/{Uri.EscapeDataString(scopeId)}/members/{Uri.EscapeDataString(memberId)}/binding",
-                expectedStatuses: "200",
+                stage: "member-binding",
                 intervalSeconds: intervalSeconds,
                 timeoutMs: timeoutMs,
-                parameters: AuthenticatedParameters(authHeader,
-                    expectedBodyRegex:
-                    "\"lastBinding\"\\s*:\\s*\\{(?=[^{}]*\"publishedServiceId\"\\s*:\\s*\"" +
-                    Regex.Escape(publishedServiceId) +
-                    "\")[^{}]*\\}")),
-            HttpTarget(
+                scopeId: scopeId,
+                teamId: teamId,
+                memberId: memberId,
+                publishedServiceId: publishedServiceId,
+                endpointId: endpointId,
+                model: model,
+                prompt: prompt));
+        targets.Add(
+            InternalForwardTeamTarget(
                 slug: "responses-forward-team-07-direct-team-invoke",
                 name: "Responses -> Studio Team 07 direct team invoke",
                 category: category,
-                url: $"{directBaseUrl}/api/scopes/{Uri.EscapeDataString(scopeId)}/teams/{Uri.EscapeDataString(teamId)}/invoke/{Uri.EscapeDataString(endpointId)}:stream",
-                method: "POST",
-                expectedStatuses: "200",
+                stage: "direct-team-invoke",
                 intervalSeconds: intervalSeconds,
                 timeoutMs: timeoutMs,
-                parameters: AuthenticatedParameters(authHeader,
-                    body: TeamInvokeBody(prompt),
-                    expectedBodyContains: "runStarted",
-                    forbiddenBodyContains: "runError")),
+                scopeId: scopeId,
+                teamId: teamId,
+                memberId: memberId,
+                publishedServiceId: publishedServiceId,
+                endpointId: endpointId,
+                model: model,
+                prompt: prompt,
+                authParameters: auth));
+        targets.Add(
             HttpTarget(
                 slug: "responses-forward-team-08-nyxid-proxy-e2e",
                 name: "Responses -> Studio Team 08 NyxID proxy e2e",
@@ -320,11 +363,57 @@ public sealed class StatusDashboardManifest
                 expectedStatuses: "200",
                 intervalSeconds: intervalSeconds,
                 timeoutMs: timeoutMs,
-                parameters: AuthenticatedParameters(authHeader,
+                parameters: AuthenticatedParameters(auth,
                     body: ResponsesBody(model, prompt),
                     expectedBodyContains: "event: response.completed",
-                    forbiddenBodyContains: "event: response.failed")),
-        ];
+                    forbiddenBodyContains: "event: response.failed")));
+
+        return targets;
+    }
+
+    private static StatusProbeTargetConfig InternalForwardTeamTarget(
+        string slug,
+        string name,
+        string category,
+        string stage,
+        int intervalSeconds,
+        int timeoutMs,
+        string scopeId,
+        string teamId,
+        string memberId,
+        string publishedServiceId,
+        string endpointId,
+        string model,
+        string prompt,
+        IReadOnlyDictionary<string, string>? authParameters = null)
+    {
+        var target = new StatusProbeTargetConfig
+        {
+            Slug = slug,
+            Name = name,
+            Category = category,
+            Probe = ResponsesForwardTeamInternalProbe,
+            IntervalSeconds = intervalSeconds,
+            TimeoutMs = timeoutMs,
+        };
+        target.Parameters["Stage"] = stage;
+        target.Parameters["ScopeId"] = scopeId;
+        target.Parameters["TeamId"] = teamId;
+        target.Parameters["MemberId"] = memberId;
+        target.Parameters["PublishedServiceId"] = publishedServiceId;
+        target.Parameters["EndpointId"] = endpointId;
+        target.Parameters["Model"] = model;
+        target.Parameters["Prompt"] = prompt;
+        if (authParameters is not null)
+        {
+            foreach (var (key, value) in authParameters)
+            {
+                if (key.StartsWith("Auth.", StringComparison.OrdinalIgnoreCase))
+                    target.Parameters[key] = value;
+            }
+        }
+
+        return target;
     }
 
     private static StatusProbeTargetConfig HttpTarget(
@@ -359,16 +448,13 @@ public sealed class StatusDashboardManifest
     }
 
     private static Dictionary<string, string> AuthenticatedParameters(
-        string authHeader,
+        IReadOnlyDictionary<string, string> auth,
         string? body = null,
         string? expectedBodyContains = null,
         string? expectedBodyRegex = null,
         string? forbiddenBodyContains = null)
     {
-        var parameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["Header.Authorization"] = authHeader,
-        };
+        var parameters = new Dictionary<string, string>(auth, StringComparer.OrdinalIgnoreCase);
         if (!string.IsNullOrWhiteSpace(body))
             parameters["Body"] = body;
         if (!string.IsNullOrWhiteSpace(expectedBodyContains))
@@ -377,6 +463,35 @@ public sealed class StatusDashboardManifest
             parameters["ExpectedBodyRegex"] = expectedBodyRegex;
         if (!string.IsNullOrWhiteSpace(forbiddenBodyContains))
             parameters["ForbiddenBodyContains"] = forbiddenBodyContains;
+        return parameters;
+    }
+
+    private static Dictionary<string, string> BuildAuthParameters(
+        ResponsesForwardToTeamStatusProbeOptions options,
+        string nyxBaseUrl)
+    {
+        var parameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Auth.Mode"] = string.IsNullOrWhiteSpace(options.AuthMode)
+                ? "static_bearer"
+                : options.AuthMode.Trim(),
+            ["Header.Authorization"] = $"Bearer {ConfigurationPlaceholder(options.AccessTokenConfigurationKey)}",
+        };
+
+        var tokenEndpoint = string.IsNullOrWhiteSpace(options.TokenEndpoint)
+            ? $"{nyxBaseUrl}/oauth/token"
+            : options.TokenEndpoint.Trim();
+        if (!string.IsNullOrWhiteSpace(tokenEndpoint))
+            parameters["Auth.TokenEndpoint"] = tokenEndpoint;
+        if (!string.IsNullOrWhiteSpace(options.ClientIdConfigurationKey))
+            parameters["Auth.ClientIdConfigurationKey"] = options.ClientIdConfigurationKey.Trim();
+        if (!string.IsNullOrWhiteSpace(options.ClientSecretConfigurationKey))
+            parameters["Auth.ClientSecretConfigurationKey"] = options.ClientSecretConfigurationKey.Trim();
+        if (!string.IsNullOrWhiteSpace(options.ClientCredentialsScope))
+            parameters["Auth.ClientCredentialsScope"] = options.ClientCredentialsScope.Trim();
+        if (!string.IsNullOrWhiteSpace(options.AccessTokenConfigurationKey))
+            parameters["Auth.StaticBearerConfigurationKey"] = options.AccessTokenConfigurationKey.Trim();
+
         return parameters;
     }
 
@@ -390,6 +505,4 @@ public sealed class StatusDashboardManifest
         ",\"input\":" + JsonSerializer.Serialize(prompt) +
         ",\"stream\":true}";
 
-    private static string TeamInvokeBody(string prompt) =>
-        "{\"prompt\":" + JsonSerializer.Serialize(prompt) + "}";
 }
