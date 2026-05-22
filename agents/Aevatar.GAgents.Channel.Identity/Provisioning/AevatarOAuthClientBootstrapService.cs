@@ -1,6 +1,5 @@
-using Aevatar.Foundation.Abstractions;
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -41,25 +40,20 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
     /// </summary>
     internal static readonly TimeSpan MaxRetryDelay = TimeSpan.FromMinutes(30);
 
-    internal static readonly TimeSpan ProvisioningObservationTimeout = TimeSpan.FromMinutes(2);
-
-    private static readonly TimeSpan ProvisioningObservationPollDelay = TimeSpan.FromSeconds(2);
-
     private readonly IAevatarOAuthClientProvider _clientProvider;
-    private readonly AevatarOAuthClientProjectionPort _projectionPort;
-    private readonly IActorRuntime _actorRuntime;
-    private readonly IActorDispatchPort _actorDispatchPort;
+    private readonly ICommandDispatchService<EnsureAevatarOAuthClientProvisionedCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> _provisioningDispatch;
     private readonly ILogger<AevatarOAuthClientBootstrapService> _logger;
     private readonly CancellationTokenSource _stoppingCts = new();
     private Task? _bootstrapTask;
 
     public AevatarOAuthClientBootstrapService(
         IAevatarOAuthClientProvider clientProvider,
-        AevatarOAuthClientProjectionPort projectionPort,
-        IActorRuntime actorRuntime,
-        IActorDispatchPort actorDispatchPort,
+        ICommandDispatchService<EnsureAevatarOAuthClientProvisionedCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> provisioningDispatch,
         ILogger<AevatarOAuthClientBootstrapService> logger)
     {
+        // Refactor (iter27/cluster-028-identity-oauth-endpoint):
+        //   Old pattern: IdentityOAuthEndpoints + AevatarOAuthClientBootstrapService 直接构造 EventEnvelope 投递,然后在 endpoint 内同步等 projection readiness / rebuild observation / readmodel polling (3-15s timeout + 50-250ms polling),违反 ACK 协议 + query-time projection priming
+        //   New principle: 加 module-local CQRS dispatch adapters(ChannelIdentityOAuthCommandDispatch);endpoint inject typed ICommandDispatchService<...>,返回 accepted/pending + status URL,不再等 projection;删 IProjectionReadinessPort/ExternalIdentityBindingProjectionPort/AevatarOAuthClientProjectionPort/AevatarOAuthClientRebuildCoordinator/ProjectionWaitTimeout 等
         // Provider is registered as a singleton (so are its transitive deps);
         // injecting it directly avoids the brittle "resolve from the root
         // IServiceProvider" pattern, which would silently mask any future
@@ -67,9 +61,7 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
         // catches scoped → singleton at resolve time, not at AddHostedService
         // wiring time).
         _clientProvider = clientProvider ?? throw new ArgumentNullException(nameof(clientProvider));
-        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
-        _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
-        _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
+        _provisioningDispatch = provisioningDispatch ?? throw new ArgumentNullException(nameof(provisioningDispatch));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -168,22 +160,10 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
 
     private async Task EnsureProvisionedAsync(CancellationToken ct)
     {
+        // Refactor (iter27/cluster-028-identity-oauth-endpoint):
+        //   Old pattern: IdentityOAuthEndpoints + AevatarOAuthClientBootstrapService 直接构造 EventEnvelope 投递,然后在 endpoint 内同步等 projection readiness / rebuild observation / readmodel polling (3-15s timeout + 50-250ms polling),违反 ACK 协议 + query-time projection priming
+        //   New principle: 加 module-local CQRS dispatch adapters(ChannelIdentityOAuthCommandDispatch);endpoint inject typed ICommandDispatchService<...>,返回 accepted/pending + status URL,不再等 projection;删 IProjectionReadinessPort/ExternalIdentityBindingProjectionPort/AevatarOAuthClientProjectionPort/AevatarOAuthClientRebuildCoordinator/ProjectionWaitTimeout 等
         var authority = NyxIdAuthorityResolver.Resolve(_logger);
-
-        // Activate the projection scope FIRST so the projector subscribes
-        // to the actor's committed events before we dispatch the
-        // provisioning command. Without this the AevatarOAuthClient
-        // readmodel never materializes and IAevatarOAuthClientProvider
-        // keeps throwing AevatarOAuthClientNotProvisionedException long
-        // after DCR succeeded (production regression observed
-        // 2026-04-30 in aismart-app-mainnet — the bootstrap log showed
-        // "Provisioned aevatar OAuth client via DCR" + "Seeded HMAC key"
-        // immediately after the silo started, but every /init still
-        // returned "正在初始化" because no consumer was watching the
-        // event stream).
-        await _projectionPort
-            .EnsureProjectionForActorAsync(AevatarOAuthClientGAgent.WellKnownId, ct)
-            .ConfigureAwait(false);
 
         // Cold-boot DCR is mediated by the well-known actor (PR #521 review):
         // every silo broadcasts EnsureAevatarOAuthClientProvisionedCommand,
@@ -237,32 +217,23 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
                 cached!.OauthScope ?? "<unrecorded>",
                 AevatarOAuthClientScopes.AuthorizationScope);
         }
-        var actor = await _actorRuntime
-            .CreateAsync<AevatarOAuthClientGAgent>(AevatarOAuthClientGAgent.WellKnownId, ct)
-            .ConfigureAwait(false);
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(new EnsureAevatarOAuthClientProvisionedCommand
+        var accepted = await _provisioningDispatch
+            .DispatchAsync(new EnsureAevatarOAuthClientProvisionedCommand
             {
                 NyxidAuthority = authority,
                 RedirectUri = redirectUri,
                 ClientName = ClientName,
-            }),
-            Route = EnvelopeRouteSemantics.CreateDirect(
-                "channel-identity.oauth-bootstrap",
-                AevatarOAuthClientGAgent.WellKnownId),
-        };
-        await _actorDispatchPort.DispatchAsync(actor.Id, envelope, ct).ConfigureAwait(false);
+            }, ct)
+            .ConfigureAwait(false);
+        if (!accepted.Succeeded || accepted.Receipt is null)
+            throw new InvalidOperationException($"Aevatar OAuth client bootstrap dispatch rejected: {accepted.Error}.");
 
         _logger.LogInformation(
-            "Aevatar OAuth client EnsureProvisioned dispatched to {ActorId} (authority={Authority}). " +
+            "Aevatar OAuth client EnsureProvisioned accepted for {ActorId} (authority={Authority}, command_id={CommandId}). " +
             "Production deployments must enable broker_capability_enabled on this client at NyxID admin (one-time per cluster).",
             AevatarOAuthClientGAgent.WellKnownId,
-            authority);
-
-        await WaitForProvisionedReadModelAsync(authority, redirectUri, ct).ConfigureAwait(false);
+            authority,
+            accepted.Receipt.CommandId);
     }
 
     /// <summary>
@@ -277,50 +248,4 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
         string.IsNullOrEmpty(stored)
         || !string.Equals(stored, resolved, StringComparison.Ordinal);
 
-    private async Task WaitForProvisionedReadModelAsync(
-        string authority,
-        string redirectUri,
-        CancellationToken ct)
-    {
-        var deadline = DateTimeOffset.UtcNow.Add(ProvisioningObservationTimeout);
-        AevatarOAuthClientSnapshot? lastSnapshot = null;
-
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            ct.ThrowIfCancellationRequested();
-
-            try
-            {
-                var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
-                lastSnapshot = snapshot;
-                if (string.Equals(snapshot.NyxIdAuthority, authority, StringComparison.Ordinal)
-                    && !string.IsNullOrEmpty(snapshot.ClientId)
-                    && !RedirectUriDrifted(snapshot.RedirectUri, redirectUri)
-                    && AevatarOAuthClientScopes.ContainsRequiredScopes(snapshot.OauthScope))
-                {
-                    _logger.LogInformation(
-                        "Aevatar OAuth client provisioning observed in readmodel: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}, oauth_scope={OauthScope}",
-                        snapshot.ClientId,
-                        snapshot.NyxIdAuthority,
-                        snapshot.RedirectUri,
-                        snapshot.OauthScope);
-                    return;
-                }
-            }
-            catch (AevatarOAuthClientNotProvisionedException)
-            {
-                // Projection has not materialized the first state root yet.
-            }
-
-            await Task.Delay(ProvisioningObservationPollDelay, ct).ConfigureAwait(false);
-        }
-
-        throw new TimeoutException(
-            "Aevatar OAuth client provisioning did not become visible in the readmodel " +
-            $"within {ProvisioningObservationTimeout.TotalSeconds:n0}s " +
-            $"(authority='{authority}', expected_redirect_uri='{redirectUri}', " +
-            $"last_client_id='{lastSnapshot?.ClientId ?? "<none>"}', " +
-            $"last_redirect_uri='{lastSnapshot?.RedirectUri ?? "<none>"}', " +
-            $"last_oauth_scope='{lastSnapshot?.OauthScope ?? "<none>"}').");
-    }
 }

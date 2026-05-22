@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.Telegram;
 using Aevatar.Configuration;
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -66,8 +67,9 @@ public sealed class MainnetHostCompositionTests
             .Should()
             .NotBeNull();
         app.Services.GetRequiredService<IExternalIdentityBindingQueryPort>().Should().NotBeNull();
-        app.Services.GetRequiredService<IProjectionReadinessPort>().Should().NotBeNull();
-        app.Services.GetRequiredService<ExternalIdentityBindingProjectionPort>().Should().NotBeNull();
+        app.Services.GetRequiredService<ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>>()
+            .Should()
+            .NotBeNull();
         app.Services.GetRequiredService<IProjectionDocumentReader<ExternalIdentityBindingDocument, string>>()
             .Should()
             .NotBeNull();

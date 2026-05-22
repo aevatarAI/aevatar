@@ -40,7 +40,17 @@ command_path_hits="$(
     || true
 )"
 
-if [[ -n "${hits}${endpoint_lifecycle_hits}${scope_service_script_stream_hits}${command_path_hits}" ]]; then
+identity_oauth_hits="$(
+  rg -n "IProjectionReadinessPort|ExternalIdentityBindingProjectionPort|AevatarOAuthClientProjectionPort|AevatarOAuthClientRebuildCoordinator|ProjectionWaitTimeout|WaitForRebuildObservedAsync|RebuildObservation|WaitForBindingStateAsync" \
+    agents/Aevatar.GAgents.Channel.Identity \
+    agents/Aevatar.GAgents.Channel.Identity.Abstractions \
+    test/Aevatar.GAgents.ChannelRuntime.Tests/Identity \
+    test/Aevatar.Hosting.Tests/MainnetHostCompositionTests.cs \
+    | rg -v "Refactor \\(iter27/cluster-028-identity-oauth-endpoint\\)|Old pattern:|New principle:" \
+    || true
+)"
+
+if [[ -n "${hits}${endpoint_lifecycle_hits}${scope_service_script_stream_hits}${command_path_hits}${identity_oauth_hits}" ]]; then
   if [[ -n "${hits}" ]]; then
     echo "${hits}"
   fi
@@ -55,6 +65,10 @@ if [[ -n "${hits}${endpoint_lifecycle_hits}${scope_service_script_stream_hits}${
   if [[ -n "${command_path_hits}" ]]; then
     echo "${command_path_hits}"
     echo "Command ports must dispatch accepted commands; projection activation belongs to committed-state hooks, observation binders, startup activators, or background materializers."
+  fi
+  if [[ -n "${identity_oauth_hits}" ]]; then
+    echo "${identity_oauth_hits}"
+    echo "Identity OAuth endpoints/bootstrap must use typed CQRS dispatch and accepted/pending ACKs, not projection readiness, rebuild observation, or readmodel polling."
   fi
   echo "Query/read paths must not trigger projection priming, activation, or lifecycle control."
   exit 1

@@ -1,11 +1,10 @@
 using System.Security.Cryptography;
 using System.Text;
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Core;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -22,50 +21,14 @@ namespace Aevatar.GAgents.Channel.Identity.Endpoints;
 /// </summary>
 public static class IdentityOAuthEndpoints
 {
-    private static readonly TimeSpan ProjectionWaitTimeout = TimeSpan.FromSeconds(3);
-    // 15s leaves comfortable margin under typical reverse-proxy idle-timeout
-    // budgets (Cloudflare 100s, AWS ALB 60s default, stricter corporate
-    // proxies 30s) so the operator does not hit a 504 race on the happy path
-    // even when the readmodel takes a few seconds to materialize. Callers
-    // that hit the timeout still get a 202 with a poll URL — see issue #549
-    // PR #570 review (mimo-v2.5-pro / glm-5.1).
-    private static readonly TimeSpan RebuildObservationTimeout = TimeSpan.FromSeconds(15);
-    private static readonly TimeSpan RebuildObservationPollDelay = TimeSpan.FromMilliseconds(250);
     private const int MaxWebhookBodyBytes = 64 * 1024;
-    private const string OAuthCallbackPublisherActorId = "channel-identity.oauth-callback";
-    private const string OAuthRebuildPublisherActorId = "channel-identity.oauth-rebuild";
-    private const string BrokerRevocationPublisherActorId = "channel-identity.broker-revocation";
-
-    /// <summary>
-    /// Same-host admission gate for the break-glass OAuth client rebuild endpoint.
-    /// The actor is still the authoritative serializer; this gate prevents two
-    /// operator HTTP calls on one host from dispatching competing rebuild commands
-    /// and then racing each other through the readmodel observation loop.
-    /// </summary>
-    public sealed class AevatarOAuthClientRebuildCoordinator
-    {
-        private readonly SemaphoreSlim _gate = new(1, 1);
-
-        public async ValueTask<IAsyncDisposable?> TryEnterAsync(CancellationToken ct)
-        {
-            if (!await _gate.WaitAsync(millisecondsTimeout: 0, ct).ConfigureAwait(false))
-                return null;
-
-            return new Lease(_gate);
-        }
-
-        private sealed class Lease(SemaphoreSlim gate) : IAsyncDisposable
-        {
-            public ValueTask DisposeAsync()
-            {
-                gate.Release();
-                return ValueTask.CompletedTask;
-            }
-        }
-    }
+    private const string OAuthClientStatusUrl = "/api/oauth/aevatar-client/status";
 
     public static IEndpointRouteBuilder MapIdentityOAuthEndpoints(this IEndpointRouteBuilder app)
     {
+        // Refactor (iter27/cluster-028-identity-oauth-endpoint):
+        //   Old pattern: IdentityOAuthEndpoints + AevatarOAuthClientBootstrapService 直接构造 EventEnvelope 投递,然后在 endpoint 内同步等 projection readiness / rebuild observation / readmodel polling (3-15s timeout + 50-250ms polling),违反 ACK 协议 + query-time projection priming
+        //   New principle: 加 module-local CQRS dispatch adapters(ChannelIdentityOAuthCommandDispatch);endpoint inject typed ICommandDispatchService<...>,返回 accepted/pending + status URL,不再等 projection;删 IProjectionReadinessPort/ExternalIdentityBindingProjectionPort/AevatarOAuthClientProjectionPort/AevatarOAuthClientRebuildCoordinator/ProjectionWaitTimeout 等
         ArgumentNullException.ThrowIfNull(app);
 
         app.MapGet("/api/oauth/nyxid-callback", HandleNyxIdOAuthCallbackAsync)
@@ -102,13 +65,14 @@ public static class IdentityOAuthEndpoints
         [FromQuery] string? format,
         [FromServices] INyxIdBrokerCallbackClient brokerCallback,
         [FromServices] IExternalIdentityBindingQueryPort queryPort,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorDispatchPort actorDispatchPort,
-        [FromServices] IProjectionReadinessPort projectionReadiness,
-        [FromServices] IExternalIdentityBindingProjectionPort bindingProjectionPort,
+        [FromServices] ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> bindingDispatch,
+        [FromServices] ICommandDispatchService<ObserveBrokerCapabilityCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> brokerCapabilityDispatch,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
+        // Refactor (iter27/cluster-028-identity-oauth-endpoint):
+        //   Old pattern: IdentityOAuthEndpoints + AevatarOAuthClientBootstrapService 直接构造 EventEnvelope 投递,然后在 endpoint 内同步等 projection readiness / rebuild observation / readmodel polling (3-15s timeout + 50-250ms polling),违反 ACK 协议 + query-time projection priming
+        //   New principle: 加 module-local CQRS dispatch adapters(ChannelIdentityOAuthCommandDispatch);endpoint inject typed ICommandDispatchService<...>,返回 accepted/pending + status URL,不再等 projection;删 IProjectionReadinessPort/ExternalIdentityBindingProjectionPort/AevatarOAuthClientProjectionPort/AevatarOAuthClientRebuildCoordinator/ProjectionWaitTimeout 等
         var logger = loggerFactory.CreateLogger("Aevatar.Channel.Identity.OAuthCallback");
 
         if (!string.IsNullOrWhiteSpace(error))
@@ -198,17 +162,6 @@ public static class IdentityOAuthEndpoints
 
         var actorId = subject.ToActorId();
 
-        // Activate the binding projection scope BEFORE any readmodel query
-        // or actor dispatch. Without an active scope, the projector never
-        // subscribes to this actor's committed events and the readmodel
-        // stays empty — the next two checks (ResolveAsync below; the
-        // post-dispatch WaitForBindingStateAsync) would both miss the
-        // binding and the user gets stuck on the binding card forever.
-        // Same lifecycle pattern AevatarOAuthClientBootstrapService uses
-        // for the cluster-singleton OAuth client (issue #549 follow-up
-        // observed 2026-05-01).
-        await bindingProjectionPort.EnsureProjectionForActorAsync(actorId, ct).ConfigureAwait(false);
-
         if (await queryPort.ResolveAsync(subject, ct).ConfigureAwait(false) is not null)
         {
             // Concurrent /init protection: if the subject is already bound,
@@ -219,112 +172,65 @@ public static class IdentityOAuthEndpoints
             return RenderBoundSuccess(displayName: null, alreadyBound: true, format: format);
         }
 
-        var actor = await TryActivateActorAsync(actorRuntime, actorId, logger, ct).ConfigureAwait(false);
-        if (actor is null)
+        CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> accepted;
+        try
         {
-            // Actor activation failed — the binding_id we just got from NyxID
-            // would otherwise leak (no local actor will ever commit it). Best-
-            // effort revoke at NyxID before responding so the orphan does not
-            // accumulate. Same cleanup pattern as the already-bound branch
-            // above (PR #521 codex/glm review).
+            accepted = await bindingDispatch
+                .DispatchAsync(new CommitBindingCommand
+                {
+                    ExternalSubject = subject.Clone(),
+                    BindingId = exchange.BindingId,
+                }, ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "OAuth callback failed to dispatch CommitBindingCommand for actor={ActorId}", actorId);
             await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
             return Results.Json(new
             {
-                error = "actor_activation_failed",
-                detail = "NyxID 绑定失败,稍后重试 /init",
+                error = "actor_dispatch_failed",
+                detail = "NyxID 绑定请求未能进入本地处理队列,请稍后重试 /init",
             }, statusCode: StatusCodes.Status503ServiceUnavailable);
         }
 
-        var commitEnvelope = new EventEnvelope
+        if (!accepted.Succeeded || accepted.Receipt is null)
         {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(new CommitBindingCommand
+            logger.LogError(
+                "OAuth callback dispatch rejected for actor={ActorId}: error={Error}",
+                actorId,
+                accepted.Error);
+            await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+            return Results.Json(new
             {
-                ExternalSubject = subject.Clone(),
-                BindingId = exchange.BindingId,
-            }),
-            Route = EnvelopeRouteSemantics.CreateDirect(OAuthCallbackPublisherActorId, actorId),
-        };
-        await actorDispatchPort.DispatchAsync(actor.Id, commitEnvelope, ct).ConfigureAwait(false);
+                error = "actor_dispatch_rejected",
+                detail = "NyxID 绑定请求未被本地处理队列接受,请稍后重试 /init",
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
 
         // Observe broker capability on the cluster client (idempotent) — first
         // successful binding_id is proof that NyxID admin enabled the flag.
         try
         {
-            var clientActor = await actorRuntime
-                .CreateAsync<AevatarOAuthClientGAgent>(AevatarOAuthClientGAgent.WellKnownId, ct)
+            await brokerCapabilityDispatch
+                .DispatchAsync(new ObserveBrokerCapabilityCommand(), ct)
                 .ConfigureAwait(false);
-            await actorDispatchPort.DispatchAsync(clientActor.Id, new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                Payload = Any.Pack(new ObserveBrokerCapabilityCommand()),
-                Route = EnvelopeRouteSemantics.CreateDirect(
-                    OAuthCallbackPublisherActorId,
-                    AevatarOAuthClientGAgent.WellKnownId),
-            }, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Failed to record broker capability observation; continuing");
         }
 
-        try
-        {
-            await projectionReadiness
-                .WaitForBindingStateAsync(subject, exchange.BindingId, ProjectionWaitTimeout, ct)
-                .ConfigureAwait(false);
-        }
-        catch (TimeoutException)
-        {
-            // Distinguish two timeout shapes (PR #555 review): the actor's
-            // discard branch (legacy already-bound) keeps State.BindingId =
-            // existing != incoming, so WaitForBindingStateAsync NEVER matches
-            // — but the rebuild event we now emit has materialized the
-            // existing binding into the readmodel, so a final ResolveAsync
-            // here distinguishes:
-            //   1. ResolveAsync returns active binding != exchange.BindingId
-            //      → actor took the discard path; the incoming binding NyxID
-            //        just issued is an orphan. Revoke it and return the same
-            //        already_bound shape the up-front check above produces.
-            //   2. ResolveAsync still returns null → readmodel really has not
-            //      caught up yet; surface the existing pending-propagation
-            //      hint so the user retries.
-            // Without this branch the legacy heal path would (a) leave
-            // bnd_incoming as a permanent orphan at NyxID on every /init
-            // retry and (b) frustrate the user with binding_pending_propagation
-            // even though their existing binding is now visible.
-            var resolvedAfterTimeout = await queryPort.ResolveAsync(subject, ct).ConfigureAwait(false);
-            if (resolvedAfterTimeout is not null
-                && !string.Equals(resolvedAfterTimeout.Value, exchange.BindingId, StringComparison.Ordinal))
-            {
-                logger.LogInformation(
-                    "OAuth callback observed legacy already-bound on actor={ActorId}: existing={ExistingBindingId}, incoming={IncomingBindingId}; revoking the incoming binding so it does not orphan at NyxID.",
-                    actorId,
-                    resolvedAfterTimeout.Value,
-                    exchange.BindingId);
-                await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
-                return RenderBoundSuccess(displayName: null, alreadyBound: true, format: format);
-            }
-
-            logger.LogWarning(
-                "Projection readiness timed out for actor={ActorId}, expected binding={BindingId}",
-                actorId,
-                exchange.BindingId);
-            return Results.Json(new
-            {
-                status = "binding_pending_propagation",
-                detail = "绑定已写入,稍后重发消息即可生效",
-            });
-        }
-
         var displayName = ResolveDisplayName(exchange.IdToken);
         logger.LogInformation(
-            "Bound external identity {Platform}:{Tenant}:{User} -> binding_id={BindingId}",
-            subject.Platform, subject.Tenant, subject.ExternalUserId, exchange.BindingId);
+            "Accepted external identity binding dispatch {Platform}:{Tenant}:{User} -> binding_id={BindingId}, command_id={CommandId}",
+            subject.Platform,
+            subject.Tenant,
+            subject.ExternalUserId,
+            exchange.BindingId,
+            accepted.Receipt.CommandId);
 
-        return RenderBoundSuccess(displayName, alreadyBound: false, format: format);
+        return RenderBindingAccepted(displayName, accepted.Receipt, format);
     }
 
     // ─── Status endpoint ───
@@ -397,25 +303,15 @@ public static class IdentityOAuthEndpoints
         HttpContext http,
         [FromBody] RebuildAevatarOAuthClientRequest? body,
         [FromServices] IOptionsMonitor<AevatarOAuthAdminOptions> adminOptions,
-        [FromServices] IAevatarOAuthClientProvider provider,
-        [FromServices] AevatarOAuthClientProjectionPort projectionPort,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorDispatchPort actorDispatchPort,
-        [FromServices] AevatarOAuthClientRebuildCoordinator rebuildCoordinator,
+        [FromServices] ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> rebuildDispatch,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct) =>
         HandleAevatarOAuthClientRebuildCoreAsync(
             http,
             body,
             adminOptions,
-            provider,
-            projectionPort,
-            actorRuntime,
-            actorDispatchPort,
-            rebuildCoordinator,
+            rebuildDispatch,
             loggerFactory,
-            observationTimeout: RebuildObservationTimeout,
-            observationPollDelay: RebuildObservationPollDelay,
             ct);
 
     /// <summary>
@@ -428,16 +324,13 @@ public static class IdentityOAuthEndpoints
         HttpContext http,
         RebuildAevatarOAuthClientRequest? body,
         IOptionsMonitor<AevatarOAuthAdminOptions> adminOptions,
-        IAevatarOAuthClientProvider provider,
-        AevatarOAuthClientProjectionPort projectionPort,
-        IActorRuntime actorRuntime,
-        IActorDispatchPort actorDispatchPort,
-        AevatarOAuthClientRebuildCoordinator? rebuildCoordinator,
+        ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> rebuildDispatch,
         ILoggerFactory loggerFactory,
-        TimeSpan observationTimeout,
-        TimeSpan observationPollDelay,
         CancellationToken ct)
     {
+        // Refactor (iter27/cluster-028-identity-oauth-endpoint):
+        //   Old pattern: IdentityOAuthEndpoints + AevatarOAuthClientBootstrapService 直接构造 EventEnvelope 投递,然后在 endpoint 内同步等 projection readiness / rebuild observation / readmodel polling (3-15s timeout + 50-250ms polling),违反 ACK 协议 + query-time projection priming
+        //   New principle: 加 module-local CQRS dispatch adapters(ChannelIdentityOAuthCommandDispatch);endpoint inject typed ICommandDispatchService<...>,返回 accepted/pending + status URL,不再等 projection;删 IProjectionReadinessPort/ExternalIdentityBindingProjectionPort/AevatarOAuthClientProjectionPort/AevatarOAuthClientRebuildCoordinator/ProjectionWaitTimeout 等
         var logger = loggerFactory.CreateLogger("Aevatar.Channel.Identity.OAuthRebuild");
 
         var configuredToken = adminOptions.CurrentValue.RebuildToken;
@@ -502,54 +395,18 @@ public static class IdentityOAuthEndpoints
             issuedAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         }
 
-        await using var rebuildLease = rebuildCoordinator is null
-            ? null
-            : await rebuildCoordinator.TryEnterAsync(ct).ConfigureAwait(false);
-        if (rebuildCoordinator is not null && rebuildLease is null)
-        {
-            return Results.Json(new
-            {
-                error = "rebuild_in_progress",
-                detail = "Another OAuth client rebuild request is already dispatching or waiting for readmodel observation. Retry after it completes.",
-            }, statusCode: StatusCodes.Status409Conflict);
-        }
-
-        // Activate the projection scope first so the projector subscribes to
-        // the actor's committed events before we dispatch the provision
-        // command — same pattern as AevatarOAuthClientBootstrapService.
-        // Without this the readmodel never updates and the wait loop below
-        // times out even though the actor committed correctly.
-        await projectionPort
-            .EnsureProjectionForActorAsync(AevatarOAuthClientGAgent.WellKnownId, ct)
-            .ConfigureAwait(false);
-
-        // Dispatch through IActorDispatchPort to match /unbind and the rest of the
-        // codebase. CLAUDE.md "Runtime 与 Dispatch 分责" forbids inline
-        // actor.HandleEventAsync from app/host code — that bypasses the inbox
-        // serialization guarantees and any middleware/logging the dispatch port
-        // owns. The rebuild path deliberately skips DCR mediation (operator
-        // already holds the client_id), so we publish the provision command
-        // directly to the cluster-singleton actor and let the inbox process it.
-        var provisionEnvelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(new ProvisionAevatarOAuthClientCommand
-            {
-                ClientId = body.client_id!.Trim(),
-                ClientIdIssuedAtUnix = issuedAtUnix,
-                NyxidAuthority = authority,
-                OauthScope = oauthScope,
-                RedirectUri = redirectUri,
-            }),
-            Route = EnvelopeRouteSemantics.CreateDirect(
-                OAuthRebuildPublisherActorId,
-                AevatarOAuthClientGAgent.WellKnownId),
-        };
+        CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> accepted;
         try
         {
-            await actorDispatchPort
-                .DispatchAsync(AevatarOAuthClientGAgent.WellKnownId, provisionEnvelope, ct)
+            accepted = await rebuildDispatch
+                .DispatchAsync(new ProvisionAevatarOAuthClientCommand
+                {
+                    ClientId = body.client_id!.Trim(),
+                    ClientIdIssuedAtUnix = issuedAtUnix,
+                    NyxidAuthority = authority,
+                    OauthScope = oauthScope,
+                    RedirectUri = redirectUri,
+                }, ct)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -562,81 +419,32 @@ public static class IdentityOAuthEndpoints
             }, statusCode: StatusCodes.Status503ServiceUnavailable);
         }
 
-        logger.LogWarning(
-            "Operator rebuild dispatched for AevatarOAuthClientGAgent: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}.",
-            body.client_id,
-            authority,
-            redirectUri);
-
-        var observed = await WaitForRebuildObservedAsync(
-                provider,
-                expectedClientId: body.client_id!.Trim(),
-                expectedAuthority: authority,
-                expectedRedirectUri: redirectUri,
-                expectedOauthScope: oauthScope,
-                timeout: observationTimeout,
-                pollDelay: observationPollDelay,
-                ct)
-            .ConfigureAwait(false);
-        if (observed is null)
+        if (!accepted.Succeeded || accepted.Receipt is null)
         {
+            logger.LogError("Rebuild endpoint dispatch rejected: error={Error}", accepted.Error);
             return Results.Json(new
             {
-                status = "rebuild_pending_propagation",
-                detail = $"Provision command dispatched but readmodel has not yet caught up within {observationTimeout.TotalSeconds:n0}s. Re-poll /api/oauth/aevatar-client/status; it will reflect the new client_id once the projection materializes.",
-            }, statusCode: StatusCodes.Status202Accepted);
+                error = "actor_dispatch_rejected",
+                detail = "Provision command was rejected before entering the OAuth client actor inbox.",
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
         }
 
-        return Results.Ok(new
+        logger.LogWarning(
+            "Operator rebuild accepted for AevatarOAuthClientGAgent: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}, command_id={CommandId}.",
+            body.client_id,
+            authority,
+            redirectUri,
+            accepted.Receipt.CommandId);
+
+        return Results.Accepted(OAuthClientStatusUrl, new
         {
-            status = "rebuilt",
-            client_id = observed.ClientId,
-            client_id_issued_at = observed.ClientIdIssuedAt,
-            nyxid_authority = observed.NyxIdAuthority,
-            redirect_uri_registered = observed.RedirectUri,
-            oauth_scope_registered = observed.OauthScope,
-            broker_capability_observed = observed.BrokerCapabilityObserved,
-            detail = "OAuth client rebuilt. New /init flows will use the supplied client_id; the previous client_id is now an orphan at NyxID — delete it via NyxID admin to keep the registration list clean.",
+            status = "rebuild_pending",
+            command_id = accepted.Receipt.CommandId,
+            correlation_id = accepted.Receipt.CorrelationId,
+            actor_id = accepted.Receipt.ActorId,
+            status_url = OAuthClientStatusUrl,
+            detail = "Provision command accepted for dispatch. Re-poll the status URL; it will reflect the new client_id once the actor commits and projection materializes.",
         });
-    }
-
-    private static async Task<AevatarOAuthClientSnapshot?> WaitForRebuildObservedAsync(
-        IAevatarOAuthClientProvider provider,
-        string expectedClientId,
-        string expectedAuthority,
-        string expectedRedirectUri,
-        string expectedOauthScope,
-        TimeSpan timeout,
-        TimeSpan pollDelay,
-        CancellationToken ct)
-    {
-        var deadline = DateTimeOffset.UtcNow.Add(timeout);
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            ct.ThrowIfCancellationRequested();
-
-            try
-            {
-                var snapshot = await provider.GetAsync(ct).ConfigureAwait(false);
-                if (string.Equals(snapshot.ClientId, expectedClientId, StringComparison.Ordinal)
-                    && string.Equals(snapshot.NyxIdAuthority, expectedAuthority, StringComparison.Ordinal)
-                    && string.Equals(snapshot.RedirectUri, expectedRedirectUri, StringComparison.Ordinal)
-                    && string.Equals(snapshot.OauthScope, expectedOauthScope, StringComparison.Ordinal))
-                {
-                    return snapshot;
-                }
-            }
-            catch (AevatarOAuthClientNotProvisionedException)
-            {
-                // Projection has not yet materialized the very first state
-                // root for this actor — possible on a brand-new cluster
-                // where rebuild is the first provisioning event.
-            }
-
-            await Task.Delay(pollDelay, ct).ConfigureAwait(false);
-            pollDelay = TimeSpan.FromMilliseconds(Math.Min(pollDelay.TotalMilliseconds * 2, 1000));
-        }
-        return null;
     }
 
     /// <summary>
@@ -669,8 +477,8 @@ public static class IdentityOAuthEndpoints
     /// and per-request DI activation kick in. Without this filter the handler method
     /// still rejects unauthenticated callers (it re-runs the same check inline), but
     /// every unauthenticated POST would needlessly deserialize the body and resolve
-    /// IActorRuntime / IActorDispatchPort etc. — a small but real DoS amplifier on a
-    /// /rebuild that is supposed to be operator-only break-glass.
+    /// command dispatch services — a small but real DoS amplifier on a /rebuild
+    /// that is supposed to be operator-only break-glass.
     /// </summary>
     internal sealed class RebuildAuthEndpointFilter : IEndpointFilter
     {
@@ -704,11 +512,13 @@ public static class IdentityOAuthEndpoints
     internal static async Task<IResult> HandleBrokerRevocationWebhookAsync(
         HttpContext http,
         [FromServices] BrokerRevocationWebhookValidator webhookValidator,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorDispatchPort actorDispatchPort,
+        [FromServices] ICommandDispatchService<RevokeBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> revokeDispatch,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
+        // Refactor (iter27/cluster-028-identity-oauth-endpoint):
+        //   Old pattern: IdentityOAuthEndpoints + AevatarOAuthClientBootstrapService 直接构造 EventEnvelope 投递,然后在 endpoint 内同步等 projection readiness / rebuild observation / readmodel polling (3-15s timeout + 50-250ms polling),违反 ACK 协议 + query-time projection priming
+        //   New principle: 加 module-local CQRS dispatch adapters(ChannelIdentityOAuthCommandDispatch);endpoint inject typed ICommandDispatchService<...>,返回 accepted/pending + status URL,不再等 projection;删 IProjectionReadinessPort/ExternalIdentityBindingProjectionPort/AevatarOAuthClientProjectionPort/AevatarOAuthClientRebuildCoordinator/ProjectionWaitTimeout 等
         var logger = loggerFactory.CreateLogger("Aevatar.Channel.Identity.BrokerRevocation");
 
         byte[] bodyBytes;
@@ -744,23 +554,17 @@ public static class IdentityOAuthEndpoints
         var actorId = notification.ExternalSubject.ToActorId();
         try
         {
-            var actor = await actorRuntime
-                .CreateAsync<ExternalIdentityBindingGAgent>(actorId, ct)
-                .ConfigureAwait(false);
-            var revokeEnvelope = new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                Payload = Any.Pack(new RevokeBindingCommand
+            var accepted = await revokeDispatch
+                .DispatchAsync(new RevokeBindingCommand
                 {
                     ExternalSubject = notification.ExternalSubject.Clone(),
                     Reason = string.IsNullOrWhiteSpace(notification.Reason)
                         ? "nyxid_cae_revocation"
                         : notification.Reason,
-                }),
-                Route = EnvelopeRouteSemantics.CreateDirect(BrokerRevocationPublisherActorId, actorId),
-            };
-            await actorDispatchPort.DispatchAsync(actor.Id, revokeEnvelope, ct).ConfigureAwait(false);
+                }, ct)
+                .ConfigureAwait(false);
+            if (!accepted.Succeeded)
+                throw new InvalidOperationException($"Broker revocation dispatch rejected: {accepted.Error}.");
         }
         catch (Exception ex)
         {
@@ -776,23 +580,6 @@ public static class IdentityOAuthEndpoints
             notification.ExternalSubject.Tenant,
             notification.ExternalSubject.ExternalUserId);
         return Results.Accepted();
-    }
-
-    private static async Task<Aevatar.Foundation.Abstractions.IActor?> TryActivateActorAsync(
-        IActorRuntime runtime,
-        string actorId,
-        ILogger logger,
-        CancellationToken ct)
-    {
-        try
-        {
-            return await runtime.CreateAsync<ExternalIdentityBindingGAgent>(actorId, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Failed to activate ExternalIdentityBindingGAgent for actor={ActorId}", actorId);
-            return null;
-        }
     }
 
     private static async Task TryRevokeOrphanBindingAsync(
@@ -898,6 +685,28 @@ public static class IdentityOAuthEndpoints
         return RenderBoundSuccessHtmlInternal(displayName, alreadyBound);
     }
 
+    internal static IResult RenderBindingAccepted(
+        string? displayName,
+        ChannelIdentityOAuthAcceptedReceipt receipt,
+        string? format)
+    {
+        if (string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.Accepted(OAuthClientStatusUrl, new
+            {
+                status = "binding_pending",
+                actor_id = receipt.ActorId,
+                command_id = receipt.CommandId,
+                correlation_id = receipt.CorrelationId,
+                display_name = string.IsNullOrWhiteSpace(displayName) ? null : displayName,
+                status_url = OAuthClientStatusUrl,
+                detail = "Binding command accepted for dispatch. Return to Lark and use /whoami to check once projection materializes.",
+            });
+        }
+
+        return RenderBindingAcceptedHtmlInternal(displayName, receipt);
+    }
+
     internal static IResult RenderBoundSuccessHtmlInternal(string? displayName, bool alreadyBound)
     {
         var badge = alreadyBound ? "已绑定" : "绑定成功";
@@ -931,6 +740,42 @@ h1 {{ font-size: 22px; margin: 16px 0 8px; }}
 <div class=""hint"">
 <strong>下一步</strong><br>
 回到 Lark 后,发送 <code>/model</code> 选择想用的模型,或 <code>/whoami</code> 查看当前绑定状态。
+</div>
+</body>
+</html>";
+        return Results.Content(html, "text/html; charset=utf-8");
+    }
+
+    private static IResult RenderBindingAcceptedHtmlInternal(
+        string? displayName,
+        ChannelIdentityOAuthAcceptedReceipt receipt)
+    {
+        var displayLine = string.IsNullOrWhiteSpace(displayName)
+            ? string.Empty
+            : $"<p>账号:{System.Net.WebUtility.HtmlEncode(displayName)}</p>";
+        var commandId = System.Net.WebUtility.HtmlEncode(receipt.CommandId);
+        var html = $@"<!DOCTYPE html>
+<html lang=""zh-CN"">
+<head>
+<meta charset=""UTF-8"">
+<meta name=""viewport"" content=""width=device-width, initial-scale=1"">
+<title>NyxID 绑定 — 已受理</title>
+<style>
+body {{ font-family: -apple-system, ""Segoe UI"", ""PingFang SC"", ""Microsoft YaHei"", sans-serif; max-width: 480px; margin: 60px auto; padding: 0 20px; color: #1d1d1f; line-height: 1.6; }}
+.badge {{ display: inline-block; padding: 4px 10px; background: #fff4cc; color: #7a4d00; border-radius: 999px; font-size: 13px; font-weight: 500; }}
+h1 {{ font-size: 22px; margin: 16px 0 8px; }}
+.hint {{ background: #f5f5f7; padding: 16px 20px; border-radius: 8px; margin-top: 24px; }}
+.hint code {{ background: #fff; padding: 2px 6px; border-radius: 4px; font-family: ui-monospace, ""SFMono-Regular"", Menlo, monospace; }}
+</style>
+</head>
+<body>
+<span class=""badge"">已受理</span>
+<h1>NyxID 绑定请求已受理</h1>
+{displayLine}
+<p>可以关闭此页,回到 Lark 稍后继续对话。请求编号:<code>{commandId}</code></p>
+<div class=""hint"">
+<strong>下一步</strong><br>
+回到 Lark 后,发送 <code>/whoami</code> 查看绑定状态。状态可见后,发送 <code>/model</code> 选择想用的模型。
 </div>
 </body>
 </html>";
