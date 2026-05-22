@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Google.Protobuf;
@@ -28,16 +30,17 @@ internal sealed class VoiceDemoAgentCommandPort : IVoiceDemoAgentCommandPort
     }
 
     public async Task<VoiceDemoAgentCommandAcceptedReceipt> EnsureAsync(
-        string actorId,
+        string scopeId,
         string voiceModuleName,
         CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(actorId))
-            throw new ArgumentException("actorId is required.", nameof(actorId));
+        if (string.IsNullOrWhiteSpace(scopeId))
+            throw new ArgumentException("scopeId is required.", nameof(scopeId));
         if (string.IsNullOrWhiteSpace(voiceModuleName))
             throw new ArgumentException("voiceModuleName is required.", nameof(voiceModuleName));
 
-        var actor = await _actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId.Trim(), ct);
+        var actorId = BuildDemoActorId(scopeId);
+        var actor = await _actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);
         var initialize = new InitializeRoleAgentEvent
         {
             RoleId = "voice-demo",
@@ -69,5 +72,12 @@ internal sealed class VoiceDemoAgentCommandPort : IVoiceDemoAgentCommandPort
 
         await _actorDispatchPort.DispatchAsync(actor.Id, envelope, ct);
         return new VoiceDemoAgentCommandAcceptedReceipt(actor.Id, commandId, commandId);
+    }
+
+    private static string BuildDemoActorId(string scopeId)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(scopeId.Trim()));
+        var hash = Convert.ToHexString(bytes)[..16].ToLowerInvariant();
+        return $"{NyxIdChatServiceDefaults.ActorIdPrefix}-voice-demo-{hash}";
     }
 }

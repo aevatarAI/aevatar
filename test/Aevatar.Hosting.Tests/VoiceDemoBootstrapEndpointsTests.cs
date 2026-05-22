@@ -73,7 +73,8 @@ public sealed class VoiceDemoBootstrapEndpointsTests
         body.Should().ContainKey("actor_id");
         var demoActorId = body!["actor_id"].ToString()!;
         voiceDemoCommandPort.Commands.Should().ContainSingle()
-            .Which.Should().Be((demoActorId, "voice_presence_openai"));
+            .Which.Should().Be((Scope, "voice_presence_openai"));
+        demoActorId.Should().Be(RecordingVoiceDemoAgentCommandPort.DemoActorId);
         catalogCommandPort.Commands.Should().ContainSingle()
             .Which.AgentId.Should().Be(demoActorId);
 
@@ -128,16 +129,18 @@ public sealed class VoiceDemoBootstrapEndpointsTests
 
     private sealed class RecordingVoiceDemoAgentCommandPort : IVoiceDemoAgentCommandPort
     {
-        public List<(string ActorId, string VoiceModuleName)> Commands { get; } = [];
+        public const string DemoActorId = "nyxid-chat-voice-demo-test-scope";
+
+        public List<(string ScopeId, string VoiceModuleName)> Commands { get; } = [];
 
         public Task<VoiceDemoAgentCommandAcceptedReceipt> EnsureAsync(
-            string actorId,
+            string scopeId,
             string voiceModuleName,
             CancellationToken ct = default)
         {
-            Commands.Add((actorId, voiceModuleName));
+            Commands.Add((scopeId, voiceModuleName));
             return Task.FromResult(new VoiceDemoAgentCommandAcceptedReceipt(
-                actorId,
+                DemoActorId,
                 "voice-demo-command",
                 "voice-demo-command"));
         }

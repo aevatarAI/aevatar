@@ -1,6 +1,4 @@
 using System.Security.Claims;
-using System.Security.Cryptography;
-using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.ChatRouting.Abstractions;
@@ -57,9 +55,9 @@ internal static class VoiceDemoBootstrapEndpoints
 
         var routingScope = RoutingOwnerScope.ForNyxIdNative(scopeId);
         var scheduledScope = ScheduledOwnerScope.ForNyxIdNative(scopeId);
-        var actorId = BuildDemoActorId(scopeId);
 
-        await voiceDemoAgentCommandPort.EnsureAsync(actorId, VoiceModuleName, ct);
+        var voiceDemoReceipt = await voiceDemoAgentCommandPort.EnsureAsync(scopeId, VoiceModuleName, ct);
+        var actorId = voiceDemoReceipt.ActorId;
         await catalogCommandPort.UpsertAsync(new UserAgentCatalogUpsertCommand
         {
             AgentId = actorId,
@@ -233,13 +231,6 @@ internal static class VoiceDemoBootstrapEndpoints
             user.FindFirst(ClaimTypes.NameIdentifier)?.Value) ?? string.Empty;
 
         return !string.IsNullOrWhiteSpace(scopeId);
-    }
-
-    private static string BuildDemoActorId(string scopeId)
-    {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(scopeId.Trim()));
-        var hash = Convert.ToHexString(bytes)[..16].ToLowerInvariant();
-        return $"{NyxIdChatServiceDefaults.ActorIdPrefix}-voice-demo-{hash}";
     }
 
     private static string? FirstNonEmpty(params string?[] values)

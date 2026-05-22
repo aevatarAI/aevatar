@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.NyxidChat;
@@ -21,17 +23,18 @@ public sealed class VoiceDemoAgentCommandPortTests
         var dispatchPort = new RecordingActorDispatchPort();
         using var provider = CreateProvider(actorRuntime, dispatchPort);
         var commandPort = provider.GetRequiredService<IVoiceDemoAgentCommandPort>();
+        var expectedActorId = BuildExpectedDemoActorId("scope-1");
 
-        var receipt = await commandPort.EnsureAsync(" demo-actor ", " voice_presence_openai ");
+        var receipt = await commandPort.EnsureAsync(" scope-1 ", " voice_presence_openai ");
 
         actorRuntime.CreatedActors.Should().ContainSingle()
-            .Which.Should().Be(("demo-actor", typeof(NyxIdChatGAgent)));
+            .Which.Should().Be((expectedActorId, typeof(NyxIdChatGAgent)));
         dispatchPort.Dispatches.Should().ContainSingle();
         var (actorId, envelope) = dispatchPort.Dispatches[0];
-        actorId.Should().Be("demo-actor");
+        actorId.Should().Be(expectedActorId);
         envelope.Id.Should().NotBeNullOrWhiteSpace();
         envelope.Route.PublisherActorId.Should().Be("voice-demo-bootstrap");
-        envelope.Route.Direct.TargetActorId.Should().Be("demo-actor");
+        envelope.Route.Direct.TargetActorId.Should().Be(expectedActorId);
         envelope.Propagation.CorrelationId.Should().Be(envelope.Id);
         envelope.Runtime.Deduplication.OperationId.Should().Be(envelope.Id);
 
@@ -43,30 +46,37 @@ public sealed class VoiceDemoAgentCommandPortTests
         initialize.MaxHistoryMessages.Should().Be(16);
         initialize.EventModules.Should().Be("voice_presence_openai");
         receipt.Should().Be(new VoiceDemoAgentCommandAcceptedReceipt(
-            "demo-actor",
+            expectedActorId,
             envelope.Id,
             envelope.Id));
     }
 
     [Theory]
-    [InlineData(null, "voice_presence_openai", "actorId")]
-    [InlineData("", "voice_presence_openai", "actorId")]
-    [InlineData("   ", "voice_presence_openai", "actorId")]
-    [InlineData("demo-actor", null, "voiceModuleName")]
-    [InlineData("demo-actor", "", "voiceModuleName")]
-    [InlineData("demo-actor", "   ", "voiceModuleName")]
+    [InlineData(null, "voice_presence_openai", "scopeId")]
+    [InlineData("", "voice_presence_openai", "scopeId")]
+    [InlineData("   ", "voice_presence_openai", "scopeId")]
+    [InlineData("scope-1", null, "voiceModuleName")]
+    [InlineData("scope-1", "", "voiceModuleName")]
+    [InlineData("scope-1", "   ", "voiceModuleName")]
     public async Task EnsureAsync_RejectsMissingCommandInputs(
-        string? actorId,
+        string? scopeId,
         string? voiceModuleName,
         string expectedParameterName)
     {
         using var provider = CreateProvider(new RecordingActorRuntime(), new RecordingActorDispatchPort());
         var commandPort = provider.GetRequiredService<IVoiceDemoAgentCommandPort>();
 
-        var act = () => commandPort.EnsureAsync(actorId!, voiceModuleName!);
+        var act = () => commandPort.EnsureAsync(scopeId!, voiceModuleName!);
 
         await act.Should().ThrowAsync<ArgumentException>()
             .WithParameterName(expectedParameterName);
+    }
+
+    private static string BuildExpectedDemoActorId(string scopeId)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(scopeId.Trim()));
+        var hash = Convert.ToHexString(bytes)[..16].ToLowerInvariant();
+        return $"{NyxIdChatServiceDefaults.ActorIdPrefix}-voice-demo-{hash}";
     }
 
     private static ServiceProvider CreateProvider(

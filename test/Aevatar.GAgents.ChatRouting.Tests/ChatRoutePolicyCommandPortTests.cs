@@ -84,6 +84,38 @@ public sealed class ChatRoutePolicyCommandPortTests
             .WithParameterName("scopeId");
     }
 
+    [Fact]
+    public async Task UpsertAsync_RejectsNullCommand()
+    {
+        var actorRuntime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort();
+        using var provider = CreateProvider(actorRuntime, dispatchPort);
+        var commandPort = provider.GetRequiredService<IChatRoutePolicyCommandPort>();
+
+        var act = () => commandPort.UpsertAsync("scope-1", null!);
+
+        await act.Should().ThrowAsync<ArgumentNullException>()
+            .WithParameterName("command");
+        actorRuntime.CreatedActors.Should().BeEmpty();
+        dispatchPort.Dispatches.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RemoveRuleAsync_RejectsNullCommand()
+    {
+        var actorRuntime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort();
+        using var provider = CreateProvider(actorRuntime, dispatchPort);
+        var commandPort = provider.GetRequiredService<IChatRoutePolicyCommandPort>();
+
+        var act = () => commandPort.RemoveRuleAsync("scope-1", null!);
+
+        await act.Should().ThrowAsync<ArgumentNullException>()
+            .WithParameterName("command");
+        actorRuntime.CreatedActors.Should().BeEmpty();
+        dispatchPort.Dispatches.Should().BeEmpty();
+    }
+
     private static ServiceProvider CreateProvider(
         RecordingActorRuntime actorRuntime,
         RecordingActorDispatchPort dispatchPort)

@@ -10,7 +10,7 @@ namespace Aevatar.GAgents.NyxidChat;
 public interface IVoiceDemoAgentCommandPort
 {
     Task<VoiceDemoAgentCommandAcceptedReceipt> EnsureAsync(
-        string actorId,
+        string scopeId,
         string voiceModuleName,
         CancellationToken ct = default);
 }
