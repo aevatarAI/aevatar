@@ -1325,6 +1325,17 @@ public sealed class ScopeServiceEndpointsStreamTests
             return Task.FromResult<IGAgentDraftRunProjectionLease?>(new StubDraftRunProjectionLease(actorId, commandId));
         }
 
+        public async Task<EventSinkProjectionAttachment<IGAgentDraftRunProjectionLease>?> AttachExistingActorProjectionAsync(
+            string actorId,
+            string commandId,
+            IEventSink<AGUIEvent> sink,
+            CancellationToken ct = default)
+        {
+            var lease = new StubDraftRunProjectionLease(actorId, commandId);
+            var liveSinkLease = await AttachLiveSinkAsync(lease, sink, ct);
+            return new EventSinkProjectionAttachment<IGAgentDraftRunProjectionLease>(lease, liveSinkLease);
+        }
+
         public async Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IGAgentDraftRunProjectionLease lease,
             IEventSink<AGUIEvent> sink,
@@ -1387,6 +1398,13 @@ public sealed class ScopeServiceEndpointsStreamTests
                 new StubGAgentRunTerminalProjectionLease(actorId, correlationId, interactionKind));
         }
 
+        public Task<IGAgentRunTerminalProjectionLease?> AttachExistingProjectionAsync(
+            string actorId,
+            string correlationId,
+            GAgentRunTerminalInteractionKind interactionKind,
+            CancellationToken ct = default) =>
+            EnsureProjectionAsync(actorId, correlationId, interactionKind, ct);
+
         public Task ReleaseProjectionAsync(
             IGAgentRunTerminalProjectionLease lease,
             CancellationToken ct = default)
@@ -1442,6 +1460,17 @@ public sealed class ScopeServiceEndpointsStreamTests
             _ = ct;
             EnsureCalls.Add((actorId, runId));
             return Task.FromResult<IScriptServiceAguiProjectionLease?>(new StubScriptServiceAguiProjectionLease(actorId, runId));
+        }
+
+        public async Task<EventSinkProjectionAttachment<IScriptServiceAguiProjectionLease>?> AttachExistingRunProjectionAsync(
+            string actorId,
+            string runId,
+            IEventSink<AGUIEvent> sink,
+            CancellationToken ct = default)
+        {
+            var lease = new StubScriptServiceAguiProjectionLease(actorId, runId);
+            var liveSinkLease = await AttachLiveSinkAsync(lease, sink, ct);
+            return new EventSinkProjectionAttachment<IScriptServiceAguiProjectionLease>(lease, liveSinkLease);
         }
 
         public async Task<IAsyncDisposable?> AttachLiveSinkAsync(

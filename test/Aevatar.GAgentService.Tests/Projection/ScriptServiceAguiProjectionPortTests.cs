@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.GAgentService.Projection.Orchestration;
@@ -27,7 +28,8 @@ public sealed class ScriptServiceAguiProjectionPortTests
             new ServiceProjectionOptions { Enabled = true },
             activation,
             release,
-            hub);
+            hub,
+            new RecordingActorRuntime());
         var sink = new RecordingEventSink();
 
         var lease = await port.EnsureRunProjectionAsync("script-actor-1", "run-1", CancellationToken.None);
@@ -75,7 +77,8 @@ public sealed class ScriptServiceAguiProjectionPortTests
             new ServiceProjectionOptions { Enabled = false },
             activation,
             release,
-            hub);
+            hub,
+            new RecordingActorRuntime());
 
         var lease = await port.EnsureRunProjectionAsync("script-actor-1", "run-1", CancellationToken.None);
         await port.AttachLiveSinkAsync(new ScriptServiceAguiRuntimeLease(new ScriptServiceAguiProjectionContext

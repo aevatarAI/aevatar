@@ -67,8 +67,7 @@ public sealed class ScriptServiceRunInteractionTests
         runtimeRequest.ScopeId.Should().Be("scope-a");
         runtimeRequest.Metadata.Should().ContainKey("trace-id")
             .WhoseValue.Should().Be("trace-1");
-        projectionPort.EnsureCalls.Should().ContainSingle(call =>
-            call.ActorId == "runtime-1" && call.RunId == "run-1");
+        projectionPort.EnsureCalls.Should().BeEmpty();
         projectionPort.ReleaseCalls.Should().ContainSingle(call =>
             call.ActorId == "runtime-1" && call.RunId == "run-1");
         emitted.Should().ContainSingle(evt => evt.EventCase == AGUIEvent.EventOneofCase.RunFinished);
@@ -129,8 +128,7 @@ public sealed class ScriptServiceRunInteractionTests
 
         result.Succeeded.Should().BeFalse();
         result.Error.Code.Should().Be(ScriptServiceRunStartErrorCode.ProjectionUnavailable);
-        projectionPort.EnsureCalls.Should().ContainSingle(call =>
-            call.ActorId == "runtime-1" && call.RunId == "run-1");
+        projectionPort.EnsureCalls.Should().BeEmpty();
         projectionPort.AttachCalls.Should().BeEmpty();
         projectionPort.ReleaseCalls.Should().BeEmpty();
         runtimePort.Invocations.Should().BeEmpty();
@@ -157,8 +155,7 @@ public sealed class ScriptServiceRunInteractionTests
         runtimePort.Invocations.Should().ContainSingle(invocation =>
             invocation.RuntimeActorId == "runtime-1" &&
             invocation.RunId == "run-1");
-        projectionPort.EnsureCalls.Should().ContainSingle(call =>
-            call.ActorId == "runtime-1" && call.RunId == "run-1");
+        projectionPort.EnsureCalls.Should().BeEmpty();
         projectionPort.AttachCalls.Should().ContainSingle(call =>
             call.ActorId == "runtime-1" && call.RunId == "run-1");
         projectionPort.ReleaseCalls.Should().ContainSingle(call =>
@@ -392,6 +389,20 @@ public sealed class ScriptServiceRunInteractionTests
             EnsureCalls.Add((actorId, runId));
             return Task.FromResult<IScriptServiceAguiProjectionLease?>(
                 ReturnNullLease ? null : new Lease(actorId, runId));
+        }
+
+        public async Task<EventSinkProjectionAttachment<IScriptServiceAguiProjectionLease>?> AttachExistingRunProjectionAsync(
+            string actorId,
+            string runId,
+            IEventSink<AGUIEvent> sink,
+            CancellationToken ct = default)
+        {
+            if (ReturnNullLease)
+                return null;
+
+            var lease = new Lease(actorId, runId);
+            var liveSinkLease = await AttachLiveSinkAsync(lease, sink, ct);
+            return new EventSinkProjectionAttachment<IScriptServiceAguiProjectionLease>(lease, liveSinkLease);
         }
 
         public async Task<IAsyncDisposable?> AttachLiveSinkAsync(

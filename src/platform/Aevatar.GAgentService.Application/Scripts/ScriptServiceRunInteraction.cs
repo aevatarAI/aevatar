@@ -209,9 +209,10 @@ internal sealed class ScriptServiceRunCommandTargetResolver
     }
 }
 
-// Refactor (iter25/cluster-026-scope-service-script-stream-inline-orchestration):
-//   Old pattern: Scope service script stream inline orchestration in endpoints
-//   New principle: use existing ICommandInteractionService skeleton with ScriptServiceRunCommand and Application-owned service-run registration decorator
+// Refactor (iter37/cluster-037-gagentservice-binders-attach-existing):
+//   Old pattern: GAgentService interaction binders synchronously prime projection sessions before dispatch(request-path projection activation in BindAsync).
+//   New principle: Attach-only to existing projection sessions/materialization leases via capability-specific attach-existing ports.
+//   Cold sessions return ProjectionUnavailable / pending before dispatch; no top-level live-observation exception.
 internal sealed class ScriptServiceRunCommandTargetBinder
     : ICommandObservationLifecycle<ScriptServiceRunCommand, ScriptServiceRunCommandTarget, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError>
 {
@@ -222,9 +223,10 @@ internal sealed class ScriptServiceRunCommandTargetBinder
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
     }
 
-    // Refactor (iter25/cluster-026-scope-service-script-stream-inline-orchestration):
-    //   Old pattern: Host endpoint built script runtime payload and attached projection leases inline
-    //   New principle: Application binder owns payload construction, projection attachment, and target binding
+    // Refactor (iter37/cluster-037-gagentservice-binders-attach-existing):
+    //   Old pattern: GAgentService interaction binders synchronously prime projection sessions before dispatch(request-path projection activation in BindAsync).
+    //   New principle: Attach-only to existing projection sessions/materialization leases via capability-specific attach-existing ports.
+    //   Cold sessions return ProjectionUnavailable / pending before dispatch; no top-level live-observation exception.
     public async Task<CommandObservationBindingResult<ScriptServiceRunStartError>> BindAsync(
         ScriptServiceRunCommand command,
         CommandDispatchExecution<ScriptServiceRunCommandTarget, ScriptServiceRunAcceptedReceipt> execution,
@@ -246,8 +248,9 @@ internal sealed class ScriptServiceRunCommandTargetBinder
         var inputPayload = Any.Pack(chatRequest);
         var eventChannel = new EventChannel<AGUIEvent>();
 
-        var attachment = await _projectionPort.EnsureAndAttachLeaseAsync(
-            token => _projectionPort.EnsureRunProjectionAsync(target.ActorId, command.RunId, token),
+        var attachment = await _projectionPort.AttachExistingRunProjectionAsync(
+            target.ActorId,
+            command.RunId,
             eventChannel,
             ct);
         if (attachment == null)

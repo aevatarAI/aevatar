@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.GAgentService.Projection.Orchestration;
 using Aevatar.Presentation.AGUI;
@@ -46,7 +47,8 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
             new ServiceProjectionOptions { Enabled = true },
             activation,
             release,
-            hub);
+            hub,
+            new RecordingActorRuntime());
         var lease = await port.EnsureActorProjectionAsync("actor-1", "cmd-1", CancellationToken.None);
         var sink = new RecordingEventSink();
 

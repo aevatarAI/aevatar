@@ -171,3 +171,26 @@ internal sealed class NoOpServiceConfigurationReleaseService
         return Task.CompletedTask;
     }
 }
+
+internal sealed class RecordingActorRuntime : IActorRuntime
+{
+    public HashSet<string> ExistingActorIds { get; } = [];
+
+    public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+        where TAgent : IAgent =>
+        throw new NotSupportedException();
+
+    public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
+    public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
+
+    public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(null);
+
+    public Task<bool> ExistsAsync(string id) =>
+        Task.FromResult(ExistingActorIds.Count == 0 || ExistingActorIds.Contains(id));
+
+    public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
+
+    public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
+}

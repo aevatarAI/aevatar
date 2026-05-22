@@ -114,7 +114,8 @@ public sealed class ServiceProjectionInfrastructureTests
         IGAgentRunTerminalProjectionPort service = new GAgentRunTerminalProjectionPort(
             new ServiceProjectionOptions(),
             activationService,
-            releaseService);
+            releaseService,
+            new RecordingActorRuntime());
 
         var draftLease = await service.EnsureProjectionAsync(
             "actor-1",
@@ -159,11 +160,13 @@ public sealed class ServiceProjectionInfrastructureTests
         IGAgentRunTerminalProjectionPort disabledService = new GAgentRunTerminalProjectionPort(
             new ServiceProjectionOptions { Enabled = false },
             activationService,
-            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>());
+            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(),
+            new RecordingActorRuntime());
         IGAgentRunTerminalProjectionPort enabledService = new GAgentRunTerminalProjectionPort(
             new ServiceProjectionOptions(),
             activationService,
-            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>());
+            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(),
+            new RecordingActorRuntime());
 
         (await disabledService.EnsureProjectionAsync(
             "actor-1",
@@ -195,7 +198,8 @@ public sealed class ServiceProjectionInfrastructureTests
         IGAgentRunTerminalProjectionPort service = new GAgentRunTerminalProjectionPort(
             new ServiceProjectionOptions(),
             activationService,
-            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>());
+            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(),
+            new RecordingActorRuntime());
 
         Func<Task> releaseNull = () => service.ReleaseProjectionAsync(null!);
         Func<Task> releaseForeignLease = () => service.ReleaseProjectionAsync(new ForeignGAgentRunTerminalProjectionLease());
