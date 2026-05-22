@@ -237,7 +237,9 @@ public sealed class StatusDashboardManifest
                 timeoutMs: timeoutMs,
                 parameters: AuthenticatedParameters(authHeader,
                     expectedBodyRegex:
-                    $$"""(?s)(?=.*"slug"\s*:\s*"{{Regex.Escape(serviceSlug)}}")(?=.*"proxy_url_slug"\s*:\s*"[^"]*/s/{{Regex.Escape(serviceSlug)}}/\{path\}").*""")),
+                    "\"proxy_url_slug\"\\s*:\\s*\"[^\"]*/s/" +
+                    Regex.Escape(serviceSlug) +
+                    "/\\{path\\}\"")),
             HttpTarget(
                 slug: "responses-forward-team-02-nyxid-proxy-models",
                 name: "Responses -> Team 02 NyxID proxy",

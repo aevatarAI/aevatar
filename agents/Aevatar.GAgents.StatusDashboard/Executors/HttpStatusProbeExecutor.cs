@@ -208,6 +208,11 @@ public sealed class HttpStatusProbeExecutor : IHealthProbeExecutor
             error = $"Invalid response body regex: {ex.Message}";
             return false;
         }
+        catch (RegexMatchTimeoutException ex)
+        {
+            error = $"Response body regex timed out: {ex.Message}";
+            return false;
+        }
     }
 
     private static HashSet<int> ParseExpectedStatuses(string raw) =>
