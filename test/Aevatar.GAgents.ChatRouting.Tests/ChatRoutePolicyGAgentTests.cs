@@ -86,6 +86,55 @@ public sealed class ChatRoutePolicyGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleUpsertRuleAsync_MergesRuleAgainstAuthoritativeState()
+    {
+        await _agent.HandleUpsertAsync(new UpsertChatRoutePolicyRequested
+        {
+            OwnerScope = new ChatRouteCallerScope { RegistrationScopeId = "scope-1" },
+            DefaultTarget = ForwardToModelAction("existing-default"),
+            Rules =
+            {
+                Rule("keep", priority: 10),
+                Rule("voice-demo", priority: 5),
+            },
+        });
+
+        await _agent.HandleUpsertRuleAsync(new UpsertChatRouteRuleRequested
+        {
+            OwnerScope = new ChatRouteCallerScope { RegistrationScopeId = "ignored-new-scope" },
+            DefaultTargetIfUninitialized = ForwardToModelAction("ignored-default"),
+            Rule = Rule("voice-demo", priority: 1000, modelName: "voice-model"),
+        });
+
+        _agent.State.Version.Should().Be(2);
+        _agent.State.OwnerScope.RegistrationScopeId.Should().Be("scope-1");
+        _agent.State.DefaultTarget.ForwardToModel.ModelName.Should().Be("existing-default");
+        _agent.State.Rules.Select(rule => rule.RuleId).Should().Equal("voice-demo", "keep");
+        _agent.State.Rules.Single(rule => rule.RuleId == "keep")
+            .Action.ForwardToModel.ModelName.Should().Be("chrono-llm/gpt-5.5");
+        _agent.State.Rules.Single(rule => rule.RuleId == "voice-demo")
+            .Action.ForwardToModel.ModelName.Should().Be("voice-model");
+    }
+
+    [Fact]
+    public async Task HandleUpsertRuleAsync_InitializesPolicyWhenMissing()
+    {
+        await _agent.HandleUpsertRuleAsync(new UpsertChatRouteRuleRequested
+        {
+            OwnerScope = new ChatRouteCallerScope { RegistrationScopeId = "scope-1" },
+            DefaultTargetIfUninitialized = ForwardToModelAction("initial-default"),
+            Rule = Rule("voice-demo", priority: 1000, modelName: "voice-model"),
+        });
+
+        _agent.State.PolicyId.Should().Be(ActorId);
+        _agent.State.Version.Should().Be(1);
+        _agent.State.OwnerScope.RegistrationScopeId.Should().Be("scope-1");
+        _agent.State.DefaultTarget.ForwardToModel.ModelName.Should().Be("initial-default");
+        _agent.State.Rules.Should().ContainSingle()
+            .Which.Action.ForwardToModel.ModelName.Should().Be("voice-model");
+    }
+
+    [Fact]
     public async Task HandleUpsertAsync_MissingDefaultTarget_RejectsCommand()
     {
         var act = () => _agent.HandleUpsertAsync(new UpsertChatRoutePolicyRequested
@@ -150,18 +199,25 @@ public sealed class ChatRoutePolicyGAgentTests : IAsyncLifetime
             .ToList();
 
         handlerParameterTypes.Should().BeEquivalentTo(
-            [typeof(UpsertChatRoutePolicyRequested), typeof(RemoveChatRouteRuleRequested)]);
+            [
+                typeof(UpsertChatRoutePolicyRequested),
+                typeof(UpsertChatRouteRuleRequested),
+                typeof(RemoveChatRouteRuleRequested),
+            ]);
     }
 
     private static ChatRouteAction ForwardToModelAction(string modelName) =>
         new() { ForwardToModel = new ForwardToModel { ModelName = modelName } };
 
-    private static ChatRouteRule Rule(string ruleId, int priority) =>
+    private static ChatRouteRule Rule(
+        string ruleId,
+        int priority,
+        string modelName = "chrono-llm/gpt-5.5") =>
         new()
         {
             RuleId = ruleId,
             Priority = priority,
-            Action = ForwardToModelAction("chrono-llm/gpt-5.5"),
+            Action = ForwardToModelAction(modelName),
         };
 
     /// <summary>Minimal in-process <see cref="IEventStore"/> for unit tests.</summary>

@@ -26,18 +26,15 @@ public sealed class VoiceDemoAgentCommandPort
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _actorDispatchPort;
     private readonly IUserAgentCatalogCommandPort _catalogCommandPort;
-    private readonly IChatRoutePolicyQueryPort _routePolicyQueryPort;
 
     public VoiceDemoAgentCommandPort(
         IActorRuntime actorRuntime,
         IActorDispatchPort actorDispatchPort,
-        IUserAgentCatalogCommandPort catalogCommandPort,
-        IChatRoutePolicyQueryPort routePolicyQueryPort)
+        IUserAgentCatalogCommandPort catalogCommandPort)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
-        _routePolicyQueryPort = routePolicyQueryPort ?? throw new ArgumentNullException(nameof(routePolicyQueryPort));
     }
 
     // Refactor (iter34/cluster-004-voice-bootstrap-application-port):
@@ -49,7 +46,6 @@ public sealed class VoiceDemoAgentCommandPort
     {
         ArgumentNullException.ThrowIfNull(command);
         var scopeId = command.ScopeId.Trim();
-        var routingScope = RoutingOwnerScope.ForNyxIdNative(scopeId);
         var scheduledScope = ScheduledOwnerScope.ForNyxIdNative(scopeId);
         var actorId = BuildDemoActorId(scopeId);
         var routePolicyActorId = $"{ChatRoutePolicyActorIdPrefix}{scopeId}";
@@ -68,7 +64,6 @@ public sealed class VoiceDemoAgentCommandPort
             routePolicyActorId,
             scopeId,
             actorId,
-            routingScope,
             correlationId,
             ct);
 
@@ -105,39 +100,29 @@ public sealed class VoiceDemoAgentCommandPort
         string routePolicyActorId,
         string scopeId,
         string actorId,
-        RoutingOwnerScope routingScope,
         string correlationId,
         CancellationToken ct)
     {
-        var existing = await _routePolicyQueryPort.LookupForCallerAsync(routingScope, ct);
-        var command = new UpsertChatRoutePolicyRequested
+        var command = new UpsertChatRouteRuleRequested
         {
             OwnerScope = new ChatRouteCallerScope
             {
                 NyxUserId = scopeId,
                 Platform = RoutingOwnerScope.NyxIdPlatform,
             },
-            DefaultTarget = existing?.DefaultTarget.Clone() ?? ForwardToDemoActor(actorId),
-        };
-
-        if (existing is not null)
-        {
-            command.Rules.AddRange(existing.Rules
-                .Where(static rule => !string.Equals(rule.RuleId, RouteRuleId, StringComparison.Ordinal))
-                .Select(static rule => rule.Clone()));
-        }
-
-        command.Rules.Add(new ChatRouteRule
-        {
-            RuleId = RouteRuleId,
-            Priority = 1000,
-            Match = new ChatRouteMatch
+            DefaultTargetIfUninitialized = ForwardToDemoActor(actorId),
+            Rule = new ChatRouteRule
             {
-                SourceKind = ChatSourceKind.Voice,
+                RuleId = RouteRuleId,
+                Priority = 1000,
+                Match = new ChatRouteMatch
+                {
+                    SourceKind = ChatSourceKind.Voice,
+                },
+                Action = ForwardToDemoActor(actorId),
+                Description = "route browser voice demo to the current user's mainnet agent",
             },
-            Action = ForwardToDemoActor(actorId),
-            Description = "route browser voice demo to the current user's mainnet agent",
-        });
+        };
 
         var actor = await _actorRuntime.CreateAsync<ChatRoutePolicyGAgent>(routePolicyActorId, ct);
         return await DispatchAsync(actor.Id, command, correlationId, ct);
@@ -191,8 +176,14 @@ public sealed class VoiceDemoAgentCommandPort
     }
 }
 
+// Refactor (iter34/cluster-004-voice-bootstrap-application-port):
+//   Old pattern: The Host endpoint accepted raw HTTP state and built actor commands inline.
+//   New principle: A typed command captures the stable voice bootstrap input owned by the NyxID chat module.
 public sealed record VoiceDemoBootstrapCommand(string ScopeId);
 
+// Refactor (iter34/cluster-004-voice-bootstrap-application-port):
+//   Old pattern: The bootstrap response implied synchronous readiness after polling readmodels.
+//   New principle: The receipt only reports accepted dispatch ids and correlation data; completion is observed asynchronously.
 public sealed record VoiceDemoBootstrapReceipt(
     string ActorId,
     string RoutePolicyActorId,

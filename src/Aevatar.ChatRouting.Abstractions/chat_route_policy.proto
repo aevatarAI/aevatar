@@ -224,6 +224,12 @@ message UpsertChatRoutePolicyRequested {
   repeated ChatRouteRule rules = 3;
 }
 
+message UpsertChatRouteRuleRequested {
+  ChatRouteCallerScope owner_scope = 1;
+  ChatRouteAction default_target_if_uninitialized = 2;
+  ChatRouteRule rule = 3;
+}
+
 message RemoveChatRouteRuleRequested {
   string rule_id = 1;
 }
