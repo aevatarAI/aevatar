@@ -1189,7 +1189,7 @@ public static class ScopeServiceEndpoints
                 resolution.Deployments,
                 workflowExecutionQueryService,
                 ct);
-            var report = await workflowExecutionQueryService.GetActorReportAsync(resolution.Binding!.ActorId, ct);
+            var report = await workflowExecutionQueryService.GetWorkflowRunReportArtifactAsync(resolution.Binding!.ActorId, ct);
             if (report == null)
             {
                 return Results.NotFound(new
@@ -1464,7 +1464,7 @@ public static class ScopeServiceEndpoints
             });
         }
 
-        var report = await workflowExecutionQueryService.GetActorReportAsync(snapshot.TargetActorId, ct);
+        var report = await workflowExecutionQueryService.GetWorkflowRunReportArtifactAsync(snapshot.TargetActorId, ct);
         if (report == null)
         {
             return Results.NotFound(new

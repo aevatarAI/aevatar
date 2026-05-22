@@ -280,18 +280,22 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
         }
     }
 
-    public async Task<IReadOnlyList<JsonElement>> GetActorTimelineAsync(
-        string actorId,
+    // Refactor (iter29/cluster-029-workflow-history-artifact):
+    //   Old pattern: workflow history / report / graph are treated as current-state readmodels (current-state query path enriches actor snapshots by reading report artifacts; duplicate WorkflowRunTimelineDocument and WorkflowRunGraphArtifactDocument shells copy WorkflowRunInsightReportDocument; public application/query/tool/HTTP surfaces expose them as actor current-state queries instead of workflow-run artifacts)
+    //   New principle: Workflow history / report / graph are workflow-run artifacts (or aggregate-owned views), NOT actor current-state readmodels: keep existing WorkflowRunInsightReportDocument adapter/name workflow-local as the single report artifact source; delete duplicate WorkflowRunTimelineDocument / WorkflowRunGraphArtifactDocument shells (timeline derived from report artifact, graph materialization derived from report artifact); stop current-state query paths from reading report/history artifacts to enrich actor snapshots; rename public application/query/tool/HTTP surfaces so report/timeline/graph are explicit workflow-run artifact / export, not current-state readmodel surfaces; WorkflowExecutionCurrentStateDocument remains the only workflow actor-scoped current-state readmodel; NO CLAUDE.md change, NO new core abstraction, NO generic CQRS Projection artifact storage seam, NO new actor type
+    //   New pattern: workflow history/report/graph are artifacts or aggregate-owned views, not current-state readmodels.
+    public async Task<IReadOnlyList<JsonElement>> GetWorkflowRunTimelineExportAsync(
+        string workflowRunId,
         int take = 200,
         CancellationToken cancellationToken = default)
     {
-        EnsureNotBlank(actorId, nameof(actorId));
+        EnsureNotBlank(workflowRunId, nameof(workflowRunId));
         if (take <= 0)
             throw AevatarWorkflowException.InvalidRequest("Parameter 'take' must be greater than zero.");
 
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
-            $"/api/actors/{Uri.EscapeDataString(actorId)}/timeline?take={take}");
+            $"/api/workflow-runs/{Uri.EscapeDataString(workflowRunId)}/timeline-export?take={take}");
         using var response = await SendAsync(request, cancellationToken);
         var rawPayload = await response.Content.ReadAsStringAsync(cancellationToken);
 
@@ -300,7 +304,7 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
             throw WorkflowSdkJson.BuildHttpException(
                 response.StatusCode,
                 rawPayload,
-                $"Actor timeline request failed with HTTP {(int)response.StatusCode}.");
+                $"Workflow run timeline export request failed with HTTP {(int)response.StatusCode}.");
         }
 
         if (string.IsNullOrWhiteSpace(rawPayload))
@@ -312,7 +316,7 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
             if (document.RootElement.ValueKind != JsonValueKind.Array)
             {
                 throw AevatarWorkflowException.StreamPayload(
-                    "Timeline response is not a JSON array.",
+                    "Workflow run timeline export response is not a JSON array.",
                     rawPayload);
             }
 
@@ -321,7 +325,7 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
         catch (JsonException ex)
         {
             throw AevatarWorkflowException.StreamPayload(
-                "Failed to parse actor timeline response payload.",
+                "Failed to parse workflow run timeline export response payload.",
                 rawPayload,
                 ex);
         }

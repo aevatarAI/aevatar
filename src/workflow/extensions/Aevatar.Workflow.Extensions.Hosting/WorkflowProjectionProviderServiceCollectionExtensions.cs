@@ -85,10 +85,6 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             services,
             configuration,
             static document => document.RootActorId);
-        TryAddElasticsearchDocumentStore<WorkflowRunTimelineDocument>(
-            services,
-            configuration,
-            static document => document.RootActorId);
         TryAddElasticsearchDocumentStore<WorkflowRunInsightReportDocument>(
             services,
             configuration,
@@ -102,10 +98,6 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
     private static void AddInMemoryDocumentStores(IServiceCollection services)
     {
         TryAddInMemoryDocumentStore<WorkflowExecutionCurrentStateDocument>(
-            services,
-            static document => document.RootActorId,
-            static document => document.UpdatedAt);
-        TryAddInMemoryDocumentStore<WorkflowRunTimelineDocument>(
             services,
             static document => document.RootActorId,
             static document => document.UpdatedAt);
@@ -124,7 +116,6 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         DocumentProviderKind providerKind)
     {
         return HasDocumentReaderForProvider<WorkflowExecutionCurrentStateDocument>(services, providerKind)
-               && HasDocumentReaderForProvider<WorkflowRunTimelineDocument>(services, providerKind)
                && HasDocumentReaderForProvider<WorkflowRunInsightReportDocument>(services, providerKind)
                && HasDocumentReaderForProvider<WorkflowActorBindingDocument>(services, providerKind);
     }

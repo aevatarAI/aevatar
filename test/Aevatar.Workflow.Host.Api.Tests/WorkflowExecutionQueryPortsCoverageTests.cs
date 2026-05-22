@@ -49,10 +49,10 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         });
 
         harness.ArtifactPort.EnableActorQueryEndpoints.Should().BeFalse();
-        (await harness.ArtifactPort.GetActorGraphEdgesAsync("actor-1")).Should().BeEmpty();
-        (await harness.ArtifactPort.GetActorGraphSubgraphAsync("actor-1")).RootNodeId.Should().Be("actor-1");
+        (await harness.ArtifactPort.GetWorkflowRunGraphExportEdgesAsync("actor-1")).Should().BeEmpty();
+        (await harness.ArtifactPort.GetWorkflowRunGraphExportSubgraphAsync("actor-1")).RootNodeId.Should().Be("actor-1");
         harness.CurrentStateReader.GetCalls.Should().Be(0);
-        harness.TimelineReader.GetCalls.Should().Be(0);
+        harness.ReportReader.GetCalls.Should().Be(0);
         harness.GraphStore.GetNeighborsCalls.Should().Be(0);
         harness.GraphStore.GetSubgraphCalls.Should().Be(0);
     }
@@ -66,9 +66,9 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
             EnableActorQueryEndpoints = true,
         });
 
-        (await harness.ArtifactPort.GetActorGraphEdgesAsync("   ")).Should().BeEmpty();
+        (await harness.ArtifactPort.GetWorkflowRunGraphExportEdgesAsync("   ")).Should().BeEmpty();
 
-        var subgraph = await harness.ArtifactPort.GetActorGraphSubgraphAsync("   ");
+        var subgraph = await harness.ArtifactPort.GetWorkflowRunGraphExportSubgraphAsync("   ");
         subgraph.RootNodeId.Should().BeEmpty();
         subgraph.Nodes.Should().BeEmpty();
         subgraph.Edges.Should().BeEmpty();
@@ -86,7 +86,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
             EnableActorQueryEndpoints = true,
         });
 
-        var subgraph = await harness.ArtifactPort.GetActorGraphSubgraphAsync(null!);
+        var subgraph = await harness.ArtifactPort.GetWorkflowRunGraphExportSubgraphAsync(null!);
 
         subgraph.RootNodeId.Should().BeEmpty();
         subgraph.Nodes.Should().BeEmpty();
@@ -141,6 +141,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         projectionState!.ActorId.Should().Be("actor-1");
         harness.CurrentStateReader.GetCalls.Should().Be(2);
         harness.CurrentStateReader.QueryCalls.Should().Be(1);
+        harness.ReportReader.GetCalls.Should().Be(0);
     }
 
     [Fact]
@@ -171,7 +172,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
     }
 
     [Fact]
-    public async Task ArtifactQueryPort_ListActorTimelineAsync_ShouldOrderClampAndMapEventData()
+    public async Task ArtifactQueryPort_ListWorkflowRunTimelineExportAsync_ShouldDeriveFromReportArtifact()
     {
         var harness = CreateHarness(
             new WorkflowExecutionProjectionOptions
@@ -179,9 +180,9 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                 Enabled = true,
                 EnableActorQueryEndpoints = true,
             },
-            timelineReader: new RecordingDocumentReader<WorkflowRunTimelineDocument>
+            reportReader: new RecordingDocumentReader<WorkflowRunInsightReportDocument>
             {
-                Item = new WorkflowRunTimelineDocument
+                Item = new WorkflowRunInsightReportDocument
                 {
                     Id = "actor-1",
                     RootActorId = "actor-1",
@@ -214,32 +215,32 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                 },
             });
 
-        var items = await harness.ArtifactPort.ListActorTimelineAsync("actor-1", take: 2);
+        var items = await harness.ArtifactPort.ListWorkflowRunTimelineExportAsync("actor-1", take: 2);
 
         items.Select(x => x.Stage).Should().Equal("newer", "middle");
         items[0].Data.Should().Contain("k2", "v2");
-        harness.TimelineReader.GetCalls.Should().Be(1);
+        harness.ReportReader.GetCalls.Should().Be(1);
     }
 
     [Fact]
-    public async Task ArtifactQueryPort_ListActorTimelineAsync_ShouldShortCircuitWhenDisabledBlankOrMissing()
+    public async Task ArtifactQueryPort_ListWorkflowRunTimelineExportAsync_ShouldShortCircuitWhenDisabledBlankOrMissing()
     {
         var disabled = CreateHarness(new WorkflowExecutionProjectionOptions
         {
             Enabled = false,
             EnableActorQueryEndpoints = true,
         });
-        (await disabled.ArtifactPort.ListActorTimelineAsync("actor-1")).Should().BeEmpty();
-        disabled.TimelineReader.GetCalls.Should().Be(0);
+        (await disabled.ArtifactPort.ListWorkflowRunTimelineExportAsync("actor-1")).Should().BeEmpty();
+        disabled.ReportReader.GetCalls.Should().Be(0);
 
         var enabled = CreateHarness(new WorkflowExecutionProjectionOptions
         {
             Enabled = true,
             EnableActorQueryEndpoints = true,
         });
-        (await enabled.ArtifactPort.ListActorTimelineAsync("   ")).Should().BeEmpty();
-        (await enabled.ArtifactPort.ListActorTimelineAsync("actor-404")).Should().BeEmpty();
-        enabled.TimelineReader.GetCalls.Should().Be(1);
+        (await enabled.ArtifactPort.ListWorkflowRunTimelineExportAsync("   ")).Should().BeEmpty();
+        (await enabled.ArtifactPort.ListWorkflowRunTimelineExportAsync("actor-404")).Should().BeEmpty();
+        enabled.ReportReader.GetCalls.Should().Be(1);
     }
 
     [Fact]
@@ -292,14 +293,14 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                 },
             });
 
-        var options = new WorkflowActorGraphQueryOptions
+        var options = new WorkflowRunGraphExportQueryOptions
         {
-            Direction = WorkflowActorGraphDirection.Inbound,
+            Direction = WorkflowRunGraphExportDirection.Inbound,
             EdgeTypes = ["CHILD_OF"],
         };
 
-        var edges = await harness.ArtifactPort.GetActorGraphEdgesAsync("actor-1", take: 7, options: options);
-        var subgraph = await harness.ArtifactPort.GetActorGraphSubgraphAsync("actor-1", depth: 4, take: 11, options: options);
+        var edges = await harness.ArtifactPort.GetWorkflowRunGraphExportEdgesAsync("actor-1", take: 7, options: options);
+        var subgraph = await harness.ArtifactPort.GetWorkflowRunGraphExportSubgraphAsync("actor-1", depth: 4, take: 11, options: options);
 
         edges.Should().ContainSingle(x => x.EdgeId == "edge-1");
         subgraph.RootNodeId.Should().Be("actor-1");
@@ -325,14 +326,14 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
             EnableActorQueryEndpoints = true,
         });
 
-        var options = new WorkflowActorGraphQueryOptions
+        var options = new WorkflowRunGraphExportQueryOptions
         {
-            Direction = (WorkflowActorGraphDirection)99,
+            Direction = (WorkflowRunGraphExportDirection)99,
             EdgeTypes = [" CHILD_OF ", "", "CHILD_OF", "  ", "OWNS"],
         };
 
-        await harness.ArtifactPort.GetActorGraphEdgesAsync("actor-1", take: 0, options: options);
-        await harness.ArtifactPort.GetActorGraphSubgraphAsync("actor-1", depth: 99, take: 5001, options: options);
+        await harness.ArtifactPort.GetWorkflowRunGraphExportEdgesAsync("actor-1", take: 0, options: options);
+        await harness.ArtifactPort.GetWorkflowRunGraphExportSubgraphAsync("actor-1", depth: 99, take: 5001, options: options);
 
         harness.GraphStore.LastGraphEdgesQuery.Should().NotBeNull();
         harness.GraphStore.LastGraphEdgesQuery!.Direction.Should().Be(ProjectionGraphDirection.Both);
@@ -349,28 +350,23 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         WorkflowExecutionProjectionOptions options,
         RecordingDocumentReader<WorkflowExecutionCurrentStateDocument>? currentStateReader = null,
         RecordingDocumentReader<WorkflowRunInsightReportDocument>? reportReader = null,
-        RecordingDocumentReader<WorkflowRunTimelineDocument>? timelineReader = null,
         RecordingProjectionGraphStore? graphStore = null)
     {
         currentStateReader ??= new RecordingDocumentReader<WorkflowExecutionCurrentStateDocument>();
         reportReader ??= new RecordingDocumentReader<WorkflowRunInsightReportDocument>();
-        timelineReader ??= new RecordingDocumentReader<WorkflowRunTimelineDocument>();
         graphStore ??= new RecordingProjectionGraphStore();
         return new QueryPortHarness(
             new WorkflowExecutionCurrentStateQueryPort(
                 currentStateReader,
-                reportReader,
                 new WorkflowExecutionReadModelMapper(),
                 options),
             new WorkflowExecutionArtifactQueryPort(
                 reportReader,
-                timelineReader,
                 new WorkflowExecutionReadModelMapper(),
                 graphStore,
                 options),
             currentStateReader,
             reportReader,
-            timelineReader,
             graphStore);
     }
 
@@ -379,7 +375,6 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         IWorkflowExecutionArtifactQueryPort ArtifactPort,
         RecordingDocumentReader<WorkflowExecutionCurrentStateDocument> CurrentStateReader,
         RecordingDocumentReader<WorkflowRunInsightReportDocument> ReportReader,
-        RecordingDocumentReader<WorkflowRunTimelineDocument> TimelineReader,
         RecordingProjectionGraphStore GraphStore);
 
     private sealed class RecordingDocumentReader<TReadModel> : IProjectionDocumentReader<TReadModel, string>

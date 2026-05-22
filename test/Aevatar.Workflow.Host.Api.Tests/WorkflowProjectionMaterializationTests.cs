@@ -21,17 +21,14 @@ public sealed class WorkflowProjectionMaterializationTests
     public void WorkflowRunInsightReportArtifactProjector_Ctor_ShouldThrow_WhenDependencyMissing()
     {
         var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
-        var timelineStore = new RecordingDocumentStore<WorkflowRunTimelineDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
 
-        Action noReader = () => new WorkflowRunInsightReportArtifactProjector(null!, reportStore, timelineStore, graphWriter);
-        Action noReportWriter = () => new WorkflowRunInsightReportArtifactProjector(reportStore, null!, timelineStore, graphWriter);
-        Action noTimelineWriter = () => new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, null!, graphWriter);
-        Action noGraphWriter = () => new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, timelineStore, null!);
+        Action noReader = () => new WorkflowRunInsightReportArtifactProjector(null!, reportStore, graphWriter);
+        Action noReportWriter = () => new WorkflowRunInsightReportArtifactProjector(reportStore, null!, graphWriter);
+        Action noGraphWriter = () => new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, null!);
 
         noReader.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("reportReader");
         noReportWriter.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("reportWriter");
-        noTimelineWriter.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("timelineWriter");
         noGraphWriter.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("graphWriter");
     }
 
@@ -103,9 +100,8 @@ public sealed class WorkflowProjectionMaterializationTests
     public async Task WorkflowRunInsightReportArtifactProjector_ShouldTrackLifecycleReplyAndCompletionBranches()
     {
         var store = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
-        var timelineStore = new RecordingDocumentStore<WorkflowRunTimelineDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
-        var projector = new WorkflowRunInsightReportArtifactProjector(store, store, timelineStore, graphWriter);
+        var projector = new WorkflowRunInsightReportArtifactProjector(store, store, graphWriter);
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -217,9 +213,8 @@ public sealed class WorkflowProjectionMaterializationTests
     public async Task WorkflowRunInsightReportArtifactProjector_ShouldTrackSuspensionSignalAndStoppedBranches()
     {
         var store = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
-        var timelineStore = new RecordingDocumentStore<WorkflowRunTimelineDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
-        var projector = new WorkflowRunInsightReportArtifactProjector(store, store, timelineStore, graphWriter);
+        var projector = new WorkflowRunInsightReportArtifactProjector(store, store, graphWriter);
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -295,9 +290,8 @@ public sealed class WorkflowProjectionMaterializationTests
     public async Task WorkflowRunInsightReportArtifactProjector_ShouldIgnoreInvalidEnvelope_AndMissingStateRoot()
     {
         var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
-        var timelineStore = new RecordingDocumentStore<WorkflowRunTimelineDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
-        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, timelineStore, graphWriter);
+        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, graphWriter);
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -329,7 +323,6 @@ public sealed class WorkflowProjectionMaterializationTests
             });
 
         reportStore.UpsertCount.Should().Be(0);
-        timelineStore.UpsertCount.Should().Be(0);
         graphWriter.UpsertCount.Should().Be(0);
     }
 
@@ -337,9 +330,8 @@ public sealed class WorkflowProjectionMaterializationTests
     public async Task WorkflowArtifactProjector_ShouldTrackStepAndTopologyEvents_AndSkipDuplicates()
     {
         var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
-        var timelineStore = new RecordingDocumentStore<WorkflowRunTimelineDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
-        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, timelineStore, graphWriter);
+        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, graphWriter);
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -419,9 +411,8 @@ public sealed class WorkflowProjectionMaterializationTests
                 eventId: "evt-5"));
 
         reportStore.UpsertCount.Should().Be(5);
-        timelineStore.UpsertCount.Should().Be(5);
         graphWriter.UpsertCount.Should().Be(5);
-        timelineStore.Stored["actor-1"].Timeline.Select(x => x.Stage).Should().Contain(["step.request", "step.completed"]);
+        reportStore.Stored["actor-1"].Timeline.Select(x => x.Stage).Should().Contain(["step.request", "step.completed"]);
         graphWriter.Stored["actor-1"].Steps.Should().ContainSingle();
         graphWriter.Stored["actor-1"].Steps[0].TargetRole.Should().Be("assistant");
         graphWriter.Stored["actor-1"].Steps[0].SuspensionType.Should().Be("human_input");

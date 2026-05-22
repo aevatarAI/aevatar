@@ -47,21 +47,17 @@ public class WorkflowExecutionProjectionRegistrationTests
 
         await using var provider = services.BuildServiceProvider();
         var currentStateStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>();
-        var timelineStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowRunTimelineDocument, string>>();
         var documentStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>>();
         var relationStore = provider.GetRequiredService<IProjectionGraphStore>();
         var currentStateDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowExecutionCurrentStateDocument>>();
-        var timelineDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowRunTimelineDocument>>();
         var dispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowRunInsightReportDocument>>();
         var graphWriter = provider.GetRequiredService<IProjectionGraphWriter<WorkflowRunInsightReportDocument>>();
         var currentStateMaterializers = provider.GetServices<ICurrentStateProjectionMaterializer<WorkflowExecutionMaterializationContext>>();
         var artifactMaterializers = provider.GetServices<IProjectionArtifactMaterializer<WorkflowExecutionMaterializationContext>>();
         currentStateStore.Should().NotBeNull();
-        timelineStore.Should().NotBeNull();
         documentStore.Should().NotBeNull();
         relationStore.Should().NotBeNull();
         currentStateDispatcher.Should().NotBeNull();
-        timelineDispatcher.Should().NotBeNull();
         dispatcher.Should().NotBeNull();
         graphWriter.Should().NotBeNull();
         currentStateMaterializers.Should().ContainSingle();
@@ -111,17 +107,6 @@ public class WorkflowExecutionProjectionRegistrationTests
     }
 
     [Fact]
-    public void WorkflowRunTimelineDocumentMetadataProvider_ShouldExposeExpectedDefaults()
-    {
-        var provider = new WorkflowRunTimelineDocumentMetadataProvider();
-
-        provider.Metadata.IndexName.Should().Be("workflow-run-timelines");
-        provider.Metadata.Mappings.Should().ContainKey("dynamic").WhoseValue.Should().Be(true);
-        provider.Metadata.Settings.Should().BeEmpty();
-        provider.Metadata.Aliases.Should().BeEmpty();
-    }
-
-    [Fact]
     public async Task AddWorkflowExecutionProjectionCQRS_ShouldNotRegisterLegacyEventDeduplicator()
     {
         var services = new ServiceCollection();
@@ -136,11 +121,6 @@ public class WorkflowExecutionProjectionRegistrationTests
     private static void RegisterInMemoryProviders(IServiceCollection services)
     {
         services.AddInMemoryDocumentProjectionStore<WorkflowExecutionCurrentStateDocument, string>(
-            keySelector: document => document.RootActorId,
-            keyFormatter: key => key,
-            defaultSortSelector: document => document.UpdatedAt,
-            queryTakeMax: 200);
-        services.AddInMemoryDocumentProjectionStore<WorkflowRunTimelineDocument, string>(
             keySelector: document => document.RootActorId,
             keyFormatter: key => key,
             defaultSortSelector: document => document.UpdatedAt,
@@ -161,14 +141,6 @@ public class WorkflowExecutionProjectionRegistrationTests
                 Endpoints = ["http://localhost:9200"],
             },
             metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowExecutionCurrentStateDocument>>().Metadata,
-            keySelector: document => document.RootActorId,
-            keyFormatter: key => key);
-        services.AddElasticsearchDocumentProjectionStore<WorkflowRunTimelineDocument, string>(
-            optionsFactory: _ => new ElasticsearchProjectionDocumentStoreOptions
-            {
-                Endpoints = ["http://localhost:9200"],
-            },
-            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunTimelineDocument>>().Metadata,
             keySelector: document => document.RootActorId,
             keyFormatter: key => key);
         services.AddElasticsearchDocumentProjectionStore<WorkflowRunInsightReportDocument, string>(

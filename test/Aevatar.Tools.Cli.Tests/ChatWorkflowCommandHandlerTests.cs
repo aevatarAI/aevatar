@@ -296,7 +296,7 @@ public class ChatWorkflowCommandHandlerTests
         public Task<JsonElement?> GetActorSnapshotAsync(string actorId, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public Task<IReadOnlyList<JsonElement>> GetActorTimelineAsync(string actorId, int take = 200, CancellationToken cancellationToken = default) =>
+        public Task<IReadOnlyList<JsonElement>> GetWorkflowRunTimelineExportAsync(string workflowRunId, int take = 200, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
     }
 }
