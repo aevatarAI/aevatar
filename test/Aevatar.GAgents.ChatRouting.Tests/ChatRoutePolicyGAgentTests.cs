@@ -135,6 +135,35 @@ public sealed class ChatRoutePolicyGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleUpsertRuleAsync_MissingRuleId_RejectsWithoutPersistingEvent()
+    {
+        var act = () => _agent.HandleUpsertRuleAsync(new UpsertChatRouteRuleRequested
+        {
+            OwnerScope = new ChatRouteCallerScope { RegistrationScopeId = "scope-1" },
+            DefaultTargetIfUninitialized = ForwardToModelAction("initial-default"),
+            Rule = Rule(" ", priority: 1000, modelName: "voice-model"),
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*rule.rule_id is required*");
+        _agent.State.Version.Should().Be(0, "a rejected command persists no event");
+    }
+
+    [Fact]
+    public async Task HandleUpsertRuleAsync_UninitializedPolicyWithoutDefaultTarget_RejectsWithoutPersistingEvent()
+    {
+        var act = () => _agent.HandleUpsertRuleAsync(new UpsertChatRouteRuleRequested
+        {
+            OwnerScope = new ChatRouteCallerScope { RegistrationScopeId = "scope-1" },
+            Rule = Rule("voice-demo", priority: 1000, modelName: "voice-model"),
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*default_target_if_uninitialized is required*");
+        _agent.State.Version.Should().Be(0, "a rejected command persists no event");
+    }
+
+    [Fact]
     public async Task HandleUpsertAsync_MissingDefaultTarget_RejectsCommand()
     {
         var act = () => _agent.HandleUpsertAsync(new UpsertChatRoutePolicyRequested

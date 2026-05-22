@@ -16,7 +16,17 @@ namespace Aevatar.GAgents.NyxidChat.Voice;
 // Refactor (iter34/cluster-004-voice-bootstrap-application-port):
 //   Old pattern: Voice demo bootstrap lived in the Host endpoint, polled read-side readiness before returning, and mutated route policy from API code.
 //   New principle: The NyxID chat module owns the typed bootstrap command port; Host/API only adapts HTTP to an accepted command receipt, while readiness remains an explicit readmodel/event concern.
-public sealed class VoiceDemoAgentCommandPort
+public interface IVoiceDemoAgentCommandPort
+{
+    Task<VoiceDemoBootstrapReceipt> AcceptBootstrapAsync(
+        VoiceDemoBootstrapCommand command,
+        CancellationToken ct);
+}
+
+// Refactor (iter34/cluster-004-voice-bootstrap-application-port):
+//   Old pattern: Voice demo bootstrap lived in the Host endpoint, polled read-side readiness before returning, and mutated route policy from API code.
+//   New principle: The NyxID chat module implements the command port behind a business interface so Host/API depends on the command contract, not the concrete actor-dispatch implementation.
+public sealed class VoiceDemoAgentCommandPort : IVoiceDemoAgentCommandPort
 {
     private const string VoiceModuleName = "voice_presence_openai";
     private const string RouteRuleId = "voice-demo";

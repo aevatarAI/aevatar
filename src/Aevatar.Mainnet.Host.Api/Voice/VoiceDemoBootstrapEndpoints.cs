@@ -24,7 +24,7 @@ internal static class VoiceDemoBootstrapEndpoints
 
     private static async Task<IResult> HandleBootstrapAsync(
         HttpContext http,
-        [FromServices] VoiceDemoAgentCommandPort commandPort,
+        [FromServices] IVoiceDemoAgentCommandPort commandPort,
         CancellationToken ct)
     {
         // Refactor (iter34/cluster-004-voice-bootstrap-application-port):

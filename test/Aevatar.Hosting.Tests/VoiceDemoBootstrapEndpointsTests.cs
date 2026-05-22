@@ -96,7 +96,7 @@ public sealed class VoiceDemoBootstrapEndpointsTests
         builder.Services.AddSingleton<IActorRuntime>(actorRuntime);
         builder.Services.AddSingleton<IActorDispatchPort>(dispatchPort);
         builder.Services.AddSingleton<IUserAgentCatalogCommandPort>(catalogCommandPort);
-        builder.Services.AddSingleton<VoiceDemoAgentCommandPort>();
+        builder.Services.AddSingleton<IVoiceDemoAgentCommandPort, VoiceDemoAgentCommandPort>();
 
         var app = builder.Build();
         app.Use(async (context, next) =>

@@ -52,7 +52,7 @@ public static class ServiceCollectionExtensions
         // Refactor (iter34/cluster-004-voice-bootstrap-application-port):
         //   Old pattern: Mainnet Host/API composed the voice demo agent bootstrap workflow directly.
         //   New principle: NyxID chat owns the actor-targeted bootstrap command port; hosts only opt into the module.
-        services.TryAddSingleton<VoiceDemoAgentCommandPort>();
+        services.TryAddSingleton<IVoiceDemoAgentCommandPort, VoiceDemoAgentCommandPort>();
 
         // ─── Conversation turn-runner override + reply generator ───
         services.Replace(ServiceDescriptor.Singleton<IConversationTurnRunner, ChannelConversationTurnRunner>());
