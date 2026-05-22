@@ -42,7 +42,7 @@ This prompt deliberately keeps the NyxID and Ornn user manuals **out of the syst
 
 **Before driving the Ornn API directly via the AI Agent CLI, call `use_skill(skill="ornn-agent-manual-cli")`** to load the Ornn agent manual.
 
-`use_skill` caches the loaded instructions in-process for ~5 minutes; after that window the next call refetches from Ornn so curator updates land within 5 minutes without a redeploy.
+`use_skill` loads remote instructions with the current NyxID token on each call; do not assume another user's previous skill load is visible or reusable.
 
 ### Proactive skill discovery
 

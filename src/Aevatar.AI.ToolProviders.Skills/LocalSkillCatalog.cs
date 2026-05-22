@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────
-// SkillRegistry — 统一技能注册表
-// 汇聚本地 + 远程技能，提供查找和系统 prompt 生成
+// LocalSkillCatalog — 本地技能目录
+// 仅汇聚本地技能，提供查找和系统 prompt 生成
 // ─────────────────────────────────────────────────────────────
 
 using System.Text;
@@ -8,72 +8,60 @@ using System.Text;
 namespace Aevatar.AI.ToolProviders.Skills;
 
 /// <summary>
-/// 统一技能注册表。管理来自所有来源（本地、远程）的技能。
-/// 线程安全，支持运行时动态注册（如远程技能缓存）以及基于 TTL 的失效语义。
+/// 本地技能目录。管理从本地文件系统发现的技能。
+/// 线程安全，仅保存 local skills；远程技能由 use_skill 每次按当前 token 拉取。
 /// </summary>
-public sealed class SkillRegistry
+// Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
+//   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
+//   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
+public sealed class LocalSkillCatalog
 {
-    private readonly Dictionary<string, CachedSkill> _skills = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, SkillDefinition> _skills = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _lock = new();
-    private readonly TimeProvider _timeProvider;
 
-    public SkillRegistry()
-        : this(TimeProvider.System)
-    {
-    }
-
-    public SkillRegistry(TimeProvider timeProvider)
-    {
-        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
-    }
-
-    private sealed record CachedSkill(SkillDefinition Definition, DateTimeOffset FetchedAt);
-
-    /// <summary>注册单个技能。同名覆盖。FetchedAt 戳记为当前时间。</summary>
+    /// <summary>注册单个本地技能。同名覆盖。</summary>
+    // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
+    //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
+    //   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
     public void Register(SkillDefinition skill)
     {
+        ArgumentNullException.ThrowIfNull(skill);
+        if (skill.Source != SkillSource.Local)
+            return;
+
         lock (_lock)
-            _skills[skill.Name] = new CachedSkill(skill, _timeProvider.GetUtcNow());
+            _skills[skill.Name] = skill;
     }
 
-    /// <summary>批量注册技能。共享同一 FetchedAt 时间戳。</summary>
+    /// <summary>批量注册本地技能。</summary>
     public void RegisterRange(IEnumerable<SkillDefinition> skills)
     {
+        ArgumentNullException.ThrowIfNull(skills);
+
         lock (_lock)
         {
-            var now = _timeProvider.GetUtcNow();
             foreach (var skill in skills)
-                _skills[skill.Name] = new CachedSkill(skill, now);
+            {
+                if (skill.Source == SkillSource.Local)
+                    _skills[skill.Name] = skill;
+            }
         }
     }
 
     /// <summary>
-    /// 按名称查找技能。
+    /// 按名称查找本地技能。
     /// </summary>
-    /// <param name="nameOrId">技能名称或 RemoteId。</param>
+    /// <param name="name">技能名称。</param>
     /// <param name="skill">命中时的技能定义。</param>
-    /// <param name="maxAge">缓存最长有效期。<c>null</c> 表示不检查 TTL（始终算新鲜）。</param>
-    /// <returns>命中且未过期返回 true。</returns>
-    public bool TryGet(string nameOrId, out SkillDefinition? skill, TimeSpan? maxAge = null)
+    /// <returns>命中本地技能返回 true。</returns>
+    public bool TryGet(string name, out SkillDefinition? skill)
     {
         lock (_lock)
         {
-            if (_skills.TryGetValue(nameOrId, out var cached) && IsFresh(cached, maxAge))
+            if (_skills.TryGetValue(name, out var localSkill))
             {
-                skill = cached.Definition;
+                skill = localSkill;
                 return true;
-            }
-
-            // 尝试按 RemoteId 匹配
-            foreach (var entry in _skills.Values)
-            {
-                if (entry.Definition.RemoteId != null &&
-                    entry.Definition.RemoteId.Equals(nameOrId, StringComparison.OrdinalIgnoreCase) &&
-                    IsFresh(entry, maxAge))
-                {
-                    skill = entry.Definition;
-                    return true;
-                }
             }
 
             skill = null;
@@ -81,21 +69,11 @@ public sealed class SkillRegistry
         }
     }
 
-    private bool IsFresh(CachedSkill cached, TimeSpan? maxAge)
-    {
-        if (maxAge is null) return true;
-        // TTL only applies to remote skills — local skills are baked in at registration
-        // and don't go stale. Without this carve-out, a 5-minute TTL would expire local
-        // entries too and `use_skill` would silently lose them after the first cache window.
-        if (cached.Definition.Source != SkillSource.Remote) return true;
-        return _timeProvider.GetUtcNow() - cached.FetchedAt < maxAge.Value;
-    }
-
     /// <summary>获取所有已注册技能。</summary>
     public IReadOnlyList<SkillDefinition> GetAll()
     {
         lock (_lock)
-            return _skills.Values.Select(c => c.Definition).ToArray();
+            return _skills.Values.ToArray();
     }
 
     /// <summary>获取所有允许 LLM 自动调用的技能。</summary>
@@ -103,7 +81,6 @@ public sealed class SkillRegistry
     {
         lock (_lock)
             return _skills.Values
-                .Select(c => c.Definition)
                 .Where(s => s.IsModelInvocable)
                 .ToList();
     }
@@ -123,7 +100,6 @@ public sealed class SkillRegistry
         List<SkillDefinition> skills;
         lock (_lock)
             skills = _skills.Values
-                .Select(c => c.Definition)
                 .Where(s => s.IsModelInvocable)
                 .ToList();
 

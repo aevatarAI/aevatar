@@ -20,9 +20,12 @@ namespace Aevatar.GAgents.NyxidChat;
 /// The NyxID provider itself decides whether to use a user-configured
 /// chrono-llm service or fall back to the NyxID LLM gateway.
 /// </summary>
+// Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
+//   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
+//   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
 public sealed class NyxIdChatGAgent : RoleGAgent
 {
-    private readonly SkillRegistry? _skillRegistry;
+    private readonly LocalSkillCatalog? _localSkillCatalog;
     private readonly NyxIdRelayOptions? _relayOptions;
 
     public NyxIdChatGAgent(
@@ -32,14 +35,14 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         IEnumerable<IAgentToolSource>? toolSources = null,
-        SkillRegistry? skillRegistry = null,
+        LocalSkillCatalog? localSkillCatalog = null,
         IRemoteToolApprovalPort? remoteToolApprovalPort = null,
         NyxIdRelayOptions? relayOptions = null)
         : base(llmProviderFactory, additionalHooks, agentMiddlewares, toolMiddlewares, llmMiddlewares, toolSources,
                approvalHandler: new YieldApprovalHandler(),
                remoteToolApprovalPort: remoteToolApprovalPort)
     {
-        _skillRegistry = skillRegistry;
+        _localSkillCatalog = localSkillCatalog;
         _relayOptions = relayOptions;
     }
 
@@ -65,9 +68,12 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         var prompt = basePrompt;
         prompt += NyxIdRelayPromptConfiguration.BuildChannelRuntimeConfigurationSection(_relayOptions);
 
-        if (_skillRegistry != null && _skillRegistry.Count > 0)
+        // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
+        //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
+        //   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
+        if (_localSkillCatalog != null && _localSkillCatalog.Count > 0)
         {
-            var skillSection = _skillRegistry.BuildSystemPromptSection();
+            var skillSection = _localSkillCatalog.BuildSystemPromptSection();
             if (!string.IsNullOrEmpty(skillSection))
                 prompt += "\n" + skillSection;
         }

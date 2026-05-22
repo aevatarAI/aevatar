@@ -15,6 +15,9 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.GAgents.NyxidChat;
 
+// Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
+//   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
+//   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
 public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerator
 {
     private const int MaxToolRounds = 40;
@@ -27,13 +30,12 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
     private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares;
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
     private readonly IToolApprovalHandler? _approvalHandler;
-    private readonly SkillRegistry? _skillRegistry;
+    private readonly LocalSkillCatalog? _localSkillCatalog;
     private readonly IRemoteSkillFetcher? _remoteSkillFetcher;
     private readonly global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? _relayOptions;
     private readonly INyxIdUserLlmPreferencesStore? _preferencesStore;
     private readonly IUserMemoryStore? _userMemoryStore;
     private readonly ILogger<NyxIdConversationReplyGenerator> _logger;
-    private int _missingRemoteFetcherWarningLogged;
 
     private sealed record EffectiveMetadataPlan(
         IReadOnlyDictionary<string, string> Primary,
@@ -47,7 +49,7 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
         IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
-        SkillRegistry? skillRegistry = null,
+        LocalSkillCatalog? localSkillCatalog = null,
         IRemoteSkillFetcher? remoteSkillFetcher = null,
         global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions = null,
         INyxIdUserLlmPreferencesStore? preferencesStore = null,
@@ -61,18 +63,12 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         _toolMiddlewares = (toolMiddlewares ?? []).ToArray();
         _llmMiddlewares = (llmMiddlewares ?? []).ToArray();
         _approvalHandler = approvalHandler;
-        _skillRegistry = skillRegistry;
+        _localSkillCatalog = localSkillCatalog;
         _remoteSkillFetcher = remoteSkillFetcher;
         _relayOptions = relayOptions;
         _preferencesStore = preferencesStore;
         _userMemoryStore = userMemoryStore;
         _logger = logger ?? NullLogger<NyxIdConversationReplyGenerator>.Instance;
-        if (_skillRegistry is not null && _remoteSkillFetcher is null)
-        {
-            _logger.LogWarning(
-                "SkillRegistry is registered without IRemoteSkillFetcher; local skills remain available, but remote skills cannot be refreshed or fetched by use_skill.");
-            _missingRemoteFetcherWarningLogged = 1;
-        }
     }
 
     public async Task<ConversationReplyResult> GenerateReplyAsync(
@@ -170,35 +166,15 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         foreach (var tool in await DiscoverToolsAsync(ct))
             tools.Register(tool);
 
-        // SkillsAgentToolSource (when AddSkills is wired) advertises the same use_skill
-        // through DiscoverToolsAsync, so this defensive registration only matters for
-        // minimal hosts that registered AddOrnnSkills (IRemoteSkillFetcher) without
-        // AddSkills. ToolManager.Register is last-write-wins so the duplicate is harmless.
-        if (_skillRegistry is not null || _remoteSkillFetcher is not null)
+        // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
+        //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
+        //   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
+        if (_localSkillCatalog is not null || _remoteSkillFetcher is not null)
         {
-            LogMissingRemoteSkillFetcherOnce();
-            tools.Register(new UseSkillTool(_skillRegistry ?? new SkillRegistry(), _remoteSkillFetcher));
+            tools.Register(new UseSkillTool(_localSkillCatalog ?? new LocalSkillCatalog(), _remoteSkillFetcher));
         }
 
         return tools;
-    }
-
-    private void LogMissingRemoteSkillFetcherOnce()
-    {
-        if (_skillRegistry is null || _remoteSkillFetcher is not null)
-            return;
-        if (Interlocked.Exchange(ref _missingRemoteFetcherWarningLogged, 1) != 0)
-            return;
-
-        if (_skillRegistry.GetAll().Any(static skill => skill.Source == SkillSource.Remote))
-        {
-            _logger.LogWarning(
-                "SkillRegistry contains remote skills but no IRemoteSkillFetcher is registered; use_skill cannot refresh or fetch remote skill bodies.");
-            return;
-        }
-
-        _logger.LogDebug(
-            "SkillRegistry registered without IRemoteSkillFetcher; local skills remain available and no remote skills are currently advertised.");
     }
 
     private async Task<ConversationReplyResult> GenerateWithMetadataAsync(
@@ -460,9 +436,9 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         var prompt = LoadBaseSystemPrompt();
         prompt += NyxIdRelayPromptConfiguration.BuildChannelRuntimeConfigurationSection(_relayOptions);
 
-        if (_skillRegistry is not null && _skillRegistry.Count > 0)
+        if (_localSkillCatalog is not null && _localSkillCatalog.Count > 0)
         {
-            var skillSection = _skillRegistry.BuildSystemPromptSection();
+            var skillSection = _localSkillCatalog.BuildSystemPromptSection();
             if (!string.IsNullOrEmpty(skillSection))
                 prompt += "\n" + skillSection;
         }

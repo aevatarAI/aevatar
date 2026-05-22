@@ -552,7 +552,7 @@ public class AIComponentCoverageTests
             skills.Should().HaveCount(2);
             skills.All(x => x.DirectoryPath.Length > 0).Should().BeTrue();
 
-            var registry = new SkillRegistry();
+            var registry = new LocalSkillCatalog();
             var source = new SkillsAgentToolSource(
                 new SkillsOptions { Directories = { dirA, dirB } },
                 discovery,
