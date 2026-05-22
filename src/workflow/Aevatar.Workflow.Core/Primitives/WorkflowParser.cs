@@ -72,6 +72,9 @@ public sealed class WorkflowParser
 
     private static RoleDefinition MapRole(RawRole role)
     {
+        // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
+        //   Old pattern: workflow steps chose actor implementation with raw agent_type/agent_id parameters
+        //   New principle: role agent_kind is the stable typed lifecycle input; steps only target roles
         var eventModules = PreferTopLevelText(role.EventModules, role.Extensions?.EventModules);
         var eventRoutes = PreferTopLevelText(role.EventRoutes, role.Extensions?.EventRoutes);
 
@@ -96,6 +99,7 @@ public sealed class WorkflowParser
         {
             Id = normalized.Id,
             Name = normalized.Name,
+            AgentKind = NormalizeText(role.AgentKind),
             SystemPrompt = normalized.SystemPrompt,
             Provider = normalized.Provider,
             Model = normalized.Model,
@@ -378,8 +382,12 @@ public sealed class WorkflowParser
     private sealed class Raw { public string? Name { get; set; } public string? Description { get; set; } public List<RawRole>? Roles { get; set; } public List<RawStep>? Steps { get; set; } public RawConfiguration? Configuration { get; set; } }
     private sealed class RawRole
     {
+        // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
+        //   Old pattern: raw YAML exposed step-level CLR lifecycle selectors
+        //   New principle: raw YAML accepts role-level agent_kind and maps it to RoleDefinition.AgentKind
         public string? Id { get; set; }
         public string? Name { get; set; }
+        public string? AgentKind { get; set; }
         public string? SystemPrompt { get; set; }
         public string? Provider { get; set; }
         public string? Model { get; set; }

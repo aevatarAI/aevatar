@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 
 namespace Aevatar.Workflow.Extensions.Bridge;
@@ -11,6 +12,10 @@ namespace Aevatar.Workflow.Extensions.Bridge;
 /// Telegram channel bridge agent.
 /// Handles ChatRequestEvent -> Telegram sendMessage and waitReply dispatch.
 /// </summary>
+[GAgent("workflow.telegram-bridge")]
+// Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
+//   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
+//   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
 // Refactor (iter25/cluster-027-telegram-wait-reply-actor-turn):
 //   Old pattern: Telegram bridge maintains in-process wait-reply state in dict; bridge owns wait + reply lifecycle inline
 //   New principle: New task-scoped TelegramWaitReplyGAgent owns wait state; bridge sends WaitForReplyCommand and resumes via WaitReplyCompleted/Failed event(reference lark stream actor architecture for unification)

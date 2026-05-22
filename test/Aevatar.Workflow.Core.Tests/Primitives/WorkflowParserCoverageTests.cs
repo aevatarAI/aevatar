@@ -125,6 +125,26 @@ public sealed class WorkflowParserCoverageTests
     }
 
     [Fact]
+    public void Parse_WhenRoleAgentKindIsPresent_ShouldMapTrimmedAgentKind()
+    {
+        var workflow = new WorkflowParser().Parse(
+            """
+            name: role_agent_kind
+            roles:
+              - id: bridge
+                name: Bridge
+                agent_kind: " workflow.telegram-user-bridge "
+            steps:
+              - id: step_1
+                type: llm_call
+                target_role: bridge
+            """);
+
+        workflow.Roles.Should().ContainSingle();
+        workflow.Roles[0].AgentKind.Should().Be("workflow.telegram-user-bridge");
+    }
+
+    [Fact]
     public void Parse_WhenRetryAndOnErrorUseDefaultsAndFallbackAlias_ShouldNormalizePolicies()
     {
         var workflow = new WorkflowParser().Parse(

@@ -544,19 +544,12 @@ public sealed class WorkflowRunGAgent
         if (_childAgentIds.Count > 0 || _compiledWorkflow == null)
             return;
 
-        var roleAgentType = _roleAgentTypeResolver.ResolveRoleAgentType();
-        if (!typeof(IRoleAgent).IsAssignableFrom(roleAgentType))
-        {
-            throw new InvalidOperationException(
-                $"Role agent type '{roleAgentType.FullName}' does not implement IRoleAgent.");
-        }
-
         foreach (var role in WorkflowImplicitLlmRolePolicy.GetEffectiveRoles(_compiledWorkflow))
         {
             var roleId = role.Id;
             var childActorId = BuildChildActorId(roleId);
             var actor = await _runtime.GetAsync(childActorId)
-                        ?? await _runtime.CreateAsync(roleAgentType, childActorId);
+                        ?? await CreateRoleActorAsync(role, childActorId);
             await _runtime.LinkAsync(Id, actor.Id);
 
             await _dispatchPort.DispatchAsync(actor.Id, WorkflowRoleAgentEnvelopeFactory.CreateInitializeEnvelope(role, Id));
@@ -572,6 +565,24 @@ public sealed class WorkflowRunGAgent
         }
 
         Logger.LogInformation("Workflow run actor tree created: {Count} role agents", _childAgentIds.Count);
+    }
+
+    // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
+    //   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
+    //   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
+    private async Task<IActor> CreateRoleActorAsync(RoleDefinition role, string childActorId)
+    {
+        if (!string.IsNullOrWhiteSpace(role.AgentKind))
+            return await _runtime.CreateByKindAsync(role.AgentKind.Trim(), childActorId);
+
+        var roleAgentType = _roleAgentTypeResolver.ResolveRoleAgentType();
+        if (!typeof(IRoleAgent).IsAssignableFrom(roleAgentType))
+        {
+            throw new InvalidOperationException(
+                $"Role agent type '{roleAgentType.FullName}' does not implement IRoleAgent.");
+        }
+
+        return await _runtime.CreateAsync(roleAgentType, childActorId);
     }
 
     private string BuildChildActorId(string roleId)

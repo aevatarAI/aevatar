@@ -4,13 +4,16 @@ description: |
   Aevatar collects small human decisions, organizes them into an execution packet,
   asks OpenClaw to write files, then waits and aggregates OpenClaw file feedback.
 
-roles: []
+roles:
+  - id: telegram_user_bridge
+    name: Telegram User Bridge
+    agent_kind: workflow.telegram-user-bridge
 
 steps:
   - id: bootstrap_telegram_login
     type: llm_call
+    target_role: telegram_user_bridge
     parameters:
-      agent_type: TelegramUserBridgeGAgent
       connector: telegram_user
       operation: /ensureLogin
       chat_id: "${telegram.chat_id}"
@@ -40,8 +43,8 @@ steps:
 
   - id: retry_telegram_login_with_code
     type: llm_call
+    target_role: telegram_user_bridge
     parameters:
-      agent_type: TelegramUserBridgeGAgent
       connector: telegram_user
       operation: /ensureLogin
       chat_id: "${telegram.chat_id}"
@@ -80,8 +83,8 @@ steps:
 
   - id: retry_telegram_login_with_2fa
     type: llm_call
+    target_role: telegram_user_bridge
     parameters:
-      agent_type: TelegramUserBridgeGAgent
       connector: telegram_user
       operation: /ensureLogin
       chat_id: "${telegram.chat_id}"
@@ -113,8 +116,8 @@ steps:
 
   - id: send_to_openclaw_round1
     type: llm_call
+    target_role: telegram_user_bridge
     parameters:
-      agent_type: TelegramUserBridgeGAgent
       connector: telegram_user
       operation: /sendMessage
       chat_id: "${telegram.chat_id}"
@@ -140,8 +143,8 @@ steps:
 
   - id: wait_openclaw_round1_reply
     type: llm_call
+    target_role: telegram_user_bridge
     parameters:
-      agent_type: TelegramUserBridgeGAgent
       connector: telegram_user
       operation: /waitReply
       chat_id: "${telegram.chat_id}"
@@ -169,8 +172,8 @@ steps:
 
   - id: send_to_openclaw_file_write
     type: llm_call
+    target_role: telegram_user_bridge
     parameters:
-      agent_type: TelegramUserBridgeGAgent
       connector: telegram_user
       operation: /sendMessage
       chat_id: "${telegram.chat_id}"
@@ -205,8 +208,8 @@ steps:
 
   - id: wait_openclaw_final_feedback
     type: llm_call
+    target_role: telegram_user_bridge
     parameters:
-      agent_type: TelegramUserBridgeGAgent
       connector: telegram_user
       operation: /waitReply
       chat_id: "${telegram.chat_id}"
