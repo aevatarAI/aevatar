@@ -1,5 +1,8 @@
 namespace Aevatar.GAgentService.Application.Responses;
 
+// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+//   Old pattern: Host endpoints parsed OpenRouter-style vendor/model strings while building provider requests.
+//   New principle: Application owns route-slug parsing for command execution; Host only supplies external request fields.
 public static class ResponsesModelRouteParser
 {
     public static ResponsesModelRoute Parse(string model)

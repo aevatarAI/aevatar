@@ -6,11 +6,17 @@ using Aevatar.GAgentService.Abstractions.Queries;
 
 namespace Aevatar.GAgentService.Application.Responses;
 
+// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+//   Old pattern: Host endpoints reconstructed caller identity and origin facts while also owning response/message orchestration.
+//   New principle: Application receives a typed caller scope so command facades can validate visibility and build LLM caller context without Host-side business branching.
 public sealed record ResponsesCallerScope(
     string ScopeId,
     string OwnerSubject,
     LlmSessionOriginKind OriginKind);
 
+// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+//   Old pattern: Each endpoint resolved NyxID bearer tokens directly before continuing its inline command flow.
+//   New principle: Token-to-caller-scope resolution is a narrow Application port; Host composes the concrete adapter and command facades consume the typed result.
 public interface IResponsesCallerScopeResolver
 {
     Task<ResponsesCallerScope> ResolveAsync(
@@ -18,6 +24,9 @@ public interface IResponsesCallerScopeResolver
         CancellationToken ct = default);
 }
 
+// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+//   Old pattern: Authentication failures escaped from endpoint-local scope resolution as boundary exceptions mixed into HTTP handler code.
+//   New principle: Scope resolution has one typed failure signal that facades map into protocol-specific command errors.
 public sealed class ResponsesCallerScopeUnavailableException : Exception
 {
     public ResponsesCallerScopeUnavailableException(string message) : base(message)
@@ -25,6 +34,9 @@ public sealed class ResponsesCallerScopeUnavailableException : Exception
     }
 }
 
+// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+//   Old pattern: Host endpoints parsed catalog route slugs and resolved route values while constructing provider requests.
+//   New principle: Application depends on a route-value port and owns model-route command context; Host only wires the boundary implementation.
 public interface IResponsesRouteResolver
 {
     Task<string?> ResolveRouteValueAsync(
@@ -46,6 +58,9 @@ public interface IResponsesChatRouteDecisionPort
         CancellationToken ct = default);
 }
 
+// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+//   Old pattern: Host API models were passed through deep endpoint handlers and normalized beside session registration and LLM execution.
+//   New principle: Host maps external JSON into typed command requests; Application normalizes and executes the command lifecycle.
 public sealed record ResponsesCommandRequest(
     string? Model,
     string? Prompt,
@@ -56,6 +71,9 @@ public sealed record ResponsesCommandRequest(
     int? MaxOutputTokens,
     IReadOnlyList<ResponsesApplicationToolDeclaration> DeclaredTools);
 
+// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+//   Old pattern: Anthropic Messages HTTP payloads were normalized inside the Minimal API handler.
+//   New principle: Host passes a typed command request and Application owns Messages-specific validation plus LLM request construction.
 public sealed record MessagesCommandRequest(
     string? Model,
     int? MaxTokens,
@@ -70,6 +88,9 @@ public sealed record MessagesCommandRequest(
     bool ToolChoiceDisablesTools,
     string? ToolChoiceError);
 
+// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+//   Old pattern: Normalized Responses fields lived as endpoint locals across routing, continuation, session, and execution branches.
+//   New principle: Normalized command state is an immutable Application value passed through the facade lifecycle.
 public sealed record NormalizedResponsesRequest(
     string ResponseId,
     string MessageItemId,
@@ -82,11 +103,17 @@ public sealed record NormalizedResponsesRequest(
     IReadOnlyList<ResponsesApplicationToolDeclaration> DeclaredTools,
     IReadOnlyList<ResponsesToolResultInput> ToolResults);
 
+// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+//   Old pattern: Function-call output fields were unpacked ad hoc in endpoint continuation code.
+//   New principle: Tool result inputs are typed command data so continuation validation and persistence stay in Application.
 public sealed record ResponsesToolResultInput(
     string CallId,
     string Output,
     string? SchemaHash);
 
+// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+//   Old pattern: Normalization failures returned HTTP results directly from endpoint-local validation branches.
+//   New principle: Normalizers return typed success/failure values that command facades and Host mappers can translate honestly.
 public readonly record struct ResponsesRequestNormalizationResult(
     NormalizedResponsesRequest? Request,
     string? ErrorCode,
@@ -101,6 +128,9 @@ public readonly record struct ResponsesRequestNormalizationResult(
         new(null, code, message);
 }
 
+// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+//   Old pattern: Messages execution carried normalized locals through the Host handler.
+//   New principle: Messages command state is a typed Application value shared by streaming and non-streaming execution paths.
 public sealed record NormalizedMessagesRequest(
     string MessageId,
     string Model,
@@ -111,6 +141,9 @@ public sealed record NormalizedMessagesRequest(
     IReadOnlyList<ResponsesApplicationToolDeclaration> DeclaredTools,
     bool DroppedImageContent);
 
+// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+//   Old pattern: Messages validation failures were protocol responses produced inside the Host handler.
+//   New principle: Messages normalization returns typed failure data for the command facade to map without owning HTTP concerns.
 public readonly record struct MessagesRequestNormalizationResult(
     NormalizedMessagesRequest? Request,
     string? ErrorCode,
@@ -125,11 +158,17 @@ public readonly record struct MessagesRequestNormalizationResult(
         new(null, code, message);
 }
 
+// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+//   Old pattern: Error status/code/message triples were repeatedly assembled in Host branches.
+//   New principle: Application command results carry typed errors; Host performs only protocol rendering.
 public sealed record ResponsesCommandError(
     int StatusCode,
     string Code,
     string Message);
 
+// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+//   Old pattern: Streaming execution captured endpoint locals after session registration.
+//   New principle: A stream plan is the accepted command context that Host can render as SSE while Application still owns execution.
 public sealed record ResponsesCreateCommandPlan(
     NormalizedResponsesRequest Normalized,
     LlmSessionRegistrationResult Session,
@@ -139,6 +178,9 @@ public sealed record ResponsesCreateCommandPlan(
     ResponsesToolClassification ToolClassification,
     DateTimeOffset CreatedAt);
 
+// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+//   Old pattern: Create response branches returned HTTP/SSE/JSON directly from orchestration code.
+//   New principle: Application returns one typed union for error, stream plan, completed result, or boundary forwarding.
 public sealed record ResponsesCreateCommandResult(
     ResponsesCommandError? Error,
     ResponsesCreateCommandPlan? StreamPlan,
@@ -158,11 +200,17 @@ public sealed record ResponsesCreateCommandResult(
         new(null, null, null, forward);
 }
 
+// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+//   Old pattern: Forward-to-team/GAgent decisions were endpoint locals interleaved with provider-session setup.
+//   New principle: Forwarding is a typed command result so Host can invoke boundary AGUI rendering without owning route policy.
 public sealed record ResponsesForwardCommandResult(
     NormalizedResponsesRequest Normalized,
     ResponsesCallerScope CallerScope,
     ChatRouteAction Action);
 
+// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+//   Old pattern: Completed Responses JSON shape was built from endpoint execution locals.
+//   New principle: Application exposes the completed command data; Host maps it to the external Responses protocol.
 public sealed record ResponsesCreateCompletedCommandResult(
     NormalizedResponsesRequest Normalized,
     long CreatedAt,
@@ -171,6 +219,9 @@ public sealed record ResponsesCreateCompletedCommandResult(
     IReadOnlyList<ToolCall> ForwardedToolCalls,
     TokenUsage? Usage);
 
+// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+//   Old pattern: Streaming completion errors and final data were encoded directly into SSE handler branches.
+//   New principle: Application reports stream execution outcome as typed data; Host renders the appropriate SSE or error frame.
 public sealed record ResponsesStreamCommandResult(
     ResponsesCommandError? Error,
     string OutputText,
@@ -187,6 +238,9 @@ public sealed record ResponsesStreamCommandResult(
         new(null, outputText, forwardedToolCalls, usage);
 }
 
+// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+//   Old pattern: Cancel response visibility and status transition lived inside the Host endpoint.
+//   New principle: Cancellation is an Application command result; Host only validates the route id and renders the protocol response.
 public sealed record ResponsesCancelCommandResult(
     ResponsesCommandError? Error,
     string? ResponseId,
@@ -199,6 +253,9 @@ public sealed record ResponsesCancelCommandResult(
         new(null, responseId, cancelledAt);
 }
 
+// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+//   Old pattern: Messages streaming used endpoint locals after registering the LLM session.
+//   New principle: Application returns a typed Messages stream plan and Host owns only Anthropic SSE frame rendering.
 public sealed record MessagesCreateCommandPlan(
     NormalizedMessagesRequest Normalized,
     LlmSessionRegistrationResult Session,
@@ -206,6 +263,9 @@ public sealed record MessagesCreateCommandPlan(
     IReadOnlyDictionary<string, string> ToolContextMetadata,
     ResponsesToolClassification ToolClassification);
 
+// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+//   Old pattern: Messages create execution directly selected HTTP JSON versus SSE in the Host orchestration body.
+//   New principle: Application returns a typed result that separates validation errors, stream plans, and completed content.
 public sealed record MessagesCreateCommandResult(
     ResponsesCommandError? Error,
     MessagesCreateCommandPlan? StreamPlan,
@@ -221,10 +281,16 @@ public sealed record MessagesCreateCommandResult(
         new(null, null, completed);
 }
 
+// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+//   Old pattern: Completed Messages payload data stayed coupled to Host response construction.
+//   New principle: Application exposes the completed Messages command outcome for the Host protocol mapper.
 public sealed record MessagesCreateCompletedCommandResult(
     NormalizedMessagesRequest Normalized,
     ResponsesCompletionResult Completion);
 
+// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+//   Old pattern: /v1/responses endpoints owned command orchestration and called many lower-level collaborators directly.
+//   New principle: Host depends on one typed Application command facade for create/cancel/stream operations.
 public interface IResponsesCommandFacade
 {
     Task<ResponsesCreateCommandResult> CreateAsync(
@@ -243,6 +309,9 @@ public interface IResponsesCommandFacade
         CancellationToken ct = default);
 }
 
+// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+//   Old pattern: /v1/messages endpoints duplicated Responses command orchestration for the Anthropic protocol shape.
+//   New principle: Host depends on a Messages-specific Application command facade that shares typed command contracts and execution ports.
 public interface IMessagesCommandFacade
 {
     Task<MessagesCreateCommandResult> CreateAsync(

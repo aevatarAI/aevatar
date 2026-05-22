@@ -92,6 +92,125 @@ public sealed class ResponsesCommandFacadeTests
         sessionPort.UpdatedStatuses.Should().ContainSingle(update => update.Status == LlmSessionStatus.Cancelled);
     }
 
+    [Fact]
+    public async Task CancelAsync_ShouldRejectExpiredResponse_WithoutUpdatingSession()
+    {
+        var queryPort = new RecordingSessionQueryPort
+        {
+            Snapshot = BuildSnapshot("resp_expired", scopeId: "scope-1", status: LlmSessionStatus.Expired),
+        };
+        var sessionPort = new RecordingSessionPort();
+        var facade = CreateFacade(sessionPort: sessionPort, queryPort: queryPort);
+
+        var result = await facade.CancelAsync("resp_expired", "token");
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            400,
+            "response_expired",
+            "response id refers to an expired response session."));
+        sessionPort.UpdatedStatuses.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CancelAsync_ShouldReturnRejected_WhenSessionActorRejectsCancel()
+    {
+        var queryPort = new RecordingSessionQueryPort
+        {
+            Snapshot = BuildSnapshot("resp_active", scopeId: "scope-1"),
+        };
+        var sessionPort = new RecordingSessionPort
+        {
+            UpdateStatusException = new InvalidOperationException("cannot cancel completed response"),
+        };
+        var facade = CreateFacade(sessionPort: sessionPort, queryPort: queryPort);
+
+        var result = await facade.CancelAsync("resp_active", "token");
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            400,
+            "response_cancel_rejected",
+            "cannot cancel completed response"));
+    }
+
+    [Fact]
+    public async Task StreamAsync_ShouldReturnAuthenticationError_AndMarkSessionFailed()
+    {
+        var completion = new RecordingCompletionService(
+            new ResponsesCompletionResult("unused", null, []),
+            streamExceptionFactory: _ => new NyxIdAuthenticationRequiredException("test-provider"));
+        var sessions = new RecordingSessionPort();
+        var facade = CreateFacade(completionService: completion, sessionPort: sessions);
+
+        var result = await facade.StreamAsync(BuildStreamPlan(), (_, _) => ValueTask.CompletedTask);
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            401,
+            "authentication_required",
+            "NyxID authentication required for provider 'test-provider'. Please sign in."));
+        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
+    }
+
+    [Fact]
+    public async Task StreamAsync_ShouldReturnUpstreamError_AndMarkSessionFailed()
+    {
+        var completion = new RecordingCompletionService(
+            new ResponsesCompletionResult("unused", null, []),
+            streamExceptionFactory: _ => new NyxIdUpstreamException(
+                NyxIdUpstreamFailureKind.RateLimited,
+                429,
+                "route-a",
+                "model-a",
+                "rate limited"));
+        var sessions = new RecordingSessionPort();
+        var facade = CreateFacade(completionService: completion, sessionPort: sessions);
+
+        var result = await facade.StreamAsync(BuildStreamPlan(), (_, _) => ValueTask.CompletedTask);
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            429,
+            "ratelimited",
+            "rate limited"));
+        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
+    }
+
+    [Fact]
+    public async Task StreamAsync_ShouldReturnTimeout_AndMarkSessionCancelled()
+    {
+        var completion = new RecordingCompletionService(
+            new ResponsesCompletionResult("unused", null, []),
+            streamExceptionFactory: ct => new OperationCanceledException(ct));
+        var sessions = new RecordingSessionPort();
+        var facade = CreateFacade(completionService: completion, sessionPort: sessions);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        var result = await facade.StreamAsync(BuildStreamPlan(), (_, _) => ValueTask.CompletedTask, cts.Token);
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            408,
+            "request_timeout",
+            "Request timed out."));
+        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Cancelled);
+    }
+
+    [Fact]
+    public async Task StreamAsync_ShouldReturnApiError_AndMarkSessionFailed()
+    {
+        var completion = new RecordingCompletionService(
+            new ResponsesCompletionResult("unused", null, []),
+            streamExceptionFactory: _ => new InvalidOperationException("provider crashed"));
+        var sessions = new RecordingSessionPort();
+        var facade = CreateFacade(completionService: completion, sessionPort: sessions);
+
+        var result = await facade.StreamAsync(BuildStreamPlan(), (_, _) => ValueTask.CompletedTask);
+
+        result.Error.Should().BeEquivalentTo(new ResponsesCommandError(
+            500,
+            "api_error",
+            "Internal server error."));
+        sessions.UpdatedStatuses.Should().ContainSingle().Which.Status.Should().Be(LlmSessionStatus.Failed);
+    }
+
     private static ResponsesCommandFacade CreateFacade(
         IResponsesCompletionApplicationService? completionService = null,
         ILlmSessionRegistrationPort? sessionPort = null,
@@ -110,14 +229,42 @@ public sealed class ResponsesCommandFacadeTests
             [],
             NullLogger<ResponsesCommandFacade>.Instance);
 
-    private static LlmSessionSnapshot BuildSnapshot(string responseId, string scopeId) =>
+    private static ResponsesCreateCommandPlan BuildStreamPlan() =>
+        new(
+            new NormalizedResponsesRequest(
+                "resp_stream",
+                "msg_stream",
+                "model",
+                "hello",
+                true,
+                null,
+                null,
+                null,
+                [],
+                []),
+            new LlmSessionRegistrationResult("actor-resp_stream", "resp_stream"),
+            null,
+            new LLMRequest
+            {
+                RequestId = "resp_stream",
+                Model = "model",
+                Messages = [ChatMessage.User("hello")],
+            },
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            new ResponsesToolClassification([], [], [], []),
+            DateTimeOffset.UtcNow);
+
+    private static LlmSessionSnapshot BuildSnapshot(
+        string responseId,
+        string scopeId,
+        LlmSessionStatus status = LlmSessionStatus.Accepted) =>
         new(
             responseId,
             scopeId,
             "owner-1",
             LlmSessionOriginKind.ApiKey,
             null,
-            LlmSessionStatus.Accepted,
+            status,
             DateTimeOffset.UtcNow,
             TimeSpan.FromHours(1),
             null,
@@ -188,7 +335,9 @@ public sealed class ResponsesCommandFacadeTests
         }
     }
 
-    private sealed class RecordingCompletionService(ResponsesCompletionResult result) : IResponsesCompletionApplicationService
+    private sealed class RecordingCompletionService(
+        ResponsesCompletionResult result,
+        Func<CancellationToken, Exception>? streamExceptionFactory = null) : IResponsesCompletionApplicationService
     {
         public LLMRequest? LastRequest { get; private set; }
 
@@ -212,6 +361,8 @@ public sealed class ResponsesCommandFacadeTests
             CancellationToken ct = default)
         {
             LastRequest = request;
+            if (streamExceptionFactory?.Invoke(ct) is { } ex)
+                throw ex;
             return Task.FromResult(result);
         }
     }
@@ -224,6 +375,8 @@ public sealed class ResponsesCommandFacadeTests
 
         public List<LlmSessionForwardedToolCall> RecordedToolCalls { get; } = [];
 
+        public Exception? UpdateStatusException { get; init; }
+
         public Task<LlmSessionRegistrationResult> RegisterAsync(LlmSessionRecord record, CancellationToken ct = default)
         {
             Registered.Add(record);
@@ -232,6 +385,8 @@ public sealed class ResponsesCommandFacadeTests
 
         public Task UpdateStatusAsync(string sessionActorId, string responseId, LlmSessionStatus status, CancellationToken ct = default)
         {
+            if (UpdateStatusException is not null)
+                throw UpdateStatusException;
             UpdatedStatuses.Add((sessionActorId, responseId, status));
             return Task.CompletedTask;
         }
