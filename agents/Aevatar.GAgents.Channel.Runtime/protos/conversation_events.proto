@@ -8,6 +8,7 @@ import "google/protobuf/empty.proto";
 import "chat_activity.proto";
 import "channel_contracts.proto";
 import "chat_route_policy.proto";
+import "ai_messages.proto";
 
 message OutboundDeliveryReceipt {
   string reply_message_id = 1;
@@ -39,11 +40,15 @@ message NeedsLlmReplyEvent {
   // store, projection, or read model.
   string reply_token = 7;
   int64 reply_token_expires_at_unix_ms = 8;
+  // Refactor (iter24/cluster-002-agent-tool-context-generic-metadata-bag):
+  //   Old pattern: request credentials/routing/channel facts lived in Metadata.
+  //   New principle: tool control semantics are typed context fields; Metadata is not the internal control plane.
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 9;
   // Transient run-command-only routing target chosen at ingress. ConversationGAgent MUST
   // clear this field on the copy passed to PersistDomainEventAsync; only the run-bound
   // command copy may carry it so AgentRunGAgent can apply the route before execution.
   // Never persist to event store, projection, read model, or actor state.
-  aevatar.chat_routing.v1.ChatRouteAction target_ref = 9;
+  aevatar.chat_routing.v1.ChatRouteAction target_ref = 10;
 }
 
 // Transient actor-inbox envelope used by the NyxID relay endpoint to hand a single

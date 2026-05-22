@@ -10,13 +10,13 @@ using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgentService.Abstractions.ScopeScripts;
 using Aevatar.GAgentService.Application.ScopeGAgents;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.GAgentService.Projection.Orchestration;
 using Aevatar.GAgentService.Projection.Projectors;
 using Aevatar.Presentation.AGUI;
 using Aevatar.Scripting.Abstractions.Queries;
-using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
 using FluentAssertions;
@@ -56,6 +56,15 @@ public sealed class ScopeServiceEndpointsStreamTests
 
         methods.Should().NotContain("PumpScriptEventsAsync");
         methods.Should().NotContain("ShouldEmitSyntheticRunFinished");
+
+        var source = File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory,
+            "../../../../../src/platform/Aevatar.GAgentService.Hosting/Endpoints/ScopeServiceEndpoints.cs"));
+        source.Should().NotContain("IScriptRuntimeCommandPort");
+        source.Should().NotContain("IScriptServiceAguiProjectionPort");
+        source.Should().NotContain("EnsureRunProjectionAsync");
+        source.Should().NotContain("EnsureAndAttachLeaseAsync");
+        source.Should().NotContain("RunRuntimeAsync");
     }
 
     [Fact]
@@ -773,6 +782,11 @@ public sealed class ScopeServiceEndpointsStreamTests
     [Fact]
     public async Task HandleScriptingServiceChatStreamAsync_ShouldThrow_WhenPrimaryActorMissing()
     {
+        var interactionService = new StubScriptServiceRunInteractionService
+        {
+            StartError = ScriptServiceRunStartError.RuntimeActorUnavailable(
+                "Script runtime actor is not available. The service may not be activated."),
+        };
         var act = () => InvokeScriptingStreamAsync(
             CreateHttpContext(),
             CreateScriptingTarget(primaryActorId: string.Empty),
@@ -780,8 +794,7 @@ public sealed class ScopeServiceEndpointsStreamTests
             "session-1",
             "scope-a",
             null,
-            new StubScriptRuntimeCommandPort(),
-            new StubScriptServiceAguiProjectionPort(),
+            interactionService,
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -791,6 +804,11 @@ public sealed class ScopeServiceEndpointsStreamTests
     [Fact]
     public async Task HandleScriptingServiceChatStreamAsync_ShouldThrow_WhenActorCannotBeResolved()
     {
+        var interactionService = new StubScriptServiceRunInteractionService
+        {
+            StartError = ScriptServiceRunStartError.RuntimeActorUnavailable(
+                "Script runtime actor 'actor-1' could not be resolved. The service may not be activated."),
+        };
         var act = () => InvokeScriptingStreamAsync(
             CreateHttpContext(),
             CreateScriptingTarget(primaryActorId: "actor-1"),
@@ -798,8 +816,7 @@ public sealed class ScopeServiceEndpointsStreamTests
             "session-1",
             "scope-a",
             null,
-            new ThrowingScriptRuntimeCommandPort(new InvalidOperationException("Script runtime actor 'actor-1' could not be resolved. The service may not be activated.")),
-            new StubScriptServiceAguiProjectionPort(),
+            interactionService,
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -810,8 +827,7 @@ public sealed class ScopeServiceEndpointsStreamTests
     public async Task HandleScriptingServiceChatStreamAsync_ShouldWriteProjectionTerminalFrame()
     {
         var http = CreateHttpContext();
-        var commandPort = new StubScriptRuntimeCommandPort();
-        var projectionPort = new StubScriptServiceAguiProjectionPort
+        var interactionService = new StubScriptServiceRunInteractionService
         {
             Messages =
             {
@@ -833,20 +849,26 @@ public sealed class ScopeServiceEndpointsStreamTests
             "session-1",
             "scope-a",
             new Dictionary<string, string> { ["trace-id"] = "abc" },
-            commandPort,
-            projectionPort,
+            interactionService,
             CancellationToken.None);
 
-        var request = commandPort.Invocations.Should().ContainSingle().Subject.InputPayload.Unpack<ChatRequestEvent>();
-        request.Metadata["trace-id"].Should().Be("abc");
-        request.ScopeId.Should().Be("scope-a");
-        request.SessionId.Should().Be("session-1");
-        projectionPort.EnsureCalls.Should().ContainSingle(call =>
-            call.ActorId == "actor-1" &&
-            call.RunId == commandPort.Invocations.Single().RunId);
+        var command = interactionService.Commands.Should().ContainSingle().Subject;
+        command.RuntimeActorId.Should().Be("actor-1");
+        command.Headers.Should().Contain("trace-id", "abc");
+        command.ScopeId.Should().Be("scope-a");
+        command.SessionId.Should().Be("session-1");
+        command.RunId.Should().NotBeNullOrWhiteSpace();
+        command.CommandId.Should().NotBeNullOrWhiteSpace();
+        command.CorrelationId.Should().NotBeNullOrWhiteSpace();
+        command.CommandId.Should().NotBe(command.RunId);
+        command.CorrelationId.Should().NotBe(command.RunId);
+        command.CorrelationId.Should().NotBe(command.CommandId);
 
         var body = await ReadBodyAsync(http);
         body.Should().Contain("runStarted");
+        body.Should().Contain(command.RunId);
+        body.Should().NotContain(command.CommandId);
+        body.Should().NotContain(command.CorrelationId);
         body.Should().Contain("textMessageEnd");
         body.Should().Contain("runFinished");
     }
@@ -855,8 +877,7 @@ public sealed class ScopeServiceEndpointsStreamTests
     public async Task HandleScriptingServiceChatStreamAsync_ShouldPreserveRunErrorWithoutSyntheticFinish()
     {
         var http = CreateHttpContext();
-        var commandPort = new StubScriptRuntimeCommandPort();
-        var projectionPort = new StubScriptServiceAguiProjectionPort
+        var interactionService = new StubScriptServiceRunInteractionService
         {
             Messages =
             {
@@ -877,8 +898,7 @@ public sealed class ScopeServiceEndpointsStreamTests
             "session-1",
             "scope-a",
             null,
-            commandPort,
-            projectionPort,
+            interactionService,
             CancellationToken.None);
 
         var body = await ReadBodyAsync(http);
@@ -887,11 +907,35 @@ public sealed class ScopeServiceEndpointsStreamTests
     }
 
     [Fact]
+    public async Task HandleScriptingServiceChatStreamAsync_ShouldWriteRunError_WhenInteractionThrowsAfterAccepted()
+    {
+        var http = CreateHttpContext();
+        var interactionService = new StubScriptServiceRunInteractionService
+        {
+            ThrowAfterAccepted = new InvalidOperationException("runtime dispatch failed"),
+        };
+
+        await InvokeScriptingStreamAsync(
+            http,
+            CreateScriptingTarget(primaryActorId: "actor-1"),
+            "hello",
+            "session-1",
+            "scope-a",
+            null,
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http);
+        body.Should().Contain("runStarted");
+        body.Should().Contain("runError");
+        body.Should().Contain("runtime dispatch failed");
+    }
+
+    [Fact]
     public async Task HandleScriptingServiceChatStreamAsync_ShouldAvoidSyntheticDuplicateFinish_WhenRunFinishedArrives()
     {
         var http = CreateHttpContext();
-        var commandPort = new StubScriptRuntimeCommandPort();
-        var projectionPort = new StubScriptServiceAguiProjectionPort
+        var interactionService = new StubScriptServiceRunInteractionService
         {
             Messages =
             {
@@ -913,8 +957,7 @@ public sealed class ScopeServiceEndpointsStreamTests
             "session-1",
             "scope-a",
             null,
-            commandPort,
-            projectionPort,
+            interactionService,
             CancellationToken.None);
 
         var body = await ReadBodyAsync(http);
@@ -1084,8 +1127,7 @@ public sealed class ScopeServiceEndpointsStreamTests
         string? sessionId,
         string scopeId,
         IReadOnlyDictionary<string, string>? headers,
-        IScriptRuntimeCommandPort scriptRuntimeCommandPort,
-        IScriptServiceAguiProjectionPort scriptServiceAguiProjectionPort,
+        ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> interactionService,
         CancellationToken ct) =>
         InvokePrivateTaskAsync(
             HandleScriptingStreamMethod,
@@ -1096,10 +1138,8 @@ public sealed class ScopeServiceEndpointsStreamTests
             scopeId,
             "svc-default",
             headers,
-            scriptRuntimeCommandPort,
-            scriptServiceAguiProjectionPort,
+            interactionService,
             new ServiceInvocationRequest(),
-            new NoOpServiceRunRegistrationPort(),
             ct);
 
     private sealed class NoOpServiceRunRegistrationPort : IServiceRunRegistrationPort
@@ -1188,15 +1228,13 @@ public sealed class ScopeServiceEndpointsStreamTests
         StubActorRuntime runtime,
         StubDraftRunProjectionPort projectionPort)
     {
+        var terminalProjectionPort = new StubGAgentRunTerminalProjectionPort();
         var pipeline = new DefaultCommandDispatchPipeline<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError>(
             new GAgentDraftRunCommandTargetResolver(
                 runtime,
                 projectionPort,
-                new StubGAgentRunTerminalProjectionPort()),
+                terminalProjectionPort),
             new DefaultCommandContextPolicy(),
-            new GAgentDraftRunCommandTargetBinder(
-                projectionPort,
-                new StubGAgentRunTerminalProjectionPort()),
             new GAgentDraftRunCommandEnvelopeFactory(),
             new ActorCommandTargetDispatcher<GAgentDraftRunCommandTarget>(new InlineActorDispatchPort(runtime)),
             new GAgentDraftRunAcceptedReceiptFactory());
@@ -1207,7 +1245,9 @@ public sealed class ScopeServiceEndpointsStreamTests
             new GAgentDraftRunCompletionPolicy(),
             new GAgentDraftRunFinalizeEmitter(),
             new GAgentDraftRunDurableCompletionResolver(new StubGAgentRunTerminalQueryPort()),
-            NullLogger<DefaultCommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, AGUIEvent, GAgentDraftRunCompletionStatus>>.Instance);
+            NullLogger<DefaultCommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, AGUIEvent, GAgentDraftRunCompletionStatus>>.Instance,
+            new GAgentDraftRunObservationLifecycle(projectionPort, terminalProjectionPort),
+            new GAgentDraftRunAcceptedReceiptFactory());
     }
 
     private sealed class StubActorRuntime : IActorRuntime
@@ -1442,83 +1482,63 @@ public sealed class ScopeServiceEndpointsStreamTests
 
     private sealed record StubScriptServiceAguiProjectionLease(string ActorId, string RunId) : IScriptServiceAguiProjectionLease;
 
-    private sealed class StubScriptRuntimeCommandPort : IScriptRuntimeCommandPort
+    private sealed class StubScriptServiceRunInteractionService
+        : ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>
     {
-        public List<ScriptRuntimeInvocation> Invocations { get; } = [];
+        public List<ScriptServiceRunCommand> Commands { get; } = [];
 
-        public Task RunRuntimeAsync(
-            string runtimeActorId,
-            string runId,
-            Any? inputPayload,
-            string scriptRevision,
-            string definitionActorId,
-            string requestedEventType,
-            CancellationToken ct) =>
-            RunRuntimeAsync(
-                runtimeActorId,
-                runId,
-                inputPayload,
-                scriptRevision,
-                definitionActorId,
-                requestedEventType,
-                scopeId: null,
-                ct);
+        public List<AGUIEvent> Messages { get; } = [];
 
-        public Task RunRuntimeAsync(
-            string runtimeActorId,
-            string runId,
-            Any? inputPayload,
-            string scriptRevision,
-            string definitionActorId,
-            string requestedEventType,
-            string? scopeId,
-            CancellationToken ct)
+        public ScriptServiceRunStartError? StartError { get; init; }
+
+        public Exception? ThrowAfterAccepted { get; init; }
+
+        public async Task<CommandInteractionResult<ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, ScriptServiceRunCompletionStatus>> ExecuteAsync(
+            ScriptServiceRunCommand command,
+            Func<AGUIEvent, CancellationToken, ValueTask> emitAsync,
+            Func<ScriptServiceRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
+            CancellationToken ct = default)
         {
-            _ = ct;
-            Invocations.Add(new ScriptRuntimeInvocation(
-                runtimeActorId,
-                runId,
-                inputPayload?.Clone() ?? new Any(),
-                scriptRevision,
-                definitionActorId,
-                requestedEventType,
-                scopeId));
-            return Task.CompletedTask;
+            Commands.Add(command);
+            if (StartError != null)
+                return CommandInteractionResult<ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, ScriptServiceRunCompletionStatus>.Failure(StartError);
+
+            var receipt = new ScriptServiceRunAcceptedReceipt(
+                command.RuntimeActorId,
+                command.RunId,
+                command.CommandId,
+                command.CorrelationId);
+            if (onAcceptedAsync != null)
+                await onAcceptedAsync(receipt, ct);
+
+            if (ThrowAfterAccepted != null)
+                throw ThrowAfterAccepted;
+
+            var completion = ScriptServiceRunCompletionStatus.Incomplete;
+            var completed = false;
+            foreach (var message in Messages)
+            {
+                await emitAsync(message, ct);
+                if (message.EventCase == AGUIEvent.EventOneofCase.RunFinished)
+                {
+                    completion = ScriptServiceRunCompletionStatus.RunFinished;
+                    completed = true;
+                    break;
+                }
+
+                if (message.EventCase == AGUIEvent.EventOneofCase.RunError)
+                {
+                    completion = ScriptServiceRunCompletionStatus.RunError;
+                    completed = true;
+                    break;
+                }
+            }
+
+            return CommandInteractionResult<ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, ScriptServiceRunCompletionStatus>.Success(
+                receipt,
+                new CommandInteractionFinalizeResult<ScriptServiceRunCompletionStatus>(completion, completed));
         }
     }
-
-    private sealed class ThrowingScriptRuntimeCommandPort(Exception exception) : IScriptRuntimeCommandPort
-    {
-        public Task RunRuntimeAsync(
-            string runtimeActorId,
-            string runId,
-            Any? inputPayload,
-            string scriptRevision,
-            string definitionActorId,
-            string requestedEventType,
-            CancellationToken ct) =>
-            Task.FromException(exception);
-
-        public Task RunRuntimeAsync(
-            string runtimeActorId,
-            string runId,
-            Any? inputPayload,
-            string scriptRevision,
-            string definitionActorId,
-            string requestedEventType,
-            string? scopeId,
-            CancellationToken ct) =>
-            Task.FromException(exception);
-    }
-
-    private sealed record ScriptRuntimeInvocation(
-        string RuntimeActorId,
-        string RunId,
-        Any InputPayload,
-        string ScriptRevision,
-        string DefinitionActorId,
-        string RequestedEventType,
-        string? ScopeId);
 
     private sealed class RecordingProjectionSessionEventHub : Aevatar.CQRS.Projection.Core.Abstractions.IProjectionSessionEventHub<AGUIEvent>
     {

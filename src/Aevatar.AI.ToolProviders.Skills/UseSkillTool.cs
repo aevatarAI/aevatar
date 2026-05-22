@@ -83,7 +83,7 @@ public sealed class UseSkillTool : IAgentTool
         // 2. 缓存未命中或已过期 → 从远程拉取
         if (_remoteFetcher != null)
         {
-            var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
+            var token = AgentToolRequestContext.NyxIdAccessToken;
             if (!string.IsNullOrWhiteSpace(token))
             {
                 skill = await _remoteFetcher.FetchSkillAsync(token, skillName, ct);

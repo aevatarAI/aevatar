@@ -136,10 +136,8 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
         {
             var roundRequest = CloneRequestWithMessages(request, messages);
             var toolCalls = new ResponsesToolCallAccumulator();
-            var previousMetadata = AgentToolRequestContext.CurrentMetadata;
-            try
+            using (AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(toolContextMetadata)))
             {
-                AgentToolRequestContext.CurrentMetadata = toolContextMetadata;
                 await foreach (var chunk in provider.ChatStreamAsync(roundRequest, ct))
                 {
                     var delta = ExtractChunkText(chunk);
@@ -158,10 +156,6 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
                     if (chunk.IsLast)
                         break;
                 }
-            }
-            finally
-            {
-                AgentToolRequestContext.CurrentMetadata = previousMetadata;
             }
 
             var builtToolCalls = toolCalls.BuildToolCalls();
@@ -247,10 +241,8 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
         var toolsByName = request.Tools
             .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
             .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
-        var previousMetadata = AgentToolRequestContext.CurrentMetadata;
-        try
+        using (AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(toolContextMetadata)))
         {
-            AgentToolRequestContext.CurrentMetadata = toolContextMetadata;
             foreach (var toolCall in toolCalls)
             {
                 var result = toolsByName.TryGetValue(toolCall.Name, out var tool)
@@ -265,10 +257,6 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
                 messages.Add(ChatMessage.Tool(toolCall.Id, result));
             }
         }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = previousMetadata;
-        }
     }
 
     private static async Task<(string Text, TokenUsage? Usage, IReadOnlyList<ToolCall> ToolCalls)> CollectStreamCompletionAsync(
@@ -281,10 +269,8 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
         var toolCalls = new ResponsesToolCallAccumulator();
         TokenUsage? usage = null;
 
-        var previousMetadata = AgentToolRequestContext.CurrentMetadata;
-        try
+        using (AgentToolContextScope.Push(AgentToolExecutionContextMapper.FromMetadata(toolContextMetadata)))
         {
-            AgentToolRequestContext.CurrentMetadata = toolContextMetadata;
             await foreach (var chunk in provider.ChatStreamAsync(request, ct))
             {
                 var delta = ExtractChunkText(chunk);
@@ -300,10 +286,6 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
                 if (chunk.IsLast)
                     break;
             }
-        }
-        finally
-        {
-            AgentToolRequestContext.CurrentMetadata = previousMetadata;
         }
 
         return (outputText.ToString(), usage, toolCalls.BuildToolCalls());

@@ -6,6 +6,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.Chat;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using FluentAssertions;
@@ -51,6 +52,10 @@ public sealed class RoleGAgentStateCoverageTests
     private static readonly MethodInfo ApplyPendingApprovalMethod = typeof(RoleGAgent)
         .GetMethod("ApplyPendingApproval", BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new InvalidOperationException("ApplyPendingApproval not found.");
+
+    private static readonly MethodInfo ApplyRemoteApprovalSubmittedMethod = typeof(RoleGAgent)
+        .GetMethod("ApplyRemoteApprovalSubmitted", BindingFlags.NonPublic | BindingFlags.Static)
+        ?? throw new InvalidOperationException("ApplyRemoteApprovalSubmitted not found.");
 
     private static readonly MethodInfo SanitizeFailureMessageMethod = typeof(RoleGAgent)
         .GetMethod("SanitizeFailureMessage", BindingFlags.NonPublic | BindingFlags.Static)
@@ -313,7 +318,7 @@ public sealed class RoleGAgentStateCoverageTests
     }
 
     [Fact]
-    public async Task HandleToolApprovalTimeout_ShouldClearPending_WhenRemoteHandlerMissing()
+    public async Task HandleToolApprovalTimeout_ShouldPersistTerminalFailure_WhenRemotePortMissing()
     {
         using var provider = BuildServiceProvider();
         var agent = CreateRoleAgent(provider, "role-timeout-no-remote");
@@ -335,17 +340,22 @@ public sealed class RoleGAgentStateCoverageTests
 
         agent.State.PendingApproval.Should().BeNull();
         agent.State.Sessions["session-a"].Completed.Should().BeTrue();
-        agent.State.Sessions["session-a"].FinalContent.Should().Contain("approval_timeout: Tool approval timed out and no remote approval handler is configured.");
+        agent.State.Sessions["session-a"].FinalContent.Should().Contain("approval_timeout: Tool approval timed out and no remote approval port is configured.");
     }
 
     [Fact]
-    public async Task HandleToolApprovalTimeout_ShouldClearPending_WhenRemoteDenied()
+    public async Task HandleToolApprovalTimeout_ShouldSubmitRemoteApprovalAndPersistRemoteBinding()
     {
         using var provider = BuildServiceProvider();
+        var remotePort = new StubRemoteApprovalPort(
+            submit: request => Task.FromResult(new RemoteToolApprovalSubmission(
+                "remote-1",
+                DateTimeOffset.FromUnixTimeSeconds(1_800))),
+            status: _ => throw new InvalidOperationException("status should not be called"));
         var agent = CreateRoleAgent(
             provider,
-            "role-timeout-denied",
-            new StubRemoteApprovalHandler(_ => Task.FromResult(ToolApprovalResult.Denied("not approved"))));
+            "role-timeout-submit",
+            remotePort);
         await agent.ActivateAsync();
         agent.State.PendingApproval = new PendingToolApprovalState
         {
@@ -363,20 +373,28 @@ public sealed class RoleGAgentStateCoverageTests
             SessionId = "session-a",
         });
 
-        agent.State.PendingApproval.Should().BeNull();
-        agent.State.Sessions["session-a"].Completed.Should().BeTrue();
-        agent.State.Sessions["session-a"].FinalContent.Should().Contain("approval_denied: not approved");
-        AgentToolRequestContext.CurrentMetadata.Should().BeNull();
+        agent.State.PendingApproval.Should().NotBeNull();
+        agent.State.PendingApproval!.RemoteApprovalId.Should().Be("remote-1");
+        agent.State.PendingApproval.RemoteStatusCheckAttempt.Should().Be(1);
+        agent.State.PendingApproval.RemoteApprovalExpiresAtUnixMs.Should()
+            .Be(DateTimeOffset.FromUnixTimeSeconds(1_800).ToUnixTimeMilliseconds());
+        remotePort.Submitted.Should().ContainSingle()
+            .Which.Items[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("token-1");
+        remotePort.StatusQueries.Should().BeEmpty();
+        ((RecordingRuntimeCallbackScheduler)provider.GetRequiredService<IActorRuntimeCallbackScheduler>())
+            .TimeoutRequests.Should().ContainSingle(x =>
+                x.CallbackId == "tool-approval-remote-status-req-1-remote-1-1" &&
+                x.ActorId == "role-timeout-submit");
     }
 
     [Fact]
-    public async Task HandleToolApprovalTimeout_ShouldClearPending_WhenRemoteHandlerThrows()
+    public async Task HandleToolApprovalTimeout_ShouldPersistTerminalFailure_WhenRemoteSubmitThrows()
     {
         using var provider = BuildServiceProvider();
-        var agent = CreateRoleAgent(
-            provider,
-            "role-timeout-throws",
-            new StubRemoteApprovalHandler(_ => throw new InvalidOperationException("remote failed")));
+        var remotePort = new StubRemoteApprovalPort(
+            submit: _ => throw new InvalidOperationException("submit failed"),
+            status: _ => throw new InvalidOperationException("status should not be called"));
+        var agent = CreateRoleAgent(provider, "role-timeout-submit-throws", remotePort);
         await agent.ActivateAsync();
         agent.State.PendingApproval = new PendingToolApprovalState
         {
@@ -394,6 +412,288 @@ public sealed class RoleGAgentStateCoverageTests
         });
 
         agent.State.PendingApproval.Should().BeNull();
+        agent.State.Sessions["session-a"].Completed.Should().BeTrue();
+        agent.State.Sessions["session-a"].FinalContent.Should()
+            .Contain("approval_timeout: Remote approval submit failed: submit failed");
+        remotePort.StatusQueries.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleRemoteApprovalStatusCheck_WhenPending_ShouldScheduleNextCheckOnly()
+    {
+        using var provider = BuildServiceProvider();
+        var remotePort = new StubRemoteApprovalPort(
+            submit: _ => throw new InvalidOperationException("submit should not be called"),
+            status: _ => Task.FromResult(new RemoteToolApprovalStatusSnapshot(
+                RemoteToolApprovalStatus.Pending,
+                ExpiresAt: DateTimeOffset.FromUnixTimeSeconds(2_000))));
+        var agent = CreateRoleAgent(
+            provider,
+            "role-status-pending",
+            remotePort);
+        await agent.ActivateAsync();
+        agent.State.PendingApproval = new PendingToolApprovalState
+        {
+            RequestId = "req-1",
+            SessionId = "session-a",
+            ToolName = "dangerous_tool",
+            ToolCallId = "call-1",
+            ArgumentsJson = "{}",
+            RemoteApprovalId = "remote-1",
+            RemoteStatusCheckAttempt = 1,
+        };
+
+        await agent.HandleRemoteApprovalStatusCheck(new ToolApprovalRemoteStatusCheckFiredEvent
+        {
+            RequestId = "req-1",
+            SessionId = "session-a",
+            RemoteApprovalId = "remote-1",
+            Attempt = 1,
+        });
+
+        agent.State.PendingApproval.Should().NotBeNull();
+        agent.State.PendingApproval!.RemoteStatusCheckAttempt.Should().Be(2);
+        agent.State.PendingApproval.RemoteApprovalExpiresAtUnixMs.Should()
+            .Be(DateTimeOffset.FromUnixTimeSeconds(2_000).ToUnixTimeMilliseconds());
+        ((RecordingRuntimeCallbackScheduler)provider.GetRequiredService<IActorRuntimeCallbackScheduler>())
+            .TimeoutRequests.Should().ContainSingle(x =>
+                x.CallbackId == "tool-approval-remote-status-req-1-remote-1-2" &&
+                x.ActorId == "role-status-pending");
+    }
+
+    [Fact]
+    public async Task HandleRemoteApprovalStatusCheck_WhenPortMissing_ShouldPersistTerminalFailure()
+    {
+        using var provider = BuildServiceProvider();
+        var agent = CreateRoleAgent(provider, "role-status-no-remote");
+        await agent.ActivateAsync();
+        agent.State.PendingApproval = new PendingToolApprovalState
+        {
+            RequestId = "req-1",
+            SessionId = "session-a",
+            ToolName = "dangerous_tool",
+            ToolCallId = "call-1",
+            ArgumentsJson = "{}",
+            RemoteApprovalId = "remote-1",
+            RemoteStatusCheckAttempt = 1,
+        };
+
+        await agent.HandleRemoteApprovalStatusCheck(new ToolApprovalRemoteStatusCheckFiredEvent
+        {
+            RequestId = "req-1",
+            SessionId = "session-a",
+            RemoteApprovalId = "remote-1",
+            Attempt = 1,
+        });
+
+        agent.State.PendingApproval.Should().BeNull();
+        agent.State.Sessions["session-a"].Completed.Should().BeTrue();
+        agent.State.Sessions["session-a"].FinalContent.Should()
+            .Contain("approval_timeout: Tool approval timed out and no remote approval port is configured.");
+    }
+
+    [Fact]
+    public async Task HandleRemoteApprovalStatusCheck_WhenStatusThrows_ShouldAdvanceAttemptAndKeepPending()
+    {
+        using var provider = BuildServiceProvider();
+        var remotePort = new StubRemoteApprovalPort(
+            submit: _ => throw new InvalidOperationException("submit should not be called"),
+            status: _ => throw new InvalidOperationException("status failed"));
+        var agent = CreateRoleAgent(provider, "role-status-throws", remotePort);
+        await agent.ActivateAsync();
+        agent.State.PendingApproval = new PendingToolApprovalState
+        {
+            RequestId = "req-1",
+            SessionId = "session-a",
+            ToolName = "dangerous_tool",
+            ToolCallId = "call-1",
+            ArgumentsJson = "{}",
+            RemoteApprovalId = "remote-1",
+            RemoteStatusCheckAttempt = 1,
+            RemoteApprovalExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+        };
+
+        await agent.HandleRemoteApprovalStatusCheck(new ToolApprovalRemoteStatusCheckFiredEvent
+        {
+            RequestId = "req-1",
+            SessionId = "session-a",
+            RemoteApprovalId = "remote-1",
+            Attempt = 1,
+        });
+
+        agent.State.PendingApproval.Should().NotBeNull();
+        agent.State.PendingApproval!.RemoteStatusCheckAttempt.Should().Be(2);
+        agent.State.PendingApproval.RemoteApprovalId.Should().Be("remote-1");
+        agent.State.Sessions.ContainsKey("session-a").Should().BeFalse();
+        remotePort.StatusQueries.Should().ContainSingle();
+        ((RecordingRuntimeCallbackScheduler)provider.GetRequiredService<IActorRuntimeCallbackScheduler>())
+            .TimeoutRequests.Should().ContainSingle(x =>
+                x.CallbackId == "tool-approval-remote-status-req-1-remote-1-2" &&
+                x.ActorId == "role-status-throws");
+    }
+
+    [Fact]
+    public async Task HandleRemoteApprovalStatusCheck_WhenUnknownReachesMaxAttempts_ShouldPersistTerminalFailure()
+    {
+        using var provider = BuildServiceProvider();
+        var remotePort = new StubRemoteApprovalPort(
+            submit: _ => throw new InvalidOperationException("submit should not be called"),
+            status: _ => Task.FromResult(new RemoteToolApprovalStatusSnapshot(
+                RemoteToolApprovalStatus.Unknown,
+                "still unknown")));
+        var agent = CreateRoleAgent(provider, "role-status-max-attempts", remotePort);
+        await agent.ActivateAsync();
+        agent.State.PendingApproval = new PendingToolApprovalState
+        {
+            RequestId = "req-1",
+            SessionId = "session-a",
+            ToolName = "dangerous_tool",
+            ToolCallId = "call-1",
+            ArgumentsJson = "{}",
+            RemoteApprovalId = "remote-1",
+            RemoteStatusCheckAttempt = 23,
+            RemoteApprovalExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+        };
+
+        await agent.HandleRemoteApprovalStatusCheck(new ToolApprovalRemoteStatusCheckFiredEvent
+        {
+            RequestId = "req-1",
+            SessionId = "session-a",
+            RemoteApprovalId = "remote-1",
+            Attempt = 23,
+        });
+
+        agent.State.PendingApproval.Should().BeNull();
+        agent.State.Sessions["session-a"].Completed.Should().BeTrue();
+        agent.State.Sessions["session-a"].FinalContent.Should()
+            .Contain("approval_timeout: still unknown");
+        remotePort.StatusQueries.Should().ContainSingle();
+        ((RecordingRuntimeCallbackScheduler)provider.GetRequiredService<IActorRuntimeCallbackScheduler>())
+            .TimeoutRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleRemoteApprovalStatusCheck_WhenApproved_ShouldResumeThroughToolApprovalDecision()
+    {
+        using var provider = BuildServiceProvider();
+        var remotePort = new StubRemoteApprovalPort(
+            submit: _ => throw new InvalidOperationException("submit should not be called"),
+            status: _ => Task.FromResult(new RemoteToolApprovalStatusSnapshot(
+                RemoteToolApprovalStatus.Approved,
+                "approved remotely")));
+        var agent = CreateRoleAgent(
+            provider,
+            "role-status-approved",
+            remotePort,
+            toolSources:
+            [
+                new StaticToolSource(
+                [
+                    new DelegateTool("dangerous_tool", _ => "remote-result")
+                ])
+            ]);
+        var publisher = new RecordingEventPublisher();
+        agent.EventPublisher = publisher;
+        await agent.ActivateAsync();
+        agent.State.PendingApproval = new PendingToolApprovalState
+        {
+            RequestId = "req-1",
+            SessionId = "session-a",
+            ToolName = "dangerous_tool",
+            ToolCallId = "call-1",
+            ArgumentsJson = "{}",
+            RemoteApprovalId = "remote-1",
+            RemoteStatusCheckAttempt = 1,
+        };
+
+        await agent.HandleRemoteApprovalStatusCheck(new ToolApprovalRemoteStatusCheckFiredEvent
+        {
+            RequestId = "req-1",
+            SessionId = "session-a",
+            RemoteApprovalId = "remote-1",
+            Attempt = 1,
+        });
+
+        agent.State.PendingApproval.Should().BeNull();
+        publisher.Published.OfType<ChatRequestEvent>().Should()
+            .ContainSingle(x => x.Prompt.Contains("remote-result"));
+    }
+
+    [Theory]
+    [InlineData(RemoteToolApprovalStatus.Rejected, "approval_denied")]
+    [InlineData(RemoteToolApprovalStatus.Expired, "approval_timeout")]
+    public async Task HandleRemoteApprovalStatusCheck_WhenTerminal_ShouldPersistTerminalFailureAndClearPending(
+        RemoteToolApprovalStatus status,
+        string reasonCode)
+    {
+        using var provider = BuildServiceProvider();
+        var remotePort = new StubRemoteApprovalPort(
+            submit: _ => throw new InvalidOperationException("submit should not be called"),
+            status: _ => Task.FromResult(new RemoteToolApprovalStatusSnapshot(status, "terminal")));
+        var agent = CreateRoleAgent(provider, $"role-status-{status}", remotePort);
+        await agent.ActivateAsync();
+        agent.State.PendingApproval = new PendingToolApprovalState
+        {
+            RequestId = "req-1",
+            SessionId = "session-a",
+            ToolName = "dangerous_tool",
+            ToolCallId = "call-1",
+            ArgumentsJson = "{}",
+            RemoteApprovalId = "remote-1",
+            RemoteStatusCheckAttempt = 1,
+        };
+
+        await agent.HandleRemoteApprovalStatusCheck(new ToolApprovalRemoteStatusCheckFiredEvent
+        {
+            RequestId = "req-1",
+            SessionId = "session-a",
+            RemoteApprovalId = "remote-1",
+            Attempt = 1,
+        });
+
+        agent.State.PendingApproval.Should().BeNull();
+        agent.State.Sessions["session-a"].Completed.Should().BeTrue();
+        agent.State.Sessions["session-a"].FinalContent.Should().Contain($"{reasonCode}: terminal");
+    }
+
+    [Fact]
+    public async Task HandleRemoteApprovalStatusCheck_ShouldIgnoreStaleRequestOrRemoteId()
+    {
+        using var provider = BuildServiceProvider();
+        var remotePort = new StubRemoteApprovalPort(
+            submit: _ => throw new InvalidOperationException("submit should not be called"),
+            status: _ => throw new InvalidOperationException("stale event should not read status"));
+        var agent = CreateRoleAgent(provider, "role-status-stale", remotePort);
+        await agent.ActivateAsync();
+        agent.State.PendingApproval = new PendingToolApprovalState
+        {
+            RequestId = "req-1",
+            SessionId = "session-a",
+            ToolName = "dangerous_tool",
+            ToolCallId = "call-1",
+            ArgumentsJson = "{}",
+            RemoteApprovalId = "remote-1",
+            RemoteStatusCheckAttempt = 2,
+        };
+
+        await agent.HandleRemoteApprovalStatusCheck(new ToolApprovalRemoteStatusCheckFiredEvent
+        {
+            RequestId = "req-1",
+            SessionId = "session-a",
+            RemoteApprovalId = "remote-2",
+            Attempt = 2,
+        });
+        await agent.HandleRemoteApprovalStatusCheck(new ToolApprovalRemoteStatusCheckFiredEvent
+        {
+            RequestId = "req-1",
+            SessionId = "session-a",
+            RemoteApprovalId = "remote-1",
+            Attempt = 1,
+        });
+
+        agent.State.PendingApproval.Should().NotBeNull();
+        agent.State.PendingApproval!.RemoteApprovalId.Should().Be("remote-1");
+        remotePort.StatusQueries.Should().BeEmpty();
     }
 
     [Fact]
@@ -490,6 +790,34 @@ public sealed class RoleGAgentStateCoverageTests
         pending.ArgumentsJson.Should().Be("{\"x\":1}");
         pending.IsDestructive.Should().BeTrue();
         pending.Metadata["trace-id"].Should().Be("trace-1");
+    }
+
+    [Fact]
+    public void ApplyRemoteApprovalSubmitted_ShouldStoreRemoteBinding()
+    {
+        var state = new RoleGAgentState
+        {
+            PendingApproval = new PendingToolApprovalState
+            {
+                RequestId = "req-1",
+            },
+        };
+
+        var next = InvokePrivateStatic<RoleGAgentState>(
+            ApplyRemoteApprovalSubmittedMethod,
+            state,
+            new RemoteToolApprovalSubmittedEvent
+            {
+                RequestId = "req-1",
+                RemoteApprovalId = "remote-1",
+                StatusCheckAttempt = 3,
+                ExpiresAtUnixMs = 1234,
+            });
+
+        next.PendingApproval.Should().NotBeNull();
+        next.PendingApproval!.RemoteApprovalId.Should().Be("remote-1");
+        next.PendingApproval.RemoteStatusCheckAttempt.Should().Be(3);
+        next.PendingApproval.RemoteApprovalExpiresAtUnixMs.Should().Be(1234);
     }
 
     [Fact]
@@ -774,6 +1102,7 @@ public sealed class RoleGAgentStateCoverageTests
         return new ServiceCollection()
             .AddSingleton<IEventStore, InMemoryEventStoreForTests>()
             .AddSingleton<EventSourcingRuntimeOptions>()
+            .AddSingleton<IActorRuntimeCallbackScheduler, RecordingRuntimeCallbackScheduler>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
     }
@@ -781,10 +1110,10 @@ public sealed class RoleGAgentStateCoverageTests
     private static RoleGAgent CreateRoleAgent(
         IServiceProvider provider,
         string actorId,
-        IToolApprovalHandler? remoteApprovalHandler = null,
+        IRemoteToolApprovalPort? remoteToolApprovalPort = null,
         IEnumerable<IAgentToolSource>? toolSources = null)
     {
-        var agent = new TestRoleGAgent(remoteApprovalHandler, toolSources ?? Enumerable.Empty<IAgentToolSource>())
+        var agent = new TestRoleGAgent(remoteToolApprovalPort, toolSources ?? Enumerable.Empty<IAgentToolSource>())
         {
             Services = provider,
             EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
@@ -834,18 +1163,63 @@ public sealed class RoleGAgentStateCoverageTests
     }
 
     private sealed class TestRoleGAgent(
-        IToolApprovalHandler? remoteApprovalHandler,
+        IRemoteToolApprovalPort? remoteToolApprovalPort,
         IEnumerable<IAgentToolSource> toolSources)
-        : RoleGAgent(toolSources: toolSources)
+        : RoleGAgent(toolSources: toolSources, remoteToolApprovalPort: remoteToolApprovalPort)
     {
-        protected override IToolApprovalHandler? ResolveRemoteApprovalHandler() => remoteApprovalHandler;
     }
 
-    private sealed class StubRemoteApprovalHandler(Func<ToolApprovalRequest, Task<ToolApprovalResult>> handler)
-        : IToolApprovalHandler
+    private sealed class StubRemoteApprovalPort(
+        Func<RemoteToolApprovalRequest, Task<RemoteToolApprovalSubmission>> submit,
+        Func<RemoteToolApprovalStatusQuery, Task<RemoteToolApprovalStatusSnapshot>> status)
+        : IRemoteToolApprovalPort
     {
-        public Task<ToolApprovalResult> RequestApprovalAsync(ToolApprovalRequest request, CancellationToken ct) =>
-            handler(request);
+        public List<RemoteToolApprovalRequest> Submitted { get; } = [];
+        public List<RemoteToolApprovalStatusQuery> StatusQueries { get; } = [];
+
+        public Task<RemoteToolApprovalSubmission> SubmitAsync(RemoteToolApprovalRequest request, CancellationToken ct)
+        {
+            Submitted.Add(request);
+            return submit(request);
+        }
+
+        public Task<RemoteToolApprovalStatusSnapshot> GetStatusAsync(RemoteToolApprovalStatusQuery query, CancellationToken ct)
+        {
+            StatusQueries.Add(query);
+            return status(query);
+        }
+    }
+
+    private sealed class RecordingRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        public List<RuntimeCallbackTimeoutRequest> TimeoutRequests { get; } = [];
+
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default)
+        {
+            TimeoutRequests.Add(request);
+            return Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                TimeoutRequests.Count,
+                RuntimeCallbackBackend.InMemory));
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                1,
+                RuntimeCallbackBackend.InMemory));
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default) =>
+            Task.CompletedTask;
     }
 
     private sealed class StaticToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource

@@ -75,6 +75,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
         services.TryAddSingleton<IStaticGAgentStreamInvocationPort<AGUIEvent>, StaticGAgentStreamInvocationApplicationService>();
         services.AddScopeGAgentDraftRunInteraction();
+        services.AddScriptServiceRunInteraction();
         services.AddOptions<ScopeWorkflowCapabilityOptions>()
             .Bind(configuration.GetSection(ScopeWorkflowCapabilityOptions.SectionName));
         services.TryAddSingleton<ScopeWorkflowQueryApplicationService>();

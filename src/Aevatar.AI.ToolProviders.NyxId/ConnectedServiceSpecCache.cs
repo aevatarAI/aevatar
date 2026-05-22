@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Net.Http.Headers;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -10,18 +9,15 @@ public sealed class ConnectedServiceSpecCache : IConnectedServiceSpecSource, IDi
 {
     public const string HttpClientName = "nyxid-connected-service-spec-cache";
 
-    private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(30);
     private static readonly TimeSpan FetchTimeout = TimeSpan.FromSeconds(5);
 
     private readonly IHttpClientFactory? _httpClientFactory;
     private readonly HttpClient? _manualHttpClient;
     private readonly NyxIdToolOptions _options;
     private readonly ILogger _logger;
-    private readonly ConcurrentDictionary<string, CacheEntry> _cache = new(StringComparer.OrdinalIgnoreCase);
     private readonly bool _ownsHttpClient;
     private int _disposed;
 
-    // Fix (remote-ci/host-composition-smoke): see NyxIdSpecCatalog.cs for rationale.
     // Internal manual ctor avoids DI ambiguity while remaining callable from tests via
     // InternalsVisibleTo("Aevatar.AI.Tests").
     internal ConnectedServiceSpecCache(
@@ -47,7 +43,7 @@ public sealed class ConnectedServiceSpecCache : IConnectedServiceSpecSource, IDi
         _httpClientFactory = httpClientFactory;
         // Refactor (iter10/cluster-019):
         // Old: singleton cache pinned one raw HttpClient for the process lifetime.
-        // New: singleton cache owns cache state only; named clients come from IHttpClientFactory per fetch.
+        // New: spec fetches use named clients from IHttpClientFactory without keeping process-local spec state.
         _logger = logger ?? NullLogger<ConnectedServiceSpecCache>.Instance;
     }
 
@@ -58,16 +54,15 @@ public sealed class ConnectedServiceSpecCache : IConnectedServiceSpecSource, IDi
         string accessToken,
         CancellationToken ct = default)
     {
+        // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
+        //   Old pattern: NyxIdSpecCatalog + SpecFetchToken + IServiceDiscoveryCache 在仓库内建第二 catalog(NyxID 真实源的影子)
+        //   New principle: NyxID 是唯一真实源; connected-service spec hints fetch live per request and never keep OpenAPI facts in process-local snapshots.
         if (string.IsNullOrWhiteSpace(slug))
             return null;
 
         var url = ResolveSpecUrl(serviceId, specUrl);
         if (url is null)
             return null;
-
-        var cacheKey = $"{slug}|{url}";
-        if (_cache.TryGetValue(cacheKey, out var entry) && !entry.IsExpired)
-            return entry.Operations;
 
         try
         {
@@ -96,9 +91,8 @@ public sealed class ConnectedServiceSpecCache : IConnectedServiceSpecSource, IDi
                 var json = await response.Content.ReadAsStringAsync(cts.Token);
                 var operations = OpenApiSpecParser.ParseSpec(json, slug);
 
-                _cache[cacheKey] = new CacheEntry(operations, DateTime.UtcNow + CacheTtl);
                 _logger.LogInformation(
-                    "ConnectedServiceSpecCache: cached {Count} operations for '{Slug}'",
+                    "ConnectedServiceSpecCache: fetched {Count} operations for '{Slug}'",
                     operations.Length, slug);
 
                 return operations;
@@ -161,10 +155,5 @@ public sealed class ConnectedServiceSpecCache : IConnectedServiceSpecSource, IDi
 
         if (_ownsHttpClient)
             _manualHttpClient?.Dispose();
-    }
-
-    private sealed record CacheEntry(OperationCard[] Operations, DateTime ExpiresAt)
-    {
-        public bool IsExpired => DateTime.UtcNow >= ExpiresAt;
     }
 }

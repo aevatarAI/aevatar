@@ -56,7 +56,7 @@ Pick the test projects whose code you changed; do NOT run the full solution test
 
 ### Step 4 — Write FIX_REPORT
 
-Write `${FIX_REPORT_PATH}` with this structure:
+Write `${FIX_OUTPUT_PATH}` with this structure:
 
 ```markdown
 # Fix report for PR ${PR_NUMBER} round ${FIX_ROUND}
@@ -96,6 +96,7 @@ End your output with EXACTLY one of:
 - **You do NOT touch files outside the PR's diff unless emitting `SCOPE_EXTEND` first.**
 - **You do NOT modify other cluster's PRs** (only this PR's HEAD branch).
 - **False-positive demands must have proof** in FIX_REPORT — don't dismiss without evidence.
+- **FIX_REPORT 写入路径强制 `${FIX_OUTPUT_PATH}`**(典型 `.refactor-loop/runs/fix-pr<N>-r<N>.md`)— **禁止**写到 repo root `FIX_REPORT.md`(会污染 worktree + rebase conflict)。若 `${FIX_OUTPUT_PATH}` 空(env var 漏传),emit `FIX_BLOCKED:env-missing:FIX_OUTPUT_PATH` 不要瞎写默认路径。
 - **A demand citing CLAUDE.md verbatim is presumed valid** — burden of proof is on you to show it's a misreading.
 
 ## Anti-patterns (forbidden — emit FIX_BLOCKED instead of doing these)

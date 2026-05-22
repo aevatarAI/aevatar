@@ -237,14 +237,14 @@ public sealed class WorkflowRunOrchestrationComponentTests
     }
 
     [Fact]
-    public async Task WorkflowRunCommandTargetBinder_ShouldAttachLeaseAndSink_OnSuccess()
+    public async Task WorkflowRunObservationLifecycle_ShouldAttachLeaseAndSink_OnSuccess()
     {
         var projectionPort = new FakeProjectionPort
         {
             EnsureLease = new FakeProjectionLease("actor-1", "cmd-1"),
         };
         var actorPort = new FakeWorkflowRunActorPort();
-        var binder = new WorkflowRunCommandTargetBinder(projectionPort);
+        var lifecycle = new WorkflowRunObservationLifecycle(projectionPort);
         var target = new WorkflowRunCommandTarget(
             new FakeActor("actor-1"),
             "direct",
@@ -259,10 +259,9 @@ public sealed class WorkflowRunOrchestrationComponentTests
             "corr-1",
             new Dictionary<string, string>());
 
-        var result = await binder.BindAsync(
+        var result = await lifecycle.BindAsync(
             new WorkflowChatRunRequest("hello", "direct", null),
-            target,
-            context,
+            CreateExecution(target, context),
             CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
@@ -273,14 +272,14 @@ public sealed class WorkflowRunOrchestrationComponentTests
     }
 
     [Fact]
-    public async Task WorkflowRunCommandTargetBinder_ShouldRollbackCreatedActors_WhenProjectionLeaseIsUnavailable()
+    public async Task WorkflowRunObservationLifecycle_ShouldRollbackCreatedActors_WhenProjectionLeaseIsUnavailable()
     {
         var projectionPort = new FakeProjectionPort
         {
             EnsureLease = null,
         };
         var actorPort = new FakeWorkflowRunActorPort();
-        var binder = new WorkflowRunCommandTargetBinder(projectionPort);
+        var lifecycle = new WorkflowRunObservationLifecycle(projectionPort);
         var target = new WorkflowRunCommandTarget(
             new FakeActor("actor-1"),
             "direct",
@@ -295,10 +294,9 @@ public sealed class WorkflowRunOrchestrationComponentTests
             "corr-1",
             new Dictionary<string, string>());
 
-        var result = await binder.BindAsync(
+        var result = await lifecycle.BindAsync(
             new WorkflowChatRunRequest("hello", "direct", null),
-            target,
-            context,
+            CreateExecution(target, context),
             CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
@@ -307,7 +305,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
     }
 
     [Fact]
-    public async Task WorkflowRunCommandTargetBinder_ShouldRollbackCreatedActors_WhenAttachFails()
+    public async Task WorkflowRunObservationLifecycle_ShouldRollbackCreatedActors_WhenAttachFails()
     {
         var projectionPort = new FakeProjectionPort
         {
@@ -315,7 +313,7 @@ public sealed class WorkflowRunOrchestrationComponentTests
             AttachException = new InvalidOperationException("attach failed"),
         };
         var actorPort = new FakeWorkflowRunActorPort();
-        var binder = new WorkflowRunCommandTargetBinder(projectionPort);
+        var lifecycle = new WorkflowRunObservationLifecycle(projectionPort);
         var target = new WorkflowRunCommandTarget(
             new FakeActor("actor-1"),
             "direct",
@@ -330,16 +328,30 @@ public sealed class WorkflowRunOrchestrationComponentTests
             "corr-1",
             new Dictionary<string, string>());
 
-        var act = () => binder.BindAsync(
+        var act = () => lifecycle.BindAsync(
             new WorkflowChatRunRequest("hello", "direct", null),
-            target,
-            context,
+            CreateExecution(target, context),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("attach failed");
         actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
     }
+
+    private static CommandDispatchExecution<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt> CreateExecution(
+        WorkflowRunCommandTarget target,
+        CommandContext context) =>
+        new()
+        {
+            Target = target,
+            Context = context,
+            Envelope = new EventEnvelope { Id = "evt-1" },
+            Receipt = new WorkflowChatRunAcceptedReceipt(
+                target.ActorId,
+                target.WorkflowName,
+                context.CommandId,
+                context.CorrelationId),
+        };
 
     private sealed class FakeWorkflowRunActorResolver : IWorkflowRunActorResolver
     {

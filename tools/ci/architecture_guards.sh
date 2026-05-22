@@ -520,7 +520,9 @@ function register_base(class_name, base_clause, parts, first_base)
   if (line ~ /^[[:space:]]*\/\//)
     next;
 
-  if (line ~ /(^|[[:space:](;])(this\.)?State\.[A-Za-z_][A-Za-z0-9_]*[[:space:]]*(\+\+|--|[+*%\/-]?=)/)
+  # match State.Foo = / += / -= / *= / /= / %= / ++ / -- (real mutations)
+  # exclude State.Foo == (comparison) — `=` must NOT be followed by another `=`
+  if (line ~ /(^|[[:space:](;])(this\.)?State\.[A-Za-z_][A-Za-z0-9_]*[[:space:]]*(\+\+|--|[+*%\/-]?=[^=])/)
   {
     state_mutation[FILENAME] = state_mutation[FILENAME] sprintf("%s:%d:%s\n", FILENAME, FNR, line);
   }
@@ -657,6 +659,18 @@ fi
 
 if rg -n "Dictionary<|ConcurrentDictionary<|HashSet<|Queue<" src/workflow/Aevatar.Workflow.Core/Modules/WorkflowCallModule.cs; then
   echo "WorkflowCallModule must stay stateless; workflow_call fact state must live in WorkflowGAgent persisted state."
+  exit 1
+fi
+
+tool_context_metadata_hits="$(
+  rg -n "AgentToolRequestContext\\.(CurrentMetadata|TryGet\\()" src agents \
+    -g '*.cs' \
+    -g '!src/Aevatar.AI.Abstractions/ToolProviders/AgentToolRequestContext.cs' || true
+)"
+
+if [ -n "${tool_context_metadata_hits}" ]; then
+  echo "${tool_context_metadata_hits}"
+  echo "Agent tool control facts must use typed AgentToolExecutionContext accessors. CurrentMetadata/TryGet are legacy mapper shims only."
   exit 1
 fi
 

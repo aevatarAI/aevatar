@@ -178,6 +178,9 @@ internal static class MessagesApiEndpoints
             anthropicPrefixed = true;
         }
 
+        // Refactor (iter26/cluster-026-responses-route-user-catalog-cache):
+        //   Old pattern: Responses/Messages routes resolve `vendor/model` by reading a singleton per-bearer in-process cache of NyxID user LLM service catalog facts.
+        //   New principle: Resolve model route from the current catalog read in the request flow; do not store user route facts in singleton process memory.
         // OpenRouter-style vendor prefix routing (same as Path A). If the
         // model is `vendor/name`, resolve the route value through the catalog;
         // unknown slugs fall through to gateway default.

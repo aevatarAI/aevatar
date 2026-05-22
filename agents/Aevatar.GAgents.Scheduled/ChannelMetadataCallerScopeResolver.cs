@@ -37,14 +37,14 @@ public sealed class ChannelMetadataCallerScopeResolver : ICallerScopeResolver
 
     public async Task<OwnerScope?> TryResolveAsync(CancellationToken ct = default)
     {
-        var platform = NormalizeOptional(AgentToolRequestContext.TryGet(ChannelMetadataKeys.Platform));
+        var platform = NormalizeOptional(AgentToolRequestContext.ChannelPlatform);
         if (platform is null)
         {
             // Not a channel-surface request; let the composite try the next resolver.
             return null;
         }
 
-        var senderId = NormalizeOptional(AgentToolRequestContext.TryGet(ChannelMetadataKeys.SenderId));
+        var senderId = NormalizeOptional(AgentToolRequestContext.ChannelSenderId);
         if (senderId is null)
         {
             throw new CallerScopeUnavailableException(
@@ -53,14 +53,14 @@ public sealed class ChannelMetadataCallerScopeResolver : ICallerScopeResolver
 
         // Bot's registration scope. Empty/missing is a misconfiguration on a channel surface;
         // every channel bot has a registration scope by construction.
-        var registrationScopeId = NormalizeOptional(AgentToolRequestContext.TryGet(ChannelMetadataKeys.RegistrationScopeId));
+        var registrationScopeId = NormalizeOptional(AgentToolRequestContext.ChannelRegistrationScopeId ?? AgentToolRequestContext.ScopeId);
         if (registrationScopeId is null)
         {
             throw new CallerScopeUnavailableException(
                 $"Channel platform metadata is present (platform=\"{platform}\") but scope_id is missing. Cannot scope agent operations safely.");
         }
 
-        var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
+        var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
         {
             throw new CallerScopeUnavailableException(

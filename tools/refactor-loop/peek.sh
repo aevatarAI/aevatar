@@ -21,10 +21,13 @@ git fetch origin --quiet 2>/dev/null
 
 echo "═══════════════ peek $(date -u +%H:%M:%SZ) ═══════════════"
 
-# 0. CRITICAL: 最近 6h maintainer 评论(non-AI 即非 sentinel)
-# per Auric 2026-05-21 漏读 #720 4h+ "如果没什么用就删了吧" directive 事故
+# 0. CRITICAL: maintainer 评论(non-AI 即非 sentinel)
+# per Auric 2026-05-21 漏读 #720 4h+ + 2026-05-22 #779 8h 漏读事故
+# 规则:
+#   (a) 最近 12h 任何 issue/PR 的 maintainer 评论 — 显示
+#   (b) stuck-label issue 的 LATEST maintainer 评论 — 无论多久都显示(避免漏读)
 echo ""
-echo "▍🚨 最近 6h maintainer 评论(read first!):"
+echo "▍🚨 maintainer 评论(read first — 漏读 = controller bug):"
 {
   gh issue list --label "auto-loop" --state open --json number 2>/dev/null | python3 -c "import json,sys; [print(f'i{x[\"number\"]}') for x in json.load(sys.stdin)]" 2>/dev/null
   gh pr list --label "auto-loop" --state open --json number 2>/dev/null | python3 -c "import json,sys; [print(f'p{x[\"number\"]}') for x in json.load(sys.stdin)]" 2>/dev/null
@@ -44,18 +47,27 @@ try:
     data = json.load(sys.stdin)
     cs = data.get('comments', [])
 except: sys.exit(0)
-non_ai = [c for c in cs if '⟦AI:AUTO-LOOP⟧' not in (c.get('body','') or '') and not (c.get('body','') or '').lstrip().startswith(('## 📊', '## 🤖', '## ✅', '## 🆘'))]
+# non-AI = not AI sentinel, not status banner prefix, not codecov bot
+non_ai = [c for c in cs if '⟦AI:AUTO-LOOP⟧' not in (c.get('body','') or '')
+          and not (c.get('body','') or '').lstrip().startswith(('## 📊', '## 🤖', '## ✅', '## 🆘'))
+          and not (c.get('author',{}) or {}).get('login','').endswith('[bot]')]
 if not non_ai: sys.exit(0)
 last = max(non_ai, key=lambda c: c.get('createdAt',''))
+# Find latest AI reply (any AI sentinel or status banner)
+ai = [c for c in cs if c.get('createdAt','') > last.get('createdAt','') and
+      ('⟦AI:AUTO-LOOP⟧' in (c.get('body','') or '') or (c.get('body','') or '').lstrip().startswith(('## 📊', '## 🤖', '## ✅', '## 🆘')))]
+has_ai_reply = bool(ai)
 ts_str = last.get('createdAt','').rstrip('Z')
 try:
     ts = datetime.fromisoformat(ts_str).replace(tzinfo=timezone.utc)
 except: sys.exit(0)
 delta_h = (datetime.now(timezone.utc) - ts).total_seconds() / 3600
-if delta_h > 6: sys.exit(0)
+# 12h cutoff OR no AI reply since(无回应必显示,无论多久)
+if delta_h > 12 and has_ai_reply: sys.exit(0)
+flag = '⏰ no-AI-reply' if not has_ai_reply else ''
 author = (last.get('author', {}) or {}).get('login', '?')
 body = (last.get('body','') or '').replace('\n',' ')[:200]
-print(f'  [{author}] ${num} ${kind} ({delta_h:.1f}h ago): {body}')
+print(f'  {flag} [{author}] ${num} ${kind} ({delta_h:.1f}h ago): {body}')
 " 2>/dev/null
 done
 
@@ -161,6 +173,55 @@ gh pr list --label "auto-loop" --state open --json number,title --jq '.[].number
   # Merge rule: 0 reject AND >= 2 approve (mixed comment OK)
   if [ "$reject" = "0" ] && [ "$approve" -ge 2 ]; then
     echo "  ✅ PR #${pr_num} [${state}] r${max_round}: approve=${approve} comment=${comment} reject=0 — gh pr merge ${pr_num} --admin --squash --delete-branch"
+  fi
+done
+
+# 5b. Stale-label detection on CLOSED issues/PRs(per Auric 2026-05-21 "状态、PR跟issues的关联状态有问题")
+echo ""
+echo "▍Stale labels(已 CLOSED 但还挂 in-flight phase 标签):"
+gh issue list --label "auto-loop" --state closed --limit 30 --json number,labels --jq '.[] | "\(.number)|\(.labels | map(.name) | map(select(. | startswith("🔍") or startswith("🛠") or startswith("🔧") or startswith("👀") or startswith("⏸") or startswith("auto-loop-stuck") or startswith("🆘"))) | join(","))"' 2>/dev/null | while IFS='|' read -r num labels; do
+  [ -z "$num" ] || [ -z "$labels" ] && continue
+  echo "  ⚠️ closed issue #${num} 仍挂: ${labels}  → controller 应清理 + 加 🎉 phase:merged"
+done
+gh pr list --label "auto-loop" --state closed --limit 30 --json number,labels --jq '.[] | "\(.number)|\(.labels | map(.name) | map(select(. | startswith("🔍") or startswith("🛠") or startswith("🔧") or startswith("👀") or startswith("⏸") or startswith("auto-loop-stuck") or startswith("🆘") or startswith("🚀"))) | join(","))"' 2>/dev/null | while IFS='|' read -r num labels; do
+  [ -z "$num" ] || [ -z "$labels" ] && continue
+  echo "  ⚠️ closed PR #${num} 仍挂: ${labels}"
+done
+
+# 5c. Linkage check:open issues phase:implementing 但没对应 in-flight PR / open PRs 没对应 design issue
+echo ""
+echo "▍Issue/PR linkage 不一致:"
+gh issue list --label "🛠️ phase:implementing" --state open --json number,title --jq '.[] | "\(.number)|\(.title)"' 2>/dev/null | while IFS='|' read -r num title; do
+  [ -z "$num" ] && continue
+  # 找 closes #num 的 open PR
+  pr_count=$(gh pr list --label "auto-loop" --state open --search "in:body Closes #${num}" --json number --jq 'length' 2>/dev/null || echo 0)
+  if [ "$pr_count" = "0" ]; then
+    # 还要找 closed PR 是否已 merge
+    merged_pr=$(gh pr list --label "auto-loop" --state merged --search "in:body Closes #${num}" --json number --jq '.[0].number' 2>/dev/null)
+    if [ -z "$merged_pr" ] || [ "$merged_pr" = "null" ]; then
+      echo "  ⚠️ issue #${num} [🛠️ implementing] 无对应 in-flight 或 merged PR(implement codex 失败/未派?)"
+    else
+      echo "  ⚠️ issue #${num} [🛠️ implementing] PR #${merged_pr} 已 merged 但 issue 未关 — controller 应 gh issue close"
+    fi
+  fi
+done
+
+# 5d. Spawn drop detection: 3 solver artifact 完整但对应 judge log 没有
+echo ""
+echo "▍Spawn drop(solver 完成 N 但 judge 漏派):"
+for f in .refactor-loop/runs/phase9-issue*-r*-minimal.md; do
+  [ -f "$f" ] || continue
+  base=$(basename "$f" -minimal.md)
+  issue=$(echo "$base" | sed -E 's/phase9-issue([0-9]+)-r.*/\1/')
+  round=$(echo "$base" | sed -E 's/.*-r([0-9]+)/\1/')
+  s_min="$f"
+  s_str=".refactor-loop/runs/${base}-structural.md"
+  s_del=".refactor-loop/runs/${base}-delete.md"
+  judge_log=".refactor-loop/logs/${base}-judge.log"
+  if [ -f "$s_str" ] && [ -f "$s_del" ] && [ ! -f "$judge_log" ]; then
+    issue_state=$(gh issue view "$issue" --json state --jq '.state' 2>/dev/null)
+    [ "$issue_state" = "OPEN" ] || continue  # only flag if issue still open
+    echo "  ⚠️ issue #${issue} r${round} 3 solver done 但 judge log 不存在(需重派 judge)"
   fi
 done
 
