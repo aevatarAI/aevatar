@@ -48,7 +48,8 @@ internal static class StudioHostingServiceCollectionExtensions
             sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowActorBindingReader>(),
             sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IServiceRevisionArtifactStore>(),
             sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IServiceLifecycleQueryPort>(),
-            sp.GetService<IWorkflowDraftStore>(),
+            sp.GetService<IStudioWorkspaceQueryPort>(),
+            sp.GetService<IStudioWorkspaceCommandPort>(),
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<AppScopedWorkflowService>>()));
         services.AddSingleton(sp => new AppScopedScriptService(
             sp.GetRequiredService<IHttpClientFactory>(),

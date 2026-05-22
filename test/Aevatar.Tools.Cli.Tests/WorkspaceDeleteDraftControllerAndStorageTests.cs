@@ -7,7 +7,7 @@ using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Hosting;
 using Aevatar.Studio.Domain.Studio.Models;
 using Aevatar.Studio.Hosting.Controllers;
-using Aevatar.Studio.Infrastructure.Storage;
+using Aevatar.Studio.Tests.Shared;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -24,7 +24,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     {
         var controller = CreateController(
             CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
-            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            CreateScopeWorkflowService(new RecordingStudioWorkspacePorts()),
             new StubScopeResolver { ScopeIdToReturn = "scope-1" });
 
         var result = await controller.GetSettings(null, CancellationToken.None);
@@ -42,7 +42,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     {
         var controller = CreateController(
             CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
-            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            CreateScopeWorkflowService(new RecordingStudioWorkspacePorts()),
             new StubScopeResolver { ScopeIdToReturn = "scope-1" });
 
         var result = await controller.GetSettings("scope-2", CancellationToken.None);
@@ -60,7 +60,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     {
         var controller = CreateController(
             CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
-            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            CreateScopeWorkflowService(new RecordingStudioWorkspacePorts()),
             new StubScopeResolver(),
             new StudioHostingOptions
             {
@@ -84,7 +84,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
         var store = new RecordingWorkspaceStore(Path.GetTempPath());
         var controller = CreateController(
             CreateWorkspaceService(store),
-            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            CreateScopeWorkflowService(new RecordingStudioWorkspacePorts()),
             new StubScopeResolver());
 
         var result = await controller.UpdateSettings(
@@ -103,7 +103,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
         var store = new RecordingWorkspaceStore(workspaceRoot);
         var controller = CreateController(
             CreateWorkspaceService(store),
-            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            CreateScopeWorkflowService(new RecordingStudioWorkspacePorts()),
             new StubScopeResolver());
         var workflowPath = Path.Combine(workspaceRoot, "drafts", "hello.yaml");
         var workflowId = WorkspaceService.CreateStableId(workflowPath);
@@ -118,8 +118,12 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     [Fact]
     public async Task DeleteDraft_WhenScopeIsResolved_DeletesScopedDraftAndReturnsNoContent()
     {
-        var storagePort = new RecordingWorkflowDraftStore();
         var workflowId = $"workflow-{Guid.NewGuid():N}";
+        var storagePort = new RecordingStudioWorkspacePorts([
+            new ScopedDraft(
+                "scope-1",
+                NewScopedDraft(workflowId, workflowId, $"name: {workflowId}\nsteps: []\n", DateTimeOffset.UtcNow)),
+        ]);
         var controller = CreateController(
             CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
             CreateScopeWorkflowService(storagePort),
@@ -136,7 +140,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     [Fact]
     public async Task DeleteDraft_WhenQueryFallbackIsEnabled_ReturnsUnauthorizedForScopedWrites()
     {
-        var storagePort = new RecordingWorkflowDraftStore();
+        var storagePort = new RecordingStudioWorkspacePorts();
         var workflowId = $"workflow-{Guid.NewGuid():N}";
         var controller = CreateController(
             CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
@@ -161,7 +165,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     [Fact]
     public async Task DeleteDraft_WhenQueryFallbackIsDisabled_ReturnsUnauthorized()
     {
-        var storagePort = new RecordingWorkflowDraftStore();
+        var storagePort = new RecordingStudioWorkspacePorts();
         var controller = CreateController(
             CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
             CreateScopeWorkflowService(storagePort),
@@ -185,7 +189,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     [Fact]
     public async Task CreateDraft_WhenQueryFallbackIsEnabled_ReturnsUnauthorizedForScopedWrites()
     {
-        var storagePort = new RecordingWorkflowDraftStore();
+        var storagePort = new RecordingStudioWorkspacePorts();
         var controller = CreateController(
             CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
             CreateScopeWorkflowService(storagePort),
@@ -216,7 +220,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     [Fact]
     public async Task UpdateDraft_WhenQueryFallbackIsEnabled_ReturnsUnauthorizedForScopedWrites()
     {
-        var storagePort = new RecordingWorkflowDraftStore();
+        var storagePort = new RecordingStudioWorkspacePorts();
         var controller = CreateController(
             CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
             CreateScopeWorkflowService(storagePort),
@@ -254,7 +258,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
             "delete failed");
         var controller = CreateController(
             CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
-            CreateScopeWorkflowService(new ThrowingWorkflowStoragePort(exception)),
+            CreateScopeWorkflowService(new ThrowingScopedWorkspaceCommandPort(exception)),
             new StubScopeResolver { ScopeIdToReturn = "scope-1" });
 
         var result = await controller.DeleteDraft("workflow-1", null, CancellationToken.None);
@@ -271,7 +275,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     {
         var controller = CreateController(
             CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
-            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            CreateScopeWorkflowService(new RecordingStudioWorkspacePorts()),
             new StubScopeResolver());
 
         var result = await controller.DeleteDraft(string.Empty, null, CancellationToken.None);
@@ -286,7 +290,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     {
         var controller = CreateController(
             CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
-            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            CreateScopeWorkflowService(new RecordingStudioWorkspacePorts()),
             new StubScopeResolver());
 
         var result = await controller.CreateDraft(
@@ -311,7 +315,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     {
         var controller = CreateController(
             CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
-            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            CreateScopeWorkflowService(new RecordingStudioWorkspacePorts()),
             new StubScopeResolver { ScopeIdToReturn = "scope-1" });
 
         var result = await controller.AddDirectory(
@@ -332,7 +336,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     {
         var controller = CreateController(
             CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
-            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            CreateScopeWorkflowService(new RecordingStudioWorkspacePorts()),
             new StubScopeResolver(),
             new StudioHostingOptions
             {
@@ -357,7 +361,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     {
         var controller = CreateController(
             CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
-            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            CreateScopeWorkflowService(new RecordingStudioWorkspacePorts()),
             new StubScopeResolver { ScopeIdToReturn = "scope-1" });
 
         var result = await controller.RemoveDirectory("dir-1", null, CancellationToken.None);
@@ -375,7 +379,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
     {
         var controller = CreateController(
             CreateWorkspaceService(new RecordingWorkspaceStore(Path.GetTempPath())),
-            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            CreateScopeWorkflowService(new RecordingStudioWorkspacePorts()),
             new StubScopeResolver(),
             new StudioHostingOptions
             {
@@ -407,7 +411,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
             ColorMode: "system"));
         var controller = CreateController(
             CreateWorkspaceService(store),
-            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            CreateScopeWorkflowService(new RecordingStudioWorkspacePorts()),
             new StubScopeResolver());
 
         var result = await controller.RemoveDirectory("dir-2", null, CancellationToken.None);
@@ -423,7 +427,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
         var store = new RecordingWorkspaceStore(Path.Combine(Path.GetTempPath(), $"workspace-legacy-{Guid.NewGuid():N}"));
         var controller = CreateController(
             CreateWorkspaceService(store),
-            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            CreateScopeWorkflowService(new RecordingStudioWorkspacePorts()),
             new StubScopeResolver());
 
         var result = await controller.SaveWorkflow(
@@ -461,7 +465,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
         ]);
         var controller = CreateController(
             CreateWorkspaceService(store),
-            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            CreateScopeWorkflowService(new RecordingStudioWorkspacePorts()),
             new StubScopeResolver());
 
         var result = await controller.SaveWorkflow(
@@ -497,7 +501,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
             UpdatedAtUtc: DateTimeOffset.UtcNow);
         var controller = CreateController(
             CreateWorkspaceService(store),
-            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            CreateScopeWorkflowService(new RecordingStudioWorkspacePorts()),
             new StubScopeResolver());
 
         var result = await controller.GetWorkflow("workflow-1", null, CancellationToken.None);
@@ -515,7 +519,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
         var store = new RecordingWorkspaceStore(Path.GetTempPath());
         var controller = CreateController(
             CreateWorkspaceService(store),
-            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            CreateScopeWorkflowService(new RecordingStudioWorkspacePorts()),
             new StubScopeResolver());
 
         var result = await controller.UpdateDraft(
@@ -558,7 +562,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
                 UpdatedAtUtc: DateTimeOffset.UtcNow));
         var controller = CreateController(
             CreateWorkspaceService(store),
-            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            CreateScopeWorkflowService(new RecordingStudioWorkspacePorts()),
             new StubScopeResolver());
 
         var result = await controller.UpdateDraft(
@@ -596,7 +600,7 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
             UpdatedAtUtc: DateTimeOffset.UtcNow);
         var controller = CreateController(
             CreateWorkspaceService(store),
-            CreateScopeWorkflowService(new RecordingWorkflowDraftStore()),
+            CreateScopeWorkflowService(new RecordingStudioWorkspacePorts()),
             new StubScopeResolver());
 
         var result = await controller.ListWorkflows(null, CancellationToken.None);
@@ -606,90 +610,6 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
         payload.Should().ContainSingle();
         payload[0].WorkflowId.Should().Be("workflow-1");
         payload[0].Name.Should().Be("legacy-list");
-    }
-
-    [Fact]
-    public async Task DeleteDraftAsync_WhenWorkflowIdIsBlank_DoesNotSendRequest()
-    {
-        var handler = new RecordingHttpMessageHandler(HttpStatusCode.NoContent);
-        var port = CreateWorkflowStoragePort(handler, enabled: true);
-
-        await port.DeleteDraftAsync("scope-1", "   ", CancellationToken.None);
-
-        handler.Requests.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task DeleteDraftAsync_WhenWorkflowIdIsNull_DoesNotSendRequest()
-    {
-        var handler = new RecordingHttpMessageHandler(HttpStatusCode.NoContent);
-        var port = CreateWorkflowStoragePort(handler, enabled: true);
-
-        await port.DeleteDraftAsync("scope-1", null!, CancellationToken.None);
-
-        handler.Requests.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task DeleteDraftAsync_WhenChronoStorageIsDisabled_DoesNotSendRequest()
-    {
-        var handler = new RecordingHttpMessageHandler(HttpStatusCode.NoContent);
-        var port = CreateWorkflowStoragePort(handler, enabled: false);
-
-        await port.DeleteDraftAsync("scope-1", "workflow-1", CancellationToken.None);
-
-        handler.Requests.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task DeleteDraftAsync_WhenWorkflowIdIsValid_SendsDeleteToScopedObjectKey()
-    {
-        var handler = new RecordingHttpMessageHandler(HttpStatusCode.NoContent);
-        var port = CreateWorkflowStoragePort(handler, enabled: true, ambientScopeId: "ambient-scope");
-
-        await port.DeleteDraftAsync("scope-1", " workflow-1 ", CancellationToken.None);
-
-        var request = handler.Requests.Should().ContainSingle().Subject;
-        request.Method.Should().Be(HttpMethod.Delete);
-        request.RequestUri.Should().Be("https://chrono.example.com/api/buckets/test-bucket/objects?key=scope-1%2Fworkflows%2Fworkflow-1.yaml");
-    }
-
-    [Fact]
-    public async Task SaveDraftAsync_WhenExplicitScopeDiffersFromAmbient_UsesRequestedScopeObjectKey()
-    {
-        var handler = new RecordingHttpMessageHandler(HttpStatusCode.OK);
-        var port = CreateWorkflowStoragePort(handler, enabled: true, ambientScopeId: "ambient-scope");
-
-        await port.SaveDraftAsync(
-            "requested-scope",
-            " workflow-1 ",
-            "workflow-1",
-            "name: workflow-1\nsteps: []\n",
-            null,
-            CancellationToken.None);
-
-        var request = handler.Requests.Should().ContainSingle().Subject;
-        request.Method.Should().Be(HttpMethod.Post);
-        request.RequestUri.Should().Contain("key=requested-scope%2Fworkflows%2Fworkflow-1.yaml");
-    }
-
-    [Fact]
-    public async Task SaveDraftAsync_WhenChronoStorageIsDisabled_ShouldThrow()
-    {
-        var handler = new RecordingHttpMessageHandler(HttpStatusCode.OK);
-        var port = CreateWorkflowStoragePort(handler, enabled: false, ambientScopeId: "ambient-scope");
-
-        var act = () => port.SaveDraftAsync(
-            "scope-1",
-            "workflow-1",
-            "workflow-1",
-            "name: workflow-1\nsteps: []\n",
-            null,
-            CancellationToken.None);
-
-        (await act.Should().ThrowAsync<InvalidOperationException>())
-            .WithMessage("Scoped workflow draft storage is not enabled.");
-        handler.Requests.Should().BeEmpty();
     }
 
     private static WorkspaceController CreateController(
@@ -730,29 +650,23 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
         public Microsoft.Extensions.FileProviders.IFileProvider ContentRootFileProvider { get; set; } = null!;
     }
 
-    private static AppScopedWorkflowService CreateScopeWorkflowService(IWorkflowDraftStore? workflowDraftStore) =>
+    private static AppScopedWorkflowService CreateScopeWorkflowService(RecordingStudioWorkspacePorts workspacePorts) =>
         new(
             new StubHttpClientFactory(new HttpClient(new ThrowingHttpMessageHandler())),
             new StubWorkflowYamlDocumentService(),
-            workflowDraftStore: workflowDraftStore);
+            workspaceQueryPort: workspacePorts,
+            workspaceCommandPort: workspacePorts);
 
-    private static ChronoStorageWorkflowDraftStore CreateWorkflowStoragePort(
-        HttpMessageHandler handler,
-        bool enabled,
-        string ambientScopeId = "scope-1")
-    {
-        var blobClient = new ChronoStorageCatalogBlobClient(
-            new StubScopeResolver { ScopeIdToReturn = ambientScopeId },
-            new StubHttpClientFactory(new HttpClient(handler)),
-            Options.Create(new ConnectorCatalogStorageOptions
-            {
-                Enabled = enabled,
-                UseNyxProxy = false,
-                BaseUrl = "https://chrono.example.com",
-                Bucket = "test-bucket",
-            }));
-        return new ChronoStorageWorkflowDraftStore(blobClient);
-    }
+    private static AppScopedWorkflowService CreateScopeWorkflowService(ThrowingScopedWorkspaceCommandPort commandPort) =>
+        new(
+            new StubHttpClientFactory(new HttpClient(new ThrowingHttpMessageHandler())),
+            new StubWorkflowYamlDocumentService(),
+            workspaceQueryPort: new RecordingStudioWorkspacePorts([
+                new ScopedDraft(
+                    "scope-1",
+                    NewScopedDraft("workflow-1", "workflow-1", "name: workflow-1\nsteps: []\n", DateTimeOffset.UtcNow)),
+            ]),
+            workspaceCommandPort: commandPort);
 
     private sealed class StubScopeResolver : IAppScopeResolver
     {
@@ -798,98 +712,54 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
             throw new InvalidOperationException("HTTP client should not be used in this test.");
     }
 
-    private sealed class RecordingHttpMessageHandler : HttpMessageHandler
-    {
-        private readonly HttpStatusCode _statusCode;
-
-        public RecordingHttpMessageHandler(HttpStatusCode statusCode)
-        {
-            _statusCode = statusCode;
-        }
-
-        public List<CapturedRequest> Requests { get; } = [];
-
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            Requests.Add(new CapturedRequest(request.Method, request.RequestUri?.ToString()));
-            return Task.FromResult(new HttpResponseMessage(_statusCode));
-        }
-    }
-
-    private sealed record CapturedRequest(HttpMethod Method, string? RequestUri);
-
-    private sealed class RecordingWorkflowDraftStore : IWorkflowDraftStore
-    {
-        public List<ScopedWorkflowSave> SavedWorkflows { get; } = [];
-        public List<ScopedWorkflowDelete> DeletedWorkflows { get; } = [];
-
-        public Task SaveDraftAsync(
-            string scopeId,
-            string workflowId,
-            string workflowName,
-            string yaml,
-            WorkflowLayoutDocument? layout,
-            CancellationToken ct)
-        {
-            SavedWorkflows.Add(new ScopedWorkflowSave(scopeId, workflowId, workflowName, yaml));
-            return Task.CompletedTask;
-        }
-
-        public Task<IReadOnlyList<WorkflowDraft>> ListDraftsAsync(string scopeId, CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<WorkflowDraft>>([]);
-
-        public Task<WorkflowDraft?> GetDraftAsync(string scopeId, string workflowId, CancellationToken ct) =>
-            Task.FromResult<WorkflowDraft?>(string.IsNullOrWhiteSpace(workflowId)
-                ? null
-                : new WorkflowDraft(
-                    workflowId,
-                    workflowId,
-                    $"name: {workflowId}\nsteps: []\n",
-                    DateTimeOffset.UtcNow));
-
-        public Task DeleteDraftAsync(string scopeId, string workflowId, CancellationToken ct)
-        {
-            DeletedWorkflows.Add(new ScopedWorkflowDelete(scopeId, workflowId));
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class ThrowingWorkflowStoragePort : IWorkflowDraftStore
+    private sealed class ThrowingScopedWorkspaceCommandPort : IStudioWorkspaceCommandPort
     {
         private readonly Exception _exception;
 
-        public ThrowingWorkflowStoragePort(Exception exception)
+        public ThrowingScopedWorkspaceCommandPort(Exception exception)
         {
             _exception = exception;
         }
 
-        public Task SaveDraftAsync(
-            string scopeId,
-            string workflowId,
-            string workflowName,
-            string yaml,
-            WorkflowLayoutDocument? layout,
-            CancellationToken ct) =>
-            Task.CompletedTask;
+        public Task<StudioWorkspaceCommandReceipt> UpdateSettingsAsync(StudioWorkspaceSettings settings, long? expectedVersion = null, CancellationToken ct = default) =>
+            Task.FromException<StudioWorkspaceCommandReceipt>(_exception);
 
-        public Task<IReadOnlyList<WorkflowDraft>> ListDraftsAsync(string scopeId, CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<WorkflowDraft>>([]);
+        public Task<StudioWorkspaceCommandReceipt> AddDirectoryAsync(StudioWorkspaceDirectory directory, long? expectedVersion = null, CancellationToken ct = default) =>
+            Task.FromException<StudioWorkspaceCommandReceipt>(_exception);
 
-        public Task<WorkflowDraft?> GetDraftAsync(string scopeId, string workflowId, CancellationToken ct) =>
-            Task.FromResult<WorkflowDraft?>(string.IsNullOrWhiteSpace(workflowId)
-                ? null
-                : new WorkflowDraft(
-                    workflowId,
-                    workflowId,
-                    $"name: {workflowId}\nsteps: []\n",
-                    DateTimeOffset.UtcNow));
+        public Task<StudioWorkspaceCommandReceipt> RemoveDirectoryAsync(string directoryId, long? expectedVersion = null, CancellationToken ct = default) =>
+            Task.FromException<StudioWorkspaceCommandReceipt>(_exception);
 
-        public Task DeleteDraftAsync(string scopeId, string workflowId, CancellationToken ct) =>
-            Task.FromException(_exception);
+        public Task<StudioWorkspaceCommandReceipt> SaveDraftAsync(StudioWorkflowDraftRecord draft, long? expectedVersion = null, CancellationToken ct = default) =>
+            Task.FromException<StudioWorkspaceCommandReceipt>(_exception);
+
+        public Task<StudioWorkspaceCommandReceipt> SaveDraftAsync(string scopeId, StudioWorkflowDraftRecord draft, long? expectedVersion = null, CancellationToken ct = default) =>
+            Task.FromException<StudioWorkspaceCommandReceipt>(_exception);
+
+        public Task<StudioWorkspaceCommandReceipt> DeleteDraftAsync(string workflowId, long? expectedVersion = null, CancellationToken ct = default) =>
+            Task.FromException<StudioWorkspaceCommandReceipt>(_exception);
+
+        public Task<StudioWorkspaceCommandReceipt> DeleteDraftAsync(string scopeId, string workflowId, long? expectedVersion = null, CancellationToken ct = default) =>
+            Task.FromException<StudioWorkspaceCommandReceipt>(_exception);
     }
 
-    private sealed record ScopedWorkflowSave(string ScopeId, string WorkflowId, string WorkflowName, string Yaml);
-    private sealed record ScopedWorkflowDelete(string ScopeId, string WorkflowId);
+    private static StudioWorkflowDraftRecord NewScopedDraft(
+        string workflowId,
+        string name,
+        string yaml,
+        DateTimeOffset updatedAtUtc) =>
+        new(
+            workflowId,
+            name,
+            $"{workflowId}.yaml",
+            $"scope://scope-1/{workflowId}.yaml",
+            "scope:scope-1",
+            "scope-1",
+            yaml,
+            Layout: null,
+            updatedAtUtc,
+            updatedAtUtc,
+            1);
 
     private sealed class RecordingWorkspaceStore : IStudioWorkspaceQueryPort, IStudioWorkspaceCommandPort
     {
@@ -936,6 +806,9 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
                 _stateVersion,
                 DateTimeOffset.UtcNow));
 
+        public Task<StudioWorkspaceSnapshot> GetAsync(string scopeId, CancellationToken ct = default) =>
+            GetAsync(ct);
+
         public Task<StudioWorkspaceSettings> GetSettingsAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(_settings);
 
@@ -949,6 +822,13 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
             _stateVersion++;
             return Task.FromResult(Receipt(expectedVersion));
         }
+
+        public Task<StudioWorkspaceCommandReceipt> DeleteDraftAsync(
+            string scopeId,
+            string workflowId,
+            long? expectedVersion = null,
+            CancellationToken ct = default) =>
+            DeleteDraftAsync(workflowId, expectedVersion, ct);
 
         public Task<StudioWorkspaceCommandReceipt> UpdateSettingsAsync(
             StudioWorkspaceSettings settings,
@@ -1004,6 +884,13 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
             _stateVersion++;
             return Task.FromResult(Receipt(expectedVersion));
         }
+
+        public Task<StudioWorkspaceCommandReceipt> SaveDraftAsync(
+            string scopeId,
+            StudioWorkflowDraftRecord draft,
+            long? expectedVersion = null,
+            CancellationToken ct = default) =>
+            SaveDraftAsync(draft, expectedVersion, ct);
 
         public Task SaveSettingsAsync(StudioWorkspaceSettings settings, CancellationToken cancellationToken = default)
         {

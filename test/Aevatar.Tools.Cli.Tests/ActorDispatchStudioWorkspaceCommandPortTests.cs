@@ -112,6 +112,38 @@ public sealed class ActorDispatchStudioWorkspaceCommandPortTests
     }
 
     [Fact]
+    public async Task SaveDraftAsync_WithExplicitScope_ShouldDispatchRequestedScopeInsteadOfAmbientScope()
+    {
+        var harness = new CommandPortHarness("ambient-scope");
+        var updatedAt = DateTimeOffset.Parse("2026-05-19T10:00:00Z");
+
+        var receipt = await harness.Port.SaveDraftAsync(
+            " requested-scope ",
+            new StudioWorkflowDraftRecord(
+                "workflow-1",
+                "workflow-one",
+                "workflow-one.yaml",
+                "/tmp/drafts/workflow-one.yaml",
+                "dir-1",
+                "Drafts",
+                "name: workflow-one\nsteps: []\n",
+                Layout: null,
+                updatedAt,
+                updatedAt,
+                Version: 2),
+            expectedVersion: 8);
+
+        var evt = harness.SinglePayload<StudioWorkflowDraftSaved>("studio-workspace:requested-scope");
+        evt.WorkspaceId.Should().Be("studio-workspace:requested-scope");
+        evt.ScopeId.Should().Be("requested-scope");
+        evt.ExpectedVersion.Should().Be(8);
+        evt.Draft.WorkflowId.Should().Be("workflow-1");
+        receipt.WorkspaceId.Should().Be("studio-workspace:requested-scope");
+        receipt.ActorId.Should().Be("studio-workspace:requested-scope");
+        receipt.ExpectedVersion.Should().Be(8);
+    }
+
+    [Fact]
     public async Task DeleteDraftAsync_ShouldDispatchDraftDeletedEvent()
     {
         var harness = new CommandPortHarness();
@@ -123,6 +155,23 @@ public sealed class ActorDispatchStudioWorkspaceCommandPortTests
         evt.ScopeId.Should().Be("scope-1");
         evt.ExpectedVersion.Should().Be(7);
         evt.WorkflowId.Should().Be("workflow-1");
+    }
+
+    [Fact]
+    public async Task DeleteDraftAsync_WithExplicitScope_ShouldDispatchRequestedScopeInsteadOfAmbientScope()
+    {
+        var harness = new CommandPortHarness("ambient-scope");
+
+        var receipt = await harness.Port.DeleteDraftAsync(" requested-scope ", " workflow-1 ", expectedVersion: 9);
+
+        var evt = harness.SinglePayload<StudioWorkflowDraftDeleted>("studio-workspace:requested-scope");
+        evt.WorkspaceId.Should().Be("studio-workspace:requested-scope");
+        evt.ScopeId.Should().Be("requested-scope");
+        evt.ExpectedVersion.Should().Be(9);
+        evt.WorkflowId.Should().Be("workflow-1");
+        receipt.WorkspaceId.Should().Be("studio-workspace:requested-scope");
+        receipt.ActorId.Should().Be("studio-workspace:requested-scope");
+        receipt.ExpectedVersion.Should().Be(9);
     }
 
     [Fact]
@@ -170,24 +219,24 @@ public sealed class ActorDispatchStudioWorkspaceCommandPortTests
     {
         private readonly RecordingDispatchPort _dispatchPort = new();
 
-        public CommandPortHarness()
+        public CommandPortHarness(string scopeId = "scope-1")
         {
             Port = new ActorDispatchStudioWorkspaceCommandPort(
                 new StubBootstrap(),
                 _dispatchPort,
-                new StubScopeResolver());
+                new StubScopeResolver(scopeId));
         }
 
         public ActorDispatchStudioWorkspaceCommandPort Port { get; }
 
         public int DispatchCount => _dispatchPort.Dispatches.Count;
 
-        public TPayload SinglePayload<TPayload>()
+        public TPayload SinglePayload<TPayload>(string expectedActorId = "studio-workspace:scope-1")
             where TPayload : IMessage, new()
         {
             _dispatchPort.Dispatches.Should().ContainSingle();
             var dispatch = _dispatchPort.Dispatches[0];
-            dispatch.ActorId.Should().Be("studio-workspace:scope-1");
+            dispatch.ActorId.Should().Be(expectedActorId);
             dispatch.Envelope.Payload.Is(new TPayload().Descriptor).Should().BeTrue();
             return dispatch.Envelope.Payload.Unpack<TPayload>();
         }
@@ -234,9 +283,9 @@ public sealed class ActorDispatchStudioWorkspaceCommandPortTests
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class StubScopeResolver : IAppScopeResolver
+    private sealed class StubScopeResolver(string scopeId) : IAppScopeResolver
     {
-        public AppScopeContext? Resolve(HttpContext? httpContext = null) => new("scope-1", "test");
+        public AppScopeContext? Resolve(HttpContext? httpContext = null) => new(scopeId, "test");
         public bool HasAuthenticatedRequestWithoutScope(HttpContext? httpContext = null) => false;
     }
 }

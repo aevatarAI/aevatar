@@ -29,4 +29,8 @@
     <ProjectReference Include="..\..\src\Aevatar.Studio.Projection\Aevatar.Studio.Projection.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Shared\RecordingStudioWorkspacePorts.cs" Link="Shared\RecordingStudioWorkspacePorts.cs" />
+  </ItemGroup>
 </Project>
