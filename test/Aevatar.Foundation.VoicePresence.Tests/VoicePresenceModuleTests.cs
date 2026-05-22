@@ -472,6 +472,44 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
+    public async Task Fresh_module_should_hydrate_provider_response_binding_from_role_gagent_voice_sub_state()
+    {
+        var module = CreateModule(new RecordingVoiceProvider());
+        var roleAgent = new RecordingRoleAgent("voice-agent");
+        roleAgent.State.VoicePresence["voice_presence"] = new VoicePresenceRuntimeState
+        {
+            Status = VoicePresenceRuntimeStatus.ResponseInProgress,
+            CurrentResponseId = 7,
+            NextResponseId = 8,
+            ActiveProviderResponseId = "provider-r1",
+            LastDrainAckResponseId = -1,
+            LastDrainAckPlayoutSequence = -1,
+            ProviderResponseBindings =
+            {
+                new VoiceProviderResponseBinding
+                {
+                    ProviderResponseId = "provider-r1",
+                    ResponseId = 7,
+                },
+            },
+        };
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            ResponseDone = new VoiceResponseDone { ProviderResponseId = "provider-r1" },
+        }), ctx, CancellationToken.None);
+
+        module.StateMachine.CurrentResponseId.ShouldBe(7);
+        module.StateMachine.State.ShouldBe(VoicePresenceState.AudioDraining);
+        var persistedState = roleAgent.PersistedStates.ShouldHaveSingleItem().State;
+        persistedState.ProviderResponseBindings.ShouldBeEmpty();
+        persistedState.CurrentResponseId.ShouldBe(7);
+        persistedState.NextResponseId.ShouldBe(8);
+        persistedState.Status.ShouldBe(VoicePresenceRuntimeStatus.AudioDraining);
+    }
+
+    [Fact]
     public async Task Remote_session_signals_should_keep_lifecycle_but_not_forward_audio_chunks()
     {
         var provider = new RecordingVoiceProvider();

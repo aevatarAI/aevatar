@@ -393,7 +393,8 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
                 _runtimeState.CancelledProviderResponseIds.Clear();
                 _runtimeState.ActiveProviderResponseId = string.Empty;
                 stateChanged = true;
-                await CloseRemoteSessionAsync("provider_disconnected", ctx, ct);
+                if (await CloseRemoteSessionAsync("provider_disconnected", ctx, ct))
+                    stateChanged = false;
                 break;
             case VoiceProviderEvent.EventOneofCase.AudioReceived:
                 break;
@@ -694,14 +695,14 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         await HandleControlFrameAsync(request.ControlFrame, ctx, ct);
     }
 
-    private async Task CloseRemoteSessionAsync(
+    private async Task<bool> CloseRemoteSessionAsync(
         string reason,
         IEventHandlerContext ctx,
         CancellationToken ct)
     {
         var currentSessionId = _runtimeState.RemoteSessionId;
         if (string.IsNullOrWhiteSpace(currentSessionId))
-            return;
+            return false;
 
         _runtimeState.RemoteSessionId = string.Empty;
         _runtimeState.ProviderResponseBindings.Clear();
@@ -721,6 +722,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             },
             ctx,
             ct);
+        return true;
     }
 
     private Task PublishRemoteOutputAsync(
@@ -865,7 +867,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         if (decision != VoicePresenceEventPolicyDecision.Admit)
             return;
 
-        var injection = BuildInjection(envelope, now);
+        var injection = BuildPendingInjection(envelope, now);
         if (!IsReadyToInject())
         {
             EnqueuePendingInjection(injection);
@@ -896,20 +898,20 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         return !string.Equals(envelope.Route.PublisherActorId, agentId, StringComparison.Ordinal);
     }
 
-    private VoiceConversationEventInjection BuildInjection(EventEnvelope envelope, DateTimeOffset now)
+    private VoicePendingEventInjection BuildPendingInjection(EventEnvelope envelope, DateTimeOffset now)
     {
         var observedAt = envelope.Timestamp?.ToDateTimeOffset() ?? now;
-        return new VoiceConversationEventInjection
+        return new VoicePendingEventInjection
         {
             EnvelopeId = envelope.Id ?? string.Empty,
             PublisherActorId = envelope.Route?.PublisherActorId ?? string.Empty,
             EventType = envelope.Payload?.TypeUrl ?? string.Empty,
-            PayloadJson = envelope.Payload == null ? "{}" : FormatPayloadJson(envelope.Payload),
+            Payload = envelope.Payload?.Clone(),
             ObservedAt = Timestamp.FromDateTimeOffset(observedAt),
         };
     }
 
-    private void EnqueuePendingInjection(VoiceConversationEventInjection injection)
+    private void EnqueuePendingInjection(VoicePendingEventInjection injection)
     {
         if (_options.PendingInjectionCapacity <= 0)
             return;
@@ -936,7 +938,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         }
     }
 
-    private bool IsExpired(VoiceConversationEventInjection injection)
+    private bool IsExpired(VoicePendingEventInjection injection)
     {
         var observedAt = injection.ObservedAt?.ToDateTimeOffset() ?? _options.TimeProvider.GetUtcNow();
         return _options.TimeProvider.GetUtcNow() - observedAt > _options.StaleAfter;
@@ -947,20 +949,31 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         StateMachine.IsSafeToInject &&
         !_runtimeState.AwaitingInjectedResponseStart;
 
-    private async Task<bool> TryInjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct)
+    private async Task<bool> TryInjectEventAsync(VoicePendingEventInjection injection, CancellationToken ct)
     {
+        var providerInjection = BuildProviderInjection(injection);
         try
         {
-            await _provider.InjectEventAsync(injection, ct);
+            await _provider.InjectEventAsync(providerInjection, ct);
             _runtimeState.AwaitingInjectedResponseStart = true;
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to inject external voice event {EventType}.", injection.EventType);
+            _logger.LogWarning(ex, "Failed to inject external voice event {EventType}.", providerInjection.EventType);
             return false;
         }
     }
+
+    private static VoiceConversationEventInjection BuildProviderInjection(VoicePendingEventInjection injection) =>
+        new()
+        {
+            EnvelopeId = injection.EnvelopeId,
+            PublisherActorId = injection.PublisherActorId,
+            EventType = injection.EventType,
+            PayloadJson = injection.Payload == null ? "{}" : FormatPayloadJson(injection.Payload),
+            ObservedAt = injection.ObservedAt?.Clone(),
+        };
 
     private static string FormatPayloadJson(Any payload)
     {
