@@ -30,6 +30,9 @@ public sealed class EventQueryTool : IAgentTool
         "Optionally filter by stage or event type. " +
         "Use 'edges' action to see workflow run graph export edges.";
 
+    // Refactor (iter29/cluster-029-workflow-history-artifact):
+    //   Old pattern: event_query required actor_id for workflow history and graph lookups.
+    //   New principle: workflow_run_id is the artifact/export identity, while actor_id is a deprecated compatibility alias.
     public string ParametersSchema => """
         {
           "type": "object",
@@ -65,7 +68,10 @@ public sealed class EventQueryTool : IAgentTool
               "description": "Max events to return (default: 50, max: 200)"
             }
           },
-          "required": ["workflow_run_id"]
+          "anyOf": [
+            { "required": ["workflow_run_id"] },
+            { "required": ["actor_id"] }
+          ]
         }
         """;
 
@@ -100,6 +106,9 @@ public sealed class EventQueryTool : IAgentTool
         }
     }
 
+    // Refactor (iter29/cluster-029-workflow-history-artifact):
+    //   Old pattern: event_query exposed workflow timeline as an actor timeline readmodel query keyed by actor_id.
+    //   New principle: timeline data is a workflow-run timeline export artifact; actor_id remains only as a deprecated caller alias.
     private async Task<string> GetTimelineAsync(string workflowRunId, ToolArgs args, CancellationToken ct)
     {
         var take = Math.Clamp(args.Int("take") ?? _options.MaxTimelineItems, 1, 200);
@@ -129,6 +138,9 @@ public sealed class EventQueryTool : IAgentTool
         }, s_json);
     }
 
+    // Refactor (iter29/cluster-029-workflow-history-artifact):
+    //   Old pattern: event_query exposed graph edges as an actor graph readmodel query keyed by actor_id.
+    //   New principle: graph edges are workflow-run graph export artifact data; actor_id remains only as a deprecated caller alias.
     private async Task<string> GetEdgesAsync(string workflowRunId, ToolArgs args, CancellationToken ct)
     {
         var take = Math.Clamp(args.Int("take") ?? 200, 1, 500);
@@ -159,6 +171,9 @@ public sealed class EventQueryTool : IAgentTool
     private static string? NullIfEmpty(string? s) =>
         string.IsNullOrWhiteSpace(s) ? null : s;
 
+    // Refactor (iter29/cluster-029-workflow-history-artifact):
+    //   Old pattern: workflow tool calls treated actor_id as the artifact query identity.
+    //   New principle: workflow_run_id is the artifact identity; actor_id is accepted only for transitional tool compatibility.
     private static string GetWorkflowRunId(ToolArgs args) =>
         args.Str("workflow_run_id") ?? args.Str("actor_id") ?? string.Empty;
 

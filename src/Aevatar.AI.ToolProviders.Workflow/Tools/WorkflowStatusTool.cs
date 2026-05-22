@@ -29,6 +29,9 @@ public sealed class WorkflowStatusTool : IAgentTool
         "Use 'list' action to see available workflows, 'catalog' for definitions, " +
         "or provide a workflow_run_id to get a specific run's status.";
 
+    // Refactor (iter29/cluster-029-workflow-history-artifact):
+    //   Old pattern: workflow_status described run report/timeline lookups as actor_id-driven actor queries.
+    //   New principle: report and timeline are workflow-run artifacts/exports, with actor_id accepted only as a deprecated alias.
     public string ParametersSchema => """
         {
           "type": "object",
@@ -125,6 +128,9 @@ public sealed class WorkflowStatusTool : IAgentTool
         }, s_json);
     }
 
+    // Refactor (iter29/cluster-029-workflow-history-artifact):
+    //   Old pattern: workflow_status read execution reports through an actor report readmodel query keyed by actor_id.
+    //   New principle: execution reports are workflow-run report artifacts; actor_id remains only as a deprecated caller alias.
     private async Task<string> GetStatusAsync(ToolArgs args, CancellationToken ct)
     {
         var workflowRunId = GetWorkflowRunId(args);
@@ -159,6 +165,9 @@ public sealed class WorkflowStatusTool : IAgentTool
         }, s_json);
     }
 
+    // Refactor (iter29/cluster-029-workflow-history-artifact):
+    //   Old pattern: workflow_status exposed timeline data through an actor timeline readmodel query keyed by actor_id.
+    //   New principle: timeline data is a workflow-run timeline export artifact; actor_id remains only as a deprecated caller alias.
     private async Task<string> GetTimelineAsync(ToolArgs args, CancellationToken ct)
     {
         var workflowRunId = GetWorkflowRunId(args);
@@ -185,6 +194,9 @@ public sealed class WorkflowStatusTool : IAgentTool
     private static string? Truncate(string? s, int max) =>
         string.IsNullOrWhiteSpace(s) ? null : s.Length <= max ? s : s[..max] + "...";
 
+    // Refactor (iter29/cluster-029-workflow-history-artifact):
+    //   Old pattern: workflow tool calls treated actor_id as the artifact query identity.
+    //   New principle: workflow_run_id is the artifact identity; actor_id is accepted only for transitional tool compatibility.
     private static string GetWorkflowRunId(ToolArgs args) =>
         args.Str("workflow_run_id") ?? args.Str("actor_id") ?? string.Empty;
 }
