@@ -3,6 +3,8 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Foundation.Abstractions.ExternalLinks;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
@@ -15,12 +17,17 @@ namespace Aevatar.Workflow.Extensions.Bridge;
 // Refactor (iter25/cluster-027-telegram-wait-reply-actor-turn):
 //   Old pattern: Telegram bridge maintains in-process wait-reply state in dict; bridge owns wait + reply lifecycle inline
 //   New principle: New task-scoped TelegramWaitReplyGAgent owns protobuf wait state; typed self-events advance one bounded poll per actor turn and resume bridge via WaitReplyCompleted/Failed.
+// Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+//   Old pattern: TelegramBridgeGAgent.ExecuteConnectorWithWatchdogAsync 用 Task.Delay 兜底超时 + ContinueWith race + actor turn 内同步 await /getUpdates 长轮询
+//   New principle: TelegramWaitReplyGAgent owns /getUpdates polling through the existing ExternalLink stream; it sends getUpdates requests via IExternalLinkPort and handles ExternalLinkMessageReceivedEvent continuations, so long polling no longer blocks an actor turn and no new actor type is introduced.
 [GAgent("workflow.telegram-wait-reply")]
 // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
 //   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
 //   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
-public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
+public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>, IExternalLinkAware
 {
+    private const string GetUpdatesLinkId = "telegram-get-updates";
+    private const string GetUpdatesTimeoutCallbackPrefix = "telegram-get-updates-timeout";
     private const int MaxPollTimeoutSeconds = 25;
     private readonly IConnectorRegistry _connectorRegistry;
     private readonly TimeProvider _timeProvider;
@@ -42,6 +49,14 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         InitializeId();
     }
+
+    public IReadOnlyList<ExternalLinkDescriptor> GetLinkDescriptors() =>
+        [
+            new(
+                GetUpdatesLinkId,
+                TelegramGetUpdatesExternalLinkTransport.TransportTypeName,
+                "telegram://get-updates")
+        ];
 
     [EventHandler]
     public async Task HandleWaitForReply(TelegramWaitForReplyCommand command)
@@ -85,57 +100,11 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
         if (!IsActiveContinuation(evt.CommandId, evt.Generation))
             return;
 
-        if (!_connectorRegistry.TryGet(State.ConnectorName, out var connector) || connector == null)
-        {
-            await CompleteFailureAsync($"telegram connector '{State.ConnectorName}' not found");
-            return;
-        }
-
-        var bootstrap = await ExecuteGetUpdatesAsync(offset: null, pollTimeoutSeconds: 0, perCallTimeoutMs: 5_000, connector);
-        if (!bootstrap.Success)
-        {
-            await CompleteFailureAsync(string.IsNullOrWhiteSpace(bootstrap.Error)
-                ? "telegram bootstrap getUpdates failed"
-                : bootstrap.Error.Trim());
-            return;
-        }
-
-        if (!TryParseTelegramUpdates(
-                bootstrap.Output,
-                out var bootstrapUpdates,
-                out var bootstrapMaxUpdateId,
-                out var bootstrapError))
-        {
-            await CompleteFailureAsync($"telegram bootstrap parse failed: {bootstrapError}");
-            return;
-        }
-
-        var bootstrapRecentCutoffUnix = _timeProvider.GetUtcNow().ToUnixTimeSeconds()
-            - Math.Max(30, Math.Min(600, State.WaitTimeoutMs / 1000 + 10));
-        var matchedUpdates = SelectMatchedUpdates(
-            bootstrapUpdates,
-            minimumUpdateId: null,
-            minimumDateUnixExclusive: bootstrapRecentCutoffUnix);
-
-        if (matchedUpdates.Count > 0 && !State.CollectAllReplies)
-        {
-            await CompleteSuccessAsync(matchedUpdates[^1].Content);
-            return;
-        }
-
-        var next = State.Clone();
-        if (bootstrapMaxUpdateId.HasValue)
-            next.NextOffset = bootstrapMaxUpdateId.Value + 1;
-        ApplyMatches(next, matchedUpdates);
-
-        var result = ResolveCurrentResult(next, emptyPoll: matchedUpdates.Count == 0);
-        if (result.HasValue)
-        {
-            await CompleteResultAsync(result.Value);
-            return;
-        }
-
-        await PersistAndContinuePollAsync(next);
+        await SendGetUpdatesAsync(
+            offset: null,
+            pollTimeoutSeconds: 0,
+            perCallTimeoutMs: 5_000,
+            bootstrap: true);
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
@@ -145,12 +114,6 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
         if (!IsActiveContinuation(evt.CommandId, evt.Generation))
             return;
 
-        if (!_connectorRegistry.TryGet(State.ConnectorName, out var connector) || connector == null)
-        {
-            await CompleteFailureAsync($"telegram connector '{State.ConnectorName}' not found");
-            return;
-        }
-
         if (_timeProvider.GetUtcNow().ToUnixTimeMilliseconds() >= State.DeadlineUnixMs)
         {
             await CompleteTimeoutAsync();
@@ -159,50 +122,54 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
 
         var currentPollSeconds = ResolveCurrentPollSeconds();
         long? requestedOffset = State.HasNextOffset ? State.NextOffset : null;
-        var poll = await ExecuteGetUpdatesAsync(
+        await SendGetUpdatesAsync(
             requestedOffset,
             currentPollSeconds,
             perCallTimeoutMs: (currentPollSeconds + 3) * 1_000,
-            connector);
-        if (!poll.Success)
+            bootstrap: false);
+    }
+
+    [EventHandler(AllowSelfHandling = true)]
+    public async Task HandleExternalLinkMessageReceived(ExternalLinkMessageReceivedEvent evt)
+    {
+        // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+        //   Old pattern: TelegramBridgeGAgent.ExecuteConnectorWithWatchdogAsync 用 Task.Delay 兜底超时 + ContinueWith race + actor turn 内同步 await /getUpdates 长轮询
+        //   New principle: TelegramWaitReplyGAgent owns /getUpdates polling through the existing ExternalLink stream; it sends getUpdates requests via IExternalLinkPort and handles ExternalLinkMessageReceivedEvent continuations, so long polling no longer blocks an actor turn and no new actor type is introduced.
+        ArgumentNullException.ThrowIfNull(evt);
+        if (!string.Equals(evt.LinkId, GetUpdatesLinkId, StringComparison.Ordinal))
+            return;
+
+        TelegramGetUpdatesResult result;
+        try
         {
-            await CompleteFailureAsync(string.IsNullOrWhiteSpace(poll.Error)
-                ? "telegram getUpdates failed"
-                : poll.Error.Trim());
+            result = evt.Payload != null && evt.Payload.Is(TelegramGetUpdatesResult.Descriptor)
+                ? evt.Payload.Unpack<TelegramGetUpdatesResult>()
+                : TelegramGetUpdatesResult.Parser.ParseFrom(evt.RawPayload);
+        }
+        catch (Exception ex)
+        {
+            await CompleteFailureAsync($"telegram getUpdates result parse failed: {ex.Message}");
             return;
         }
 
-        if (!TryParseTelegramUpdates(poll.Output, out var updates, out var maxUpdateId, out var parseError))
-        {
-            await CompleteFailureAsync($"telegram getUpdates parse failed: {parseError}");
-            return;
-        }
-
-        var matchedUpdates = SelectMatchedUpdates(
-            updates,
-            minimumUpdateId: requestedOffset,
-            minimumDateUnixExclusive: null);
-        var next = State.Clone();
-        if (maxUpdateId.HasValue)
-            next.NextOffset = maxUpdateId.Value + 1;
-        ApplyMatches(next, matchedUpdates);
-
-        var result = ResolveCurrentResult(next, emptyPoll: matchedUpdates.Count == 0);
-        if (result.HasValue)
-        {
-            await CompleteResultAsync(result.Value);
-            return;
-        }
-
-        await PersistAndContinuePollAsync(next);
+        await HandleGetUpdatesResultAsync(result);
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
     public async Task HandleTimeoutDue(TelegramWaitReplyTimeoutDueEvent evt)
     {
+        // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+        //   Old pattern: watchdog timeout raced outside the actor-owned getUpdates request identity.
+        //   New principle: timeout is a self-continuation and stale RequestId callbacks cannot complete state.
         ArgumentNullException.ThrowIfNull(evt);
         if (!IsActiveContinuation(evt.CommandId, evt.Generation))
             return;
+        if (!string.IsNullOrWhiteSpace(evt.RequestId) &&
+            (State.PendingGetUpdates == null ||
+             !string.Equals(State.PendingGetUpdates.RequestId, evt.RequestId, StringComparison.Ordinal)))
+        {
+            return;
+        }
 
         await CompleteTimeoutAsync();
     }
@@ -220,6 +187,7 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
                 {
                     var next = state.Clone();
                     next.Active = false;
+                    next.PendingGetUpdates = null;
                     next.PendingMatchedUpdate = null;
                     next.CollectedReplies.Clear();
                     next.CollectedReplyOrder.Clear();
@@ -279,8 +247,206 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
         });
     }
 
+    private async Task SendGetUpdatesAsync(
+        long? offset,
+        int pollTimeoutSeconds,
+        int perCallTimeoutMs,
+        bool bootstrap)
+    {
+        // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+        //   Old pattern: actor turn awaited Telegram /getUpdates connector work behind a Task.Delay watchdog.
+        //   New principle: persist pending request, schedule durable timeout, then hand off to ExternalLink stream.
+        if (State.PendingGetUpdates != null)
+            return;
+
+        var request = BuildGetUpdatesRequest(offset, pollTimeoutSeconds, perCallTimeoutMs, bootstrap);
+        var next = State.Clone();
+        next.PendingGetUpdates = request.Clone();
+        await PersistDomainEventAsync(new TelegramWaitReplyProgressedEvent { State = next });
+        await SchedulePendingGetUpdatesTimeoutAsync(request, perCallTimeoutMs);
+
+        if (ExternalLinkPort == null)
+        {
+            await CompleteFailureAsync("telegram getUpdates external link is not active");
+            return;
+        }
+
+        try
+        {
+            await ExternalLinkPort.SendAsync(GetUpdatesLinkId, request);
+        }
+        catch (Exception ex)
+        {
+            await CompleteFailureAsync($"telegram getUpdates dispatch failed: {ex.Message}");
+        }
+    }
+
+    private async Task SchedulePendingGetUpdatesTimeoutAsync(
+        TelegramGetUpdatesRequest request,
+        int perCallTimeoutMs)
+    {
+        var dueMs = Math.Max(1, perCallTimeoutMs);
+        await ScheduleSelfDurableTimeoutAsync(
+            BuildGetUpdatesTimeoutCallbackId(request),
+            TimeSpan.FromMilliseconds(dueMs),
+            new TelegramWaitReplyTimeoutDueEvent
+            {
+                CommandId = request.CommandId,
+                Generation = request.Generation,
+                TimeoutMs = dueMs,
+                RequestId = request.RequestId,
+            });
+    }
+
+    private TelegramGetUpdatesRequest BuildGetUpdatesRequest(
+        long? offset,
+        int pollTimeoutSeconds,
+        int perCallTimeoutMs,
+        bool bootstrap)
+    {
+        var request = new TelegramGetUpdatesRequest
+        {
+            CommandId = State.CommandId,
+            Generation = State.Generation,
+            RequestId = Guid.NewGuid().ToString("N"),
+            ConnectorName = State.ConnectorName,
+            RunId = State.CommandId,
+            StepId = State.SessionId,
+            PollTimeoutSeconds = Math.Clamp(pollTimeoutSeconds, 0, MaxPollTimeoutSeconds),
+            PerCallTimeoutMs = perCallTimeoutMs,
+            HttpMethod = "POST",
+            ContentType = "application/json",
+            Bootstrap = bootstrap,
+        };
+        request.AllowedUpdates.Add("message");
+        request.AllowedUpdates.Add("channel_post");
+        request.Parameters.Add(State.ConnectorParameters);
+        if (offset.HasValue)
+            request.RequestedOffset = offset.Value;
+        return request;
+    }
+
+    private async Task HandleGetUpdatesResultAsync(TelegramGetUpdatesResult result)
+    {
+        // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+        //   Old pattern: connector completion raced in-turn watchdog callbacks with no request identity guard.
+        //   New principle: only the actor-owned pending RequestId may advance the getUpdates continuation.
+        if (!IsActiveContinuation(result.CommandId, result.Generation))
+            return;
+
+        if (State.PendingGetUpdates == null ||
+            string.IsNullOrWhiteSpace(State.PendingGetUpdates.RequestId) ||
+            !string.Equals(State.PendingGetUpdates.RequestId, result.RequestId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (!result.Success)
+        {
+            var fallback = result.Bootstrap
+                ? "telegram bootstrap getUpdates failed"
+                : "telegram getUpdates failed";
+            await CompleteFailureAsync(string.IsNullOrWhiteSpace(result.Error) ? fallback : result.Error.Trim());
+            return;
+        }
+
+        if (result.Bootstrap)
+        {
+            await HandleBootstrapGetUpdatesResultAsync(result);
+            return;
+        }
+
+        await HandlePollGetUpdatesResultAsync(result);
+    }
+
+    private async Task HandleBootstrapGetUpdatesResultAsync(TelegramGetUpdatesResult result)
+    {
+        // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+        //   Old pattern: bootstrap /getUpdates ran inline before the actor turn could yield.
+        //   New principle: bootstrap is a normal ExternalLink result continuation that updates actor state.
+        if (!TryParseTelegramUpdates(
+                result.Output,
+                out var bootstrapUpdates,
+                out var bootstrapMaxUpdateId,
+                out var bootstrapError))
+        {
+            await CompleteFailureAsync($"telegram bootstrap parse failed: {bootstrapError}");
+            return;
+        }
+
+        var bootstrapRecentCutoffUnix = _timeProvider.GetUtcNow().ToUnixTimeSeconds()
+            - Math.Max(30, Math.Min(600, State.WaitTimeoutMs / 1000 + 10));
+        var matchedUpdates = SelectMatchedUpdates(
+            bootstrapUpdates,
+            minimumUpdateId: null,
+            minimumDateUnixExclusive: bootstrapRecentCutoffUnix);
+
+        if (matchedUpdates.Count > 0 && !State.CollectAllReplies)
+        {
+            await CompleteSuccessAsync(matchedUpdates[^1].Content);
+            return;
+        }
+
+        var next = State.Clone();
+        next.PendingGetUpdates = null;
+        if (bootstrapMaxUpdateId.HasValue)
+            next.NextOffset = bootstrapMaxUpdateId.Value + 1;
+        ApplyMatches(next, matchedUpdates);
+
+        var resolved = ResolveCurrentResult(next, emptyPoll: matchedUpdates.Count == 0);
+        if (resolved.HasValue)
+        {
+            await CompleteResultAsync(resolved.Value);
+            return;
+        }
+
+        await PersistAndContinuePollAsync(next);
+    }
+
+    private async Task HandlePollGetUpdatesResultAsync(TelegramGetUpdatesResult result)
+    {
+        // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+        //   Old pattern: long-poll results returned directly to the blocked actor turn.
+        //   New principle: poll results enter as event continuations and either complete or schedule the next turn.
+        if (!TryParseTelegramUpdates(result.Output, out var updates, out var maxUpdateId, out var parseError))
+        {
+            await CompleteFailureAsync($"telegram getUpdates parse failed: {parseError}");
+            return;
+        }
+
+        var requestedOffset = result.HasRequestedOffset ? result.RequestedOffset : (long?)null;
+        var matchedUpdates = SelectMatchedUpdates(
+            updates,
+            minimumUpdateId: requestedOffset,
+            minimumDateUnixExclusive: null);
+        var next = State.Clone();
+        next.PendingGetUpdates = null;
+        if (maxUpdateId.HasValue)
+            next.NextOffset = maxUpdateId.Value + 1;
+        ApplyMatches(next, matchedUpdates);
+
+        var resolved = ResolveCurrentResult(next, emptyPoll: matchedUpdates.Count == 0);
+        if (resolved.HasValue)
+        {
+            await CompleteResultAsync(resolved.Value);
+            return;
+        }
+
+        await PersistAndContinuePollAsync(next);
+    }
+
     private async Task CompleteTimeoutAsync()
     {
+        // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+        //   Old pattern: Task.Delay watchdog raced connector completion outside actor state.
+        //   New principle: timeout is an actor event reconciled against PendingGetUpdates or matched reply state.
+        if (State.PendingGetUpdates != null)
+        {
+            await CompleteFailureAsync(
+                $"telegram getUpdates timeout after {ResolvePendingGetUpdatesTimeoutMs(State.PendingGetUpdates)}ms");
+            return;
+        }
+
         if (State.PendingMatchedUpdate != null)
         {
             await CompleteSuccessAsync(State.CollectAllReplies
@@ -483,46 +649,16 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
         return $"raw:{update.ChatId}:{update.FromUserId}:{update.DateUnix}:{update.Content}";
     }
 
-    private async Task<ConnectorResponse> ExecuteGetUpdatesAsync(
-        long? offset,
-        int pollTimeoutSeconds,
-        int perCallTimeoutMs,
-        IConnector connector)
+    private static string BuildGetUpdatesTimeoutCallbackId(TelegramGetUpdatesRequest request) =>
+        RuntimeCallbackKeyComposer.BuildCallbackId(
+            GetUpdatesTimeoutCallbackPrefix,
+            request.CommandId,
+            request.Generation.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            request.RequestId);
+
+    private static int ResolvePendingGetUpdatesTimeoutMs(TelegramGetUpdatesRequest request)
     {
-        var parameters = new Dictionary<string, string>(State.ConnectorParameters, StringComparer.OrdinalIgnoreCase)
-        {
-            ["method"] = "POST",
-            ["content_type"] = "application/json",
-            ["timeout_ms"] = perCallTimeoutMs.ToString(System.Globalization.CultureInfo.InvariantCulture),
-        };
-
-        var connectorRequest = new ConnectorRequest
-        {
-            RunId = State.CommandId,
-            StepId = State.SessionId,
-            Connector = State.ConnectorName,
-            Operation = "/getUpdates",
-            Payload = BuildGetUpdatesPayload(offset, pollTimeoutSeconds),
-            Parameters = parameters,
-        };
-
-        return await TelegramBridgeGAgent.ExecuteConnectorWithWatchdogAsync(
-            connector,
-            connectorRequest,
-            TelegramBridgeGAgent.ResolveConnectorExecutionWatchdogMs(parameters));
-    }
-
-    private static string BuildGetUpdatesPayload(long? offset, int pollTimeoutSeconds)
-    {
-        var payload = new Dictionary<string, object?>
-        {
-            ["timeout"] = Math.Clamp(pollTimeoutSeconds, 0, MaxPollTimeoutSeconds),
-            ["allowed_updates"] = new[] { "message", "channel_post" },
-        };
-        if (offset.HasValue && offset.Value >= 0)
-            payload["offset"] = offset.Value;
-
-        return JsonSerializer.Serialize(payload);
+        return request.PerCallTimeoutMs > 0 ? request.PerCallTimeoutMs : 1;
     }
 
     private static bool TryParseTelegramUpdates(
