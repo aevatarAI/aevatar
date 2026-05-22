@@ -187,7 +187,13 @@ verify_trunk_build() {
     dotnet build aevatar.slnx --nologo 2>&1 | grep -E "error CS" | head -5 >&2
     return 2
   fi
-  echo "✓ trunk build green"
+  # 加 architecture_guards 包括 docs lint(防 ADR 重复编号类 trunk bug,per 2026-05-22 #804 merge 后 ADR 0024 重复事故)
+  if ! bash tools/ci/architecture_guards.sh > /tmp/_verify_trunk_guards.log 2>&1; then
+    echo "❌ trunk architecture/docs guards 挂(merge 后 lint regression)" >&2
+    tail -5 /tmp/_verify_trunk_guards.log >&2
+    return 3
+  fi
+  echo "✓ trunk build + guards green"
   return 0
 }
 
