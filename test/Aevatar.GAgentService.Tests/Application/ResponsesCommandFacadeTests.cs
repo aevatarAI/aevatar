@@ -1,7 +1,6 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.ChatRouting.Abstractions;
-using Aevatar.ChatRouting.Core;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -25,7 +24,7 @@ public sealed class ResponsesCommandFacadeTests
             completionService: completion,
             sessionPort: sessions,
             routeResolver: new StaticResponsesRouteResolver("route-value"),
-            policyPort: new StaticChatRoutePolicyQueryPort(ForwardToModelAction("openai/gpt-5")));
+            chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(ForwardToModelAction("openai/gpt-5")));
 
         var result = await facade.CreateAsync(new ResponsesCommandRequest(
             "client-model",
@@ -99,12 +98,11 @@ public sealed class ResponsesCommandFacadeTests
         ILlmSessionQueryPort? queryPort = null,
         IResponsesCallerScopeResolver? callerScopeResolver = null,
         IResponsesRouteResolver? routeResolver = null,
-        IChatRoutePolicyQueryPort? policyPort = null) =>
+        IResponsesChatRouteDecisionPort? chatRouteDecisionPort = null) =>
         new(
             new StaticLlmProviderFactory(),
             callerScopeResolver ?? new StaticCallerScopeResolver(),
-            policyPort ?? new StaticChatRoutePolicyQueryPort(ForwardToModelAction(string.Empty)),
-            new ChatRouteResolver(new StaticChatRouteFallbackProvider(string.Empty)),
+            chatRouteDecisionPort ?? new StaticResponsesChatRouteDecisionPort(ForwardToModelAction(string.Empty)),
             routeResolver ?? new StaticResponsesRouteResolver(null),
             sessionPort ?? new RecordingSessionPort(),
             queryPort ?? new RecordingSessionQueryPort(),
@@ -150,19 +148,20 @@ public sealed class ResponsesCommandFacadeTests
             Task.FromResult(routeValue);
     }
 
-    private sealed class StaticChatRoutePolicyQueryPort(ChatRouteAction action) : IChatRoutePolicyQueryPort
+    private sealed class StaticResponsesChatRouteDecisionPort(ChatRouteAction action)
+        : IResponsesChatRouteDecisionPort
     {
-        public Task<ChatRoutePolicySnapshot?> LookupForCallerAsync(OwnerScope callerScope, CancellationToken ct = default) =>
-            Task.FromResult<ChatRoutePolicySnapshot?>(new ChatRoutePolicySnapshot(action, []));
-    }
-
-    private sealed class StaticChatRouteFallbackProvider(string modelName) : IChatRouteFallbackProvider
-    {
-        public ChatRouteDecision GetFallbackDecision() => new()
-        {
-            Action = ForwardToModelAction(modelName),
-            UsedFallback = true,
-        };
+        public Task<ChatRouteDecision> ResolveAsync(
+            ResponsesCallerScope callerScope,
+            string model,
+            ToolMode toolMode,
+            string contentHint,
+            CancellationToken ct = default)
+            => Task.FromResult(new ChatRouteDecision
+            {
+                Action = action.Clone(),
+                UsedFallback = false,
+            });
     }
 
     private sealed class StaticLlmProviderFactory : ILLMProviderFactory

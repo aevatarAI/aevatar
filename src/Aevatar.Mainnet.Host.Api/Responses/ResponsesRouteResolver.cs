@@ -1,3 +1,5 @@
+using Aevatar.ChatRouting.Abstractions;
+using Aevatar.ChatRouting.Core;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.Extensions.Logging;
@@ -84,4 +86,39 @@ internal sealed class ResponsesRouteResolver : IResponsesRouteResolver
 
     private static readonly IReadOnlyDictionary<string, string> EmptyRoutes =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+}
+
+// Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+//   Old pattern: Application facades directly depended on ChatRouting.Core query/resolver implementations to decide the ingress route.
+//   New principle: Host composes the Application route-decision port with the concrete readmodel query and resolver; Application owns only the command semantics.
+internal sealed class ResponsesChatRouteDecisionPort(
+    IChatRoutePolicyQueryPort queryPort,
+    ChatRouteResolver resolver) : IResponsesChatRouteDecisionPort
+{
+    public async Task<ChatRouteDecision> ResolveAsync(
+        ResponsesCallerScope callerScope,
+        string model,
+        ToolMode toolMode,
+        string contentHint,
+        CancellationToken ct = default)
+    {
+        var ownerScope = OwnerScope.ForNyxIdNative(callerScope.ScopeId);
+        var snapshot = await queryPort.LookupForCallerAsync(ownerScope, ct);
+        return resolver.Resolve(snapshot, new ChatRouteInput
+        {
+            SourceKind = ChatSourceKind.NyxResponses,
+            CallerScope = new ChatRouteCallerScope
+            {
+                NyxUserId = ownerScope.NyxUserId,
+                Platform = ownerScope.Platform,
+                RegistrationScopeId = ownerScope.RegistrationScopeId,
+                SenderId = ownerScope.SenderId,
+            },
+            Channel = string.Empty,
+            CommandName = string.Empty,
+            ContentHint = contentHint,
+            ToolMode = toolMode,
+            Model = model,
+        });
+    }
 }

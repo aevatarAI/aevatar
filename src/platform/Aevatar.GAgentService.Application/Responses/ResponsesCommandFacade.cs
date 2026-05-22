@@ -1,6 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.ChatRouting.Abstractions;
-using Aevatar.ChatRouting.Core;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -16,8 +15,7 @@ namespace Aevatar.GAgentService.Application.Responses;
 public sealed class ResponsesCommandFacade(
     ILLMProviderFactory providerFactory,
     IResponsesCallerScopeResolver callerScopeResolver,
-    IChatRoutePolicyQueryPort chatRoutePolicyQueryPort,
-    ChatRouteResolver chatRouteResolver,
+    IResponsesChatRouteDecisionPort chatRouteDecisionPort,
     IResponsesRouteResolver routeResolver,
     ILlmSessionRegistrationPort responseSessionRegistrationPort,
     ILlmSessionQueryPort responseSessionQueryPort,
@@ -227,8 +225,6 @@ public sealed class ResponsesCommandFacade(
         CancellationToken ct)
     {
         var routeDecision = await ResolveResponsesChatRouteAsync(
-            chatRoutePolicyQueryPort,
-            chatRouteResolver,
             callerScope,
             normalized.Model,
             ResolveToolMode(normalized.DeclaredTools.Count, normalized.ToolResults.Count),
@@ -509,34 +505,13 @@ public sealed class ResponsesCommandFacade(
             });
     }
 
-    private async Task<ChatRouteDecision> ResolveResponsesChatRouteAsync(
-        IChatRoutePolicyQueryPort queryPort,
-        ChatRouteResolver resolver,
+    private Task<ChatRouteDecision> ResolveResponsesChatRouteAsync(
         ResponsesCallerScope callerScope,
         string model,
         ToolMode toolMode,
         string contentHint,
         CancellationToken ct)
-    {
-        var ownerScope = OwnerScope.ForNyxIdNative(callerScope.ScopeId);
-        var snapshot = await queryPort.LookupForCallerAsync(ownerScope, ct);
-        return resolver.Resolve(snapshot, new ChatRouteInput
-        {
-            SourceKind = ChatSourceKind.NyxResponses,
-            CallerScope = new ChatRouteCallerScope
-            {
-                NyxUserId = ownerScope.NyxUserId,
-                Platform = ownerScope.Platform,
-                RegistrationScopeId = ownerScope.RegistrationScopeId,
-                SenderId = ownerScope.SenderId,
-            },
-            Channel = string.Empty,
-            CommandName = string.Empty,
-            ContentHint = contentHint,
-            ToolMode = toolMode,
-            Model = model,
-        });
-    }
+        => chatRouteDecisionPort.ResolveAsync(callerScope, model, toolMode, contentHint, ct);
 
     private static ToolMode ResolveToolMode(int declaredToolCount, int inlineToolResultCount)
     {

@@ -1103,6 +1103,7 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton<IChatRoutePolicyQueryPort>(StaticChatRoutePolicyQueryPort.ForSnapshot(
             new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
         builder.Services.AddSingleton(new ChatRouteResolver(new StaticChatRouteFallbackProvider(string.Empty)));
+        builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.AddSingleton<IResponsesRouteResolver>(new RecordingResponsesRouteResolver());
         builder.Services.AddSingleton<ITeamEntryMemberResolver>(StubTeamEntryMemberResolver.NotFound());
         builder.Services.AddSingleton<IMemberPublishedServiceResolver>(StubMemberPublishedServiceResolver.Identity());
@@ -1169,6 +1170,7 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton<IResponsesCallerScopeResolver>(new StubResponsesCallerScopeResolver());
         builder.Services.AddSingleton<IChatRoutePolicyQueryPort>(queryPort);
         builder.Services.AddSingleton(new ChatRouteResolver(new StaticChatRouteFallbackProvider(string.Empty)));
+        builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.AddSingleton<IResponsesRouteResolver>(new RecordingResponsesRouteResolver());
         builder.Services.AddSingleton<ITeamEntryMemberResolver>(StubTeamEntryMemberResolver.NotFound());
         builder.Services.AddSingleton<IMemberPublishedServiceResolver>(memberResolver);
@@ -2118,6 +2120,7 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton(chatRoutePolicyQueryPort ?? StaticChatRoutePolicyQueryPort.ForSnapshot(
             new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
         builder.Services.AddSingleton(new ChatRouteResolver(new StaticChatRouteFallbackProvider(string.Empty)));
+        builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.AddSingleton(modelsAggregator ?? new RecordingResponsesModelsAggregator());
         builder.Services.AddSingleton(routeResolver ?? new RecordingResponsesRouteResolver
         {

@@ -1,6 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.ChatRouting.Abstractions;
-using Aevatar.ChatRouting.Core;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -14,8 +13,7 @@ namespace Aevatar.GAgentService.Application.Responses;
 //   New principle: Application owns the Messages command lifecycle as a typed facade; Host only maps Anthropic HTTP/SSE/JSON frames.
 public sealed class MessagesCommandFacade(
     IResponsesCallerScopeResolver callerScopeResolver,
-    IChatRoutePolicyQueryPort chatRoutePolicyQueryPort,
-    ChatRouteResolver chatRouteResolver,
+    IResponsesChatRouteDecisionPort chatRouteDecisionPort,
     IResponsesRouteResolver routeResolver,
     ILlmSessionRegistrationPort sessionRegistrationPort,
     IResponsesCompletionApplicationService completionService,
@@ -365,32 +363,13 @@ public sealed class MessagesCommandFacade(
             });
     }
 
-    private async Task<ChatRouteDecision> ResolveResponsesChatRouteAsync(
+    private Task<ChatRouteDecision> ResolveResponsesChatRouteAsync(
         ResponsesCallerScope callerScope,
         string model,
         ToolMode toolMode,
         string contentHint,
         CancellationToken ct)
-    {
-        var ownerScope = OwnerScope.ForNyxIdNative(callerScope.ScopeId);
-        var snapshot = await chatRoutePolicyQueryPort.LookupForCallerAsync(ownerScope, ct);
-        return chatRouteResolver.Resolve(snapshot, new ChatRouteInput
-        {
-            SourceKind = ChatSourceKind.NyxResponses,
-            CallerScope = new ChatRouteCallerScope
-            {
-                NyxUserId = ownerScope.NyxUserId,
-                Platform = ownerScope.Platform,
-                RegistrationScopeId = ownerScope.RegistrationScopeId,
-                SenderId = ownerScope.SenderId,
-            },
-            Channel = string.Empty,
-            CommandName = string.Empty,
-            ContentHint = contentHint,
-            ToolMode = toolMode,
-            Model = model,
-        });
-    }
+        => chatRouteDecisionPort.ResolveAsync(callerScope, model, toolMode, contentHint, ct);
 
     private static ToolMode ResolveToolMode(int declaredToolCount, int inlineToolResultCount)
     {

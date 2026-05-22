@@ -8,7 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
-    <ProjectReference Include="..\..\Aevatar.ChatRouting.Core\Aevatar.ChatRouting.Core.csproj" />
+    <ProjectReference Include="..\..\Aevatar.ChatRouting.Abstractions\Aevatar.ChatRouting.Abstractions.csproj" />
     <ProjectReference Include="..\..\Aevatar.CQRS.Core\Aevatar.CQRS.Core.csproj" />
     <ProjectReference Include="..\..\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />

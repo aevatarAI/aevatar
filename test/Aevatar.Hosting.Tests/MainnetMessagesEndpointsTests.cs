@@ -700,6 +700,7 @@ public sealed class MainnetMessagesEndpointsTests
         builder.Services.AddSingleton(chatRoutePolicyQueryPort ?? MessagesStaticChatRoutePolicyQueryPort.ForSnapshot(
             new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
         builder.Services.AddSingleton(new ChatRouteResolver(new MessagesStaticChatRouteFallbackProvider(string.Empty)));
+        builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.AddSingleton(routeResolver ?? (IResponsesRouteResolver)new MessagesNoopRouteResolver());
         if (responsesToolProvider != null)
             builder.Services.AddSingleton(responsesToolProvider);

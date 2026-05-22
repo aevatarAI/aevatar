@@ -1,7 +1,6 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.ChatRouting.Abstractions;
-using Aevatar.ChatRouting.Core;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Application.Responses;
@@ -47,7 +46,7 @@ public sealed class MessagesCommandFacadeTests
     [Fact]
     public async Task CreateAsync_ShouldRejectForwardToGAgentRoute()
     {
-        var facade = CreateFacade(policyPort: new StaticChatRoutePolicyQueryPort(new ChatRouteAction
+        var facade = CreateFacade(chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(new ChatRouteAction
         {
             ForwardToGagent = new ForwardToGAgent { ActorId = "member-1" },
         }));
@@ -78,11 +77,10 @@ public sealed class MessagesCommandFacadeTests
     private static MessagesCommandFacade CreateFacade(
         IResponsesCompletionApplicationService? completionService = null,
         ILlmSessionRegistrationPort? sessionPort = null,
-        IChatRoutePolicyQueryPort? policyPort = null) =>
+        IResponsesChatRouteDecisionPort? chatRouteDecisionPort = null) =>
         new(
             new StaticCallerScopeResolver(),
-            policyPort ?? new StaticChatRoutePolicyQueryPort(ForwardToModelAction(string.Empty)),
-            new ChatRouteResolver(new StaticChatRouteFallbackProvider(string.Empty)),
+            chatRouteDecisionPort ?? new StaticResponsesChatRouteDecisionPort(ForwardToModelAction(string.Empty)),
             new StaticResponsesRouteResolver("route-value"),
             sessionPort ?? new RecordingSessionPort(),
             completionService ?? new RecordingCompletionService(new ResponsesCompletionResult("ok", null, [])),
@@ -106,19 +104,20 @@ public sealed class MessagesCommandFacadeTests
             Task.FromResult(routeValue);
     }
 
-    private sealed class StaticChatRoutePolicyQueryPort(ChatRouteAction action) : IChatRoutePolicyQueryPort
+    private sealed class StaticResponsesChatRouteDecisionPort(ChatRouteAction action)
+        : IResponsesChatRouteDecisionPort
     {
-        public Task<ChatRoutePolicySnapshot?> LookupForCallerAsync(OwnerScope callerScope, CancellationToken ct = default) =>
-            Task.FromResult<ChatRoutePolicySnapshot?>(new ChatRoutePolicySnapshot(action, []));
-    }
-
-    private sealed class StaticChatRouteFallbackProvider(string modelName) : IChatRouteFallbackProvider
-    {
-        public ChatRouteDecision GetFallbackDecision() => new()
-        {
-            Action = ForwardToModelAction(modelName),
-            UsedFallback = true,
-        };
+        public Task<ChatRouteDecision> ResolveAsync(
+            ResponsesCallerScope callerScope,
+            string model,
+            ToolMode toolMode,
+            string contentHint,
+            CancellationToken ct = default)
+            => Task.FromResult(new ChatRouteDecision
+            {
+                Action = action.Clone(),
+                UsedFallback = false,
+            });
     }
 
     private sealed class StaticLlmProviderFactory : ILLMProviderFactory
