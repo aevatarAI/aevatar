@@ -51,7 +51,7 @@ public sealed class IdentityOAuthCallbackEndpointTests
         var text = await new StreamReader(ctx.Response.Body, Encoding.UTF8).ReadToEndAsync();
         var doc = JsonDocument.Parse(text);
         doc.RootElement.GetProperty("status").GetString().Should().Be("binding_pending");
-        doc.RootElement.TryGetProperty("status_url", out _).Should().BeFalse();
+        doc.RootElement.GetProperty("status_url").GetString().Should().Be("/api/oauth/aevatar-client/status");
     }
 
     [Fact]

@@ -688,6 +688,9 @@ public static class IdentityOAuthEndpoints
         ChannelIdentityOAuthAcceptedReceipt receipt,
         string? format)
     {
+        // Refactor (iter27/cluster-028-identity-oauth-endpoint):
+        //   Old pattern: IdentityOAuthEndpoints + AevatarOAuthClientBootstrapService 直接构造 EventEnvelope 投递,然后在 endpoint 内同步等 projection readiness / rebuild observation / readmodel polling (3-15s timeout + 50-250ms polling),违反 ACK 协议 + query-time projection priming
+        //   New principle: 加 module-local CQRS dispatch adapters(ChannelIdentityOAuthCommandDispatch);endpoint inject typed ICommandDispatchService<...>,返回 accepted/pending + status URL,不再等 projection;删 IProjectionReadinessPort/ExternalIdentityBindingProjectionPort/AevatarOAuthClientProjectionPort/AevatarOAuthClientRebuildCoordinator/ProjectionWaitTimeout 等
         if (string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
         {
             return Results.Json(new
@@ -697,6 +700,7 @@ public static class IdentityOAuthEndpoints
                 command_id = receipt.CommandId,
                 correlation_id = receipt.CorrelationId,
                 display_name = string.IsNullOrWhiteSpace(displayName) ? null : displayName,
+                status_url = OAuthClientStatusUrl,
                 detail = "Binding command accepted for dispatch. Return to Lark and use /whoami to check once projection materializes.",
             }, statusCode: StatusCodes.Status202Accepted);
         }
@@ -747,6 +751,9 @@ h1 {{ font-size: 22px; margin: 16px 0 8px; }}
         string? displayName,
         ChannelIdentityOAuthAcceptedReceipt receipt)
     {
+        // Refactor (iter27/cluster-028-identity-oauth-endpoint):
+        //   Old pattern: IdentityOAuthEndpoints + AevatarOAuthClientBootstrapService 直接构造 EventEnvelope 投递,然后在 endpoint 内同步等 projection readiness / rebuild observation / readmodel polling (3-15s timeout + 50-250ms polling),违反 ACK 协议 + query-time projection priming
+        //   New principle: 加 module-local CQRS dispatch adapters(ChannelIdentityOAuthCommandDispatch);endpoint inject typed ICommandDispatchService<...>,返回 accepted/pending + status URL,不再等 projection;删 IProjectionReadinessPort/ExternalIdentityBindingProjectionPort/AevatarOAuthClientProjectionPort/AevatarOAuthClientRebuildCoordinator/ProjectionWaitTimeout 等
         var displayLine = string.IsNullOrWhiteSpace(displayName)
             ? string.Empty
             : $"<p>账号:{System.Net.WebUtility.HtmlEncode(displayName)}</p>";
