@@ -103,10 +103,10 @@ public sealed class ServiceCatalogQueryReader : IServiceCatalogQueryReader
             readModel.ServiceId,
             readModel.DisplayName,
             readModel.DefaultServingRevisionId,
-            readModel.ActiveServingRevisionId,
-            readModel.DeploymentId,
-            readModel.PrimaryActorId,
-            readModel.DeploymentStatus,
+            ActiveServingRevisionId: string.Empty,
+            DeploymentId: string.Empty,
+            PrimaryActorId: string.Empty,
+            DeploymentStatus: string.Empty,
             readModel.Endpoints
                 .Select(x => new ServiceEndpointSnapshot(
                     x.EndpointId,

@@ -1,6 +1,7 @@
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Services;
 
 namespace Aevatar.GAgentService.Application.Services;
 
@@ -20,16 +21,31 @@ public sealed class ServiceLifecycleQueryApplicationService : IServiceLifecycleQ
         _deploymentQueryReader = deploymentQueryReader ?? throw new ArgumentNullException(nameof(deploymentQueryReader));
     }
 
-    public Task<ServiceCatalogSnapshot?> GetServiceAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-        _catalogQueryReader.GetAsync(identity, ct);
+    public async Task<ServiceCatalogSnapshot?> GetServiceAsync(ServiceIdentity identity, CancellationToken ct = default)
+    {
+        var service = await _catalogQueryReader.GetAsync(identity, ct);
+        return service == null ? null : await ComposeActiveDeploymentAsync(identity, service, ct);
+    }
 
-    public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListServicesAsync(
+    public async Task<IReadOnlyList<ServiceCatalogSnapshot>> ListServicesAsync(
         string tenantId,
         string appId,
         string @namespace,
         int take = 200,
-        CancellationToken ct = default) =>
-        _catalogQueryReader.QueryByScopeAsync(tenantId, appId, @namespace, take, ct);
+        CancellationToken ct = default)
+    {
+        var services = await _catalogQueryReader.QueryByScopeAsync(tenantId, appId, @namespace, take, ct);
+        var enriched = new List<ServiceCatalogSnapshot>(services.Count);
+        foreach (var service in services)
+        {
+            enriched.Add(await ComposeActiveDeploymentAsync(
+                BuildIdentity(service),
+                service,
+                ct));
+        }
+
+        return enriched;
+    }
 
     public Task<ServiceRevisionCatalogSnapshot?> GetServiceRevisionsAsync(
         ServiceIdentity identity,
@@ -40,4 +56,38 @@ public sealed class ServiceLifecycleQueryApplicationService : IServiceLifecycleQ
         ServiceIdentity identity,
         CancellationToken ct = default) =>
         _deploymentQueryReader.GetAsync(identity, ct);
+
+    private async Task<ServiceCatalogSnapshot> ComposeActiveDeploymentAsync(
+        ServiceIdentity identity,
+        ServiceCatalogSnapshot service,
+        CancellationToken ct)
+    {
+        var deploymentCatalog = await _deploymentQueryReader.GetAsync(identity, ct);
+        var activeDeployment = deploymentCatalog?.Deployments
+            .Where(static x =>
+                string.Equals(x.Status, ServiceDeploymentStatus.Active.ToString(), StringComparison.Ordinal) &&
+                !string.IsNullOrWhiteSpace(x.PrimaryActorId))
+            .OrderByDescending(static x => x.UpdatedAt)
+            .ThenBy(static x => x.DeploymentId, StringComparer.Ordinal)
+            .FirstOrDefault();
+
+        return activeDeployment == null
+            ? service
+            : service with
+            {
+                ActiveServingRevisionId = activeDeployment.RevisionId,
+                DeploymentId = activeDeployment.DeploymentId,
+                PrimaryActorId = activeDeployment.PrimaryActorId,
+                DeploymentStatus = activeDeployment.Status,
+            };
+    }
+
+    private static ServiceIdentity BuildIdentity(ServiceCatalogSnapshot service) =>
+        new()
+        {
+            TenantId = service.TenantId,
+            AppId = service.AppId,
+            Namespace = service.Namespace,
+            ServiceId = service.ServiceId,
+        };
 }

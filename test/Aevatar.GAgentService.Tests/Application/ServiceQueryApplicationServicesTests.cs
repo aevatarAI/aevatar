@@ -79,6 +79,50 @@ public sealed class ServiceQueryApplicationServicesTests
     }
 
     [Fact]
+    public async Task GetServiceAsync_ShouldComposeActiveDeploymentFromDeploymentReadModel()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var catalogReader = new ConfiguredCatalogReader
+        {
+            GetResult = CreateServiceCatalogSnapshot(),
+        };
+        var deploymentReader = new ConfiguredDeploymentReader
+        {
+            GetResult = new ServiceDeploymentCatalogSnapshot(
+                "tenant:app:default:svc",
+                [
+                    new ServiceDeploymentSnapshot(
+                        "dep-old",
+                        "r-old",
+                        "actor-old",
+                        ServiceDeploymentStatus.Deactivated.ToString(),
+                        DateTimeOffset.Parse("2026-03-14T00:00:00+00:00"),
+                        DateTimeOffset.Parse("2026-03-14T00:05:00+00:00")),
+                    new ServiceDeploymentSnapshot(
+                        "dep-active",
+                        "r-active",
+                        "actor-active",
+                        ServiceDeploymentStatus.Active.ToString(),
+                        DateTimeOffset.Parse("2026-03-14T00:10:00+00:00"),
+                        DateTimeOffset.Parse("2026-03-14T00:15:00+00:00")),
+                ],
+                DateTimeOffset.Parse("2026-03-14T00:15:00+00:00")),
+        };
+        var service = new ServiceLifecycleQueryApplicationService(
+            catalogReader,
+            new RecordingRevisionReader(),
+            deploymentReader);
+
+        var result = await service.GetServiceAsync(identity);
+
+        result.Should().NotBeNull();
+        result!.ActiveServingRevisionId.Should().Be("r-active");
+        result.DeploymentId.Should().Be("dep-active");
+        result.PrimaryActorId.Should().Be("actor-active");
+        result.DeploymentStatus.Should().Be(ServiceDeploymentStatus.Active.ToString());
+    }
+
+    [Fact]
     public async Task GetServiceRevisionsAsync_ShouldReturnSnapshot_WhenReaderHasData()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
@@ -200,6 +244,25 @@ public sealed class ServiceQueryApplicationServicesTests
             Task.FromResult(GetResult);
     }
 
+    private sealed class ConfiguredCatalogReader : IServiceCatalogQueryReader
+    {
+        public ServiceCatalogSnapshot? GetResult { get; init; }
+
+        public Task<ServiceCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult(GetResult);
+
+        public Task<IReadOnlyList<ServiceCatalogSnapshot>> QueryAllAsync(int take = 1000, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
+
+        public Task<IReadOnlyList<ServiceCatalogSnapshot>> QueryByScopeAsync(
+            string tenantId,
+            string appId,
+            string @namespace,
+            int take = 200,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
+    }
+
     private sealed class ConfiguredDeploymentReader : IServiceDeploymentCatalogQueryReader
     {
         public ServiceDeploymentCatalogSnapshot? GetResult { get; init; }
@@ -301,4 +364,21 @@ public sealed class ServiceQueryApplicationServicesTests
             return Task.FromResult(Snapshot);
         }
     }
+
+    private static ServiceCatalogSnapshot CreateServiceCatalogSnapshot() =>
+        new(
+            ServiceKey: "tenant:app:default:svc",
+            TenantId: "tenant",
+            AppId: "app",
+            Namespace: "default",
+            ServiceId: "svc",
+            DisplayName: "Service",
+            DefaultServingRevisionId: "r-default",
+            ActiveServingRevisionId: string.Empty,
+            DeploymentId: string.Empty,
+            PrimaryActorId: string.Empty,
+            DeploymentStatus: string.Empty,
+            Endpoints: [],
+            PolicyIds: [],
+            UpdatedAt: DateTimeOffset.Parse("2026-03-14T00:00:00+00:00"));
 }
