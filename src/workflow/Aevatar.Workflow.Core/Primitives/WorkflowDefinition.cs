@@ -106,6 +106,14 @@ public sealed class RoleDefinition
     public required string Name { get; init; }
 
     /// <summary>
+    /// Stable agent kind token used by WorkflowRunGAgent to provision the role actor.
+    /// </summary>
+    // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
+    //   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
+    //   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
+    public string? AgentKind { get; init; }
+
+    /// <summary>
     /// 系统提示词，用于 LLM 调用时的角色设定。
     /// </summary>
     public string SystemPrompt { get; init; } = "";

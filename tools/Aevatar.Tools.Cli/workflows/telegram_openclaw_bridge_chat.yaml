@@ -4,13 +4,16 @@ description: |
   Aevatar bot sends prompt -> OpenClaw bot replies in the same group ->
   Aevatar bot polls group stream and captures the reply (no OpenClaw callback).
 
-roles: []
+roles:
+  - id: telegram_user_bridge
+    name: Telegram User Bridge
+    agent_kind: workflow.telegram-user-bridge
 
 steps:
   - id: bootstrap_telegram_login
     type: llm_call
+    target_role: telegram_user_bridge
     parameters:
-      agent_type: TelegramUserBridgeGAgent
       connector: telegram_user
       operation: /ensureLogin
       chat_id: "${telegram.chat_id}"
@@ -40,8 +43,8 @@ steps:
 
   - id: retry_telegram_login_with_code
     type: llm_call
+    target_role: telegram_user_bridge
     parameters:
-      agent_type: TelegramUserBridgeGAgent
       connector: telegram_user
       operation: /ensureLogin
       chat_id: "${telegram.chat_id}"
@@ -80,8 +83,8 @@ steps:
 
   - id: retry_telegram_login_with_2fa
     type: llm_call
+    target_role: telegram_user_bridge
     parameters:
-      agent_type: TelegramUserBridgeGAgent
       connector: telegram_user
       operation: /ensureLogin
       chat_id: "${telegram.chat_id}"
@@ -113,8 +116,8 @@ steps:
 
   - id: send_to_openclaw_group
     type: llm_call
+    target_role: telegram_user_bridge
     parameters:
-      agent_type: TelegramUserBridgeGAgent
       connector: telegram_user
       operation: /sendMessage
       chat_id: "${telegram.chat_id}"
@@ -135,8 +138,8 @@ steps:
 
   - id: wait_openclaw_group_stream
     type: llm_call
+    target_role: telegram_user_bridge
     parameters:
-      agent_type: TelegramUserBridgeGAgent
       connector: telegram_user
       operation: /waitReply
       chat_id: "${telegram.chat_id}"

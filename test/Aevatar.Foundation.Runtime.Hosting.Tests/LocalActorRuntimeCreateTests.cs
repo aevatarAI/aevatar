@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using System.Threading;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Streaming;
@@ -137,6 +139,18 @@ public sealed class LocalActorRuntimeCreateTests
     }
 
     [Fact]
+    public async Task CreateByKindAsync_ShouldCreateActorFromRegisteredKind()
+    {
+        var runtime = CreateRuntime(services =>
+            services.AddAevatarAgentKindRegistry(builder => builder.Register<KindRegisteredAgent>()));
+
+        var actor = await runtime.CreateByKindAsync("tests.local-kind", "kind-actor");
+
+        actor.Id.Should().Be("kind-actor");
+        actor.Agent.Should().BeOfType<KindRegisteredAgent>();
+    }
+
+    [Fact]
     public async Task CreateAsync_WhenConcurrentRequestsUseSameType_ShouldReturnAuthoritativeActor()
     {
         var runtime = CreateRuntime();
@@ -193,14 +207,16 @@ public sealed class LocalActorRuntimeCreateTests
         }
     }
 
-    private static LocalActorRuntime CreateRuntime()
+    private static LocalActorRuntime CreateRuntime(Action<IServiceCollection>? configureServices = null)
     {
         var registry = new InMemoryStreamForwardingRegistry();
         var streams = new InMemoryStreamProvider(
             new InMemoryStreamOptions(),
             NullLoggerFactory.Instance,
             registry);
-        var services = new ServiceCollection().BuildServiceProvider();
+        var servicesBuilder = new ServiceCollection();
+        configureServices?.Invoke(servicesBuilder);
+        var services = servicesBuilder.BuildServiceProvider();
         return new LocalActorRuntime(streams, services, streams);
     }
 
@@ -375,6 +391,22 @@ public sealed class LocalActorRuntimeCreateTests
         public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
 
         public Task<string> GetDescriptionAsync() => Task.FromResult("blocking-b");
+
+        public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    [GAgent("tests.local-kind")]
+    private sealed class KindRegisteredAgent : IAgent
+    {
+        public string Id => "kind-registered";
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult("kind-registered");
 
         public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
 

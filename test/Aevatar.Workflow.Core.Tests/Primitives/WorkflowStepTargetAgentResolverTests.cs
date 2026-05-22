@@ -12,167 +12,57 @@ namespace Aevatar.Workflow.Core.Tests.Primitives;
 public sealed class WorkflowStepTargetAgentResolverTests
 {
     [Fact]
-    public async Task ResolveAsync_WhenAgentTypeProvided_ShouldCreateAndReturnTargetActor()
+    public async Task ResolveAsync_WhenTargetRoleProvided_ShouldReturnRoleActor()
     {
-        var runtime = new RecordingActorRuntime();
-        var resolver = new WorkflowStepTargetAgentResolver(
-            runtime,
-            [new FixedAliasProvider("telegram", typeof(TestTargetAgent))]);
+        var resolver = new WorkflowStepTargetAgentResolver();
         var ctx = new StubEventHandlerContext("workflow:root");
         var request = new StepRequestEvent
         {
             StepId = "notify",
-            TargetRole = "legacy-role",
+            StepType = "llm_call",
+            TargetRole = "telegram_user_bridge",
         };
-        request.Parameters["agent_type"] = "telegram";
-        request.Parameters["agent_id"] = "bridge:telegram:prod";
 
         var result = await resolver.ResolveAsync(request, ctx, CancellationToken.None);
 
         result.UseSelf.Should().BeFalse();
-        result.ActorId.Should().Be("bridge:telegram:prod");
-        result.Mode.Should().Contain("agent_type");
-        runtime.Created.Should().ContainSingle();
-        runtime.Created[0].agentType.Should().Be(typeof(TestTargetAgent));
-        runtime.Created[0].actorId.Should().Be("bridge:telegram:prod");
-        runtime.Links.Should().ContainSingle()
-            .Which.Should().Be(("workflow:root", "bridge:telegram:prod"));
+        result.ActorId.Should().Be("workflow:root:telegram_user_bridge");
+        result.Mode.Should().Be("target_role:telegram_user_bridge");
     }
 
     [Fact]
-    public async Task ResolveAsync_WhenAgentTypeMissing_ShouldFallbackToRoleImplicitAssistantThenSelf()
+    public async Task ResolveAsync_WhenLlmCallOmitsTargetRole_ShouldUseImplicitAssistantRole()
     {
-        var runtime = new RecordingActorRuntime();
-        var resolver = new WorkflowStepTargetAgentResolver(runtime);
+        var resolver = new WorkflowStepTargetAgentResolver();
         var ctx = new StubEventHandlerContext("workflow:root");
-
-        var roleRequest = new StepRequestEvent
-        {
-            StepId = "step-1",
-            TargetRole = "assistant",
-        };
-        var roleResult = await resolver.ResolveAsync(roleRequest, ctx, CancellationToken.None);
-        roleResult.UseSelf.Should().BeFalse();
-        roleResult.ActorId.Should().Be("workflow:root:assistant");
-
-        var implicitLlmRequest = new StepRequestEvent
-        {
-            StepId = "step-2",
-            StepType = "llm_call",
-        };
-        var implicitLlmResult = await resolver.ResolveAsync(implicitLlmRequest, ctx, CancellationToken.None);
-        implicitLlmResult.UseSelf.Should().BeFalse();
-        implicitLlmResult.ActorId.Should().Be("workflow:root:assistant");
-
-        var selfRequest = new StepRequestEvent
-        {
-            StepId = "step-3",
-            StepType = "transform",
-        };
-        var selfResult = await resolver.ResolveAsync(selfRequest, ctx, CancellationToken.None);
-        selfResult.UseSelf.Should().BeTrue();
-        selfResult.WorkerId.Should().Be("workflow:root");
-    }
-
-    [Fact]
-    public async Task ResolveAsync_WhenAgentTypeAndNoAgentId_ShouldGenerateStableActorId()
-    {
-        var runtime = new RecordingActorRuntime();
-        var resolver = new WorkflowStepTargetAgentResolver(
-            runtime,
-            [new FixedAliasProvider("telegram", typeof(TestTargetAgent))]);
-        var ctx = new StubEventHandlerContext("workflow:main");
         var request = new StepRequestEvent
         {
-            StepId = "notify-step",
+            StepId = "answer",
+            StepType = "llm_call",
         };
-        request.Parameters["agent_type"] = "telegram";
 
         var result = await resolver.ResolveAsync(request, ctx, CancellationToken.None);
 
-        result.ActorId.Should().StartWith("workflow:main:step:notify-step:agent:");
-        runtime.Created.Should().ContainSingle();
-        runtime.Created[0].actorId.Should().Be(result.ActorId);
-        runtime.Links.Should().ContainSingle()
-            .Which.Should().Be(("workflow:main", result.ActorId));
+        result.UseSelf.Should().BeFalse();
+        result.ActorId.Should().Be("workflow:root:assistant");
+        result.Mode.Should().Be("implicit_target_role:assistant");
     }
 
-    private sealed class FixedAliasProvider(string alias, Type type) : IWorkflowAgentTypeAliasProvider
+    [Fact]
+    public async Task ResolveAsync_WhenNonLlmStepOmitsTargetRole_ShouldUseSelf()
     {
-        public bool TryResolve(string inputAlias, out Type agentType)
+        var resolver = new WorkflowStepTargetAgentResolver();
+        var ctx = new StubEventHandlerContext("workflow:root");
+        var request = new StepRequestEvent
         {
-            if (string.Equals(alias, inputAlias, StringComparison.OrdinalIgnoreCase))
-            {
-                agentType = type;
-                return true;
-            }
+            StepId = "normalize",
+            StepType = "transform",
+        };
 
-            agentType = type;
-            return false;
-        }
-    }
+        var result = await resolver.ResolveAsync(request, ctx, CancellationToken.None);
 
-    private sealed class RecordingActorRuntime : IActorRuntime
-    {
-        private readonly Dictionary<string, IActor> _actors = new(StringComparer.Ordinal);
-        public List<(Type agentType, string actorId)> Created { get; } = [];
-        public List<(string parentId, string childId)> Links { get; } = [];
-
-        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
-            where TAgent : IAgent =>
-            CreateAsync(typeof(TAgent), id, ct);
-
-        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default)
-        {
-            var actorId = id ?? Guid.NewGuid().ToString("N");
-            var actor = new StubActor(actorId, (IAgent)Activator.CreateInstance(agentType, actorId)!);
-            _actors[actorId] = actor;
-            Created.Add((agentType, actorId));
-            return Task.FromResult<IActor>(actor);
-        }
-
-        public Task DestroyAsync(string id, CancellationToken ct = default)
-        {
-            _actors.Remove(id);
-            return Task.CompletedTask;
-        }
-
-        public Task<IActor?> GetAsync(string id)
-        {
-            _actors.TryGetValue(id, out var actor);
-            return Task.FromResult(actor);
-        }
-
-        public Task<bool> ExistsAsync(string id) => Task.FromResult(_actors.ContainsKey(id));
-
-        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default)
-        {
-            Links.Add((parentId, childId));
-            return Task.CompletedTask;
-        }
-
-        public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
-    }
-
-    private sealed class StubActor(string id, IAgent agent) : IActor
-    {
-        public string Id { get; } = id;
-        public IAgent Agent { get; } = agent;
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
-        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
-    }
-
-    private sealed class TestTargetAgent(string id) : IAgent
-    {
-        public string Id { get; } = id;
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<string> GetDescriptionAsync() => Task.FromResult("test-target");
-        public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        result.UseSelf.Should().BeTrue();
+        result.WorkerId.Should().Be("workflow:root");
     }
 
     private sealed class StubEventHandlerContext(string agentId) : IEventHandlerContext
@@ -216,6 +106,16 @@ public sealed class WorkflowStepTargetAgentResolverTests
 
         public Task CancelDurableCallbackAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
             Task.CompletedTask;
+    }
+
+    private sealed class TestTargetAgent(string id) : IAgent
+    {
+        public string Id { get; } = id;
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<string> GetDescriptionAsync() => Task.FromResult("test-target");
+        public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class EmptyServiceProvider : IServiceProvider

@@ -414,7 +414,7 @@ public class WorkflowValidatorCoverageTests
     }
 
     [Fact]
-    public void Validate_WhenAgentTypeIsEmptyOrInvalid_ShouldReportErrors()
+    public void Validate_WhenRawActorLifecycleParametersArePresent_ShouldReportErrors()
     {
         var wf = new WorkflowDefinition
         {
@@ -445,11 +445,11 @@ public class WorkflowValidatorCoverageTests
 
         var errors = WorkflowValidator.Validate(wf);
         errors.Should().Contain(e => e.Contains("s-empty") && e.Contains("agent_type"));
-        errors.Should().Contain(e => e.Contains("s-invalid") && e.Contains("格式非法"));
+        errors.Should().Contain(e => e.Contains("s-invalid") && e.Contains("已废止"));
     }
 
     [Fact]
-    public void Validate_WhenLlmCallMissingTargetRoleAndAgentType_ShouldAllowImplicitAssistantRole()
+    public void Validate_WhenLlmCallMissingTargetRole_ShouldAllowImplicitAssistantRole()
     {
         var wf = new WorkflowDefinition
         {
@@ -470,7 +470,7 @@ public class WorkflowValidatorCoverageTests
     }
 
     [Fact]
-    public void Validate_WhenAgentTypePresent_ShouldSkipMissingTargetRoleValidation()
+    public void Validate_WhenAgentTypePresent_ShouldStillValidateMissingTargetRole()
     {
         var wf = new WorkflowDefinition
         {
@@ -492,11 +492,12 @@ public class WorkflowValidatorCoverageTests
         };
 
         var errors = WorkflowValidator.Validate(wf);
-        errors.Should().NotContain(e => e.Contains("missing-role"));
+        errors.Should().Contain(e => e.Contains("missing-role"));
+        errors.Should().Contain(e => e.Contains("agent_type") && e.Contains("已废止"));
     }
 
     [Fact]
-    public void Validate_WhenAgentIdIsBlankString_ShouldReportError()
+    public void Validate_WhenAgentIdIsPresent_ShouldReportDeprecatedRawLifecycleError()
     {
         var wf = new WorkflowDefinition
         {
@@ -518,6 +519,6 @@ public class WorkflowValidatorCoverageTests
         };
 
         var errors = WorkflowValidator.Validate(wf);
-        errors.Should().Contain(e => e.Contains("s-agent-id") && e.Contains("agent_id"));
+        errors.Should().Contain(e => e.Contains("s-agent-id") && e.Contains("agent_id") && e.Contains("已废止"));
     }
 }

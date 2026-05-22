@@ -5,13 +5,16 @@ description: |
   then send a research+report task to OpenClaw over Telegram and wait for reply.
   OpenClaw writes reports to ~/.openclaw/workspace automatically.
 
-roles: []
+roles:
+  - id: telegram_user_bridge
+    name: Telegram User Bridge
+    agent_kind: workflow.telegram-user-bridge
 
 steps:
   - id: bootstrap_telegram_login
     type: llm_call
+    target_role: telegram_user_bridge
     parameters:
-      agent_type: TelegramUserBridgeGAgent
       connector: telegram_user
       operation: /ensureLogin
       chat_id: "${telegram.chat_id}"
@@ -40,8 +43,8 @@ steps:
 
   - id: send_research_task_to_openclaw
     type: llm_call
+    target_role: telegram_user_bridge
     parameters:
-      agent_type: TelegramUserBridgeGAgent
       connector: telegram_user
       operation: /sendMessage
       chat_id: "${telegram.chat_id}"
@@ -71,8 +74,8 @@ steps:
 
   - id: wait_openclaw_research_feedback
     type: llm_call
+    target_role: telegram_user_bridge
     parameters:
-      agent_type: TelegramUserBridgeGAgent
       connector: telegram_user
       operation: /waitReply
       chat_id: "${telegram.chat_id}"

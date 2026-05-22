@@ -96,6 +96,7 @@ public sealed class WorkflowParser
         {
             Id = normalized.Id,
             Name = normalized.Name,
+            AgentKind = NormalizeText(role.AgentKind),
             SystemPrompt = normalized.SystemPrompt,
             Provider = normalized.Provider,
             Model = normalized.Model,
@@ -380,6 +381,7 @@ public sealed class WorkflowParser
     {
         public string? Id { get; set; }
         public string? Name { get; set; }
+        public string? AgentKind { get; set; }
         public string? SystemPrompt { get; set; }
         public string? Provider { get; set; }
         public string? Model { get; set; }
