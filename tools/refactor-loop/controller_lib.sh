@@ -80,12 +80,18 @@ merge_pr() {
 }
 
 # Open PR + add auto-loop label atomically + capture PR number into PR_NUM
-# Usage: open_pr_with_label <title> <body-file> [base]
+# Usage: open_pr_with_label <title> <body-file> [base] [head]
 # Sets PR_NUM env var.
+# head 必须显式传(controller 当前分支可能不是 cluster branch),per 2026-05-22
+# Auric "PR #802 创建失败 same as base branch" 教训。
 open_pr_with_label() {
-  local title="$1" body_file="$2" base="${3:-auto-refact-dev}"
+  local title="$1" body_file="$2" base="${3:-auto-refact-dev}" head="${4:-}"
+  if [ -z "$head" ]; then
+    echo "open_pr_with_label: head branch required (avoid gh fallback to current branch = base)" >&2
+    return 1
+  fi
   local pr_url
-  pr_url=$(gh pr create --base "$base" --title "$title" --body-file "$body_file" 2>&1 | tail -1)
+  pr_url=$(gh pr create --base "$base" --head "$head" --title "$title" --body-file "$body_file" 2>&1 | tail -1)
   PR_NUM=$(echo "$pr_url" | grep -oE "pull/[0-9]+" | grep -oE "[0-9]+")
   if [ -z "$PR_NUM" ]; then
     echo "open_pr_with_label: failed to extract PR num from: $pr_url" >&2
