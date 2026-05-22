@@ -10,6 +10,25 @@ namespace Aevatar.AI.Tests;
 public class StreamingToolExecutorTests
 {
     [Fact]
+    public void StreamingToolExecutorSource_ShouldNotOwnProcessLocalProgressCoordinator()
+    {
+        var root = FindRepositoryRoot();
+        var source = StripLineComments(File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "Aevatar.AI.Core",
+            "Tools",
+            "StreamingToolExecutor.cs")));
+
+        source.Should().NotContain("System.Threading.Channels");
+        source.Should().NotContain("Channel<");
+        source.Should().NotContain("TaskCompletionSource");
+        source.Should().NotContain("private readonly List<ToolExecutionEntry>");
+        source.Should().NotContain("private readonly List<TaskCompletionSource>");
+        source.Should().NotContain("private readonly ExecutionState");
+    }
+
+    [Fact]
     public async Task ReadOnlyTools_ShouldExecuteInParallel()
     {
         var concurrentCount = 0;
@@ -24,17 +43,18 @@ public class StreamingToolExecutorTests
         tools.Register(new ConcurrencyTrackingTool("read3", isReadOnly: true, async ct =>
             await TrackConcurrencyAsync("r3", gate, ct)));
 
-        using var executor = new StreamingToolExecutor(tools);
+        var executor = new StreamingToolExecutor(tools);
+        using var executionState = executor.CreateExecutionState();
 
-        executor.AddTool(new ToolCall { Id = "tc-1", Name = "read1", ArgumentsJson = "{}" });
-        executor.AddTool(new ToolCall { Id = "tc-2", Name = "read2", ArgumentsJson = "{}" });
-        executor.AddTool(new ToolCall { Id = "tc-3", Name = "read3", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-1", Name = "read1", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-2", Name = "read2", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-3", Name = "read3", ArgumentsJson = "{}" });
 
         await gate.WaitForEntrantsAsync(CancellationToken.None);
         gate.Release();
 
         var results = new List<ToolExecutionResult>();
-        await foreach (var result in executor.GetRemainingResultsAsync(CancellationToken.None))
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
             results.Add(result);
 
         maxConcurrent.Should().BeGreaterThan(1, "read-only tools should execute concurrently");
@@ -65,17 +85,18 @@ public class StreamingToolExecutorTests
         tools.Register(new ConcurrencyTrackingTool("write2", isReadOnly: false, async ct =>
             await TrackConcurrencyAsync("w2", ct)));
 
-        using var executor = new StreamingToolExecutor(tools);
+        var executor = new StreamingToolExecutor(tools);
+        using var executionState = executor.CreateExecutionState();
 
-        executor.AddTool(new ToolCall { Id = "tc-1", Name = "write1", ArgumentsJson = "{}" });
-        executor.AddTool(new ToolCall { Id = "tc-2", Name = "write2", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-1", Name = "write1", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-2", Name = "write2", ArgumentsJson = "{}" });
 
         await gate.WaitForEntrantsAsync(CancellationToken.None);
-        executor.GetCompletedResults().Should().BeEmpty();
+        executor.GetCompletedResults(executionState).Should().BeEmpty();
         gate.Release();
 
         var results = new List<ToolExecutionResult>();
-        await foreach (var result in executor.GetRemainingResultsAsync(CancellationToken.None))
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
             results.Add(result);
 
         maxConcurrent.Should().Be(1, "non-read-only tools should execute serially");
@@ -115,17 +136,18 @@ public class StreamingToolExecutorTests
             return "fast-result";
         }));
 
-        using var executor = new StreamingToolExecutor(tools);
+        var executor = new StreamingToolExecutor(tools);
+        using var executionState = executor.CreateExecutionState();
 
-        executor.AddTool(new ToolCall { Id = "tc-slow", Name = "slow", ArgumentsJson = "{}" });
-        executor.AddTool(new ToolCall { Id = "tc-fast", Name = "fast", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-slow", Name = "slow", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-fast", Name = "fast", ArgumentsJson = "{}" });
 
         await fastCompleted.Task;
-        executor.GetCompletedResults().Should().BeEmpty();
+        executor.GetCompletedResults(executionState).Should().BeEmpty();
         slowGate.Release();
 
         var results = new List<ToolExecutionResult>();
-        await foreach (var result in executor.GetRemainingResultsAsync(CancellationToken.None))
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
             results.Add(result);
 
         results.Should().HaveCount(2);
@@ -165,21 +187,22 @@ public class StreamingToolExecutorTests
             return "w1";
         }));
 
-        using var executor = new StreamingToolExecutor(tools);
+        var executor = new StreamingToolExecutor(tools);
+        using var executionState = executor.CreateExecutionState();
 
-        executor.AddTool(new ToolCall { Id = "tc-1", Name = "read1", ArgumentsJson = "{}" });
-        executor.AddTool(new ToolCall { Id = "tc-2", Name = "read2", ArgumentsJson = "{}" });
-        executor.AddTool(new ToolCall { Id = "tc-3", Name = "write1", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-1", Name = "read1", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-2", Name = "read2", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-3", Name = "write1", ArgumentsJson = "{}" });
 
         await readsGate.WaitForEntrantsAsync(CancellationToken.None);
         executionLog.Should().NotContain("write1-start");
         readsGate.Release();
-        await writeStarted.Task;
 
         var results = new List<ToolExecutionResult>();
-        await foreach (var result in executor.GetRemainingResultsAsync(CancellationToken.None))
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
             results.Add(result);
 
+        writeStarted.Task.IsCompleted.Should().BeTrue();
         results.Should().HaveCount(3);
         results[0].CallId.Should().Be("tc-1");
         results[1].CallId.Should().Be("tc-2");
@@ -213,13 +236,14 @@ public class StreamingToolExecutorTests
             await next();
         });
 
-        using var executor = new StreamingToolExecutor(tools, toolMiddlewares: [middleware]);
+        var executor = new StreamingToolExecutor(tools, toolMiddlewares: [middleware]);
+        using var executionState = executor.CreateExecutionState();
 
-        executor.AddTool(new ToolCall { Id = "tc-fail", Name = "failing", ArgumentsJson = "{}" });
-        executor.AddTool(new ToolCall { Id = "tc-skip", Name = "skipped", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-fail", Name = "failing", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-skip", Name = "skipped", ArgumentsJson = "{}" });
 
         var results = new List<ToolExecutionResult>();
-        await foreach (var result in executor.GetRemainingResultsAsync(CancellationToken.None))
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
             results.Add(result);
 
         results.Should().HaveCount(2);
@@ -244,17 +268,18 @@ public class StreamingToolExecutorTests
         }));
         tools.Register(new ConcurrencyTrackingTool("queued", isReadOnly: false, _ => "q"));
 
-        using var executor = new StreamingToolExecutor(tools);
+        var executor = new StreamingToolExecutor(tools);
+        using var executionState = executor.CreateExecutionState();
 
-        executor.AddTool(new ToolCall { Id = "tc-1", Name = "slow", ArgumentsJson = "{}" });
-        executor.AddTool(new ToolCall { Id = "tc-2", Name = "queued", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-1", Name = "slow", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-2", Name = "queued", ArgumentsJson = "{}" });
 
         await slowGate.WaitForEntrantsAsync(CancellationToken.None);
-        executor.Discard();
+        executor.Discard(executionState);
         slowGate.Release();
 
         var results = new List<ToolExecutionResult>();
-        await foreach (var result in executor.GetRemainingResultsAsync(CancellationToken.None))
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
             results.Add(result);
 
         results.Should().HaveCount(2);
@@ -267,13 +292,14 @@ public class StreamingToolExecutorTests
         var tools = new ToolManager();
         tools.Register(new ConcurrencyTrackingTool("echo", isReadOnly: true, _ => "ok"));
 
-        using var executor = new StreamingToolExecutor(tools);
-        executor.Discard();
+        var executor = new StreamingToolExecutor(tools);
+        using var executionState = executor.CreateExecutionState();
+        executor.Discard(executionState);
 
-        executor.AddTool(new ToolCall { Id = "tc-late", Name = "echo", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-late", Name = "echo", ArgumentsJson = "{}" });
 
         var results = new List<ToolExecutionResult>();
-        await foreach (var result in executor.GetRemainingResultsAsync(CancellationToken.None))
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
             results.Add(result);
 
         results.Should().HaveCount(1);
@@ -303,12 +329,13 @@ public class StreamingToolExecutorTests
             ["auth_token"] = "secret-123",
         };
 
-        using var executor = new StreamingToolExecutor(
+        var executor = new StreamingToolExecutor(
             tools, requestMetadata: metadata);
+        using var executionState = executor.CreateExecutionState();
 
-        executor.AddTool(new ToolCall { Id = "tc-1", Name = "meta-check", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-1", Name = "meta-check", ArgumentsJson = "{}" });
 
-        await foreach (var _ in executor.GetRemainingResultsAsync(CancellationToken.None)) { }
+        await foreach (var _ in executor.GetRemainingResultsAsync(executionState, CancellationToken.None)) { }
 
         capturedToken.Should().Be("typed-secret");
         capturedExternal.Should().Be("secret-123");
@@ -322,25 +349,26 @@ public class StreamingToolExecutorTests
         var tools = new ToolManager();
         tools.Register(new ConcurrencyTrackingTool("echo", isReadOnly: true, _ => "ok"));
 
-        using var executor = new StreamingToolExecutor(tools);
+        var executor = new StreamingToolExecutor(tools);
+        using var executionState = executor.CreateExecutionState();
 
         // Before adding any tools
-        executor.GetCompletedResults().Should().BeEmpty();
+        executor.GetCompletedResults(executionState).Should().BeEmpty();
 
-        executor.AddTool(new ToolCall { Id = "tc-1", Name = "echo", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-1", Name = "echo", ArgumentsJson = "{}" });
 
-        await foreach (var result in executor.GetRemainingResultsAsync(CancellationToken.None))
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
         {
             result.CallId.Should().Be("tc-1");
             result.Result.Should().Be("ok");
             break;
         }
 
-        var results = executor.GetCompletedResults().ToList();
+        var results = executor.GetCompletedResults(executionState).ToList();
         results.Should().BeEmpty();
 
         // Should not yield again (already yielded)
-        executor.GetCompletedResults().Should().BeEmpty();
+        executor.GetCompletedResults(executionState).Should().BeEmpty();
     }
 
     [Fact]
@@ -359,13 +387,14 @@ public class StreamingToolExecutorTests
             await next();
         });
 
-        using var executor = new StreamingToolExecutor(tools, hooks, [middleware]);
+        var executor = new StreamingToolExecutor(tools, hooks, [middleware]);
+        using var executionState = executor.CreateExecutionState();
 
-        executor.AddTool(new ToolCall { Id = "tc-1", Name = "echo", ArgumentsJson = "{}" });
-        executor.AddTool(new ToolCall { Id = "tc-2", Name = "echo", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-1", Name = "echo", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-2", Name = "echo", ArgumentsJson = "{}" });
 
         var results = new List<ToolExecutionResult>();
-        await foreach (var result in executor.GetRemainingResultsAsync(CancellationToken.None))
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
             results.Add(result);
 
         results.Should().HaveCount(2);
@@ -378,12 +407,13 @@ public class StreamingToolExecutorTests
     public async Task UnknownTool_ShouldReturnNotFoundResult()
     {
         var tools = new ToolManager();
-        using var executor = new StreamingToolExecutor(tools);
+        var executor = new StreamingToolExecutor(tools);
+        using var executionState = executor.CreateExecutionState();
 
-        executor.AddTool(new ToolCall { Id = "tc-1", Name = "nonexistent", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-1", Name = "nonexistent", ArgumentsJson = "{}" });
 
         var results = new List<ToolExecutionResult>();
-        await foreach (var result in executor.GetRemainingResultsAsync(CancellationToken.None))
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
             results.Add(result);
 
         results.Should().HaveCount(1);
@@ -485,5 +515,32 @@ public class StreamingToolExecutorTests
             if (Interlocked.CompareExchange(ref target, value, current) == current)
                 return;
         }
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null)
+        {
+            if (File.Exists(Path.Combine(dir.FullName, "aevatar.slnx")))
+                return dir.FullName;
+
+            dir = dir.Parent;
+        }
+
+        throw new InvalidOperationException("Could not locate repository root.");
+    }
+
+    private static string StripLineComments(string source)
+    {
+        var lines = source.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var idx = lines[i].IndexOf("//", StringComparison.Ordinal);
+            if (idx >= 0)
+                lines[i] = lines[i][..idx];
+        }
+
+        return string.Join('\n', lines);
     }
 }

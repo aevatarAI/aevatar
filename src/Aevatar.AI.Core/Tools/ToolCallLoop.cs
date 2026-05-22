@@ -548,12 +548,16 @@ public sealed class ToolCallLoop
         List<ChatMessage> messages,
         CancellationToken ct)
     {
-        using var executor = new StreamingToolExecutor(_tools, _hooks, _toolMiddlewares);
+        // Refactor (iter35/cluster-040-streaming-tool-executor):
+        //   Old pattern: StreamingToolExecutor owns process-local channel coordinator + TaskCompletionSource waiters + List<TrackedTool>/List<TaskCompletionSource> as object fields for tool execution ordering.
+        //   New principle: Tool execution state kept in owning chat/actor turn,或 narrow runtime-neutral tool scheduling abstraction(no process-local progress storage)。Streaming tool progress advanced by owning execution flow;process-local channels 仅作 transport mechanics,不作 business progress 来源。
+        var executor = new StreamingToolExecutor(_tools, _hooks, _toolMiddlewares);
+        using var executionState = executor.CreateExecutionState();
 
         foreach (var call in toolCalls)
-            executor.AddTool(call);
+            executor.AddTool(executionState, call);
 
-        await foreach (var result in executor.GetRemainingResultsAsync(ct))
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, ct))
             messages.Add(BuildToolResultMessage(result.CallId, result.Result));
     }
 
