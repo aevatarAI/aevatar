@@ -5,6 +5,7 @@ package aevatar.chat_routing.v1;
 option csharp_namespace = "Aevatar.ChatRouting.Abstractions";
 
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
 
 // ─── Caller identity ───
 //
@@ -100,8 +101,26 @@ message ChatRouteInput {
 }
 
 // ─── Decision actions (oneof) ───
+message ChatRouteToolSetRef {
+  // Name of the registered tool set (e.g. "workspace.default",
+  // "lark.self_notify", "voice.realtime"). The registry resolves this to a
+  // concrete IAgentToolSource list at the boundary.
+  string name = 1;
+}
+
+message ChatRouteToolChoiceHint {
+  // Tool name to pin. Empty means no hint; the LLM is free to choose.
+  string tool_name = 1;
+  // Server-policy arguments for the chosen tool. Boundary mergers must reject
+  // LLM-supplied arguments that conflict on the same key; the prefilled values
+  // are trusted policy input, not model-supplied data.
+  google.protobuf.Struct prefilled_arguments = 2;
+}
+
 message ForwardToModel {
   string model_name = 1;
+  ChatRouteToolSetRef tool_set_ref = 2;
+  ChatRouteToolChoiceHint tool_choice_hint = 3;
 }
 
 message ForwardToGAgent {
