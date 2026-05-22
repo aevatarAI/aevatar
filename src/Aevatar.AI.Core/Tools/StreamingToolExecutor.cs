@@ -63,7 +63,6 @@ public sealed class StreamingToolExecutor
 
         var tool = _tools.Get(toolCall.Name);
         var tracked = new ToolExecutionEntry(
-            Index: state.Tools.Count,
             Call: toolCall,
             Tool: tool,
             IsConcurrencySafe: tool?.IsReadOnly == true && tool.IsDestructive == false);
@@ -377,12 +376,10 @@ public sealed class StreamingToolExecutor
     internal enum ToolStatus { Queued, Executing, Completed, Yielded }
 
     internal sealed class ToolExecutionEntry(
-        int Index,
         ToolCall Call,
         IAgentTool? Tool,
         bool IsConcurrencySafe)
     {
-        public int Index { get; } = Index;
         public ToolCall Call { get; } = Call;
         public IAgentTool? Tool { get; } = Tool;
         public bool IsConcurrencySafe { get; } = IsConcurrencySafe;

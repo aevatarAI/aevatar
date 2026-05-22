@@ -309,6 +309,50 @@ public class StreamingToolExecutorTests
     }
 
     [Fact]
+    public async Task ExecutionStates_OnSameExecutor_ShouldIsolateQueuesResultsAndDiscard()
+    {
+        var tools = new ToolManager();
+        var firstGate = new ToolExecutionGate(expectedEntrants: 1);
+        tools.Register(new ConcurrencyTrackingTool("blocked", isReadOnly: true, async ct =>
+        {
+            firstGate.SignalEntered();
+            await firstGate.WaitForReleaseAsync(ct);
+            return "blocked-result";
+        }));
+        tools.Register(new ConcurrencyTrackingTool("echo", isReadOnly: true, _ => "ok"));
+
+        var executor = new StreamingToolExecutor(tools);
+        using var firstState = executor.CreateExecutionState();
+        using var secondState = executor.CreateExecutionState();
+
+        executor.AddTool(firstState, new ToolCall { Id = "first", Name = "blocked", ArgumentsJson = "{}" });
+        executor.AddTool(secondState, new ToolCall { Id = "second", Name = "echo", ArgumentsJson = "{}" });
+        await firstGate.WaitForEntrantsAsync(CancellationToken.None);
+        executor.Discard(firstState);
+        firstGate.Release();
+
+        var firstResults = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(firstState, CancellationToken.None))
+            firstResults.Add(result);
+
+        var secondResults = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(secondState, CancellationToken.None))
+            secondResults.Add(result);
+
+        firstResults.Should().ContainSingle();
+        firstResults[0].CallId.Should().Be("first");
+        firstResults[0].IsError.Should().BeTrue();
+        firstResults[0].Result.Should().Contain("discarded");
+
+        secondResults.Should().ContainSingle();
+        secondResults[0].CallId.Should().Be("second");
+        secondResults[0].IsError.Should().BeFalse();
+        secondResults[0].Result.Should().Be("ok");
+        executor.GetCompletedResults(firstState).Should().BeEmpty();
+        executor.GetCompletedResults(secondState).Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task TypedContextPropagation_ShouldSetAsyncLocalDuringExecutionAndRestore()
     {
         string? capturedToken = null;
@@ -404,6 +448,46 @@ public class StreamingToolExecutorTests
     }
 
     [Fact]
+    public async Task HookRewrite_FromReadOnlyToNonReadOnly_ShouldErrorAndSkipQueuedTool()
+    {
+        var destructiveRan = false;
+        var skippedRan = false;
+        var tools = new ToolManager();
+        tools.Register(new ConcurrencyTrackingTool("read", isReadOnly: true, _ => "read-result"));
+        tools.Register(new ConcurrencyTrackingTool("write", isReadOnly: false, _ =>
+        {
+            destructiveRan = true;
+            return "write-result";
+        }));
+        tools.Register(new ConcurrencyTrackingTool("queued", isReadOnly: false, _ =>
+        {
+            skippedRan = true;
+            return "queued-result";
+        }));
+
+        var hooks = new AgentHookPipeline([new RewriteToolNameHook("read", "write")]);
+        var executor = new StreamingToolExecutor(tools, hooks);
+        using var executionState = executor.CreateExecutionState();
+
+        executor.AddTool(executionState, new ToolCall { Id = "tc-rewrite", Name = "read", ArgumentsJson = "{}" });
+        executor.AddTool(executionState, new ToolCall { Id = "tc-queued", Name = "queued", ArgumentsJson = "{}" });
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
+            results.Add(result);
+
+        results.Should().HaveCount(2);
+        results[0].CallId.Should().Be("tc-rewrite");
+        results[0].IsError.Should().BeTrue();
+        results[0].Result.Should().Contain("rewrote a concurrent read-only call to a non-read-only tool");
+        results[1].CallId.Should().Be("tc-queued");
+        results[1].IsError.Should().BeTrue();
+        results[1].Result.Should().Contain("prior tool error");
+        destructiveRan.Should().BeFalse("rewritten non-read-only tool must not execute after concurrent admission");
+        skippedRan.Should().BeFalse("scheduler fault should prevent queued tools from executing");
+    }
+
+    [Fact]
     public async Task UnknownTool_ShouldReturnNotFoundResult()
     {
         var tools = new ToolManager();
@@ -481,6 +565,20 @@ public class StreamingToolExecutorTests
         public Task OnToolExecuteEndAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct)
         {
             Interlocked.Increment(ref ToolEndCount);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RewriteToolNameHook(string fromName, string toName) : IAIGAgentExecutionHook
+    {
+        public string Name => "rewrite-tool";
+        public int Priority => 0;
+
+        public Task OnToolExecuteStartAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct)
+        {
+            if (string.Equals(ctx.ToolName, fromName, StringComparison.OrdinalIgnoreCase))
+                ctx.ToolName = toName;
+
             return Task.CompletedTask;
         }
     }
