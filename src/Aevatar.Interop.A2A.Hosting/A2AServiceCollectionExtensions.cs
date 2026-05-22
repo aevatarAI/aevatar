@@ -1,3 +1,6 @@
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.DependencyInjection;
+using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Interop.A2A.Abstractions;
 using Aevatar.Interop.A2A.Application;
 using Microsoft.Extensions.DependencyInjection;
@@ -16,6 +19,10 @@ public static class A2AServiceCollectionExtensions
     //   New principle: adapter uses task command/readmodel/subscription ports; lifecycle belongs to task GAgent.
     public static IServiceCollection AddA2AAdapter(this IServiceCollection services)
     {
+        services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
+        services.AddCurrentStateProjectionMaterializer<
+            A2ATaskProjectionContext,
+            A2ATaskCurrentStateProjector>();
         services.TryAddScoped<IA2ATaskCommandPort, A2ATaskCommandPort>();
         services.TryAddScoped<IA2AAdapterService, A2AAdapterService>();
         return services;

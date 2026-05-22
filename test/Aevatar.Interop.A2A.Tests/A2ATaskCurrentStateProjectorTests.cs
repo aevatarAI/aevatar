@@ -1,3 +1,6 @@
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Interop.A2A.Abstractions;
 using Aevatar.Interop.A2A.Application;
@@ -12,8 +15,12 @@ namespace Aevatar.Interop.A2A.Tests;
 public class A2ATaskCurrentStateProjectorTests
 {
     [Fact]
-    public void TryProject_WithCommittedA2ATaskState_MapsAuthorityVersionAndEventFacts()
+    public async Task ProjectAsync_WithCommittedA2ATaskState_WritesAuthorityVersionAndEventFacts()
     {
+        var store = new RecordingWriteDispatcher();
+        var projector = new A2ATaskCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-05-22T00:00:00+00:00")));
         var observedAt = Timestamp.FromDateTime(DateTime.UtcNow);
         var state = new A2ATaskState
         {
@@ -41,8 +48,9 @@ public class A2ATaskCurrentStateProjectorTests
                 },
             });
 
-        var document = A2ATaskCurrentStateProjector.TryProject(envelope);
+        await projector.ProjectAsync(BuildContext(), envelope);
 
+        var document = store.Document;
         document.Should().NotBeNull();
         document!.Id.Should().Be("a2a-task:task-1");
         document.ActorId.Should().Be("a2a-task:task-1");
@@ -53,12 +61,15 @@ public class A2ATaskCurrentStateProjectorTests
     }
 
     [Fact]
-    public void TryProject_WithNonCommittedOrNonA2AState_ReturnsNull()
+    public async Task ProjectAsync_WithNonCommittedOrNonA2AState_SkipsWrite()
     {
-        A2ATaskCurrentStateProjector.TryProject(BuildEnvelope(new StringValue { Value = "not committed" }))
-            .Should().BeNull();
+        var store = new RecordingWriteDispatcher();
+        var projector = new A2ATaskCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.UtcNow));
 
-        A2ATaskCurrentStateProjector.TryProject(BuildEnvelope(new CommittedStateEventPublished
+        await projector.ProjectAsync(BuildContext(), BuildEnvelope(new StringValue { Value = "not committed" }));
+        await projector.ProjectAsync(BuildContext(), BuildEnvelope(new CommittedStateEventPublished
             {
                 StateRoot = Google.Protobuf.WellKnownTypes.Any.Pack(new StringValue { Value = "wrong state" }),
                 StateEvent = new StateEvent
@@ -67,16 +78,21 @@ public class A2ATaskCurrentStateProjectorTests
                     EventId = "evt-1",
                     Version = 1,
                 },
-            }))
-            .Should().BeNull();
+            }));
+
+        store.WriteCount.Should().Be(0);
     }
 
     [Fact]
-    public void TryProject_WithMissingActorOrTaskIdentity_ReturnsNull()
+    public async Task ProjectAsync_WithMissingActorOrTaskIdentity_SkipsWrite()
     {
+        var store = new RecordingWriteDispatcher();
+        var projector = new A2ATaskCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.UtcNow));
         var timestamp = Timestamp.FromDateTime(DateTime.UtcNow);
 
-        A2ATaskCurrentStateProjector.TryProject(BuildEnvelope(new CommittedStateEventPublished
+        await projector.ProjectAsync(BuildContext(), BuildEnvelope(new CommittedStateEventPublished
             {
                 StateRoot = Google.Protobuf.WellKnownTypes.Any.Pack(new A2ATaskState
                 {
@@ -88,10 +104,9 @@ public class A2ATaskCurrentStateProjectorTests
                     EventId = "evt-1",
                     Version = 1,
                 },
-            }))
-            .Should().BeNull();
+            }));
 
-        A2ATaskCurrentStateProjector.TryProject(BuildEnvelope(new CommittedStateEventPublished
+        await projector.ProjectAsync(BuildContext(), BuildEnvelope(new CommittedStateEventPublished
             {
                 StateRoot = Google.Protobuf.WellKnownTypes.Any.Pack(new A2ATaskState
                 {
@@ -103,9 +118,17 @@ public class A2ATaskCurrentStateProjectorTests
                     EventId = "evt-1",
                     Version = 1,
                 },
-            }))
-            .Should().BeNull();
+            }));
+
+        store.WriteCount.Should().Be(0);
     }
+
+    private static A2ATaskProjectionContext BuildContext() =>
+        new()
+        {
+            RootActorId = "a2a-task:task-1",
+            ProjectionKind = "a2a-tasks",
+        };
 
     private static EventEnvelope BuildEnvelope(Google.Protobuf.IMessage payload) =>
         new()
@@ -114,4 +137,28 @@ public class A2ATaskCurrentStateProjectorTests
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Google.Protobuf.WellKnownTypes.Any.Pack(payload),
         };
+
+    private sealed class RecordingWriteDispatcher : IProjectionWriteDispatcher<A2ATaskCurrentStateReadModel>
+    {
+        public A2ATaskCurrentStateReadModel? Document { get; private set; }
+
+        public int WriteCount { get; private set; }
+
+        public Task<ProjectionWriteResult> UpsertAsync(
+            A2ATaskCurrentStateReadModel readModel,
+            CancellationToken ct = default)
+        {
+            Document = readModel;
+            WriteCount++;
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
+            Task.FromResult(ProjectionWriteResult.Applied());
+    }
+
+    private sealed class FixedProjectionClock(DateTimeOffset utcNow) : IProjectionClock
+    {
+        public DateTimeOffset UtcNow { get; } = utcNow;
+    }
 }

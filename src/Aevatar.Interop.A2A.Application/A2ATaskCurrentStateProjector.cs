@@ -1,41 +1,62 @@
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Interop.A2A.Abstractions;
-using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Interop.A2A.Application;
 
 // Refactor (iter30/cluster-031-a2a-actor-owned):
 //   Old pattern: task current state lived in IA2ATaskStore process memory.
-//   New principle: current-state readmodel is materialized from committed task actor state.
-internal static class A2ATaskCurrentStateProjector
+//   New principle: Projection Pipeline materializes current-state readmodel from committed task actor state.
+public sealed class A2ATaskCurrentStateProjector
+    : ICurrentStateProjectionMaterializer<A2ATaskProjectionContext>
 {
-    public static A2ATaskCurrentStateReadModel? TryProject(EventEnvelope envelope)
+    private readonly IProjectionWriteDispatcher<A2ATaskCurrentStateReadModel> _writeDispatcher;
+    private readonly IProjectionClock _clock;
+
+    public A2ATaskCurrentStateProjector(
+        IProjectionWriteDispatcher<A2ATaskCurrentStateReadModel> writeDispatcher,
+        IProjectionClock clock)
     {
+        _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
+        _clock = clock ?? throw new ArgumentNullException(nameof(clock));
+    }
+
+    public async ValueTask ProjectAsync(
+        A2ATaskProjectionContext context,
+        EventEnvelope envelope,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(envelope);
-        if (envelope.Payload == null || !envelope.Payload.Is(CommittedStateEventPublished.Descriptor))
-            return null;
 
-        var published = envelope.Payload.Unpack<CommittedStateEventPublished>();
-        if (published.StateRoot == null || !published.StateRoot.Is(A2ATaskState.Descriptor))
-            return null;
-
-        var state = published.StateRoot.Unpack<A2ATaskState>();
-        var stateEvent = published.StateEvent;
-        if (stateEvent == null)
-            return null;
+        if (!CommittedStateEventEnvelope.TryUnpackState<A2ATaskState>(
+                envelope,
+                out _,
+                out var stateEvent,
+                out var state) ||
+            stateEvent == null ||
+            state == null)
+        {
+            return;
+        }
 
         var actorId = stateEvent.AgentId;
         if (string.IsNullOrWhiteSpace(actorId) || string.IsNullOrWhiteSpace(state.TaskId))
-            return null;
+            return;
 
-        return new A2ATaskCurrentStateReadModel
+        var observedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
+        var document = new A2ATaskCurrentStateReadModel
         {
             Id = actorId,
             ActorId = actorId,
             StateVersion = stateEvent.Version,
-            LastEventId = stateEvent.EventId,
-            UpdatedAtUtcValue = stateEvent.Timestamp ?? Timestamp.FromDateTime(DateTime.UtcNow),
+            LastEventId = stateEvent.EventId ?? string.Empty,
+            UpdatedAtUtcValue = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(observedAt),
             State = state,
         };
+
+        await _writeDispatcher.UpsertAsync(document, ct);
     }
 }

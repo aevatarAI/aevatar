@@ -1,6 +1,8 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
@@ -351,15 +353,19 @@ public class A2AEndpointsTests : IDisposable
         services.AddSingleton<IActorRuntime>(new StubActorRuntime());
         services.AddSingleton<IActorDispatchPort>(new StubDispatchPort());
         services.AddSingleton<IProjectionDocumentReader<A2ATaskCurrentStateReadModel, string>>(new StubProjectionReader());
+        services.AddSingleton<IProjectionWriteDispatcher<A2ATaskCurrentStateReadModel>>(new StubTaskProjectionWriteDispatcher());
         services.AddSingleton<IActorEventSubscriptionProvider>(new StubTaskSubscriptionPort());
         services.AddLogging();
         services.AddA2AAdapter();
 
         var serviceTypes = services.Select(descriptor => descriptor.ServiceType).ToArray();
         serviceTypes.Should().NotContain(type => type.Name.Contains("IA2ATaskStore", StringComparison.Ordinal));
+        serviceTypes.Should().Contain(typeof(ICurrentStateProjectionMaterializer<A2ATaskProjectionContext>));
 
         using var provider = services.BuildServiceProvider();
         provider.GetService<IA2AAdapterService>().Should().NotBeNull();
+        provider.GetServices<ICurrentStateProjectionMaterializer<A2ATaskProjectionContext>>()
+            .Should().ContainSingle();
     }
 
     [Fact]
@@ -512,6 +518,17 @@ public class A2AEndpointsTests : IDisposable
             ProjectionDocumentQuery query,
             CancellationToken ct = default) =>
             Task.FromResult(ProjectionDocumentQueryResult<A2ATaskCurrentStateReadModel>.Empty);
+    }
+
+    private sealed class StubTaskProjectionWriteDispatcher : IProjectionWriteDispatcher<A2ATaskCurrentStateReadModel>
+    {
+        public Task<ProjectionWriteResult> UpsertAsync(
+            A2ATaskCurrentStateReadModel readModel,
+            CancellationToken ct = default) =>
+            Task.FromResult(ProjectionWriteResult.Applied());
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
+            Task.FromResult(ProjectionWriteResult.Applied());
     }
 
     private sealed class StubTaskSubscriptionPort : IActorEventSubscriptionProvider

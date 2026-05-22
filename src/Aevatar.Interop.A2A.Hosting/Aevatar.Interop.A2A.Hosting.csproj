@@ -9,6 +9,8 @@
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.Interop.A2A.Abstractions\Aevatar.Interop.A2A.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Interop.A2A.Application\Aevatar.Interop.A2A.Application.csproj" />
+    <ProjectReference Include="..\Aevatar.CQRS.Projection.Core\Aevatar.CQRS.Projection.Core.csproj" />
+    <ProjectReference Include="..\Aevatar.CQRS.Projection.Core.Abstractions\Aevatar.CQRS.Projection.Core.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
