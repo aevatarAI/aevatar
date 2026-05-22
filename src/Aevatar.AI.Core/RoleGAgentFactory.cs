@@ -32,6 +32,9 @@ namespace Aevatar.AI.Core;
 /// </summary>
 public static class RoleGAgentFactory
 {
+    // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+    //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
+    //   New principle: reflector force-pick: 删 Task.Run + Channel/ChannelWriter + _streamBufferCapacity 整个 owned stream 框架;ChatStreamAsync 自己 own stream flow;删 stream_buffer_capacity proto/YAML/config(reserve proto field number);middleware bridge 必须 private/internal adapter-only,不暴露公开 stream middleware 接口
     private static readonly IDeserializer Yaml = new DeserializerBuilder()
         .WithNamingConvention(UnderscoredNamingConvention.Instance)
         .IgnoreUnmatchedProperties()
@@ -61,7 +64,6 @@ public static class RoleGAgentFactory
             MaxTokens = config.MaxTokens,
             MaxToolRounds = config.MaxToolRounds,
             MaxHistoryMessages = config.MaxHistoryMessages,
-            StreamBufferCapacity = config.StreamBufferCapacity,
             EventModules = eventModules,
             EventRoutes = eventRoutes,
         });
@@ -76,7 +78,6 @@ public static class RoleGAgentFactory
             MaxTokens = normalized.MaxTokens ?? 0,
             MaxToolRounds = normalized.MaxToolRounds ?? 0,
             MaxHistoryMessages = normalized.MaxHistoryMessages ?? 0,
-            StreamBufferCapacity = normalized.StreamBufferCapacity ?? 0,
             EventModules = normalized.EventModules ?? string.Empty,
             EventRoutes = normalized.EventRoutes ?? string.Empty,
         };
@@ -206,9 +207,6 @@ public sealed class RoleYamlConfig
 
     /// <summary>最大历史消息条数。</summary>
     public int? MaxHistoryMessages { get; set; }
-
-    /// <summary>流式缓冲区容量。</summary>
-    public int? StreamBufferCapacity { get; set; }
 
     /// <summary>平铺写法：逗号分隔的 EventModule 名称列表。</summary>
     public string? EventModules { get; set; }

@@ -143,7 +143,6 @@ internal static class VoiceDemoBootstrapEndpoints
             ProviderName = NyxIdChatServiceDefaults.ProviderName,
             SystemPrompt = "You are the Aevatar voice demo agent. Reply conversationally and keep spoken answers concise.",
             MaxHistoryMessages = 16,
-            StreamBufferCapacity = 64,
             EventModules = VoiceModuleName,
         };
 

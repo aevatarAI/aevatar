@@ -570,6 +570,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
 
     protected override AIAgentConfigStateOverrides ExtractStateConfigOverrides(RoleGAgentState state)
     {
+        // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+        //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
+        //   New principle: reflector force-pick: 删 Task.Run + Channel/ChannelWriter + _streamBufferCapacity 整个 owned stream 框架;ChatStreamAsync 自己 own stream flow;删 stream_buffer_capacity proto/YAML/config(reserve proto field number);middleware bridge 必须 private/internal adapter-only,不暴露公开 stream middleware 接口
         var overrides = state.ConfigOverrides;
         if (overrides == null)
             return new AIAgentConfigStateOverrides();
@@ -590,8 +593,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             MaxToolRounds = overrides.HasMaxToolRounds ? overrides.MaxToolRounds : null,
             HasMaxHistoryMessages = overrides.HasMaxHistoryMessages,
             MaxHistoryMessages = overrides.HasMaxHistoryMessages ? overrides.MaxHistoryMessages : null,
-            HasStreamBufferCapacity = overrides.HasStreamBufferCapacity,
-            StreamBufferCapacity = overrides.HasStreamBufferCapacity ? overrides.StreamBufferCapacity : null,
             HasMaxPromptTokenBudget = overrides.HasMaxPromptTokenBudget,
             MaxPromptTokenBudget = overrides.HasMaxPromptTokenBudget ? overrides.MaxPromptTokenBudget : null,
             HasCompressionThreshold = overrides.HasCompressionThreshold,
@@ -1061,10 +1062,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             overrides.MaxHistoryMessages = evt.MaxHistoryMessages;
         else
             overrides.ClearMaxHistoryMessages();
-        if (evt.StreamBufferCapacity > 0)
-            overrides.StreamBufferCapacity = evt.StreamBufferCapacity;
-        else
-            overrides.ClearStreamBufferCapacity();
         if (evt.MaxPromptTokenBudget > 0)
             overrides.MaxPromptTokenBudget = evt.MaxPromptTokenBudget;
         else

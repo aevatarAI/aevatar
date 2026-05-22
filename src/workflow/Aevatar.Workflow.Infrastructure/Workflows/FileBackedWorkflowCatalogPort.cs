@@ -595,7 +595,6 @@ internal sealed class FileBackedWorkflowCatalogPort : IWorkflowCatalogPort, IWor
             MaxTokens = role.MaxTokens,
             MaxToolRounds = role.MaxToolRounds,
             MaxHistoryMessages = role.MaxHistoryMessages,
-            StreamBufferCapacity = role.StreamBufferCapacity,
             EventModules = SplitCsv(role.EventModules),
             EventRoutes = role.EventRoutes ?? string.Empty,
             Connectors = role.Connectors.ToList(),

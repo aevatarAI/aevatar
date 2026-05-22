@@ -143,7 +143,6 @@ public sealed class AIAbstractionsProtoCoverageTests
             MaxTokens = 120,
             MaxToolRounds = 3,
             MaxHistoryMessages = 40,
-            StreamBufferCapacity = 128,
             EventModules = "demo",
             EventRoutes = "event.type == X -> demo",
         }, InitializeRoleAgentEvent.Parser);
@@ -159,7 +158,6 @@ public sealed class AIAbstractionsProtoCoverageTests
             MaxTokens = 128,
             MaxToolRounds = 2,
             MaxHistoryMessages = 16,
-            StreamBufferCapacity = 64,
         }, AIAgentConfigOverrides.Parser);
         overrides.ProviderName.Should().Be("mock");
 

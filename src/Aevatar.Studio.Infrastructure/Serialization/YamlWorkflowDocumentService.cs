@@ -155,7 +155,6 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
                 MaxTokens = ReadInteger(roleNode, "max_tokens", findings, path),
                 MaxToolRounds = ReadInteger(roleNode, "max_tool_rounds", findings, path),
                 MaxHistoryMessages = ReadInteger(roleNode, "max_history_messages", findings, path),
-                StreamBufferCapacity = ReadInteger(roleNode, "stream_buffer_capacity", findings, path),
                 EventModules = eventModules,
                 EventRoutes = eventRoutes,
                 Connectors = ParseConnectors(roleNode, path, findings),
@@ -423,9 +422,7 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
         AddIfNotNull(result, "temperature", role.Temperature);
         AddIfNotNull(result, "max_tokens", role.MaxTokens);
         AddIfNotNull(result, "max_tool_rounds", role.MaxToolRounds);
-        AddIfNotNull(result, "max_history_messages", role.MaxHistoryMessages);
-        AddIfNotNull(result, "stream_buffer_capacity", role.StreamBufferCapacity);
-        AddIfNotNull(result, "event_modules", role.EventModules);
+        AddIfNotNull(result, "max_history_messages", role.MaxHistoryMessages);        AddIfNotNull(result, "event_modules", role.EventModules);
         AddIfNotNull(result, "event_routes", role.EventRoutes);
 
         if (role.Connectors.Count > 0)

@@ -89,7 +89,6 @@ public sealed class WorkflowParser
             MaxTokens = role.MaxTokens,
             MaxToolRounds = role.MaxToolRounds,
             MaxHistoryMessages = role.MaxHistoryMessages,
-            StreamBufferCapacity = role.StreamBufferCapacity,
             EventModules = eventModules,
             EventRoutes = eventRoutes,
             Connectors = role.Connectors,
@@ -107,7 +106,6 @@ public sealed class WorkflowParser
             MaxTokens = normalized.MaxTokens,
             MaxToolRounds = normalized.MaxToolRounds,
             MaxHistoryMessages = normalized.MaxHistoryMessages,
-            StreamBufferCapacity = normalized.StreamBufferCapacity,
             EventModules = normalized.EventModules,
             EventRoutes = normalized.EventRoutes,
             Connectors = normalized.Connectors.ToList(),
@@ -395,7 +393,6 @@ public sealed class WorkflowParser
         public int? MaxTokens { get; set; }
         public int? MaxToolRounds { get; set; }
         public int? MaxHistoryMessages { get; set; }
-        public int? StreamBufferCapacity { get; set; }
         public string? EventModules { get; set; }
         public string? EventRoutes { get; set; }
         public RawRoleExtensions? Extensions { get; set; }

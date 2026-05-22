@@ -35,7 +35,6 @@ public class RoleGAgentReplayContractTests
             SystemPrompt = "be helpful",
             MaxToolRounds = 4,
             MaxHistoryMessages = 32,
-            StreamBufferCapacity = 128,
         });
         await agent1.DeactivateAsync();
 
@@ -53,9 +52,7 @@ public class RoleGAgentReplayContractTests
         agent2.EffectiveConfig.Model.Should().Be("m1");
         agent2.EffectiveConfig.SystemPrompt.Should().Be("be helpful");
         agent2.EffectiveConfig.MaxToolRounds.Should().Be(4);
-        agent2.EffectiveConfig.MaxHistoryMessages.Should().Be(32);
-        agent2.EffectiveConfig.StreamBufferCapacity.Should().Be(128);
-    }
+        agent2.EffectiveConfig.MaxHistoryMessages.Should().Be(32);    }
 
     [Fact]
     public async Task InitializeRoleEvent_ShouldPreserveExplicitZeroTemperature()

@@ -124,7 +124,6 @@ roles:
     max_tokens: 512
     max_tool_rounds: 4
     max_history_messages: 50
-    stream_buffer_capacity: 128
     event_modules: "llm_handler,tool_handler"
     event_routes: |
       event.type == ChatRequestEvent -> llm_handler
@@ -140,6 +139,9 @@ roles:
 - `agent_kind` 是 role-level actor lifecycle 入口；step 只使用 `target_role` / `role`，不得通过参数选择 CLR 类型或 actor id。
 - `event_modules` / `event_routes` 支持平铺写法和 `extensions.*` 写法，且**平铺字段优先级更高**。
 - 未配置 `event_modules` 时，`RoleGAgent` 不会额外装配 event modules（保持旧行为）。
+- Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+  Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
+  New principle: reflector force-pick: 删 Task.Run + Channel/ChannelWriter + _streamBufferCapacity 整个 owned stream 框架;ChatStreamAsync 自己 own stream flow;删 stream_buffer_capacity proto/YAML/config(reserve proto field number);middleware bridge 必须 private/internal adapter-only,不暴露公开 stream middleware 接口
 
 ---
 

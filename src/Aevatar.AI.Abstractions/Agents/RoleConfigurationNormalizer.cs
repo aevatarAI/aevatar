@@ -6,6 +6,9 @@ namespace Aevatar.AI.Abstractions.Agents;
 /// </summary>
 public sealed class RoleConfigurationInput
 {
+    // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+    //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
+    //   New principle: reflector force-pick: 删 Task.Run + Channel/ChannelWriter + _streamBufferCapacity 整个 owned stream 框架;ChatStreamAsync 自己 own stream flow;删 stream_buffer_capacity proto/YAML/config(reserve proto field number);middleware bridge 必须 private/internal adapter-only,不暴露公开 stream middleware 接口
     public string? Id { get; init; }
     public string? Name { get; init; }
     public string? SystemPrompt { get; init; }
@@ -16,7 +19,6 @@ public sealed class RoleConfigurationInput
     public int? MaxTokens { get; init; }
     public int? MaxToolRounds { get; init; }
     public int? MaxHistoryMessages { get; init; }
-    public int? StreamBufferCapacity { get; init; }
 
     public string? EventModules { get; init; }
     public string? EventRoutes { get; init; }
@@ -28,6 +30,9 @@ public sealed class RoleConfigurationInput
 /// </summary>
 public sealed class RoleConfigurationNormalized
 {
+    // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+    //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
+    //   New principle: reflector force-pick: 删 Task.Run + Channel/ChannelWriter + _streamBufferCapacity 整个 owned stream 框架;ChatStreamAsync 自己 own stream flow;删 stream_buffer_capacity proto/YAML/config(reserve proto field number);middleware bridge 必须 private/internal adapter-only,不暴露公开 stream middleware 接口
     public required string Id { get; init; }
     public required string Name { get; init; }
     public string SystemPrompt { get; init; } = "";
@@ -38,7 +43,6 @@ public sealed class RoleConfigurationNormalized
     public int? MaxTokens { get; init; }
     public int? MaxToolRounds { get; init; }
     public int? MaxHistoryMessages { get; init; }
-    public int? StreamBufferCapacity { get; init; }
 
     public string? EventModules { get; init; }
     public string? EventRoutes { get; init; }
@@ -70,7 +74,6 @@ public static class RoleConfigurationNormalizer
             MaxTokens = input.MaxTokens,
             MaxToolRounds = input.MaxToolRounds,
             MaxHistoryMessages = input.MaxHistoryMessages,
-            StreamBufferCapacity = input.StreamBufferCapacity,
             EventModules = eventModules,
             EventRoutes = eventRoutes,
             Connectors = connectors,

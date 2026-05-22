@@ -118,10 +118,6 @@ public sealed class NyxIdChatGAgent : RoleGAgent
 
         if (overrides?.HasMaxHistoryMessages == true && overrides.MaxHistoryMessages > 0)
             initializeEvent.MaxHistoryMessages = overrides.MaxHistoryMessages;
-
-        if (overrides?.HasStreamBufferCapacity == true && overrides.StreamBufferCapacity > 0)
-            initializeEvent.StreamBufferCapacity = overrides.StreamBufferCapacity;
-
         return initializeEvent;
     }
 }

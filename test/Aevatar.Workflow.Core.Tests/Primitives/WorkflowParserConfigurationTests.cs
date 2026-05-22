@@ -58,9 +58,7 @@ public class WorkflowParserConfigurationTests
                 temperature: 0.1
                 max_tokens: 512
                 max_tool_rounds: 3
-                max_history_messages: 50
-                stream_buffer_capacity: 128
-                connectors: [conn_a, conn_b]
+                max_history_messages: 50                connectors: [conn_a, conn_b]
                 extensions:
                   event_modules: "llm_handler,tool_handler"
                   event_routes: |
@@ -84,9 +82,7 @@ public class WorkflowParserConfigurationTests
         role.Temperature.Should().Be(0.1);
         role.MaxTokens.Should().Be(512);
         role.MaxToolRounds.Should().Be(3);
-        role.MaxHistoryMessages.Should().Be(50);
-        role.StreamBufferCapacity.Should().Be(128);
-        role.EventModules.Should().Be("llm_handler,tool_handler");
+        role.MaxHistoryMessages.Should().Be(50);        role.EventModules.Should().Be("llm_handler,tool_handler");
         role.EventRoutes.Should().Contain("event.type");
         role.Connectors.Should().BeEquivalentTo(["conn_a", "conn_b"]);
     }

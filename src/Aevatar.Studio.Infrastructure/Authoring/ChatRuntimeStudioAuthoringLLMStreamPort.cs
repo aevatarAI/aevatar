@@ -58,8 +58,7 @@ internal sealed class ChatRuntimeStudioAuthoringLLMStreamPort : IStudioAuthoring
             agentMiddlewares: _agentMiddlewares,
             llmMiddlewares: _llmMiddlewares,
             agentId: BuildAgentName(request.Kind),
-            agentName: BuildAgentName(request.Kind),
-            streamBufferCapacity: config.StreamBufferCapacity);
+            agentName: BuildAgentName(request.Kind));
 
         await foreach (var chunk in runtime.ChatStreamAsync(
                            request.Prompt,
@@ -83,9 +82,7 @@ internal sealed class ChatRuntimeStudioAuthoringLLMStreamPort : IStudioAuthoring
             Temperature = 0.1,
             MaxTokens = 4096,
             MaxToolRounds = 1,
-            MaxHistoryMessages = 12,
-            StreamBufferCapacity = 256,
-        };
+            MaxHistoryMessages = 12,        };
 
         return CloneAndNormalize(config);
     }
@@ -122,7 +119,6 @@ internal sealed class ChatRuntimeStudioAuthoringLLMStreamPort : IStudioAuthoring
             MaxTokens = source?.MaxTokens,
             MaxToolRounds = source?.MaxToolRounds ?? 0,
             MaxHistoryMessages = source?.MaxHistoryMessages ?? 0,
-            StreamBufferCapacity = source?.StreamBufferCapacity ?? 0,
         };
 
         config.ProviderName = config.ProviderName.Trim();
@@ -132,9 +128,6 @@ internal sealed class ChatRuntimeStudioAuthoringLLMStreamPort : IStudioAuthoring
             config.MaxToolRounds = 10;
         if (config.MaxHistoryMessages <= 0)
             config.MaxHistoryMessages = 100;
-        if (config.StreamBufferCapacity <= 0)
-            config.StreamBufferCapacity = 256;
-
         return config;
     }
 }

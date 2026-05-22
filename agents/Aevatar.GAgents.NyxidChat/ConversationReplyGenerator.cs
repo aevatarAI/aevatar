@@ -22,8 +22,6 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
 {
     private const int MaxToolRounds = 40;
     private const int MaxHistoryMessages = 100;
-    private const int StreamBufferCapacity = 256;
-
     private readonly ILLMProviderFactory _llmProviderFactory;
     private readonly IReadOnlyList<IAgentToolSource> _toolSources;
     private readonly IReadOnlyList<IAgentRunMiddleware> _agentMiddlewares;
@@ -209,8 +207,7 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
             agentMiddlewares: _agentMiddlewares,
             llmMiddlewares: _llmMiddlewares,
             agentId: activity.Conversation?.CanonicalKey,
-            agentName: "NyxIdConversationReply",
-            streamBufferCapacity: StreamBufferCapacity);
+            agentName: "NyxIdConversationReply");
 
         var output = new StringBuilder();
         // ADR-0021 §6 / canon §8 actor-edge closeout: aggregate Usage and track the last

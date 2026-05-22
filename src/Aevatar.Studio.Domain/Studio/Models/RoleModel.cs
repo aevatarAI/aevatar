@@ -19,9 +19,6 @@ public sealed record RoleModel
     public int? MaxToolRounds { get; init; }
 
     public int? MaxHistoryMessages { get; init; }
-
-    public int? StreamBufferCapacity { get; init; }
-
     public string? EventModules { get; init; }
 
     public string? EventRoutes { get; init; }

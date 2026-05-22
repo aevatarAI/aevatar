@@ -1159,9 +1159,7 @@ static object BuildRoleDto(RoleDefinition role) => new
     temperature = role.Temperature,
     maxTokens = role.MaxTokens,
     maxToolRounds = role.MaxToolRounds,
-    maxHistoryMessages = role.MaxHistoryMessages,
-    streamBufferCapacity = role.StreamBufferCapacity,
-    eventModules = role.EventModules,
+    maxHistoryMessages = role.MaxHistoryMessages,    eventModules = role.EventModules,
     eventRoutes = role.EventRoutes,
     connectors = role.Connectors,
 };
