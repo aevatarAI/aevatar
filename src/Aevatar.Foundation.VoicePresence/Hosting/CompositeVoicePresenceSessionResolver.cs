@@ -1,31 +1,25 @@
 namespace Aevatar.Foundation.VoicePresence.Hosting;
 
 /// <summary>
-/// Default host resolver that prefers direct in-process module attachment and falls back to runtime-neutral remote bridging.
+/// Default host resolver for direct in-process module attachment.
 /// </summary>
-// Refactor (iter15/cluster-025-voice-host-session-state-actorization):
-//   Old pattern: voice host resolver locks shared mutable lease state outside actor lifecycle
-//   New principle: fallback remote sessions are setup/control only.
-//   Media endpoints fail fast until raw remote audio transport exists.
+// Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
+//   Old pattern: VoicePresenceModule 在 module 内持有 process-local background state(unbounded channels / TaskCompletionSource waiters / 静态字段持 lifecycle),还保留 disabled remote voice fallback shell;违反 Actor 单线程事实源 + 中间层状态约束。
+//   New principle: Reuse existing RoleGAgent state for voice runtime facts(typed protobuf sub-state in RoleGAgent state);transport handles 仅作 volatile process-local lease(non-fact source);provider callbacks 走 typed self-signals(self-message 到 actor inbox);**删除** disabled remote voice fallback shell。无新 actor type / 新 envelope kind。
 public sealed class CompositeVoicePresenceSessionResolver : IVoicePresenceSessionResolver
 {
     private readonly InProcessActorVoicePresenceSessionResolver _inProcessResolver;
-    private readonly RemoteActorVoicePresenceSessionResolver _remoteResolver;
 
     public CompositeVoicePresenceSessionResolver(
         InProcessActorVoicePresenceSessionResolver inProcessResolver,
         RemoteActorVoicePresenceSessionResolver remoteResolver)
     {
         _inProcessResolver = inProcessResolver ?? throw new ArgumentNullException(nameof(inProcessResolver));
-        _remoteResolver = remoteResolver ?? throw new ArgumentNullException(nameof(remoteResolver));
+        _ = remoteResolver ?? throw new ArgumentNullException(nameof(remoteResolver));
     }
 
     public async Task<VoicePresenceSession?> ResolveAsync(VoicePresenceSessionRequest request, CancellationToken ct = default)
     {
-        var inProcessSession = await _inProcessResolver.ResolveAsync(request, ct);
-        if (inProcessSession != null)
-            return inProcessSession;
-
-        return await _remoteResolver.ResolveAsync(request, ct);
+        return await _inProcessResolver.ResolveAsync(request, ct);
     }
 }

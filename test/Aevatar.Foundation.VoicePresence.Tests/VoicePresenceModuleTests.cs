@@ -447,7 +447,28 @@ public class VoicePresenceModuleTests
 
         var moduleSourcePath = Path.Combine(repoRoot, "src/Aevatar.Foundation.VoicePresence/Modules/VoicePresenceModule.cs");
         var moduleSource = File.ReadAllText(moduleSourcePath);
-        moduleSource.ShouldContain("_providerResponseIds");
+        moduleSource.ShouldContain("VoicePresenceRuntimeState");
+        moduleSource.ShouldNotContain("private readonly Dictionary<string, int> _providerResponseIds");
+    }
+
+    [Fact]
+    public async Task Provider_response_identity_should_persist_in_role_gagent_voice_sub_state()
+    {
+        var module = CreateModule(new RecordingVoiceProvider());
+        var roleAgent = new RecordingRoleAgent("voice-agent");
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            ResponseStarted = new VoiceResponseStarted { ProviderResponseId = "provider-r1" },
+        }), ctx, CancellationToken.None);
+
+        roleAgent.PersistedStates.ShouldHaveSingleItem();
+        var runtimeState = roleAgent.State.VoicePresence["voice_presence"];
+        runtimeState.ProviderResponseBindings.ShouldHaveSingleItem();
+        runtimeState.ProviderResponseBindings[0].ProviderResponseId.ShouldBe("provider-r1");
+        runtimeState.ProviderResponseBindings[0].ResponseId.ShouldBe(1);
+        runtimeState.Status.ShouldBe(VoicePresenceRuntimeStatus.ResponseInProgress);
     }
 
     [Fact]
@@ -1049,7 +1070,7 @@ public class VoicePresenceModuleTests
         }
     }
 
-    private sealed class StubEventHandlerContext(IServiceProvider? services = null) : IEventHandlerContext
+    private sealed class StubEventHandlerContext(IServiceProvider? services = null, IAgent? agent = null) : IEventHandlerContext
     {
         public EventEnvelope InboundEnvelope { get; } = new();
 
@@ -1059,7 +1080,7 @@ public class VoicePresenceModuleTests
 
         public Microsoft.Extensions.Logging.ILogger Logger { get; } = NullLogger.Instance;
 
-        public IAgent Agent { get; } = new StubAgent();
+        public IAgent Agent { get; } = agent ?? new StubAgent();
 
         public List<IMessage> PublishedEvents { get; } = [];
 
@@ -1126,6 +1147,47 @@ public class VoicePresenceModuleTests
         public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
 
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingRoleAgent(string id) : IAgent
+    {
+        public string Id => id;
+
+        public RecordingRoleState State { get; } = new();
+
+        public List<VoicePresenceRuntimeStateChangedEvent> PersistedStates { get; } = [];
+
+        public Task PersistVoicePresenceRuntimeStateAsync(
+            string moduleName,
+            VoicePresenceRuntimeState runtimeState,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            var evt = new VoicePresenceRuntimeStateChangedEvent
+            {
+                ModuleName = moduleName,
+                State = runtimeState.Clone(),
+            };
+            PersistedStates.Add(evt);
+            State.VoicePresence[moduleName] = runtimeState.Clone();
+            return Task.CompletedTask;
+        }
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult(id);
+
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
+            Task.FromResult<IReadOnlyList<System.Type>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingRoleState
+    {
+        public Dictionary<string, VoicePresenceRuntimeState> VoicePresence { get; } = [];
     }
 
     private sealed class RecordingVoiceToolInvoker(string resultJson) : IVoiceToolInvoker

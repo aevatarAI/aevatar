@@ -6,6 +6,14 @@ option csharp_namespace = "Aevatar.Foundation.VoicePresence.Abstractions";
 
 import "google/protobuf/timestamp.proto";
 
+enum VoicePresenceRuntimeStatus {
+  VOICE_PRESENCE_RUNTIME_STATUS_UNSPECIFIED = 0;
+  VOICE_PRESENCE_RUNTIME_STATUS_IDLE = 1;
+  VOICE_PRESENCE_RUNTIME_STATUS_USER_SPEAKING = 2;
+  VOICE_PRESENCE_RUNTIME_STATUS_RESPONSE_IN_PROGRESS = 3;
+  VOICE_PRESENCE_RUNTIME_STATUS_AUDIO_DRAINING = 4;
+}
+
 message VoiceProviderConfig {
   string provider_name = 1;
   string endpoint = 2;
@@ -33,6 +41,33 @@ message VoiceConversationEventInjection {
   string event_type = 3;
   string payload_json = 4;
   google.protobuf.Timestamp observed_at = 5;
+}
+
+// Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
+//   Old pattern: VoicePresenceModule 在 module 内持有 process-local background state(unbounded channels / TaskCompletionSource waiters / 静态字段持 lifecycle),还保留 disabled remote voice fallback shell.
+//   New principle: Reuse existing RoleGAgent state for voice runtime facts(typed protobuf sub-state in RoleGAgent state); transport handles 仅作 volatile process-local lease.
+message VoiceProviderResponseBinding {
+  string provider_response_id = 1;
+  int32 response_id = 2;
+}
+
+message VoicePresenceRuntimeState {
+  VoicePresenceRuntimeStatus status = 1;
+  int32 current_response_id = 2;
+  int64 last_drain_ack_playout_sequence = 3;
+  int32 last_drain_ack_response_id = 4;
+  int32 next_response_id = 5;
+  repeated VoiceProviderResponseBinding provider_response_bindings = 6;
+  repeated string cancelled_provider_response_ids = 7;
+  bool awaiting_injected_response_start = 8;
+  string active_provider_response_id = 9;
+  string remote_session_id = 10;
+  repeated VoiceConversationEventInjection pending_injections = 11;
+}
+
+message VoicePresenceRuntimeStateChangedEvent {
+  string module_name = 1;
+  VoicePresenceRuntimeState state = 2;
 }
 
 message VoiceRemoteSessionOpenRequested {

@@ -29,7 +29,7 @@ public class CompositeVoicePresenceSessionResolverTests
     }
 
     [Fact]
-    public async Task ResolveAsync_should_fall_back_to_remote_session_when_actor_is_not_module_container()
+    public async Task ResolveAsync_should_return_null_when_actor_is_not_in_process_module_container()
     {
         using var services = BuildServices(new StubActorRuntime(
             new StubActor("agent-1", new PlainAgent("agent-1"))));
@@ -37,10 +37,7 @@ public class CompositeVoicePresenceSessionResolverTests
 
         var session = await resolver.ResolveAsync(new VoicePresenceSessionRequest("agent-1", "voice_presence_openai"));
 
-        session.ShouldNotBeNull();
-        session.Module.ShouldBeNull();
-        session.IsInitialized.ShouldBeTrue();
-        session.PcmSampleRateHz.ShouldBe(16000);
+        session.ShouldBeNull();
     }
 
     private static CompositeVoicePresenceSessionResolver CreateResolver(ServiceProvider services) =>
