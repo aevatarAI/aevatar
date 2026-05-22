@@ -50,10 +50,13 @@ public static class ChannelRuntimeServiceCollectionExtensions
         services.TryAddSingleton<IConversationTurnRunner, NullConversationTurnRunner>();
         services.TryAddSingleton<IConversationCardTurnRunner, NullConversationCardTurnRunner>();
 
-        // ─── Tombstone compaction options + diagnostics + ES watermark ───
+        // ─── Tombstone compaction options + diagnostics + materialized watermark ───
         services.AddOptions<ChannelRuntimeTombstoneCompactionOptions>();
         services.TryAddSingleton<IChannelRuntimeDiagnostics, InMemoryChannelRuntimeDiagnostics>();
-        services.TryAddSingleton<IProjectionScopeWatermarkQueryPort, EventStoreProjectionScopeWatermarkQueryPort>();
+        // Refactor (iter17/cluster-034):
+        //   Old pattern: Replay-based projection scope watermark query via IEventStore (EventStoreProjectionScopeWatermarkQueryPort).
+        //   New principle: Materialized ProjectionScopeStatusDocument readmodel; ProjectionScopeStatusQueryPort reads document only; never replays IEventStore.
+        services.AddProjectionScopeStatusRuntimeCore();
         if (configuration != null)
         {
             services.Configure<ChannelRuntimeTombstoneCompactionOptions>(
@@ -102,10 +105,17 @@ public static class ChannelRuntimeServiceCollectionExtensions
                 metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>>().Metadata,
                 keySelector: static doc => doc.Id,
                 keyFormatter: static key => key);
+            services.AddElasticsearchDocumentProjectionStore<ProjectionScopeStatusDocument, string>(
+                optionsFactory: _ => ElasticsearchProjectionConfiguration.BindOptions(configuration!),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ProjectionScopeStatusDocument>>().Metadata,
+                keySelector: static doc => doc.Id,
+                keyFormatter: static key => key);
         }
         else
         {
             services.AddInMemoryDocumentProjectionStore<ChannelBotRegistrationDocument, string>(
+                static doc => doc.Id, static key => key);
+            services.AddInMemoryDocumentProjectionStore<ProjectionScopeStatusDocument, string>(
                 static doc => doc.Id, static key => key);
         }
 

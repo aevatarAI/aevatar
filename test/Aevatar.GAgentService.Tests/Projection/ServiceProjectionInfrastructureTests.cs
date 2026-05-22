@@ -319,15 +319,31 @@ public sealed class ServiceProjectionInfrastructureTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(IGAgentRunTerminalProjectionPort) &&
             x.ImplementationType == typeof(GAgentRunTerminalProjectionPort));
-        services.Should().Contain(x =>
+        services.Should().ContainSingle(x =>
             x.ServiceType == typeof(IProjectionArtifactMaterializer<ServiceCatalogProjectionContext>) &&
-            x.ImplementationType == typeof(ServiceCatalogProjector));
-        services.Should().Contain(x =>
+            IsObservedProjectionArtifactMaterializerFor<ServiceCatalogProjector>(x.ImplementationType));
+        services.Should().ContainSingle(x =>
             x.ServiceType == typeof(IProjectionArtifactMaterializer<ServiceRevisionCatalogProjectionContext>) &&
-            x.ImplementationType == typeof(ServiceRevisionCatalogProjector));
-        services.Should().Contain(x =>
+            IsObservedProjectionArtifactMaterializerFor<ServiceRevisionCatalogProjector>(x.ImplementationType));
+        services.Should().ContainSingle(x =>
             x.ServiceType == typeof(ICurrentStateProjectionMaterializer<GAgentRunTerminalProjectionContext>) &&
-            x.ImplementationType == typeof(GAgentRunTerminalProjector));
+            IsObservedCurrentStateMaterializerFor<GAgentRunTerminalProjector>(x.ImplementationType));
+    }
+
+    private static bool IsObservedProjectionArtifactMaterializerFor<TProjector>(System.Type? type)
+    {
+        return type?.IsGenericType == true &&
+               type.Name.StartsWith("ObservedProjectionArtifactMaterializer`", StringComparison.Ordinal) &&
+               type.GenericTypeArguments.Length == 2 &&
+               type.GenericTypeArguments[1] == typeof(TProjector);
+    }
+
+    private static bool IsObservedCurrentStateMaterializerFor<TProjector>(System.Type? type)
+    {
+        return type?.IsGenericType == true &&
+               type.Name.StartsWith("ObservedCurrentStateProjectionMaterializer`", StringComparison.Ordinal) &&
+               type.GenericTypeArguments.Length == 2 &&
+               type.GenericTypeArguments[1] == typeof(TProjector);
     }
 
     [Fact]

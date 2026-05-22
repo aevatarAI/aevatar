@@ -591,7 +591,7 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
             return EnsureActorProjectionAsync(actorId, ct);
         }
 
-        public Task AttachLiveSinkAsync(
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IScriptExecutionProjectionLease lease,
             IEventSink<EventEnvelope> sink,
             CancellationToken ct = default)
@@ -599,19 +599,12 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
             _ = lease;
             _ = sink;
             ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
+            return Task.FromResult<IAsyncDisposable?>(null);
         }
-
-        public Task DetachLiveSinkAsync(
-            IScriptExecutionProjectionLease lease,
-            IEventSink<EventEnvelope> sink,
-            CancellationToken ct = default)
-        {
-            _ = lease;
-            _ = sink;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
+    public Task DetachLiveSinkAsync(
+        IAsyncDisposable? liveSinkLease,
+        CancellationToken ct = default) =>
+        Task.CompletedTask;
 
         public Task ReleaseActorProjectionAsync(
             IScriptExecutionProjectionLease lease,

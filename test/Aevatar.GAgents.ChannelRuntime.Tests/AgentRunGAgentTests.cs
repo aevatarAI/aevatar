@@ -420,6 +420,66 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleStartAsync_WhenTargetRefForwardsToModel_OverridesBotOwnerDefaultModel()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("conversation:c");
+        var actorRuntime = new DispatchingActorRuntime(("conversation:c", actor));
+        IReadOnlyDictionary<string, string>? observedMetadata = null;
+        var replyGenerator = new RecordingReplyGenerator(() => false)
+        {
+            ReplyText = "ok",
+            MetadataObserver = m => observedMetadata = m,
+        };
+
+        var scopeResolver = Substitute.For<INyxIdRelayScopeResolver>();
+        scopeResolver.ResolveScopeIdByApiKeyAsync("api-key-bot", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<string?>("scope-bot-owner"));
+        var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
+        userConfigQueryPort.GetAsync("scope-bot-owner", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new Aevatar.Studio.Application.Studio.Abstractions.UserConfig(
+                DefaultModel: "gpt-4o-bot-owner",
+                PreferredLlmRoute: "/api/v1/proxy/s/anthropic-via-bot-owner",
+                RuntimeMode: "local",
+                LocalRuntimeBaseUrl: "http://localhost",
+                RemoteRuntimeBaseUrl: "https://example.com",
+                GithubUsername: null,
+                MaxToolRounds: 11)));
+
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true },
+            scopeResolver,
+            userConfigQueryPort);
+
+        var activity = BuildRelayActivity();
+        activity.Bot = BotInstanceId.From("api-key-bot");
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-forward-model-owner",
+            TargetActorId = "conversation:c",
+            RegistrationId = "reg-1",
+            Activity = activity,
+            ReplyToken = "relay-token-forward-model-owner",
+            TargetRef = new ChatRouteAction
+            {
+                ForwardToModel = new ForwardToModel { ModelName = "anthropic/claude-sonnet-4-6" },
+            },
+        });
+
+        observedMetadata.Should().NotBeNull("the LLM provider must have been invoked");
+        observedMetadata![LLMRequestMetadataKeys.ModelOverride].Should().Be(
+            "anthropic/claude-sonnet-4-6",
+            "chat-route policy is more specific than the bot owner's default model");
+        observedMetadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be(
+            "/api/v1/proxy/s/anthropic-via-bot-owner",
+            "the route preference is independent from the model override");
+    }
+
+    [Fact]
     public async Task HandleStartAsync_WhenTargetRefIsNullOrNone_LeavesRequestUnchanged()
     {
         // Defense-in-depth: turns without a chat-route policy match must
@@ -1447,6 +1507,7 @@ public sealed class AgentRunGAgentTests
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled.Add(call.Arg<EventEnvelope>()));
         var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        const long replyTokenExpiresAtUnixMs = 1770000000000;
         var runtime = CreateRunAgent(
             actorRuntime,
             replyGenerator,
@@ -1466,7 +1527,7 @@ public sealed class AgentRunGAgentTests
             RegistrationId = "reg-1",
             Activity = BuildRelayActivity(),
             ReplyToken = "relay-token-stream",
-            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+            ReplyTokenExpiresAtUnixMs = replyTokenExpiresAtUnixMs,
         });
 
         handled.Any(e => e.Payload.Is(LlmReplyStreamChunkEvent.Descriptor)).Should().BeTrue();
@@ -1475,6 +1536,100 @@ public sealed class AgentRunGAgentTests
             .Payload.Unpack<LlmReplyStreamChunkEvent>();
         chunk.AccumulatedText.Should().Be("streamed reply");
         chunk.CorrelationId.Should().Be("corr-stream");
+        chunk.ReplyToken.Should().Be("relay-token-stream");
+        chunk.ReplyTokenExpiresAtUnixMs.Should().Be(replyTokenExpiresAtUnixMs);
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_StreamingEnabled_CoalescesDuplicateAndThrottledSnapshotsUntilFinal()
+    {
+        var collector = new AsyncLocalInteractiveReplyCollector();
+        var replyGenerator = new RecordingReplyGenerator(() => false)
+        {
+            ReplyText = "abc",
+            StreamingSnapshots = ["a", "a", "ab", "abc"],
+        };
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("channel-conversation:lark:group:oc_group_chat_stream_coalesce");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            collector,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = false,
+                StreamingRepliesEnabled = true,
+                StreamingFlushIntervalMs = 750,
+                StreamingMaxInterimChunks = 10,
+                StreamingCardKitEnabled = false,
+            });
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-stream-coalesce",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-stream-coalesce",
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+        });
+
+        var chunks = handled
+            .Where(e => e.Payload.Is(LlmReplyStreamChunkEvent.Descriptor))
+            .Select(e => e.Payload.Unpack<LlmReplyStreamChunkEvent>().AccumulatedText)
+            .ToList();
+        chunks.Should().Equal("a", "abc");
+        handled.Last().Payload.Is(LlmReplyReadyEvent.Descriptor).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_StreamingEnabled_InterimCapDoesNotSuppressFinalChunk()
+    {
+        var collector = new AsyncLocalInteractiveReplyCollector();
+        var replyGenerator = new RecordingReplyGenerator(() => false)
+        {
+            ReplyText = "first second final",
+            StreamingSnapshots = ["first", "first second", "first second final"],
+        };
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("channel-conversation:lark:group:oc_group_chat_stream_cap");
+        var handled = new List<EventEnvelope>();
+        actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled.Add(call.Arg<EventEnvelope>()));
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            collector,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = false,
+                StreamingRepliesEnabled = true,
+                StreamingFlushIntervalMs = 0,
+                StreamingMaxInterimChunks = 1,
+                StreamingCardKitEnabled = false,
+            });
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-stream-cap",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-stream-cap",
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+        });
+
+        var chunks = handled
+            .Where(e => e.Payload.Is(LlmReplyStreamChunkEvent.Descriptor))
+            .Select(e => e.Payload.Unpack<LlmReplyStreamChunkEvent>().AccumulatedText)
+            .ToList();
+        chunks.Should().Equal("first", "first second final");
+        handled.Last().Payload.Is(LlmReplyReadyEvent.Descriptor).Should().BeTrue();
     }
 
     [Fact]
@@ -1492,6 +1647,7 @@ public sealed class AgentRunGAgentTests
         actor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled.Add(call.Arg<EventEnvelope>()));
         var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        const long replyTokenExpiresAtUnixMs = 1770000000001;
         var runtime = CreateRunAgent(
             actorRuntime,
             replyGenerator,
@@ -1511,7 +1667,7 @@ public sealed class AgentRunGAgentTests
             RegistrationId = "reg-1",
             Activity = BuildRelayActivity(),
             ReplyToken = "relay-token-card-stream",
-            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+            ReplyTokenExpiresAtUnixMs = replyTokenExpiresAtUnixMs,
         });
 
         handled.Any(e => e.Payload.Is(LlmReplyCardStreamChunkEvent.Descriptor)).Should().BeTrue();
@@ -1520,6 +1676,8 @@ public sealed class AgentRunGAgentTests
             .Payload.Unpack<LlmReplyCardStreamChunkEvent>();
         chunk.AccumulatedText.Should().Be("card streamed reply");
         chunk.CorrelationId.Should().Be("corr-card-stream");
+        chunk.ReplyToken.Should().Be("relay-token-card-stream");
+        chunk.ReplyTokenExpiresAtUnixMs.Should().Be(replyTokenExpiresAtUnixMs);
     }
 
     [Fact]
@@ -2174,6 +2332,8 @@ public sealed class AgentRunGAgentTests
 
         public Action<IReadOnlyDictionary<string, string>>? MetadataObserver { get; init; }
 
+        public IReadOnlyList<string>? StreamingSnapshots { get; init; }
+
         public async Task<ConversationReplyResult> GenerateReplyAsync(
             ChatActivity activity,
             IReadOnlyDictionary<string, string> metadata,
@@ -2183,8 +2343,18 @@ public sealed class AgentRunGAgentTests
             CallCount++;
             CaptureSucceeded = captureAction();
             MetadataObserver?.Invoke(metadata);
-            if (streamingSink is not null && !string.IsNullOrEmpty(ReplyText))
-                await streamingSink.OnDeltaAsync(ReplyText, ct);
+            if (streamingSink is not null)
+            {
+                if (StreamingSnapshots is { Count: > 0 })
+                {
+                    foreach (var snapshot in StreamingSnapshots)
+                        await streamingSink.OnDeltaAsync(snapshot, ct);
+                }
+                else if (!string.IsNullOrEmpty(ReplyText))
+                {
+                    await streamingSink.OnDeltaAsync(ReplyText, ct);
+                }
+            }
             return new ConversationReplyResult(ReplyText, Usage: null, FinishReason: null);
         }
     }

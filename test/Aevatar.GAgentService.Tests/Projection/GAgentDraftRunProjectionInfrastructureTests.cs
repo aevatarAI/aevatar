@@ -56,7 +56,7 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
         activation.Requests[0].ProjectionKind.Should().Be("service-draft-run-session");
         activation.Requests[0].SessionId.Should().Be("cmd-1");
 
-        await port.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);
+        var liveSinkLease = await port.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);
         await hub.Handler!(new AGUIEvent
         {
             RunFinished = new RunFinishedEvent
@@ -65,7 +65,7 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
                 RunId = "cmd-1",
             },
         });
-        await port.DetachLiveSinkAsync(lease, sink, CancellationToken.None);
+        await port.DetachLiveSinkAsync(liveSinkLease, CancellationToken.None);
         await port.ReleaseActorProjectionAsync(lease, CancellationToken.None);
 
         hub.SubscribeCalls.Should().Be(1);

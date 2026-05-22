@@ -6,7 +6,6 @@ using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Time.Testing;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -19,7 +18,7 @@ public sealed class SkillRunnerStreamingReplySinkTests
     public async Task FirstDelta_SendsLarkPost_CapturingMessageIdFromResponse()
     {
         var handler = new SequencedHandler(OkSendResponse);
-        var sink = CreateSink(handler, throttleMs: 0, out _);
+        var sink = CreateSink(handler);
 
         await sink.OnDeltaAsync("first chunk", CancellationToken.None);
 
@@ -33,10 +32,10 @@ public sealed class SkillRunnerStreamingReplySinkTests
     }
 
     [Fact]
-    public async Task SecondDelta_PatchesCapturedMessageId()
+    public async Task SecondDelta_EditsCapturedMessageIdWithPut()
     {
         var handler = new SequencedHandler(OkSendResponse, OkEditResponse);
-        var sink = CreateSink(handler, throttleMs: 0, out _);
+        var sink = CreateSink(handler);
 
         await sink.OnDeltaAsync("first chunk", CancellationToken.None);
         await sink.OnDeltaAsync("first chunk and more", CancellationToken.None);
@@ -58,40 +57,30 @@ public sealed class SkillRunnerStreamingReplySinkTests
     }
 
     [Fact]
-    public async Task DeltasInsideThrottle_AreCollapsedToLatestEditWhenTimerFires()
+    public async Task ActorApprovedSnapshots_SendEachRequestedEdit()
     {
-        var handler = new SequencedHandler(OkSendResponse, OkEditResponse);
-        var sink = CreateSink(handler, throttleMs: 750, out var time);
+        var handler = new SequencedHandler(OkSendResponse, OkEditResponse, OkEditResponse);
+        var sink = CreateSink(handler);
 
         await sink.OnDeltaAsync("first chunk", CancellationToken.None);
-        time.Advance(TimeSpan.FromMilliseconds(100));
         await sink.OnDeltaAsync("first chunk plus", CancellationToken.None);
-        time.Advance(TimeSpan.FromMilliseconds(100));
         await sink.OnDeltaAsync("first chunk plus more", CancellationToken.None);
 
-        // Inside the throttle window: only the initial POST went out. Two later deltas are stashed.
-        handler.Requests.Should().ContainSingle();
-
-        time.Advance(TimeSpan.FromMilliseconds(800));
-
-        // Crossing the throttle boundary fires the deferred timer; the LATEST stashed text edits
-        // (collapse-on-latest), not every individual delta.
-        handler.Requests.Should().HaveCount(2);
-        handler.Requests[1].Method.Should().Be(HttpMethod.Put);
-        using var body = JsonDocument.Parse(handler.Bodies[1]!);
+        handler.Requests.Should().HaveCount(3);
+        handler.Requests[2].Method.Should().Be(HttpMethod.Put);
+        using var body = JsonDocument.Parse(handler.Bodies[2]!);
         var contentString = body.RootElement.GetProperty("content").GetString();
         using var content = JsonDocument.Parse(contentString!);
         content.RootElement.GetProperty("text").GetString().Should().Be("first chunk plus more");
     }
 
     [Fact]
-    public async Task FinalizeAsync_BypassesThrottleAndPatchesFinalText()
+    public async Task FinalizeAsync_SendsActorApprovedFinalEdit()
     {
         var handler = new SequencedHandler(OkSendResponse, OkEditResponse);
-        var sink = CreateSink(handler, throttleMs: 750, out var time);
+        var sink = CreateSink(handler);
 
         await sink.OnDeltaAsync("first chunk", CancellationToken.None);
-        time.Advance(TimeSpan.FromMilliseconds(100));
         await sink.FinalizeAsync("first chunk plus final", CancellationToken.None);
 
         handler.Requests.Should().HaveCount(2);
@@ -110,7 +99,7 @@ public sealed class SkillRunnerStreamingReplySinkTests
         // still has to deliver the run output so the user gets the report — the sink does the
         // first POST even though nothing streamed.
         var handler = new SequencedHandler(OkSendResponse);
-        var sink = CreateSink(handler, throttleMs: 0, out _);
+        var sink = CreateSink(handler);
 
         await sink.FinalizeAsync("Daily report — no measurable activity in the last 24h.", CancellationToken.None);
 
@@ -137,10 +126,8 @@ public sealed class SkillRunnerStreamingReplySinkTests
             (HttpStatusCode.OK, """{"code":0,"msg":"success","data":{"message_id":"om_fallback"}}"""));
         var sink = CreateSink(
             handler,
-            throttleMs: 0,
             primary: new LarkReceiveTarget("oc_dm_chat_1", "chat_id", FellBackToPrefixInference: false),
-            fallback: new LarkReceiveTarget("on_user_1", "union_id", FellBackToPrefixInference: false),
-            out _);
+            fallback: new LarkReceiveTarget("on_user_1", "union_id", FellBackToPrefixInference: false));
 
         await sink.OnDeltaAsync("first chunk", CancellationToken.None);
 
@@ -162,10 +149,8 @@ public sealed class SkillRunnerStreamingReplySinkTests
             """{"code":0,"msg":"success","data":{"message_id":"om_fallback"}}""");
         var sink = CreateSink(
             handler,
-            throttleMs: 0,
             primary: new LarkReceiveTarget("oc_dm_chat_1", "chat_id", FellBackToPrefixInference: false),
-            fallback: new LarkReceiveTarget("on_user_1", "union_id", FellBackToPrefixInference: false),
-            out _);
+            fallback: new LarkReceiveTarget("on_user_1", "union_id", FellBackToPrefixInference: false));
 
         await sink.OnDeltaAsync("first chunk", CancellationToken.None);
 
@@ -188,10 +173,8 @@ public sealed class SkillRunnerStreamingReplySinkTests
             """{"code":99992364,"msg":"user id cross tenant"}""");
         var sink = CreateSink(
             handler,
-            throttleMs: 0,
             primary: new LarkReceiveTarget("on_user_1", "union_id", FellBackToPrefixInference: false),
-            fallback: null,
-            out _);
+            fallback: null);
 
         // Mid-stream rejection is swallowed (the run is still producing chunks). Only finalize
         // raises.
@@ -214,7 +197,7 @@ public sealed class SkillRunnerStreamingReplySinkTests
         var handler = new SequencedHandler(
             OkSendResponse,
             """{"code":230002,"msg":"Bot is not in the chat"}""");
-        var sink = CreateSink(handler, throttleMs: 0, out _);
+        var sink = CreateSink(handler);
 
         await sink.OnDeltaAsync("first chunk", CancellationToken.None);
 
@@ -233,7 +216,7 @@ public sealed class SkillRunnerStreamingReplySinkTests
             OkSendResponse,
             """{"code":230020,"msg":"transient rate limit"}""",
             OkEditResponse);
-        var sink = CreateSink(handler, throttleMs: 0, out _);
+        var sink = CreateSink(handler);
 
         await sink.OnDeltaAsync("first chunk", CancellationToken.None);
         await sink.OnDeltaAsync("first chunk plus", CancellationToken.None);
@@ -250,7 +233,7 @@ public sealed class SkillRunnerStreamingReplySinkTests
     public async Task TruncatesPayloadAtLarkBodyLimit_WithMarker()
     {
         var handler = new SequencedHandler(OkSendResponse);
-        var sink = CreateSink(handler, throttleMs: 0, out _);
+        var sink = CreateSink(handler);
 
         // Massively exceeds the 30K cap so we can verify the truncation marker survives JSON
         // round-trip without re-checking the exact tail bytes.
@@ -268,49 +251,58 @@ public sealed class SkillRunnerStreamingReplySinkTests
     }
 
     [Fact]
-    public async Task DuplicateText_DoesNotEmitRedundantEdit()
+    public async Task DuplicateActorApprovedText_SendsRequestedEdit()
     {
-        var handler = new SequencedHandler(OkSendResponse);
-        var sink = CreateSink(handler, throttleMs: 0, out _);
+        var handler = new SequencedHandler(OkSendResponse, OkEditResponse, OkEditResponse);
+        var sink = CreateSink(handler);
 
         await sink.OnDeltaAsync("hello", CancellationToken.None);
         await sink.OnDeltaAsync("hello", CancellationToken.None);
         await sink.OnDeltaAsync("hello", CancellationToken.None);
 
-        handler.Requests.Should().ContainSingle();
+        handler.Requests.Should().HaveCount(3, "the actor-owned run state, not this transport sink, suppresses duplicate snapshots");
     }
 
     [Fact]
-    public async Task FinalizeAsync_TextMatchesLastEmitted_DoesNotEmitFinalEdit()
+    public async Task FinalizeAsync_TextMatchesLastSent_SendsActorApprovedFinalEdit()
     {
-        var handler = new SequencedHandler(OkSendResponse);
-        var sink = CreateSink(handler, throttleMs: 0, out _);
+        var handler = new SequencedHandler(OkSendResponse, OkEditResponse);
+        var sink = CreateSink(handler);
 
         await sink.OnDeltaAsync("complete final text", CancellationToken.None);
         await sink.FinalizeAsync("complete final text", CancellationToken.None);
 
-        handler.Requests.Should().ContainSingle();
+        handler.Requests.Should().HaveCount(2, "final duplicate suppression belongs to SkillRunnerGAgent's actor-owned run state");
     }
 
-    private static SkillRunnerStreamingReplySink CreateSink(
-        HttpMessageHandler handler,
-        int throttleMs,
-        out FakeTimeProvider timeProvider) =>
+    [Fact]
+    public void Source_ShouldNotContainSinkOwnedTimerOrPendingDispatchState()
+    {
+        // Refactor (iter15/cluster-027-streaming-reply-timer-business-dispatch):
+        //   Old pattern: sink owned timer callbacks, pending output, and callback-timed Lark dispatch loops.
+        //   New principle: SkillRunnerGAgent owns coalescing and calls the sink only with approved snapshots.
+        var source = File.ReadAllText(GetProductionSourcePath());
+
+        source.Should().NotContain("_flushTimer");
+        source.Should().NotContain("CreateTimer");
+        source.Should().NotContain("_pendingText");
+        source.Should().NotContain("_dispatchInProgress");
+        source.Should().NotContain(string.Concat("Task", ".Run"));
+        source.Should().NotContain("_ = DispatchAsync");
+        source.Should().NotContain("_ = DispatchLoopAsync");
+    }
+
+    private static SkillRunnerStreamingReplySink CreateSink(HttpMessageHandler handler) =>
         CreateSink(
             handler,
-            throttleMs,
             primary: new LarkReceiveTarget("oc_chat_1", "chat_id", FellBackToPrefixInference: false),
-            fallback: null,
-            out timeProvider);
+            fallback: null);
 
     private static SkillRunnerStreamingReplySink CreateSink(
         HttpMessageHandler handler,
-        int throttleMs,
         LarkReceiveTarget primary,
-        LarkReceiveTarget? fallback,
-        out FakeTimeProvider timeProvider)
+        LarkReceiveTarget? fallback)
     {
-        timeProvider = new FakeTimeProvider(new DateTimeOffset(2026, 4, 28, 9, 0, 0, TimeSpan.Zero));
         var client = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
@@ -322,8 +314,6 @@ public sealed class SkillRunnerStreamingReplySinkTests
             primaryTarget: primary,
             fallbackTarget: fallback,
             rejectionMessageBuilder: BuildRejectionMessage,
-            throttle: TimeSpan.FromMilliseconds(throttleMs),
-            timeProvider: timeProvider,
             logger: NullLogger<SkillRunnerStreamingReplySink>.Instance);
     }
 
@@ -375,5 +365,24 @@ public sealed class SkillRunnerStreamingReplySinkTests
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),
             };
         }
+    }
+
+    private static string GetProductionSourcePath()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(
+                directory.FullName,
+                "agents",
+                "Aevatar.GAgents.Scheduled",
+                "SkillRunnerStreamingReplySink.cs");
+            if (File.Exists(candidate))
+                return candidate;
+
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException("Could not locate SkillRunnerStreamingReplySink.cs from test output directory.");
     }
 }

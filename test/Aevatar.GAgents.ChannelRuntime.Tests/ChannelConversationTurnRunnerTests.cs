@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -936,6 +937,70 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Activity.OutboundDelivery.ReplyMessageId.Should().Be("relay-msg-normal-1");
         result.LlmReplyRequest.Activity.OutboundDelivery.CorrelationId.Should().Be("corr-normal-relay-1");
         adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldUseRuntimeNyxToken_ForSanitizedRelayAgentBuilderTurn()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var relayHandler = new RecordingJsonHandler("""{"message_id":"relay-agent-builder-reply"}""");
+        var callerScopeResolver = new CapturingCallerScopeResolver();
+        var services = new ServiceCollection()
+            .AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>())
+            .AddSingleton(Substitute.For<ISkillRunnerCommandPort>())
+            .AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>())
+            .AddSingleton<ICallerScopeResolver>(callerScopeResolver)
+            .AddSingleton(new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://example.com" },
+                new HttpClient(new RecordingJsonHandler("""{"ok":true}"""))
+                {
+                    BaseAddress = new Uri("https://example.com"),
+                }))
+            .BuildServiceProvider();
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            services,
+            relayHandler: relayHandler);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "/agents",
+                "msg-runtime-token-agent-builder-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                new OutboundDeliveryContext
+                {
+                    ReplyMessageId = "relay-msg-runtime-token-1",
+                    CorrelationId = "corr-runtime-token-1",
+                },
+                new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                    NyxUserAccessToken = string.Empty,
+                }),
+            RelayRuntimeContext(
+                "corr-runtime-token-1",
+                replyToken: "relay-token-runtime-1",
+                replyMessageId: "relay-msg-runtime-token-1",
+                nyxUserAccessToken: "runtime-user-token-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.SentActivityId.Should().Be("direct-reply:msg-runtime-token-agent-builder-1");
+        result.OutboundDelivery?.ReplyMessageId.Should().Be("relay-msg-runtime-token-1");
+        result.OutboundDelivery?.CorrelationId.Should().Be("corr-runtime-token-1");
+        relayHandler.Requests.Should().ContainSingle();
+        relayHandler.Requests[0].Authorization.Should().Be("Bearer relay-token-runtime-1");
+        callerScopeResolver.CapturedMetadata.Should().NotBeNull();
+        callerScopeResolver.CapturedMetadata![LLMRequestMetadataKeys.NyxIdAccessToken]
+            .Should().Be("runtime-user-token-1");
+        callerScopeResolver.CapturedMetadata[LLMRequestMetadataKeys.NyxIdOrgToken]
+            .Should().Be("runtime-user-token-1");
+        callerScopeResolver.CapturedMetadata[ChannelMetadataKeys.MessageId]
+            .Should().Be("msg-runtime-token-agent-builder-1");
+        AgentToolRequestContext.CurrentMetadata.Should().BeNull();
     }
 
     [Fact]
@@ -2440,12 +2505,15 @@ public sealed class ChannelConversationTurnRunnerTests
     private static ConversationTurnRuntimeContext RelayRuntimeContext(
         string correlationId,
         string replyToken = "relay-token-1",
-        string replyMessageId = "relay-msg-1") =>
+        string replyMessageId = "relay-msg-1",
+        string? nyxUserAccessToken = null) =>
         new(new NyxRelayReplyTokenContext(
             correlationId,
             replyToken,
             replyMessageId,
-            DateTimeOffset.UtcNow.AddMinutes(5)));
+            DateTimeOffset.UtcNow.AddMinutes(5),
+            nyxUserAccessToken),
+            nyxUserAccessToken);
 
     private static ChatActivity BuildInboundActivity(
         string text,
@@ -2599,6 +2667,23 @@ public sealed class ChannelConversationTurnRunnerTests
         {
             Commands.Add(command);
             return Task.FromResult(Result);
+        }
+    }
+
+    private sealed class CapturingCallerScopeResolver : ICallerScopeResolver
+    {
+        public IReadOnlyDictionary<string, string>? CapturedMetadata { get; private set; }
+
+        public Task<OwnerScope?> TryResolveAsync(CancellationToken ct = default)
+        {
+            CapturedMetadata = AgentToolRequestContext.CurrentMetadata is null
+                ? null
+                : new Dictionary<string, string>(AgentToolRequestContext.CurrentMetadata, StringComparer.Ordinal);
+            return Task.FromResult<OwnerScope?>(OwnerScope.ForChannel(
+                "nyx-user-1",
+                "lark",
+                "scope-1",
+                "ou_user_1"));
         }
     }
 

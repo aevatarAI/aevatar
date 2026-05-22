@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.MCP;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
@@ -38,6 +39,11 @@ public sealed class WorkflowHostingExtensionsCoverageTests
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
             EnvironmentName = Environments.Development,
+        });
+
+        builder.Services.AddNyxIdTools(options =>
+        {
+            options.BaseUrl = "https://nyx.example";
         });
 
         builder.AddAevatarPlatform(options =>

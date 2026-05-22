@@ -16,14 +16,6 @@ namespace Aevatar.Studio.Application.Studio.Services;
 /// </summary>
 public sealed class StudioMemberService : IStudioMemberService
 {
-    // Mirrors the values pinned in ScopeWorkflowCapabilityOptions
-    // (FixedServiceAppId / FixedServiceNamespace). Adding a runtime options
-    // dependency here would force every Studio.Application consumer to wire
-    // the platform Application layer just to read two const strings; copying
-    // the constants keeps the layer boundary clean and matches what
-    // AppScopedWorkflowService already does for the same reason.
-    private const string ServiceAppId = "default";
-    private const string ServiceNamespace = "default";
     private const string DefaultSmokePrompt = "Hello from Studio Bind.";
 
     private readonly IStudioMemberCommandPort _memberCommandPort;
@@ -376,8 +368,8 @@ public sealed class StudioMemberService : IStudioMemberService
         var identity = new ServiceIdentity
         {
             TenantId = normalizedScopeId,
-            AppId = ServiceAppId,
-            Namespace = ServiceNamespace,
+            AppId = ScopeServiceIdentityDefaults.ServiceAppId,
+            Namespace = ScopeServiceIdentityDefaults.ServiceNamespace,
             ServiceId = publishedServiceId,
         };
 

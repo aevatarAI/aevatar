@@ -17,6 +17,7 @@ export type TeamRuntimeLens = {
 
 export type TeamRuntimeLensInput = {
   scopeId: string;
+  allowServiceFallback?: boolean;
   focusedServiceId: string | null;
   serviceRevisionCatalog: ScopeServiceRevisionCatalogSnapshot | null;
   services: readonly ServiceCatalogSnapshot[];
@@ -79,6 +80,7 @@ export function selectCurrentTeamRun(
 export function deriveTeamRuntimeLens(
   input: TeamRuntimeLensInput,
 ): TeamRuntimeLens {
+  const allowServiceFallback = input.allowServiceFallback ?? true;
   const activeRevision = getScopeServiceCurrentRevision(input.serviceRevisionCatalog);
   const sortedServices = sortServices(input.services);
   const currentRun =
@@ -97,7 +99,7 @@ export function deriveTeamRuntimeLens(
     sortedServices.find(
       (service) => trimOptional(service.serviceId) === trimOptional(currentRun?.serviceId),
     ) ||
-    sortedServices[0] ||
+    (allowServiceFallback ? sortedServices[0] : null) ||
     null;
   const subtitleParts = [
     input.workflowCount > 0 ? `${input.workflowCount} 个 workflow` : "",

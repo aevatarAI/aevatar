@@ -184,10 +184,11 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - `WorkflowRunInsightReportArtifactProjector` / `WorkflowRunTimelineArtifactProjector` / `WorkflowRunGraphArtifactProjector` 负责 derived durable artifacts
 - **Workflow 应用编排** 在 `Aevatar.Workflow.Application`：
   - `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 负责完整交互路径（dispatch + sink consume + finalize）
-  - `DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 负责 accepted-only 路径
+  - `DefaultCommandDispatchService<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>` 负责 accepted-only 路径（只返回 accepted receipt，不持有 live sink）
   - `ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>` / `ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>` 负责 run control 命令入口
   - `WorkflowRunCommandTargetResolver` 负责 workflow source 解析与 run target 构建
   - `WorkflowRunCommandTargetBinder` 负责 projection lease/live sink 绑定与清理兜底
+  - `WorkflowRunAcceptedCommandTargetResolver` / `NoOpCommandTargetBinder<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunStartError>` 负责 accepted-only target 解析与空绑定
   - `WorkflowRunAcceptedReceiptFactory` 负责 `actorId + commandId + correlationId` receipt 生成
   - `WorkflowExecutionQueryApplicationService` 提供读侧查询
 - **宿主职责** 在 `Aevatar.Workflow.Host.Api`：

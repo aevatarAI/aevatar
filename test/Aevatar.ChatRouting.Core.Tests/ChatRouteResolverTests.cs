@@ -128,6 +128,93 @@ public sealed class ChatRouteResolverTests
     }
 
     [Fact]
+    public void Resolve_ForwardToTeamRule_ReturnsTeamAction()
+    {
+        var resolver = NewResolver();
+        var snapshot = new ChatRoutePolicySnapshot(
+            ForwardToModelAction("default-model"),
+            [
+                new ChatRouteRule
+                {
+                    RuleId = "team-route",
+                    Priority = 10,
+                    Match = new ChatRouteMatch { CommandName = "/triage" },
+                    Action = new ChatRouteAction
+                    {
+                        ForwardToTeam = new ForwardToTeam
+                        {
+                            TeamId = "team-1",
+                            EndpointId = "chat",
+                        },
+                    },
+                },
+            ]);
+
+        var decision = resolver.Resolve(snapshot, new ChatRouteInput { CommandName = "/triage" });
+
+        decision.MatchedRuleId.Should().Be("team-route");
+        decision.Action.ActionCase.Should().Be(ChatRouteAction.ActionOneofCase.ForwardToTeam);
+        decision.Action.ForwardToTeam.TeamId.Should().Be("team-1");
+        decision.Action.ForwardToTeam.EndpointId.Should().Be("chat");
+    }
+
+    [Fact]
+    public void Resolve_DefaultTargetIsForwardToTeam_ReturnsTeamAction()
+    {
+        var resolver = NewResolver();
+        var defaultTeam = new ChatRouteAction
+        {
+            ForwardToTeam = new ForwardToTeam
+            {
+                TeamId = "default-team",
+                EndpointId = "chat",
+                ScopeId = "scope-x",
+            },
+        };
+        var snapshot = new ChatRoutePolicySnapshot(defaultTeam, []);
+
+        var decision = resolver.Resolve(snapshot, new ChatRouteInput());
+
+        decision.UsedFallback.Should().BeFalse();
+        decision.MatchedRuleId.Should().BeEmpty();
+        decision.Action.ActionCase.Should().Be(ChatRouteAction.ActionOneofCase.ForwardToTeam);
+        decision.Action.ForwardToTeam.TeamId.Should().Be("default-team");
+        decision.Action.ForwardToTeam.ScopeId.Should().Be("scope-x");
+    }
+
+    [Fact]
+    public void Resolve_ModelAndToolModeRule_ReturnsRuleAction()
+    {
+        var resolver = NewResolver();
+        var snapshot = new ChatRoutePolicySnapshot(
+            ForwardToModelAction("default-model"),
+            [
+                new ChatRouteRule
+                {
+                    RuleId = "responses-tools",
+                    Priority = 10,
+                    Match = new ChatRouteMatch
+                    {
+                        SourceKind = ChatSourceKind.NyxResponses,
+                        Model = "original-model",
+                        ToolMode = ToolMode.Declared,
+                    },
+                    Action = ForwardToModelAction("tool-aware-model"),
+                },
+            ]);
+
+        var decision = resolver.Resolve(snapshot, new ChatRouteInput
+        {
+            SourceKind = ChatSourceKind.NyxResponses,
+            Model = "original-model",
+            ToolMode = ToolMode.Declared,
+        });
+
+        decision.MatchedRuleId.Should().Be("responses-tools");
+        decision.Action.ForwardToModel.ModelName.Should().Be("tool-aware-model");
+    }
+
+    [Fact]
     public void Resolve_MatchingRuleWithEmptyAction_FallsThroughToDefaultTarget()
     {
         var resolver = NewResolver();

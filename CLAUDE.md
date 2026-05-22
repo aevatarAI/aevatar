@@ -135,6 +135,25 @@
 - 根目录允许的 `.md` 文件：`CLAUDE.md`、`README.md`、`CHANGELOG.md`、`LICENSE`、`AGENTS.md`。`src/` 下各项目允许自身 `README.md`。
 - `docs/README.md` 由 `tools/docs/build-index.sh` 自动生成，不手动编辑。
 
+### 不保留历史记录,但保留反面示例(强制)
+
+Per Auric (2026-05-19) "不要保留历史记录,历史记录都在git里面有" + "可以保留反面,保障harness":
+
+**文件层面**:
+- 废弃 / 重命名 / 替换的文件直接 `git rm`,不创建 `*.deprecated` / `*.bak` / `*.old` / `*.archived` / `*-superseded.md` 等历史保留版本。历史在 `git log` / `git show <sha>:<path>` 里。
+- `sed -i.bak` 用完立刻 `rm *.bak`。
+- 不要"先 mv 到 .deprecated 等下个 iter 再删":今天废止今天就删,git revert 比恢复 working tree 更干净。
+
+**spec / prompt / skill 文件内容层面**:
+- **不写历史叙述**: 不要在 skill / prompt / spec 里写 "Per Auric YYYY-MM-DD" 出处引用、"旧规则曾经是 X,现在改为 Y"、"supersede 了 Z"、"## History" / "## Legacy" / "## Why we changed" 等。这些都在 commit message + git log 里。skill **只描述当前态**。
+- **但保留 anti-pattern 反面示例**: "❌ 禁止 X" / "反模式: 如果你 X 就会 Y" 这种**防护性反面**是有价值的(它告诉 codex / future-self 不要踩坑,而不是叙述历史)。规则:**反面要描述"会发生什么坏事"而不是"以前我们这么干过"**。
+  - ✅ 好的反面:`❌ 第一行不是 ## 🤖 → comment-monitor 会把它当 maintainer 评论 react,造成自循环`
+  - ❌ 坏的历史叙述:`旧版 skill 没要求 ## 🤖,导致 monitor false-positive,Auric 2026-05-19 让我们加这条`
+
+**例外**:`docs/adr/` 与 `docs/history/` 是被显式设计为归档的目录,这里的规则不覆盖它们(它们本来就是归档)。
+
+**Memory 文件**(`/.claude/projects/.../memory/*.md`)允许写"trigger 事件"(行为反思需要),但 skill 本身不写。
+
 ## 项目结构
 - `src/`：生产代码（`Aevatar.Foundation.*`、`Aevatar.AI.*`、`Aevatar.CQRS.Projection.Core.Abstractions/Runtime/Stores.Abstractions`、`src/workflow/Aevatar.Workflow.*`、`Aevatar.Host.*`）。
 - `test/`：对应测试项目（单元、集成、API）。
@@ -151,7 +170,9 @@
 
 ### CI 门禁（全量）
 - `bash tools/ci/architecture_guards.sh`：CI 架构门禁主入口。
-- 分片构建/测试：`bash tools/ci/solution_split_guards.sh` / `bash tools/ci/solution_split_test_guards.sh`
+- 分片构建：`bash tools/ci/solution_split_guards.sh`
+- 全量测试：`dotnet test aevatar.slnx --nologo`
+- 慢测：`bash tools/ci/slow_test_guards.sh`
 
 ### 专项门禁（按变更范围触发）
 
@@ -206,6 +227,8 @@
 - 拒绝 timeout < 3600（exit 2 + 提示文档）
 - 用 `-` stdin 把 prompt 喂进去
 - 末尾追加 `EXIT=<code>` 和 `DONE_AT=<ISO8601>` 到 log
+- 启动时 stderr 打印 `SPAWN: prompt=<path> log=<path>` + 完成时打印 `DONE: log=<path> exit=<N>`
+- 支持 `--prompt-text "..."` (自动 mktemp `/tmp/codex-prompt-XXXXXXXX.md`,免去调用方先手工写文件)
 - 不 commit、不 push、不 checkout —— 这些由 controller 负责
 
 ### 后台调度
@@ -223,6 +246,17 @@
 - 必须输出明确的终止 marker（如 `IMPLEMENT_DONE:<id>:<status>`、`VERIFY_DONE:<id>:<verdict>`、`AUDIT_DONE:<path>:<N>` 或 `AUDIT_INCOMPLETE:<reason>`）—— controller 用这些路由下一步。
 - 越界 scope 时打印 `SCOPE_EXTEND: <file> <reason>` 再改，便于审计。
 
+### Prompt + 输出必须双 file（强制,debug 友好）
+
+每次 codex 调用 **prompt 是文件,输出是文件**。两者都可在事后被 `cat`/`grep`/`tail` 检查;debug 时一一对应:`cat <prompt-path>` 看 codex 看到什么,`cat <log-path>` 看 codex 做了什么。
+
+具体规则:
+- **Prompt → 文件**。要么调用方先把 prompt 写到具名文件(`.refactor-loop/prompts/...md`),再用 `--prompt <file>`;要么用 `--prompt-text "..."` 让 wrapper 自动 mktemp 一个 `/tmp/codex-prompt-XXXXXXXX.md`。**禁止 inline-string-to-stdin** 或 argv-prompt 调用 codex,这两者都让 debug 时找不到原始 prompt。
+- **输出 → 文件**。`--log <path>` 必填,wrapper 把 codex 的 stdout+stderr+`EXIT=...`+`DONE_AT=...` 全写进该文件。**禁止 `> /dev/null`** 或纯 stdout(失去 debug 痕迹)。
+- **路径透明**。wrapper 在 stderr 上先打印 `SPAWN: prompt=<path> log=<path> cd=<dir> timeout=<s>`,完成后打印 `DONE: log=<path> exit=<N> prompt=<path>`。调用方 / `tail` 立即看到两个路径,无需事后猜文件名。
+
+教训:2026-05-19 Auric 明确 "提示词直接写到一个临时文件就可以, 输出也输出到一个临时文件, 方便debug"。任何"为了图省事"绕开此规范的调用方式均不再允许。
+
 ### 反模式（禁止）
 
 - 用裸 `codex` 进 TUI 在无人值守流程里
@@ -231,6 +265,8 @@
 - 不带 `-C` 让 codex 用当前 cwd（worktree cwd-leak 会污染）
 - codex prompt 让 codex 自己 commit/push（git 拓扑应由 controller 集中管理）
 - 把 codex 输出当真相不验证 —— controller 必须读 log 末尾 marker 后再推进
+- **inline-string prompt**(失去 debug 文件):必须 `--prompt <file>` 或 `--prompt-text` 让 wrapper mktemp
+- **不带 `--log`**(输出散在 stdout):必须显式 log 文件路径
 
 ## 编码风格
 - 遵循 `.editorconfig`：UTF-8、LF、4 空格缩进、去除行尾空白。
@@ -273,6 +309,18 @@
 - 文件名时间戳前置定长：日期 `YYYY-MM-DD-`，日期时间 `YYYY-MM-DD-HH-mm-ss-`。示例：`2026-03-09-workflow-architecture.md`。
 - 打分/审计文档 → `docs/audit-scorecard/`。
 - 工作文档不加入 `aevatar.slnx`。
+
+### Mermaid 在 GitHub issue / PR comment 的禁忌（强制）
+
+post 到 GitHub issue 或 PR comment 的 mermaid 经常渲染失败。规则：
+
+- **禁止双语混排标签**：`participant X as "Caller / 调用线程"` 这种带 `/` 的引号双语标签 GitHub 渲染器会断行或不识别。EN 与 ZH 各画一张图。
+- **禁止依赖 `%%{init: ...}%%` 指令**：GitHub mermaid 不保证支持 `themeVariables.fontSize`、`flowchart.useMaxWidth: false` 等。默认指令只对仓库内 docs 渲染有效，不对 GitHub UI 评论框生效。
+- **禁止超宽 sequenceDiagram**：6+ participant + 长标签会被 GitHub 容器裁掉，且不会出现横向滚动条。如超过 4 个 participant 或单标签超 30 字符，改用 ASCII 框图。
+- **优先用 ASCII / 表格**：GitHub issue/PR 评论里的设计澄清,首选 ASCII 流程图(monospace block)和 markdown 表格,而不是 mermaid。可读性优先。
+- **mermaid 仅在仓库内 `docs/` 文件用**：那里渲染器稳定、CSS 可控。issue/PR 评论里只在确认渲染成功的简单 `flowchart LR` 场景才用。
+
+教训来源: 2026-05-19 在 issue #684 post 多 participant + 引号双语 sequence diagram,GitHub 完全不渲染,Auric 直接反馈 "图没法看"。
 
 ## gstack
 

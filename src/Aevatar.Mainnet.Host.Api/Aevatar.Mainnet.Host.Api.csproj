@@ -31,6 +31,7 @@
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.ChatRouting\Aevatar.GAgents.ChatRouting.csproj" />
     <ProjectReference Include="..\Aevatar.ChatRouting.Core\Aevatar.ChatRouting.Core.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.Device\Aevatar.GAgents.Device.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.StatusDashboard\Aevatar.GAgents.StatusDashboard.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.AgentCatalog\Aevatar.AI.ToolProviders.AgentCatalog.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.Channel\Aevatar.AI.ToolProviders.Channel.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.ChannelAdmin\Aevatar.AI.ToolProviders.ChannelAdmin.csproj" />

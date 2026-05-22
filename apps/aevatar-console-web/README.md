@@ -24,7 +24,10 @@ pnpm install
 Use `pnpm dev`, `pnpm build`, `pnpm preview`, or `pnpm exec max <command>` from `apps/aevatar-console-web`.
 If you see `max: command not found`, install dependencies first with `pnpm install` in this directory.
 
-`pnpm dev` reads proxy targets from `.env.local`. If you also want your shell to reuse the same values for manually starting backend processes, export the file first:
+`pnpm dev` reads proxy targets from `.env.local`, and `./boot.sh` loads the
+same file before applying command-line overrides. If you also want your shell
+to reuse the same values for manually starting backend processes, export the
+file first:
 
 ```bash
 cd apps/aevatar-console-web
@@ -33,7 +36,11 @@ source .env.local
 set +a
 ```
 
-If you change backend ports, also keep `AEVATAR_API_TARGET` and `AEVATAR_STUDIO_API_TARGET` aligned with those ports.
+If you change backend ports, also keep `AEVATAR_API_TARGET` and
+`AEVATAR_STUDIO_API_TARGET` aligned with those ports. To point the whole local
+console at the hosted backend, set both targets to the hosted API URL in
+`.env.local` and set `AEVATAR_PROXY_PRESERVE_AUTH_HOST=false` so `/api/auth/*`
+uses the hosted backend Host header.
 
 For NyxID login, also set these values in `.env.local`:
 

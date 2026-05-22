@@ -28,6 +28,7 @@ public sealed class ProjectionStudioTeamQueryPortTests
         summary.Description.Should().Be("alpha desc");
         summary.LifecycleStage.Should().Be(TeamLifecycleStageNames.Active);
         summary.MemberCount.Should().Be(2);
+        summary.EntryMemberId.Should().Be("m-1");
     }
 
     [Fact]
@@ -160,6 +161,7 @@ public sealed class ProjectionStudioTeamQueryPortTests
             LifecycleStage = lifecycleStage,
             CreatedAt = now,
             MemberCount = memberCount,
+            EntryMemberId = "m-1",
         };
     }
 

@@ -3,6 +3,9 @@ using Aevatar.Studio.Application.Studio.Contracts;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
+// Refactor (iter16/cluster-meta-studio-actor-substrate):
+//   Old: runtime and appearance settings were read from and written to the local workspace store.
+//   New principle: workspace settings flow through workspace query/command ports while provider secrets remain in the settings store boundary.
 public sealed class SettingsService
 {
     private static readonly HttpClient RuntimeProbeClient = new()
@@ -10,20 +13,23 @@ public sealed class SettingsService
         Timeout = TimeSpan.FromSeconds(8),
     };
 
-    private readonly IStudioWorkspaceStore _workspaceStore;
+    private readonly IStudioWorkspaceQueryPort _workspaceQueryPort;
+    private readonly IStudioWorkspaceCommandPort _workspaceCommandPort;
     private readonly IAevatarSettingsStore _aevatarSettingsStore;
 
     public SettingsService(
-        IStudioWorkspaceStore workspaceStore,
+        IStudioWorkspaceQueryPort workspaceQueryPort,
+        IStudioWorkspaceCommandPort workspaceCommandPort,
         IAevatarSettingsStore aevatarSettingsStore)
     {
-        _workspaceStore = workspaceStore;
+        _workspaceQueryPort = workspaceQueryPort;
+        _workspaceCommandPort = workspaceCommandPort;
         _aevatarSettingsStore = aevatarSettingsStore;
     }
 
     public async Task<StudioSettingsResponse> GetAsync(CancellationToken cancellationToken = default)
     {
-        var workspace = await _workspaceStore.GetSettingsAsync(cancellationToken);
+        var workspace = (await _workspaceQueryPort.GetAsync(cancellationToken)).Settings;
         var aevatar = await _aevatarSettingsStore.GetAsync(cancellationToken);
         return ToResponse(workspace.RuntimeBaseUrl, workspace.AppearanceTheme, workspace.ColorMode, aevatar);
     }
@@ -32,27 +38,28 @@ public sealed class SettingsService
         UpdateStudioSettingsRequest request,
         CancellationToken cancellationToken = default)
     {
-        var workspace = await _workspaceStore.GetSettingsAsync(cancellationToken);
+        var workspace = await _workspaceQueryPort.GetAsync(cancellationToken);
+        var settings = workspace.Settings;
         var runtimeBaseUrl = string.IsNullOrWhiteSpace(request.RuntimeBaseUrl)
-            ? workspace.RuntimeBaseUrl
+            ? settings.RuntimeBaseUrl
             : NormalizeRuntimeBaseUrl(request.RuntimeBaseUrl);
         var appearanceTheme = string.IsNullOrWhiteSpace(request.AppearanceTheme)
-            ? workspace.AppearanceTheme
+            ? settings.AppearanceTheme
             : NormalizeAppearanceTheme(request.AppearanceTheme);
         var colorMode = string.IsNullOrWhiteSpace(request.ColorMode)
-            ? workspace.ColorMode
+            ? settings.ColorMode
             : NormalizeColorMode(request.ColorMode);
 
-        if (!string.Equals(runtimeBaseUrl, workspace.RuntimeBaseUrl, StringComparison.Ordinal) ||
-            !string.Equals(appearanceTheme, workspace.AppearanceTheme, StringComparison.Ordinal) ||
-            !string.Equals(colorMode, workspace.ColorMode, StringComparison.Ordinal))
+        if (!string.Equals(runtimeBaseUrl, settings.RuntimeBaseUrl, StringComparison.Ordinal) ||
+            !string.Equals(appearanceTheme, settings.AppearanceTheme, StringComparison.Ordinal) ||
+            !string.Equals(colorMode, settings.ColorMode, StringComparison.Ordinal))
         {
-            await _workspaceStore.SaveSettingsAsync(workspace with
+            await _workspaceCommandPort.UpdateSettingsAsync(settings with
             {
                 RuntimeBaseUrl = runtimeBaseUrl,
                 AppearanceTheme = appearanceTheme,
                 ColorMode = colorMode,
-            }, cancellationToken);
+            }, workspace.StateVersion, cancellationToken);
         }
 
         var current = await _aevatarSettingsStore.GetAsync(cancellationToken);
@@ -82,7 +89,7 @@ public sealed class SettingsService
         RuntimeConnectionTestRequest request,
         CancellationToken cancellationToken = default)
     {
-        var workspace = await _workspaceStore.GetSettingsAsync(cancellationToken);
+        var workspace = (await _workspaceQueryPort.GetAsync(cancellationToken)).Settings;
         var runtimeBaseUrl = NormalizeRuntimeBaseUrl(string.IsNullOrWhiteSpace(request.RuntimeBaseUrl)
             ? workspace.RuntimeBaseUrl
             : request.RuntimeBaseUrl!);

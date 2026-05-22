@@ -17,7 +17,7 @@ policy:
 | Direct chat | `/api/scopes/{scopeId}/nyxid-chat/...` | hard-codes `NyxIdChatGAgent` |
 | NyxID relay (Lark / Telegram) | `/api/webhooks/nyxid-relay` → `ConversationGAgent` | runner picked via DI singleton; one path |
 | NyxID Responses | `/v1/responses` + `/v1/messages` | `ILLMProviderFactory.GetDefault()` directly; no GAgent |
-| Voice | `/ws/voice/{actorId}` (extension only, not yet mounted on Mainnet host) | client supplies `actorId`; zero routing decision |
+| Voice | `/ws/voice` + dev/admin `/ws/voice/{actorId}` | policy-aware entry resolves target; explicit actorId entry is gated bypass |
 
 Issues #672 + #674 introduce one user-configurable layer that decides which
 target GAgent or LLM model handles each inbound request. The earlier proposal
@@ -69,10 +69,14 @@ control flow, compatibility, or stable lookup is a typed proto field or typed
 sub-message. For routing this includes:
 
 - `ChatSourceKind` (enum), `ToolMode` (enum)
+- `ChatRouteInput.model` + `ChatRouteMatch.model` for stable model-based rules
 - `VoiceCodec`, `VoiceConversationMode`, `VadMode` (enums)
 - `VoiceInput` (sub-message) — only valid when `source_kind = VOICE`
-- `ForwardToModel`, `ForwardToGAgent`, `ForwardToWorkflow`, `Reject`
-  (oneof variants)
+- `ForwardToModel`, `ForwardToGAgent`, `ForwardToWorkflow`, `Reject`,
+  `ForwardToTeam` (oneof variants)
+- `ForwardToTeam.team_id` + `ForwardToTeam.endpoint_id` (typed strings) —
+  resolved at ingress to a Studio entry-member's `published_service_id` via
+  `ITeamEntryMemberResolver`, never persisted in the decision
 - `VoiceInput.voice_module_name` (typed string) — chooses among
   `voice_presence`, `voice_presence_openai`, `voice_presence_minicpm`,
   `voice_presence_minicpm_o` registered at bootstrap
@@ -93,11 +97,45 @@ scope in Phase 4 so prod traffic doesn't bypass policy.
 
 ### D5 — v1 scope reduction
 
-Only `ForwardToGAgent` and `ForwardToModel` are implemented in v1.
+`ForwardToGAgent`, `ForwardToModel`, and `ForwardToTeam` are implemented in v1.
 
 - `Reject` is declared on the wire but unused by v1 rule semantics — it lets
   endpoints uniformly return HTTP 403 when policy lookup fails closed.
 - `ForwardToWorkflow` is reserved on the wire only — no implementation.
+- `ForwardToTeam` and `ForwardToGAgent` are supported on both GAgent-native
+  ingress entries (NyxIdChat, Relay, Voice) and the OpenAI-shaped LLM facade
+  entry (`/v1/responses`).
+    - On GAgent-native ingress the proto field `ForwardToGAgent.actor_id`
+      means a raw Orleans grain key bound directly to the ingress (Voice
+      binds `/ws/voice/{actorId}`; NyxIdChat overrides
+      `NeedsLlmReplyEvent.TargetActorId`). `ForwardToTeam` resolves
+      `(team_id, endpoint_id)` to a Studio entry-member's
+      `published_service_id` via `ITeamEntryMemberResolver` and dispatches
+      through `IStaticGAgentStreamInvocationPort<AGUIEvent>`.
+    - On the LLM facade (`/v1/responses`) both variants flow through the
+      same AGUI → Responses SSE/JSON adapter
+      (`AGUIEventToResponsesSseAdapter`). `ForwardToTeam` uses
+      `ITeamEntryMemberResolver`; `ForwardToGAgent.actor_id` is interpreted
+      as a Studio `memberId` (per issue #588: every invoke must resolve to
+      a member identity) and goes through `IMemberPublishedServiceResolver`.
+      The wire-format assumption ("OpenAI Responses cannot carry AGUI")
+      that an earlier draft of this ADR relied on did not hold up against
+      the actual proto: AGUI events
+      (`text_message_start/content/end`, `tool_call_start/end`,
+      `run_started/finished`) are structurally isomorphic with Responses
+      SSE events (`response.created`, `response.output_text.delta/done`,
+      `response.output_item.added/done`, `response.completed`), so the
+      adapter is ~280 lines of typed mapping, not an independent milestone.
+    - `/v1/messages` (Anthropic Messages facade) still rejects both
+      `ForwardToTeam` and `ForwardToGAgent` at HTTP 501. Adding them is
+      symmetric to the `/v1/responses` work but is not in this milestone;
+      track separately.
+    - `ForwardToGAgent` has no `endpoint_id` field, so `/v1/responses`
+      pins the invocation to the conventional `"chat"` endpoint on the
+      resolved member's published service. Callers that need a non-default
+      endpoint should use `ForwardToTeam` (which carries `endpoint_id`)
+      or the direct Studio member invoke surface
+      (`POST /api/scopes/{scopeId}/members/{memberId}/invoke/{endpointId}[:stream]`).
 - No `Bypass` action exists on `ChatRouteAction`. The dev endpoint
   `/ws/voice/{actorId}` does not produce a `ChatRouteAction` at all — it
   reads the `actorId` from the route directly and short-circuits the

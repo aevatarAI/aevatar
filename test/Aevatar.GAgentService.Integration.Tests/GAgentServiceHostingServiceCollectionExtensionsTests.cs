@@ -1,9 +1,7 @@
-#pragma warning disable CS0618 // Tests exercise legacy migration utilities pending removal
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Hosting.DependencyInjection;
-using Aevatar.GAgentService.Governance.Hosting.Migration;
 using Aevatar.GAgentService.Governance.Projection.DependencyInjection;
 using Aevatar.GAgentService.Governance.Projection.ReadModels;
 using Aevatar.GAgentService.Projection.ReadModels;
@@ -18,6 +16,7 @@ using Aevatar.Hosting;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Presentation.AGUI;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
@@ -47,13 +46,28 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Should().Contain(x => x.ServiceType == typeof(IServiceServingQueryPort));
         services.Should().Contain(x => x.ServiceType == typeof(IScopeBindingReadinessQueryPort));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceInvocationPort));
+        services.Should().Contain(x => x.ServiceType == typeof(IStaticGAgentStreamInvocationPort<AGUIEvent>));
+        // Transitional platform fallback only. Studio registration replaces it
+        // with the actor-readmodel resolver; remove this assertion when Team
+        // invoke no longer needs a GAgentService compatibility resolver.
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ITeamEntryMemberResolver) &&
+            x.ImplementationType != null &&
+            x.ImplementationType.FullName == "Aevatar.GAgentService.Application.Bindings.DefaultTeamEntryMemberResolver");
         services.Should().Contain(x => x.ServiceType == typeof(IServiceGovernanceCommandPort));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceGovernanceQueryPort));
         services.Should().Contain(x => x.ServiceType == typeof(IActivationCapabilityViewReader));
         services.Should().Contain(x => x.ServiceType == typeof(IInvokeAdmissionAuthorizer));
-        services.Should().Contain(x =>
+        // Refactor (iter23/cluster-003-governance-legacy-startup-eventstore-fold):
+        //   Old pattern: capability registration added a startup hosted service that folded legacy events.
+        //   New principle: startup must not own migration replay; only explicit runtime services are composed.
+        services.Should().NotContain(x =>
             x.ServiceType == typeof(IHostedService) &&
-            x.ImplementationType == typeof(ServiceGovernanceLegacyMigrationHostedService));
+            x.ImplementationType != null &&
+            string.Equals(
+                x.ImplementationType.FullName,
+                "Aevatar.GAgentService.Governance.Hosting.Migration.ServiceGovernanceLegacyMigrationHostedService",
+                StringComparison.Ordinal));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType != null &&
@@ -186,6 +200,8 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         endpoints.Should().Contain("/api/scopes/{scopeId}/workflow/draft-run");
         endpoints.Should().Contain("/api/scopes/{scopeId}/invoke/chat:stream");
         endpoints.Should().Contain("/api/scopes/{scopeId}/invoke/{endpointId}");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/teams/{teamId}/invoke/{endpointId}:stream");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/teams/{teamId}/invoke/{endpointId}");
         endpoints.Should().Contain("/api/scopes/{scopeId}/runs");
         endpoints.Should().Contain("/api/scopes/{scopeId}/runs/{runId}");
         endpoints.Should().Contain("/api/scopes/{scopeId}/runs/{runId}/audit");

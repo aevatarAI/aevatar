@@ -350,7 +350,7 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
-    public async Task ChatAsync_WhenAgentMiddlewareTerminates_ShouldReturnSyntheticResultWithoutCallingProvider()
+    public async Task ChatAsync_WhenAgentMiddlewareTerminates_ShouldAggregateStreamAdapterWithoutCallingProvider()
     {
         var provider = new StreamingProvider(["ignored"]);
         var runtime = CreateRuntime(
@@ -369,8 +369,76 @@ public sealed class ChatRuntimeStreamingBufferTests
         var result = await runtime.ChatAsync("hello");
 
         result.Should().Be("short-circuit");
-        provider.ChatCallCount.Should().Be(0);
         provider.StreamCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ChatAsync_WhenProviderStreamsContent_ShouldAggregateWithoutCallingProviderChatAsync()
+    {
+        var provider = new StreamingProvider(["stream-", "answer"]);
+        var runtime = CreateRuntime(provider, streamBufferCapacity: 2);
+
+        var result = await runtime.ChatAsync("hello");
+
+        result.Should().Be("stream-answer");
+        provider.StreamCallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public void UserFacingAiExecutorSurfaces_ShouldNotDirectlyCallProviderChatAsyncOutsideProviderBoundary()
+    {
+        var root = FindRepositoryRoot();
+        var scannedRoots = new[]
+        {
+            Path.Combine(root, "src", "Aevatar.AI.Core"),
+            Path.Combine(root, "src", "Aevatar.Studio.Hosting"),
+            Path.Combine(root, "agents", "Aevatar.GAgents.ChatbotClassifier"),
+        };
+        var offenders = scannedRoots
+            .SelectMany(scanRoot => Directory.EnumerateFiles(scanRoot, "*.cs", SearchOption.AllDirectories))
+            .SelectMany(file => File.ReadLines(file)
+                .Select((line, index) => new { file, line, index })
+                .Where(x => !x.line.TrimStart().StartsWith("//", StringComparison.Ordinal))
+                .Where(x => x.line.Contains("provider.ChatAsync", StringComparison.Ordinal)
+                            || x.line.Contains("_provider.ChatAsync", StringComparison.Ordinal))
+                .Select(x => $"{Path.GetRelativePath(root, x.file)}:{x.index + 1}:{x.line.Trim()}"))
+            .ToArray();
+
+        offenders.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ProviderContractSurfaces_ShouldNotDeclareNonStreamingChatAsync()
+    {
+        var root = FindRepositoryRoot();
+        var providerContractFile = Path.Combine(
+            root,
+            "src",
+            "Aevatar.AI.Abstractions",
+            "LLMProviders",
+            "ILLMProvider.cs");
+        var concreteProviderRoots = new[]
+        {
+            Path.Combine(root, "src", "Aevatar.AI.Core", "LLMProviders"),
+            Path.Combine(root, "src", "Aevatar.AI.LLMProviders.MEAI"),
+            Path.Combine(root, "src", "Aevatar.AI.LLMProviders.NyxId"),
+            Path.Combine(root, "src", "Aevatar.AI.LLMProviders.Tornado"),
+        };
+
+        var scannedFiles = new[] { providerContractFile }
+            .Concat(concreteProviderRoots.SelectMany(scanRoot =>
+                Directory.EnumerateFiles(scanRoot, "*.cs", SearchOption.AllDirectories)));
+        var offenders = scannedFiles
+            .SelectMany(file => File.ReadLines(file)
+                .Select((line, index) => new { file, line, index })
+                .Where(x => !x.line.TrimStart().StartsWith("//", StringComparison.Ordinal))
+                .Where(x => System.Text.RegularExpressions.Regex.IsMatch(
+                    x.line,
+                    @"Task<LLMResponse>\s+ChatAsync\s*\("))
+                .Select(x => $"{Path.GetRelativePath(root, x.file)}:{x.index + 1}:{x.line.Trim()}"))
+            .ToArray();
+
+        offenders.Should().BeEmpty();
     }
 
     [Fact]
@@ -527,13 +595,6 @@ public sealed class ChatRuntimeStreamingBufferTests
         public string Name => "queued-streaming-provider";
         public List<LLMRequest> StreamRequests { get; } = [];
 
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            _ = request;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new LLMResponse());
-        }
-
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [EnumeratorCancellation] CancellationToken ct = default)
@@ -556,18 +617,8 @@ public sealed class ChatRuntimeStreamingBufferTests
         IReadOnlyList<LLMStreamChunk>? streamToolDeltas = null) : ILLMProvider
     {
         public string Name => "streaming-provider";
-        public int ChatCallCount { get; private set; }
         public int StreamCallCount { get; private set; }
         public LLMRequest? LastStreamRequest { get; private set; }
-        public LLMRequest? LastChatRequest { get; private set; }
-
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            LastChatRequest = request;
-            ChatCallCount++;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new LLMResponse { Content = string.Concat(chunks) });
-        }
 
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
@@ -626,6 +677,20 @@ public sealed class ChatRuntimeStreamingBufferTests
 
             await next();
         }
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var current = AppContext.BaseDirectory;
+        while (!string.IsNullOrEmpty(current))
+        {
+            if (File.Exists(Path.Combine(current, "aevatar.slnx")))
+                return current;
+
+            current = Directory.GetParent(current)?.FullName;
+        }
+
+        throw new InvalidOperationException("Could not locate repository root.");
     }
 
     private sealed class DelegateAgentRunMiddleware(

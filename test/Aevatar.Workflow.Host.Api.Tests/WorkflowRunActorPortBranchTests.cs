@@ -346,8 +346,7 @@ public sealed class WorkflowRunActorPortBranchTests
         var runtime = new RecordingActorRuntime();
         var actor = new RecordingActor("definition-inline-bind", new WorkflowGAgent());
         runtime.StoredActors[actor.Id] = actor;
-        var bindingProjectionPort = new RecordingWorkflowBindingProjectionActivationPort();
-        var port = CreatePort(runtime, bindingProjectionPort: bindingProjectionPort);
+        var port = CreatePort(runtime);
 
         await port.BindWorkflowDefinitionAsync(
             actor,
@@ -364,11 +363,10 @@ public sealed class WorkflowRunActorPortBranchTests
         var bind = actor.LastHandledEnvelope.Payload.Unpack<BindWorkflowDefinitionEvent>();
         bind.WorkflowName.Should().Be("direct");
         bind.InlineWorkflowYamls.Should().ContainKey("child");
-        bindingProjectionPort.ActorIds.Should().ContainSingle(actor.Id);
     }
 
     [Fact]
-    public async Task CreateRunAsync_ShouldActivateBindingAndExecutionProjections_BeforeDispatchingRunBinding()
+    public async Task CreateRunAsync_ShouldDispatchRunBindingWithoutProjectionActivationPorts()
     {
         var runtime = new RecordingActorRuntime();
         var definitionAgent = new WorkflowGAgent();
@@ -376,12 +374,7 @@ public sealed class WorkflowRunActorPortBranchTests
         definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps: []\n";
         runtime.StoredActors["definition-projection"] = new RecordingActor("definition-projection", definitionAgent);
         runtime.ActorsToCreate.Enqueue(new RecordingActor("run-projection", new StubAgent("run-projection")));
-        var bindingProjectionPort = new RecordingWorkflowBindingProjectionActivationPort();
-        var executionMaterializationPort = new RecordingWorkflowExecutionMaterializationActivationPort();
-        var port = CreatePort(
-            runtime,
-            bindingProjectionPort: bindingProjectionPort,
-            executionMaterializationPort: executionMaterializationPort);
+        var port = CreatePort(runtime);
 
         await port.CreateRunAsync(
             new WorkflowDefinitionBinding(
@@ -391,12 +384,14 @@ public sealed class WorkflowRunActorPortBranchTests
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
             CancellationToken.None);
 
-        bindingProjectionPort.ActorIds.Should().Contain("run-projection");
-        executionMaterializationPort.ActorIds.Should().ContainSingle("run-projection");
+        ((RecordingActor)runtime.StoredActors["run-projection"]).LastHandledEnvelope.Should().NotBeNull();
+        ((RecordingActor)runtime.StoredActors["run-projection"]).LastHandledEnvelope!.Payload!
+            .Is(BindWorkflowRunDefinitionEvent.Descriptor)
+            .Should().BeTrue();
     }
 
     [Fact]
-    public async Task CreateRunAsync_ShouldFailFast_WhenExecutionMaterializationCannotActivate()
+    public async Task CreateRunAsync_ShouldNotRollback_WhenProjectionActivationPortWouldHaveFailed()
     {
         var runtime = new RecordingActorRuntime();
         var definitionAgent = new WorkflowGAgent();
@@ -404,14 +399,9 @@ public sealed class WorkflowRunActorPortBranchTests
         definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps: []\n";
         runtime.StoredActors["definition-projection-fail"] = new RecordingActor("definition-projection-fail", definitionAgent);
         runtime.ActorsToCreate.Enqueue(new RecordingActor("run-projection-fail", new StubAgent("run-projection-fail")));
-        var port = CreatePort(
-            runtime,
-            executionMaterializationPort: new RecordingWorkflowExecutionMaterializationActivationPort
-            {
-                ActivateResult = false,
-            });
+        var port = CreatePort(runtime);
 
-        var act = async () => await port.CreateRunAsync(
+        await port.CreateRunAsync(
             new WorkflowDefinitionBinding(
                 "definition-projection-fail",
                 "direct",
@@ -419,9 +409,8 @@ public sealed class WorkflowRunActorPortBranchTests
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
             CancellationToken.None);
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Workflow execution materialization is disabled*");
-        runtime.Destroyed.Should().Equal("run-projection-fail");
+        runtime.Destroyed.Should().BeEmpty();
+        ((RecordingActor)runtime.StoredActors["run-projection-fail"]).LastHandledEnvelope.Should().NotBeNull();
     }
 
     [Fact]
@@ -567,15 +556,11 @@ public sealed class WorkflowRunActorPortBranchTests
 
     private static WorkflowRunActorPort CreatePort(
         RecordingActorRuntime runtime,
-        IWorkflowActorBindingReader? bindingReader = null,
-        IWorkflowBindingProjectionActivationPort? bindingProjectionPort = null,
-        IWorkflowExecutionMaterializationActivationPort? executionMaterializationPort = null) =>
+        IWorkflowActorBindingReader? bindingReader = null) =>
         new(
             runtime,
             runtime,
             bindingReader ?? new RuntimeBackedWorkflowActorBindingReader(runtime),
-            bindingProjectionPort ?? new RecordingWorkflowBindingProjectionActivationPort(),
-            executionMaterializationPort ?? new RecordingWorkflowExecutionMaterializationActivationPort(),
             [new WorkflowCoreModulePack()]);
 
     private static string ResolveRepositoryRoot()
@@ -774,32 +759,6 @@ public sealed class WorkflowRunActorPortBranchTests
     private sealed class FakeRoleAgentTypeResolver : IRoleAgentTypeResolver
     {
         public Type ResolveRoleAgentType() => typeof(StubAgent);
-    }
-
-    private sealed class RecordingWorkflowBindingProjectionActivationPort : IWorkflowBindingProjectionActivationPort
-    {
-        public List<string> ActorIds { get; } = [];
-        public bool ActivateResult { get; set; } = true;
-
-        public Task<bool> ActivateAsync(string rootActorId, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            ActorIds.Add(rootActorId);
-            return Task.FromResult(ActivateResult);
-        }
-    }
-
-    private sealed class RecordingWorkflowExecutionMaterializationActivationPort : IWorkflowExecutionMaterializationActivationPort
-    {
-        public List<string> ActorIds { get; } = [];
-        public bool ActivateResult { get; set; } = true;
-
-        public Task<bool> ActivateAsync(string rootActorId, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            ActorIds.Add(rootActorId);
-            return Task.FromResult(ActivateResult);
-        }
     }
 
     private sealed class FakeStepExecutorFactory : IEventModuleFactory<IWorkflowExecutionContext>

@@ -473,6 +473,56 @@ public sealed class MainnetMessagesEndpointsTests
     }
 
     [Fact]
+    public async Task PostMessages_WhenChatRouteMatchesModelAndDeclaredTools_UsesRuleAction()
+    {
+        var provider = new MessagesRecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk { DeltaContent = "Hi", IsLast = true, Usage = new TokenUsage(1, 1, 2) },
+            ],
+        };
+        var queryPort = MessagesStaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
+            ForwardToModelAction("default-claude"),
+            [
+                new ChatRouteRule
+                {
+                    RuleId = "messages-model-tools",
+                    Priority = 10,
+                    Match = new ChatRouteMatch
+                    {
+                        SourceKind = ChatSourceKind.NyxResponses,
+                        Model = "original-claude",
+                        ToolMode = ToolMode.Declared,
+                    },
+                    Action = ForwardToModelAction("routed-tool-claude"),
+                },
+            ]));
+        await using var app = await CreateAppAsync(provider, chatRoutePolicyQueryPort: queryPort);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
+        {
+            Content = JsonContent("""
+            {
+              "model": "original-claude",
+              "max_tokens": 32,
+              "messages": [{"role": "user", "content": "ping"}],
+              "tools": [{"name":"do_thing","description":"do a thing","input_schema":{"type":"object","properties":{}}}]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "anthropic-bearer");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.Model.Should().Be("routed-tool-claude");
+    }
+
+    [Fact]
     public async Task PostMessages_WhenBareClaudeModel_AutoPrefixesAnthropicAndResolvesRoute()
     {
         // Regression: cc-switch / Claude Code / Anthropic SDK send raw model
@@ -677,12 +727,6 @@ public sealed class MainnetMessagesEndpointsTests
         public ILLMProvider GetDefault() => this;
 
         public IReadOnlyList<string> GetAvailableProviders() => [Name];
-
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            LastRequest = request;
-            return Task.FromResult(new LLMResponse { Content = "ok" });
-        }
 
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,

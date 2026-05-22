@@ -65,7 +65,8 @@ public sealed class ChatRouteResolver
                && MatchesString(match.Channel, input.Channel)
                && MatchesString(match.CommandName, input.CommandName)
                && MatchesString(match.ContentHint, input.ContentHint)
-               && MatchesEnum(match.ToolMode, ToolMode.Unspecified, input.ToolMode);
+               && MatchesEnum(match.ToolMode, ToolMode.Unspecified, input.ToolMode)
+               && MatchesString(match.Model, input.Model);
     }
 
     private static bool MatchesString(string? expected, string actual) =>

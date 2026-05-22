@@ -1,7 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Application.ScopeGAgents;
-using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
 
 namespace Aevatar.GAgentService.Tests.Application;

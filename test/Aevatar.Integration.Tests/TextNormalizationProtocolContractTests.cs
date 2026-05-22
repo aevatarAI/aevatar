@@ -41,7 +41,7 @@ public sealed class TextNormalizationProtocolContractTests
         var lease = await projectionPort.EnsureActorProjectionAsync(runtimeActorId, CancellationToken.None);
         lease.Should().NotBeNull();
         await using var sink = new EventChannel<Aevatar.Foundation.Abstractions.EventEnvelope>(capacity: 32);
-        await projectionPort.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);
+        var liveSinkLease = await projectionPort.AttachLiveSinkAsync(lease!, sink, CancellationToken.None);
 
         try
         {
@@ -78,7 +78,7 @@ public sealed class TextNormalizationProtocolContractTests
         }
         finally
         {
-            await projectionPort.DetachLiveSinkAsync(lease!, sink, CancellationToken.None);
+            await projectionPort.DetachLiveSinkAsync(liveSinkLease, CancellationToken.None);
             await projectionPort.ReleaseActorProjectionAsync(lease!, CancellationToken.None);
         }
     }

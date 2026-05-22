@@ -1,6 +1,5 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -21,6 +20,7 @@ using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.Hosting;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Serialization;
 using Aevatar.Presentation.AGUI;
@@ -62,6 +62,8 @@ public static class ScopeServiceEndpoints
         group.MapPost("/{scopeId}/invoke/{endpointId}", HandleInvokeDefaultAsync);
         group.MapPost("/{scopeId}/members/{memberId}/invoke/{endpointId}:stream", HandleInvokeMemberStreamAsync);
         group.MapPost("/{scopeId}/members/{memberId}/invoke/{endpointId}", HandleInvokeMemberAsync);
+        group.MapPost("/{scopeId}/teams/{teamId}/invoke/{endpointId}:stream", HandleInvokeTeamStreamAsync);
+        group.MapPost("/{scopeId}/teams/{teamId}/invoke/{endpointId}", HandleInvokeTeamAsync);
         group.MapGet("/{scopeId}/runs", HandleListDefaultRunsAsync);
         group.MapGet("/{scopeId}/runs/{runId}", HandleGetDefaultRunAsync);
         group.MapGet("/{scopeId}/members/{memberId}/runs", HandleListMemberRunsAsync);
@@ -779,6 +781,109 @@ public static class ScopeServiceEndpoints
                 artifactStore,
                 options,
                 ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return CreateScopeInvokeFailureResult(ex);
+        }
+    }
+
+    private static async Task HandleInvokeTeamStreamAsync(
+        HttpContext http,
+        string scopeId,
+        string teamId,
+        string endpointId,
+        StreamScopeServiceHttpRequest request,
+        [FromServices] ITeamEntryMemberResolver teamEntryMemberResolver,
+        [FromServices] ServiceInvocationResolutionService resolutionService,
+        [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
+        [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
+        [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        [FromServices] ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> gagentDraftRunService,
+        [FromServices] IScriptRuntimeCommandPort scriptRuntimeCommandPort,
+        [FromServices] IScriptServiceAguiProjectionPort scriptServiceAguiProjectionPort,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+                return;
+
+            var teamResolution = await teamEntryMemberResolver.ResolveAsync(scopeId, teamId, ct);
+            await HandleInvokeStreamAsync(
+                http,
+                teamResolution.ScopeId,
+                teamResolution.PublishedServiceId,
+                endpointId,
+                request,
+                null,
+                resolutionService,
+                admissionAuthorizer,
+                serviceRunRegistrationPort,
+                chatRunService,
+                gagentDraftRunService,
+                scriptRuntimeCommandPort,
+                scriptServiceAguiProjectionPort,
+                options,
+                ct);
+        }
+        catch (TeamEntryMemberResolutionException ex)
+        {
+            await WriteJsonErrorResponseAsync(
+                http,
+                ResolveTeamEntryHttpStatusCode(ex.Code),
+                ex.Code,
+                ex.Message,
+                ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            await WriteJsonErrorResponseAsync(
+                http,
+                StatusCodes.Status400BadRequest,
+                "INVALID_TEAM_SERVICE_STREAM_REQUEST",
+                ex.Message,
+                ct);
+        }
+    }
+
+    private static async Task<IResult> HandleInvokeTeamAsync(
+        HttpContext http,
+        string scopeId,
+        string teamId,
+        string endpointId,
+        InvokeScopeServiceHttpRequest request,
+        [FromServices] ITeamEntryMemberResolver teamEntryMemberResolver,
+        [FromServices] IServiceInvocationPort invocationPort,
+        [FromServices] IServiceCatalogQueryReader catalogReader,
+        [FromServices] IServiceRevisionArtifactStore artifactStore,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
+            var teamResolution = await teamEntryMemberResolver.ResolveAsync(scopeId, teamId, ct);
+            return await HandleInvokeAsyncCore(
+                http,
+                teamResolution.ScopeId,
+                teamResolution.PublishedServiceId,
+                endpointId,
+                request,
+                null,
+                BuildTeamApiPath(teamResolution.ScopeId, teamResolution.TeamId),
+                invocationPort,
+                catalogReader,
+                artifactStore,
+                options,
+                ct);
+        }
+        catch (TeamEntryMemberResolutionException ex)
+        {
+            return CreateTeamEntryFailureResult(ex);
         }
         catch (InvalidOperationException ex)
         {
@@ -1749,11 +1854,11 @@ public static class ScopeServiceEndpoints
         CopyHeaders(headers, chatRequest.Metadata);
         var inputPayload = Any.Pack(chatRequest);
         var eventChannel = new EventChannel<AGUIEvent>();
-        var projectionLease = await scriptServiceAguiProjectionPort.EnsureAndAttachAsync(
+        var attachment = await scriptServiceAguiProjectionPort.EnsureAndAttachLeaseAsync(
             token => scriptServiceAguiProjectionPort.EnsureRunProjectionAsync(actorId, runId, token),
             eventChannel,
             ct);
-        if (projectionLease == null)
+        if (attachment == null)
             throw new InvalidOperationException("Script execution projection pipeline is unavailable.");
 
         try
@@ -1804,7 +1909,8 @@ public static class ScopeServiceEndpoints
         finally
         {
             await scriptServiceAguiProjectionPort.DetachReleaseAndDisposeAsync(
-                projectionLease,
+                attachment.ProjectionLease,
+                attachment.LiveSinkLease,
                 eventChannel,
                 null,
                 CancellationToken.None);
@@ -2420,6 +2526,9 @@ public static class ScopeServiceEndpoints
     private static string BuildMemberApiPath(string scopeId, string memberId) =>
         $"/api/scopes/{Uri.EscapeDataString(scopeId)}/members/{Uri.EscapeDataString(memberId)}";
 
+    private static string BuildTeamApiPath(string scopeId, string teamId) =>
+        $"/api/scopes/{Uri.EscapeDataString(scopeId)}/teams/{Uri.EscapeDataString(teamId)}";
+
     private static string? BuildTypedInvokeRequestExampleBody(string? requestTypeUrl, bool prettyPrinted) =>
         ServiceEndpointContractMath.BuildTypedInvokeRequestExampleBody(requestTypeUrl, prettyPrinted);
 
@@ -3024,6 +3133,31 @@ const response = await fetch("{{invokePath}}", {
             message,
         });
     }
+
+    private static IResult CreateTeamEntryFailureResult(TeamEntryMemberResolutionException ex)
+    {
+        ArgumentNullException.ThrowIfNull(ex);
+        var statusCode = ResolveTeamEntryHttpStatusCode(ex.Code);
+        return Results.Json(
+            new
+            {
+                code = ex.Code,
+                message = ex.Message,
+            },
+            statusCode: statusCode);
+    }
+
+    private static int ResolveTeamEntryHttpStatusCode(string code) =>
+        code switch
+        {
+            TeamEntryMemberErrorCodes.TeamNotFound => StatusCodes.Status404NotFound,
+            TeamEntryMemberErrorCodes.TeamArchived => StatusCodes.Status409Conflict,
+            TeamEntryMemberErrorCodes.EntryMemberNotConfigured => StatusCodes.Status409Conflict,
+            TeamEntryMemberErrorCodes.EntryMemberMismatch => StatusCodes.Status409Conflict,
+            TeamEntryMemberErrorCodes.EntryMemberNotReady => StatusCodes.Status409Conflict,
+            TeamEntryMemberErrorCodes.EntryMemberNotFound => StatusCodes.Status409Conflict,
+            _ => StatusCodes.Status400BadRequest,
+        };
 
     private static bool IsScopeInvokeNotFoundFailure(string message) =>
         message.Contains(" was not found.", StringComparison.Ordinal) ||

@@ -52,6 +52,19 @@ if rg -n "GetAwaiter\(\)\.GetResult\(\)" src; then
   exit 1
 fi
 
+# Refactor (iter18/cluster-001):
+#   Old pattern: ILLMProvider 仍暴露 ChatAsync 非流式入口,provider/failover 可绕过流式链路
+#   New principle: Provider contract 只暴露 ChatStreamAsync;非流式聚合用现有 ChatStreamContentAggregator;无新 offline adapter
+if rg -n "Task<LLMResponse>[[:space:]]+ChatAsync[[:space:]]*\(" \
+  src/Aevatar.AI.Abstractions/LLMProviders/ILLMProvider.cs \
+  src/Aevatar.AI.Core/LLMProviders \
+  src/Aevatar.AI.LLMProviders.* \
+  -g '*.cs'
+then
+  echo "Provider-level Task<LLMResponse> ChatAsync is forbidden. Use ChatStreamAsync plus ChatStreamContentAggregator for offline aggregation."
+  exit 1
+fi
+
 if rg -n "CommandContext\.Metadata|AgentRunContext\.Metadata|LLMCallContext\.Metadata|ToolCallContext\.Metadata|GAgentExecutionHookContext\.Metadata" \
   src test
 then
@@ -1174,6 +1187,9 @@ bash tools/ci/runtime_callback_guards.sh
 
 echo "Running channel card literal guard..."
 bash tools/ci/channel_card_literal_guard.sh
+
+echo "Running Nyx relay replay authority guard..."
+python3 tools/ci/guards/nyx_relay_replay_authority_guard.py
 
 echo "Running docs lint guard..."
 bash tools/docs/lint.sh

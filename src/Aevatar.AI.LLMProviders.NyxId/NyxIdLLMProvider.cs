@@ -47,20 +47,9 @@ public sealed class NyxIdLLMProvider : ILLMProvider
 
     public string Name { get; }
 
-    public async Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-    {
-        var route = await ResolveRouteAsync(request, ct);
-        var provider = CreateDelegateProvider(route.Request, route.Endpoint, route.RouteName, route.AccessToken);
-        try
-        {
-            return await provider.ChatAsync(route.Request, ct);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            throw TranslateUpstreamFailure(ex, route);
-        }
-    }
-
+    // Refactor (iter18/cluster-001):
+    //   Old pattern: ILLMProvider 仍暴露 ChatAsync 非流式入口,provider/failover 可绕过流式链路
+    //   New principle: Provider contract 只暴露 ChatStreamAsync;非流式聚合用现有 ChatStreamContentAggregator;无新 offline adapter
     public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         LLMRequest request,
         CancellationToken ct = default)

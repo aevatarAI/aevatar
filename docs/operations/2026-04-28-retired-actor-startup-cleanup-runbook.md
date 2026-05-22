@@ -41,14 +41,13 @@ A spec declares:
 - `Targets` — well-known retired actor ids and the CLR type name tokens that
   identify them as retired.
 - `DiscoverDynamicTargetsAsync` — optional. The Scheduled spec uses this to read
-  the user-agent catalog and surface generated `skill-runner-*` /
-  `workflow-agent-*` actor ids that need cleaning before the catalog itself is
-  destroyed. Discovery is gated on the catalog runtime type still looking
-  retired (or the catalog state being cleared but its event stream still having
-  events) so warm clusters do not pay the catalog walk on every startup.
-  When the gate fires, ids are read from the `UserAgentCatalogDocument` read
-  model first (survives event-stream snapshot+compaction), then merged with
-  any catalog upsert events not yet projected.
+  the typed `UserAgentCatalogDocument` read model and surface generated
+  `skill-runner` / `workflow_agent` entries that need cleaning before the catalog
+  itself is destroyed. Discovery is gated on the catalog runtime type still
+  looking retired so warm clusters do not pay the catalog read-model query on
+  every startup. Actor ids from the read model are treated as opaque addresses;
+  the decision that a row is a generated user agent comes from
+  `UserAgentCatalogDocument.AgentType`.
 - `DeleteReadModelsForActorAsync` — optional. Each module deletes its own typed
   `IProjectionDocumentReader` / `IProjectionWriteDispatcher` documents (no
   cross-module document knowledge).
@@ -77,7 +76,7 @@ reset path).
 |-------------------|-----------------------------------|---------|
 | `channel-runtime` | `Aevatar.GAgents.Channel.Runtime` | `channel-bot-registration-store`, `projection.durable.scope:channel-bot-registration:channel-bot-registration-store` |
 | `device`          | `Aevatar.GAgents.Device`          | `device-registration-store`, `projection.durable.scope:device-registration:device-registration-store` |
-| `scheduled`       | `Aevatar.GAgents.Scheduled`       | `agent-registry-store`, `projection.durable.scope:agent-registry:agent-registry-store` + dynamic `skill-runner-*` / `workflow-agent-*` discovered from the catalog stream |
+| `scheduled`       | `Aevatar.GAgents.Scheduled`       | `agent-registry-store`, `projection.durable.scope:agent-registry:agent-registry-store` + dynamic generated user agents discovered from typed catalog read-model rows |
 
 ## Configuration
 
