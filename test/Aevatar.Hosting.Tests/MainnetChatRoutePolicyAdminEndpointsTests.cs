@@ -23,8 +23,8 @@ namespace Aevatar.Hosting.Tests;
 
 /// <summary>
 /// REST admin surface for ChatRoutePolicyGAgent. Without these tests it is
-/// easy to regress the JSON parsing, scope-stamp behavior, or the dispatch
-/// shape (commandId / actor id / envelope route) — the actor itself
+/// easy to regress the JSON parsing, scope-stamp behavior, or the command-port
+/// admission shape (accepted scope / stamped owner scope / rule command) — the actor itself
 /// (validated by ChatRoutePolicyGAgentTests) is fire-and-forget on the
 /// stream, so an endpoint bug surfaces only in operator pain.
 /// </summary>

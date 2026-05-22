@@ -71,10 +71,6 @@ internal static class ChatRoutePolicyAdminEndpoints
         [FromServices] IChatRoutePolicyCommandPort commandPort,
         CancellationToken ct)
     {
-        // Refactor (iter34/cluster-005-mainnet-host-direct-actor-runtime):
-        //   Old pattern: Mainnet Host endpoints inject IActorRuntime/IActorDispatchPort and build EventEnvelope + dispatch directly in Host code.
-        //   New principle: Host calls Application command ports that normalize, resolve target, build envelope, dispatch, return honest accepted receipt.
-        //   Host endpoint stays minimal (auth + body parsing). NO direct dependency on IActorRuntime/IActorDispatchPort in Host.
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return denied;
 
@@ -133,10 +129,6 @@ internal static class ChatRoutePolicyAdminEndpoints
         [FromServices] IChatRoutePolicyCommandPort commandPort,
         CancellationToken ct)
     {
-        // Refactor (iter34/cluster-005-mainnet-host-direct-actor-runtime):
-        //   Old pattern: Mainnet Host endpoints inject IActorRuntime/IActorDispatchPort and build EventEnvelope + dispatch directly in Host code.
-        //   New principle: Host calls Application command ports that normalize, resolve target, build envelope, dispatch, return honest accepted receipt.
-        //   Host endpoint stays minimal (auth + body parsing). NO direct dependency on IActorRuntime/IActorDispatchPort in Host.
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return denied;
 

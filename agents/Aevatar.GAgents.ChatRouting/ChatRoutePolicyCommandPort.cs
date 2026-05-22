@@ -29,10 +29,6 @@ internal sealed class ChatRoutePolicyCommandPort : IChatRoutePolicyCommandPort
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
     }
 
-    // Refactor (iter34/cluster-005-mainnet-host-direct-actor-runtime):
-    //   Old pattern: Mainnet Host endpoints inject IActorRuntime/IActorDispatchPort and build EventEnvelope + dispatch directly in Host code.
-    //   New principle: Host calls Application command ports that normalize, resolve target, build envelope, dispatch, return honest accepted receipt.
-    //   Host endpoint stays minimal (auth + body parsing). NO direct dependency on IActorRuntime/IActorDispatchPort in Host.
     public Task<ChatRoutePolicyCommandAcceptedReceipt> UpsertAsync(
         string scopeId,
         UpsertChatRoutePolicyRequested command,
@@ -42,10 +38,6 @@ internal sealed class ChatRoutePolicyCommandPort : IChatRoutePolicyCommandPort
         return DispatchAsync(scopeId, command, ct);
     }
 
-    // Refactor (iter34/cluster-005-mainnet-host-direct-actor-runtime):
-    //   Old pattern: Mainnet Host endpoints inject IActorRuntime/IActorDispatchPort and build EventEnvelope + dispatch directly in Host code.
-    //   New principle: Host calls Application command ports that normalize, resolve target, build envelope, dispatch, return honest accepted receipt.
-    //   Host endpoint stays minimal (auth + body parsing). NO direct dependency on IActorRuntime/IActorDispatchPort in Host.
     public Task<ChatRoutePolicyCommandAcceptedReceipt> RemoveRuleAsync(
         string scopeId,
         RemoveChatRouteRuleRequested command,

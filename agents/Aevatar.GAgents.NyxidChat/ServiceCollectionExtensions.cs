@@ -29,11 +29,11 @@ namespace Aevatar.GAgents.NyxidChat;
 
 public static class ServiceCollectionExtensions
 {
-    // Refactor (iter17/cluster-038):
-    //   Old pattern: Nyx relay replay/idempotency 和 reply 累积在 process-local ConcurrentDictionary/lock(NyxRelayBridgeIdempotencyGuard / NyxIdRelayReplayGuard / NyxIdRelayReplyAccumulator)。
-    //   New principle: ConversationGAgent persist callback_jti admission 为 typed event 优先于 business work;删除 process-local replay guards + dead accumulator。
     public static IServiceCollection AddNyxIdChat(this IServiceCollection services, IConfiguration? configuration = null)
     {
+        // Refactor (iter34/cluster-005-mainnet-host-direct-actor-runtime):
+        //   Old pattern: Mainnet Host voice bootstrap injected actor runtime/dispatch and built initialization envelopes in the endpoint.
+        //   New principle: DI exposes the voice demo Application command port so Host composes the port instead of runtime internals.
         ArgumentNullException.ThrowIfNull(services);
         RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(AgentRunGAgent).TypeHandle);
