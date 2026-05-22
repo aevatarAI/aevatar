@@ -25,12 +25,15 @@ using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Platform.Telegram;
 using Aevatar.GAgents.Scheduled;
+using Aevatar.GAgents.StatusDashboard.DependencyInjection;
+using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Mainnet.Host.Api.ChatRouting;
 using Aevatar.Mainnet.Host.Api.Messages;
 using Aevatar.Mainnet.Host.Api.Responses;
+using Aevatar.Mainnet.Host.Api.Status;
 using Aevatar.Mainnet.Host.Api.Voice;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
@@ -95,6 +98,9 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddChannelIdentityProjectionStores(builder.Configuration);
         builder.Services.AddDeviceRegistration(builder.Configuration);
         builder.Services.AddScheduledAgents(builder.Configuration);
+        builder.Services.AddStatusDashboard(builder.Configuration);
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IReadmodelFreshnessSource, ChannelBotRegistrationFreshnessSource>());
         // Ingress layer v1: registers the ChatRoutePolicy current-state readmodel
         // document store (Elasticsearch in prod, InMemory otherwise — same
         // selection pattern as AddScheduledAgents / AddDeviceRegistration).
@@ -213,6 +219,7 @@ public static class MainnetHostBuilderExtensions
         app.MapIdentityOAuthEndpoints();
         app.MapVoiceDemoBootstrapEndpoints();
         app.MapPolicyAwareVoiceEndpoint();
+        app.MapStatusEndpoints();
         app.MapVoicePresenceWebSocket("/ws/voice/{actorId}")
             .RequireAuthorization("voice-dev");
 
