@@ -5,6 +5,9 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Scripting.Abstractions.Behaviors;
 
+// Refactor (iter27/cluster-029-scripting-runtime-raw-actor-lifecycle):
+//   Old pattern: Scripting behavior runtime exposes raw IActorRuntime lifecycle/topology by assembly-qualified type name and caller-supplied actor ids
+//   New principle: Delete raw script-facing actor lifecycle/topology API; keep existing typed scripting ports (provisioning/command/definition/catalog/evolution)
 public interface IScriptBehaviorRuntimeCapabilities
 {
     Task<string> AskAIAsync(string prompt, CancellationToken ct);
@@ -22,14 +25,6 @@ public interface IScriptBehaviorRuntimeCapabilities
         CancellationToken ct);
 
     Task CancelDurableCallbackAsync(RuntimeCallbackLease lease, CancellationToken ct);
-
-    Task<string> CreateAgentAsync(string agentTypeAssemblyQualifiedName, string? actorId, CancellationToken ct);
-
-    Task DestroyAgentAsync(string actorId, CancellationToken ct);
-
-    Task LinkAgentsAsync(string parentActorId, string childActorId, CancellationToken ct);
-
-    Task UnlinkAgentAsync(string childActorId, CancellationToken ct);
 
     Task<ScriptPromotionDecision> ProposeScriptEvolutionAsync(ScriptEvolutionProposal proposal, CancellationToken ct);
 
