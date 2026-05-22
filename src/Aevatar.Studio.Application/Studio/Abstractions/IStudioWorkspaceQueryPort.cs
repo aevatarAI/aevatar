@@ -13,7 +13,8 @@ public interface IStudioWorkspaceQueryPort
     Task<StudioWorkspaceSnapshot> GetAsync(CancellationToken ct = default);
 
     Task<StudioWorkspaceSnapshot> GetAsync(string scopeId, CancellationToken ct = default) =>
-        GetAsync(ct);
+        throw new NotImplementedException(
+            "Explicit workspace scope routing must be implemented by the query port.");
 }
 
 public sealed record StudioWorkspaceSnapshot(

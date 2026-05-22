@@ -122,6 +122,22 @@ public sealed class ProjectionStudioWorkspaceQueryPortTests
     }
 
     [Fact]
+    public async Task GetAsync_WithExplicitScope_ShouldReadRequestedScopeInsteadOfAmbientScope()
+    {
+        var reader = new StubDocumentReader();
+        var port = new ProjectionStudioWorkspaceQueryPort(
+            reader,
+            new StubScopeResolver { ScopeId = "ambient-scope" });
+
+        var snapshot = await port.GetAsync(" requested-scope ");
+
+        reader.ReadKeys.Should().ContainSingle().Which.Should().Be("studio-workspace:requested-scope");
+        snapshot.WorkspaceId.Should().Be("studio-workspace:requested-scope");
+        snapshot.ScopeId.Should().Be("requested-scope");
+        snapshot.Drafts.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task GetAsync_WhenStateRootIsUnexpectedType_ShouldUseScopedEmptyStateButKeepDocumentWatermark()
     {
         var scopeResolver = new StubScopeResolver { ScopeId = "scope-2" };
@@ -179,13 +195,18 @@ public sealed class ProjectionStudioWorkspaceQueryPortTests
     {
         private readonly Dictionary<string, StudioWorkspaceCurrentStateDocument> _documents = new(StringComparer.Ordinal);
 
+        public List<string> ReadKeys { get; } = [];
+
         public void Set(string key, StudioWorkspaceCurrentStateDocument document) =>
             _documents[key] = document;
 
         public Task<StudioWorkspaceCurrentStateDocument?> GetAsync(
             string key,
-            CancellationToken ct = default) =>
-            Task.FromResult(_documents.GetValueOrDefault(key));
+            CancellationToken ct = default)
+        {
+            ReadKeys.Add(key);
+            return Task.FromResult(_documents.GetValueOrDefault(key));
+        }
 
         public Task<ProjectionDocumentQueryResult<StudioWorkspaceCurrentStateDocument>> QueryAsync(
             ProjectionDocumentQuery query,
