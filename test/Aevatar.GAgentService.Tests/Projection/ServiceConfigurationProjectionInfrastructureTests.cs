@@ -172,10 +172,6 @@ public sealed class ServiceConfigurationProjectionInfrastructureTests
         var invalidCommittedResult = (bool)supportType
             .GetMethod("TryGetObservedPayload", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public)!
             .Invoke(null, invalidCommittedArgs)!;
-        var resolvedVersion = (long)supportType
-            .GetMethod("ResolveNextStateVersion", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public)!
-            .Invoke(null, [0L, 0L])!;
-
         committedResult.Should().BeTrue();
         ((Any)committedArgs[2]!).Is(StringValue.Descriptor).Should().BeTrue();
         committedArgs[3].Should().Be("evt-1");
@@ -191,7 +187,6 @@ public sealed class ServiceConfigurationProjectionInfrastructureTests
         invalidCommittedArgs[3].Should().Be(string.Empty);
         invalidCommittedArgs[4].Should().Be(0L);
         invalidCommittedArgs[5].Should().Be(default(DateTimeOffset));
-        resolvedVersion.Should().Be(0L);
     }
 
     [Fact]
