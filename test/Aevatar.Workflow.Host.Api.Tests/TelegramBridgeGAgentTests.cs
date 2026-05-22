@@ -3,12 +3,15 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Foundation.Abstractions.ExternalLinks;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Workflow.Extensions.Bridge;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -234,8 +237,10 @@ public sealed class TelegramBridgeGAgentTests
             EventSourcing = new RecordingEventSourcing<TelegramWaitReplyState>(
                 (state, evt) => TelegramWaitReplyStateTransitions.Apply(state, evt)),
             EventPublisher = publisher,
-            Services = CreateAgentServices(),
         };
+        var dispatch = new RecordingActorDispatchPort(agent);
+        agent.Services = CreateAgentServices(dispatch, registry);
+        await agent.ActivateAsync();
 
         var command = BuildWaitReplyCommand(
             sessionId: "session-wait-edited",
@@ -247,7 +252,7 @@ public sealed class TelegramBridgeGAgentTests
         connector.Received.Should().BeEmpty();
         publisher.Sent.Select(x => x.evt).Should().ContainSingle(x => x is TelegramWaitReplyBootstrapDueEvent);
 
-        await DrainWaitReplySelfEventsAsync(agent, publisher);
+        await DrainWaitReplySelfEventsAsync(agent, publisher, dispatch);
 
         connector.Received.Count.Should().Be(4);
         connector.Received.Should().OnlyContain(x => x.Operation == "/getUpdates");
@@ -335,8 +340,10 @@ public sealed class TelegramBridgeGAgentTests
             EventSourcing = new RecordingEventSourcing<TelegramWaitReplyState>(
                 (state, evt) => TelegramWaitReplyStateTransitions.Apply(state, evt)),
             EventPublisher = publisher,
-            Services = CreateAgentServices(),
         };
+        var dispatch = new RecordingActorDispatchPort(agent);
+        agent.Services = CreateAgentServices(dispatch, registry);
+        await agent.ActivateAsync();
 
         var command = BuildWaitReplyCommand(
             sessionId: "session-wait-collect-all",
@@ -346,7 +353,7 @@ public sealed class TelegramBridgeGAgentTests
         command.SettlePollsAfterMatch = 2;
 
         await agent.HandleEventAsync(Envelope(command), CancellationToken.None);
-        await DrainWaitReplySelfEventsAsync(agent, publisher);
+        await DrainWaitReplySelfEventsAsync(agent, publisher, dispatch);
 
         var completed = publisher.Published.Select(x => x.evt).OfType<TelegramWaitReplyCompletedEvent>().Single();
         completed.SessionId.Should().Be("session-wait-collect-all");
@@ -373,8 +380,10 @@ public sealed class TelegramBridgeGAgentTests
             EventSourcing = new RecordingEventSourcing<TelegramWaitReplyState>(
                 (state, evt) => TelegramWaitReplyStateTransitions.Apply(state, evt)),
             EventPublisher = publisher,
-            Services = CreateAgentServices(),
         };
+        var dispatch = new RecordingActorDispatchPort(agent);
+        agent.Services = CreateAgentServices(dispatch, registry);
+        await agent.ActivateAsync();
 
         var command = BuildWaitReplyCommand(
             sessionId: "session-wait-bootstrap",
@@ -385,7 +394,7 @@ public sealed class TelegramBridgeGAgentTests
         await agent.HandleEventAsync(Envelope(command), CancellationToken.None);
         connector.Received.Should().BeEmpty();
 
-        await DrainWaitReplySelfEventsAsync(agent, publisher);
+        await DrainWaitReplySelfEventsAsync(agent, publisher, dispatch);
 
         connector.Received.Should().ContainSingle();
         connector.Received[0].Operation.Should().Be("/getUpdates");
@@ -415,8 +424,10 @@ public sealed class TelegramBridgeGAgentTests
             EventSourcing = new RecordingEventSourcing<TelegramWaitReplyState>(
                 (state, evt) => TelegramWaitReplyStateTransitions.Apply(state, evt)),
             EventPublisher = publisher,
-            Services = CreateAgentServices(),
         };
+        var dispatch = new RecordingActorDispatchPort(agent);
+        agent.Services = CreateAgentServices(dispatch, registry);
+        await agent.ActivateAsync();
 
         var command = BuildWaitReplyCommand(
             sessionId: "session-wait-username-missing",
@@ -425,7 +436,7 @@ public sealed class TelegramBridgeGAgentTests
         command.StartFromLatest = true;
 
         await agent.HandleEventAsync(Envelope(command), CancellationToken.None);
-        await DrainWaitReplySelfEventsAsync(agent, publisher);
+        await DrainWaitReplySelfEventsAsync(agent, publisher, dispatch);
 
         var completed = publisher.Published.Select(x => x.evt).OfType<TelegramWaitReplyCompletedEvent>().Single();
         completed.SessionId.Should().Be("session-wait-username-missing");
@@ -450,15 +461,17 @@ public sealed class TelegramBridgeGAgentTests
             EventSourcing = new RecordingEventSourcing<TelegramWaitReplyState>(
                 (state, evt) => TelegramWaitReplyStateTransitions.Apply(state, evt)),
             EventPublisher = publisher,
-            Services = CreateAgentServices(),
         };
+        var dispatch = new RecordingActorDispatchPort(agent);
+        agent.Services = CreateAgentServices(dispatch, registry);
+        await agent.ActivateAsync();
 
         var command = BuildWaitReplyCommand(
             sessionId: "session-wait-failed",
             expectedUsername: "openclaw_bot");
 
         await agent.HandleEventAsync(Envelope(command), CancellationToken.None);
-        await DrainWaitReplySelfEventsAsync(agent, publisher);
+        await DrainWaitReplySelfEventsAsync(agent, publisher, dispatch);
 
         var failed = publisher.Published.Select(x => x.evt).OfType<TelegramWaitReplyFailedEvent>().Single();
         failed.SessionId.Should().Be("session-wait-failed");
@@ -494,38 +507,35 @@ public sealed class TelegramBridgeGAgentTests
     }
 
     [Fact]
-    public async Task HandleChatRequest_WhenConnectorHangs_ShouldFailByWatchdogBeforeLlmTimeout()
+    public async Task TelegramWaitReplyGAgent_WhenGetUpdatesConnectorHangs_ShouldNotBlockActorTurn()
     {
         var connector = new HangingConnector();
         var registry = new InMemoryConnectorRegistry();
         registry.Register(connector);
         var publisher = new RecordingEventPublisher();
-        var agent = new TelegramBridgeGAgent(
+        var agent = new TelegramWaitReplyGAgent(
             new NoopActorRuntime(),
             registry)
         {
+            EventSourcing = new RecordingEventSourcing<TelegramWaitReplyState>(
+                (state, evt) => TelegramWaitReplyStateTransitions.Apply(state, evt)),
             EventPublisher = publisher,
-            Services = CreateAgentServices(),
         };
-
-        var request = new ChatRequestEvent
-        {
-            Prompt = "hello telegram",
-            SessionId = "session-watchdog-timeout",
-        };
-        request.Headers["chat_id"] = "10001";
-        request.Headers["telegram.timeout_ms"] = "100";
-        request.Headers["aevatar.llm_timeout_ms"] = "30000";
+        var dispatch = new RecordingActorDispatchPort(agent);
+        agent.Services = CreateAgentServices(dispatch, registry);
+        await agent.ActivateAsync();
 
         var stopwatch = Stopwatch.StartNew();
-        await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
+        await agent.HandleEventAsync(Envelope(BuildWaitReplyCommand(
+            sessionId: "session-hanging-getupdates",
+            expectedUsername: "openclaw_bot")), CancellationToken.None);
+        await DrainWaitReplySelfEventsAsync(agent, publisher, dispatch, maxTurns: 1);
         stopwatch.Stop();
 
-        stopwatch.ElapsedMilliseconds.Should().BeLessThan(2_000);
-
-        var textEnd = publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>().Single();
-        textEnd.Content.Should().StartWith("[[AEVATAR_LLM_ERROR]]");
-        textEnd.Content.Should().Contain("watchdog timeout");
+        stopwatch.ElapsedMilliseconds.Should().BeLessThan(500);
+        connector.Received.Should().ContainSingle(x => x.Operation == "/getUpdates");
+        publisher.Published.Select(x => x.evt).OfType<TelegramWaitReplyCompletedEvent>().Should().BeEmpty();
+        publisher.Published.Select(x => x.evt).OfType<TelegramWaitReplyFailedEvent>().Should().BeEmpty();
     }
 
     [Fact]
@@ -579,10 +589,13 @@ public sealed class TelegramBridgeGAgentTests
     private static async Task DrainWaitReplySelfEventsAsync(
         TelegramWaitReplyGAgent agent,
         RecordingEventPublisher publisher,
+        RecordingActorDispatchPort dispatch,
         int maxTurns = 16)
     {
         for (var i = 0; i < maxTurns; i++)
         {
+            await dispatch.DrainAsync();
+
             var nextIndex = publisher.Sent.FindIndex(x =>
                 x.targetActorId == agent.Id &&
                 x.evt is TelegramWaitReplyBootstrapDueEvent or TelegramWaitReplyPollDueEvent or TelegramWaitReplyTimeoutDueEvent);
@@ -592,9 +605,16 @@ public sealed class TelegramBridgeGAgentTests
             var next = publisher.Sent[nextIndex];
             publisher.Sent.RemoveAt(nextIndex);
             await agent.HandleEventAsync(Envelope(next.evt), CancellationToken.None);
+            await dispatch.DrainAsync();
         }
 
-        throw new InvalidOperationException("wait-reply self event drain exceeded max turns");
+        await dispatch.DrainAsync();
+        if (publisher.Sent.Any(x =>
+                x.targetActorId == agent.Id &&
+                x.evt is TelegramWaitReplyBootstrapDueEvent or TelegramWaitReplyPollDueEvent or TelegramWaitReplyTimeoutDueEvent))
+        {
+            throw new InvalidOperationException("wait-reply self event drain exceeded max turns");
+        }
     }
 
     private static TelegramWaitForReplyCommand BuildWaitReplyCommand(
@@ -662,12 +682,13 @@ public sealed class TelegramBridgeGAgentTests
 
     private sealed class HangingConnector : IConnector
     {
+        public List<ConnectorRequest> Received { get; } = [];
         public string Name { get; } = "telegram";
         public string Type { get; } = "http";
 
         public Task<ConnectorResponse> ExecuteAsync(ConnectorRequest request, CancellationToken ct = default)
         {
-            _ = request;
+            Received.Add(request);
             _ = ct;
             return new TaskCompletionSource<ConnectorResponse>(TaskCreationOptions.RunContinuationsAsynchronously).Task;
         }
@@ -733,12 +754,22 @@ public sealed class TelegramBridgeGAgentTests
 
         public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
         {
+            var committedEvents = _pending.Select((evt, index) => new StateEvent
+            {
+                AgentId = "test-agent",
+                EventId = Guid.NewGuid().ToString("N"),
+                EventType = evt.Descriptor.FullName,
+                EventData = Any.Pack(evt),
+                Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                Version = CurrentVersion + index + 1,
+            }).ToList();
             CurrentVersion += _pending.Count;
             _pending.Clear();
             return Task.FromResult(new EventStoreCommitResult
             {
                 AgentId = "test-agent",
                 LatestVersion = CurrentVersion,
+                CommittedEvents = { committedEvents },
             });
         }
 
@@ -788,34 +819,63 @@ public sealed class TelegramBridgeGAgentTests
         }
     }
 
-    private static IServiceProvider CreateAgentServices()
+    private static IServiceProvider CreateAgentServices(
+        RecordingActorDispatchPort? dispatchPort = null,
+        IConnectorRegistry? connectorRegistry = null)
     {
-        return new Microsoft.Extensions.DependencyInjection.ServiceCollection()
-            .AddSingleton<Aevatar.Foundation.Abstractions.Runtime.Callbacks.IActorRuntimeCallbackScheduler, NoopRuntimeCallbackScheduler>()
-            .BuildServiceProvider();
+        var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+            .AddSingleton<IActorRuntimeCallbackScheduler, NoopRuntimeCallbackScheduler>()
+            .AddSingleton<IExternalLinkTransportFactory, TelegramGetUpdatesExternalLinkTransportFactory>()
+            .AddSingleton(typeof(Microsoft.Extensions.Logging.ILogger<>), typeof(NullLogger<>));
+        if (dispatchPort != null)
+            services.AddSingleton<IActorDispatchPort>(dispatchPort);
+        if (connectorRegistry != null)
+            services.AddSingleton(connectorRegistry);
+        return services.BuildServiceProvider();
     }
 
-    private sealed class NoopRuntimeCallbackScheduler : Aevatar.Foundation.Abstractions.Runtime.Callbacks.IActorRuntimeCallbackScheduler
+    private sealed class RecordingActorDispatchPort(TelegramWaitReplyGAgent agent) : IActorDispatchPort
     {
-        public Task<Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease> ScheduleTimeoutAsync(
-            Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackTimeoutRequest request,
+        private readonly Queue<EventEnvelope> _pending = [];
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            actorId.Should().Be(agent.Id);
+            _pending.Enqueue(envelope);
+            return Task.CompletedTask;
+        }
+
+        public async Task DrainAsync()
+        {
+            while (_pending.Count > 0)
+            {
+                var envelope = _pending.Dequeue();
+                await agent.HandleEventAsync(envelope, CancellationToken.None);
+            }
+        }
+    }
+
+    private sealed class NoopRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
             CancellationToken ct = default) =>
-            Task.FromResult(new Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease(
+            Task.FromResult(new RuntimeCallbackLease(
                 request.ActorId,
                 request.CallbackId,
                 1,
-                Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackBackend.InMemory));
+                RuntimeCallbackBackend.InMemory));
 
-        public Task<Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease> ScheduleTimerAsync(
-            Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackTimerRequest request,
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
             CancellationToken ct = default) =>
-            Task.FromResult(new Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease(
+            Task.FromResult(new RuntimeCallbackLease(
                 request.ActorId,
                 request.CallbackId,
                 1,
-                Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackBackend.InMemory));
+                RuntimeCallbackBackend.InMemory));
 
-        public Task CancelAsync(Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease lease, CancellationToken ct = default) =>
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
             Task.CompletedTask;
 
         public Task PurgeActorAsync(string actorId, CancellationToken ct = default) =>

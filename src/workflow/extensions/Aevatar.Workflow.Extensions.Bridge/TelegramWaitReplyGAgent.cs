@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Foundation.Abstractions.ExternalLinks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
@@ -15,12 +16,16 @@ namespace Aevatar.Workflow.Extensions.Bridge;
 // Refactor (iter25/cluster-027-telegram-wait-reply-actor-turn):
 //   Old pattern: Telegram bridge maintains in-process wait-reply state in dict; bridge owns wait + reply lifecycle inline
 //   New principle: New task-scoped TelegramWaitReplyGAgent owns protobuf wait state; typed self-events advance one bounded poll per actor turn and resume bridge via WaitReplyCompleted/Failed.
+// Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+//   Old pattern: TelegramBridgeGAgent.ExecuteConnectorWithWatchdogAsync 用 Task.Delay 兜底超时 + ContinueWith race + actor turn 内同步 await /getUpdates 长轮询
+//   New principle: 复用现有 ExternalLink actor-owned stream pattern(reflector force-pick):TelegramWaitReplyGAgent 实现 IExternalLinkAware + 加 TelegramGetUpdatesExternalLinkTransport;/getUpdates 走 IExternalLinkPort.SendAsync,result 经 ExternalLinkMessageReceivedEvent 回 actor;删 ExecuteConnectorWithWatchdogAsync/Task.Delay/ContinueWith race。**不新增 actor 类型**
 [GAgent("workflow.telegram-wait-reply")]
 // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
 //   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
 //   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
-public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
+public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>, IExternalLinkAware
 {
+    private const string GetUpdatesLinkId = "telegram-get-updates";
     private const int MaxPollTimeoutSeconds = 25;
     private readonly IConnectorRegistry _connectorRegistry;
     private readonly TimeProvider _timeProvider;
@@ -42,6 +47,14 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         InitializeId();
     }
+
+    public IReadOnlyList<ExternalLinkDescriptor> GetLinkDescriptors() =>
+        [
+            new(
+                GetUpdatesLinkId,
+                TelegramGetUpdatesExternalLinkTransport.TransportTypeName,
+                "telegram://get-updates")
+        ];
 
     [EventHandler]
     public async Task HandleWaitForReply(TelegramWaitForReplyCommand command)
@@ -85,57 +98,11 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
         if (!IsActiveContinuation(evt.CommandId, evt.Generation))
             return;
 
-        if (!_connectorRegistry.TryGet(State.ConnectorName, out var connector) || connector == null)
-        {
-            await CompleteFailureAsync($"telegram connector '{State.ConnectorName}' not found");
-            return;
-        }
-
-        var bootstrap = await ExecuteGetUpdatesAsync(offset: null, pollTimeoutSeconds: 0, perCallTimeoutMs: 5_000, connector);
-        if (!bootstrap.Success)
-        {
-            await CompleteFailureAsync(string.IsNullOrWhiteSpace(bootstrap.Error)
-                ? "telegram bootstrap getUpdates failed"
-                : bootstrap.Error.Trim());
-            return;
-        }
-
-        if (!TryParseTelegramUpdates(
-                bootstrap.Output,
-                out var bootstrapUpdates,
-                out var bootstrapMaxUpdateId,
-                out var bootstrapError))
-        {
-            await CompleteFailureAsync($"telegram bootstrap parse failed: {bootstrapError}");
-            return;
-        }
-
-        var bootstrapRecentCutoffUnix = _timeProvider.GetUtcNow().ToUnixTimeSeconds()
-            - Math.Max(30, Math.Min(600, State.WaitTimeoutMs / 1000 + 10));
-        var matchedUpdates = SelectMatchedUpdates(
-            bootstrapUpdates,
-            minimumUpdateId: null,
-            minimumDateUnixExclusive: bootstrapRecentCutoffUnix);
-
-        if (matchedUpdates.Count > 0 && !State.CollectAllReplies)
-        {
-            await CompleteSuccessAsync(matchedUpdates[^1].Content);
-            return;
-        }
-
-        var next = State.Clone();
-        if (bootstrapMaxUpdateId.HasValue)
-            next.NextOffset = bootstrapMaxUpdateId.Value + 1;
-        ApplyMatches(next, matchedUpdates);
-
-        var result = ResolveCurrentResult(next, emptyPoll: matchedUpdates.Count == 0);
-        if (result.HasValue)
-        {
-            await CompleteResultAsync(result.Value);
-            return;
-        }
-
-        await PersistAndContinuePollAsync(next);
+        await SendGetUpdatesAsync(
+            offset: null,
+            pollTimeoutSeconds: 0,
+            perCallTimeoutMs: 5_000,
+            bootstrap: true);
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
@@ -145,12 +112,6 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
         if (!IsActiveContinuation(evt.CommandId, evt.Generation))
             return;
 
-        if (!_connectorRegistry.TryGet(State.ConnectorName, out var connector) || connector == null)
-        {
-            await CompleteFailureAsync($"telegram connector '{State.ConnectorName}' not found");
-            return;
-        }
-
         if (_timeProvider.GetUtcNow().ToUnixTimeMilliseconds() >= State.DeadlineUnixMs)
         {
             await CompleteTimeoutAsync();
@@ -159,42 +120,37 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
 
         var currentPollSeconds = ResolveCurrentPollSeconds();
         long? requestedOffset = State.HasNextOffset ? State.NextOffset : null;
-        var poll = await ExecuteGetUpdatesAsync(
+        await SendGetUpdatesAsync(
             requestedOffset,
             currentPollSeconds,
             perCallTimeoutMs: (currentPollSeconds + 3) * 1_000,
-            connector);
-        if (!poll.Success)
+            bootstrap: false);
+    }
+
+    [EventHandler(AllowSelfHandling = true)]
+    public async Task HandleExternalLinkMessageReceived(ExternalLinkMessageReceivedEvent evt)
+    {
+        // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+        //   Old pattern: TelegramBridgeGAgent.ExecuteConnectorWithWatchdogAsync 用 Task.Delay 兜底超时 + ContinueWith race + actor turn 内同步 await /getUpdates 长轮询
+        //   New principle: 复用现有 ExternalLink actor-owned stream pattern(reflector force-pick):TelegramWaitReplyGAgent 实现 IExternalLinkAware + 加 TelegramGetUpdatesExternalLinkTransport;/getUpdates 走 IExternalLinkPort.SendAsync,result 经 ExternalLinkMessageReceivedEvent 回 actor;删 ExecuteConnectorWithWatchdogAsync/Task.Delay/ContinueWith race。**不新增 actor 类型**
+        ArgumentNullException.ThrowIfNull(evt);
+        if (!string.Equals(evt.LinkId, GetUpdatesLinkId, StringComparison.Ordinal))
+            return;
+
+        TelegramGetUpdatesResult result;
+        try
         {
-            await CompleteFailureAsync(string.IsNullOrWhiteSpace(poll.Error)
-                ? "telegram getUpdates failed"
-                : poll.Error.Trim());
+            result = evt.Payload != null && evt.Payload.Is(TelegramGetUpdatesResult.Descriptor)
+                ? evt.Payload.Unpack<TelegramGetUpdatesResult>()
+                : TelegramGetUpdatesResult.Parser.ParseFrom(evt.RawPayload);
+        }
+        catch (Exception ex)
+        {
+            await CompleteFailureAsync($"telegram getUpdates result parse failed: {ex.Message}");
             return;
         }
 
-        if (!TryParseTelegramUpdates(poll.Output, out var updates, out var maxUpdateId, out var parseError))
-        {
-            await CompleteFailureAsync($"telegram getUpdates parse failed: {parseError}");
-            return;
-        }
-
-        var matchedUpdates = SelectMatchedUpdates(
-            updates,
-            minimumUpdateId: requestedOffset,
-            minimumDateUnixExclusive: null);
-        var next = State.Clone();
-        if (maxUpdateId.HasValue)
-            next.NextOffset = maxUpdateId.Value + 1;
-        ApplyMatches(next, matchedUpdates);
-
-        var result = ResolveCurrentResult(next, emptyPoll: matchedUpdates.Count == 0);
-        if (result.HasValue)
-        {
-            await CompleteResultAsync(result.Value);
-            return;
-        }
-
-        await PersistAndContinuePollAsync(next);
+        await HandleGetUpdatesResultAsync(result);
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
@@ -277,6 +233,166 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
             CommandId = State.CommandId,
             Generation = State.Generation,
         });
+    }
+
+    private async Task SendGetUpdatesAsync(
+        long? offset,
+        int pollTimeoutSeconds,
+        int perCallTimeoutMs,
+        bool bootstrap)
+    {
+        if (State.PendingGetUpdates != null)
+            return;
+
+        var request = BuildGetUpdatesRequest(offset, pollTimeoutSeconds, perCallTimeoutMs, bootstrap);
+        var next = State.Clone();
+        next.PendingGetUpdates = request.Clone();
+        await PersistDomainEventAsync(new TelegramWaitReplyProgressedEvent { State = next });
+
+        if (ExternalLinkPort == null)
+        {
+            await CompleteFailureAsync("telegram getUpdates external link is not active");
+            return;
+        }
+
+        try
+        {
+            await ExternalLinkPort.SendAsync(GetUpdatesLinkId, request);
+        }
+        catch (Exception ex)
+        {
+            await CompleteFailureAsync($"telegram getUpdates dispatch failed: {ex.Message}");
+        }
+    }
+
+    private TelegramGetUpdatesRequest BuildGetUpdatesRequest(
+        long? offset,
+        int pollTimeoutSeconds,
+        int perCallTimeoutMs,
+        bool bootstrap)
+    {
+        var parameters = new Dictionary<string, string>(State.ConnectorParameters, StringComparer.OrdinalIgnoreCase)
+        {
+            ["method"] = "POST",
+            ["content_type"] = "application/json",
+            ["timeout_ms"] = perCallTimeoutMs.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        };
+
+        var request = new TelegramGetUpdatesRequest
+        {
+            CommandId = State.CommandId,
+            Generation = State.Generation,
+            RequestId = Guid.NewGuid().ToString("N"),
+            ConnectorName = State.ConnectorName,
+            RunId = State.CommandId,
+            StepId = State.SessionId,
+            Payload = BuildGetUpdatesPayload(offset, pollTimeoutSeconds),
+            Bootstrap = bootstrap,
+        };
+        request.Parameters.Add(parameters);
+        if (offset.HasValue)
+            request.RequestedOffset = offset.Value;
+        return request;
+    }
+
+    private async Task HandleGetUpdatesResultAsync(TelegramGetUpdatesResult result)
+    {
+        if (!IsActiveContinuation(result.CommandId, result.Generation))
+            return;
+
+        if (State.PendingGetUpdates == null ||
+            string.IsNullOrWhiteSpace(State.PendingGetUpdates.RequestId) ||
+            !string.Equals(State.PendingGetUpdates.RequestId, result.RequestId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (!result.Success)
+        {
+            var fallback = result.Bootstrap
+                ? "telegram bootstrap getUpdates failed"
+                : "telegram getUpdates failed";
+            await CompleteFailureAsync(string.IsNullOrWhiteSpace(result.Error) ? fallback : result.Error.Trim());
+            return;
+        }
+
+        if (result.Bootstrap)
+        {
+            await HandleBootstrapGetUpdatesResultAsync(result);
+            return;
+        }
+
+        await HandlePollGetUpdatesResultAsync(result);
+    }
+
+    private async Task HandleBootstrapGetUpdatesResultAsync(TelegramGetUpdatesResult result)
+    {
+        if (!TryParseTelegramUpdates(
+                result.Output,
+                out var bootstrapUpdates,
+                out var bootstrapMaxUpdateId,
+                out var bootstrapError))
+        {
+            await CompleteFailureAsync($"telegram bootstrap parse failed: {bootstrapError}");
+            return;
+        }
+
+        var bootstrapRecentCutoffUnix = _timeProvider.GetUtcNow().ToUnixTimeSeconds()
+            - Math.Max(30, Math.Min(600, State.WaitTimeoutMs / 1000 + 10));
+        var matchedUpdates = SelectMatchedUpdates(
+            bootstrapUpdates,
+            minimumUpdateId: null,
+            minimumDateUnixExclusive: bootstrapRecentCutoffUnix);
+
+        if (matchedUpdates.Count > 0 && !State.CollectAllReplies)
+        {
+            await CompleteSuccessAsync(matchedUpdates[^1].Content);
+            return;
+        }
+
+        var next = State.Clone();
+        next.PendingGetUpdates = null;
+        if (bootstrapMaxUpdateId.HasValue)
+            next.NextOffset = bootstrapMaxUpdateId.Value + 1;
+        ApplyMatches(next, matchedUpdates);
+
+        var resolved = ResolveCurrentResult(next, emptyPoll: matchedUpdates.Count == 0);
+        if (resolved.HasValue)
+        {
+            await CompleteResultAsync(resolved.Value);
+            return;
+        }
+
+        await PersistAndContinuePollAsync(next);
+    }
+
+    private async Task HandlePollGetUpdatesResultAsync(TelegramGetUpdatesResult result)
+    {
+        if (!TryParseTelegramUpdates(result.Output, out var updates, out var maxUpdateId, out var parseError))
+        {
+            await CompleteFailureAsync($"telegram getUpdates parse failed: {parseError}");
+            return;
+        }
+
+        var requestedOffset = result.HasRequestedOffset ? result.RequestedOffset : (long?)null;
+        var matchedUpdates = SelectMatchedUpdates(
+            updates,
+            minimumUpdateId: requestedOffset,
+            minimumDateUnixExclusive: null);
+        var next = State.Clone();
+        next.PendingGetUpdates = null;
+        if (maxUpdateId.HasValue)
+            next.NextOffset = maxUpdateId.Value + 1;
+        ApplyMatches(next, matchedUpdates);
+
+        var resolved = ResolveCurrentResult(next, emptyPoll: matchedUpdates.Count == 0);
+        if (resolved.HasValue)
+        {
+            await CompleteResultAsync(resolved.Value);
+            return;
+        }
+
+        await PersistAndContinuePollAsync(next);
     }
 
     private async Task CompleteTimeoutAsync()
@@ -481,35 +597,6 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
             return $"update:{update.UpdateId}";
 
         return $"raw:{update.ChatId}:{update.FromUserId}:{update.DateUnix}:{update.Content}";
-    }
-
-    private async Task<ConnectorResponse> ExecuteGetUpdatesAsync(
-        long? offset,
-        int pollTimeoutSeconds,
-        int perCallTimeoutMs,
-        IConnector connector)
-    {
-        var parameters = new Dictionary<string, string>(State.ConnectorParameters, StringComparer.OrdinalIgnoreCase)
-        {
-            ["method"] = "POST",
-            ["content_type"] = "application/json",
-            ["timeout_ms"] = perCallTimeoutMs.ToString(System.Globalization.CultureInfo.InvariantCulture),
-        };
-
-        var connectorRequest = new ConnectorRequest
-        {
-            RunId = State.CommandId,
-            StepId = State.SessionId,
-            Connector = State.ConnectorName,
-            Operation = "/getUpdates",
-            Payload = BuildGetUpdatesPayload(offset, pollTimeoutSeconds),
-            Parameters = parameters,
-        };
-
-        return await TelegramBridgeGAgent.ExecuteConnectorWithWatchdogAsync(
-            connector,
-            connectorRequest,
-            TelegramBridgeGAgent.ResolveConnectorExecutionWatchdogMs(parameters));
     }
 
     private static string BuildGetUpdatesPayload(long? offset, int pollTimeoutSeconds)

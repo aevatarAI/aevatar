@@ -2,9 +2,9 @@ syntax = "proto3";
 package aevatar.workflow.extensions.bridge;
 option csharp_namespace = "Aevatar.Workflow.Extensions.Bridge";
 
-// Refactor (iter25/cluster-027-telegram-wait-reply-actor-turn):
-//   Old pattern: Telegram bridge owned wait-reply polling and stack-local progress inside one actor turn.
-//   New principle: a task-scoped wait actor owns protobuf wait state and advances by typed self-continuation events.
+// Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+//   Old pattern: TelegramBridgeGAgent.ExecuteConnectorWithWatchdogAsync 用 Task.Delay 兜底超时 + ContinueWith race + actor turn 内同步 await /getUpdates 长轮询
+//   New principle: 复用现有 ExternalLink actor-owned stream pattern(reflector force-pick):TelegramWaitReplyGAgent 实现 IExternalLinkAware + 加 TelegramGetUpdatesExternalLinkTransport;/getUpdates 走 IExternalLinkPort.SendAsync,result 经 ExternalLinkMessageReceivedEvent 回 actor;删 ExecuteConnectorWithWatchdogAsync/Task.Delay/ContinueWith race。**不新增 actor 类型**
 
 message TelegramWaitForReplyCommand {
   string command_id = 1;
@@ -57,6 +57,31 @@ message TelegramWaitReplyState {
   int32 polls_since_last_match = 20;
   map<string, TelegramInboundUpdateState> collected_replies = 21;
   repeated string collected_reply_order = 22;
+  TelegramGetUpdatesRequest pending_get_updates = 23;
+}
+
+message TelegramGetUpdatesRequest {
+  string command_id = 1;
+  int64 generation = 2;
+  string request_id = 3;
+  string connector_name = 4;
+  string run_id = 5;
+  string step_id = 6;
+  string payload = 7;
+  map<string, string> parameters = 8;
+  bool bootstrap = 9;
+  optional int64 requested_offset = 10;
+}
+
+message TelegramGetUpdatesResult {
+  string command_id = 1;
+  int64 generation = 2;
+  string request_id = 3;
+  bool bootstrap = 4;
+  bool success = 5;
+  string output = 6;
+  string error = 7;
+  optional int64 requested_offset = 8;
 }
 
 message TelegramWaitReplyStartedEvent {
