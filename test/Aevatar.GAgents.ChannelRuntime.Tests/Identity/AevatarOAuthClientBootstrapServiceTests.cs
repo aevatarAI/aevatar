@@ -16,7 +16,8 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
     public async Task EnsureProvisionedAsync_SkipsDispatch_WhenSnapshotAlreadyMatchesResolvedClient()
     {
         using var environment = new OAuthBootstrapEnvironment();
-        var dispatch = new RecordingDispatch();
+        var dispatch = new RecordingCommandDispatch<EnsureAevatarOAuthClientProvisionedCommand>(
+            static _ => OAuthClientReceipt());
         var service = NewService(
             new StaticClientProvider(Snapshot(
                 authority: environment.Authority,
@@ -33,7 +34,8 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
     public async Task EnsureProvisionedAsync_DispatchesAcceptedCommand_WhenSnapshotIsMissing()
     {
         using var environment = new OAuthBootstrapEnvironment();
-        var dispatch = new RecordingDispatch();
+        var dispatch = new RecordingCommandDispatch<EnsureAevatarOAuthClientProvisionedCommand>(
+            static _ => OAuthClientReceipt());
         var service = NewService(new MissingClientProvider(), dispatch);
 
         await service.EnsureProvisionedAsync(CancellationToken.None);
@@ -49,7 +51,8 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
     public async Task EnsureProvisionedAsync_DispatchesAcceptedCommand_WhenSnapshotDrifted()
     {
         using var environment = new OAuthBootstrapEnvironment();
-        var dispatch = new RecordingDispatch();
+        var dispatch = new RecordingCommandDispatch<EnsureAevatarOAuthClientProvisionedCommand>(
+            static _ => OAuthClientReceipt());
         var service = NewService(
             new StaticClientProvider(Snapshot(
                 authority: environment.Authority,
@@ -70,13 +73,41 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
     public async Task EnsureProvisionedAsync_Throws_WhenDispatchRejects()
     {
         using var environment = new OAuthBootstrapEnvironment();
-        var service = NewService(new MissingClientProvider(), new RejectingDispatch());
+        var service = NewService(
+            new MissingClientProvider(),
+            new RejectingCommandDispatch<EnsureAevatarOAuthClientProvisionedCommand>());
 
         var act = () => service.EnsureProvisionedAsync(CancellationToken.None);
 
         await act.Should()
             .ThrowAsync<InvalidOperationException>()
             .WithMessage("*InvalidTarget*");
+    }
+
+    [Fact]
+    public void IdentityOAuthSource_ShouldNotContainProjectionReadinessOrPollingCompletionPath()
+    {
+        var endpointSource = RemoveRefactorSelfDocLines(File.ReadAllText(GetRepositoryPath(
+            "agents",
+            "Aevatar.GAgents.Channel.Identity",
+            "Endpoints",
+            "IdentityOAuthEndpoints.cs")));
+        var bootstrapSource = RemoveRefactorSelfDocLines(ExtractEnsureProvisionedSource(File.ReadAllText(GetRepositoryPath(
+            "agents",
+            "Aevatar.GAgents.Channel.Identity",
+            "Provisioning",
+            "AevatarOAuthClientBootstrapService.cs"))));
+        var combinedSource = string.Join(Environment.NewLine, endpointSource, bootstrapSource);
+
+        combinedSource.Should().NotContain("IProjection" + "ReadinessPort");
+        combinedSource.Should().NotContain("ExternalIdentityBinding" + "ProjectionPort");
+        combinedSource.Should().NotContain("AevatarOAuthClient" + "ProjectionPort");
+        combinedSource.Should().NotContain("AevatarOAuthClient" + "RebuildCoordinator");
+        combinedSource.Should().NotContain("ProjectionWait" + "Timeout");
+        combinedSource.Should().NotContain("WaitForRebuild" + "ObservedAsync");
+        combinedSource.Should().NotContain("Rebuild" + "Observation");
+        combinedSource.Should().NotContain("WaitForBinding" + "StateAsync");
+        combinedSource.Should().NotContain(string.Concat("Task", ".Delay"));
     }
 
     private static AevatarOAuthClientBootstrapService NewService(
@@ -99,6 +130,45 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
             BrokerCapabilityObservedAt: DateTimeOffset.UtcNow,
             RedirectUri: redirectUri,
             OauthScope: oauthScope);
+
+    private static ChannelIdentityOAuthAcceptedReceipt OAuthClientReceipt() =>
+        new(
+            ActorId: AevatarOAuthClientGAgent.WellKnownId,
+            CommandId: "cmd-1",
+            CorrelationId: "cmd-1");
+
+    private static string GetRepositoryPath(params string[] segments)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine([directory.FullName, .. segments]);
+            if (File.Exists(candidate))
+                return candidate;
+
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException($"Could not locate {Path.Combine(segments)} from test output directory.");
+    }
+
+    private static string RemoveRefactorSelfDocLines(string source) =>
+        string.Join(
+            Environment.NewLine,
+            source
+                .Split('\n')
+                .Where(static line =>
+                    !line.Contains("Refactor (iter27/cluster-028-identity-oauth-endpoint)", StringComparison.Ordinal) &&
+                    !line.Contains("Old pattern:", StringComparison.Ordinal) &&
+                    !line.Contains("New principle:", StringComparison.Ordinal)));
+
+    private static string ExtractEnsureProvisionedSource(string source)
+    {
+        const string marker = "internal async Task EnsureProvisionedAsync";
+        var start = source.IndexOf(marker, StringComparison.Ordinal);
+        start.Should().BeGreaterThanOrEqualTo(0, "bootstrap source should keep the dispatch completion method");
+        return source[start..];
+    }
 
     private sealed class OAuthBootstrapEnvironment : IDisposable
     {
@@ -136,31 +206,4 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
             throw new AevatarOAuthClientNotProvisionedException();
     }
 
-    private sealed class RecordingDispatch
-        : ICommandDispatchService<EnsureAevatarOAuthClientProvisionedCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>
-    {
-        public List<EnsureAevatarOAuthClientProvisionedCommand> Commands { get; } = new();
-
-        public Task<CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>> DispatchAsync(
-            EnsureAevatarOAuthClientProvisionedCommand command,
-            CancellationToken ct = default)
-        {
-            Commands.Add(command);
-            return Task.FromResult(CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>.Success(
-                new ChannelIdentityOAuthAcceptedReceipt(
-                    ActorId: AevatarOAuthClientGAgent.WellKnownId,
-                    CommandId: "cmd-1",
-                    CorrelationId: "cmd-1")));
-        }
-    }
-
-    private sealed class RejectingDispatch
-        : ICommandDispatchService<EnsureAevatarOAuthClientProvisionedCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>
-    {
-        public Task<CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>> DispatchAsync(
-            EnsureAevatarOAuthClientProvisionedCommand command,
-            CancellationToken ct = default) =>
-            Task.FromResult(CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>.Failure(
-                ChannelIdentityOAuthDispatchError.InvalidTarget));
-    }
 }

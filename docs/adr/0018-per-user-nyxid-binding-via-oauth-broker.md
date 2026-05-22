@@ -238,29 +238,26 @@ NyxID#549 issue 第一版提出 broker token issuance 走专用端点 `POST /oau
 
 NyxID#549 已同步追加 comment 提议 align 到 RFC 8693 token-exchange。两侧契约最终冻结(`subject_token_type` URN 字符串、`invalid_grant` 错误码语义)前 ADR 保持 `proposed`。
 
-### OAuth Callback ACK Semantics
+### Projection Readiness
 
 `ResolveBindingAsync` 走 `ExternalIdentityBindingGAgent` 的 readmodel projection。OAuth callback handler 落 `ExternalIdentityBoundEvent` 后,projection 物化是异步的。
 
-**ACK 边界**:OAuth callback handler 只承诺 `CommitBindingCommand` 已被 accepted for dispatch,返回 `binding_pending` 与状态提示;不承诺 actor 已 committed,也不承诺 readmodel 已 observed。readmodel 可见性由后续 `/whoami`、turn gate 或 `/api/oauth/aevatar-client/status` 查询诚实暴露。
+**写侧 vs query 侧边界**:本节描述的"等 projection 水位"发生在 OAuth callback handler(write-side completion path),**不在 turn / query 路径上**。CLAUDE.md 禁的是 **query-time** priming(`QueryPort/QueryService/ApplicationService` 在请求路径读 ES、重放、补投影);callback handler 在事件提交时同步等待该事件 projection 物化属于 write-side 的正常完成性保证,不违反禁令。
 
 具体处理:
 
-- callback handler 完成 state token 验证与 authorization-code exchange 后,通过 module-local `ICommandDispatchService<CommitBindingCommand,...>` 投递命令
-- accepted 响应形态为 `binding_pending + command_id/correlation_id + status_url`;浏览器 HTML 同样表达"已受理",提示回到 Lark 用 `/whoami` 查看
-- endpoint 不激活 projection scope、不调用 readiness port、不轮询 readmodel,也不在 request path 重建 observation
-- 此后用户回到 Lark 发任意消息,turn 路径调 `ResolveBindingAsync`;若 readmodel 尚未可见,只能诚实引导 sender 稍后重试或 `/whoami`
+- callback handler 在 commit `ExternalIdentityBoundEvent` 时**写侧预挂接 projection** —— 通过 `IProjectionReadinessPort.WaitForBindingStateAsync(externalSubject, expectedBindingId, timeout)` 同步等待 binding readmodel 对指定 external subject 物化出 expected binding state(actor committed version 对齐),再返回 callback HTTP 响应给浏览器
+- 等待超时(配置上限,e.g. 3s)→ callback 响应"binding 已写入,读副本仍在传播,稍后重发消息";不进 query-time priming/replay 路径
+- 此后用户回到 Lark 发任意消息,turn 路径调 `ResolveBindingAsync` 一定看得到 binding
 - turn 路径在 `ResolveBindingAsync` 返回 null 时**禁止**走 ES replay / actor state mirror / 重建 priming;只能引导 sender 重新 `/init`
 
-// Refactor (iter27/cluster-028-identity-oauth-endpoint):
-//   Old pattern: IdentityOAuthEndpoints + AevatarOAuthClientBootstrapService 直接构造 EventEnvelope 投递,然后在 endpoint 内同步等 projection readiness / rebuild observation / readmodel polling (3-15s timeout + 50-250ms polling),违反 ACK 协议 + query-time projection priming
-//   New principle: 加 module-local CQRS dispatch adapters(ChannelIdentityOAuthCommandDispatch);endpoint inject typed ICommandDispatchService<...>,返回 accepted/pending + status URL,不再等 projection;删 IProjectionReadinessPort/ExternalIdentityBindingProjectionPort/AevatarOAuthClientProjectionPort/AevatarOAuthClientRebuildCoordinator/ProjectionWaitTimeout 等
+`IProjectionReadinessPort` 是 write-side 端口,只服务 callback handler 这一类完成性等待场景,query / turn 路径不依赖此端口。
 
 ## Consequences
 
 - 新增模块 `Aevatar.GAgents.Channel.Identity`(并列于 `Aevatar.GAgents.Channel.NyxIdRelay`):承载 `ExternalIdentityBindingGAgent` + projection + `IExternalIdentityBindingQueryPort` + `INyxIdCapabilityBroker`
-- 新增 OAuth callback endpoint `/api/oauth/nyxid-callback`(标准 OAuth client redirect 处理,不是 webhook),返回 accepted/pending ACK,不等 projection
-- 新增 module-local CQRS dispatch adapters: OAuth endpoint/bootstrap 注入 typed `ICommandDispatchService<...>`,不直接构造 `EventEnvelope`
+- 新增 OAuth callback endpoint `/api/oauth/nyxid-callback`(标准 OAuth client redirect 处理,不是 webhook),含写侧预挂接 projection 等待
+- 新增 `IProjectionReadinessPort`(write-side 端口):callback handler 在事件提交后同步等待指定 external subject 的 expected binding state 在 binding readmodel 上可见;turn / query 路径不依赖此端口
 - `ChannelConversationTurnRunner.RunInboundAsync` 开头加 slash-command 前置路由(`/init`、`/unbind`),`/init` 幂等,`/unbind` 同步调 NyxID revoke
 - `BuildReplyMetadata` 改成 `ResolveAsync` + `IssueShortLivedAsync`;metadata key 从 `nyxid.access_token` 改为 `nyxid.capability_handle`(诚实表达"短期、scoped、可撤销")
 - 未绑定 sender(无论 1:1 还是群聊)统一强制 `/init`,不回落 bot owner;现有 bot owner-shared 模式终止策略由 implementation PR 选 §Bot-Owner-Shared 模式终止策略 中的 A/B/C 之一,记入 runbook
@@ -298,7 +295,7 @@ ADR 核心决策已 lock。以下是边界细节,reviewer 在 final review 提�
 |---|---|---|
 | `state_token` 过期 / HMAC 校验失败 | 400 | "绑定链接已过期或无效,请回到 Lark 重新发送 `/init`" |
 | `/oauth/token`(authorization_code 兑换)失败 | 502 | "NyxID 绑定失败,稍后重试 `/init`" |
-| command accepted,readmodel 未必可见 | 202 / HTML 200 | "绑定请求已受理,回到 Lark 后稍后用 `/whoami` 查看" |
+| projection 等待超时(已落 event 但 readmodel 未水位) | 200 | "绑定已写入,稍后重发消息即可生效" |
 | 其他未分类 | 500 | "绑定遇到问题,请重试 `/init`" |
 
 `exp ≤5min` 给用户留足登录时间;实际 P99 远小于 5min,不期望成为常见 fail mode。
@@ -315,8 +312,9 @@ NyxID 不可用 / 5xx / timeout / connect refuse 时:
 
 `/unbind` 成功后,`ResolveAsync`(走 projection)在 readmodel 物化前可能仍返回旧 `binding_id`,导致下一条 `/init` 误判"已绑定":
 
-- `/unbind` handler 可以把本地 revoke command accepted 作为同步完成边界;不得同步等待 projection 水位
-- readmodel 物化前,`/init` 可能仍看到旧 binding;handler 必须诚实提示用户稍后重试,而不是读取 actor 直接态或 query-time priming
+- `/unbind` handler 在 commit `ExternalIdentityBindingRevokedEvent` 后,**同步等 projection 水位**(复用 `IProjectionReadinessPort.WaitForEventAsync`),再返回成功响应给 sender
+- 等待超时(配置上限,e.g. 3s)时,handler 返回"解绑已写入,读副本仍在传播,稍后重试 `/init`";不读取 actor 直接态,也不做 query-time priming
+- 这跟 OAuth callback 的写侧预挂接同源(均属 write-side completion path,不违反 query-time priming 禁令)
 - 不采"`/init` 幂等检查读 actor 直接态"备选方案 — 会把 turn 路径的"已绑定"判定拆成两条查询源(actor 直读 + projection),违反单一查询源原则
 
 ## Related

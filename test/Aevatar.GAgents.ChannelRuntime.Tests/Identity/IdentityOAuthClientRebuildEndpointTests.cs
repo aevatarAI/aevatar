@@ -23,7 +23,8 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
     [Fact]
     public async Task Returns503_WhenAdminTokenNotConfigured()
     {
-        var dispatch = new RecordingDispatch();
+        var dispatch = new RecordingCommandDispatch<ProvisionAevatarOAuthClientCommand>(
+            static _ => OAuthClientReceipt());
         var result = await InvokeRebuildAsync(
             adminTokenConfigured: string.Empty,
             adminTokenHeader: AdminToken,
@@ -42,7 +43,8 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
             adminTokenConfigured: AdminToken,
             adminTokenHeader: null,
             body: SampleBody(),
-            dispatch: new RecordingDispatch());
+            dispatch: new RecordingCommandDispatch<ProvisionAevatarOAuthClientCommand>(
+                static _ => OAuthClientReceipt()));
 
         var ctx = NewHttpContext();
         await result.ExecuteAsync(ctx);
@@ -56,7 +58,8 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
             adminTokenConfigured: AdminToken,
             adminTokenHeader: "wrong-token",
             body: SampleBody(),
-            dispatch: new RecordingDispatch());
+            dispatch: new RecordingCommandDispatch<ProvisionAevatarOAuthClientCommand>(
+                static _ => OAuthClientReceipt()));
 
         var ctx = NewHttpContext();
         await result.ExecuteAsync(ctx);
@@ -66,7 +69,8 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
     [Fact]
     public async Task Returns400_WhenClientIdMissing()
     {
-        var dispatch = new RecordingDispatch();
+        var dispatch = new RecordingCommandDispatch<ProvisionAevatarOAuthClientCommand>(
+            static _ => OAuthClientReceipt());
         var result = await InvokeRebuildAsync(
             adminTokenConfigured: AdminToken,
             adminTokenHeader: AdminToken,
@@ -83,7 +87,8 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
     [Fact]
     public async Task Returns400_WhenIssuedAtUnixOutOfRange()
     {
-        var dispatch = new RecordingDispatch();
+        var dispatch = new RecordingCommandDispatch<ProvisionAevatarOAuthClientCommand>(
+            static _ => OAuthClientReceipt());
         var result = await InvokeRebuildAsync(
             adminTokenConfigured: AdminToken,
             adminTokenHeader: AdminToken,
@@ -101,7 +106,8 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
     [Fact]
     public async Task DispatchesProvisionCommand_WithCanonicalSnapshotAndReturnsAccepted()
     {
-        var dispatch = new RecordingDispatch();
+        var dispatch = new RecordingCommandDispatch<ProvisionAevatarOAuthClientCommand>(
+            static _ => OAuthClientReceipt());
         var result = await InvokeRebuildAsync(
             adminTokenConfigured: AdminToken,
             adminTokenHeader: AdminToken,
@@ -135,7 +141,7 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
             adminTokenConfigured: AdminToken,
             adminTokenHeader: AdminToken,
             body: SampleBody(),
-            dispatch: new ThrowingDispatch());
+            dispatch: new ThrowingCommandDispatch<ProvisionAevatarOAuthClientCommand>());
 
         var ctx = NewHttpContext();
         await result.ExecuteAsync(ctx);
@@ -149,7 +155,7 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
             adminTokenConfigured: AdminToken,
             adminTokenHeader: AdminToken,
             body: SampleBody(),
-            dispatch: new RejectingDispatch());
+            dispatch: new RejectingCommandDispatch<ProvisionAevatarOAuthClientCommand>());
 
         var ctx = NewHttpContext();
         await result.ExecuteAsync(ctx);
@@ -225,40 +231,9 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
         };
     }
 
-    private sealed class RecordingDispatch
-        : ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>
-    {
-        public List<ProvisionAevatarOAuthClientCommand> Commands { get; } = new();
-
-        public Task<CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>> DispatchAsync(
-            ProvisionAevatarOAuthClientCommand command,
-            CancellationToken ct = default)
-        {
-            Commands.Add(command);
-            return Task.FromResult(CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>.Success(
-                new ChannelIdentityOAuthAcceptedReceipt(
-                    ActorId: AevatarOAuthClientGAgent.WellKnownId,
-                    CommandId: "cmd-1",
-                    CorrelationId: "cmd-1")));
-        }
-    }
-
-    private sealed class ThrowingDispatch
-        : ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>
-    {
-        public Task<CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>> DispatchAsync(
-            ProvisionAevatarOAuthClientCommand command,
-            CancellationToken ct = default) =>
-            throw new InvalidOperationException("dispatch failed");
-    }
-
-    private sealed class RejectingDispatch
-        : ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>
-    {
-        public Task<CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>> DispatchAsync(
-            ProvisionAevatarOAuthClientCommand command,
-            CancellationToken ct = default) =>
-            Task.FromResult(CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>.Failure(
-                ChannelIdentityOAuthDispatchError.InvalidTarget));
-    }
+    private static ChannelIdentityOAuthAcceptedReceipt OAuthClientReceipt() =>
+        new(
+            ActorId: AevatarOAuthClientGAgent.WellKnownId,
+            CommandId: "cmd-1",
+            CorrelationId: "cmd-1");
 }

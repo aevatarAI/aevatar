@@ -29,8 +29,8 @@ public sealed class IdentityOAuthCallbackEndpointTests
         var queryPort = Substitute.For<IExternalIdentityBindingQueryPort>();
         queryPort.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<BindingId?>(null));
-        var bindingDispatch = new RecordingDispatch<CommitBindingCommand>();
-        var capabilityDispatch = new RecordingDispatch<ObserveBrokerCapabilityCommand>();
+        var bindingDispatch = new RecordingCommandDispatch<CommitBindingCommand>();
+        var capabilityDispatch = new RecordingCommandDispatch<ObserveBrokerCapabilityCommand>();
 
         var result = await InvokeCallbackAsync(
             broker,
@@ -63,8 +63,8 @@ public sealed class IdentityOAuthCallbackEndpointTests
         var queryPort = Substitute.For<IExternalIdentityBindingQueryPort>();
         queryPort.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<BindingId?>(null));
-        var bindingDispatch = new RejectingDispatch<CommitBindingCommand>();
-        var capabilityDispatch = new RecordingDispatch<ObserveBrokerCapabilityCommand>();
+        var bindingDispatch = new RejectingCommandDispatch<CommitBindingCommand>();
+        var capabilityDispatch = new RecordingCommandDispatch<ObserveBrokerCapabilityCommand>();
 
         var result = await InvokeCallbackAsync(
             broker,
@@ -93,8 +93,8 @@ public sealed class IdentityOAuthCallbackEndpointTests
         var queryPort = Substitute.For<IExternalIdentityBindingQueryPort>();
         queryPort.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<BindingId?>(existing));
-        var bindingDispatch = new RecordingDispatch<CommitBindingCommand>();
-        var capabilityDispatch = new RecordingDispatch<ObserveBrokerCapabilityCommand>();
+        var bindingDispatch = new RecordingCommandDispatch<CommitBindingCommand>();
+        var capabilityDispatch = new RecordingCommandDispatch<ObserveBrokerCapabilityCommand>();
 
         var result = await InvokeCallbackAsync(
             broker,
@@ -119,8 +119,8 @@ public sealed class IdentityOAuthCallbackEndpointTests
         var queryPort = Substitute.For<IExternalIdentityBindingQueryPort>();
         queryPort.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<BindingId?>(null));
-        var bindingDispatch = new ThrowingDispatch<CommitBindingCommand>();
-        var capabilityDispatch = new RecordingDispatch<ObserveBrokerCapabilityCommand>();
+        var bindingDispatch = new ThrowingCommandDispatch<CommitBindingCommand>();
+        var capabilityDispatch = new RecordingCommandDispatch<ObserveBrokerCapabilityCommand>();
 
         var result = await InvokeCallbackAsync(
             broker,
@@ -146,8 +146,8 @@ public sealed class IdentityOAuthCallbackEndpointTests
         var result = await InvokeCallbackAsync(
             broker,
             queryPort,
-            new RecordingDispatch<CommitBindingCommand>(),
-            new RecordingDispatch<ObserveBrokerCapabilityCommand>());
+            new RecordingCommandDispatch<CommitBindingCommand>(),
+            new RecordingCommandDispatch<ObserveBrokerCapabilityCommand>());
         var (text, contentType) = await ReadTextWithContentTypeAsync(result);
 
         contentType.Should().StartWith("text/html");
@@ -232,40 +232,4 @@ public sealed class IdentityOAuthCallbackEndpointTests
         };
     }
 
-    private sealed class RecordingDispatch<TCommand>
-        : ICommandDispatchService<TCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>
-    {
-        public List<TCommand> Commands { get; } = new();
-
-        public Task<CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>> DispatchAsync(
-            TCommand command,
-            CancellationToken ct = default)
-        {
-            Commands.Add(command);
-            return Task.FromResult(CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>.Success(
-                new ChannelIdentityOAuthAcceptedReceipt(
-                    ActorId: "actor",
-                    CommandId: "cmd-1",
-                    CorrelationId: "cmd-1")));
-        }
-    }
-
-    private sealed class ThrowingDispatch<TCommand>
-        : ICommandDispatchService<TCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>
-    {
-        public Task<CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>> DispatchAsync(
-            TCommand command,
-            CancellationToken ct = default) =>
-            throw new InvalidOperationException("dispatch failed");
-    }
-
-    private sealed class RejectingDispatch<TCommand>
-        : ICommandDispatchService<TCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>
-    {
-        public Task<CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>> DispatchAsync(
-            TCommand command,
-            CancellationToken ct = default) =>
-            Task.FromResult(CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>.Failure(
-                ChannelIdentityOAuthDispatchError.InvalidTarget));
-    }
 }

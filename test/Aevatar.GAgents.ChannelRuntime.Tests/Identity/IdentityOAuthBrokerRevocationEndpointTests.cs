@@ -28,7 +28,11 @@ public sealed class IdentityOAuthBrokerRevocationEndpointTests
     [Fact]
     public async Task ValidWebhook_DispatchesRevokeCommandAndReturnsAccepted()
     {
-        var dispatch = new RecordingDispatch();
+        var dispatch = new RecordingCommandDispatch<RevokeBindingCommand>(
+            static command => new ChannelIdentityOAuthAcceptedReceipt(
+                ActorId: command.ExternalSubject.ToActorId(),
+                CommandId: "cmd-1",
+                CorrelationId: "cmd-1"));
         var result = await InvokeEndpointAsync(dispatch);
 
         dispatch.Commands.Should().ContainSingle();
@@ -49,7 +53,7 @@ public sealed class IdentityOAuthBrokerRevocationEndpointTests
     [Fact]
     public async Task DispatchRejected_ReturnsProblem()
     {
-        var result = await InvokeEndpointAsync(new RejectingDispatch());
+        var result = await InvokeEndpointAsync(new RejectingCommandDispatch<RevokeBindingCommand>());
 
         var ctx = NewHttpContext();
         await result.ExecuteAsync(ctx);
@@ -111,31 +115,4 @@ public sealed class IdentityOAuthBrokerRevocationEndpointTests
             Task.FromResult(snapshot);
     }
 
-    private sealed class RecordingDispatch
-        : ICommandDispatchService<RevokeBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>
-    {
-        public List<RevokeBindingCommand> Commands { get; } = new();
-
-        public Task<CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>> DispatchAsync(
-            RevokeBindingCommand command,
-            CancellationToken ct = default)
-        {
-            Commands.Add(command);
-            return Task.FromResult(CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>.Success(
-                new ChannelIdentityOAuthAcceptedReceipt(
-                    ActorId: command.ExternalSubject.ToActorId(),
-                    CommandId: "cmd-1",
-                    CorrelationId: "cmd-1")));
-        }
-    }
-
-    private sealed class RejectingDispatch
-        : ICommandDispatchService<RevokeBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>
-    {
-        public Task<CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>> DispatchAsync(
-            RevokeBindingCommand command,
-            CancellationToken ct = default) =>
-            Task.FromResult(CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>.Failure(
-                ChannelIdentityOAuthDispatchError.InvalidTarget));
-    }
 }
