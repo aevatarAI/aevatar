@@ -439,18 +439,15 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
-    public async Task HandleGetDiagnosticErrorsAsync_ExposesEntries()
+    public async Task HandleGetDiagnosticErrorsAsync_ReturnsRetiredMessage()
     {
-        var diagnostics = new InMemoryChannelRuntimeDiagnostics();
-        diagnostics.Record("dispatch", "lark", "reg-1", "accepted");
-
-        var result = await InvokeAsync("HandleGetDiagnosticErrorsAsync", diagnostics);
+        var result = await InvokeAsync("HandleGetDiagnosticErrorsAsync");
         var response = await ExecuteResultAsync(result);
 
-        response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        response.Body.Should().Contain("\"entry_count\":1");
-        response.Body.Should().Contain("\"platform\":\"lark\"");
-        response.Body.Should().Contain("\"detail\":\"accepted\"");
+        response.StatusCode.Should().Be(StatusCodes.Status410Gone);
+        response.Body.Should().Contain("process-local diagnostic history is retired");
+        response.Body.Should().NotContain("entry_count");
+        response.Body.Should().NotContain("entries");
     }
 
     private static HttpContext CreateHttpContext(string? scopeId = null)

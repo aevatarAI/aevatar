@@ -16,6 +16,12 @@ public static class ChannelCallbackEndpoints
     // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
     //   Old pattern: Nyx relay registration endpoints + singleton provisioning services 在 Host 内做 platform selection / scope resolution / remote Nyx provisioning / actor creation / envelope construction / dispatch through raw runtime/dispatch helpers。
     //   New principle: Channel registration 暴露 typed application command facade(reuse existing CQRS command dispatch skeleton);Host 仅 adapt HTTP;provisioning adapters 只调 existing NyxID REST surfaces(**不修改 NyxID 仓库**);local mirror writes 进 standard command skeleton via narrow dispatch port。**不引入新 actor type / 新 envelope / 新 projection phase**(reflector force-pick minimal,排除 structural 的 ChannelRelayRegistrationRunGAgent)。
+    // Refactor (iter36/cluster-042-channel-diagnostics-readmodel):
+    //   Old pattern: Channel runtime diagnostics 用 singleton in-memory list with retention trimming;diagnostics endpoint 直接读 process-local list。
+    //   New principle: Channel diagnostics 改为 logs/metrics only(observability path)OR actor/projection-backed diagnostic events with readmodel query。**禁止** public endpoint 读 singleton process memory 作 diagnostic fact source。
+    // Refactor (iter27/cluster-003-channel-registration-scope-backfill):
+    //   Old pattern: ChannelBotRegistrationScopeBackfill used readmodels to infer write candidates plus live repair_lark_mirror HTTP/tool surface and RepairLocalMirrorAsync.
+    //   New principle: remove backfill/repair_lark_mirror live recovery; rebuild_projection is projection-only; keep ChannelBotScopeIdRepairedEvent replay compatibility.
     public static IEndpointRouteBuilder MapChannelCallbackEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/channels").WithTags("ChannelRuntime");
@@ -237,29 +243,12 @@ public static class ChannelCallbackEndpoints
         }, statusCode: StatusCodes.Status410Gone);
     }
 
-    private static Task<IResult> HandleGetDiagnosticErrorsAsync(
-        [FromServices] IChannelRuntimeDiagnostics? diagnostics)
+    private static Task<IResult> HandleGetDiagnosticErrorsAsync()
     {
-        var entries = diagnostics?.GetRecent()
-                      ?? Array.Empty<ChannelRuntimeDiagnosticEntry>();
-
-        return Task.FromResult<IResult>(Results.Ok(new
+        return Task.FromResult<IResult>(Results.Json(new
         {
-            status = new
-            {
-                service_resolved = diagnostics != null,
-                server_time = DateTimeOffset.UtcNow.ToString("O"),
-                entry_count = entries.Count,
-            },
-            entries = entries.Select(entry => new
-            {
-                timestamp = entry.Timestamp.ToString("O"),
-                stage = entry.Stage,
-                platform = entry.Platform,
-                registrationId = entry.RegistrationId,
-                detail = entry.Detail,
-            }),
-        }));
+            error = "Channel runtime process-local diagnostic history is retired. Use logs, metrics, traces, or actor/projection-backed readmodel diagnostics.",
+        }, statusCode: StatusCodes.Status410Gone));
     }
 
     private static int ResolveProvisioningFailureStatusCode(string? error)

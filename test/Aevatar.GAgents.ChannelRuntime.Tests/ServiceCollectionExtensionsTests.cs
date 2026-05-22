@@ -61,6 +61,10 @@ public sealed class ServiceCollectionExtensionsTests
         //   Old pattern: Lark-local durable inbox subscriber worker stream path(orphan)
         //   New principle: delete orphan path,NyxID relay 唯一 ingress
         AssertNoRetiredLarkConversationInboxRegistration(services);
+        // Refactor (iter36/cluster-042-channel-diagnostics-readmodel):
+        //   Old pattern: AddChannelRuntime registered singleton process-local ChannelRuntimeDiagnostics as a queryable fact source.
+        //   New principle: channel diagnostics are logs/metrics only unless backed by actor/projection readmodels; DI must not restore the retired singleton.
+        AssertNoRetiredChannelRuntimeDiagnosticsRegistration(services);
         registry.Get(ChannelId.From("lark")).Should().BeOfType<LarkMessageComposer>();
         services.Count(descriptor => descriptor.ServiceType == typeof(IPlatformAdapter))
             .Should().Be(0);
@@ -140,6 +144,10 @@ public sealed class ServiceCollectionExtensionsTests
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(ChannelBotRegistrationStartupService));
         AssertNoRetiredLarkConversationInboxRegistration(services);
+        // Refactor (iter36/cluster-042-channel-diagnostics-readmodel):
+        //   Old pattern: AddChannelRuntime(IConfiguration) registered singleton process-local ChannelRuntimeDiagnostics as a queryable fact source.
+        //   New principle: channel diagnostics are logs/metrics only unless backed by actor/projection readmodels; configured DI must not restore the retired singleton.
+        AssertNoRetiredChannelRuntimeDiagnosticsRegistration(services);
         registry.Get(ChannelId.From("lark")).Should().BeOfType<LarkMessageComposer>();
         services.Should().NotContain(descriptor =>
             descriptor.ServiceType.Name.Contains("ChannelBotDirectCallbackBinding", StringComparison.Ordinal));
@@ -155,4 +163,17 @@ public sealed class ServiceCollectionExtensionsTests
 
     private static bool ContainsLarkConversationInboxName(string? name) =>
         name is not null && name.Contains("LarkConversationInbox", StringComparison.Ordinal);
+
+    private static void AssertNoRetiredChannelRuntimeDiagnosticsRegistration(IServiceCollection services)
+    {
+        services.Any(descriptor =>
+            ContainsChannelRuntimeDiagnosticsName(descriptor.ServiceType.FullName) ||
+            ContainsChannelRuntimeDiagnosticsName(descriptor.ImplementationType?.FullName) ||
+            ContainsChannelRuntimeDiagnosticsName(descriptor.ImplementationInstance?.GetType().FullName) ||
+            ContainsChannelRuntimeDiagnosticsName(descriptor.ImplementationFactory?.Method.ReturnType.FullName))
+            .Should().BeFalse();
+    }
+
+    private static bool ContainsChannelRuntimeDiagnosticsName(string? name) =>
+        name is not null && name.Contains("ChannelRuntimeDiagnostics", StringComparison.Ordinal);
 }
