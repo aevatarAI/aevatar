@@ -25,7 +25,6 @@ public sealed class TelegramGetUpdatesExternalLinkTransport(
         await NotifyStateChangedAsync(ExternalLinkStateChange.Connected, null, ct);
     }
 
-    // refactor helper, no behavior change: bridges connector completion back to the existing ExternalLink callback path.
     public Task SendAsync(ReadOnlyMemory<byte> payload, CancellationToken ct)
     {
         var request = TelegramGetUpdatesRequest.Parser.ParseFrom(payload.Span);
@@ -33,7 +32,8 @@ public sealed class TelegramGetUpdatesExternalLinkTransport(
         if (connectorTask.IsCompleted)
             return PublishCompletedConnectorTaskAsync(request, connectorTask, CancellationToken.None);
 
-        _ = AwaitAndPublishAsync(request, connectorTask, CancellationToken.None);
+        // Long polling must finish outside the actor turn; the result re-enters through ExternalLink callbacks.
+        _ = PublishCompletedConnectorTaskAsync(request, connectorTask, CancellationToken.None);
         return Task.CompletedTask;
     }
 
@@ -66,14 +66,6 @@ public sealed class TelegramGetUpdatesExternalLinkTransport(
                 Error = $"telegram getUpdates execution failed: {ex.Message}",
             });
         }
-    }
-
-    private async Task AwaitAndPublishAsync(
-        TelegramGetUpdatesRequest request,
-        Task<ConnectorResponse> connectorTask,
-        CancellationToken ct)
-    {
-        await PublishCompletedConnectorTaskAsync(request, connectorTask, ct);
     }
 
     private async Task PublishCompletedConnectorTaskAsync(
@@ -140,7 +132,6 @@ public sealed class TelegramGetUpdatesExternalLinkTransport(
         OnStateChanged?.Invoke(state, reason, ct) ?? Task.CompletedTask;
 }
 
-// refactor helper, no behavior change
 public sealed class TelegramGetUpdatesExternalLinkTransportFactory(
     IConnectorRegistry connectorRegistry,
     ILogger<TelegramGetUpdatesExternalLinkTransport> logger) : IExternalLinkTransportFactory

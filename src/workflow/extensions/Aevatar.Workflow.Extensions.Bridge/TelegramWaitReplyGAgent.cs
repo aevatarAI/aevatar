@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.ExternalLinks;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
@@ -26,6 +27,7 @@ namespace Aevatar.Workflow.Extensions.Bridge;
 public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>, IExternalLinkAware
 {
     private const string GetUpdatesLinkId = "telegram-get-updates";
+    private const string GetUpdatesTimeoutCallbackPrefix = "telegram-get-updates-timeout";
     private const int MaxPollTimeoutSeconds = 25;
     private readonly IConnectorRegistry _connectorRegistry;
     private readonly TimeProvider _timeProvider;
@@ -159,6 +161,12 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
         ArgumentNullException.ThrowIfNull(evt);
         if (!IsActiveContinuation(evt.CommandId, evt.Generation))
             return;
+        if (!string.IsNullOrWhiteSpace(evt.RequestId) &&
+            (State.PendingGetUpdates == null ||
+             !string.Equals(State.PendingGetUpdates.RequestId, evt.RequestId, StringComparison.Ordinal)))
+        {
+            return;
+        }
 
         await CompleteTimeoutAsync();
     }
@@ -176,6 +184,7 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
                 {
                     var next = state.Clone();
                     next.Active = false;
+                    next.PendingGetUpdates = null;
                     next.PendingMatchedUpdate = null;
                     next.CollectedReplies.Clear();
                     next.CollectedReplyOrder.Clear();
@@ -248,6 +257,7 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
         var next = State.Clone();
         next.PendingGetUpdates = request.Clone();
         await PersistDomainEventAsync(new TelegramWaitReplyProgressedEvent { State = next });
+        await SchedulePendingGetUpdatesTimeoutAsync(request, perCallTimeoutMs);
 
         if (ExternalLinkPort == null)
         {
@@ -263,6 +273,23 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
         {
             await CompleteFailureAsync($"telegram getUpdates dispatch failed: {ex.Message}");
         }
+    }
+
+    private async Task SchedulePendingGetUpdatesTimeoutAsync(
+        TelegramGetUpdatesRequest request,
+        int perCallTimeoutMs)
+    {
+        var dueMs = Math.Max(1, perCallTimeoutMs);
+        await ScheduleSelfDurableTimeoutAsync(
+            BuildGetUpdatesTimeoutCallbackId(request),
+            TimeSpan.FromMilliseconds(dueMs),
+            new TelegramWaitReplyTimeoutDueEvent
+            {
+                CommandId = request.CommandId,
+                Generation = request.Generation,
+                TimeoutMs = dueMs,
+                RequestId = request.RequestId,
+            });
     }
 
     private TelegramGetUpdatesRequest BuildGetUpdatesRequest(
@@ -397,6 +424,13 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
 
     private async Task CompleteTimeoutAsync()
     {
+        if (State.PendingGetUpdates != null)
+        {
+            await CompleteFailureAsync(
+                $"telegram getUpdates timeout after {ResolvePendingGetUpdatesTimeoutMs(State.PendingGetUpdates)}ms");
+            return;
+        }
+
         if (State.PendingMatchedUpdate != null)
         {
             await CompleteSuccessAsync(State.CollectAllReplies
@@ -610,6 +644,22 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
             payload["offset"] = offset.Value;
 
         return JsonSerializer.Serialize(payload);
+    }
+
+    private static string BuildGetUpdatesTimeoutCallbackId(TelegramGetUpdatesRequest request) =>
+        RuntimeCallbackKeyComposer.BuildCallbackId(
+            GetUpdatesTimeoutCallbackPrefix,
+            request.CommandId,
+            request.Generation.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            request.RequestId);
+
+    private static int ResolvePendingGetUpdatesTimeoutMs(TelegramGetUpdatesRequest request)
+    {
+        return request.Parameters.TryGetValue("timeout_ms", out var raw) &&
+               int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) &&
+               parsed > 0
+            ? parsed
+            : 1;
     }
 
     private static bool TryParseTelegramUpdates(
