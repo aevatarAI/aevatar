@@ -79,7 +79,8 @@ internal sealed class RecordingStudioWorkspacePorts : IStudioWorkspaceQueryPort,
             draft.WorkflowId,
             draft.Name,
             draft.Yaml,
-            draft.UpdatedAtUtc));
+            draft.UpdatedAtUtc,
+            expectedVersion));
         GetOrCreateScope(normalizedScopeId)[draft.WorkflowId] = draft;
         return Task.FromResult(Receipt(normalizedScopeId, expectedVersion));
     }
@@ -97,7 +98,7 @@ internal sealed class RecordingStudioWorkspacePorts : IStudioWorkspaceQueryPort,
         CancellationToken ct = default)
     {
         var normalizedScopeId = NormalizeScopeId(scopeId);
-        DeletedDrafts.Add(new ScopedWorkflowDelete(normalizedScopeId, workflowId));
+        DeletedDrafts.Add(new ScopedWorkflowDelete(normalizedScopeId, workflowId, expectedVersion));
         if (_drafts.TryGetValue(normalizedScopeId, out var scopeDrafts))
         {
             scopeDrafts.Remove(workflowId);
@@ -156,8 +157,9 @@ internal sealed record ScopedWorkflowUpload(
     string WorkflowId,
     string WorkflowName,
     string Yaml,
-    DateTimeOffset UploadedAtUtc);
+    DateTimeOffset UploadedAtUtc,
+    long? ExpectedVersion);
 
-internal sealed record ScopedWorkflowDelete(string ScopeId, string WorkflowId);
+internal sealed record ScopedWorkflowDelete(string ScopeId, string WorkflowId, long? ExpectedVersion);
 
 internal sealed record ScopedDraft(string ScopeId, StudioWorkflowDraftRecord Draft);

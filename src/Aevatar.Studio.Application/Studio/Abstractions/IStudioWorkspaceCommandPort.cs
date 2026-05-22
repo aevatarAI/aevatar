@@ -34,9 +34,7 @@ public interface IStudioWorkspaceCommandPort
         string scopeId,
         StudioWorkflowDraftRecord draft,
         long? expectedVersion = null,
-        CancellationToken ct = default) =>
-        throw new NotImplementedException(
-            "Explicit workspace scope routing must be implemented by the command port.");
+        CancellationToken ct = default);
 
     Task<StudioWorkspaceCommandReceipt> DeleteDraftAsync(
         string workflowId,
@@ -47,9 +45,7 @@ public interface IStudioWorkspaceCommandPort
         string scopeId,
         string workflowId,
         long? expectedVersion = null,
-        CancellationToken ct = default) =>
-        throw new NotImplementedException(
-            "Explicit workspace scope routing must be implemented by the command port.");
+        CancellationToken ct = default);
 }
 
 public sealed record StudioWorkspaceCommandReceipt(

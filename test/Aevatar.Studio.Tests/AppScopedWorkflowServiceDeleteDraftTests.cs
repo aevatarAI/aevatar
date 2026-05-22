@@ -39,6 +39,7 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
         var deleted = workspacePort.DeletedDrafts.Should().ContainSingle().Subject;
         deleted.ScopeId.Should().Be("scope-1");
         deleted.WorkflowId.Should().Be("workflow-1");
+        deleted.ExpectedVersion.Should().Be(11);
     }
 
     [Fact]
@@ -95,6 +96,7 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
         runtimePorts.TotalInvocations.Should().Be(0);
         workspacePort.SavedDrafts.Should().ContainSingle();
         workspacePort.SavedDrafts[0].ScopeId.Should().Be("scope-1");
+        workspacePort.SavedDrafts[0].ExpectedVersion.Should().Be(11);
         saved.WorkflowId.Should().Be("workflow-1");
     }
 
@@ -160,6 +162,7 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
         var deleted = workspacePort.DeletedDrafts.Should().ContainSingle().Subject;
         deleted.ScopeId.Should().Be("scope-1");
         deleted.WorkflowId.Should().Be("workflow-1");
+        deleted.ExpectedVersion.Should().Be(11);
         (await workspacePort.GetAsync("scope-1", CancellationToken.None)).Drafts.Should().BeEmpty();
     }
 

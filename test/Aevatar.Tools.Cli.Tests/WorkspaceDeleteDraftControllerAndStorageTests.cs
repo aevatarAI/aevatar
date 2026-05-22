@@ -733,6 +733,9 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
         public Task<StudioWorkspaceCommandReceipt> SaveDraftAsync(StudioWorkflowDraftRecord draft, long? expectedVersion = null, CancellationToken ct = default) =>
             Task.FromException<StudioWorkspaceCommandReceipt>(_exception);
 
+        public Task<StudioWorkspaceCommandReceipt> SaveDraftAsync(string scopeId, StudioWorkflowDraftRecord draft, long? expectedVersion = null, CancellationToken ct = default) =>
+            Task.FromException<StudioWorkspaceCommandReceipt>(_exception);
+
         public Task<StudioWorkspaceCommandReceipt> DeleteDraftAsync(string workflowId, long? expectedVersion = null, CancellationToken ct = default) =>
             Task.FromException<StudioWorkspaceCommandReceipt>(_exception);
 
@@ -803,6 +806,9 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
                 _stateVersion,
                 DateTimeOffset.UtcNow));
 
+        public Task<StudioWorkspaceSnapshot> GetAsync(string scopeId, CancellationToken ct = default) =>
+            GetAsync(ct);
+
         public Task<StudioWorkspaceSettings> GetSettingsAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(_settings);
 
@@ -816,6 +822,13 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
             _stateVersion++;
             return Task.FromResult(Receipt(expectedVersion));
         }
+
+        public Task<StudioWorkspaceCommandReceipt> DeleteDraftAsync(
+            string scopeId,
+            string workflowId,
+            long? expectedVersion = null,
+            CancellationToken ct = default) =>
+            DeleteDraftAsync(workflowId, expectedVersion, ct);
 
         public Task<StudioWorkspaceCommandReceipt> UpdateSettingsAsync(
             StudioWorkspaceSettings settings,
@@ -871,6 +884,13 @@ public sealed class WorkspaceDeleteDraftControllerAndStorageTests
             _stateVersion++;
             return Task.FromResult(Receipt(expectedVersion));
         }
+
+        public Task<StudioWorkspaceCommandReceipt> SaveDraftAsync(
+            string scopeId,
+            StudioWorkflowDraftRecord draft,
+            long? expectedVersion = null,
+            CancellationToken ct = default) =>
+            SaveDraftAsync(draft, expectedVersion, ct);
 
         public Task SaveSettingsAsync(StudioWorkspaceSettings settings, CancellationToken cancellationToken = default)
         {
