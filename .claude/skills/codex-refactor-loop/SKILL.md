@@ -104,6 +104,14 @@ Controller wakeup 处理 markers 后,**必须在同 turn 内派出下一步 code
 
 派出后 ScheduleWakeup;**不允许** "wakeup → sweep → 0 派出 → 下 wakeup" pattern(空 wakeup)。
 
+### Spawn / merge / banner 后必须 peek(强制 — 防 maintainer 漏读)
+
+任何 controller turn 派 codex / merge PR / post banner / close issue 之后,**turn 结束前必须 `bash tools/refactor-loop/peek.sh | tail -80` 一次扫 maintainer 评论 + 0-codex 漏洞**。
+
+理由:`task-notification` 触发的 turn 容易陷入"处理 marker → spawn 下一步 → end turn"线性思维,会跳过 peek 而错过 maintainer 与此 task 并行的新评论。Auric 2026-05-22 04:15 #779 "命名/架构也很差" 评论在 controller spawn #796 r3 judge 期间到达,因为没 peek 漏读 ~20 min,Auric 直接报错 "没监控到"。
+
+例外:turn 唯一动作是 ScheduleWakeup(纯休眠)可省 peek。
+
 ### Concurrency monitor:`tools/refactor-loop/concurrency_monitor.py`(强制)
 
 **60s** 周期 daemon(per Auric 2026-05-21 "60s 就扫描一次"),监控 actual vs expected codex 并发数:
