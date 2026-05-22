@@ -1,6 +1,7 @@
 using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,6 +16,9 @@ namespace Aevatar.GAgents.ChatRouting.Tests;
 /// These assertions lock in the full materialization-runtime + materializer +
 /// document-store triple so the readmodel actually populates.
 /// </summary>
+// Refactor (iter32/cluster-034-chat-route-policy-request-path-projection-activation):
+//   Old pattern: Chat route policy admin endpoints + voice demo bootstrap 在 request path 调 EnsureProjectionForActorAsync 同步 priming projection,违反 query-time priming forbidden + 命令骨架内聚
+//   New principle: 加 ChatRoutePolicyCommittedStateProjectionActivationPlanProvider(committed-state hook 触发);删 ChatRoutePolicyProjectionPort + request-path activation;DI 注册 dispatcher + hook + provider;query_projection_priming_guard 加 chat route policy endpoint 扫描
 public sealed class ChatRoutingServiceCollectionExtensionsTests
 {
     [Fact]
@@ -45,6 +49,22 @@ public sealed class ChatRoutingServiceCollectionExtensionsTests
             .Should().NotBeNull(
                 "without the materializer subscription, committed ChatRoutePolicyUpdated events would " +
                 "land in event storage but never reach ChatRoutePolicyCurrentStateDocument");
+    }
+
+    [Fact]
+    public void AddChatRoutingAgents_RegistersCommittedStateProjectionActivationHook()
+    {
+        using var provider = new ServiceCollection()
+            .AddChatRoutingAgents()
+            .BuildServiceProvider();
+
+        provider.GetService<ProjectionActivationPlanDispatcher>()
+            .Should().NotBeNull("the committed-state hook dispatches activation plans through the shared dispatcher");
+        provider.GetServices<ICommittedStatePublicationHook>()
+            .Should().ContainSingle(hook => hook is CommittedStateProjectionActivationHook);
+        provider.GetServices<IProjectionActivationPlanProvider>()
+            .Should().ContainSingle(planProvider =>
+                planProvider is ChatRoutePolicyCommittedStateProjectionActivationPlanProvider);
     }
 
     [Fact]

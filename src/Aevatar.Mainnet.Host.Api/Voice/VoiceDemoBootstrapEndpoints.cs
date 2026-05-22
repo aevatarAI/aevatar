@@ -20,6 +20,9 @@ using ScheduledOwnerScope = Aevatar.GAgents.Scheduled.OwnerScope;
 
 namespace Aevatar.Mainnet.Host.Api.Voice;
 
+// Refactor (iter32/cluster-034-chat-route-policy-request-path-projection-activation):
+//   Old pattern: Chat route policy admin endpoints + voice demo bootstrap 在 request path 调 EnsureProjectionForActorAsync 同步 priming projection,违反 query-time priming forbidden + 命令骨架内聚
+//   New principle: 加 ChatRoutePolicyCommittedStateProjectionActivationPlanProvider(committed-state hook 触发);删 ChatRoutePolicyProjectionPort + request-path activation;DI 注册 dispatcher + hook + provider;query_projection_priming_guard 加 chat route policy endpoint 扫描
 internal static class VoiceDemoBootstrapEndpoints
 {
     private const string VoiceModuleName = "voice_presence_openai";
@@ -46,11 +49,13 @@ internal static class VoiceDemoBootstrapEndpoints
         [FromServices] IUserAgentCatalogCommandPort catalogCommandPort,
         [FromServices] IUserAgentCatalogQueryPort catalogQueryPort,
         [FromServices] IChatRoutePolicyQueryPort routePolicyQueryPort,
-        [FromServices] ChatRoutePolicyProjectionPort routePolicyProjectionPort,
         [FromServices] ChatRouteResolver routeResolver,
         [FromServices] IVoicePresenceSessionResolver voiceSessionResolver,
         CancellationToken ct)
     {
+        // Refactor (iter32/cluster-034-chat-route-policy-request-path-projection-activation):
+        //   Old pattern: bootstrap request path injected ChatRoutePolicyProjectionPort and primed projection.
+        //   New principle: bootstrap dispatches accepted commands; committed-state hook activates route-policy projection.
         if (!TryResolveScopeId(http.User, out var scopeId))
         {
             return Results.Json(
@@ -80,7 +85,6 @@ internal static class VoiceDemoBootstrapEndpoints
             actorRuntime,
             actorDispatchPort,
             routePolicyQueryPort,
-            routePolicyProjectionPort,
             ct);
 
         var catalogObserved = await WaitUntilAsync(
@@ -157,9 +161,11 @@ internal static class VoiceDemoBootstrapEndpoints
         IActorRuntime actorRuntime,
         IActorDispatchPort actorDispatchPort,
         IChatRoutePolicyQueryPort routePolicyQueryPort,
-        ChatRoutePolicyProjectionPort routePolicyProjectionPort,
         CancellationToken ct)
     {
+        // Refactor (iter32/cluster-034-chat-route-policy-request-path-projection-activation):
+        //   Old pattern: Chat route policy admin endpoints + voice demo bootstrap 在 request path 调 EnsureProjectionForActorAsync 同步 priming projection,违反 query-time priming forbidden + 命令骨架内聚
+        //   New principle: 加 ChatRoutePolicyCommittedStateProjectionActivationPlanProvider(committed-state hook 触发);删 ChatRoutePolicyProjectionPort + request-path activation;DI 注册 dispatcher + hook + provider;query_projection_priming_guard 加 chat route policy endpoint 扫描
         var existing = await routePolicyQueryPort.LookupForCallerAsync(routingScope, ct);
         var command = new UpsertChatRoutePolicyRequested
         {
@@ -191,7 +197,6 @@ internal static class VoiceDemoBootstrapEndpoints
         });
 
         var actor = await actorRuntime.CreateAsync<ChatRoutePolicyGAgent>(routePolicyActorId, ct);
-        await routePolicyProjectionPort.EnsureProjectionForActorAsync(actor.Id, ct);
         await DispatchAsync(actor.Id, command, actorDispatchPort, ct);
     }
 

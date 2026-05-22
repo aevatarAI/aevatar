@@ -40,6 +40,14 @@ command_path_hits="$(
     || true
 )"
 
+chat_route_policy_endpoint_hits="$(
+  rg -n "ChatRoutePolicyProjectionPort|EnsureProjectionForActorAsync|ActivateAsync|PrimeAsync" \
+    src/Aevatar.Mainnet.Host.Api/ChatRouting/ChatRoutePolicyAdminEndpoints.cs \
+    src/Aevatar.Mainnet.Host.Api/Voice/VoiceDemoBootstrapEndpoints.cs \
+    | rg -v "Refactor \\(iter32/cluster-034-chat-route-policy-request-path-projection-activation\\)|Old pattern:|New principle:" \
+    || true
+)"
+
 identity_oauth_hits="$(
   rg -n "IProjectionReadinessPort|ExternalIdentityBindingProjectionPort|AevatarOAuthClientProjectionPort|AevatarOAuthClientRebuildCoordinator|ProjectionWaitTimeout|WaitForRebuildObservedAsync|RebuildObservation|WaitForBindingStateAsync" \
     agents/Aevatar.GAgents.Channel.Identity \
@@ -50,7 +58,7 @@ identity_oauth_hits="$(
     || true
 )"
 
-if [[ -n "${hits}${endpoint_lifecycle_hits}${scope_service_script_stream_hits}${command_path_hits}${identity_oauth_hits}" ]]; then
+if [[ -n "${hits}${endpoint_lifecycle_hits}${scope_service_script_stream_hits}${command_path_hits}${chat_route_policy_endpoint_hits}${identity_oauth_hits}" ]]; then
   if [[ -n "${hits}" ]]; then
     echo "${hits}"
   fi
@@ -65,6 +73,10 @@ if [[ -n "${hits}${endpoint_lifecycle_hits}${scope_service_script_stream_hits}${
   if [[ -n "${command_path_hits}" ]]; then
     echo "${command_path_hits}"
     echo "Command ports must dispatch accepted commands; projection activation belongs to committed-state hooks, observation binders, startup activators, or background materializers."
+  fi
+  if [[ -n "${chat_route_policy_endpoint_hits}" ]]; then
+    echo "${chat_route_policy_endpoint_hits}"
+    echo "Chat route policy endpoints/bootstrap must not activate projection lifecycle in request paths; committed-state hooks own projection activation."
   fi
   if [[ -n "${identity_oauth_hits}" ]]; then
     echo "${identity_oauth_hits}"

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Text.RegularExpressions;
 using System.Text;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
@@ -28,6 +29,9 @@ namespace Aevatar.Hosting.Tests;
 /// (validated by ChatRoutePolicyGAgentTests) is fire-and-forget on the
 /// stream, so an endpoint bug surfaces only in operator pain.
 /// </summary>
+// Refactor (iter32/cluster-034-chat-route-policy-request-path-projection-activation):
+//   Old pattern: Chat route policy admin endpoints + voice demo bootstrap 在 request path 调 EnsureProjectionForActorAsync 同步 priming projection,违反 query-time priming forbidden + 命令骨架内聚
+//   New principle: 加 ChatRoutePolicyCommittedStateProjectionActivationPlanProvider(committed-state hook 触发);删 ChatRoutePolicyProjectionPort + request-path activation;DI 注册 dispatcher + hook + provider;query_projection_priming_guard 加 chat route policy endpoint 扫描
 public sealed class MainnetChatRoutePolicyAdminEndpointsTests
 {
     private const string Scope = "5d0d7b72-acff-49af-bb1b-9f30bbb7c102";
@@ -167,6 +171,28 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
         body.Should().Contain("\"actorId\": \"agent-x\"");
     }
 
+    [Fact]
+    public void RequestPathSources_ShouldNotContainProjectionPrimingOutsideRefactorComments()
+    {
+        // Refactor (iter32/cluster-034-chat-route-policy-request-path-projection-activation):
+        //   Old pattern: tests only proved endpoint business responses, not absence of projection priming calls.
+        //   New principle: source-regression assertion locks request paths to dispatch-only behavior.
+        var adminSource = StripLineComments(File.ReadAllText(GetSourcePath(
+            "src",
+            "Aevatar.Mainnet.Host.Api",
+            "ChatRouting",
+            "ChatRoutePolicyAdminEndpoints.cs")));
+        var voiceSource = StripLineComments(File.ReadAllText(GetSourcePath(
+            "src",
+            "Aevatar.Mainnet.Host.Api",
+            "Voice",
+            "VoiceDemoBootstrapEndpoints.cs")));
+        var requestPathSource = adminSource + voiceSource;
+
+        requestPathSource.Should().NotContain("ChatRoutePolicyProjectionPort");
+        requestPathSource.Should().NotContain("EnsureProjectionForActorAsync");
+    }
+
     // ----- Test fixtures -------------------------------------------------------
 
     private static async Task<WebApplication> CreateAppAsync(
@@ -191,17 +217,29 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
         builder.Services.AddSingleton<IActorRuntime>(actorRuntime);
         builder.Services.AddSingleton<IActorDispatchPort>(dispatchPort);
         builder.Services.AddSingleton(queryPort ?? new StaticPolicyQueryPort(snapshot: null));
-        // Admin endpoints require ChatRoutePolicyProjectionPort to activate
-        // the per-scope projection runtime before dispatch — stub it with a
-        // no-op activation service for tests.
-        builder.Services.AddSingleton<Aevatar.CQRS.Projection.Core.Abstractions.IProjectionScopeActivationService<ChatRoutePolicyMaterializationRuntimeLease>,
-            NoopActivationService>();
-        builder.Services.AddSingleton<ChatRoutePolicyProjectionPort>();
 
         var app = builder.Build();
         app.MapChatRoutePolicyAdminEndpoints();
         await app.StartAsync();
         return app;
+    }
+
+    private static string StripLineComments(string source) =>
+        Regex.Replace(source, @"^\s*//.*$", string.Empty, RegexOptions.Multiline);
+
+    private static string GetSourcePath(params string[] relativePath)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine([directory.FullName, .. relativePath]);
+            if (File.Exists(candidate))
+                return candidate;
+
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException($"Could not locate {Path.Combine(relativePath)} from test output directory.");
     }
 
     private sealed class RecordingActorRuntime : IActorRuntime
@@ -251,20 +289,6 @@ public sealed class MainnetChatRoutePolicyAdminEndpointsTests
             Dispatches.Add((actorId, envelope));
             return Task.CompletedTask;
         }
-    }
-
-    private sealed class NoopActivationService
-        : Aevatar.CQRS.Projection.Core.Abstractions.IProjectionScopeActivationService<ChatRoutePolicyMaterializationRuntimeLease>
-    {
-        public Task<ChatRoutePolicyMaterializationRuntimeLease> EnsureAsync(
-            Aevatar.CQRS.Projection.Core.Abstractions.ProjectionScopeStartRequest request,
-            CancellationToken ct = default) =>
-            Task.FromResult(new ChatRoutePolicyMaterializationRuntimeLease(
-                new ChatRoutePolicyMaterializationContext
-                {
-                    RootActorId = request.RootActorId,
-                    ProjectionKind = request.ProjectionKind,
-                }));
     }
 
     private sealed class StaticPolicyQueryPort(ChatRoutePolicySnapshot? snapshot) : IChatRoutePolicyQueryPort
