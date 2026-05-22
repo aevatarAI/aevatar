@@ -483,7 +483,7 @@ public class RoleGAgentReplayContractTests
         replayPublisher.Published
             .OfType<TextMessageContentEvent>()
             .Should()
-            .NotContain(x => x.SessionId == "session-rich");
+            .ContainSingle(x => x.SessionId == "session-rich" && x.Delta == "final answer");
         replayPublisher.Published
             .OfType<TextMessageReasoningEvent>()
             .Should()
@@ -539,6 +539,68 @@ public class RoleGAgentReplayContractTests
         var persisted = await inner.GetEventsAsync("role-persist-fail");
         persisted.Should().NotContain(x =>
             x.EventType.Contains(nameof(RoleChatSessionCompletedEvent), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task HandleChatRequest_WhenReplayHasFinalOnlyContent_ShouldPublishDisplayContentBeforeEnd()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var services = BuildServices(store);
+
+        var agent1 = CreateAgent(services, "role-final-only-replay");
+        await agent1.ActivateAsync();
+        await agent1.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "assistant",
+            ProviderName = "counting",
+            SystemPrompt = "system",
+        });
+        await agent1.DeactivateAsync();
+
+        await store.AppendAsync(
+            "role-final-only-replay",
+            [
+                StateEventFor(
+                    "role-final-only-replay",
+                    2,
+                    new RoleChatSessionCompletedEvent
+                    {
+                        SessionId = "session-final-only",
+                        Prompt = "hello",
+                        Content = "final-only answer",
+                        ContentEmitted = false,
+                    }),
+            ],
+            expectedVersion: 1);
+
+        var publisher = new RecordingEventPublisher();
+        var agent2 = CreateAgent(services, "role-final-only-replay");
+        agent2.EventPublisher = publisher;
+        await agent2.ActivateAsync();
+
+        await agent2.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "hello",
+            SessionId = "session-final-only",
+        });
+
+        publisher.Published
+            .OfType<TextMessageContentEvent>()
+            .Should()
+            .ContainSingle(x =>
+                x.SessionId == "session-final-only" &&
+                x.Delta == "final-only answer");
+        publisher.Published
+            .OfType<TextMessageEndEvent>()
+            .Should()
+            .ContainSingle(x =>
+                x.SessionId == "session-final-only" &&
+                x.Content == "final-only answer");
+
+        var persisted = await store.GetEventsAsync("role-final-only-replay");
+        persisted.Should().ContainSingle(x =>
+            x.EventData.Is(RoleChatSessionCompletedEvent.Descriptor) &&
+            x.EventData.Unpack<RoleChatSessionCompletedEvent>().SessionId == "session-final-only");
     }
 
     private static IServiceProvider BuildServices(

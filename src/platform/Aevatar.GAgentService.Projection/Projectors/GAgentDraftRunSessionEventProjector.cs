@@ -178,7 +178,7 @@ public sealed class GAgentDraftRunSessionEventProjector
             {
                 RunError = new RunErrorEvent
                 {
-                    Message = content.Trim(),
+                    Message = ScopeGAgentAguiEventMapper.NormalizeLlmFailureMessage(content),
                 },
             };
             return true;

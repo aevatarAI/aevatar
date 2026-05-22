@@ -59,7 +59,7 @@ public sealed class ScopeGAgentAguiEventMapperTests
                 SessionId = "s2",
             }));
         textEndToolFailed!.RunError.Should().NotBeNull();
-        textEndToolFailed.RunError!.Message.Should().Be("LLM request failed [tools=none]: upstream");
+        textEndToolFailed.RunError!.Message.Should().Be("upstream");
 
         var toolCall = ScopeGAgentAguiEventMapper.TryMap(BuildEventEnvelope(new AiToolCall
         {

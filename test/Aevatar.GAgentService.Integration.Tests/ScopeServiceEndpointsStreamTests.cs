@@ -1,12 +1,18 @@
 using System.Reflection;
+using System.Text.Json;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Core;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Core.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
@@ -235,6 +241,54 @@ public sealed class ScopeServiceEndpointsStreamTests
         var body = await ReadBodyAsync(http);
         body.Should().Contain("runError");
         body.Should().NotContain("runFinished");
+    }
+
+    [Fact]
+    public async Task HandleGAgentServiceChatStreamAsync_WithMockProvider_ShouldStreamRoleContentThroughDraftRunPipeline()
+    {
+        var http = CreateHttpContext();
+        var provider = new StreamingMockLlmProviderFactory(
+            "refund request ",
+            "classified as billing_support");
+        await using var services = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<ILLMProviderFactory>(provider)
+            .AddAevatarRuntime()
+            .BuildServiceProvider();
+        var runtime = services.GetRequiredService<IActorRuntime>();
+        var streamProvider = services.GetRequiredService<IStreamProvider>();
+        var actorId = $"role-draft-run-{Guid.NewGuid():N}";
+        await SeedRoleInitializationAsync(
+            services.GetRequiredService<IEventStore>(),
+            actorId,
+            provider.Name);
+
+        var projectionPort = new StreamBackedDraftRunProjectionPort(streamProvider);
+        var interactionService = CreateStaticStreamInteractionService(runtime, projectionPort);
+
+        await InvokeStaticStreamAsync(
+            http,
+            CreateStaticTarget(typeof(RoleGAgent).AssemblyQualifiedName!, primaryActorId: actorId),
+            "Classify this refund request.",
+            actorId,
+            null,
+            "scope-a",
+            null,
+            null,
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http);
+        body.Should().Contain("runStarted");
+        body.Should().Contain("textMessageStart");
+        body.Should().Contain("textMessageContent");
+        body.Should().Contain("refund request ");
+        body.Should().Contain("classified as billing_support");
+        body.Should().Contain("textMessageEnd");
+        body.Should().Contain("runFinished");
+        body.Should().NotContain("runError");
+        provider.StreamCallCount.Should().Be(1);
+        provider.StreamRequests.Should().ContainSingle(x => x.RequestId == ExtractCorrelationId(body));
     }
 
     [Fact]
@@ -641,7 +695,7 @@ public sealed class ScopeServiceEndpointsStreamTests
 
         var published = sessionHub.Published.Should().ContainSingle().Subject;
         published.Event.RunError.Should().NotBeNull();
-        published.Event.RunError!.Message.Should().Be("LLM request failed [tools=none]: upstream");
+        published.Event.RunError!.Message.Should().Be("upstream");
     }
 
     private static EventEnvelope WrapCommittedCompletion(
@@ -1184,21 +1238,99 @@ public sealed class ScopeServiceEndpointsStreamTests
         return await new StreamReader(http.Response.Body).ReadToEndAsync();
     }
 
+    private static async Task SeedRoleInitializationAsync(
+        IEventStore store,
+        string actorId,
+        string providerName)
+    {
+        var initialize = new InitializeRoleAgentEvent
+        {
+            RoleId = "role-refund-classifier",
+            RoleName = "refund-classifier",
+            ProviderName = providerName,
+            SystemPrompt = "Classify refund requests.",
+            MaxToolRounds = 1,
+        };
+
+        await store.AppendAsync(
+            actorId,
+            [
+                new StateEvent
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                    Version = 1,
+                    EventType = InitializeRoleAgentEvent.Descriptor.FullName,
+                    EventData = Any.Pack(initialize),
+                    AgentId = actorId,
+                },
+            ],
+            expectedVersion: 0);
+    }
+
+    private static string ExtractCorrelationId(string sseBody)
+    {
+        using var document = ParseFirstEvent(sseBody, "runStarted");
+        return document.RootElement
+            .GetProperty("runStarted")
+            .GetProperty("runId")
+            .GetString()
+            ?? throw new InvalidOperationException("runStarted.runId is missing.");
+    }
+
+    private static JsonDocument ParseFirstEvent(string sseBody, string eventProperty)
+    {
+        foreach (var line in sseBody.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!line.StartsWith("data: ", StringComparison.Ordinal))
+                continue;
+
+            var document = JsonDocument.Parse(line["data: ".Length..]);
+            if (document.RootElement.TryGetProperty(eventProperty, out _))
+                return document;
+
+            document.Dispose();
+        }
+
+        throw new InvalidOperationException($"SSE event '{eventProperty}' was not found.");
+    }
+
     private static ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> CreateStaticStreamInteractionService(
-        StubActorRuntime runtime,
+        IActorRuntime runtime,
         StubDraftRunProjectionPort projectionPort)
+    {
+        return CreateStaticStreamInteractionService(
+            runtime,
+            projectionPort,
+            new StubGAgentRunTerminalProjectionPort());
+    }
+
+    private static ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> CreateStaticStreamInteractionService(
+        IActorRuntime runtime,
+        IGAgentDraftRunProjectionPort projectionPort)
+    {
+        return CreateStaticStreamInteractionService(
+            runtime,
+            projectionPort,
+            new StubGAgentRunTerminalProjectionPort());
+    }
+
+    private static ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> CreateStaticStreamInteractionService(
+        IActorRuntime runtime,
+        IGAgentDraftRunProjectionPort projectionPort,
+        IGAgentRunTerminalProjectionPort terminalProjectionPort)
     {
         var pipeline = new DefaultCommandDispatchPipeline<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError>(
             new GAgentDraftRunCommandTargetResolver(
                 runtime,
                 projectionPort,
-                new StubGAgentRunTerminalProjectionPort()),
+                terminalProjectionPort),
             new DefaultCommandContextPolicy(),
             new GAgentDraftRunCommandTargetBinder(
                 projectionPort,
-                new StubGAgentRunTerminalProjectionPort()),
+                terminalProjectionPort),
             new GAgentDraftRunCommandEnvelopeFactory(),
-            new ActorCommandTargetDispatcher<GAgentDraftRunCommandTarget>(new InlineActorDispatchPort(runtime)),
+            new ActorCommandTargetDispatcher<GAgentDraftRunCommandTarget>(new RuntimeActorDispatchPort(runtime)),
             new GAgentDraftRunAcceptedReceiptFactory());
 
         return new DefaultCommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, AGUIEvent, GAgentDraftRunCompletionStatus>(
@@ -1208,6 +1340,132 @@ public sealed class ScopeServiceEndpointsStreamTests
             new GAgentDraftRunFinalizeEmitter(),
             new GAgentDraftRunDurableCompletionResolver(new StubGAgentRunTerminalQueryPort()),
             NullLogger<DefaultCommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, AGUIEvent, GAgentDraftRunCompletionStatus>>.Instance);
+    }
+
+    private sealed class StreamingMockLlmProviderFactory(params string[] chunks) : ILLMProviderFactory, ILLMProvider
+    {
+        public int StreamCallCount { get; private set; }
+        public List<LLMRequest> StreamRequests { get; } = [];
+        public string Name => "mock";
+
+        public ILLMProvider GetProvider(string name)
+        {
+            _ = name;
+            return this;
+        }
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new LLMResponse
+            {
+                Content = string.Concat(chunks),
+                FinishReason = "stop",
+                Usage = new TokenUsage(1, 1, 2),
+            });
+        }
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            StreamCallCount++;
+            StreamRequests.Add(request);
+            foreach (var chunk in chunks)
+            {
+                ct.ThrowIfCancellationRequested();
+                yield return new LLMStreamChunk { DeltaContent = chunk };
+                await Task.Yield();
+            }
+
+            yield return new LLMStreamChunk
+            {
+                IsLast = true,
+                Usage = new TokenUsage(1, 1, 2),
+            };
+        }
+    }
+
+    private sealed class StreamBackedDraftRunProjectionPort(IStreamProvider streamProvider) : IGAgentDraftRunProjectionPort
+    {
+        private readonly IStreamProvider _streamProvider = streamProvider;
+        private readonly Dictionary<IGAgentDraftRunProjectionLease, IAsyncDisposable> _subscriptions = [];
+
+        public bool ProjectionEnabled => true;
+
+        public Task<IGAgentDraftRunProjectionLease?> EnsureActorProjectionAsync(
+            string actorId,
+            string commandId,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            return Task.FromResult<IGAgentDraftRunProjectionLease?>(
+                new StubDraftRunProjectionLease(actorId, commandId));
+        }
+
+        public async Task AttachLiveSinkAsync(
+            IGAgentDraftRunProjectionLease lease,
+            IEventSink<AGUIEvent> sink,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(lease);
+            ArgumentNullException.ThrowIfNull(sink);
+
+            if (lease is not StubDraftRunProjectionLease draftRunLease)
+                throw new InvalidOperationException("Unsupported draft-run projection lease.");
+
+            var subscription = await _streamProvider
+                .GetStream(draftRunLease.ActorId)
+                .SubscribeAsync<EventEnvelope>(async envelope =>
+                {
+                    if (!string.Equals(
+                            envelope.Propagation?.CorrelationId,
+                            draftRunLease.CommandId,
+                            StringComparison.Ordinal))
+                    {
+                        return;
+                    }
+
+                    var mapped = ScopeGAgentAguiEventMapper.TryMap(envelope);
+                    if (mapped == null)
+                        return;
+
+                    try
+                    {
+                        await sink.PushAsync(mapped, CancellationToken.None);
+                    }
+                    catch (EventSinkCompletedException)
+                    {
+                    }
+                }, ct);
+
+            _subscriptions[lease] = subscription;
+        }
+
+        public async Task DetachLiveSinkAsync(
+            IGAgentDraftRunProjectionLease lease,
+            IEventSink<AGUIEvent> sink,
+            CancellationToken ct = default)
+        {
+            _ = sink;
+            _ = ct;
+            if (_subscriptions.Remove(lease, out var subscription))
+                await subscription.DisposeAsync();
+        }
+
+        public async Task ReleaseActorProjectionAsync(
+            IGAgentDraftRunProjectionLease lease,
+            CancellationToken ct = default)
+        {
+            _ = ct;
+            if (_subscriptions.Remove(lease, out var subscription))
+                await subscription.DisposeAsync();
+        }
     }
 
     private sealed class StubActorRuntime : IActorRuntime
@@ -1233,7 +1491,7 @@ public sealed class ScopeServiceEndpointsStreamTests
         public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class InlineActorDispatchPort(StubActorRuntime runtime) : IActorDispatchPort
+    private sealed class RuntimeActorDispatchPort(IActorRuntime runtime) : IActorDispatchPort
     {
         public async Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
