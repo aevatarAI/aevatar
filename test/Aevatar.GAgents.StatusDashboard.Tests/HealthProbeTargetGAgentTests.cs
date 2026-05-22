@@ -78,6 +78,31 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Configure_WithChangedDescriptor_ClearsStaleOutcomes()
+    {
+        var descriptor = NewDescriptor("nyxid-auth");
+        await _agent.HandleConfigureAsync(new HealthProbeConfigureCommand { Spec = descriptor.Clone() });
+
+        _executor.NextOutcome = new HealthProbeOutcome
+        {
+            Status = HealthOutcomeStatus.Down,
+            Detail = "http_500",
+        };
+        await _agent.HandleTickAsync(new HealthProbeTickRequested { Slug = "nyxid-auth" });
+
+        var updated = descriptor.Clone();
+        updated.DisplayName = "nyxid-auth updated";
+        await _agent.HandleConfigureAsync(new HealthProbeConfigureCommand { Spec = updated });
+
+        _agent.State.Spec.DisplayName.Should().Be("nyxid-auth updated");
+        _agent.State.LastOutcome.Should().BeNull();
+        _agent.State.LastCheckAt.Should().BeNull();
+        _agent.State.LastSuccessAt.Should().BeNull();
+        _agent.State.ConsecutiveFailures.Should().Be(0);
+        _agent.State.RecentOutcomes.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Tick_InvokesExecutor_AndPersistsObservedOutcome()
     {
         await _agent.HandleConfigureAsync(new HealthProbeConfigureCommand

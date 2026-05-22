@@ -205,6 +205,11 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
     {
         var next = s.Clone();
         next.Spec = evt.Spec?.Clone();
+        next.LastOutcome = null;
+        next.LastCheckAt = null;
+        next.LastSuccessAt = null;
+        next.ConsecutiveFailures = 0;
+        next.RecentOutcomes.Clear();
         return next;
     }
 

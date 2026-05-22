@@ -229,7 +229,7 @@ public sealed class StatusDashboardManifest
         [
             HttpTarget(
                 slug: "responses-forward-team-01-nyxid-service",
-                name: "Responses -> Team 01 NyxID service",
+                name: "Responses -> Studio Team 01 NyxID service",
                 category: category,
                 url: $"{nyxBaseUrl}/api/v1/proxy/services",
                 expectedStatuses: "200",
@@ -242,7 +242,7 @@ public sealed class StatusDashboardManifest
                     "/\\{path\\}\"")),
             HttpTarget(
                 slug: "responses-forward-team-02-nyxid-proxy-models",
-                name: "Responses -> Team 02 NyxID proxy",
+                name: "Responses -> Studio Team 02 NyxID proxy",
                 category: category,
                 url: $"{nyxBaseUrl}/api/v1/proxy/s/{Uri.EscapeDataString(serviceSlug)}/v1/models",
                 expectedStatuses: "200",
@@ -252,7 +252,7 @@ public sealed class StatusDashboardManifest
                     expectedBodyRegex: """(?s)"data"\s*:""")),
             HttpTarget(
                 slug: "responses-forward-team-03-direct-responses",
-                name: "Responses -> Team 03 direct /v1/responses",
+                name: "Responses -> Studio Team 03 direct /v1/responses",
                 category: category,
                 url: $"{directBaseUrl}/v1/responses",
                 method: "POST",
@@ -265,7 +265,7 @@ public sealed class StatusDashboardManifest
                     forbiddenBodyContains: "event: response.failed")),
             HttpTarget(
                 slug: "responses-forward-team-04-route-policy",
-                name: "Responses -> Team 04 route policy",
+                name: "Responses -> Studio Team 04 route policy",
                 category: category,
                 url: $"{directBaseUrl}/api/scopes/{Uri.EscapeDataString(scopeId)}/chat-route-policy",
                 expectedStatuses: "200",
@@ -276,7 +276,7 @@ public sealed class StatusDashboardManifest
                     $$"""(?s)(?=.*"sourceKind"\s*:\s*"CHAT_SOURCE_KIND_NYX_RESPONSES")(?=.*"forwardToTeam")(?=.*"teamId"\s*:\s*"{{Regex.Escape(teamId)}}")(?=.*"endpointId"\s*:\s*"{{Regex.Escape(endpointId)}}").*""")),
             HttpTarget(
                 slug: "responses-forward-team-05-team-entry-member",
-                name: "Responses -> Team 05 team entry member",
+                name: "Responses -> Studio Team 05 team entry member",
                 category: category,
                 url: $"{directBaseUrl}/api/scopes/{Uri.EscapeDataString(scopeId)}/teams/{Uri.EscapeDataString(teamId)}",
                 expectedStatuses: "200",
@@ -287,7 +287,7 @@ public sealed class StatusDashboardManifest
                     $$"""(?s)(?=.*"teamId"\s*:\s*"{{Regex.Escape(teamId)}}")(?=.*"entryMemberId"\s*:\s*"{{Regex.Escape(memberId)}}").*""")),
             HttpTarget(
                 slug: "responses-forward-team-06-member-binding",
-                name: "Responses -> Team 06 member binding",
+                name: "Responses -> Studio Team 06 member binding",
                 category: category,
                 url: $"{directBaseUrl}/api/scopes/{Uri.EscapeDataString(scopeId)}/members/{Uri.EscapeDataString(memberId)}/binding",
                 expectedStatuses: "200",
@@ -295,10 +295,12 @@ public sealed class StatusDashboardManifest
                 timeoutMs: timeoutMs,
                 parameters: AuthenticatedParameters(authHeader,
                     expectedBodyRegex:
-                    $$"""(?s)(?=.*"memberId"\s*:\s*"{{Regex.Escape(memberId)}}")(?=.*"publishedServiceId"\s*:\s*"{{Regex.Escape(publishedServiceId)}}")(?=.*"status"\s*:\s*"succeeded").*""")),
+                    "\"lastBinding\"\\s*:\\s*\\{(?=[^{}]*\"publishedServiceId\"\\s*:\\s*\"" +
+                    Regex.Escape(publishedServiceId) +
+                    "\")[^{}]*\\}")),
             HttpTarget(
                 slug: "responses-forward-team-07-direct-team-invoke",
-                name: "Responses -> Team 07 direct team invoke",
+                name: "Responses -> Studio Team 07 direct team invoke",
                 category: category,
                 url: $"{directBaseUrl}/api/scopes/{Uri.EscapeDataString(scopeId)}/teams/{Uri.EscapeDataString(teamId)}/invoke/{Uri.EscapeDataString(endpointId)}:stream",
                 method: "POST",
@@ -311,7 +313,7 @@ public sealed class StatusDashboardManifest
                     forbiddenBodyContains: "runError")),
             HttpTarget(
                 slug: "responses-forward-team-08-nyxid-proxy-e2e",
-                name: "Responses -> Team 08 NyxID proxy e2e",
+                name: "Responses -> Studio Team 08 NyxID proxy e2e",
                 category: category,
                 url: $"{nyxBaseUrl}/api/v1/proxy/s/{Uri.EscapeDataString(serviceSlug)}/v1/responses",
                 method: "POST",

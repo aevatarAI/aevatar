@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Aevatar.GAgents.StatusDashboard.Configuration;
 using FluentAssertions;
 
@@ -91,6 +92,21 @@ public sealed class StatusDashboardManifestTests
         var nyxProxy = stages.Single(d => d.Slug == "responses-forward-team-02-nyxid-proxy-models");
         nyxProxy.Parameters["Url"].Should().Be("https://nyx.example/api/v1/proxy/s/aevatar/v1/models");
         nyxProxy.Parameters["ExpectedBodyRegex"].Should().Contain("\"data\"");
+
+        var memberBinding = stages.Single(d => d.Slug == "responses-forward-team-06-member-binding");
+        memberBinding.DisplayName.Should().Be("Responses -> Studio Team 06 member binding");
+        memberBinding.Parameters["ExpectedBodyRegex"].Should().Contain("\"lastBinding\"");
+        memberBinding.Parameters["ExpectedBodyRegex"].Should().Contain("member-member-1");
+        memberBinding.Parameters["ExpectedBodyRegex"].Should().NotContain("\"status\"");
+        Regex.IsMatch(
+                """
+                {"lastBinding":{"publishedServiceId":"member-member-1","revisionId":"rev-1","implementationKind":"gagent"},"currentBindingRun":{"status":"failed"}}
+                """,
+                memberBinding.Parameters["ExpectedBodyRegex"],
+                RegexOptions.None,
+                TimeSpan.FromMilliseconds(250))
+            .Should()
+            .BeTrue();
 
         var e2e = stages.Single(d => d.Slug == "responses-forward-team-08-nyxid-proxy-e2e");
         e2e.Parameters["Url"].Should().Be("https://nyx.example/api/v1/proxy/s/aevatar/v1/responses");
