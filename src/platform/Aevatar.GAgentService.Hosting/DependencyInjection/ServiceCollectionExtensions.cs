@@ -64,6 +64,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ILlmSessionRegistrationPort, LlmSessionRegistrationAdapter>();
         services.TryAddSingleton<IResponsesAgentToolStateCommandPort, ResponsesAgentToolStateCommandAdapter>();
         services.TryAddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
+        services.TryAddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
+        services.TryAddSingleton<IMessagesCommandFacade, MessagesCommandFacade>();
         services.TryAddSingleton<IServiceInvocationDispatcher, DefaultServiceInvocationDispatcher>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, StaticServiceImplementationAdapter>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, ScriptingServiceImplementationAdapter>());

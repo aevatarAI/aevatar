@@ -695,6 +695,7 @@ public sealed class MainnetMessagesEndpointsTests
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(sessions);
         builder.Services.AddSingleton<ILlmSessionQueryPort>(sessions);
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
+        builder.Services.AddSingleton<IMessagesCommandFacade, MessagesCommandFacade>();
         builder.Services.AddSingleton(callerScopeResolver ?? new MessagesStubCallerScopeResolver());
         builder.Services.AddSingleton(chatRoutePolicyQueryPort ?? MessagesStaticChatRoutePolicyQueryPort.ForSnapshot(
             new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
@@ -747,7 +748,6 @@ public sealed class MainnetMessagesEndpointsTests
     {
         public Task<ResponsesCallerScope> ResolveAsync(
             string nyxIdAccessToken,
-            HttpContext http,
             CancellationToken ct = default) =>
             Task.FromResult(new ResponsesCallerScope("user-1", "user-1", LlmSessionOriginKind.ApiKey));
     }

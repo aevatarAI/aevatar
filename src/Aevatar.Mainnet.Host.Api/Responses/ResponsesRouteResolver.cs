@@ -1,3 +1,4 @@
+using Aevatar.GAgentService.Application.Responses;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.Extensions.Logging;
 
@@ -9,14 +10,6 @@ namespace Aevatar.Mainnet.Host.Api.Responses;
 /// that <see cref="Aevatar.AI.LLMProviders.NyxId.NyxIdLLMProvider"/> can route. Returns
 /// <c>null</c> when the slug isn't a known service — caller falls back to default gateway
 /// routing (treats the whole string as a bare model name).</summary>
-internal interface IResponsesRouteResolver
-{
-    Task<string?> ResolveRouteValueAsync(
-        string slug,
-        string bearerToken,
-        CancellationToken ct);
-}
-
 internal sealed class ResponsesRouteResolver : IResponsesRouteResolver
 {
     // Refactor (iter26/cluster-026-responses-route-user-catalog-cache):

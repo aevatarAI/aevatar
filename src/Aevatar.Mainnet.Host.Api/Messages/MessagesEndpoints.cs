@@ -1,20 +1,10 @@
-using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
-using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.ChatRouting.Core;
-using Aevatar.GAgentService.Abstractions;
-using Aevatar.GAgentService.Abstractions.Ports;
-using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Application.Responses;
-using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Mainnet.Host.Api.Responses;
-using Google.Protobuf.WellKnownTypes;
-using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Mainnet.Host.Api.Messages;
 
@@ -41,39 +31,64 @@ internal static partial class MessagesApiEndpoints
     internal static async Task<IResult> HandleCreateMessageAsync(
         HttpContext http,
         MessagesCreateRequest request,
+        [FromServices] IMessagesCommandFacade commandFacade,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(commandFacade);
 
         var bearerToken = ExtractBearerToken(http);
         if (string.IsNullOrWhiteSpace(bearerToken))
             return ToErrorResult(StatusCodes.Status401Unauthorized, "authentication_error", "Authorization bearer token is required.");
 
-        var facade = ActivatorUtilities.CreateInstance<MessagesCommandFacade>(http.RequestServices);
-        return await facade.CreateAsync(http, request, bearerToken, ct);
+        var result = await commandFacade.CreateAsync(ToCommandRequest(request), bearerToken, ct);
+        if (result.Error is not null)
+            return ToErrorResult(result.Error.StatusCode, result.Error.Code, result.Error.Message);
+
+        if (result.StreamPlan is not null)
+        {
+            await WriteStreamingMessageAsync(
+                http.Response,
+                commandFacade,
+                result.StreamPlan,
+                ct);
+            return Results.Empty;
+        }
+
+        if (result.Completed is not null)
+        {
+            return Results.Json(
+                BuildCompletedMessage(result.Completed.Normalized, result.Completed.Completion),
+                JsonOptions,
+                statusCode: StatusCodes.Status200OK);
+        }
+
+        throw new InvalidOperationException("Messages command facade returned no result.");
     }
 
-    private static string BuildRouteContentHint(NormalizedMessagesRequest normalized) =>
-        normalized.ChatMessages
-            .LastOrDefault(static message => string.Equals(message.Role, "user", StringComparison.OrdinalIgnoreCase))
-            ?.Content
-        ?? normalized.ChatMessages.LastOrDefault()?.Content
-        ?? string.Empty;
+    private static MessagesCommandRequest ToCommandRequest(MessagesCreateRequest request) =>
+        new(
+            request.Model,
+            request.MaxTokens,
+            request.System,
+            request.Messages,
+            request.Temperature,
+            request.TopP,
+            request.TopK,
+            request.StopSequences,
+            request.Stream,
+            request.Tools,
+            request.ToolChoice,
+            request.Metadata);
 
     private static async Task WriteStreamingMessageAsync(
         HttpResponse response,
-        ILLMProviderFactory providerFactory,
-        IResponsesCompletionApplicationService completionService,
-        ILlmSessionRegistrationPort sessionRegistrationPort,
-        ILogger logger,
-        LlmSessionRegistrationResult session,
-        LLMRequest llmRequest,
-        IReadOnlyDictionary<string, string> toolContextMetadata,
-        NormalizedMessagesRequest normalized,
-        ResponsesToolClassification toolClassification,
+        IMessagesCommandFacade commandFacade,
+        MessagesCreateCommandPlan plan,
         CancellationToken ct)
     {
+        var normalized = plan.Normalized;
         response.StatusCode = StatusCodes.Status200OK;
         response.ContentType = "text/event-stream; charset=utf-8";
         response.Headers.CacheControl = "no-store";
@@ -82,153 +97,118 @@ internal static partial class MessagesApiEndpoints
         await response.StartAsync(ct);
 
         var textStarted = false;
-        TokenUsage? usage = null;
-
-        try
+        await WriteSseFrameAsync(response, "message_start", new
         {
-            var provider = providerFactory.GetDefault();
-            await WriteSseFrameAsync(response, "message_start", new
+            type = "message_start",
+            message = new
             {
-                type = "message_start",
-                message = new
-                {
-                    id = normalized.MessageId,
-                    type = "message",
-                    role = "assistant",
-                    model = normalized.Model,
-                    content = Array.Empty<object>(),
-                    stop_reason = (string?)null,
-                    stop_sequence = (string?)null,
-                    usage = new { input_tokens = 0, output_tokens = 0 },
-                },
-            }, ct);
+                id = normalized.MessageId,
+                type = "message",
+                role = "assistant",
+                model = normalized.Model,
+                content = Array.Empty<object>(),
+                stop_reason = (string?)null,
+                stop_sequence = (string?)null,
+                usage = new { input_tokens = 0, output_tokens = 0 },
+            },
+        }, ct);
 
-            var completion = await completionService.StreamAsync(
-                provider,
-                llmRequest,
-                toolContextMetadata,
-                toolClassification,
-                async (delta, token) =>
+        var completion = await commandFacade.StreamAsync(
+            plan,
+            async (delta, token) =>
+            {
+                if (string.IsNullOrEmpty(delta))
+                    return;
+                if (!textStarted)
                 {
-                    if (string.IsNullOrEmpty(delta))
-                        return;
-                    if (!textStarted)
+                    textStarted = true;
+                    await WriteSseFrameAsync(response, "content_block_start", new
                     {
-                        textStarted = true;
-                        await WriteSseFrameAsync(response, "content_block_start", new
-                        {
-                            type = "content_block_start",
-                            index = 0,
-                            content_block = new { type = "text", text = string.Empty },
-                        }, token);
-                    }
-                    await WriteSseFrameAsync(response, "content_block_delta", new
-                    {
-                        type = "content_block_delta",
+                        type = "content_block_start",
                         index = 0,
-                        delta = new { type = "text_delta", text = delta },
+                        content_block = new { type = "text", text = string.Empty },
                     }, token);
-                },
-                ct);
-            usage = completion.Usage;
-
-            if (textStarted)
-            {
-                await WriteSseFrameAsync(response, "content_block_stop", new
-                {
-                    type = "content_block_stop",
-                    index = 0,
-                }, ct);
-            }
-
-            var nextBlockIndex = textStarted ? 1 : 0;
-            foreach (var toolCall in completion.ForwardedToolCalls)
-            {
-                using var argsDoc = SafeParseJson(toolCall.ArgumentsJson);
-                await WriteSseFrameAsync(response, "content_block_start", new
-                {
-                    type = "content_block_start",
-                    index = nextBlockIndex,
-                    content_block = new
-                    {
-                        type = "tool_use",
-                        id = toolCall.Id,
-                        name = toolCall.Name,
-                        input = new { },
-                    },
-                }, ct);
+                }
                 await WriteSseFrameAsync(response, "content_block_delta", new
                 {
                     type = "content_block_delta",
-                    index = nextBlockIndex,
-                    delta = new
-                    {
-                        type = "input_json_delta",
-                        partial_json = toolCall.ArgumentsJson ?? "{}",
-                    },
-                }, ct);
-                await WriteSseFrameAsync(response, "content_block_stop", new
-                {
-                    type = "content_block_stop",
-                    index = nextBlockIndex,
-                }, ct);
-                nextBlockIndex++;
-            }
+                    index = 0,
+                    delta = new { type = "text_delta", text = delta },
+                }, token);
+            },
+            ct);
 
-            var stopReason = completion.ForwardedToolCalls.Count > 0 ? "tool_use" : "end_turn";
-            await WriteSseFrameAsync(response, "message_delta", new
+        if (completion.Error is not null)
+        {
+            await WriteSseFrameAsync(response, "error", new
             {
-                type = "message_delta",
+                type = "error",
+                error = new { type = completion.Error.Code, message = completion.Error.Message },
+            }, CancellationToken.None);
+            return;
+        }
+
+        if (textStarted)
+        {
+            await WriteSseFrameAsync(response, "content_block_stop", new
+            {
+                type = "content_block_stop",
+                index = 0,
+            }, ct);
+        }
+
+        var nextBlockIndex = textStarted ? 1 : 0;
+        foreach (var toolCall in completion.ForwardedToolCalls)
+        {
+            await WriteSseFrameAsync(response, "content_block_start", new
+            {
+                type = "content_block_start",
+                index = nextBlockIndex,
+                content_block = new
+                {
+                    type = "tool_use",
+                    id = toolCall.Id,
+                    name = toolCall.Name,
+                    input = new { },
+                },
+            }, ct);
+            await WriteSseFrameAsync(response, "content_block_delta", new
+            {
+                type = "content_block_delta",
+                index = nextBlockIndex,
                 delta = new
                 {
-                    stop_reason = stopReason,
-                    stop_sequence = (string?)null,
-                },
-                usage = new
-                {
-                    output_tokens = usage?.CompletionTokens ?? 0,
+                    type = "input_json_delta",
+                    partial_json = toolCall.ArgumentsJson ?? "{}",
                 },
             }, ct);
-
-            await WriteSseFrameAsync(response, "message_stop", new
+            await WriteSseFrameAsync(response, "content_block_stop", new
             {
-                type = "message_stop",
+                type = "content_block_stop",
+                index = nextBlockIndex,
             }, ct);
+            nextBlockIndex++;
+        }
 
-            await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Completed, ct);
-        }
-        catch (NyxIdAuthenticationRequiredException ex)
+        var stopReason = completion.ForwardedToolCalls.Count > 0 ? "tool_use" : "end_turn";
+        await WriteSseFrameAsync(response, "message_delta", new
         {
-            await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Failed, CancellationToken.None);
-            await WriteSseFrameAsync(response, "error", new
+            type = "message_delta",
+            delta = new
             {
-                type = "error",
-                error = new { type = "authentication_error", message = ex.Message },
-            }, CancellationToken.None);
-        }
-        catch (NyxIdUpstreamException ex)
-        {
-            await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Failed, CancellationToken.None);
-            await WriteSseFrameAsync(response, "error", new
+                stop_reason = stopReason,
+                stop_sequence = (string?)null,
+            },
+            usage = new
             {
-                type = "error",
-                error = new { type = ex.Kind.ToString().ToLowerInvariant(), message = ex.Message },
-            }, CancellationToken.None);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                output_tokens = completion.Usage?.CompletionTokens ?? 0,
+            },
+        }, ct);
+
+        await WriteSseFrameAsync(response, "message_stop", new
         {
-            await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Cancelled, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Failed, CancellationToken.None);
-            logger.LogError(ex, "Streaming /v1/messages {MessageId} failed", normalized.MessageId);
-            await WriteSseFrameAsync(response, "error", new
-            {
-                type = "error",
-                error = new { type = "api_error", message = "Internal server error." },
-            }, CancellationToken.None);
-        }
+            type = "message_stop",
+        }, ct);
     }
 
     private static object BuildCompletedMessage(
@@ -268,42 +248,6 @@ internal static partial class MessagesApiEndpoints
                 output_tokens = completion.Usage?.CompletionTokens ?? 0,
             },
         };
-    }
-
-    private static LlmSessionRecord BuildSessionRecord(
-        NormalizedMessagesRequest normalized,
-        ResponsesCallerScope callerScope,
-        DateTimeOffset createdAt)
-    {
-        return new LlmSessionRecord
-        {
-            ResponseId = normalized.MessageId,
-            ScopeId = callerScope.ScopeId,
-            OwnerSubject = callerScope.OwnerSubject,
-            OriginKind = callerScope.OriginKind,
-            PreviousResponseId = string.Empty,
-            Status = LlmSessionStatus.Accepted,
-            CreatedAt = Timestamp.FromDateTime(createdAt.UtcDateTime),
-            UpdatedAt = Timestamp.FromDateTime(createdAt.UtcDateTime),
-            Ttl = Duration.FromTimeSpan(TimeSpan.FromHours(24)),
-        };
-    }
-
-    private static async Task TryUpdateSessionStatusAsync(
-        ILlmSessionRegistrationPort port,
-        ILogger logger,
-        LlmSessionRegistrationResult session,
-        LlmSessionStatus status,
-        CancellationToken ct)
-    {
-        try
-        {
-            await port.UpdateStatusAsync(session.ActorId, session.ResponseId, status, ct);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to update llm session {ResponseId} to {Status}", session.ResponseId, status);
-        }
     }
 
     private static async Task WriteSseFrameAsync(
