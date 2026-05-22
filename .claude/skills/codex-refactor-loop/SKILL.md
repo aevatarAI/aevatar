@@ -506,7 +506,7 @@ Create top-level TaskCreate items: audit / dispatch / merge.
      --timeout 3600
    ```
 
-   Use Bash with `run_in_background: true`. 3600s (60 min) is the project-wide minimum for codex jobs (see CLAUDE.md "Codex CLI 调用规范"); audit may legitimately need most of it to complete the coverage manifest.
+   Use Bash with `run_in_background: true`. 3600s (60 min) is the project-wide minimum for codex jobs (see this skill's spawn wrapper rules); audit may legitimately need most of it to complete the coverage manifest.
 
 4. Schedule wakeup 1500–1800s as safety net (task notification is primary wake).
 5. **End turn.**
@@ -1841,7 +1841,7 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 
 **约束**:
 - 问题 ASCII 图**画当前架构的违反点**——数据流 / 状态归属 / 调用链 / 生命周期等;**不画**reflector / round 路径(那是过程,不是问题)
-- 用 box-drawing(`─│┌┐└┘▶▼◀▲`)+ 空格对齐;**禁用 mermaid**(per CLAUDE.md "GitHub issue/PR comment mermaid 禁忌")
+- 用 box-drawing(`─│┌┐└┘▶▼◀▲`)+ 空格对齐;**禁用 mermaid**(per this skill's GitHub banner rendering rules)
 - 历史 round 信息**降级为表格一行**(`r1+reflector+r2 仍 escalate`),不占主视觉
 - 决策选项 2-4 个,每个 Plan / 影响 / Tradeoff 三栏(file:line 级别)
 - "为什么不是机械重构能解"段是**根因**而非 *recap*(maintainer 看一眼知道为什么 AI 不接手)
