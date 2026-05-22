@@ -63,7 +63,6 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
             "direct",
             createdActorIds: [],
             projectionPort,
-            projectionPort,
             new NoOpWorkflowRunActorPort(),
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
@@ -100,17 +99,9 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
     }
 
     private sealed class NoOpProjectionPort
-        : IWorkflowExecutionProjectionPort,
-          IWorkflowExecutionMaterializationActivationPort
+        : IWorkflowExecutionProjectionPort
     {
         public bool ProjectionEnabled => true;
-
-        public Task<bool> ActivateAsync(string actorId, CancellationToken ct = default)
-        {
-            _ = actorId;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(true);
-        }
 
         public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
             string rootActorId,
@@ -123,6 +114,14 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
             Aevatar.CQRS.Core.Abstractions.Streaming.IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default) =>
             Task.FromResult<IAsyncDisposable?>(null);
+
+        public Task<EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>?> AttachExistingActorProjectionAsync(
+            string rootActorId,
+            string commandId,
+            Aevatar.CQRS.Core.Abstractions.Streaming.IEventSink<WorkflowRunEventEnvelope> sink,
+            CancellationToken ct = default) =>
+            Task.FromResult<EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>?>(null);
+
         public Task DetachLiveSinkAsync(
             IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default) =>

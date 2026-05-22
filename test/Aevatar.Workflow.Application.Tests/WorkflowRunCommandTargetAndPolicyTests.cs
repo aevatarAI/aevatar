@@ -40,7 +40,6 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
             "direct",
             [],
             projectionPort,
-            projectionPort,
             new FakeWorkflowRunActorPort(),
             durableCompletionResolver: null!);
 
@@ -384,31 +383,29 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
             "direct",
             createdActorIds ?? [],
             projectionPort,
-            projectionPort,
             actorPort,
             new WorkflowRunDurableCompletionResolver(currentStateQueryPort));
     }
 
     private sealed class FakeProjectionPort
-        : IWorkflowExecutionProjectionPort,
-          IWorkflowExecutionMaterializationActivationPort
+        : IWorkflowExecutionProjectionPort
     {
         public bool ProjectionEnabled => true;
         public Exception? DetachException { get; set; }
         public Exception? ReleaseException { get; set; }
         public List<string> Events { get; } = [];
 
-        public Task<bool> ActivateAsync(string actorId, CancellationToken ct = default)
-        {
-            _ = actorId;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(true);
-        }
-
         public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(string rootActorId, string commandId, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task<IAsyncDisposable?> AttachLiveSinkAsync(IWorkflowExecutionProjectionLease lease, IEventSink<WorkflowRunEventEnvelope> sink, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>?> AttachExistingActorProjectionAsync(
+            string rootActorId,
+            string commandId,
+            IEventSink<WorkflowRunEventEnvelope> sink,
+            CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task DetachLiveSinkAsync(IAsyncDisposable? liveSinkLease, CancellationToken ct = default)

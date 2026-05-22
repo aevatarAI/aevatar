@@ -189,7 +189,6 @@ public sealed class WorkflowRunFallbackCoverageTests
             workflowName,
             [actorId],
             projectionPort,
-            projectionPort,
             actorPort,
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         target.BindLiveObservation(
@@ -356,17 +355,9 @@ public sealed class WorkflowRunFallbackCoverageTests
     }
 
     private sealed class FakeProjectionPort
-        : IWorkflowExecutionProjectionPort,
-          IWorkflowExecutionMaterializationActivationPort
+        : IWorkflowExecutionProjectionPort
     {
         public bool ProjectionEnabled => true;
-
-        public Task<bool> ActivateAsync(string actorId, CancellationToken ct = default)
-        {
-            _ = actorId;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(true);
-        }
 
         public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
             string rootActorId,
@@ -379,6 +370,14 @@ public sealed class WorkflowRunFallbackCoverageTests
             IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default) =>
             Task.FromResult<IAsyncDisposable?>(null);
+
+        public Task<EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>?> AttachExistingActorProjectionAsync(
+            string rootActorId,
+            string commandId,
+            IEventSink<WorkflowRunEventEnvelope> sink,
+            CancellationToken ct = default) =>
+            Task.FromResult<EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>?>(null);
+
         public Task DetachLiveSinkAsync(
             IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default) =>
