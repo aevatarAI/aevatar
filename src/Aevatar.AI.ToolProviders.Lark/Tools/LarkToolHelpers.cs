@@ -22,8 +22,10 @@ internal static class LarkMessageIdResolver
             return null;
         }
 
-        var currentMessageId = AgentToolRequestContext.TryGet(ChannelPlatformMessageIdKey) ??
-                               AgentToolRequestContext.TryGet(ChannelMessageIdKey);
+        var currentMessageId = AgentToolRequestContext.ChannelPlatformMessageId ??
+                               AgentToolRequestContext.ChannelMessageId ??
+                               AgentToolRequestContext.TryGetExternalMetadata(ChannelPlatformMessageIdKey) ??
+                               AgentToolRequestContext.TryGetExternalMetadata(ChannelMessageIdKey);
         if (TryValidate(currentMessageId, out var current, out _))
         {
             usedCurrentMessage = true;

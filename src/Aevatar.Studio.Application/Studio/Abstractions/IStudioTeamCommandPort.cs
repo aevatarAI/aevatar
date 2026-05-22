@@ -28,4 +28,15 @@ public interface IStudioTeamCommandPort
         string scopeId,
         string teamId,
         CancellationToken ct = default);
+
+    Task SetEntryMemberAsync(
+        string scopeId,
+        string teamId,
+        string memberId,
+        CancellationToken ct = default);
+
+    Task ClearEntryMemberAsync(
+        string scopeId,
+        string teamId,
+        CancellationToken ct = default);
 }

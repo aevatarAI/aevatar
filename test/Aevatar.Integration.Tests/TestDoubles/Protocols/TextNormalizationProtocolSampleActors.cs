@@ -261,7 +261,7 @@ public sealed class TextNormalizationScriptingProtocolGAgent : GAgentBase<TextNo
         var lease = await _projectionPort.EnsureActorProjectionAsync(runtimeActorId, CancellationToken.None)
             ?? throw new InvalidOperationException("Script projection lease is required for text normalization sample.");
         await using var sink = new EventChannel<EventEnvelope>(capacity: 16);
-        await _projectionPort.AttachLiveSinkAsync(lease, sink, CancellationToken.None);
+        var liveSinkLease = await _projectionPort.AttachLiveSinkAsync(lease, sink, CancellationToken.None);
 
         try
         {
@@ -291,7 +291,7 @@ public sealed class TextNormalizationScriptingProtocolGAgent : GAgentBase<TextNo
         }
         finally
         {
-            await _projectionPort.DetachLiveSinkAsync(lease, sink, CancellationToken.None);
+            await _projectionPort.DetachLiveSinkAsync(liveSinkLease, CancellationToken.None);
             await _projectionPort.ReleaseActorProjectionAsync(lease, CancellationToken.None);
         }
     }

@@ -22,6 +22,8 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
     private TState _state = new();
     private IServiceProvider? _applierServiceProvider;
     private IReadOnlyList<IStateEventApplier<TState>> _appliers = [];
+    private IServiceProvider? _publicationHookServiceProvider;
+    private IReadOnlyList<ICommittedStatePublicationHook> _publicationHooks = [];
 
     /// <summary>Mutable agent state, writable only in EventHandler/OnActivateAsync scopes.</summary>
     public TState State
@@ -234,16 +236,53 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
     {
         for (var i = 0; i < commitResult.CommittedEvents.Count; i++)
         {
+            var published = new CommittedStateEventPublished
+            {
+                StateEvent = commitResult.CommittedEvents[i].Clone(),
+                StateRoot = Any.Pack(_state),
+            };
+            const ObserverAudience audience = ObserverAudience.CommittedFacts;
+            var context = new CommittedStatePublicationContext
+            {
+                ActorId = Id,
+                ActorType = GetType(),
+                Published = published,
+                SourceEnvelope = ActiveInboundEnvelope,
+                Audience = audience,
+            };
+
+            // Refactor (iter18/cluster-006):
+            //   Old pattern: command-path projection activation facade with new actor/lifecycle phase
+            //   New principle: committed-state publication hook activates existing projection scopes; no new actor/lifecycle phase
+            foreach (var hook in ResolveCommittedStatePublicationHooks())
+                await hook.BeforePublishAsync(context, ct);
+
             await CommittedStateEventPublisher.PublishAsync(
-                new CommittedStateEventPublished
-                {
-                    StateEvent = commitResult.CommittedEvents[i].Clone(),
-                    StateRoot = Any.Pack(_state),
-                },
-                ObserverAudience.CommittedFacts,
+                published,
+                audience,
                 ct,
                 ActiveInboundEnvelope);
         }
+    }
+
+    private IReadOnlyList<ICommittedStatePublicationHook> ResolveCommittedStatePublicationHooks()
+    {
+        if (ReferenceEquals(_publicationHookServiceProvider, Services))
+            return _publicationHooks;
+
+        _publicationHookServiceProvider = Services;
+        if (Services == null)
+        {
+            _publicationHooks = [];
+            return _publicationHooks;
+        }
+
+        _publicationHooks =
+            Services.GetService(typeof(IEnumerable<ICommittedStatePublicationHook>))
+                is IEnumerable<ICommittedStatePublicationHook> hooks
+                    ? hooks.ToArray()
+                    : [];
+        return _publicationHooks;
     }
 
 }

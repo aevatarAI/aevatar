@@ -44,6 +44,9 @@ public sealed class NyxIdRelayAuthValidatorTests
 
         result.Succeeded.Should().BeTrue();
         result.RelayApiKeyId.Should().Be("api-key-123");
+        result.CallbackJti.Should().Be("corr-1");
+        result.CallbackObservedAtUnixMs.Should().BeGreaterThan(0);
+        result.CallbackReplayExpiresAtUnixMs.Should().BeGreaterThan(result.CallbackObservedAtUnixMs);
         result.UserAccessToken.Should().Be("user-token-1");
         result.Principal.Should().NotBeNull();
         result.Principal!.Claims.Should().Contain(claim =>
@@ -426,14 +429,13 @@ public sealed class NyxIdRelayAuthValidatorTests
     }
 
     [Fact]
-    public async Task ValidateAsync_ShouldRejectReplayWithinWindow()
+    public async Task ValidateAsync_ShouldAcceptExactReplayAndReturnSameReplayIdentity()
     {
         using var rsa = RSA.Create(2048);
         var key = CreateSigningKey(rsa, "kid-1");
         var validator = CreateValidator(
             new NyxRelayOidcDocumentHandler(CreateDiscoveryJson(Issuer, $"{Issuer}/jwks"), () => CreateJwksJson(key)),
-            Issuer,
-            replayGuard: new NyxIdRelayReplayGuard());
+            Issuer);
         var request = CreateRelayRequest(key, messageId: "msg-replay", correlationId: "corr-replay");
 
         var first = await validator.ValidateAsync(
@@ -448,8 +450,11 @@ public sealed class NyxIdRelayAuthValidatorTests
             CancellationToken.None);
 
         first.Succeeded.Should().BeTrue();
-        second.Succeeded.Should().BeFalse();
-        second.ErrorCode.Should().Be("callback_jwt_replay_detected");
+        second.Succeeded.Should().BeTrue();
+        first.RelayApiKeyId.Should().Be("api-key-123");
+        first.CallbackJti.Should().Be("corr-replay");
+        second.RelayApiKeyId.Should().Be(first.RelayApiKeyId);
+        second.CallbackJti.Should().Be(first.CallbackJti);
     }
 
     [Fact]
@@ -459,8 +464,7 @@ public sealed class NyxIdRelayAuthValidatorTests
         var key = CreateSigningKey(rsa, "kid-1");
         var validator = CreateValidator(
             new NyxRelayOidcDocumentHandler(CreateDiscoveryJson(Issuer, $"{Issuer}/jwks"), () => CreateJwksJson(key)),
-            Issuer,
-            replayGuard: new NyxIdRelayReplayGuard());
+            Issuer);
         var firstRequest = CreateRelayRequest(key, messageId: "msg-retry", correlationId: "jti-retry-1");
         var retryRequest = CreateRelayRequest(key, messageId: "msg-retry", correlationId: "jti-retry-2");
 
@@ -510,7 +514,6 @@ public sealed class NyxIdRelayAuthValidatorTests
     private static NyxIdRelayAuthValidator CreateValidator(
         HttpMessageHandler handler,
         string baseUrl,
-        INyxIdRelayReplayGuard? replayGuard = null,
         int kidMissRefreshCooldownSeconds = 0)
     {
         var factory = new NyxRelayTestHttpClientFactory(new HttpClient(handler));
@@ -524,8 +527,7 @@ public sealed class NyxIdRelayAuthValidatorTests
                 RequireMessageIdHeader = true,
                 JwksKidMissRefreshCooldownSeconds = kidMissRefreshCooldownSeconds,
             },
-            NullLogger<NyxIdRelayAuthValidator>.Instance,
-            replayGuard);
+            NullLogger<NyxIdRelayAuthValidator>.Instance);
     }
 
     private static RelayRequest CreateRelayRequest(

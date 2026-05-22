@@ -23,45 +23,12 @@ public sealed class ApplicationServiceGuardTests
     {
         Action nullDispatch = () => new ServiceCommandApplicationService(
             null!,
-            new NoOpServiceCommandTargetProvisioner(),
-            new NoOpCatalogProjectionPort(),
-            new NoOpRevisionProjectionPort(),
-            new NoOpProjectionPort(),
-            new NoOpProjectionPort(),
-            new NoOpProjectionPort(),
-            new NoOpProjectionPort());
+            new NoOpServiceCommandTargetProvisioner());
         Action nullProvisioner = () => new ServiceCommandApplicationService(
             new NoOpActorDispatchPort(),
-            null!,
-            new NoOpCatalogProjectionPort(),
-            new NoOpRevisionProjectionPort(),
-            new NoOpProjectionPort(),
-            new NoOpProjectionPort(),
-            new NoOpProjectionPort(),
-            new NoOpProjectionPort());
-        Action nullCatalogProjection = () => new ServiceCommandApplicationService(
-            new NoOpActorDispatchPort(),
-            new NoOpServiceCommandTargetProvisioner(),
-            null!,
-            new NoOpRevisionProjectionPort(),
-            new NoOpProjectionPort(),
-            new NoOpProjectionPort(),
-            new NoOpProjectionPort(),
-            new NoOpProjectionPort());
-        Action nullTrafficProjection = () => new ServiceCommandApplicationService(
-            new NoOpActorDispatchPort(),
-            new NoOpServiceCommandTargetProvisioner(),
-            new NoOpCatalogProjectionPort(),
-            new NoOpRevisionProjectionPort(),
-            new NoOpProjectionPort(),
-            new NoOpProjectionPort(),
-            new NoOpProjectionPort(),
             null!);
-
         nullDispatch.Should().Throw<ArgumentNullException>();
         nullProvisioner.Should().Throw<ArgumentNullException>();
-        nullCatalogProjection.Should().Throw<ArgumentNullException>();
-        nullTrafficProjection.Should().Throw<ArgumentNullException>();
     }
 
     [Fact]
@@ -171,20 +138,12 @@ public sealed class ApplicationServiceGuardTests
     {
         Action nullDispatch = () => new ServiceGovernanceCommandApplicationService(
             null!,
-            new NoOpGovernanceCommandTargetProvisioner(),
-            new NoOpGovernanceProjectionPort());
+            new NoOpGovernanceCommandTargetProvisioner());
         Action nullProvisioner = () => new ServiceGovernanceCommandApplicationService(
             new NoOpActorDispatchPort(),
-            null!,
-            new NoOpGovernanceProjectionPort());
-        Action nullProjectionPort = () => new ServiceGovernanceCommandApplicationService(
-            new NoOpActorDispatchPort(),
-            new NoOpGovernanceCommandTargetProvisioner(),
             null!);
-
         nullDispatch.Should().Throw<ArgumentNullException>();
         nullProvisioner.Should().Throw<ArgumentNullException>();
-        nullProjectionPort.Should().Throw<ArgumentNullException>();
     }
 
     [Fact]
@@ -338,25 +297,6 @@ public sealed class ApplicationServiceGuardTests
             Task.FromResult<ServiceRolloutCommandObservationSnapshot?>(null);
     }
 
-    private sealed class NoOpCatalogProjectionPort : IServiceCatalogProjectionPort
-    {
-        public Task EnsureProjectionAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
-    }
-
-    private sealed class NoOpRevisionProjectionPort : IServiceRevisionCatalogProjectionPort
-    {
-        public Task EnsureProjectionAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
-    }
-
-    private sealed class NoOpProjectionPort
-        : IServiceDeploymentCatalogProjectionPort,
-          IServiceServingSetProjectionPort,
-          IServiceRolloutProjectionPort,
-          IServiceTrafficViewProjectionPort
-    {
-        public Task EnsureProjectionAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
-    }
-
     private sealed class NoOpInvocationDispatcher : IServiceInvocationDispatcher
     {
         public Task<ServiceInvocationAcceptedReceipt> DispatchAsync(ServiceInvocationResolvedTarget target, ServiceInvocationRequest request, CancellationToken ct = default) =>
@@ -373,11 +313,6 @@ public sealed class ApplicationServiceGuardTests
     {
         public Task<ServiceConfigurationSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult<ServiceConfigurationSnapshot?>(null);
-    }
-
-    private sealed class NoOpGovernanceProjectionPort : IServiceConfigurationProjectionPort
-    {
-        public Task EnsureProjectionAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class NoOpInvokeAdmissionEvaluator : IInvokeAdmissionEvaluator

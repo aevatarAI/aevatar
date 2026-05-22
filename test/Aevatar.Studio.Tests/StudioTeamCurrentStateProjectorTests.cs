@@ -31,6 +31,7 @@ public sealed class StudioTeamCurrentStateProjectorTests
             DisplayName = "Team Alpha",
             Description = "alpha desc",
             LifecycleStage = StudioTeamLifecycleStage.Active,
+            EntryMemberId = "m-1",
             CreatedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow.AddDays(-1)),
             UpdatedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
         };
@@ -59,6 +60,7 @@ public sealed class StudioTeamCurrentStateProjectorTests
         written.Description.Should().Be("alpha desc");
         written.LifecycleStage.Should().Be(TeamLifecycleStageNames.Active);
         written.MemberCount.Should().Be(2);
+        written.EntryMemberId.Should().Be("m-1");
     }
 
     [Fact]

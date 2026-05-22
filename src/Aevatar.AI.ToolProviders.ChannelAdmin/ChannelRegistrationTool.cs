@@ -105,7 +105,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
+        var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
@@ -166,7 +166,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
     private static ToolScopeResolution ResolveToolScopeId(JsonElement args, bool required)
     {
         var explicitScopeId = NormalizeOptional(GetStr(args, "scope_id"));
-        var contextScopeId = NormalizeOptional(AgentToolRequestContext.TryGet("scope_id"));
+        var contextScopeId = NormalizeOptional(AgentToolRequestContext.ScopeId);
         if (explicitScopeId is not null &&
             contextScopeId is not null &&
             !string.Equals(explicitScopeId, contextScopeId, StringComparison.Ordinal))
@@ -349,7 +349,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
 
         var result = await provisioningService.RepairLocalMirrorAsync(
             new NyxLarkMirrorRepairRequest(
-                AccessToken: AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken) ?? string.Empty,
+                AccessToken: AgentToolRequestContext.NyxIdAccessToken ?? string.Empty,
                 RequestedRegistrationId: requestedRegistrationId?.Trim() ?? string.Empty,
                 ScopeId: scopeResolution.ScopeId!,
                 NyxProviderSlug: ResolveNyxProviderSlug(args),

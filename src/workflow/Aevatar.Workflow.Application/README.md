@@ -5,7 +5,7 @@
 ## 关键职责
 
 - 解析请求来源：registry / inline bundle / source actor
-- 生成 `WorkflowRunCommandTarget`
+- 生成 interaction 用 `WorkflowRunCommandTarget` 与 accepted-only 用 `WorkflowRunAcceptedCommandTarget`
 - 通过 `IWorkflowRunActorPort` 创建 definition actor 或 run actor
 - 为 run actor 建立 projection lifecycle 和 live sink
 - 生成 `WorkflowChatRunAcceptedReceipt`
@@ -31,19 +31,18 @@
 - inline workflow bundle 不注册固定 definition actor id；其 definition 只对当前 run 创建过程负责。
 - resolver 只向 infrastructure 传递“权威 definition actor id”或空值，不再传递语义不明的占位空 id。
 
-### WorkflowRunCommandTargetBinder
+### WorkflowRunObservationLifecycle
 
 - 调用 resolver 拿到 run actor
-- 若 resolver 本次新建了 actor，而 projection 不可用或 attach 失败，负责回滚这些新建 actor
-- 为 run actor 创建 `CommandContext`
+- 若 resolver 本次新建了 actor，而 observation lifecycle 启动失败，负责回滚这些新建 actor
 - 创建 `EventChannel<WorkflowRunEvent>`
 - 通过 projection lifecycle port 建立 run-isolated projection lease
-- 产出供 CQRS Core 继续 dispatch 的 `CommandTargetBindingResult`
+- 产出供 interaction service 判定是否继续 dispatch 的 `CommandObservationBindingResult`
 
 ### CQRS Interaction / Detached Dispatch
 
 - `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 走完整交互路径：驱动标准 CQRS interaction service、接收 accepted receipt、消费 sink 并持续输出 `WorkflowRunEventEnvelope`
-- `DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 走 accepted-only 路径：复用同一套 CQRS command skeleton，后台 drain session event stream，并在 `WorkflowRunCommandTarget.ReleaseAfterInteractionAsync(...)` 内统一做 release / cleanup
+- `DefaultCommandDispatchService<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>` 走 accepted-only 路径：复用 CQRS command skeleton，只返回 accepted receipt；该路径不建立 live sink，也不 drain session event stream
 - `WorkflowDirectFallbackPolicy` 通过 generic fallback decorator 同时包裹 interaction / dispatch 两条命令入口
 - 真正的 envelope 投递由 CQRS Core 的 `ActorCommandTargetDispatcher` 通过 `IActorDispatchPort` 完成，`IActorRuntime` 继续负责目标 actor 的获取/创建与拓扑
 - 状态快照由 `WorkflowRunFinalizeEmitter` 统一在收尾阶段补发
@@ -71,12 +70,14 @@
 Aevatar.Workflow.Application/
 ├── Runs/
 │   ├── WorkflowRunAcceptedReceiptFactory.cs
+│   ├── WorkflowRunAcceptedCommandTarget.cs
+│   ├── WorkflowRunAcceptedCommandTargetResolver.cs
 │   ├── WorkflowRunActorResolver.cs
 │   ├── WorkflowRunControlAcceptedReceiptFactory.cs
 │   ├── WorkflowRunControlCommandTarget.cs
 │   ├── WorkflowRunControlCommandTargetResolverBase.cs
 │   ├── WorkflowRunCommandTarget.cs
-│   ├── WorkflowRunCommandTargetBinder.cs
+│   ├── WorkflowRunObservationLifecycle.cs
 │   ├── WorkflowRunCommandTargetResolver.cs
 │   ├── WorkflowResumeCommandEnvelopeFactory.cs
 │   ├── WorkflowResumeCommandTargetResolver.cs

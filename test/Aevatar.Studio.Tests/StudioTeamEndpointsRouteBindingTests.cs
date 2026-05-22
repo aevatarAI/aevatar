@@ -32,8 +32,14 @@ public sealed class StudioTeamEndpointsRouteBindingTests
             .SelectMany(d => d.Endpoints)
             .ToList();
 
-        // Six routes: create, list, get, patch, archive, list-members.
-        endpoints.Should().HaveCount(6);
+        // Eight routes: create, list, get, patch, archive, entry set,
+        // entry clear, list-members. Team stream invoke is owned by
+        // GAgentService ScopeServiceEndpoints.
+        endpoints.Should().HaveCount(8);
+        endpoints.OfType<RouteEndpoint>()
+            .Select(x => x.RoutePattern.RawText)
+            .Should()
+            .NotContain("/api/scopes/{scopeId}/teams/{teamId}/invoke/{endpointId}:stream");
     }
 
     private sealed class NoOpTeamService : IStudioTeamService
@@ -57,6 +63,19 @@ public sealed class StudioTeamEndpointsRouteBindingTests
         public Task<StudioTeamSummaryResponse> ArchiveAsync(
             string scopeId, string teamId, CancellationToken ct = default) =>
             Task.FromException<StudioTeamSummaryResponse>(new NotImplementedException());
+
+        public Task SetEntryMemberAsync(
+            string scopeId,
+            string teamId,
+            SetStudioTeamEntryMemberRequest request,
+            CancellationToken ct = default) =>
+            Task.FromException(new NotImplementedException());
+
+        public Task ClearEntryMemberAsync(
+            string scopeId,
+            string teamId,
+            CancellationToken ct = default) =>
+            Task.FromException(new NotImplementedException());
     }
 
     private sealed class NoOpMemberServiceForTeam : IStudioMemberService

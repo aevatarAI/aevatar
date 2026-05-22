@@ -36,6 +36,7 @@ internal sealed class GAgentApprovalCommandTarget
     public string SessionId { get; private set; } = string.Empty;
     public IGAgentDraftRunProjectionLease? ProjectionLease { get; private set; }
     public IGAgentRunTerminalProjectionLease? TerminalProjectionLease { get; private set; }
+    public IAsyncDisposable? LiveSinkLease { get; private set; }
     public IEventSink<AGUIEvent>? LiveSink { get; private set; }
 
     public void BindTerminalProjection(IGAgentRunTerminalProjectionLease? lease)
@@ -45,10 +46,15 @@ internal sealed class GAgentApprovalCommandTarget
 
     public void BindLiveObservation(
         IGAgentDraftRunProjectionLease lease,
+        IAsyncDisposable? liveSinkLease,
         IEventSink<AGUIEvent> sink,
         string sessionId)
     {
+        // Refactor (iter25/cluster-002-observation-lifecycle-core):
+        //   Old pattern: command preparation could attach projection/session leases and mix read-side observation into dispatch admission.
+        //   New principle: live observation is an explicit interaction phase that starts before dispatch; PrepareAsync and dispatch-only callers stay free of read-side lifecycle work
         ProjectionLease = lease ?? throw new ArgumentNullException(nameof(lease));
+        LiveSinkLease = liveSinkLease;
         LiveSink = sink ?? throw new ArgumentNullException(nameof(sink));
         SessionId = sessionId;
     }
@@ -81,10 +87,12 @@ internal sealed class GAgentApprovalCommandTarget
             {
                 await _projectionPort.DetachReleaseAndDisposeAsync(
                     projectionLease,
+                    LiveSinkLease,
                     sink,
                     null,
                     ct);
                 ProjectionLease = null;
+                LiveSinkLease = null;
                 LiveSink = null;
             }
             catch (Exception ex)
@@ -100,6 +108,7 @@ internal sealed class GAgentApprovalCommandTarget
                 {
                     sink.Complete();
                     await sink.DisposeAsync();
+                    LiveSinkLease = null;
                     LiveSink = null;
                 }
                 catch (Exception ex)
@@ -114,6 +123,7 @@ internal sealed class GAgentApprovalCommandTarget
                 {
                     await _projectionPort.ReleaseActorProjectionAsync(projectionLease, ct);
                     ProjectionLease = null;
+                    LiveSinkLease = null;
                 }
                 catch (Exception ex)
                 {
@@ -176,13 +186,13 @@ internal sealed class GAgentApprovalCommandTargetResolver
     }
 }
 
-internal sealed class GAgentApprovalCommandTargetBinder
-    : ICommandTargetBinder<GAgentApprovalCommand, GAgentApprovalCommandTarget, GAgentApprovalStartError>
+internal sealed class GAgentApprovalObservationLifecycle
+    : ICommandObservationLifecycle<GAgentApprovalCommand, GAgentApprovalCommandTarget, GAgentApprovalAcceptedReceipt, GAgentApprovalStartError>
 {
     private readonly IGAgentDraftRunProjectionPort _projectionPort;
     private readonly IGAgentRunTerminalProjectionPort _terminalProjectionPort;
 
-    public GAgentApprovalCommandTargetBinder(
+    public GAgentApprovalObservationLifecycle(
         IGAgentDraftRunProjectionPort projectionPort,
         IGAgentRunTerminalProjectionPort terminalProjectionPort)
     {
@@ -190,16 +200,19 @@ internal sealed class GAgentApprovalCommandTargetBinder
         _terminalProjectionPort = terminalProjectionPort ?? throw new ArgumentNullException(nameof(terminalProjectionPort));
     }
 
-    public async Task<CommandTargetBindingResult<GAgentApprovalStartError>> BindAsync(
+    public async Task<CommandObservationBindingResult<GAgentApprovalStartError>> BindAsync(
         GAgentApprovalCommand command,
-        GAgentApprovalCommandTarget target,
-        CommandContext context,
+        CommandDispatchExecution<GAgentApprovalCommandTarget, GAgentApprovalAcceptedReceipt> execution,
         CancellationToken ct = default)
     {
+        // Refactor (iter25/cluster-002-observation-lifecycle-core):
+        //   Old pattern: approval binder attached terminal/live projections during command preparation.
+        //   New principle: interaction observation lifecycle starts read-side observation before dispatch without affecting dispatch-only command admission.
         ArgumentNullException.ThrowIfNull(command);
-        ArgumentNullException.ThrowIfNull(target);
-        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(execution);
 
+        var target = execution.Target;
+        var context = execution.Context;
         var sink = new EventChannel<AGUIEvent>();
         IGAgentRunTerminalProjectionLease? terminalProjectionLease = null;
 
@@ -212,7 +225,7 @@ internal sealed class GAgentApprovalCommandTargetBinder
                 ct);
             target.BindTerminalProjection(terminalProjectionLease);
 
-            var projectionLease = await _projectionPort.EnsureAndAttachAsync(
+            var attachment = await _projectionPort.EnsureAndAttachLeaseAsync(
                 token => _projectionPort.EnsureActorProjectionAsync(
                     target.ActorId,
                     context.CorrelationId,
@@ -220,7 +233,7 @@ internal sealed class GAgentApprovalCommandTargetBinder
                 sink,
                 ct);
 
-            if (projectionLease == null)
+            if (attachment == null)
             {
                 sink.Complete();
                 await sink.DisposeAsync();
@@ -228,10 +241,11 @@ internal sealed class GAgentApprovalCommandTargetBinder
             }
 
             target.BindLiveObservation(
-                projectionLease,
+                attachment.ProjectionLease,
+                attachment.LiveSinkLease,
                 sink,
                 command.SessionId?.Trim() ?? string.Empty);
-            return CommandTargetBindingResult<GAgentApprovalStartError>.Success();
+            return CommandObservationBindingResult<GAgentApprovalStartError>.Success();
         }
         catch
         {

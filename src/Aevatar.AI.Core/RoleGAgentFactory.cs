@@ -92,10 +92,29 @@ public static class RoleGAgentFactory
         string? eventRoutes,
         IServiceProvider services)
     {
+        var finalModules = BuildModuleExtensions(eventModules, eventRoutes, services);
+        agent.SetModules(finalModules);
+    }
+
+    public static async Task ApplyModuleExtensionsAsync(
+        RoleGAgent agent,
+        string? eventModules,
+        string? eventRoutes,
+        IServiceProvider services,
+        CancellationToken ct = default)
+    {
+        var finalModules = BuildModuleExtensions(eventModules, eventRoutes, services);
+        await agent.SetModulesAsync(finalModules, ct);
+    }
+
+    private static IReadOnlyList<IEventModule<IEventHandlerContext>> BuildModuleExtensions(
+        string? eventModules,
+        string? eventRoutes,
+        IServiceProvider services)
+    {
         if (string.IsNullOrWhiteSpace(eventModules))
         {
-            agent.SetModules([]);
-            return;
+            return [];
         }
 
         var factories = services.GetServices<IEventModuleFactory<IEventHandlerContext>>().ToList();
@@ -103,8 +122,7 @@ public static class RoleGAgentFactory
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (moduleNames.Length == 0)
         {
-            agent.SetModules([]);
-            return;
+            return [];
         }
 
         var logger = services.GetService<ILoggerFactory>()?.CreateLogger("RoleGAgentFactory");
@@ -145,7 +163,7 @@ public static class RoleGAgentFactory
             }
         }
 
-        agent.SetModules(finalModules);
+        return finalModules;
     }
 
     private static string? PreferTopLevelText(string? topLevel, string? fallback)

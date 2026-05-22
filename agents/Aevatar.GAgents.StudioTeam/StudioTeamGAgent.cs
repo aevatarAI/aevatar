@@ -89,6 +89,40 @@ public sealed class StudioTeamGAgent : GAgentBase<StudioTeamState>, IProjectedAc
         await PersistDomainEventAsync(evt);
     }
 
+    [EventHandler(EndpointName = "setEntryMember")]
+    public async Task HandleEntryMemberChanged(StudioTeamEntryMemberChangedEvent evt)
+    {
+        if (string.IsNullOrEmpty(State.TeamId))
+        {
+            throw new InvalidOperationException("team not yet created.");
+        }
+
+        if (State.LifecycleStage == StudioTeamLifecycleStage.Archived)
+        {
+            throw new InvalidOperationException(
+                $"team '{State.TeamId}' is archived; entry member updates are not allowed.");
+        }
+
+        if (!string.Equals(State.ScopeId, evt.ScopeId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"team '{State.TeamId}' (scope {State.ScopeId}) cannot update entry member in scope {evt.ScopeId}.");
+        }
+
+        if (evt.HasEntryMemberId && !ContainsMember(State.MemberIds, evt.EntryMemberId))
+        {
+            throw new InvalidOperationException(
+                $"entry member '{evt.EntryMemberId}' must belong to team '{State.TeamId}'.");
+        }
+
+        var currentEntry = State.HasEntryMemberId ? State.EntryMemberId : null;
+        var requestedEntry = evt.HasEntryMemberId ? evt.EntryMemberId : null;
+        if (string.Equals(currentEntry, requestedEntry, StringComparison.Ordinal))
+            return;
+
+        await PersistDomainEventAsync(evt);
+    }
+
     [EventHandler(EndpointName = "archiveTeam")]
     public async Task HandleArchived(StudioTeamArchivedEvent evt)
     {
@@ -176,6 +210,24 @@ public sealed class StudioTeamGAgent : GAgentBase<StudioTeamState>, IProjectedAc
             MemberCount = memberCountAfter,
             ChangedAtUtc = evt.ReassignedAtUtc,
         };
+
+        if (effect == StudioTeamRosterEffect.Removed
+            && State.HasEntryMemberId
+            && string.Equals(State.EntryMemberId, evt.MemberId, StringComparison.Ordinal))
+        {
+            await PersistDomainEventsAsync(
+                [
+                    rosterEvent,
+                    new StudioTeamEntryMemberChangedEvent
+                    {
+                        TeamId = State.TeamId,
+                        ScopeId = State.ScopeId,
+                        ChangedAtUtc = evt.ReassignedAtUtc,
+                    },
+                ]);
+            return;
+        }
+
         await PersistDomainEventAsync(rosterEvent);
     }
 
@@ -188,6 +240,7 @@ public sealed class StudioTeamGAgent : GAgentBase<StudioTeamState>, IProjectedAc
             .On<StudioTeamUpdatedEvent>(ApplyUpdated)
             .On<StudioTeamArchivedEvent>(ApplyArchived)
             .On<StudioTeamMemberRosterChangedEvent>(ApplyRosterChanged)
+            .On<StudioTeamEntryMemberChangedEvent>(ApplyEntryMemberChanged)
             .OrCurrent();
     }
 
@@ -239,6 +292,11 @@ public sealed class StudioTeamGAgent : GAgentBase<StudioTeamState>, IProjectedAc
                 break;
             case StudioTeamRosterEffect.Removed:
                 RemoveMember(next.MemberIds, evt.MemberId);
+                if (next.HasEntryMemberId
+                    && string.Equals(next.EntryMemberId, evt.MemberId, StringComparison.Ordinal))
+                {
+                    next.ClearEntryMemberId();
+                }
                 break;
             case StudioTeamRosterEffect.Noop:
             case StudioTeamRosterEffect.Unspecified:
@@ -246,6 +304,18 @@ public sealed class StudioTeamGAgent : GAgentBase<StudioTeamState>, IProjectedAc
                 // No roster change (UpdatedAtUtc still advances).
                 break;
         }
+        next.UpdatedAtUtc = evt.ChangedAtUtc;
+        return next;
+    }
+
+    private static StudioTeamState ApplyEntryMemberChanged(
+        StudioTeamState state, StudioTeamEntryMemberChangedEvent evt)
+    {
+        var next = state.Clone();
+        if (evt.HasEntryMemberId)
+            next.EntryMemberId = evt.EntryMemberId;
+        else
+            next.ClearEntryMemberId();
         next.UpdatedAtUtc = evt.ChangedAtUtc;
         return next;
     }

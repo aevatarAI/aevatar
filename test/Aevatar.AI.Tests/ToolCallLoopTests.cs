@@ -62,7 +62,7 @@ public class ToolCallLoopTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenBaseRequestIdPresent_ShouldKeepStableRequestIdAndEmitPerCallMetadata()
+    public async Task ExecuteAsync_WhenBaseRequestIdPresent_ShouldKeepStableRequestIdAndEmitPerCallTypedContext()
     {
         var provider = new QueueLLMProvider(
         [
@@ -100,8 +100,39 @@ public class ToolCallLoopTests
         provider.Requests[0].RequestId.Should().Be("session-99");
         provider.Requests[1].RequestId.Should().Be("session-99");
         provider.Requests.Should().OnlyContain(x => x.Metadata != null && x.Metadata["workflow.run_id"] == "run-99");
-        provider.Requests[0].Metadata![LLMRequestMetadataKeys.CallId].Should().Be("session-99");
-        provider.Requests[1].Metadata![LLMRequestMetadataKeys.CallId].Should().Be("session-99:tool-round:2");
+        provider.Requests.Should().OnlyContain(x => !x.Metadata!.ContainsKey(LLMRequestMetadataKeys.CallId));
+        provider.Requests[0].ToolContext!.Request.CallId.Should().Be("session-99");
+        provider.Requests[1].ToolContext!.Request.CallId.Should().Be("session-99:tool-round:2");
+    }
+
+    [Fact]
+    public void AgentToolExecutionContextMapper_ShouldPromoteOwnedKeysAndKeepExternalMetadataOnly()
+    {
+        var context = AgentToolExecutionContextMapper.FromMetadata(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "access-token",
+            [LLMRequestMetadataKeys.NyxIdOrgToken] = "org-token",
+            [LLMRequestMetadataKeys.ModelOverride] = "model-a",
+            [LLMRequestMetadataKeys.NyxIdRoutePreference] = "/preferred",
+            [LLMRequestMetadataKeys.MaxToolRoundsOverride] = "7",
+            [LLMRequestMetadataKeys.ConnectedServicesContext] = "{\"services\":[]}",
+            ["scope_id"] = "scope-a",
+            ["channel.platform"] = "lark",
+            ["channel.sender_id"] = "ou_1",
+            ["trace-id"] = "trace-1",
+        });
+
+        context.Credentials.NyxIdAccessToken.Should().Be("access-token");
+        context.Credentials.NyxIdOrgToken.Should().Be("org-token");
+        context.Caller.ScopeId.Should().Be("scope-a");
+        context.Channel.Platform.Should().Be("lark");
+        context.Channel.SenderId.Should().Be("ou_1");
+        context.Routing.ModelOverride.Should().Be("model-a");
+        context.Routing.NyxIdRoutePreference.Should().Be("/preferred");
+        context.Routing.MaxToolRoundsOverride.Should().Be(7);
+        context.ConnectedServices.ContextJson.Should().Be("{\"services\":[]}");
+        context.ExternalMetadata.Should().ContainSingle();
+        context.ExternalMetadata["trace-id"].Should().Be("trace-1");
     }
 
     [Fact]
@@ -142,6 +173,46 @@ public class ToolCallLoopTests
 
         requestIdMiddleware.RequestIds.Should().Equal("session-105", "session-105");
         requestIdMiddleware.CallIds.Should().Equal("session-105", "session-105:tool-round:2");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenLlmMiddlewareRuns_ShouldExposeStreamingContextAndAggregateProviderStream()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                Content = "stream-answer",
+                ReasoningContent = "stream-reasoning",
+                FinishReason = "stop",
+            },
+        ]);
+        bool? observedIsStreaming = null;
+        var middleware = new DelegateLlmCallMiddleware(async (context, next) =>
+        {
+            observedIsStreaming = context.IsStreaming;
+            await next();
+            context.Response.Should().NotBeNull();
+            context.Response!.Content.Should().Be("stream-answer");
+            context.Response.ReasoningContent.Should().Be("stream-reasoning");
+        });
+        var loop = new ToolCallLoop(
+            new ToolManager(),
+            hooks: null,
+            toolMiddlewares: [],
+            llmMiddlewares: [middleware]);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 1, CancellationToken.None);
+
+        result.Should().Be("stream-answer");
+        observedIsStreaming.Should().BeTrue();
+        provider.Requests.Should().HaveCount(1);
+        messages.Should().ContainSingle(m =>
+            m.Role == "assistant" &&
+            m.Content == "stream-answer" &&
+            m.ReasoningContent == "stream-reasoning");
     }
 
     [Fact]
@@ -749,21 +820,33 @@ public class ToolCallLoopTests
         public string Name => "queue";
         public List<LLMRequest> Requests { get; } = [];
 
-        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Requests.Add(request);
-            return Task.FromResult(_responses.Count > 0 ? _responses.Dequeue() : new LLMResponse());
-        }
-
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [EnumeratorCancellation] CancellationToken ct = default)
         {
-            _ = request;
             ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            var response = _responses.Count > 0 ? _responses.Dequeue() : new LLMResponse();
+
+            if (!string.IsNullOrEmpty(response.ReasoningContent))
+                yield return new LLMStreamChunk { DeltaReasoningContent = response.ReasoningContent };
+
+            if (!string.IsNullOrEmpty(response.Content))
+                yield return new LLMStreamChunk { DeltaContent = response.Content };
+
+            if (response.ToolCalls is { Count: > 0 })
+            {
+                foreach (var toolCall in response.ToolCalls)
+                    yield return new LLMStreamChunk { DeltaToolCall = toolCall };
+            }
+
+            yield return new LLMStreamChunk
+            {
+                IsLast = true,
+                Usage = response.Usage,
+                FinishReason = response.FinishReason,
+            };
             await Task.CompletedTask;
-            yield break;
         }
     }
 

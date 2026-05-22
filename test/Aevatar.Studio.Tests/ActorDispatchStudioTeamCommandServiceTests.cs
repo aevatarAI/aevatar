@@ -158,6 +158,39 @@ public sealed class ActorDispatchStudioTeamCommandServiceTests
     }
 
     [Fact]
+    public async Task SetEntryMemberAsync_ShouldDispatchEntryMemberChangedEvent()
+    {
+        var dispatch = new RecordingDispatchPort();
+        var service = new ActorDispatchStudioTeamCommandService(
+            new RecordingBootstrap(), dispatch);
+
+        await service.SetEntryMemberAsync(ScopeId, "t-1", "m-1", CancellationToken.None);
+
+        dispatch.Dispatches.Should().ContainSingle();
+        var evt = dispatch.Dispatches[0].Envelope.Payload.Unpack<StudioTeamEntryMemberChangedEvent>();
+        evt.TeamId.Should().Be("t-1");
+        evt.ScopeId.Should().Be(ScopeId);
+        evt.EntryMemberId.Should().Be("m-1");
+        evt.HasEntryMemberId.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ClearEntryMemberAsync_ShouldDispatchEntryMemberChangedEventWithoutMemberId()
+    {
+        var dispatch = new RecordingDispatchPort();
+        var service = new ActorDispatchStudioTeamCommandService(
+            new RecordingBootstrap(), dispatch);
+
+        await service.ClearEntryMemberAsync(ScopeId, "t-1", CancellationToken.None);
+
+        dispatch.Dispatches.Should().ContainSingle();
+        var evt = dispatch.Dispatches[0].Envelope.Payload.Unpack<StudioTeamEntryMemberChangedEvent>();
+        evt.TeamId.Should().Be("t-1");
+        evt.ScopeId.Should().Be(ScopeId);
+        evt.HasEntryMemberId.Should().BeFalse();
+    }
+
+    [Fact]
     public void Constructor_ShouldRejectNullDependencies()
     {
         FluentActions.Invoking(() =>

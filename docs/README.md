@@ -25,6 +25,7 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [Role 与工作流、Connector 配置指南](canon/role-model.md)
 - [Aevatar.Scripting 架构文档](canon/scripting.md)
 - [.NET Workflow SDK Quick Start](canon/sdk-dotnet.md)
+- [Aevatar /status 状态面板架构](canon/status-dashboard.md)
 - [Workflow Primitives 参考手册](canon/workflow-primitives.md)
 - [工作流引擎设计与实践](canon/workflow-runtime.md)
 
@@ -53,6 +54,8 @@ Immutable records of architectural choices and their rationale.
 - [Lark Reply Chain Completion Semantics](adr/0021-lark-reply-chain-completion-semantics.md)
 - [0022 — OpenTelemetry semantic conventions for aevatar.* activities](adr/0022-otel-aevatar-semantic-conventions.md)
 - [0023 — Two-tier Inspector architecture (canonical readmodel vs observation OTel)](adr/0023-two-tier-inspector-architecture.md)
+- [Chat Route Policy — Config Actor + Boundary Resolver](adr/0024-chat-route-policy.md)
+- [Voice Router Integration - Policy-Aware WebSocket Boundary](adr/0025-voice-router-integration.md)
 
 ## History
 
@@ -79,12 +82,15 @@ Point-in-time design snapshots. Not authoritative — for context only.
 
 - [2026-05-11-aevatar-inspector-design](history/2026-05/2026-05-11-aevatar-inspector-design.md)
 - [2026-05-14-issue-370-gagent-durable-terminal-completion-design](history/2026-05/2026-05-14-issue-370-gagent-durable-terminal-completion-design.md)
+- [2026-05-19-issue-616-binding-readiness-observation-design](history/2026-05/2026-05-19-issue-616-binding-readiness-observation-design.md)
 
 ## Audit Scorecard
 
 - [2026-04-08-architecture-audit-detailed.md](audit-scorecard/2026-04-08-architecture-audit-detailed.md)
 - [2026-04-27-daily-pipeline-architecture-review.md](audit-scorecard/2026-04-27-daily-pipeline-architecture-review.md)
 - [2026-05-13-lark-bot-reply-chain-test-coverage-audit.md](audit-scorecard/2026-05-13-lark-bot-reply-chain-test-coverage-audit.md)
+- [2026-05-19-auto-refactor-loop-summary.md](audit-scorecard/2026-05-19-auto-refactor-loop-summary.md)
+- [2026-05-19-meta-audit-loop-depth-diagnosis.md](audit-scorecard/2026-05-19-meta-audit-loop-depth-diagnosis.md)
 - [FEATURE_APP_SERVICES_AUDIT.md](audit-scorecard/FEATURE_APP_SERVICES_AUDIT.md)
 
 ## Templates

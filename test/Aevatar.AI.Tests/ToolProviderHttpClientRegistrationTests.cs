@@ -1,5 +1,7 @@
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.ChronoStorage;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.AI.ToolProviders.Web;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -18,12 +20,40 @@ public sealed class ToolProviderHttpClientRegistrationTests
         services.AddNyxIdTools(options => options.BaseUrl = "https://nyx.test");
 
         services.ShouldContainTypedHttpClient<NyxIdApiClient>();
-        services.ShouldContainNamedHttpClient(NyxIdSpecCatalog.HttpClientName);
         services.ShouldContainNamedHttpClient(ConnectedServiceSpecCache.HttpClientName);
 
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<IHttpClientFactory>().Should().NotBeNull();
         provider.GetRequiredService<NyxIdApiClient>().Should().NotBeNull();
+        provider.GetRequiredService<IRemoteToolApprovalPort>().Should()
+            .BeOfType<NyxIdRemoteToolApprovalPort>();
+        provider.GetServices<IToolApprovalHandler>().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task AddNyxIdTools_ResolvesToolSourceWithoutDeletedCatalogServices()
+    {
+        var services = new ServiceCollection();
+
+        services.AddNyxIdTools(options => options.BaseUrl = "https://nyx.test");
+
+        services.Any(HttpClientRegistrationAssertions.IsDeletedNyxIdDiscoveryRegistration)
+            .Should()
+            .BeFalse("AddNyxIdTools must not expose deleted catalog/cache services");
+
+        await using var provider = services.BuildServiceProvider();
+        var source = provider.GetServices<IAgentToolSource>()
+            .Should()
+            .ContainSingle(toolSource => toolSource is NyxIdAgentToolSource)
+            .Which;
+
+        var tools = await source.DiscoverToolsAsync();
+        var names = tools.Select(tool => tool.Name).ToList();
+
+        names.Should().Contain("nyxid_proxy");
+        names.Should().NotContain("nyxid_search_capabilities");
+        names.Should().NotContain("nyxid_proxy_execute");
+        tools.Should().ContainSingle(tool => tool is NyxIdProxyTool);
     }
 
     [Fact]
@@ -64,6 +94,15 @@ file static class HttpClientRegistrationAssertions
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(TClient) &&
             descriptor.Lifetime == ServiceLifetime.Transient);
+    }
+
+    public static bool IsDeletedNyxIdDiscoveryRegistration(ServiceDescriptor descriptor)
+    {
+        var serviceName = descriptor.ServiceType.Name;
+        var implementationName = descriptor.ImplementationType?.Name;
+
+        return serviceName is "NyxIdSpecCatalog" or "IServiceDiscoveryCache" ||
+               implementationName is "NyxIdSpecCatalog" or "InMemoryServiceDiscoveryCache";
     }
 
     public static void ShouldContainNamedHttpClient(

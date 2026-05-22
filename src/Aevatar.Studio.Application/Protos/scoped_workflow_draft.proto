@@ -1,0 +1,35 @@
+syntax = "proto3";
+package aevatar.studio.application;
+option csharp_namespace = "Aevatar.Studio.Application.Protos";
+
+message ScopedWorkflowDraftFact {
+  string workflow_id = 1;
+  string workflow_name = 2;
+  string yaml = 3;
+  ScopedWorkflowLayoutFact layout = 4;
+}
+
+message ScopedWorkflowLayoutFact {
+  repeated ScopedWorkflowNodeLayoutFact nodes = 1;
+  repeated ScopedWorkflowLayoutGroupFact groups = 2;
+  repeated string collapsed = 3;
+  ScopedWorkflowViewportFact viewport = 4;
+  string entry_workflow = 5;
+}
+
+message ScopedWorkflowNodeLayoutFact {
+  string node_id = 1;
+  double x = 2;
+  double y = 3;
+}
+
+message ScopedWorkflowLayoutGroupFact {
+  string group_id = 1;
+  repeated string node_ids = 2;
+}
+
+message ScopedWorkflowViewportFact {
+  double x = 1;
+  double y = 2;
+  double zoom = 3;
+}

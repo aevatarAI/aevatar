@@ -38,6 +38,7 @@ owner: eanzhao
 | ReadModel | Interface | ReadModel 是**查询副本**（actor-scoped current-state replica）。它的查询契约（IXxxQueryPort）才是 Interface / Seam。 |
 | Projection Pipeline | Adapter | Projection 是**物化机制**（committed event → readmodel），不是某个 seam 上的具体实现。"Projection 通道下的具体投影器"才类比 Adapter。 |
 | Service（如 `WriteService`、`QueryService`） | Module（无脑套用） | aevatar 的应用层契约必须承载业务语义、不是纯转发空壳；一个 "Service" 是不是 Module 取决于它的 Interface 是不是足够 deep。多数情况下，正确的形态是更窄的 `IXxxQueryPort` / `IActorDispatchPort`，而不是泛 `Service`。 |
+| Router | 新的转发 Actor / hot-path 调度中心 | 在 ingress 语境里，router = **config actor + boundary resolver**：`ChatRoutePolicyGAgent` 只作为 per-scope 配置权威持有策略，`ChatRouteResolver` 只在入口边界做无状态、瞬时决策；它不是新增 actor hop，也不持久化决策。见 [ADR-0024: Chat Route Policy — Config Actor + Boundary Resolver](../adr/0024-chat-route-policy.md)。 |
 
 ## 2. 关键原则（与 CLAUDE.md 已有规则的映射）
 

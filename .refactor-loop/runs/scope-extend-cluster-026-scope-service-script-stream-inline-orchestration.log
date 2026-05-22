@@ -1,0 +1,12 @@
+SCOPE_EXTEND: src/platform/Aevatar.GAgentService.Abstractions/ScopeScripts/ScriptServiceRunModels.cs required typed ScriptServiceRunCommand/receipt/error/completion models for the existing ICommandInteractionService skeleton
+SCOPE_EXTEND: src/platform/Aevatar.GAgentService.Application/Scripts/ScriptServiceRunInteraction.cs required Application-owned script stream target/binder/dispatcher/completion and cleanup implementation
+SCOPE_EXTEND: src/platform/Aevatar.GAgentService.Application/Scripts/ScriptServiceRunRegistrationInteraction.cs required Application-owned service-run registration decorator
+SCOPE_EXTEND: src/platform/Aevatar.GAgentService.Application/Scripts/ServiceCollectionExtensions.cs required DI registration for ScriptServiceRunCommand interaction skeleton and decorator
+SCOPE_EXTEND: src/Aevatar.Scripting.Core/Ports/IScriptRuntimeCommandPort.cs required explicit commandId/correlationId overload for command skeleton id separation
+SCOPE_EXTEND: src/Aevatar.Scripting.Infrastructure/Ports/ScriptingCommandDispatchModels.cs required RunScriptRuntimeCommand to carry explicit command/correlation ids already supported by proto event fields
+SCOPE_EXTEND: src/Aevatar.Scripting.Infrastructure/Ports/RuntimeScriptCommandService.cs required to pass explicit command/correlation ids into existing scripting dispatch skeleton
+SCOPE_EXTEND: tools/ci/query_projection_priming_guard.sh required guard coverage preventing ScopeServiceEndpoints from regressing to inline script projection/runtime orchestration
+SCOPE_EXTEND: test/Aevatar.GAgentService.Integration.Tests/ScopeServiceEndpointsStreamTests.cs required tests to fake ScriptServiceRunCommand interaction instead of endpoint-owned runtime/projection orchestration
+SCOPE_EXTEND: test/Aevatar.GAgentService.Integration.Tests/ScopeServiceEndpointsTests.cs required tests to fake ScriptServiceRunCommand interaction instead of endpoint-owned runtime/projection orchestration
+SCOPE_EXTEND: test/Aevatar.GAgentService.Tests/Application/ScriptServiceRunInteractionTests.cs required focused Application behavior tests for registration decorator and script stream interaction cleanup
+SCOPE_EXTEND: test/Aevatar.Scripting.Core.Tests/Runtime/RuntimeScriptInfrastructurePortsTests.cs required explicit command/correlation id propagation coverage

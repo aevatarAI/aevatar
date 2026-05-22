@@ -7,5 +7,5 @@ internal sealed class RoleCatalogImportParser : IRoleCatalogImportParser
     public Task<IReadOnlyList<StoredRoleDefinition>> ParseCatalogAsync(
         Stream stream,
         CancellationToken cancellationToken = default) =>
-        RoleCatalogJsonSerializer.ReadCatalogAsync(stream, cancellationToken);
+        RoleCatalogStorageSerializer.ReadCatalogAsync(stream, cancellationToken);
 }

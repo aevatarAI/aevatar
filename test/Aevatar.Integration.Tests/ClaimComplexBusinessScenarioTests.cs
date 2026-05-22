@@ -82,6 +82,24 @@ public class ClaimComplexBusinessScenarioTests
             aiCalls[0].CorrelationId.Should().Be(runId);
             aiCalls[0].Prompt.Should().Contain(claimCase.CaseId);
 
+            await ClaimIntegrationTestKit.WaitForMessageAsync(
+                runtime,
+                analystActor.Id,
+                nameof(ClaimAnalystReviewRequested),
+                CancellationToken.None);
+            await ClaimIntegrationTestKit.WaitForMessageAsync(
+                runtime,
+                fraudActor.Id,
+                nameof(ClaimFraudScoringRequested),
+                CancellationToken.None);
+            await ClaimIntegrationTestKit.WaitForMessageAsync(
+                runtime,
+                complianceActor.Id,
+                nameof(ClaimComplianceCheckRequested),
+                CancellationToken.None);
+            analystActor = (await runtime.GetAsync(analystActor.Id))!;
+            fraudActor = (await runtime.GetAsync(fraudActor.Id))!;
+            complianceActor = (await runtime.GetAsync(complianceActor.Id))!;
             ClaimIntegrationTestKit.ReadMessages(analystActor).Should().ContainSingle(x => x == nameof(ClaimAnalystReviewRequested));
             ClaimIntegrationTestKit.ReadMessages(fraudActor).Should().ContainSingle(x => x == nameof(ClaimFraudScoringRequested));
             ClaimIntegrationTestKit.ReadMessages(complianceActor).Should().ContainSingle(x => x == nameof(ClaimComplianceCheckRequested));
@@ -92,6 +110,12 @@ public class ClaimComplexBusinessScenarioTests
                 (await runtime.ExistsAsync(manualReviewActorId)).Should().BeTrue();
                 var manualReviewActor = await runtime.GetAsync(manualReviewActorId);
                 manualReviewActor.Should().NotBeNull();
+                await ClaimIntegrationTestKit.WaitForMessageAsync(
+                    runtime,
+                    manualReviewActorId,
+                    nameof(ClaimManualReviewRequested),
+                    CancellationToken.None);
+                manualReviewActor = await runtime.GetAsync(manualReviewActorId);
                 ClaimIntegrationTestKit.ReadMessages(manualReviewActor!).Should().ContainSingle(x => x == nameof(ClaimManualReviewRequested));
             }
             else

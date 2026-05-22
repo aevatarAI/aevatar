@@ -70,7 +70,7 @@ public sealed class ChatRuntime
         _compressionConfig = compressionConfig ?? new ContextCompressionConfig();
     }
 
-    /// <summary>单轮 Chat（含 Tool Calling 循环），包裹 Agent Run Middleware。</summary>
+    /// <summary>单轮 Chat（含 Tool Calling 循环），显式离线聚合 adapter。</summary>
     public Task<string?> ChatAsync(string userMessage, int maxToolRounds = DefaultMaxToolRounds, CancellationToken ct = default) =>
         ChatAsync([ContentPart.TextPart(userMessage)], maxToolRounds, requestId: null, metadata: null, ct);
 
@@ -91,64 +91,12 @@ public sealed class ChatRuntime
         IReadOnlyDictionary<string, string>? metadata,
         CancellationToken ct = default)
     {
-        var normalizedUserContent = NormalizeUserContent(userContent);
-        var runContext = new AgentRunContext
-        {
-            UserMessage = DescribeUserContent(normalizedUserContent),
-            AgentId = _agentId,
-            AgentName = _agentName,
-            CancellationToken = ct,
-        };
-
-        try
-        {
-            await MiddlewarePipeline.RunAgentAsync(_agentMiddlewares, runContext, async () =>
-            {
-                if (runContext.Terminate) return;
-
-                _history.Add(ChatMessage.User(normalizedUserContent, runContext.UserMessage));
-                await RunCompressionIfNeededAsync(ct);
-                var baseRequest = ApplyRequestIdentity(_requestBuilder(), requestId, metadata);
-                var provider = _providerFactory();
-                runContext.Items["gen_ai.provider.name"] = provider.Name;
-                var messages = _history.BuildMessages(baseRequest.Messages.FirstOrDefault(m => m.Role == "system")?.Content);
-
-                var result = await _toolLoop.ExecuteAsync(provider, messages, baseRequest, maxToolRounds, ct);
-
-                _history.Clear();
-                foreach (var m in messages.Where(m => m.Role != "system"))
-                    _history.Add(m);
-
-                runContext.Result = result;
-            });
-
-            // ─── Hook: Stop（轮次正常完成） ───
-            if (_hooks != null)
-            {
-                var stopCtx = new AIGAgentExecutionHookContext { AgentId = _agentId };
-                stopCtx.Items["final_content"] = runContext.Result ?? "";
-                // Count tool-calling rounds by counting assistant messages that have tool calls
-                stopCtx.Items["total_rounds"] = _history.Messages
-                    .Count(m => m.Role == "assistant" && m.ToolCalls is { Count: > 0 });
-                await _hooks.RunStopAsync(stopCtx, ct);
-            }
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            // ─── Hook: StopFailure（轮次因错误终止） ───
-            if (_hooks != null)
-            {
-                var failCtx = new AIGAgentExecutionHookContext { AgentId = _agentId };
-                failCtx.Items["error"] = ex;
-                failCtx.Items["error_message"] = ex.Message;
-                failCtx.Items["error_phase"] = "llm_or_tool_execution";
-                try { await _hooks.RunStopFailureAsync(failCtx, ct); }
-                catch { /* best-effort */ }
-            }
-            throw;
-        }
-
-        return runContext.Result;
+        // Refactor (iter15/cluster-024):
+        //   Old pattern: non-streaming ChatAsync directly called provider.ChatAsync.
+        //   New principle: ChatStreamAsync is the only authoritative AI executor; offline text aggregation consumes the stream as an explicit adapter.
+        return await ChatStreamContentAggregator.AggregateContentAsync(
+            ChatStreamAsync(userContent, maxToolRounds, requestId, metadata, ct),
+            ct: ct);
     }
 
     /// <summary>流式 Chat，包裹 LLM Call Middleware。</summary>
@@ -278,7 +226,8 @@ public sealed class ChatRuntime
                         // then dispatch after PostSampling approves.
                         using var streamingExecutor = new StreamingToolExecutor(
                             _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
-                            requestMetadata: baseRequest.Metadata);
+                            requestMetadata: baseRequest.Metadata,
+                            toolContext: baseRequest.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest));
 
                         List<ToolCall>? deferredToolCalls = _hooks != null ? [] : null;
 
@@ -286,9 +235,12 @@ public sealed class ChatRuntime
                         {
                             Messages = [..messages],
                             RequestId = baseRequest.RequestId,
-                            Metadata = ToolCallLoop.BuildPerCallMetadata(
-                                baseRequest.Metadata,
+                            Metadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(baseRequest.Metadata),
+                            CallerContext = baseRequest.CallerContext,
+                            ToolContext = AgentToolExecutionContextMapper.FromRequestWithCallId(
+                                baseRequest,
                                 ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, round)),
+                            RoutingContext = baseRequest.RoutingContext,
                             Tools = baseRequest.Tools,
                             Model = baseRequest.Model,
                             Temperature = baseRequest.Temperature,
@@ -368,7 +320,8 @@ public sealed class ChatRuntime
                                     // Execute parsed tool calls via a fresh executor
                                     using var textToolExecutor = new StreamingToolExecutor(
                                         _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
-                                        requestMetadata: baseRequest.Metadata);
+                                        requestMetadata: baseRequest.Metadata,
+                                        toolContext: AgentToolExecutionContextMapper.FromRequest(roundRequest));
                                     foreach (var tc in parsed.ToolCalls)
                                         textToolExecutor.AddTool(tc);
                                     await foreach (var result in textToolExecutor.GetRemainingResultsAsync(runToken))
@@ -465,9 +418,12 @@ public sealed class ChatRuntime
                         {
                             Messages = [..messages],
                             RequestId = baseRequest.RequestId,
-                            Metadata = ToolCallLoop.BuildPerCallMetadata(
-                                baseRequest.Metadata,
+                            Metadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(baseRequest.Metadata),
+                            CallerContext = baseRequest.CallerContext,
+                            ToolContext = AgentToolExecutionContextMapper.FromRequestWithCallId(
+                                baseRequest,
                                 ToolCallLoop.ComposeFinalCallId(baseRequest.RequestId)),
+                            RoutingContext = baseRequest.RoutingContext,
                             Tools = null,
                             Model = baseRequest.Model,
                             Temperature = baseRequest.Temperature,
@@ -498,7 +454,8 @@ public sealed class ChatRuntime
 
                             using var finalToolExecutor = new StreamingToolExecutor(
                                 _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
-                                requestMetadata: baseRequest.Metadata);
+                                requestMetadata: baseRequest.Metadata,
+                                toolContext: finalRequest.ToolContext);
                             foreach (var tc in finalParsed.ToolCalls)
                                 finalToolExecutor.AddTool(tc);
                             await foreach (var result in finalToolExecutor.GetRemainingResultsAsync(runToken))
@@ -516,6 +473,9 @@ public sealed class ChatRuntime
                                 Messages = [..messages],
                                 RequestId = finalRequest.RequestId,
                                 Metadata = finalRequest.Metadata,
+                                CallerContext = finalRequest.CallerContext,
+                                ToolContext = finalRequest.ToolContext,
+                                RoutingContext = finalRequest.RoutingContext,
                                 Tools = null,
                                 Model = finalRequest.Model,
                                 Temperature = finalRequest.Temperature,
@@ -748,11 +708,17 @@ public sealed class ChatRuntime
         string? requestId,
         IReadOnlyDictionary<string, string>? metadata)
     {
+        // Refactor (iter24/cluster-002-agent-tool-context-generic-metadata-bag):
+        //   Old pattern: request identity and routing controls stayed in Metadata.
+        //   New principle: tool control semantics are typed context fields; Metadata is not the internal control plane.
         return new LLMRequest
         {
             Messages = baseRequest.Messages,
             RequestId = string.IsNullOrWhiteSpace(requestId) ? baseRequest.RequestId : requestId.Trim(),
-            Metadata = MergeMetadata(baseRequest.Metadata, metadata),
+            Metadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(MergeMetadata(baseRequest.Metadata, metadata)),
+            CallerContext = baseRequest.CallerContext,
+            ToolContext = AgentToolExecutionContextMapper.FromMetadata(MergeMetadata(baseRequest.ToolContext?.ToLegacyMetadata() ?? baseRequest.Metadata, metadata)),
+            RoutingContext = AgentToolExecutionContextMapper.FromMetadata(MergeMetadata(baseRequest.Metadata, metadata)).Routing,
             Tools = baseRequest.Tools,
             Model = baseRequest.Model,
             Temperature = baseRequest.Temperature,
@@ -792,9 +758,8 @@ public sealed class ChatRuntime
         if (!string.IsNullOrWhiteSpace(context.Request.RequestId))
             context.Items[LLMRequestMetadataKeys.RequestId] = context.Request.RequestId;
 
-        if (context.Request.Metadata != null &&
-            context.Request.Metadata.TryGetValue(LLMRequestMetadataKeys.CallId, out var callId) &&
-            !string.IsNullOrWhiteSpace(callId))
+        var callId = context.Request.ToolContext?.Request.CallId;
+        if (!string.IsNullOrWhiteSpace(callId))
         {
             context.Items[LLMRequestMetadataKeys.CallId] = callId;
         }

@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.ChatRouting.Core;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -43,6 +44,8 @@ internal static class MessagesApiEndpoints
         MessagesCreateRequest request,
         [FromServices] ILLMProviderFactory providerFactory,
         [FromServices] IResponsesCallerScopeResolver callerScopeResolver,
+        [FromServices] IChatRoutePolicyQueryPort chatRoutePolicyQueryPort,
+        [FromServices] ChatRouteResolver chatRouteResolver,
         [FromServices] IResponsesRouteResolver routeResolver,
         [FromServices] ILlmSessionRegistrationPort sessionRegistrationPort,
         [FromServices] IResponsesCompletionApplicationService completionService,
@@ -52,6 +55,8 @@ internal static class MessagesApiEndpoints
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(providerFactory);
         ArgumentNullException.ThrowIfNull(callerScopeResolver);
+        ArgumentNullException.ThrowIfNull(chatRoutePolicyQueryPort);
+        ArgumentNullException.ThrowIfNull(chatRouteResolver);
         ArgumentNullException.ThrowIfNull(routeResolver);
         ArgumentNullException.ThrowIfNull(sessionRegistrationPort);
         ArgumentNullException.ThrowIfNull(completionService);
@@ -81,6 +86,37 @@ internal static class MessagesApiEndpoints
         catch (ResponsesCallerScopeUnavailableException ex)
         {
             return ToErrorResult(StatusCodes.Status401Unauthorized, "authentication_error", ex.Message);
+        }
+
+        // Implement (issue #694):
+        //   Behavior: Anthropic Messages facade applies the same chat-route model override as Responses.
+        //   Why this shape: Messages shares the LlmSession/LLMRequest path, so routing stays protocol-neutral.
+        var routedModel = normalized.Model;
+        var routeDecision = await ResponsesApiEndpoints.ResolveResponsesChatRouteAsync(
+            chatRoutePolicyQueryPort,
+            chatRouteResolver,
+            callerScope,
+            normalized.Model,
+            ResponsesApiEndpoints.ResolveToolMode(normalized.DeclaredTools.Count, inlineToolResultCount: 0),
+            ResponsesApiEndpoints.BuildContentHint(BuildRouteContentHint(normalized)),
+            ct);
+        if (routeDecision.Action.Reject is not null)
+            return ToErrorResult(
+                StatusCodes.Status403Forbidden,
+                "chat_route_rejected",
+                string.IsNullOrWhiteSpace(routeDecision.Action.Reject.Reason)
+                    ? "The chat route policy rejected this request."
+                    : routeDecision.Action.Reject.Reason);
+        if (!string.IsNullOrWhiteSpace(routeDecision.Action.ForwardToModel?.ModelName))
+        {
+            routedModel = routeDecision.Action.ForwardToModel.ModelName.Trim();
+        }
+        else if (routeDecision.Action.ForwardToGagent is not null)
+        {
+            return ToErrorResult(
+                StatusCodes.Status501NotImplemented,
+                "chat_route_action_not_supported",
+                "ForwardToGAgent is not supported by /v1/messages in v1.");
         }
 
         // Path B is stateless: register a new LlmSession per request, no
@@ -123,11 +159,33 @@ internal static class MessagesApiEndpoints
             logger,
             ct);
 
+        // /v1/messages is the Anthropic Messages facade. Native Anthropic
+        // clients (Claude Code, Cursor's Anthropic mode, Anthropic SDK) send
+        // raw Anthropic model ids without a provider prefix
+        // (e.g. `claude-sonnet-4-5-20250929`). Without normalization those
+        // strings have no `/` so the catalog router treats them as
+        // gateway-default, and NyxID's gateway then rejects them with HTTP 400
+        // because it doesn't know to route a bare `claude-*` to the anthropic
+        // backend. Auto-prefix `anthropic/` so the existing OpenRouter-style
+        // routing below resolves to `/api/v1/llm/anthropic/v1` for any caller
+        // that doesn't hand-prefix the model. If the route resolver doesn't
+        // recognize `anthropic` we fall back to the original bare name (which
+        // was the pre-fix behavior), so this change is strictly additive.
+        var anthropicPrefixed = false;
+        if (!routedModel.Contains('/', StringComparison.Ordinal))
+        {
+            routedModel = $"anthropic/{routedModel}";
+            anthropicPrefixed = true;
+        }
+
+        // Refactor (iter26/cluster-026-responses-route-user-catalog-cache):
+        //   Old pattern: Responses/Messages routes resolve `vendor/model` by reading a singleton per-bearer in-process cache of NyxID user LLM service catalog facts.
+        //   New principle: Resolve model route from the current catalog read in the request flow; do not store user route facts in singleton process memory.
         // OpenRouter-style vendor prefix routing (same as Path A). If the
         // model is `vendor/name`, resolve the route value through the catalog;
         // unknown slugs fall through to gateway default.
-        var modelRoute = ResponsesModelRouteParser.Parse(normalized.Model);
-        var effectiveModel = normalized.Model;
+        var modelRoute = ResponsesModelRouteParser.Parse(routedModel);
+        var effectiveModel = routedModel;
         string? resolvedRouteValue = null;
         if (modelRoute.RouteSlug is not null)
         {
@@ -136,6 +194,15 @@ internal static class MessagesApiEndpoints
                 .ConfigureAwait(false);
             if (resolvedRouteValue is not null)
                 effectiveModel = modelRoute.Model;
+            else if (anthropicPrefixed)
+            {
+                // Resolver doesn't know the synthesized "anthropic" slug;
+                // fall back to the original bare model so downstream behavior
+                // matches pre-fix code paths and tests that wire a no-op
+                // resolver keep working.
+                routedModel = modelRoute.Model;
+                effectiveModel = modelRoute.Model;
+            }
         }
 
         var llmMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -235,6 +302,13 @@ internal static class MessagesApiEndpoints
             return ToErrorResult(StatusCodes.Status500InternalServerError, "api_error", "Internal server error.");
         }
     }
+
+    private static string BuildRouteContentHint(NormalizedMessagesRequest normalized) =>
+        normalized.ChatMessages
+            .LastOrDefault(static message => string.Equals(message.Role, "user", StringComparison.OrdinalIgnoreCase))
+            ?.Content
+        ?? normalized.ChatMessages.LastOrDefault()?.Content
+        ?? string.Empty;
 
     private static async Task WriteStreamingMessageAsync(
         HttpResponse response,

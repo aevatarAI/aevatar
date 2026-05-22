@@ -23,16 +23,13 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
 
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
-    private readonly IResponsesAgentToolStateCurrentStateProjectionPort _projectionPort;
 
     public ResponsesAgentToolStateCommandAdapter(
         IActorRuntime runtime,
-        IActorDispatchPort dispatchPort,
-        IResponsesAgentToolStateCurrentStateProjectionPort projectionPort)
+        IActorDispatchPort dispatchPort)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
-        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
     }
 
     public async Task<ResponsesTodoWriteResult> ApplyTodoWriteAsync(
@@ -163,7 +160,6 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
 
         var actorId = ResponseAgentToolStateIds.BuildActorId(scopeId, ownerSubject);
         var actor = await _runtime.CreateAsync<ResponsesAgentToolStateGAgent>(actorId, ct: ct);
-        await _projectionPort.EnsureProjectionAsync(actor.Id, ct);
         // The register dispatch is idempotent at the actor (HandleRegisterAsync
         // returns early when scope/owner already match). We do not cache a
         // "registered" set in this adapter — that would violate the
@@ -171,6 +167,9 @@ public sealed class ResponsesAgentToolStateCommandAdapter : IResponsesAgentToolS
         // entity-id → fact-state dictionary). The cost is one extra ignored
         // envelope per command, which is dwarfed by the projection write the
         // command itself triggers.
+        // Refactor (iter18/cluster-006):
+        //   Old pattern: command-path projection activation facade with new actor/lifecycle phase
+        //   New principle: committed-state publication hook activates existing projection scopes; no new actor/lifecycle phase
         await _dispatchPort.DispatchAsync(
             actor.Id,
             CreateEnvelope(

@@ -45,7 +45,7 @@ rg -n "actorId.*StartsWith|StartsWith\([^\n]*actor|TypeUrl\.Contains|\.HandleEve
 
 ### Step 3 — Candidate 文件（必写，与 cluster 文件分离）
 
-写入 `$REPO_ROOT/.refactor-loop/runs/audit-iter-{{iteration}}-candidates.ndjson`：每行一个 candidate。
+写入 `$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}-candidates.ndjson`：每行一个 candidate。
 
 ```json
 {"rule_id": "<CLAUDE clause id>", "path": "<file>", "line": <int>, "evidence": "<one-line code snippet>", "verdict": "accept|reject", "reject_reason": "<if reject>", "prior_cluster_overlap": "<cluster-id|none>"}
@@ -63,6 +63,78 @@ rg -n "actorId.*StartsWith|StartsWith\([^\n]*actor|TypeUrl\.Contains|\.HandleEve
 - **明确归因**：清楚 old/new pattern，后者直接写进代码注释。
 - **设计违规允许大 cluster**：如果是"需先定协议 / actor 化 / proto 迁移"的深层违规，**不要因为 >30 文件就拒绝**，标 `requires_design` 让 controller 决定是否拆。
 
+每个 cluster 输出含：
+
+```yaml
+id: cluster-NNN-<slug>
+rule_ids: [...]
+severity: high|medium|low
+requires_design: true|false
+files_touched_estimate: N-M
+old_pattern: <one-liner>
+new_pattern: <one-liner>
+```
+
+紧跟 Evidence + Fix boundary sections（沿用现有结构）。
+
+### Step 4b — `requires_design: true` cluster 必须额外产出"人话字段"
+
+当 `requires_design: true`，cluster 节末尾**必须**追加 `human_brief:` 块给非 audit 上下文的人类 reviewer 看：
+
+```yaml
+human_brief:
+  problem_title: "<中文短句,例如 'Voice host bridge 持有应该归 actor-state 的会话事实'>"
+  problem_statement: |
+    <3-5 句中文白话。禁用 audit 行话、file:line 引用、clause id。
+    回答:哪里坏了 / 为什么开发者应该关心。>
+  problem_example_file_path: "<single representative file:line range>"
+  problem_example_code: |
+    <10-30 line code snippet copied verbatim from the file, with
+    `// ← problem: <one-line annotation>` comments on the offending lines.
+    Reader should see the violation at a glance without opening other files.
+    Code stays original language; only the annotation is 中文.>
+  why_needs_design: |
+    <2-3 句中文。哪些是机械重构无法决定的、需要 trade-off。
+    例:"修复要在 actor-owned lease 和 projection-owned session contract 之间选;
+    这是公共 API 改动,有 backward-compat 取舍。">
+  design_question: "<给 maintainer 的一个具体问题,中文>"
+  original_authors:
+    # ⚠️ STRICT WHITELIST + REAL git blame VERIFICATION REQUIRED (per maintainer 2026-05-20
+    # "ai 原作者请确认真实在 git 源码出现过,不要用幻觉 at" + 投诉  误 ping 不相关用户事故)
+    #
+    # PROCEDURE(必须执行 — no shortcut):
+    # 1. 跑实际 git blame:`git blame --line-porcelain <file> | grep -E "^author " | sort | uniq -c | sort -rn | head -5`
+    # 2. 拿到的 git author name(e.g. "Loning" / "eanzhao" / "louis.li")
+    # 3. 用 STRICT WHITELIST 映射:
+    #    | git author | GitHub handle |
+    #    |---|---|
+    #    | Loning / loning | @loning |
+    #    | louis.li / louis4li | @louis4li |
+    #    | eanzhao / Ean Zhao | @eanzhao |
+    #    | jason | @jason-aelf |
+    #    | AbigailDeng | @AbigailDeng |
+    #    | potter / potter-sun | @potter-sun |
+    # 4. 不在 whitelist 的 git author → **不 list**(更不 @-mention)
+    # 5. git blame 0 lines 匹配 whitelist → fallback 一个 ["@loning"]
+    #
+    # ❌ 严禁 hallucinate(违反 = audit 拒收,重派):
+    #    - 没跑 git blame 就 list → ban
+    #    - ""(GitHub 上 `auric` 是不相关用户,会被误 ping)→ ban
+    #    - "@louis-li" 等错 variation → ban,只能 verbatim 表里 handle
+    #    - 非 whitelist handle → ban,即使真在 git blame 里(他们可能不在项目内)
+    - "@<handle-from-whitelist>"  # e.g. @eanzhao(经 git blame 验证 + 在 whitelist)
+    - "@<handle-from-whitelist>"  # 同上;若 git blame 只 1 个 whitelist match,只 list 1 个
+```
+
+**Per maintainer (2026-05-19) "默认工作语言中文吧, 不双语了"**: human_brief 不再要求 `_en` + `_zh` 双字段。`problem_title` / `problem_statement` / `why_needs_design` / `design_question` 直接用中文。Code snippet + file path + GitHub handle 等技术内容保留原英文。
+
+**红线**：
+
+1. `problem_statement_*` 不能是 audit YAML 复述；必须是面向"刚来的人"的解释。
+2. `problem_example_code` 必须是真实 verbatim copy + annotation comments；禁止伪造或省略。
+3. **每个 `_en` 字段必须有对等 `_zh` 字段，且内容完全等价**：信息密度、段落数、决策点列举数必须一致。禁止 `_zh` 写"见英文部分"或更短的 TL;DR 版本——这违反 SKILL.md "Bilingual rule (双语规则)"。`_zh` 自身必须是非中文母语 reviewer 看不到 `_en` 也能行动的完整解释。缺 `_zh` 或 `_zh` 显著短于 `_en` → controller 验收为 `AUDIT_INCOMPLETE: human_brief_missing_or_unbalanced_zh`。
+4. `design_question_pattern_en/zh` 是 cluster 专属问题，不是通用模板套话；要让 reviewer 看到就能直接回答。
+
 输出格式（每 cluster 一节，frontmatter + cluster sections，沿用现有 YAML 结构）。
 
 ### Step 5 — Reject 必须证据齐全
@@ -75,7 +147,7 @@ rg -n "actorId.*StartsWith|StartsWith\([^\n]*actor|TypeUrl\.Contains|\.HandleEve
 
 ### Step 6 — 终止 marker
 
-- 有 cluster → 末尾打印 `AUDIT_DONE:/Users/auric/aevatar/.refactor-loop/runs/audit-iter-{{iteration}}.md:<N>`
+- 有 cluster → 末尾打印 `AUDIT_DONE:/Users/auric/aevatar/.refactor-loop/runs/audit-iter-${ITERATION}.md:<N>`
 - **0 cluster** → 必须满足：manifest 完整 + candidates ndjson 存在 + 每个 reject 都有 evidence + 至少跑了 1 次 "second-pass" 命令对最高风险类别复扫。否则输出 `AUDIT_INCOMPLETE:<reason>` 而不是 `AUDIT_DONE:none:0`
 
 ## 红线 — 反 anchoring
@@ -88,3 +160,13 @@ rg -n "actorId.*StartsWith|StartsWith\([^\n]*actor|TypeUrl\.Contains|\.HandleEve
 - 禁止把"想加的功能"伪装成 cluster
 
 开始执行。
+
+---
+
+## AI 内容标识符(强制)
+
+所有 AI 生成的对外内容(GitHub issue/PR comment、PR body、commit message、`runs/*.md` artifact、push notification)**必须末尾独立一行**加 sentinel:
+
+    ⟦AI:AUTO-LOOP⟧
+
+不可修改字符 / 不放代码注释 / 不放路径分支名。无 sentinel = 产生失败,controller 拒绝 post。

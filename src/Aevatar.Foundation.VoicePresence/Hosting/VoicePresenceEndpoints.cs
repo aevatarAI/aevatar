@@ -12,6 +12,10 @@ namespace Aevatar.Foundation.VoicePresence.Hosting;
 /// <summary>
 /// Extension methods to map voice-presence WebSocket endpoints onto an ASP.NET host.
 /// </summary>
+// Refactor (iter15/cluster-025-voice-host-session-state-actorization):
+//   Old pattern: voice host resolver locks shared mutable lease state outside actor lifecycle
+//   New principle: media endpoints expose remote audio unavailability honestly.
+//   Remote setup/control remains actor-owned; chunks never cross EventEnvelope.
 public static class VoicePresenceEndpoints
 {
     public static IEndpointConventionBuilder MapVoicePresenceWebSocket(
@@ -85,6 +89,10 @@ public static class VoicePresenceEndpoints
                 await session.AttachTransportAsync(transport, ctx.RequestAborted);
                 attached = true;
                 await WaitUntilClosedAsync(ws, ctx.RequestAborted);
+            }
+            catch (VoiceRemoteAudioTransportUnavailableException)
+            {
+                await TryCloseUnsupportedRemoteAudioAsync(ws);
             }
             catch (InvalidOperationException) when (!attached)
             {
@@ -186,6 +194,14 @@ public static class VoicePresenceEndpoints
                 ctx.Response.Headers.Location = ctx.Request.Path.ToString();
                 await ctx.Response.WriteAsync(transportSession.AnswerSdp);
             }
+            catch (VoiceRemoteAudioTransportUnavailableException)
+            {
+                if (!attached)
+                    await transportSession.Transport.DisposeAsync();
+
+                ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                await ctx.Response.WriteAsync(VoiceRemoteAudioTransportUnavailableException.Reason);
+            }
             catch
             {
                 if (!attached)
@@ -263,6 +279,25 @@ public static class VoicePresenceEndpoints
         }
     }
 
+    private static async Task TryCloseUnsupportedRemoteAudioAsync(WebSocket ws)
+    {
+        if (ws.State is not WebSocketState.Open and not WebSocketState.CloseReceived)
+            return;
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            await ws.CloseAsync(
+                WebSocketCloseStatus.PolicyViolation,
+                VoiceRemoteAudioTransportUnavailableException.Reason,
+                cts.Token);
+        }
+        catch
+        {
+            // best effort close after websocket upgrade
+        }
+    }
+
     private static async Task WaitUntilClosedAsync(WebSocket ws, CancellationToken ct)
     {
         try
@@ -301,4 +336,13 @@ public static class VoicePresenceEndpoints
 
         await session.DetachTransportAsync(transport);
     }
+}
+
+// Refactor (iter15/cluster-025-voice-host-session-state-actorization):
+//   Old pattern: resolver and endpoints matched duplicated private exception-message constants.
+//   New principle: remote media unavailability is a typed host signal with one shared reason.
+internal sealed class VoiceRemoteAudioTransportUnavailableException()
+    : NotSupportedException(Reason)
+{
+    public const string Reason = "remote_audio_transport_unavailable";
 }

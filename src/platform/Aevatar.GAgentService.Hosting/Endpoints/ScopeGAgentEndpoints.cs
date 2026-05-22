@@ -321,7 +321,7 @@ public static class ScopeGAgentEndpoints
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            await RollbackPreparedActorIfPendingAsync(actorPreparationPort, preparedActor, session.ResponseStarted);
+            await RollbackPreparedActorAsync(actorPreparationPort, preparedActor);
 
             try
             {
@@ -335,11 +335,11 @@ public static class ScopeGAgentEndpoints
         catch (OperationCanceledException)
         {
             // Client disconnected.
-            await RollbackPreparedActorIfPendingAsync(actorPreparationPort, preparedActor, session.ResponseStarted);
+            await RollbackPreparedActorAsync(actorPreparationPort, preparedActor);
         }
         catch (Exception ex)
         {
-            await RollbackPreparedActorIfPendingAsync(actorPreparationPort, preparedActor, session.ResponseStarted);
+            await RollbackPreparedActorAsync(actorPreparationPort, preparedActor);
 
             logger.LogError(ex, "GAgent draft-run failed for type {TypeName}", request.ActorTypeName);
             var isAuthRequired = IsNyxIdAuthenticationRequired(ex);
@@ -497,17 +497,6 @@ public static class ScopeGAgentEndpoints
     {
         if (preparedActor?.RequiresRollbackOnFailure == true)
             await actorPreparationPort.RollbackAsync(preparedActor, CancellationToken.None);
-    }
-
-    private static async Task RollbackPreparedActorIfPendingAsync(
-        IGAgentDraftRunActorPreparationPort actorPreparationPort,
-        GAgentDraftRunPreparedActor? preparedActor,
-        bool responseStarted)
-    {
-        if (responseStarted)
-            return;
-
-        await RollbackPreparedActorAsync(actorPreparationPort, preparedActor);
     }
 
     private static async Task WriteDraftRunExceptionJsonAsync(

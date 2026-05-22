@@ -1,12 +1,12 @@
-# 任务：验证 {{cluster_id}} 的实施改动
+# 任务：验证 ${CLUSTER_ID} 的实施改动
 
-你以无人值守模式在 worktree `{{worktree_path}}` 中工作。前一个 codex 已完成实施，改动在工作树未提交。
+你以无人值守模式在 worktree `${WORKTREE_PATH}` 中工作。前一个 codex 已完成实施，改动在工作树未提交。
 
 ## 必读
 
 1. `$REPO_ROOT/CLAUDE.md` 全部强制条款。
-2. `$REPO_ROOT/.refactor-loop/runs/audit-iter-{{iteration}}.md` 的 "{{cluster_id}}" 一节。
-3. `$REPO_ROOT/.refactor-loop/runs/implement-{{cluster_id}}.md` 实施摘要。
+2. `$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md` 的 "${CLUSTER_ID}" 一节。
+3. `$REPO_ROOT/.refactor-loop/runs/implement-${CLUSTER_ID}.md` 实施摘要。
 4. `git diff HEAD` —— 完整改动 diff。
 
 ## 验证维度
@@ -38,7 +38,7 @@
 bash $REPO_ROOT/tools/ci/architecture_guards.sh
 bash $REPO_ROOT/tools/ci/test_stability_guards.sh
 # 任何 cluster 特定守卫，例如：
-{{cluster_specific_guards}}
+${CLUSTER_SPECIFIC_GUARDS}
 ```
 
 如果项目编译失败 → rework。
@@ -53,12 +53,12 @@ bash $REPO_ROOT/tools/ci/test_stability_guards.sh
 
 ## 输出契约
 
-写入 `$REPO_ROOT/.refactor-loop/runs/verify-{{cluster_id}}.md`：
+写入 `$REPO_ROOT/.refactor-loop/runs/verify-${CLUSTER_ID}.md`：
 
 ```markdown
 ---
 schema: refactor-verify-v1
-cluster_id: {{cluster_id}}
+cluster_id: ${CLUSTER_ID}
 verdict: pass | rework | abort
 verified_at: <ISO8601>
 ---
@@ -81,7 +81,7 @@ verified_at: <ISO8601>
 <给 implement 阶段的明确返工指令，可直接拼接到 implement prompt>
 ```
 
-末尾打印 `VERIFY_DONE:{{cluster_id}}:<verdict>` 其中 verdict ∈ {pass, rework, abort}。
+末尾打印 `VERIFY_DONE:${CLUSTER_ID}:<verdict>` 其中 verdict ∈ {pass, rework, abort}。
 
 - `pass` —— controller 会合并。
 - `rework` —— controller 会回炉实施。
@@ -94,3 +94,13 @@ verified_at: <ISO8601>
 - 验证宽松度倾向严格而非宽松：怀疑 → 标 rework，不要妥协给 pass。
 
 开始执行。
+
+---
+
+## AI 内容标识符(强制)
+
+所有 AI 生成的对外内容(GitHub issue/PR comment、PR body、commit message、`runs/*.md` artifact、push notification)**必须末尾独立一行**加 sentinel:
+
+    ⟦AI:AUTO-LOOP⟧
+
+不可修改字符 / 不放代码注释 / 不放路径分支名。无 sentinel = 产生失败,controller 拒绝 post。

@@ -1,0 +1,376 @@
+using Aevatar.ChatRouting.Abstractions;
+using FluentAssertions;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using NSubstitute;
+
+namespace Aevatar.ChatRouting.Core.Tests;
+
+public sealed class ChatRouteResolverTests
+{
+    [Fact]
+    public void Resolve_NullSnapshot_UsesFallbackDecision()
+    {
+        var fallback = Substitute.For<IChatRouteFallbackProvider>();
+        fallback.GetFallbackDecision().Returns(new ChatRouteDecision
+        {
+            Action = ForwardToModelAction("fallback-model"),
+            UsedFallback = true,
+        });
+        var resolver = new ChatRouteResolver(fallback);
+
+        var decision = resolver.Resolve(null, new ChatRouteInput());
+
+        decision.UsedFallback.Should().BeTrue();
+        decision.MatchedRuleId.Should().BeEmpty();
+        decision.Action.ForwardToModel.ModelName.Should().Be("fallback-model");
+    }
+
+    [Fact]
+    public void Resolve_RulesEmpty_ReturnsDefaultTarget()
+    {
+        var resolver = NewResolver();
+        var snapshot = new ChatRoutePolicySnapshot(ForwardToModelAction("default-model"), []);
+
+        var decision = resolver.Resolve(snapshot, new ChatRouteInput());
+
+        decision.UsedFallback.Should().BeFalse();
+        decision.MatchedRuleId.Should().BeEmpty();
+        decision.Action.ForwardToModel.ModelName.Should().Be("default-model");
+    }
+
+    [Fact]
+    public void Resolve_SingleMatchingRule_ReturnsRuleActionAndMatchedRuleId()
+    {
+        var resolver = NewResolver();
+        var snapshot = new ChatRoutePolicySnapshot(
+            ForwardToModelAction("default-model"),
+            [
+                new ChatRouteRule
+                {
+                    RuleId = "daily",
+                    Priority = 10,
+                    Match = new ChatRouteMatch { CommandName = "/daily" },
+                    Action = ForwardToModelAction("daily-model"),
+                },
+            ]);
+
+        var decision = resolver.Resolve(snapshot, new ChatRouteInput { CommandName = "/daily" });
+
+        decision.MatchedRuleId.Should().Be("daily");
+        decision.Action.ForwardToModel.ModelName.Should().Be("daily-model");
+    }
+
+    [Fact]
+    public void Resolve_MultipleMatchingRules_UsesProjectedRuleOrder()
+    {
+        var resolver = NewResolver();
+        var snapshot = new ChatRoutePolicySnapshot(
+            ForwardToModelAction("default-model"),
+            [
+                new ChatRouteRule
+                {
+                    RuleId = "low",
+                    Priority = 1,
+                    Match = new ChatRouteMatch { Channel = "lark" },
+                    Action = ForwardToModelAction("low-model"),
+                },
+                new ChatRouteRule
+                {
+                    RuleId = "high",
+                    Priority = 20,
+                    Match = new ChatRouteMatch { Channel = "lark" },
+                    Action = ForwardToModelAction("high-model"),
+                },
+            ]);
+
+        var decision = resolver.Resolve(snapshot, new ChatRouteInput { Channel = "lark" });
+
+        decision.MatchedRuleId.Should().Be("low");
+        decision.Action.ForwardToModel.ModelName.Should().Be(
+            "low-model",
+            "the policy actor stores rules in priority order, so the resolver must not re-sort on the hot path");
+    }
+
+    [Fact]
+    public void Resolve_VoiceSourceRule_ReturnsVoiceTargetModule()
+    {
+        var resolver = NewResolver();
+        var snapshot = new ChatRoutePolicySnapshot(
+            ForwardToModelAction("default-model"),
+            [
+                new ChatRouteRule
+                {
+                    RuleId = "voice-openai",
+                    Priority = 10,
+                    Match = new ChatRouteMatch { SourceKind = ChatSourceKind.Voice },
+                    Action = new ChatRouteAction
+                    {
+                        ForwardToGagent = new ForwardToGAgent
+                        {
+                            ActorId = "agent-voice",
+                            VoiceModuleName = "voice_presence_openai",
+                        },
+                    },
+                },
+            ]);
+
+        var decision = resolver.Resolve(snapshot, new ChatRouteInput
+        {
+            SourceKind = ChatSourceKind.Voice,
+            Voice = new VoiceInput { VoiceModuleName = "voice_presence_openai" },
+        });
+
+        decision.MatchedRuleId.Should().Be("voice-openai");
+        decision.Action.ForwardToGagent.ActorId.Should().Be("agent-voice");
+        decision.Action.ForwardToGagent.VoiceModuleName.Should().Be("voice_presence_openai");
+    }
+
+    [Fact]
+    public void Resolve_ForwardToTeamRule_ReturnsTeamAction()
+    {
+        var resolver = NewResolver();
+        var snapshot = new ChatRoutePolicySnapshot(
+            ForwardToModelAction("default-model"),
+            [
+                new ChatRouteRule
+                {
+                    RuleId = "team-route",
+                    Priority = 10,
+                    Match = new ChatRouteMatch { CommandName = "/triage" },
+                    Action = new ChatRouteAction
+                    {
+                        ForwardToTeam = new ForwardToTeam
+                        {
+                            TeamId = "team-1",
+                            EndpointId = "chat",
+                        },
+                    },
+                },
+            ]);
+
+        var decision = resolver.Resolve(snapshot, new ChatRouteInput { CommandName = "/triage" });
+
+        decision.MatchedRuleId.Should().Be("team-route");
+        decision.Action.ActionCase.Should().Be(ChatRouteAction.ActionOneofCase.ForwardToTeam);
+        decision.Action.ForwardToTeam.TeamId.Should().Be("team-1");
+        decision.Action.ForwardToTeam.EndpointId.Should().Be("chat");
+    }
+
+    [Fact]
+    public void Resolve_DefaultTargetIsForwardToTeam_ReturnsTeamAction()
+    {
+        var resolver = NewResolver();
+        var defaultTeam = new ChatRouteAction
+        {
+            ForwardToTeam = new ForwardToTeam
+            {
+                TeamId = "default-team",
+                EndpointId = "chat",
+                ScopeId = "scope-x",
+            },
+        };
+        var snapshot = new ChatRoutePolicySnapshot(defaultTeam, []);
+
+        var decision = resolver.Resolve(snapshot, new ChatRouteInput());
+
+        decision.UsedFallback.Should().BeFalse();
+        decision.MatchedRuleId.Should().BeEmpty();
+        decision.Action.ActionCase.Should().Be(ChatRouteAction.ActionOneofCase.ForwardToTeam);
+        decision.Action.ForwardToTeam.TeamId.Should().Be("default-team");
+        decision.Action.ForwardToTeam.ScopeId.Should().Be("scope-x");
+    }
+
+    [Fact]
+    public void Resolve_ModelAndToolModeRule_ReturnsRuleAction()
+    {
+        var resolver = NewResolver();
+        var snapshot = new ChatRoutePolicySnapshot(
+            ForwardToModelAction("default-model"),
+            [
+                new ChatRouteRule
+                {
+                    RuleId = "responses-tools",
+                    Priority = 10,
+                    Match = new ChatRouteMatch
+                    {
+                        SourceKind = ChatSourceKind.NyxResponses,
+                        Model = "original-model",
+                        ToolMode = ToolMode.Declared,
+                    },
+                    Action = ForwardToModelAction("tool-aware-model"),
+                },
+            ]);
+
+        var decision = resolver.Resolve(snapshot, new ChatRouteInput
+        {
+            SourceKind = ChatSourceKind.NyxResponses,
+            Model = "original-model",
+            ToolMode = ToolMode.Declared,
+        });
+
+        decision.MatchedRuleId.Should().Be("responses-tools");
+        decision.Action.ForwardToModel.ModelName.Should().Be("tool-aware-model");
+    }
+
+    [Fact]
+    public void Resolve_MatchingRuleWithEmptyAction_FallsThroughToDefaultTarget()
+    {
+        var resolver = NewResolver();
+        var snapshot = new ChatRoutePolicySnapshot(
+            ForwardToModelAction("default-model"),
+            [
+                // A projected rule whose action was never set — proto3 leaves
+                // the message field null, and the write side only validates
+                // default_target on upsert, so this is reachable on the read
+                // side. Resolver must not NRE on action.Clone().
+                new ChatRouteRule
+                {
+                    RuleId = "broken",
+                    Priority = 10,
+                    Match = new ChatRouteMatch { Channel = "lark" },
+                    Action = null,
+                },
+            ]);
+
+        var decision = resolver.Resolve(snapshot, new ChatRouteInput { Channel = "lark" });
+
+        decision.MatchedRuleId.Should().BeEmpty(
+            "an actionless matching rule must be skipped, not return a half-built decision");
+        decision.Action.ForwardToModel.ModelName.Should().Be("default-model");
+        decision.UsedFallback.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Resolve_HigherPriorityRuleEmpty_LowerPriorityRuleWithActionStillWins()
+    {
+        var resolver = NewResolver();
+        var snapshot = new ChatRoutePolicySnapshot(
+            ForwardToModelAction("default-model"),
+            [
+                new ChatRouteRule
+                {
+                    RuleId = "high-empty",
+                    Priority = 20,
+                    Match = new ChatRouteMatch { Channel = "lark" },
+                    Action = null,
+                },
+                new ChatRouteRule
+                {
+                    RuleId = "low-actioned",
+                    Priority = 5,
+                    Match = new ChatRouteMatch { Channel = "lark" },
+                    Action = ForwardToModelAction("low-model"),
+                },
+            ]);
+
+        var decision = resolver.Resolve(snapshot, new ChatRouteInput { Channel = "lark" });
+
+        decision.MatchedRuleId.Should().Be("low-actioned",
+            "a higher-priority but actionless rule must not block a lower-priority actionable one");
+        decision.Action.ForwardToModel.ModelName.Should().Be("low-model");
+    }
+
+    [Fact]
+    public void ResolverAssembly_HasNoOrleansRuntimeOrHttpClientInjectionSurface()
+    {
+        var disallowedReferences = typeof(ChatRouteResolver).Assembly.GetReferencedAssemblies()
+            .Select(static name => name.Name)
+            .Where(static name =>
+                name is not null &&
+                name.Contains("Orleans", StringComparison.OrdinalIgnoreCase));
+        disallowedReferences.Should().BeEmpty();
+
+        var disallowedConstructorTypes = typeof(ChatRouteResolver).GetConstructors()
+            .SelectMany(static ctor => ctor.GetParameters())
+            .Select(static parameter => parameter.ParameterType.FullName)
+            .Where(static name =>
+                name is not null &&
+                (name.Contains("HttpClient", StringComparison.Ordinal) ||
+                 name.Contains("IActorRuntime", StringComparison.Ordinal)));
+        disallowedConstructorTypes.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void EnvFallback_EnvModelWinsOverOptions()
+    {
+        var previous = Environment.GetEnvironmentVariable(EnvChatRouteFallbackProvider.DefaultModelEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(EnvChatRouteFallbackProvider.DefaultModelEnvironmentVariable, "env-model");
+            var provider = new EnvChatRouteFallbackProvider(Options.Create(new ChatRoutingOptions
+            {
+                Defaults = new ChatRoutingDefaultsOptions { FallbackModel = "option-model" },
+            }));
+
+            var decision = provider.GetFallbackDecision();
+
+            decision.UsedFallback.Should().BeTrue();
+            decision.MatchedRuleId.Should().BeEmpty();
+            decision.Action.ForwardToModel.ModelName.Should().Be("env-model");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(EnvChatRouteFallbackProvider.DefaultModelEnvironmentVariable, previous);
+        }
+    }
+
+    [Fact]
+    public void AddChatRoutingCore_RegistersResolverFallbackAndQueryPort()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<
+            Aevatar.CQRS.Projection.Stores.Abstractions.IProjectionDocumentReader<
+                ChatRoutePolicyCurrentStateDocument,
+                string>>());
+
+        using var provider = services.AddChatRoutingCore().BuildServiceProvider();
+
+        provider.GetRequiredService<ChatRouteResolver>().Should().NotBeNull();
+        provider.GetRequiredService<IChatRouteFallbackProvider>().Should().BeOfType<EnvChatRouteFallbackProvider>();
+        provider.GetRequiredService<IChatRoutePolicyQueryPort>().Should().BeOfType<ChatRoutePolicyQueryPort>();
+    }
+
+    [Fact]
+    public void AddChatRoutingCore_BindsChatRoutingOptionsFromConfiguration()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ChatRouting:Defaults:FallbackModel"] = "configured-model",
+            })
+            .Build();
+        var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(configuration);
+        services.AddSingleton(Substitute.For<
+            Aevatar.CQRS.Projection.Stores.Abstractions.IProjectionDocumentReader<
+                ChatRoutePolicyCurrentStateDocument,
+                string>>());
+
+        using var provider = services.AddChatRoutingCore().BuildServiceProvider();
+
+        provider.GetRequiredService<IOptions<ChatRoutingOptions>>()
+            .Value.Defaults.FallbackModel.Should().Be("configured-model");
+    }
+
+    private static ChatRouteResolver NewResolver()
+    {
+        var fallback = Substitute.For<IChatRouteFallbackProvider>();
+        fallback.GetFallbackDecision().Returns(new ChatRouteDecision
+        {
+            Action = ForwardToModelAction("fallback-model"),
+            UsedFallback = true,
+        });
+        return new ChatRouteResolver(fallback);
+    }
+
+    internal static ChatRouteAction ForwardToModelAction(string modelName) =>
+        new() { ForwardToModel = new ForwardToModel { ModelName = modelName } };
+
+    internal static OwnerScope CallerScope() => OwnerScope.ForChannel(
+        "user-1",
+        "lark",
+        "bot-1",
+        "sender-1");
+}
