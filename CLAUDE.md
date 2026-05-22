@@ -1,5 +1,11 @@
 # CLAUDE.md
 
+<!--
+Refactor (iter33/cluster-claude-md-slim):
+Old pattern: CLAUDE.md mixed top-level architecture rules with duplicated operational runbooks and skill-owned details.
+New principle: CLAUDE.md keeps the cross-process architecture and engineering boundary; operational procedures live in their owning skills.
+-->
+
 ## 顶级架构约束（最高优先级）
 - 严格分层：`Domain / Application / Infrastructure / Host`；`API` 仅做宿主与组合，不承载业务编排。
 - 统一投影链路：CQRS 与 AGUI 走同一套 Projection Pipeline，统一入口、一对多分发，禁止双轨实现。
@@ -44,7 +50,7 @@
 - 禁止 stream request-reply 冒充 RPC：stream 用于事件分发与观察；"先发消息再等 reply"必须改 readmodel 查询或 continuation 事件协议。
 - 命令骨架内聚：标准生命周期 `Normalize -> Resolve Target -> Build Context -> Build Envelope -> Dispatch -> Receipt -> Observe`；业务模块只负责目标解析与载荷/结果映射。
 - 传输载体可替换：上层依赖投递契约（`IActorDispatchPort`），不依赖具体载体；链路可从直投切换为异步传输而不污染应用语义。
-- 投递语义 runtime-neutral：`publish/send` 统一表示"进入目标 inbox"；不因目标 `self` 或底层差异退化为 inline dispatch；需立即执行走独立 `dispatch` 契约。
+- 投递语义 runtime-neutral：`publish/send` 统一表示"进入目标 inbox"；不因目标 `self` 或底层差异退化为 inline dispatch；需立即执行走独立 `dispatch` 契约，禁止绕过 publisher 直操底层传输对象。
 - Runtime 与 Dispatch 分责：`Runtime` 负责 lifecycle/topology/lookup，`Dispatch Port` 负责投递；禁止揉成全能接口。
 - ACK 诚实：同步返回只承诺已达到阶段（默认 `accepted + stable command id`）；`committed`/`read-model observed` 等强保证须通过独立契约或异步观察获取。
 - 追踪标识与目标身份分离：`commandId/correlationId` 追踪请求，`actorId` 标识实体；禁止混用或假设一一对应。
@@ -57,7 +63,7 @@
 - 查询始终走 readmodel：对外查询只读 readmodel；不暴露 actor 内部状态、state mirror payload 或 event replay 为查询主路径。
 - 写侧端口只负责 lifecycle/command；读取走窄 query contract 或 projection，禁止 Application/Infrastructure 直读 write-model 内部状态。
 - 禁止侧读冒充 query：禁止直读其他 actor 的 event store、持久态快照或"事实重建器"拼装查询结果；跨 actor 读取走 readmodel 或 projection。
-- 禁止 query-time replay/priming：`QueryPort/QueryService/ApplicationService` 不得在请求路径读 `IEventStore`、重放 events、临时重建 state mirror，或在 query 方法内同步补投影。
+- 禁止 query-time replay/priming：`QueryPort/QueryService/ApplicationService` 不得在请求路径读 `IEventStore`、重放 events、临时重建 state mirror，或在 query 方法内同步补投影/补跑 ES/materialization；刷新须通过正式 projection 会话、后台 materializer 或写侧预挂接 projection 完成。
 - `EventEnvelope` 是唯一投影传输壳：业务消息与投影消息都用 `EventEnvelope`；区别由强类型 payload 表达，禁止引入第二层包络。
 - 业务一致性与查询一致性分层：actor 间链路对"消息已接收/事件已提交/协议已推进"负责；readmodel 对"某 `StateVersion` 已物化可见"负责；禁止混用。
 - 一权威状态 → 多 readmodel：不同 readmodel 表达同一 actor 当前态的不同查询形态，不得各自重算业务状态机。
@@ -80,7 +86,7 @@
 ## Actor 设计 / 生命周期 / 执行模型（强制）
 - Actor 以业务命名：actor 类型和 ID 描述业务实体，禁止 `WriteActor`、`ReadModelActor`、`StoreActor` 等技术功能命名。
 - 读写分离在 Projection Pipeline 层实现，不在 actor 层实现：actor 拥有完整业务状态并处理命令；committed event 流入 Projection Pipeline 物化查询视图。
-- 应用层契约以业务命名：读端口用 `IXxxQueryPort`，写命令通过 `IActorDispatchPort` 或等价命令分发机制；endpoint 不直接依赖 runtime 或 projection 基础设施抽象。
+- 应用层契约以业务命名：读端口用 `IXxxQueryPort`，写命令通过 `IActorDispatchPort` 或等价命令分发机制；禁止 `IXxxStore` 等存储导向命名出现在应用层，endpoint 不直接依赖 `IActorRuntime`/`IProjectionDocumentReader` 等基础设施抽象；应用层契约必须承载业务语义，禁止纯转发空壳。
 - 面向对象内聚：同一业务实体的状态、命令处理、事件发布在同一个 actor 内完成；禁止将数据和方法拆分到不同 actor 再拼装。
 - 默认短生命周期：一次执行/会话/编排即完成的能力，建模为 `run/session/task-scoped actor`；GAgent、workflow、scripting 只要协议一致均可作为实现来源。
 - 长期 actor 限定事实拥有者：`definition/catalog/manager/index/checkpoint` 等需长期持有权威状态、串行推进事实的对象。
