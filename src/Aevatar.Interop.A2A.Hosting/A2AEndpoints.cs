@@ -9,6 +9,7 @@
 using System.Text;
 using System.Text.Json;
 using Aevatar.Interop.A2A.Abstractions;
+using Aevatar.Interop.A2A.Application;
 using Aevatar.Interop.A2A.Abstractions.Models;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -140,9 +141,11 @@ public static class A2AEndpoints
     private static async Task HandleSubscribeAsync(
         HttpContext context,
         string taskId,
-        IA2AAdapterService adapter,
-        IA2ATaskStore taskStore)
+        IA2AAdapterService adapter)
     {
+        // Refactor (iter30/cluster-031-a2a-actor-owned):
+        //   Old pattern: SSE used IA2ATaskStore.SubscribeAsync process-local subscriber registry.
+        //   New principle: SSE observes typed materialized task updates via adapter subscription port.
         var ct = context.RequestAborted;
 
         // Verify task exists
@@ -161,10 +164,11 @@ public static class A2AEndpoints
         context.Response.Headers["X-Accel-Buffering"] = "no";
         await context.Response.StartAsync(ct);
 
-        var reader = taskStore.SubscribeAsync(taskId);
+        await using var subscription = await adapter.SubscribeTaskUpdatesAsync(
+            taskId,
+            update => WriteTaskUpdateAsync(context.Response, update, ct),
+            ct);
 
-        // Subscribe before sending the first event so a transition that happens
-        // during stream startup is still observed by the reader.
         await WriteSseEventAsync(context.Response, "status", task.Status, ct);
 
         // If task is already in terminal state, close the stream
@@ -174,23 +178,21 @@ public static class A2AEndpoints
             return;
         }
 
-        try
-        {
-            await foreach (var update in reader.ReadAllAsync(ct))
-            {
-                await WriteSseEventAsync(context.Response, "status", update.Status, ct);
-
-                if (update.Artifact != null)
-                    await WriteSseEventAsync(context.Response, "artifact", update.Artifact, ct);
-
-                if (update.IsFinal)
-                {
-                    await WriteSseEventAsync(context.Response, "close", new { reason = "terminal_state" }, ct);
-                    break;
-                }
-            }
-        }
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var cancellationRegistration = ct.Register(() => completion.TrySetCanceled(ct));
+        try { await completion.Task; }
         catch (OperationCanceledException) { /* client disconnected */ }
+    }
+
+    private static async Task WriteTaskUpdateAsync(HttpResponse response, A2ATaskUpdate update, CancellationToken ct)
+    {
+        await WriteSseEventAsync(response, "status", A2ATaskModelMapper.ToDto(update.Status), ct);
+
+        if (update.Artifact != null)
+            await WriteSseEventAsync(response, "artifact", A2ATaskModelMapper.ToDto(update.Artifact), ct);
+
+        if (update.IsFinal)
+            await WriteSseEventAsync(response, "close", new { reason = "terminal_state" }, ct);
     }
 
     private static async Task WriteSseEventAsync(HttpResponse response, string eventType, object data, CancellationToken ct)

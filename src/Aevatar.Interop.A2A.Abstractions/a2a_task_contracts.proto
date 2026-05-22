@@ -1,0 +1,119 @@
+syntax = "proto3";
+package aevatar.interop.a2a;
+option csharp_namespace = "Aevatar.Interop.A2A.Abstractions";
+
+import "google/protobuf/timestamp.proto";
+
+// Refactor (iter30/cluster-031-a2a-actor-owned):
+//   Old pattern: process-local IA2ATaskStore ledger/subscriber registry owned lifecycle facts.
+//   New principle: task-scoped GAgent owns typed protobuf state/events; query/subscribe observe materialized updates only.
+
+enum A2ATaskLifecycleState {
+  A2A_TASK_LIFECYCLE_STATE_UNSPECIFIED = 0;
+  A2A_TASK_LIFECYCLE_STATE_SUBMITTED = 1;
+  A2A_TASK_LIFECYCLE_STATE_WORKING = 2;
+  A2A_TASK_LIFECYCLE_STATE_INPUT_REQUIRED = 3;
+  A2A_TASK_LIFECYCLE_STATE_COMPLETED = 4;
+  A2A_TASK_LIFECYCLE_STATE_CANCELED = 5;
+  A2A_TASK_LIFECYCLE_STATE_FAILED = 6;
+  A2A_TASK_LIFECYCLE_STATE_UNKNOWN = 7;
+}
+
+message A2ATaskPartDataEntry {
+  string key = 1;
+  string value_json = 2;
+}
+
+message A2ATaskPart {
+  string type = 1;
+  string text = 2;
+  string file_name = 3;
+  string file_mime_type = 4;
+  string file_bytes = 5;
+  string file_uri = 6;
+  repeated A2ATaskPartDataEntry data_entries = 7;
+  map<string, string> metadata = 8;
+}
+
+message A2ATaskMessage {
+  string role = 1;
+  repeated A2ATaskPart parts = 2;
+  map<string, string> metadata = 3;
+}
+
+message A2ATaskArtifact {
+  string name = 1;
+  string description = 2;
+  repeated A2ATaskPart parts = 3;
+  int32 index = 4;
+  map<string, string> metadata = 5;
+}
+
+message A2ATaskStatusSnapshot {
+  A2ATaskLifecycleState state = 1;
+  A2ATaskMessage message = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+message A2ATaskState {
+  string task_id = 1;
+  string session_id = 2;
+  string target_actor_id = 3;
+  string command_id = 4;
+  string correlation_id = 5;
+  A2ATaskStatusSnapshot status = 6;
+  repeated A2ATaskMessage history = 7;
+  repeated A2ATaskArtifact artifacts = 8;
+  map<string, string> metadata = 9;
+  int64 state_version = 10;
+  string last_event_id = 11;
+  google.protobuf.Timestamp updated_at = 12;
+}
+
+message A2ATaskSubmitCommand {
+  string task_id = 1;
+  string session_id = 2;
+  string target_actor_id = 3;
+  string command_id = 4;
+  string correlation_id = 5;
+  A2ATaskMessage message = 6;
+  map<string, string> metadata = 7;
+  google.protobuf.Timestamp requested_at = 8;
+}
+
+message A2ATaskCancelCommand {
+  string task_id = 1;
+  string command_id = 2;
+  string correlation_id = 3;
+  google.protobuf.Timestamp requested_at = 4;
+}
+
+message A2ATaskSubmittedEvent {
+  string event_id = 1;
+  A2ATaskState state = 2;
+}
+
+message A2ATaskCancelSubmittedEvent {
+  string event_id = 1;
+  A2ATaskState state = 2;
+}
+
+message A2ATaskCurrentStateReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  A2ATaskState state = 6;
+}
+
+message A2ATaskUpdate {
+  string task_id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  A2ATaskStatusSnapshot status = 6;
+  A2ATaskArtifact artifact = 7;
+  bool is_final = 8;
+}

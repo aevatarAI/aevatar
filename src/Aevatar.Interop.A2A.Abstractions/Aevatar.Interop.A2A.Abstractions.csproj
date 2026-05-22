@@ -7,6 +7,17 @@
     <RootNamespace>Aevatar.Interop.A2A.Abstractions</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Aevatar.CQRS.Projection.Stores.Abstractions\Aevatar.CQRS.Projection.Stores.Abstractions.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Tools">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
     <PackageReference Include="System.Text.Json" />
+  </ItemGroup>
+  <ItemGroup>
+    <Protobuf Include="a2a_task_contracts.proto" GrpcServices="None" />
   </ItemGroup>
 </Project>

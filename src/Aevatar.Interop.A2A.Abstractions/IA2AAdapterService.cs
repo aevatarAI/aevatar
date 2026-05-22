@@ -3,6 +3,9 @@ using Aevatar.Interop.A2A.Abstractions.Models;
 namespace Aevatar.Interop.A2A.Abstractions;
 
 /// <summary>A2A protocol adapter service. Converts A2A JSON-RPC requests into internal actor interactions.</summary>
+// Refactor (iter30/cluster-031-a2a-actor-owned):
+//   Old pattern: tasks/send/get/cancel crossed a synchronous IA2ATaskStore lifecycle service.
+//   New principle: send/cancel dispatch typed task commands; get/subscribe read typed materialized task facts.
 public interface IA2AAdapterService
 {
     /// <summary>Handles the tasks/send request.</summary>
@@ -13,6 +16,12 @@ public interface IA2AAdapterService
 
     /// <summary>Handles the tasks/cancel request.</summary>
     Task<A2ATask> CancelTaskAsync(TaskIdParams idParams, CancellationToken ct = default);
+
+    /// <summary>Observes materialized task updates for SSE delivery.</summary>
+    Task<IAsyncDisposable> SubscribeTaskUpdatesAsync(
+        string taskId,
+        Func<A2ATaskUpdate, Task> handler,
+        CancellationToken ct = default);
 
     /// <summary>Gets the Agent Card.</summary>
     AgentCard GetAgentCard(string baseUrl);
