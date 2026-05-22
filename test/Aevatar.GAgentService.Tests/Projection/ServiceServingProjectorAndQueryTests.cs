@@ -74,6 +74,73 @@ public sealed class ServiceServingProjectorAndQueryTests
     }
 
     [Fact]
+    public async Task DeploymentCatalogProjector_ShouldOverwriteStaleDeployments_FromLatestStateRoot()
+    {
+        var store = new RecordingDocumentStore<ServiceDeploymentCatalogReadModel>(x => x.Id);
+        await store.UpsertAsync(new ServiceDeploymentCatalogReadModel
+        {
+            Id = "tenant:app:default:svc",
+            ActorId = "tenant:app:default:svc",
+            StateVersion = 8,
+            LastEventId = "evt-stale",
+            UpdatedAt = DateTimeOffset.Parse("2026-03-15T00:00:00+00:00"),
+            Deployments =
+            {
+                new ServiceDeploymentReadModel
+                {
+                    DeploymentId = "dep-stale",
+                    RevisionId = "old-revision",
+                    PrimaryActorId = "old-actor",
+                    Status = ServiceDeploymentStatus.Active.ToString(),
+                    UpdatedAt = DateTimeOffset.Parse("2026-03-15T00:01:00+00:00"),
+                },
+            },
+        });
+        var projector = new ServiceDeploymentCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-15T00:00:00+00:00")));
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var state = new ServiceDeploymentState
+        {
+            Identity = identity.Clone(),
+        };
+        state.Deployments["dep-fresh"] = new ServiceDeploymentRecord
+        {
+            DeploymentId = "dep-fresh",
+            RevisionId = "fresh-revision",
+            PrimaryActorId = "fresh-actor",
+            Status = ServiceDeploymentStatus.Active,
+            UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-03-15T02:00:00+00:00")),
+        };
+
+        await projector.ProjectAsync(
+            new ServiceDeploymentCatalogProjectionContext
+            {
+                RootActorId = "tenant:app:default:svc",
+                ProjectionKind = "service-deployments",
+            },
+            BuildCommittedEnvelope(
+                new ServiceDeploymentActivatedEvent
+                {
+                    Identity = identity.Clone(),
+                    DeploymentId = "dep-fresh",
+                    RevisionId = "fresh-revision",
+                    PrimaryActorId = "fresh-actor",
+                    Status = ServiceDeploymentStatus.Active,
+                },
+                state,
+                eventId: "evt-fresh",
+                stateVersion: 9,
+                observedAt: DateTimeOffset.Parse("2026-03-15T02:00:00+00:00")));
+
+        var readModel = await store.GetAsync(ServiceKeys.Build(identity));
+
+        readModel.Should().NotBeNull();
+        readModel!.StateVersion.Should().Be(9);
+        readModel.LastEventId.Should().Be("evt-fresh");
+        readModel.Deployments.Select(x => x.DeploymentId).Should().Equal("dep-fresh");
+        readModel.Deployments.Should().NotContain(x => x.DeploymentId == "dep-stale");
+    }
+
+    [Fact]
     public async Task DeploymentCatalogProjector_ShouldRespectCancellation_AndReaderShouldReturnNull()
     {
         var store = new RecordingDocumentStore<ServiceDeploymentCatalogReadModel>(x => x.Id);
@@ -296,6 +363,104 @@ public sealed class ServiceServingProjectorAndQueryTests
     }
 
     [Fact]
+    public async Task RolloutProjector_ShouldOverwriteStaleStagesAndStatus_FromLatestStateRoot()
+    {
+        var store = new RecordingDocumentStore<ServiceRolloutReadModel>(x => x.Id);
+        await store.UpsertAsync(new ServiceRolloutReadModel
+        {
+            Id = "tenant:app:default:svc",
+            ActorId = "tenant:app:default:svc",
+            StateVersion = 11,
+            LastEventId = "evt-stale",
+            RolloutId = "rollout-stale",
+            Status = ServiceRolloutStatus.Paused.ToString(),
+            CurrentStageIndex = 99,
+            FailureReason = "stale failure",
+            UpdatedAt = DateTimeOffset.Parse("2026-03-15T00:00:00+00:00"),
+            Stages =
+            {
+                new ServiceRolloutStageReadModel
+                {
+                    StageId = "stage-stale",
+                    StageIndex = 99,
+                    Targets =
+                    {
+                        new ServiceServingTargetReadModel
+                        {
+                            DeploymentId = "dep-stale",
+                            RevisionId = "old-revision",
+                            PrimaryActorId = "old-actor",
+                            AllocationWeight = 100,
+                            ServingState = ServiceServingState.Active.ToString(),
+                            EnabledEndpointIds = { "run" },
+                        },
+                    },
+                },
+            },
+        });
+        var projector = new ServiceRolloutProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-15T00:00:00+00:00")));
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var observedAt = DateTimeOffset.Parse("2026-03-15T10:00:00+00:00");
+        var state = new ServiceRolloutExecutionState
+        {
+            Identity = identity.Clone(),
+            RolloutId = "rollout-fresh",
+            Plan = new ServiceRolloutPlanSpec
+            {
+                RolloutId = "rollout-fresh",
+                DisplayName = "Fresh rollout",
+                Stages =
+                {
+                    new ServiceRolloutStageSpec
+                    {
+                        StageId = "stage-fresh",
+                        Targets =
+                        {
+                            CreateTarget("dep-fresh", "fresh-revision", "fresh-actor", 100, "run"),
+                        },
+                    },
+                },
+            },
+            Status = ServiceRolloutStatus.InProgress,
+            CurrentStageIndex = 0,
+            UpdatedAt = Timestamp.FromDateTimeOffset(observedAt),
+        };
+
+        await projector.ProjectAsync(
+            new ServiceRolloutProjectionContext
+            {
+                RootActorId = "tenant:app:default:svc",
+                ProjectionKind = "service-rollout",
+            },
+            BuildCommittedEnvelope(
+                new ServiceRolloutStageAdvancedEvent
+                {
+                    Identity = identity.Clone(),
+                    RolloutId = "rollout-fresh",
+                    StageId = "stage-fresh",
+                    StageIndex = 0,
+                    Targets = { CreateTarget("dep-fresh", "fresh-revision", "fresh-actor", 100, "run") },
+                    OccurredAt = Timestamp.FromDateTimeOffset(observedAt),
+                },
+                state,
+                eventId: "evt-fresh-rollout",
+                stateVersion: 12,
+                observedAt: observedAt));
+
+        var readModel = await store.GetAsync(ServiceKeys.Build(identity));
+
+        readModel.Should().NotBeNull();
+        readModel!.RolloutId.Should().Be("rollout-fresh");
+        readModel.Status.Should().Be(ServiceRolloutStatus.InProgress.ToString());
+        readModel.CurrentStageIndex.Should().Be(0);
+        readModel.FailureReason.Should().BeEmpty();
+        readModel.StateVersion.Should().Be(12);
+        readModel.Stages.Select(x => x.StageId).Should().Equal("stage-fresh");
+        readModel.Stages.Should().NotContain(x => x.StageId == "stage-stale");
+        readModel.Stages.Single().Targets.Select(x => x.DeploymentId).Should().Equal("dep-fresh");
+    }
+
+    [Fact]
     public async Task RolloutProjector_ShouldIgnoreEvents_WhenIdentityIsMissing()
     {
         var store = new RecordingDocumentStore<ServiceRolloutReadModel>(x => x.Id);
@@ -338,6 +503,60 @@ public sealed class ServiceServingProjectorAndQueryTests
             });
 
         (await store.ReadItemsAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RolloutProjector_ShouldIgnoreStateRoot_WhenCommittedVersionIsNotPositive()
+    {
+        var store = new RecordingDocumentStore<ServiceRolloutReadModel>(x => x.Id);
+        var projector = new ServiceRolloutProjector(store, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var identity = GAgentServiceTestKit.CreateIdentity();
+
+        await projector.ProjectAsync(
+            new ServiceRolloutProjectionContext
+            {
+                RootActorId = "tenant:app:default:svc",
+                ProjectionKind = "service-rollout",
+            },
+            BuildCommittedEnvelope(
+                new ServiceRolloutStartedEvent
+                {
+                    Identity = identity.Clone(),
+                    Plan = new ServiceRolloutPlanSpec
+                    {
+                        RolloutId = "rollout-zero-version",
+                    },
+                },
+                new ServiceRolloutExecutionState
+                {
+                    Identity = identity.Clone(),
+                    RolloutId = "rollout-zero-version",
+                    Plan = new ServiceRolloutPlanSpec
+                    {
+                        RolloutId = "rollout-zero-version",
+                    },
+                },
+                eventId: "evt-zero-version",
+                stateVersion: 0,
+                observedAt: DateTimeOffset.Parse("2026-03-15T11:00:00+00:00")));
+
+        (await store.ReadItemsAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ServiceArtifactProjectorSources_ShouldNotReadPriorProjectionDocuments()
+    {
+        foreach (var sourcePath in new[]
+                 {
+                     SourcePath("src/platform/Aevatar.GAgentService.Projection/Projectors/ServiceCatalogProjector.cs"),
+                     SourcePath("src/platform/Aevatar.GAgentService.Projection/Projectors/ServiceDeploymentCatalogProjector.cs"),
+                     SourcePath("src/platform/Aevatar.GAgentService.Projection/Projectors/ServiceRolloutProjector.cs"),
+                 })
+        {
+            var source = File.ReadAllText(sourcePath);
+
+            source.Should().NotContain("IProjectionDocumentReader");
+        }
     }
 
     [Fact]
@@ -572,5 +791,20 @@ public sealed class ServiceServingProjectorAndQueryTests
             ServingState = ServiceServingState.Active,
             EnabledEndpointIds = { enabledEndpointIds },
         };
+    }
+
+    private static string SourcePath(string relativePath)
+    {
+        var directory = AppContext.BaseDirectory;
+        while (!string.IsNullOrEmpty(directory))
+        {
+            var candidate = Path.Combine(directory, relativePath);
+            if (File.Exists(candidate))
+                return candidate;
+
+            directory = Directory.GetParent(directory)?.FullName;
+        }
+
+        throw new FileNotFoundException($"Could not locate source file '{relativePath}'.");
     }
 }

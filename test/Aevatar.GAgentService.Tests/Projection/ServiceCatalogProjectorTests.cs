@@ -65,7 +65,7 @@ public sealed class ServiceCatalogProjectorTests
     }
 
     [Fact]
-    public async Task ProjectAsync_ShouldApplyDefinitionMutations_ForExistingReadModel()
+    public async Task ProjectAsync_ShouldOverwriteDefinition_FromLatestStateRoot()
     {
         var store = new RecordingDocumentStore<ServiceCatalogReadModel>(x => x.Id);
         var projector = new ServiceCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
