@@ -152,22 +152,25 @@ def tick() -> None:
 
     log(f"actual={actual} expected={expected} low_streak={low_streak} zero_streak={zero_streak}")
 
-    # P0 规则:有 active task 但 actual==0 → IMMEDIATE alert
-    # per Auric 2026-05-21 "没有并行 codex 就有问题"。controller 必须立刻 no-gap 补派。
+    # P0 规则:有 active task 但 actual==0 + 持续 >=3 tick(3 min grace)→ alert
+    # per Auric 2026-05-21 "没有并行 codex 就有问题"。
+    # streak 阈值 3 防 codex-finish → controller-spawn-next 自然 1-2 min gap 误报。
     if expected > 0 and actual == 0:
         zero_streak += 1
         state["zero_streak"] = zero_streak
-        detail = {
-            "actual": 0,
-            "expected": expected,
-            "breakdown": breakdown,
-            "zero_streak": zero_streak,
-            "severity": "P0",
-            "rule": "no-gap-violation",
-        }
-        write_alert(f"P0 no-gap-violation: 0 codex with {expected} active task(s)", detail)
-        log(f"P0 ALERT: 0 codex but {expected} active task(s);streak={zero_streak};see {ALERT_LOG}")
-        # 0 streak 不阻止其他逻辑,return
+        if zero_streak >= 3:
+            detail = {
+                "actual": 0,
+                "expected": expected,
+                "breakdown": breakdown,
+                "zero_streak": zero_streak,
+                "severity": "P0",
+                "rule": "no-gap-violation",
+            }
+            write_alert(f"P0 no-gap-violation: 0 codex with {expected} active task(s)", detail)
+            log(f"P0 ALERT: 0 codex but {expected} active task(s);streak={zero_streak};see {ALERT_LOG}")
+        else:
+            log(f"P0 grace: actual=0 expected={expected} streak={zero_streak}/3 (silent)")
         save_state(state)
         return
     else:
