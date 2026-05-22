@@ -284,6 +284,9 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
         MapField<string, string> source,
         MapField<string, string> destination)
     {
+        // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
+        //   Old pattern: module helpers hid raw step agent_type/agent_id lifecycle parameters by filtering them before dispatch
+        //   New principle: validator rejects raw lifecycle input; helpers only copy already-valid chat metadata parameters
         foreach (var (key, value) in source)
         {
             if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))

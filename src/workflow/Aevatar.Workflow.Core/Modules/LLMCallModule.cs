@@ -109,8 +109,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 TargetRole = WorkflowImplicitLlmRolePolicy.ResolveEffectiveTargetRole(
                     workflow: null,
                     configuredTargetRole: request.TargetRole,
-                    stepType: request.StepType,
-                    parameters: request.Parameters),
+                    stepType: request.StepType),
                 RequestDispatched = false,
                 WatchdogCallbackId = BuildWatchdogCallbackId(sessionId),
                 DispatchDedupId = BuildDispatchDedupId(sessionId),
@@ -369,6 +368,9 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         MapField<string, string> parameters,
         MapField<string, string> headers)
     {
+        // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
+        //   Old pattern: module helpers hid raw step agent_type/agent_id lifecycle parameters by filtering them before dispatch
+        //   New principle: validator rejects raw lifecycle input; helpers only copy already-valid chat metadata parameters
         foreach (var (key, value) in parameters)
         {
             if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))

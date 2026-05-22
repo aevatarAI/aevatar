@@ -27,8 +27,7 @@ public sealed class WorkflowStepTargetAgentResolver
         var implicitTargetRole = WorkflowImplicitLlmRolePolicy.ResolveEffectiveTargetRole(
             workflow: null,
             configuredTargetRole: request.TargetRole,
-            stepType: request.StepType,
-            parameters: request.Parameters);
+            stepType: request.StepType);
         if (!string.IsNullOrWhiteSpace(implicitTargetRole))
         {
             var roleActorId = WorkflowRoleActorIdResolver.ResolveTargetActorId(ctx.AgentId, implicitTargetRole);
