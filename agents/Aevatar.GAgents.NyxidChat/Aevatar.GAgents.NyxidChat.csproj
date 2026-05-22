@@ -20,6 +20,7 @@
     <ProjectReference Include="..\platforms\Aevatar.GAgents.Platform.Lark\Aevatar.GAgents.Platform.Lark.csproj" />
     <ProjectReference Include="..\Aevatar.GAgents.Authoring.Lark\Aevatar.GAgents.Authoring.Lark.csproj" />
     <ProjectReference Include="..\Aevatar.GAgents.Scheduled\Aevatar.GAgents.Scheduled.csproj" />
+    <ProjectReference Include="..\Aevatar.GAgents.ChatRouting\Aevatar.GAgents.ChatRouting.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.ChatRouting.Core\Aevatar.ChatRouting.Core.csproj" />

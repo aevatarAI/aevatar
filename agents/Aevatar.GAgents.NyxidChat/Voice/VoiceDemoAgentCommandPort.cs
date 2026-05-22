@@ -5,19 +5,18 @@ using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.ChatRouting;
-using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.Scheduled;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using RoutingOwnerScope = Aevatar.ChatRouting.Core.OwnerScope;
 using ScheduledOwnerScope = Aevatar.GAgents.Scheduled.OwnerScope;
 
-namespace Aevatar.Mainnet.Host.Api.Voice;
+namespace Aevatar.GAgents.NyxidChat.Voice;
 
 // Refactor (iter34/cluster-004-voice-bootstrap-application-port):
-//   Old pattern: Voice bootstrap endpoint(VoiceDemoBootstrapEndpoints)同步等待 actor readiness/observation loop;POST 返回前阻塞读取 actor 状态;route-policy mutation 在 Host 内做。
-//   New principle: Medium-B framing(reflector force-pick): 删除 POST readiness polling;移 voice bootstrap + voice-demo route mutation 到 Application/actor-owned typed command port;无新 bootstrap actor / 新 envelope / 新 projection phase / mandatory status endpoint / shared route-policy command port(留给可能后续 cluster)。POST 返回 honest accepted receipt + stable id;readiness 由 client 显式 readmodel query 获取(或事件 notification,无需 Host 内同步等)。
-internal sealed class VoiceDemoAgentCommandPort
+//   Old pattern: Voice demo bootstrap lived in the Host endpoint, polled read-side readiness before returning, and mutated route policy from API code.
+//   New principle: The NyxID chat module owns the typed bootstrap command port; Host/API only adapts HTTP to an accepted command receipt, while readiness remains an explicit readmodel/event concern.
+public sealed class VoiceDemoAgentCommandPort
 {
     private const string VoiceModuleName = "voice_presence_openai";
     private const string RouteRuleId = "voice-demo";
@@ -41,13 +40,13 @@ internal sealed class VoiceDemoAgentCommandPort
         _routePolicyQueryPort = routePolicyQueryPort ?? throw new ArgumentNullException(nameof(routePolicyQueryPort));
     }
 
+    // Refactor (iter34/cluster-004-voice-bootstrap-application-port):
+    //   Old pattern: POST /api/demo/voice/bootstrap synchronously waited for catalog, route, and voice-session readiness.
+    //   New principle: AcceptBootstrapAsync dispatches the actor-owned commands and returns stable command ids; callers observe completion through readmodels or events.
     public async Task<VoiceDemoBootstrapReceipt> AcceptBootstrapAsync(
         VoiceDemoBootstrapCommand command,
         CancellationToken ct)
     {
-        // Refactor (iter34/cluster-004-voice-bootstrap-application-port):
-        //   Old pattern: Voice bootstrap endpoint(VoiceDemoBootstrapEndpoints)同步等待 actor readiness/observation loop;POST 返回前阻塞读取 actor 状态;route-policy mutation 在 Host 内做。
-        //   New principle: Medium-B framing(reflector force-pick): 删除 POST readiness polling;移 voice bootstrap + voice-demo route mutation 到 Application/actor-owned typed command port;无新 bootstrap actor / 新 envelope / 新 projection phase / mandatory status endpoint / shared route-policy command port(留给可能后续 cluster)。POST 返回 honest accepted receipt + stable id;readiness 由 client 显式 readmodel query 获取(或事件 notification,无需 Host 内同步等)。
         ArgumentNullException.ThrowIfNull(command);
         var scopeId = command.ScopeId.Trim();
         var routingScope = RoutingOwnerScope.ForNyxIdNative(scopeId);
@@ -78,7 +77,6 @@ internal sealed class VoiceDemoAgentCommandPort
             routePolicyActorId,
             VoiceModuleName,
             RouteRuleId,
-            correlationId,
             correlationId,
             agentCommandId,
             routePolicyCommandId);
@@ -192,3 +190,14 @@ internal sealed class VoiceDemoAgentCommandPort
         return $"{NyxIdChatServiceDefaults.ActorIdPrefix}-voice-demo-{hash}";
     }
 }
+
+public sealed record VoiceDemoBootstrapCommand(string ScopeId);
+
+public sealed record VoiceDemoBootstrapReceipt(
+    string ActorId,
+    string RoutePolicyActorId,
+    string VoiceModuleName,
+    string PolicyRuleId,
+    string CorrelationId,
+    string AgentCommandId,
+    string RoutePolicyCommandId);

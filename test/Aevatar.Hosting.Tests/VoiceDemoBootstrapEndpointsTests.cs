@@ -8,6 +8,7 @@ using Aevatar.ChatRouting.Core;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.ChatRouting;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgents.NyxidChat.Voice;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.Hosting;
 using Aevatar.Mainnet.Host.Api.Voice;
@@ -25,8 +26,8 @@ using ScheduledOwnerScope = Aevatar.GAgents.Scheduled.OwnerScope;
 namespace Aevatar.Hosting.Tests;
 
 // Refactor (iter34/cluster-004-voice-bootstrap-application-port):
-//   Old pattern: Voice bootstrap endpoint(VoiceDemoBootstrapEndpoints)同步等待 actor readiness/observation loop;POST 返回前阻塞读取 actor 状态;route-policy mutation 在 Host 内做。
-//   New principle: Medium-B framing(reflector force-pick): 删除 POST readiness polling;移 voice bootstrap + voice-demo route mutation 到 Application/actor-owned typed command port;无新 bootstrap actor / 新 envelope / 新 projection phase / mandatory status endpoint / shared route-policy command port(留给可能后续 cluster)。POST 返回 honest accepted receipt + stable id;readiness 由 client 显式 readmodel query 获取(或事件 notification,无需 Host 内同步等)。
+//   Old pattern: Endpoint tests expected synchronous readiness after request-path polling.
+//   New principle: Tests assert accepted command receipt semantics and dispatch-only behavior, with readiness left to readmodels or events.
 public sealed class VoiceDemoBootstrapEndpointsTests
 {
     private const string Scope = "voice-scope-1";
@@ -71,23 +72,29 @@ public sealed class VoiceDemoBootstrapEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.Accepted, await response.Content.ReadAsStringAsync());
         body.Should().ContainKey("status").WhoseValue.ToString().Should().Be("accepted");
         body.Should().ContainKey("actor_id");
-        body.Should().ContainKey("run_id");
         body.Should().ContainKey("correlation_id");
         body.Should().ContainKey("agent_command_id");
         body.Should().ContainKey("route_policy_command_id");
         var demoActorId = body!["actor_id"].ToString()!;
+        var correlationId = body["correlation_id"].ToString();
         actorRuntime.CreatedActors.Should().Equal(demoActorId, $"chat-route-policy:{Scope}");
         routePolicyQueryPort.LookupCount.Should().Be(1, "the command port may read existing route readmodel once to preserve non-demo rules, but must not poll readiness");
         catalogCommandPort.Commands.Should().ContainSingle()
             .Which.AgentId.Should().Be(demoActorId);
 
         dispatchPort.Dispatches.Should().HaveCount(2);
-        dispatchPort.Dispatches.Should().ContainSingle(dispatch => dispatch.ActorId == demoActorId)
-            .Which.Envelope.Payload.Is(InitializeRoleAgentEvent.Descriptor).Should().BeTrue();
+        var initDispatch = dispatchPort.Dispatches.Should().ContainSingle(dispatch => dispatch.ActorId == demoActorId)
+            .Subject;
+        initDispatch.Envelope.Payload.Is(InitializeRoleAgentEvent.Descriptor).Should().BeTrue();
         dispatchPort.Dispatches.Should().ContainSingle(dispatch => dispatch.ActorId == $"chat-route-policy:{Scope}");
         var routeDispatch = dispatchPort.Dispatches.Single(dispatch => dispatch.ActorId == $"chat-route-policy:{Scope}");
         var command = routeDispatch.Envelope.Payload.Unpack<UpsertChatRoutePolicyRequested>();
-        routeDispatch.Envelope.Propagation.CorrelationId.Should().Be(body["correlation_id"].ToString());
+        body["agent_command_id"].ToString().Should().Be(initDispatch.Envelope.Id);
+        body["route_policy_command_id"].ToString().Should().Be(routeDispatch.Envelope.Id);
+        initDispatch.Envelope.Propagation.CorrelationId.Should().Be(correlationId);
+        routeDispatch.Envelope.Propagation.CorrelationId.Should().Be(correlationId);
+        initDispatch.Envelope.Runtime.Deduplication.OperationId.Should().Be(initDispatch.Envelope.Id);
+        routeDispatch.Envelope.Runtime.Deduplication.OperationId.Should().Be(routeDispatch.Envelope.Id);
         command.OwnerScope.NyxUserId.Should().Be(Scope);
         command.OwnerScope.Platform.Should().Be(RoutingOwnerScope.NyxIdPlatform);
         command.DefaultTarget.ForwardToModel.ModelName.Should().Be("existing-default");
