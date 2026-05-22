@@ -1,10 +1,8 @@
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.ChatRouting;
 using Aevatar.Hosting;
 using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -21,8 +19,8 @@ namespace Aevatar.Mainnet.Host.Api.ChatRouting;
 /// service), so the generic <c>/api/scopes/{scopeId}/invoke/{endpointId}</c>
 /// surface can't address it. This endpoint dispatches
 /// <see cref="UpsertChatRoutePolicyRequested"/> /
-/// <see cref="RemoveChatRouteRuleRequested"/> directly via
-/// <see cref="IActorDispatchPort"/>.
+/// <see cref="RemoveChatRouteRuleRequested"/> through the chat route policy
+/// application command port.
 ///
 /// Authorization model: the same scope-access guard the other
 /// scope-bound endpoints use — caller's scope claim must match the URL
@@ -30,13 +28,12 @@ namespace Aevatar.Mainnet.Host.Api.ChatRouting;
 /// scopeId so callers cannot write a policy targeting someone else's caller
 /// scope by accident or by intent.
 /// </summary>
-// Refactor (iter32/cluster-034-chat-route-policy-request-path-projection-activation):
-//   Old pattern: Chat route policy admin endpoints + voice demo bootstrap 在 request path 调 EnsureProjectionForActorAsync 同步 priming projection,违反 query-time priming forbidden + 命令骨架内聚
-//   New principle: 加 ChatRoutePolicyCommittedStateProjectionActivationPlanProvider(committed-state hook 触发);删 ChatRoutePolicyProjectionPort + request-path activation;DI 注册 dispatcher + hook + provider;query_projection_priming_guard 加 chat route policy endpoint 扫描
+// Refactor (iter34/cluster-005-mainnet-host-direct-actor-runtime):
+//   Old pattern: Mainnet Host endpoints inject IActorRuntime/IActorDispatchPort and build EventEnvelope + dispatch directly in Host code.
+//   New principle: Host calls Application command ports that normalize, resolve target, build envelope, dispatch, return honest accepted receipt.
+//   Host endpoint stays minimal (auth + body parsing). NO direct dependency on IActorRuntime/IActorDispatchPort in Host.
 internal static class ChatRoutePolicyAdminEndpoints
 {
-    private const string ProjectionKindActorIdPrefix = "chat-route-policy:";
-
     private static readonly JsonParser BodyParser = new(
         JsonParser.Settings.Default.WithIgnoreUnknownFields(true));
 
@@ -71,13 +68,9 @@ internal static class ChatRoutePolicyAdminEndpoints
     private static async Task<IResult> HandleUpsertAsync(
         HttpContext http,
         string scopeId,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorDispatchPort actorDispatchPort,
+        [FromServices] IChatRoutePolicyCommandPort commandPort,
         CancellationToken ct)
     {
-        // Refactor (iter32/cluster-034-chat-route-policy-request-path-projection-activation):
-        //   Old pattern: write endpoint injected ChatRoutePolicyProjectionPort and primed projection before dispatch.
-        //   New principle: endpoint only builds/dispatches the command; committed-state hook activates projection.
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return denied;
 
@@ -117,11 +110,11 @@ internal static class ChatRoutePolicyAdminEndpoints
             SenderId = string.Empty,
         };
 
-        var (actorId, commandId) = await DispatchAsync(command, scopeId, actorRuntime, actorDispatchPort, ct);
+        var receipt = await commandPort.UpsertAsync(scopeId, command, ct);
         return Results.Accepted(value: new
         {
-            actor_id = actorId,
-            command_id = commandId,
+            actor_id = receipt.ActorId,
+            command_id = receipt.CommandId,
             note = "Upsert dispatched. Re-query GET to observe materialized state.",
         });
     }
@@ -133,13 +126,9 @@ internal static class ChatRoutePolicyAdminEndpoints
         HttpContext http,
         string scopeId,
         string ruleId,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorDispatchPort actorDispatchPort,
+        [FromServices] IChatRoutePolicyCommandPort commandPort,
         CancellationToken ct)
     {
-        // Refactor (iter32/cluster-034-chat-route-policy-request-path-projection-activation):
-        //   Old pattern: delete endpoint injected ChatRoutePolicyProjectionPort and primed projection before dispatch.
-        //   New principle: endpoint only builds/dispatches the command; committed-state hook activates projection.
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return denied;
 
@@ -147,11 +136,11 @@ internal static class ChatRoutePolicyAdminEndpoints
             return JsonError(StatusCodes.Status400BadRequest, "rule_id_required", "rule_id path segment is required.");
 
         var command = new RemoveChatRouteRuleRequested { RuleId = ruleId.Trim() };
-        var (actorId, commandId) = await DispatchAsync(command, scopeId, actorRuntime, actorDispatchPort, ct);
+        var receipt = await commandPort.RemoveRuleAsync(scopeId, command, ct);
         return Results.Accepted(value: new
         {
-            actor_id = actorId,
-            command_id = commandId,
+            actor_id = receipt.ActorId,
+            command_id = receipt.CommandId,
             note = "Rule removal dispatched. Re-query GET to observe materialized state.",
         });
     }
@@ -195,41 +184,6 @@ internal static class ChatRoutePolicyAdminEndpoints
             view.Rules.Add(rule.Clone());
 
         return Results.Content(ResponseFormatter.Format(view), "application/json");
-    }
-
-    private static async Task<(string ActorId, string CommandId)> DispatchAsync(
-        IMessage command,
-        string scopeId,
-        IActorRuntime actorRuntime,
-        IActorDispatchPort actorDispatchPort,
-        CancellationToken ct)
-    {
-        // Refactor (iter32/cluster-034-chat-route-policy-request-path-projection-activation):
-        //   Old pattern: Chat route policy admin endpoints + voice demo bootstrap 在 request path 调 EnsureProjectionForActorAsync 同步 priming projection,违反 query-time priming forbidden + 命令骨架内聚
-        //   New principle: 加 ChatRoutePolicyCommittedStateProjectionActivationPlanProvider(committed-state hook 触发);删 ChatRoutePolicyProjectionPort + request-path activation;DI 注册 dispatcher + hook + provider;query_projection_priming_guard 加 chat route policy endpoint 扫描
-        var actorId = $"{ProjectionKindActorIdPrefix}{scopeId}";
-        var actor = await actorRuntime.CreateAsync<ChatRoutePolicyGAgent>(actorId, ct);
-        var commandId = Guid.NewGuid().ToString("N");
-        var envelope = new EventEnvelope
-        {
-            Id = commandId,
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(command),
-            Route = EnvelopeRouteSemantics.CreateDirect("chat-route-policy-admin", actor.Id),
-            Propagation = new EnvelopePropagation
-            {
-                CorrelationId = commandId,
-            },
-            Runtime = new EnvelopeRuntime
-            {
-                Deduplication = new DeliveryDeduplication
-                {
-                    OperationId = commandId,
-                },
-            },
-        };
-        await actorDispatchPort.DispatchAsync(actor.Id, envelope, ct);
-        return (actor.Id, commandId);
     }
 
     private static IResult JsonError(int status, string error, string detail) =>

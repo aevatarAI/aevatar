@@ -5,15 +5,12 @@ using Aevatar.AI.Abstractions;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.VoicePresence.Hosting;
-using Aevatar.GAgents.ChatRouting;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.Hosting;
 using Aevatar.Mainnet.Host.Api.Voice;
 using FluentAssertions;
-using Google.Protobuf;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -25,9 +22,10 @@ using ScheduledOwnerScope = Aevatar.GAgents.Scheduled.OwnerScope;
 
 namespace Aevatar.Hosting.Tests;
 
-// Refactor (iter32/cluster-034-chat-route-policy-request-path-projection-activation):
-//   Old pattern: voice bootstrap removed request-path projection priming without endpoint behavior coverage.
-//   New principle: test the route-policy upsert command shape and dispatch-only request path.
+// Refactor (iter34/cluster-005-mainnet-host-direct-actor-runtime):
+//   Old pattern: Mainnet Host endpoints inject IActorRuntime/IActorDispatchPort and build EventEnvelope + dispatch directly in Host code.
+//   New principle: Host calls Application command ports that normalize, resolve target, build envelope, dispatch, return honest accepted receipt.
+//   Host endpoint stays minimal (auth + body parsing). NO direct dependency on IActorRuntime/IActorDispatchPort in Host.
 public sealed class VoiceDemoBootstrapEndpointsTests
 {
     private const string Scope = "voice-scope-1";
@@ -35,7 +33,7 @@ public sealed class VoiceDemoBootstrapEndpointsTests
     [Fact]
     public async Task Bootstrap_UpsertsVoiceRoutePolicyWithoutProjectionPriming()
     {
-        var actorRuntime = new RecordingActorRuntime();
+        var voiceDemoCommandPort = new RecordingVoiceDemoAgentCommandPort();
         var catalogCommandPort = new RecordingCatalogCommandPort();
         var existing = new ChatRoutePolicySnapshot(
             new ChatRouteAction { ForwardToModel = new ForwardToModel { ModelName = "existing-default" } },
@@ -58,12 +56,12 @@ public sealed class VoiceDemoBootstrapEndpointsTests
                 },
             ]);
         var routePolicyQueryPort = new UpdatingRoutePolicyQueryPort(existing);
-        var dispatchPort = new RecordingActorDispatchPort(routePolicyQueryPort);
+        var routePolicyCommandPort = new RecordingChatRoutePolicyCommandPort(routePolicyQueryPort);
         await using var app = await CreateAppAsync(
-            actorRuntime,
-            dispatchPort,
+            voiceDemoCommandPort,
             catalogCommandPort,
             new RecordingCatalogQueryPort(),
+            routePolicyCommandPort,
             routePolicyQueryPort,
             new ReadyVoiceSessionResolver());
         var client = app.GetTestClient();
@@ -74,16 +72,15 @@ public sealed class VoiceDemoBootstrapEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
         body.Should().ContainKey("actor_id");
         var demoActorId = body!["actor_id"].ToString()!;
-        actorRuntime.CreatedActors.Should().Equal(demoActorId, $"chat-route-policy:{Scope}");
+        voiceDemoCommandPort.Commands.Should().ContainSingle()
+            .Which.Should().Be((Scope, "voice_presence_openai"));
+        demoActorId.Should().Be(RecordingVoiceDemoAgentCommandPort.DemoActorId);
         catalogCommandPort.Commands.Should().ContainSingle()
             .Which.AgentId.Should().Be(demoActorId);
 
-        dispatchPort.Dispatches.Should().HaveCount(2);
-        dispatchPort.Dispatches.Should().ContainSingle(dispatch => dispatch.ActorId == demoActorId)
-            .Which.Envelope.Payload.Is(InitializeRoleAgentEvent.Descriptor).Should().BeTrue();
-        dispatchPort.Dispatches.Should().ContainSingle(dispatch => dispatch.ActorId == $"chat-route-policy:{Scope}");
-        var routeDispatch = dispatchPort.Dispatches.Single(dispatch => dispatch.ActorId == $"chat-route-policy:{Scope}");
-        var command = routeDispatch.Envelope.Payload.Unpack<UpsertChatRoutePolicyRequested>();
+        routePolicyCommandPort.Upserts.Should().ContainSingle();
+        var (policyScope, command) = routePolicyCommandPort.Upserts[0];
+        policyScope.Should().Be(Scope);
         command.OwnerScope.NyxUserId.Should().Be(Scope);
         command.OwnerScope.Platform.Should().Be(RoutingOwnerScope.NyxIdPlatform);
         command.DefaultTarget.ForwardToModel.ModelName.Should().Be("existing-default");
@@ -97,10 +94,10 @@ public sealed class VoiceDemoBootstrapEndpointsTests
     }
 
     private static async Task<WebApplication> CreateAppAsync(
-        RecordingActorRuntime actorRuntime,
-        RecordingActorDispatchPort dispatchPort,
+        RecordingVoiceDemoAgentCommandPort voiceDemoCommandPort,
         RecordingCatalogCommandPort catalogCommandPort,
         RecordingCatalogQueryPort catalogQueryPort,
+        RecordingChatRoutePolicyCommandPort routePolicyCommandPort,
         UpdatingRoutePolicyQueryPort routePolicyQueryPort,
         ReadyVoiceSessionResolver voiceSessionResolver)
     {
@@ -109,10 +106,10 @@ public sealed class VoiceDemoBootstrapEndpointsTests
             EnvironmentName = Environments.Development,
         });
         builder.WebHost.UseTestServer();
-        builder.Services.AddSingleton<IActorRuntime>(actorRuntime);
-        builder.Services.AddSingleton<IActorDispatchPort>(dispatchPort);
+        builder.Services.AddSingleton<IVoiceDemoAgentCommandPort>(voiceDemoCommandPort);
         builder.Services.AddSingleton<IUserAgentCatalogCommandPort>(catalogCommandPort);
         builder.Services.AddSingleton<IUserAgentCatalogQueryPort>(catalogQueryPort);
+        builder.Services.AddSingleton<IChatRoutePolicyCommandPort>(routePolicyCommandPort);
         builder.Services.AddSingleton<IChatRoutePolicyQueryPort>(routePolicyQueryPort);
         builder.Services.AddSingleton(new ChatRouteResolver(new StaticFallbackProvider()));
         builder.Services.AddSingleton<IVoicePresenceSessionResolver>(voiceSessionResolver);
@@ -130,58 +127,51 @@ public sealed class VoiceDemoBootstrapEndpointsTests
         return app;
     }
 
-    private sealed class RecordingActorRuntime : IActorRuntime
+    private sealed class RecordingVoiceDemoAgentCommandPort : IVoiceDemoAgentCommandPort
     {
-        public List<string> CreatedActors { get; } = [];
+        public const string DemoActorId = "nyxid-chat-voice-demo-test-scope";
 
-        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
-            where TAgent : IAgent
+        public List<(string ScopeId, string VoiceModuleName)> Commands { get; } = [];
+
+        public Task<VoiceDemoAgentCommandAcceptedReceipt> EnsureAsync(
+            string scopeId,
+            string voiceModuleName,
+            CancellationToken ct = default)
         {
-            ArgumentNullException.ThrowIfNull(id);
-            CreatedActors.Add(id);
-            return Task.FromResult<IActor>(new StubActor(id));
+            Commands.Add((scopeId, voiceModuleName));
+            return Task.FromResult(new VoiceDemoAgentCommandAcceptedReceipt(
+                DemoActorId,
+                "voice-demo-command",
+                "voice-demo-command"));
         }
-
-        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default) =>
-            CreateAsync<IAgent>(id, ct);
-
-        public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(new StubActor(id));
-
-        public Task<bool> ExistsAsync(string id) => Task.FromResult(false);
-
-        public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class StubActor(string id) : IActor
+    private sealed class RecordingChatRoutePolicyCommandPort(
+        UpdatingRoutePolicyQueryPort routePolicyQueryPort) : IChatRoutePolicyCommandPort
     {
-        public string Id { get; } = id;
-        public IAgent Agent => throw new NotSupportedException();
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
-        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() =>
-            Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
-    }
+        public List<(string ScopeId, UpsertChatRoutePolicyRequested Command)> Upserts { get; } = [];
 
-    private sealed class RecordingActorDispatchPort(UpdatingRoutePolicyQueryPort routePolicyQueryPort) : IActorDispatchPort
-    {
-        public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
-
-        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task<ChatRoutePolicyCommandAcceptedReceipt> UpsertAsync(
+            string scopeId,
+            UpsertChatRoutePolicyRequested command,
+            CancellationToken ct = default)
         {
-            Dispatches.Add((actorId, envelope));
-            if (envelope.Payload.Is(UpsertChatRoutePolicyRequested.Descriptor))
-            {
-                routePolicyQueryPort.Observe(envelope.Payload.Unpack<UpsertChatRoutePolicyRequested>());
-            }
-
-            return Task.CompletedTask;
+            Upserts.Add((scopeId, command.Clone()));
+            routePolicyQueryPort.Observe(command);
+            return Task.FromResult(new ChatRoutePolicyCommandAcceptedReceipt(
+                $"chat-route-policy:{scopeId}",
+                "route-policy-command",
+                "route-policy-command"));
         }
+
+        public Task<ChatRoutePolicyCommandAcceptedReceipt> RemoveRuleAsync(
+            string scopeId,
+            RemoveChatRouteRuleRequested command,
+            CancellationToken ct = default) =>
+            Task.FromResult(new ChatRoutePolicyCommandAcceptedReceipt(
+                $"chat-route-policy:{scopeId}",
+                "route-policy-remove",
+                "route-policy-remove"));
     }
 
     private sealed class RecordingCatalogCommandPort : IUserAgentCatalogCommandPort
