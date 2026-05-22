@@ -42,7 +42,16 @@ internal static partial class MessagesApiEndpoints
         if (string.IsNullOrWhiteSpace(bearerToken))
             return ToErrorResult(StatusCodes.Status401Unauthorized, "authentication_error", "Authorization bearer token is required.");
 
-        var result = await commandFacade.CreateAsync(ToCommandRequest(request), bearerToken, ct);
+        var commandRequest = MessagesProtocolMapper.ToCommandRequest(request);
+        if (!commandRequest.Succeeded)
+        {
+            return ToErrorResult(
+                StatusCodes.Status400BadRequest,
+                commandRequest.ErrorCode ?? "invalid_request_error",
+                commandRequest.ErrorMessage ?? "Invalid request.");
+        }
+
+        var result = await commandFacade.CreateAsync(commandRequest.Request!, bearerToken, ct);
         if (result.Error is not null)
             return ToErrorResult(result.Error.StatusCode, result.Error.Code, result.Error.Message);
 
@@ -66,21 +75,6 @@ internal static partial class MessagesApiEndpoints
 
         throw new InvalidOperationException("Messages command facade returned no result.");
     }
-
-    private static MessagesCommandRequest ToCommandRequest(MessagesCreateRequest request) =>
-        new(
-            request.Model,
-            request.MaxTokens,
-            request.System,
-            request.Messages,
-            request.Temperature,
-            request.TopP,
-            request.TopK,
-            request.StopSequences,
-            request.Stream,
-            request.Tools,
-            request.ToolChoice,
-            request.Metadata);
 
     private static async Task WriteStreamingMessageAsync(
         HttpResponse response,

@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.GAgentService.Abstractions;
@@ -36,26 +35,27 @@ public interface IResponsesRouteResolver
 
 public sealed record ResponsesCommandRequest(
     string? Model,
-    JsonElement Input,
+    string? Prompt,
+    IReadOnlyList<ResponsesToolResultInput> ToolResults,
     bool? Stream,
     string? PreviousResponseId,
     double? Temperature,
     int? MaxOutputTokens,
-    JsonElement Tools);
+    IReadOnlyList<ResponsesApplicationToolDeclaration> DeclaredTools);
 
 public sealed record MessagesCommandRequest(
     string? Model,
     int? MaxTokens,
-    JsonElement System,
-    JsonElement Messages,
+    IReadOnlyList<ChatMessage> ChatMessages,
+    IReadOnlyList<ResponsesApplicationToolDeclaration> DeclaredTools,
+    bool DroppedImageContent,
     double? Temperature,
     double? TopP,
     int? TopK,
     IReadOnlyList<string>? StopSequences,
     bool? Stream,
-    JsonElement Tools,
-    JsonElement ToolChoice,
-    JsonElement Metadata);
+    bool ToolChoiceDisablesTools,
+    string? ToolChoiceError);
 
 public sealed record NormalizedResponsesRequest(
     string ResponseId,

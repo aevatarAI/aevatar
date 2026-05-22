@@ -66,7 +66,16 @@ internal static partial class ResponsesApiEndpoints
                 "authentication_required",
                 "Authorization bearer token is required.");
 
-        var result = await commandFacade.CreateAsync(ToCommandRequest(request), bearerToken, ct);
+        var commandRequest = ResponsesProtocolMapper.ToCommandRequest(request);
+        if (!commandRequest.Succeeded)
+        {
+            return ToErrorResult(
+                StatusCodes.Status400BadRequest,
+                commandRequest.ErrorCode ?? "invalid_request_error",
+                commandRequest.ErrorMessage ?? "Invalid request.");
+        }
+
+        var result = await commandFacade.CreateAsync(commandRequest.Request!, bearerToken, ct);
         if (result.Error is not null)
             return ToErrorResult(result.Error.StatusCode, result.Error.Code, result.Error.Message);
 
@@ -160,16 +169,6 @@ internal static partial class ResponsesApiEndpoints
             cancelled_at = result.CancelledAt,
         }, JsonOptions, statusCode: StatusCodes.Status200OK);
     }
-
-    private static ResponsesCommandRequest ToCommandRequest(ResponsesCreateRequest request) =>
-        new(
-            request.Model,
-            request.Input,
-            request.Stream,
-            request.PreviousResponseId,
-            request.Temperature,
-            request.MaxOutputTokens,
-            request.Tools);
 
     private static async Task WriteStreamResponseAsync(
         HttpResponse response,

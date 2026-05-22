@@ -28,6 +28,223 @@ internal sealed record ResponsesCreateRequest
     public JsonElement Tools { get; init; }
 }
 
+internal readonly record struct ResponsesProtocolMappingResult(
+    ResponsesCommandRequest? Request,
+    string? ErrorCode,
+    string? ErrorMessage)
+{
+    public bool Succeeded => Request != null && ErrorCode == null;
+
+    public static ResponsesProtocolMappingResult Success(ResponsesCommandRequest request) =>
+        new(request, null, null);
+
+    public static ResponsesProtocolMappingResult Failed(string code, string message) =>
+        new(null, code, message);
+}
+
+internal static class ResponsesProtocolMapper
+{
+    // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+    //   Old pattern: Application command contracts carried raw JsonElement from the OpenAI Responses wire protocol.
+    //   New principle: Host converts boundary JSON into typed command fields before delegating orchestration to Application.
+    public static ResponsesProtocolMappingResult ToCommandRequest(ResponsesCreateRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (!TryExtractInput(request.Input, out var prompt, out var toolResults, out var inputError))
+            return ResponsesProtocolMappingResult.Failed("invalid_input", inputError);
+        if (!TryExtractDeclaredTools(request.Tools, out var declaredTools, out var toolsError))
+            return ResponsesProtocolMappingResult.Failed("invalid_tools", toolsError);
+
+        return ResponsesProtocolMappingResult.Success(new ResponsesCommandRequest(
+            request.Model,
+            prompt,
+            toolResults,
+            request.Stream,
+            request.PreviousResponseId,
+            request.Temperature,
+            request.MaxOutputTokens,
+            declaredTools));
+    }
+
+    private static bool TryExtractInput(
+        JsonElement input,
+        out string prompt,
+        out IReadOnlyList<ResponsesToolResultInput> toolResults,
+        out string error)
+    {
+        var parts = new List<string>();
+        var results = new List<ResponsesToolResultInput>();
+        ExtractInput(input, parts, results);
+
+        prompt = string.Join("\n", parts.Select(static part => part.Trim()).Where(static part => part.Length > 0));
+        toolResults = results;
+        if (prompt.Length > 0 || results.Count > 0)
+        {
+            error = string.Empty;
+            return true;
+        }
+
+        error = "input must contain at least one text value.";
+        return false;
+    }
+
+    private static void ExtractInput(
+        JsonElement element,
+        ICollection<string> parts,
+        ICollection<ResponsesToolResultInput> toolResults)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.String:
+                AddText(element.GetString(), parts);
+                return;
+
+            case JsonValueKind.Array:
+                foreach (var item in element.EnumerateArray())
+                    ExtractInput(item, parts, toolResults);
+                return;
+
+            case JsonValueKind.Object:
+                ExtractObjectInput(element, parts, toolResults);
+                return;
+        }
+    }
+
+    private static void ExtractObjectInput(
+        JsonElement element,
+        ICollection<string> parts,
+        ICollection<ResponsesToolResultInput> toolResults)
+    {
+        if (TryExtractToolResult(element, out var toolResult))
+        {
+            toolResults.Add(toolResult);
+            return;
+        }
+
+        if (element.TryGetProperty("text", out var text))
+        {
+            ExtractInput(text, parts, toolResults);
+            return;
+        }
+
+        if (element.TryGetProperty("content", out var content))
+        {
+            ExtractInput(content, parts, toolResults);
+            return;
+        }
+
+        if (element.TryGetProperty("input_text", out var inputText))
+        {
+            ExtractInput(inputText, parts, toolResults);
+        }
+    }
+
+    private static void AddText(string? value, ICollection<string> parts)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+            parts.Add(value);
+    }
+
+    private static bool TryExtractToolResult(JsonElement element, out ResponsesToolResultInput toolResult)
+    {
+        toolResult = new ResponsesToolResultInput(string.Empty, string.Empty, null);
+        var type = GetStringProperty(element, "type");
+        if (!string.Equals(type, "function_call_output", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(type, "tool_result", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var callId = GetStringProperty(element, "call_id")
+                     ?? GetStringProperty(element, "tool_call_id")
+                     ?? GetStringProperty(element, "id");
+        if (string.IsNullOrWhiteSpace(callId))
+            return false;
+
+        string? output = null;
+        if (element.TryGetProperty("output", out var outputElement))
+            output = ElementToPayloadString(outputElement);
+        else if (element.TryGetProperty("result", out var resultElement))
+            output = ElementToPayloadString(resultElement);
+
+        var schemaHash = GetStringProperty(element, "schema_hash")
+                         ?? GetStringProperty(element, "schemaHash");
+        toolResult = new ResponsesToolResultInput(callId.Trim(), output ?? string.Empty, schemaHash);
+        return true;
+    }
+
+    private static bool TryExtractDeclaredTools(
+        JsonElement tools,
+        out IReadOnlyList<ResponsesApplicationToolDeclaration> declaredTools,
+        out string error)
+    {
+        declaredTools = [];
+        error = string.Empty;
+        if (tools.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+            return true;
+        if (tools.ValueKind != JsonValueKind.Array)
+        {
+            error = "tools must be an array when provided.";
+            return false;
+        }
+
+        var result = new List<ResponsesApplicationToolDeclaration>();
+        var toolIndex = -1;
+        foreach (var tool in tools.EnumerateArray())
+        {
+            toolIndex++;
+            if (tool.ValueKind != JsonValueKind.Object)
+            {
+                error = $"tool at index {toolIndex} must be an object.";
+                return false;
+            }
+
+            var toolType = GetStringProperty(tool, "type");
+            var isFunctionType = string.IsNullOrWhiteSpace(toolType) ||
+                                 string.Equals(toolType, "function", StringComparison.OrdinalIgnoreCase);
+            if (!isFunctionType)
+                continue;
+
+            var function = tool.TryGetProperty("function", out var functionElement) &&
+                           functionElement.ValueKind == JsonValueKind.Object
+                ? functionElement
+                : tool;
+            var name = GetStringProperty(function, "name");
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                error = $"function tool at index {toolIndex} requires a non-empty name.";
+                return false;
+            }
+
+            var description = GetStringProperty(function, "description") ?? string.Empty;
+            var parametersJson = function.TryGetProperty("parameters", out var parameters)
+                ? ElementToPayloadString(parameters)
+                : """{"type":"object","properties":{}}""";
+            result.Add(new ResponsesApplicationToolDeclaration(
+                name.Trim(),
+                description,
+                parametersJson,
+                ResponsesToolSchemaHashes.Compute(parametersJson)));
+        }
+
+        declaredTools = result;
+        return true;
+    }
+
+    private static string? GetStringProperty(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property))
+            return null;
+        return property.ValueKind == JsonValueKind.String ? property.GetString() : null;
+    }
+
+    private static string ElementToPayloadString(JsonElement element) =>
+        element.ValueKind == JsonValueKind.String
+            ? element.GetString() ?? string.Empty
+            : element.GetRawText();
+}
+
 internal sealed record ResponsesApiErrorResponse
 {
     [JsonPropertyName("error")]

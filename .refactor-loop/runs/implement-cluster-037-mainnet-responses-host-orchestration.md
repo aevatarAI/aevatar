@@ -3,9 +3,9 @@
 ## 修改文件列表
 
 - `src/Aevatar.Mainnet.Host.Api/Responses/ResponsesEndpoints.cs` — 1520 lines
-- `src/Aevatar.Mainnet.Host.Api/Responses/ResponsesCommandFacade.cs` — 522 lines
+- `src/platform/Aevatar.GAgentService.Application/Responses/ResponsesCommandFacade.cs` — 522 lines
 - `src/Aevatar.Mainnet.Host.Api/Messages/MessagesEndpoints.cs` — 358 lines
-- `src/Aevatar.Mainnet.Host.Api/Messages/MessagesCommandFacade.cs` — 316 lines
+- `src/platform/Aevatar.GAgentService.Application/Responses/MessagesCommandFacade.cs` — 316 lines
 
 ## 测试结果
 
