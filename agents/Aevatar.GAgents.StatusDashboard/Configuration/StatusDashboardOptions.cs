@@ -33,6 +33,13 @@ public sealed class StatusDashboardOptions
     public bool UseBuiltInTargets { get; set; } = true;
 
     /// <summary>
+    /// Optional staged probes for the NyxID proxy -> /v1/responses ->
+    /// chat-route ForwardToTeam -> Studio Team path. Disabled by default
+    /// because it needs a live NyxID bearer and a prepared Studio team/member.
+    /// </summary>
+    public ResponsesForwardToTeamStatusProbeOptions ResponsesForwardToTeam { get; set; } = new();
+
+    /// <summary>
     /// Probe target manifest. Order is preserved; the API surfaces targets in
     /// declared order.
     /// </summary>
@@ -63,4 +70,37 @@ public sealed class StatusProbeTargetConfig
     /// </summary>
     public Dictionary<string, string> Parameters { get; set; } =
         new(StringComparer.OrdinalIgnoreCase);
+}
+
+public sealed class ResponsesForwardToTeamStatusProbeOptions
+{
+    public bool Enabled { get; set; }
+
+    public string DirectBaseUrl { get; set; } = string.Empty;
+
+    public string NyxIdBaseUrl { get; set; } = string.Empty;
+
+    public string NyxIdServiceSlug { get; set; } = "aevatar";
+
+    public string AccessTokenConfigurationKey { get; set; } =
+        "Aevatar:Status:ResponsesForwardToTeam:BearerToken";
+
+    public string ScopeId { get; set; } = string.Empty;
+
+    public string TeamId { get; set; } = string.Empty;
+
+    public string MemberId { get; set; } = string.Empty;
+
+    public string PublishedServiceId { get; set; } = string.Empty;
+
+    public string EndpointId { get; set; } = "chat";
+
+    public string Model { get; set; } = "deepseek/deepseek-chat";
+
+    public string Prompt { get; set; } =
+        "Aevatar status probe. Reply in one short sentence.";
+
+    public int IntervalSeconds { get; set; } = 300;
+
+    public int TimeoutMs { get; set; } = 45_000;
 }

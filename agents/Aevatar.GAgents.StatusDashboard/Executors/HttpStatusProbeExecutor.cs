@@ -20,6 +20,10 @@ namespace Aevatar.GAgents.StatusDashboard.Executors;
 ///   Body              optional — raw request body
 ///   Header.{name}     optional — request header; supports ${configuration:Key}
 ///                                 placeholders resolved at probe time
+///   ExpectedBodyContains optional — required literal marker in a successful response body
+///   ExpectedBodyRegex    optional — required regex marker in a successful response body
+///   ForbiddenBodyContains optional — literal marker that must not appear in response body
+///   ForbiddenBodyRegex   optional — regex marker that must not appear in response body
 ///   DegradedOnNon2xx  optional — "true" to mark unexpected non-2xx as degraded
 ///                                 rather than down (default down)
 /// </summary>
@@ -92,6 +96,10 @@ public sealed class HttpStatusProbeExecutor : IHealthProbeExecutor
             var statusCode = (int)response.StatusCode;
             if (expectedStatuses.Contains(statusCode))
             {
+                var bodyAssertion = await ValidateBodyAssertionsAsync(descriptor, response, ct);
+                if (bodyAssertion is not null)
+                    return bodyAssertion;
+
                 return new HealthProbeOutcome
                 {
                     Status = HealthOutcomeStatus.Ok,
@@ -124,6 +132,82 @@ public sealed class HttpStatusProbeExecutor : IHealthProbeExecutor
                 return string.IsNullOrEmpty(v) ? fallback : v;
         }
         return fallback;
+    }
+
+    private static async Task<HealthProbeOutcome?> ValidateBodyAssertionsAsync(
+        HealthProbeTargetDescriptor descriptor,
+        HttpResponseMessage response,
+        CancellationToken ct)
+    {
+        var expectedContains = ReadParam(descriptor, "ExpectedBodyContains");
+        var expectedRegex = ReadParam(descriptor, "ExpectedBodyRegex");
+        var forbiddenContains = ReadParam(descriptor, "ForbiddenBodyContains");
+        var forbiddenRegex = ReadParam(descriptor, "ForbiddenBodyRegex");
+        if (string.IsNullOrWhiteSpace(expectedContains) &&
+            string.IsNullOrWhiteSpace(expectedRegex) &&
+            string.IsNullOrWhiteSpace(forbiddenContains) &&
+            string.IsNullOrWhiteSpace(forbiddenRegex))
+        {
+            return null;
+        }
+
+        var body = response.Content is null
+            ? string.Empty
+            : await response.Content.ReadAsStringAsync(ct);
+
+        if (!string.IsNullOrEmpty(expectedContains) &&
+            !body.Contains(expectedContains, StringComparison.Ordinal))
+        {
+            return Failure(
+                "body_assertion_failed",
+                "Expected response body marker was not found.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(expectedRegex) &&
+            !BodyRegexMatches(body, expectedRegex, out var regexError))
+        {
+            return Failure(
+                string.IsNullOrEmpty(regexError) ? "body_assertion_failed" : "invalid_body_regex",
+                regexError ?? "Expected response body pattern was not found.");
+        }
+
+        if (!string.IsNullOrEmpty(forbiddenContains) &&
+            body.Contains(forbiddenContains, StringComparison.Ordinal))
+        {
+            return Failure(
+                "body_assertion_failed",
+                "Forbidden response body marker was found.");
+        }
+
+        string? forbiddenRegexError = null;
+        if (!string.IsNullOrWhiteSpace(forbiddenRegex) &&
+            BodyRegexMatches(body, forbiddenRegex, out forbiddenRegexError))
+        {
+            return Failure(
+                "body_assertion_failed",
+                "Forbidden response body pattern was found.");
+        }
+
+        if (!string.IsNullOrEmpty(forbiddenRegexError))
+        {
+            return Failure("invalid_body_regex", forbiddenRegexError);
+        }
+
+        return null;
+    }
+
+    private static bool BodyRegexMatches(string body, string pattern, out string? error)
+    {
+        try
+        {
+            error = null;
+            return Regex.IsMatch(body, pattern, RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+        }
+        catch (ArgumentException ex)
+        {
+            error = $"Invalid response body regex: {ex.Message}";
+            return false;
+        }
     }
 
     private static HashSet<int> ParseExpectedStatuses(string raw) =>
