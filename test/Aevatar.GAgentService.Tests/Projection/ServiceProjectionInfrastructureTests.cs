@@ -196,7 +196,7 @@ public sealed class ServiceProjectionInfrastructureTests
                 InteractionKind = GAgentRunTerminalProjectionPort.ResolveInteractionKind(projectionName),
             });
         var runtime = new RecordingActorRuntime();
-        runtime.ExistingActorIds.Add(ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
+        runtime.KnownActorIds.Add(ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
             "actor-1",
             "gagent-run-terminal-draft-run",
             ProjectionRuntimeMode.DurableMaterialization,
@@ -232,7 +232,7 @@ public sealed class ServiceProjectionInfrastructureTests
                 InteractionKind = GAgentRunTerminalProjectionPort.ResolveInteractionKind(projectionName),
             });
         var runtime = new RecordingActorRuntime();
-        runtime.ExistingActorIds.Add("different-scope");
+        runtime.KnownActorIds.Add("different-scope");
         IGAgentRunTerminalProjectionPort disabledService = new GAgentRunTerminalProjectionPort(
             new ServiceProjectionOptions { Enabled = false },
             activationService,

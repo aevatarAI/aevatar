@@ -3,6 +3,9 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Core.Commands;
+using Aevatar.CQRS.Core.Interactions;
+using Aevatar.CQRS.Core.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
@@ -300,6 +303,37 @@ public sealed class GAgentDraftRunInteractionCoverageTests
             x.correlationId == "corr-1" &&
             x.interactionKind == GAgentRunTerminalInteractionKind.DraftRun);
         terminalPort.ReleaseCalls.Should().ContainSingle();
+        target.TerminalProjectionLease.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ObservationLifecycle_ShouldReturnProjectionUnavailable_WhenTerminalProjectionIsUnavailable()
+    {
+        var projectionPort = new DraftRunProjectionPort();
+        var terminalPort = new RecordingGAgentRunTerminalProjectionPort { ReturnNullLease = true };
+        var lifecycle = new GAgentDraftRunObservationLifecycle(projectionPort, terminalPort);
+        var target = new GAgentDraftRunCommandTarget(
+            new DraftRunStubActor("actor-1", new DraftRunExpectedAgent()),
+            typeof(DraftRunExpectedAgent).AssemblyQualifiedName!,
+            projectionPort,
+            terminalPort);
+        var context = new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>());
+
+        var result = await lifecycle.BindAsync(
+            new GAgentDraftRunCommand("scope-a", typeof(DraftRunExpectedAgent).AssemblyQualifiedName!, "hello"),
+            CreateExecution(target, context),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(GAgentDraftRunStartError.ProjectionUnavailable);
+        terminalPort.Calls.Should().ContainSingle(x =>
+            x.actorId == "actor-1" &&
+            x.correlationId == "corr-1" &&
+            x.interactionKind == GAgentRunTerminalInteractionKind.DraftRun);
+        terminalPort.ReleaseCalls.Should().BeEmpty();
+        projectionPort.EnsureCalls.Should().BeEmpty();
+        projectionPort.AttachCalls.Should().BeEmpty();
+        target.TerminalProjectionLease.Should().BeNull();
     }
 
     [Fact]
@@ -551,6 +585,54 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         projectionPort.AttachCalls.Should().ContainSingle();
     }
 
+    [Fact]
+    public async Task Interaction_ShouldFailWithProjectionUnavailable_AndNotDispatch_WhenTerminalProjectionAttachFails()
+    {
+        var projectionPort = new DraftRunProjectionPort();
+        var terminalPort = new RecordingGAgentRunTerminalProjectionPort { ReturnNullLease = true };
+        var dispatchPort = new RecordingActorDispatchPort();
+        var interaction = CreateInteraction(projectionPort, terminalPort, dispatchPort);
+
+        var result = await interaction.ExecuteAsync(
+            CreateCommand(),
+            (_, _) => ValueTask.CompletedTask,
+            null,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(GAgentDraftRunStartError.ProjectionUnavailable);
+        dispatchPort.Dispatches.Should().BeEmpty();
+        terminalPort.Calls.Should().ContainSingle(x =>
+            x.interactionKind == GAgentRunTerminalInteractionKind.DraftRun);
+        terminalPort.ReleaseCalls.Should().BeEmpty();
+        projectionPort.EnsureCalls.Should().BeEmpty();
+        projectionPort.AttachCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Interaction_ShouldFailWithProjectionUnavailable_AndNotDispatch_WhenLiveProjectionAttachFails()
+    {
+        var projectionPort = new DraftRunProjectionPort { LeaseToReturn = null };
+        var terminalPort = new RecordingGAgentRunTerminalProjectionPort();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var interaction = CreateInteraction(projectionPort, terminalPort, dispatchPort);
+
+        var result = await interaction.ExecuteAsync(
+            CreateCommand(),
+            (_, _) => ValueTask.CompletedTask,
+            null,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(GAgentDraftRunStartError.ProjectionUnavailable);
+        dispatchPort.Dispatches.Should().BeEmpty();
+        terminalPort.Calls.Should().ContainSingle(x =>
+            x.interactionKind == GAgentRunTerminalInteractionKind.DraftRun);
+        terminalPort.ReleaseCalls.Should().ContainSingle();
+        projectionPort.EnsureCalls.Should().BeEmpty();
+        projectionPort.AttachCalls.Should().BeEmpty();
+    }
+
     private static CommandDispatchExecution<GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt> CreateExecution(
         GAgentDraftRunCommandTarget target,
         CommandContext context) =>
@@ -566,6 +648,33 @@ public sealed class GAgentDraftRunInteractionCoverageTests
                 context.CorrelationId,
                 string.Empty),
         };
+
+    private static ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus> CreateInteraction(
+        DraftRunProjectionPort projectionPort,
+        RecordingGAgentRunTerminalProjectionPort terminalPort,
+        RecordingActorDispatchPort dispatchPort)
+    {
+        var pipeline = new DefaultCommandDispatchPipeline<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError>(
+            new GAgentDraftRunCommandTargetResolver(
+                new DraftRunStubActorRuntime(),
+                projectionPort,
+                terminalPort),
+            new DefaultCommandContextPolicy(),
+            new GAgentDraftRunCommandEnvelopeFactory(),
+            new ActorCommandTargetDispatcher<GAgentDraftRunCommandTarget>(dispatchPort),
+            new GAgentDraftRunAcceptedReceiptFactory());
+
+        return new DefaultCommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunCommandTarget, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, AGUIEvent, GAgentDraftRunCompletionStatus>(
+            pipeline,
+            new DefaultEventOutputStream<AGUIEvent, AGUIEvent>(new IdentityEventFrameMapper<AGUIEvent>()),
+            new GAgentDraftRunCompletionPolicy(),
+            new GAgentDraftRunFinalizeEmitter(),
+            new GAgentDraftRunDurableCompletionResolver(new RecordingGAgentRunTerminalQueryPort()),
+            observationLifecycle: new GAgentDraftRunObservationLifecycle(projectionPort, terminalPort));
+    }
+
+    private static GAgentDraftRunCommand CreateCommand() =>
+        new("scope-a", typeof(DraftRunExpectedAgent).AssemblyQualifiedName!, "hello");
 
     private sealed class DraftRunProjectionPort : IGAgentDraftRunProjectionPort
     {
@@ -647,6 +756,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
     {
         public List<(string actorId, string correlationId, GAgentRunTerminalInteractionKind interactionKind)> Calls { get; } = [];
         public List<IGAgentRunTerminalProjectionLease> ReleaseCalls { get; } = [];
+        public bool ReturnNullLease { get; init; }
 
         public Task<IGAgentRunTerminalProjectionLease?> EnsureProjectionAsync(
             string actorId,
@@ -655,6 +765,9 @@ public sealed class GAgentDraftRunInteractionCoverageTests
             CancellationToken ct = default)
         {
             Calls.Add((actorId, correlationId, interactionKind));
+            if (ReturnNullLease)
+                return Task.FromResult<IGAgentRunTerminalProjectionLease?>(null);
+
             return Task.FromResult<IGAgentRunTerminalProjectionLease?>(
                 new RecordingGAgentRunTerminalProjectionLease(actorId, correlationId, interactionKind));
         }
@@ -731,6 +844,17 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         public Task<bool> ExistsAsync(string id) => Task.FromResult(_actors.ContainsKey(id));
         public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
         public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingActorDispatchPort : IActorDispatchPort
+    {
+        public List<(string actorId, EventEnvelope envelope)> Dispatches { get; } = [];
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            Dispatches.Add((actorId, envelope));
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class DraftRunStubActor(string id, IAgent agent) : IActor

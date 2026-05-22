@@ -174,7 +174,7 @@ internal sealed class NoOpServiceConfigurationReleaseService
 
 internal sealed class RecordingActorRuntime : IActorRuntime
 {
-    public HashSet<string> ExistingActorIds { get; } = [];
+    public HashSet<string> KnownActorIds { get; } = [];
 
     public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
         where TAgent : IAgent =>
@@ -188,7 +188,7 @@ internal sealed class RecordingActorRuntime : IActorRuntime
     public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(null);
 
     public Task<bool> ExistsAsync(string id) =>
-        Task.FromResult(ExistingActorIds.Count == 0 || ExistingActorIds.Contains(id));
+        Task.FromResult(KnownActorIds.Contains(id));
 
     public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
 

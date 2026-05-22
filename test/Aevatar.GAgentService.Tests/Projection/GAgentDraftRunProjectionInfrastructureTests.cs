@@ -84,7 +84,7 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
         var activation = new RecordingActivationService();
         var hub = new RecordingSessionEventHub();
         var runtime = new RecordingActorRuntime();
-        runtime.ExistingActorIds.Add(ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
+        runtime.KnownActorIds.Add(ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
             "actor-1",
             "service-draft-run-session",
             ProjectionRuntimeMode.SessionObservation,
@@ -129,7 +129,7 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
         var activation = new RecordingActivationService();
         var hub = new RecordingSessionEventHub();
         var runtime = new RecordingActorRuntime();
-        runtime.ExistingActorIds.Add("different-scope");
+        runtime.KnownActorIds.Add("different-scope");
         var disabledPort = new GAgentDraftRunProjectionPort(
             new ServiceProjectionOptions { Enabled = false },
             activation,

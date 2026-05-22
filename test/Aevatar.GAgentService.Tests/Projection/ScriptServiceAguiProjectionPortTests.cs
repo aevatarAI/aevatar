@@ -106,7 +106,7 @@ public sealed class ScriptServiceAguiProjectionPortTests
         var activation = new RecordingActivationService();
         var hub = new RecordingSessionEventHub();
         var runtime = new RecordingActorRuntime();
-        runtime.ExistingActorIds.Add(BuildScopeActorId(
+        runtime.KnownActorIds.Add(BuildScopeActorId(
             "script-actor-1",
             ScriptServiceAguiProjectionKind,
             ProjectionRuntimeMode.SessionObservation,
@@ -154,7 +154,7 @@ public sealed class ScriptServiceAguiProjectionPortTests
         var activation = new RecordingActivationService();
         var hub = new RecordingSessionEventHub();
         var runtime = new RecordingActorRuntime();
-        runtime.ExistingActorIds.Add("different-scope");
+        runtime.KnownActorIds.Add("different-scope");
         var disabledPort = new ScriptServiceAguiProjectionPort(
             new ServiceProjectionOptions { Enabled = false },
             activation,
