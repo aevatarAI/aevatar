@@ -92,8 +92,6 @@ public sealed class WorkflowActorGraphQueryOptions
     public IReadOnlyList<string> EdgeTypes { get; set; } = [];
 }
 
-public sealed record WorkflowTopologyEdge(string Parent, string Child);
-
 public enum WorkflowRunProjectionScope
 {
     ActorShared = 0,
@@ -103,7 +101,7 @@ public enum WorkflowRunProjectionScope
 
 public enum WorkflowRunTopologySource
 {
-    RuntimeSnapshot = 0,
+    CommittedProjection = 0,
     Unknown = 99,
 }
 

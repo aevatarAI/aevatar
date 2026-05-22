@@ -14,7 +14,7 @@ public enum WorkflowExecutionProjectionScope
 
 public enum WorkflowExecutionTopologySource
 {
-    RuntimeSnapshot = 0,
+    CommittedProjection = 0,
 }
 
 public enum WorkflowExecutionCompletionStatus

@@ -193,7 +193,7 @@ public sealed class WorkflowExecutionReadModelMapper
     private static WorkflowRunTopologySource MapTopologySource(WorkflowExecutionTopologySource source) =>
         source switch
         {
-            WorkflowExecutionTopologySource.RuntimeSnapshot => WorkflowRunTopologySource.RuntimeSnapshot,
+            WorkflowExecutionTopologySource.CommittedProjection => WorkflowRunTopologySource.CommittedProjection,
             _ => WorkflowRunTopologySource.Unknown,
         };
 

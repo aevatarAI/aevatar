@@ -79,7 +79,7 @@ public sealed class WorkflowProjectionReadModelCoverageTests
         report.CreatedAt.Should().Be(default);
         report.UpdatedAt.Should().Be(default);
         report.ProjectionScope.Should().Be(WorkflowExecutionProjectionScope.ActorShared);
-        report.TopologySource.Should().Be(WorkflowExecutionTopologySource.RuntimeSnapshot);
+        report.TopologySource.Should().Be(WorkflowExecutionTopologySource.CommittedProjection);
         report.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Running);
 
         report.CreatedAt = localTime;
