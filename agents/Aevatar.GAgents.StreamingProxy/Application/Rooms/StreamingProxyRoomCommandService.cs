@@ -123,19 +123,20 @@ public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomComman
 
         var actor = await _actorRuntime.GetAsync(command.RoomId.Trim());
         if (actor is null)
-            return new StreamingProxyRoomJoinResult(StreamingProxyRoomJoinStatus.RoomNotFound, null);
+            return new StreamingProxyRoomJoinResult(StreamingProxyRoomJoinStatus.RoomNotFound, null, null);
 
         var agentId = NormalizeRequiredValue(command.AgentId, nameof(command.AgentId));
+        var displayName = NormalizeOptionalValue(command.DisplayName) ?? agentId;
         var envelope = BuildRoomEnvelope(
             actor.Id,
             new GroupChatParticipantJoinedEvent
             {
                 AgentId = agentId,
-                DisplayName = NormalizeOptionalValue(command.DisplayName) ?? agentId,
+                DisplayName = displayName,
             });
 
         await DispatchRoomEnvelopeAsync(actor.Id, envelope, cancellationToken);
-        return new StreamingProxyRoomJoinResult(StreamingProxyRoomJoinStatus.Joined, agentId);
+        return new StreamingProxyRoomJoinResult(StreamingProxyRoomJoinStatus.Joined, agentId, displayName);
     }
 
     public Task PublishTerminalStateAsync(

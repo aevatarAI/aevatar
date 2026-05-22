@@ -26,7 +26,9 @@ public sealed record StreamingProxyRoomCreateCommand(
     string ScopeId,
     string? RoomName);
 
-// refactor helper, no behavior change
+// Refactor (iter38/cluster-038-streaming-proxy-reuse-existing):
+//   Old pattern: Streaming proxy endpoints built post-message room envelopes directly in Host code.
+//   New principle: The Application command service owns typed message normalization and dispatch.
 public sealed record StreamingProxyRoomPostMessageCommand(
     string RoomId,
     string AgentId,
@@ -34,13 +36,17 @@ public sealed record StreamingProxyRoomPostMessageCommand(
     string Content,
     string? SessionId);
 
-// refactor helper, no behavior change
+// Refactor (iter38/cluster-038-streaming-proxy-reuse-existing):
+//   Old pattern: Streaming proxy endpoints built join room envelopes and duplicated participant normalization in Host code.
+//   New principle: The Application command service owns typed join normalization and returns the normalized participant identity.
 public sealed record StreamingProxyRoomJoinCommand(
     string RoomId,
     string AgentId,
     string? DisplayName);
 
-// refactor helper, no behavior change
+// Refactor (iter38/cluster-038-streaming-proxy-reuse-existing):
+//   Old pattern: Streaming proxy endpoints published terminal state envelopes through raw dispatch helpers.
+//   New principle: The Application command service owns typed terminal-state publication without adding a second room interaction port.
 public sealed record StreamingProxyRoomTerminalStateCommand(
     string RoomId,
     string SessionId,
@@ -57,7 +63,8 @@ public sealed record StreamingProxyRoomPostMessageResult(
 
 public sealed record StreamingProxyRoomJoinResult(
     StreamingProxyRoomJoinStatus Status,
-    string? AgentId);
+    string? AgentId,
+    string? DisplayName);
 
 public enum StreamingProxyRoomCreateStatus
 {

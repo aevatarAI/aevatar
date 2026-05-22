@@ -519,7 +519,7 @@ public static class StreamingProxyEndpoints
             return Results.NotFound(new { error = "Room not found" });
 
         var agentId = result.AgentId ?? request.AgentId.Trim();
-        var displayName = request.DisplayName?.Trim() ?? agentId;
+        var displayName = result.DisplayName ?? agentId;
 
         var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
         try

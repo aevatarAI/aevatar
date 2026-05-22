@@ -295,11 +295,37 @@ public sealed class StreamingProxyRoomCommandServiceTests
             new StreamingProxyRoomJoinCommand("room-a", " agent-1 ", " Alice "),
             CancellationToken.None);
 
-        result.Should().Be(new StreamingProxyRoomJoinResult(StreamingProxyRoomJoinStatus.Joined, "agent-1"));
+        result.Should().Be(new StreamingProxyRoomJoinResult(
+            StreamingProxyRoomJoinStatus.Joined,
+            "agent-1",
+            "Alice"));
         dispatchPort.Dispatches.Should().ContainSingle(x => x.ActorId == "room-a");
         var joined = dispatchPort.Dispatches.Single().Envelope.Payload.Unpack<GroupChatParticipantJoinedEvent>();
         joined.AgentId.Should().Be("agent-1");
         joined.DisplayName.Should().Be("Alice");
+    }
+
+    [Fact]
+    public async Task JoinAsync_ShouldReturnRoomNotFound_WhenRoomIsMissing()
+    {
+        var operations = new List<string>();
+        var runtime = new RecordingActorRuntime(operations, new RecordingActor("room-a", operations));
+        var dispatchPort = new RecordingActorDispatchPort(operations, runtime);
+        var service = new StreamingProxyRoomCommandService(
+            runtime,
+            dispatchPort,
+            new RecordingGAgentActorRegistryCommandPort(operations),
+            NullLogger<StreamingProxyRoomCommandService>.Instance);
+
+        var result = await service.JoinAsync(
+            new StreamingProxyRoomJoinCommand("missing-room", "agent-1", "Alice"),
+            CancellationToken.None);
+
+        result.Should().Be(new StreamingProxyRoomJoinResult(
+            StreamingProxyRoomJoinStatus.RoomNotFound,
+            null,
+            null));
+        dispatchPort.Dispatches.Should().BeEmpty();
     }
 
     [Fact]

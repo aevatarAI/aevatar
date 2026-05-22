@@ -1126,6 +1126,30 @@ public class StreamingProxyCoverageTests
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
 
+        roomCommandService = new StubRoomCommandService
+        {
+            JoinResult = new StreamingProxyRoomJoinResult(
+                StreamingProxyRoomJoinStatus.RoomNotFound,
+                null,
+                null),
+        };
+        result = await InvokeResultAsync(
+            "HandleJoinAsync",
+            CreateScopedHttpContext(),
+            "scope-a",
+            "missing-room",
+            new JoinRoomRequest("agent-1", "Alice"),
+            roomCommandService,
+            actorStore,
+            participantStore,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        participantStore.AddedParticipants.Should().BeEmpty();
+
+        roomCommandService = new StubRoomCommandService();
         var joinRequest = new JoinRoomRequest("agent-1", "Alice");
         result = await InvokeResultAsync(
             "HandleJoinAsync",
@@ -2068,7 +2092,8 @@ public class StreamingProxyCoverageTests
             JoinCommands.Add(command);
             return Task.FromResult(JoinResult ?? new StreamingProxyRoomJoinResult(
                 StreamingProxyRoomJoinStatus.Joined,
-                command.AgentId?.Trim()));
+                command.AgentId?.Trim(),
+                command.DisplayName?.Trim()));
         }
 
         public Task PublishTerminalStateAsync(

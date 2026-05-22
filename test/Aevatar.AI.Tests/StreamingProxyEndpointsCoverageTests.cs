@@ -335,7 +335,8 @@ public sealed class StreamingProxyEndpointsCoverageTests
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(new StreamingProxyRoomJoinResult(
                 StreamingProxyRoomJoinStatus.Joined,
-                command.AgentId?.Trim()));
+                command.AgentId?.Trim(),
+                command.DisplayName?.Trim()));
         }
 
         public Task PublishTerminalStateAsync(
