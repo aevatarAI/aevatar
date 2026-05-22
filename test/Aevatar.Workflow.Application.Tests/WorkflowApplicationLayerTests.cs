@@ -104,7 +104,7 @@ public sealed class WorkflowApplicationLayerTests
     }
 
     [Fact]
-    public async Task CommandInteractionService_ShouldNotifyAcceptedBeforeAwaitingPreparedDispatch()
+    public async Task CommandInteractionService_ShouldNotifyAcceptedAfterPreparedDispatchBeforePumpingOutput()
     {
         var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort();
@@ -122,6 +122,7 @@ public sealed class WorkflowApplicationLayerTests
         };
         var accepted = new TaskCompletionSource<WorkflowChatRunAcceptedReceipt>(
             TaskCreationOptions.RunContinuationsAsynchronously);
+        var acceptedRelease = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var service = CreateInteractionService(
             pipeline,
             outputStream,
@@ -136,18 +137,22 @@ public sealed class WorkflowApplicationLayerTests
         var executeTask = service.ExecuteAsync(
             new WorkflowChatRunRequest("hello", "direct", null),
             static (_, _) => ValueTask.CompletedTask,
-            (acceptedReceipt, _) =>
+            async (acceptedReceipt, _) =>
             {
                 accepted.SetResult(acceptedReceipt);
-                return ValueTask.CompletedTask;
+                await acceptedRelease.Task.ConfigureAwait(false);
             },
             CancellationToken.None);
 
-        (await accepted.Task.WaitAsync(TimeSpan.FromSeconds(5))).Should().Be(receipt);
         pipeline.DispatchPreparedCalls.Should().Be(1);
         outputStream.PumpCalls.Should().Be(0);
 
         dispatchRelease.SetResult(null);
+        (await accepted.Task.WaitAsync(TimeSpan.FromSeconds(5))).Should().Be(receipt);
+        pipeline.DispatchPreparedCalls.Should().Be(1);
+        outputStream.PumpCalls.Should().Be(0);
+
+        acceptedRelease.SetResult(null);
         var result = await executeTask.WaitAsync(TimeSpan.FromSeconds(5));
 
         result.Succeeded.Should().BeTrue();
