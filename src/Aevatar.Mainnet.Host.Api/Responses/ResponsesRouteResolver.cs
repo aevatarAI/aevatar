@@ -1,6 +1,3 @@
-using System.Collections.Concurrent;
-using System.Security.Cryptography;
-using System.Text;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.Extensions.Logging;
 
@@ -20,27 +17,20 @@ internal interface IResponsesRouteResolver
         CancellationToken ct);
 }
 
-internal sealed class CachingResponsesRouteResolver : IResponsesRouteResolver
+internal sealed class ResponsesRouteResolver : IResponsesRouteResolver
 {
-    /// <summary>Catalog HTTP fetches are expensive (2 NyxID round-trips). Cache per caller
-    /// (bearer-keyed because the catalog is per-user-filtered) with a short TTL so revocations
-    /// and new service bindings surface within a few minutes. Bearer is hashed before keying
-    /// to keep raw tokens out of in-memory state.</summary>
-    private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
-
+    // Refactor (iter26/cluster-026-responses-route-user-catalog-cache):
+    //   Old pattern: Responses/Messages routes resolve `vendor/model` by reading a singleton per-bearer in-process cache of NyxID user LLM service catalog facts.
+    //   New principle: Resolve model route from the current catalog read in the request flow; do not store user route facts in singleton process memory.
     private readonly IUserLlmCatalogPort _catalog;
-    private readonly ILogger<CachingResponsesRouteResolver> _logger;
-    private readonly TimeProvider _timeProvider;
-    private readonly ConcurrentDictionary<string, CacheEntry> _cache = new();
+    private readonly ILogger<ResponsesRouteResolver> _logger;
 
-    public CachingResponsesRouteResolver(
+    public ResponsesRouteResolver(
         IUserLlmCatalogPort catalog,
-        ILogger<CachingResponsesRouteResolver> logger,
-        TimeProvider? timeProvider = null)
+        ILogger<ResponsesRouteResolver> logger)
     {
         _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task<string?> ResolveRouteValueAsync(
@@ -52,19 +42,14 @@ internal sealed class CachingResponsesRouteResolver : IResponsesRouteResolver
         ArgumentException.ThrowIfNullOrWhiteSpace(bearerToken);
 
         var normalizedSlug = slug.Trim();
-        var routes = await GetRoutesAsync(bearerToken, ct).ConfigureAwait(false);
+        var routes = await ReadCurrentRoutesAsync(bearerToken, ct).ConfigureAwait(false);
         return routes.TryGetValue(normalizedSlug, out var routeValue) ? routeValue : null;
     }
 
-    private async Task<IReadOnlyDictionary<string, string>> GetRoutesAsync(
+    private async Task<IReadOnlyDictionary<string, string>> ReadCurrentRoutesAsync(
         string bearerToken,
         CancellationToken ct)
     {
-        var key = HashBearer(bearerToken);
-        var now = _timeProvider.GetUtcNow();
-        if (_cache.TryGetValue(key, out var cached) && cached.ExpiresAt > now)
-            return cached.Routes;
-
         NyxIdLlmServicesResult result;
         try
         {
@@ -80,9 +65,7 @@ internal sealed class CachingResponsesRouteResolver : IResponsesRouteResolver
             return EmptyRoutes;
         }
 
-        var routes = BuildRouteMap(result);
-        _cache[key] = new CacheEntry(routes, now + CacheTtl);
-        return routes;
+        return BuildRouteMap(result);
     }
 
     private static Dictionary<string, string> BuildRouteMap(NyxIdLlmServicesResult result)
@@ -106,16 +89,6 @@ internal sealed class CachingResponsesRouteResolver : IResponsesRouteResolver
         return routes;
     }
 
-    private static string HashBearer(string bearerToken)
-    {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(bearerToken));
-        return Convert.ToHexString(bytes);
-    }
-
     private static readonly IReadOnlyDictionary<string, string> EmptyRoutes =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-    private readonly record struct CacheEntry(
-        IReadOnlyDictionary<string, string> Routes,
-        DateTimeOffset ExpiresAt);
 }

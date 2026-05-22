@@ -155,6 +155,9 @@ internal static class ResponsesApiEndpoints
             toolProviderContext,
             logger,
             ct);
+        // Refactor (iter26/cluster-026-responses-route-user-catalog-cache):
+        //   Old pattern: Responses/Messages routes resolve `vendor/model` by reading a singleton per-bearer in-process cache of NyxID user LLM service catalog facts.
+        //   New principle: Resolve model route from the current catalog read in the request flow; do not store user route facts in singleton process memory.
         // OpenRouter-style vendor prefix: the catalog advertises every model as
         // `{slug}/{model}` regardless of route shape (gateway provider, user
         // service, proxy service). When the slug resolves to a known catalog
