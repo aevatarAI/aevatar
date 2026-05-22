@@ -34,7 +34,7 @@ public static class RoleGAgentFactory
 {
     // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
     //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
-    //   New principle: reflector force-pick: 删 Task.Run + Channel/ChannelWriter + _streamBufferCapacity 整个 owned stream 框架;ChatStreamAsync 自己 own stream flow;删 stream_buffer_capacity proto/YAML/config(reserve proto field number);middleware bridge 必须 private/internal adapter-only,不暴露公开 stream middleware 接口
+    //   New principle: ChatStreamAsync owns the stream flow directly; the Task.Run + Channel owned-stream loop and stream_buffer_capacity config were removed; middleware wrapping stays inside private bridge adapters.
     private static readonly IDeserializer Yaml = new DeserializerBuilder()
         .WithNamingConvention(UnderscoredNamingConvention.Instance)
         .IgnoreUnmatchedProperties()

@@ -402,6 +402,9 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
 
     private Dictionary<string, object?> SerializeRole(RoleModel role)
     {
+        // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+        //   Old pattern: role YAML emitted stream_buffer_capacity as if stream buffering were authoring semantics.
+        //   New principle: exported roles include only stable role behavior; ChatRuntime owns stream flow without a YAML buffer knob.
         var result = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["id"] = role.Id,
@@ -422,7 +425,8 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
         AddIfNotNull(result, "temperature", role.Temperature);
         AddIfNotNull(result, "max_tokens", role.MaxTokens);
         AddIfNotNull(result, "max_tool_rounds", role.MaxToolRounds);
-        AddIfNotNull(result, "max_history_messages", role.MaxHistoryMessages);        AddIfNotNull(result, "event_modules", role.EventModules);
+        AddIfNotNull(result, "max_history_messages", role.MaxHistoryMessages);
+        AddIfNotNull(result, "event_modules", role.EventModules);
         AddIfNotNull(result, "event_routes", role.EventRoutes);
 
         if (role.Connectors.Count > 0)

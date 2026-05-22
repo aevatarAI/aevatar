@@ -456,6 +456,38 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
+    public async Task ChatStreamAsync_WhenAgentMiddlewareAwaitsNext_ShouldObserveResultAndItems()
+    {
+        var provider = new StreamingProvider(["stream-", "answer"]);
+        AgentRunContext? observedContext = null;
+        var runtime = CreateRuntime(
+            provider,
+            agentMiddlewares:
+            [
+                new DelegateAgentRunMiddleware(async (context, next) =>
+                {
+                    context.Items["agent.before_next"] = "seen";
+                    await next();
+                    observedContext = context;
+                }),
+            ]);
+        var output = new StringBuilder();
+
+        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+        {
+            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+                output.Append(chunk.DeltaContent);
+        }
+
+        output.ToString().Should().Be("stream-answer");
+        provider.StreamCallCount.Should().Be(1);
+        observedContext.Should().NotBeNull();
+        observedContext!.Result.Should().Be("stream-answer");
+        observedContext.Items.Should().Contain("agent.before_next", "seen");
+        observedContext.Items.Should().Contain("gen_ai.provider.name", "streaming-provider");
+    }
+
+    [Fact]
     public async Task ChatAsync_WhenProviderStreamsContent_ShouldAggregateWithoutCallingProviderChatAsync()
     {
         var provider = new StreamingProvider(["stream-", "answer"]);

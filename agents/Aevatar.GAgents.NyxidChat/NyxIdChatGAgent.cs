@@ -91,6 +91,9 @@ public sealed class NyxIdChatGAgent : RoleGAgent
 
     private InitializeRoleAgentEvent BuildInitializeRoleAgentEvent(string roleName)
     {
+        // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+        //   Old pattern: role initialization copied StreamBufferCapacity overrides into the ChatRuntime config surface.
+        //   New principle: stream buffering is not a role-level business option; the actor initializes only stable role semantics.
         var initializeEvent = new InitializeRoleAgentEvent
         {
             RoleName = string.IsNullOrWhiteSpace(roleName)

@@ -182,6 +182,9 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         IStreamingReplySink? streamingSink,
         CancellationToken ct)
     {
+        // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+        //   Old pattern: NyxID reply construction passed stream_buffer_capacity into ChatRuntime after the stream loop moved to Task.Run + Channel.
+        //   New principle: ChatRuntime owns the async stream directly; this caller only supplies provider, tools, middleware, and request identity.
         var history = new global::Aevatar.AI.Core.Chat.ChatHistory
         {
             MaxMessages = MaxHistoryMessages,
