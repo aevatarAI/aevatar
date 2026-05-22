@@ -6,7 +6,6 @@ using Aevatar.Authentication.Abstractions;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.GAgents.ChatRouting;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.Scheduled;
@@ -25,15 +24,15 @@ using ScheduledOwnerScope = Aevatar.GAgents.Scheduled.OwnerScope;
 
 namespace Aevatar.Hosting.Tests;
 
-// Refactor (iter32/cluster-034-chat-route-policy-request-path-projection-activation):
-//   Old pattern: voice bootstrap removed request-path projection priming without endpoint behavior coverage.
-//   New principle: test the route-policy upsert command shape and dispatch-only request path.
+// Refactor (iter34/cluster-004-voice-bootstrap-application-port):
+//   Old pattern: Voice bootstrap endpoint(VoiceDemoBootstrapEndpoints)同步等待 actor readiness/observation loop;POST 返回前阻塞读取 actor 状态;route-policy mutation 在 Host 内做。
+//   New principle: Medium-B framing(reflector force-pick): 删除 POST readiness polling;移 voice bootstrap + voice-demo route mutation 到 Application/actor-owned typed command port;无新 bootstrap actor / 新 envelope / 新 projection phase / mandatory status endpoint / shared route-policy command port(留给可能后续 cluster)。POST 返回 honest accepted receipt + stable id;readiness 由 client 显式 readmodel query 获取(或事件 notification,无需 Host 内同步等)。
 public sealed class VoiceDemoBootstrapEndpointsTests
 {
     private const string Scope = "voice-scope-1";
 
     [Fact]
-    public async Task Bootstrap_UpsertsVoiceRoutePolicyWithoutProjectionPriming()
+    public async Task Bootstrap_AcceptsTypedCommandWithoutReadinessPolling()
     {
         var actorRuntime = new RecordingActorRuntime();
         var catalogCommandPort = new RecordingCatalogCommandPort();
@@ -63,18 +62,22 @@ public sealed class VoiceDemoBootstrapEndpointsTests
             actorRuntime,
             dispatchPort,
             catalogCommandPort,
-            new RecordingCatalogQueryPort(),
-            routePolicyQueryPort,
-            new ReadyVoiceSessionResolver());
+            routePolicyQueryPort);
         var client = app.GetTestClient();
 
         var response = await client.PostAsync("/api/demo/voice/bootstrap", content: null);
         var body = await response.Content.ReadFromJsonAsync<Dictionary<string, object>>();
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted, await response.Content.ReadAsStringAsync());
+        body.Should().ContainKey("status").WhoseValue.ToString().Should().Be("accepted");
         body.Should().ContainKey("actor_id");
+        body.Should().ContainKey("run_id");
+        body.Should().ContainKey("correlation_id");
+        body.Should().ContainKey("agent_command_id");
+        body.Should().ContainKey("route_policy_command_id");
         var demoActorId = body!["actor_id"].ToString()!;
         actorRuntime.CreatedActors.Should().Equal(demoActorId, $"chat-route-policy:{Scope}");
+        routePolicyQueryPort.LookupCount.Should().Be(1, "the command port may read existing route readmodel once to preserve non-demo rules, but must not poll readiness");
         catalogCommandPort.Commands.Should().ContainSingle()
             .Which.AgentId.Should().Be(demoActorId);
 
@@ -84,6 +87,7 @@ public sealed class VoiceDemoBootstrapEndpointsTests
         dispatchPort.Dispatches.Should().ContainSingle(dispatch => dispatch.ActorId == $"chat-route-policy:{Scope}");
         var routeDispatch = dispatchPort.Dispatches.Single(dispatch => dispatch.ActorId == $"chat-route-policy:{Scope}");
         var command = routeDispatch.Envelope.Payload.Unpack<UpsertChatRoutePolicyRequested>();
+        routeDispatch.Envelope.Propagation.CorrelationId.Should().Be(body["correlation_id"].ToString());
         command.OwnerScope.NyxUserId.Should().Be(Scope);
         command.OwnerScope.Platform.Should().Be(RoutingOwnerScope.NyxIdPlatform);
         command.DefaultTarget.ForwardToModel.ModelName.Should().Be("existing-default");
@@ -100,9 +104,7 @@ public sealed class VoiceDemoBootstrapEndpointsTests
         RecordingActorRuntime actorRuntime,
         RecordingActorDispatchPort dispatchPort,
         RecordingCatalogCommandPort catalogCommandPort,
-        RecordingCatalogQueryPort catalogQueryPort,
-        UpdatingRoutePolicyQueryPort routePolicyQueryPort,
-        ReadyVoiceSessionResolver voiceSessionResolver)
+        UpdatingRoutePolicyQueryPort routePolicyQueryPort)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -112,10 +114,8 @@ public sealed class VoiceDemoBootstrapEndpointsTests
         builder.Services.AddSingleton<IActorRuntime>(actorRuntime);
         builder.Services.AddSingleton<IActorDispatchPort>(dispatchPort);
         builder.Services.AddSingleton<IUserAgentCatalogCommandPort>(catalogCommandPort);
-        builder.Services.AddSingleton<IUserAgentCatalogQueryPort>(catalogQueryPort);
         builder.Services.AddSingleton<IChatRoutePolicyQueryPort>(routePolicyQueryPort);
-        builder.Services.AddSingleton(new ChatRouteResolver(new StaticFallbackProvider()));
-        builder.Services.AddSingleton<IVoicePresenceSessionResolver>(voiceSessionResolver);
+        builder.Services.AddSingleton<VoiceDemoAgentCommandPort>();
 
         var app = builder.Build();
         app.Use(async (context, next) =>
@@ -197,66 +197,22 @@ public sealed class VoiceDemoBootstrapEndpointsTests
         public Task TombstoneAsync(string agentId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class RecordingCatalogQueryPort : IUserAgentCatalogQueryPort
-    {
-        public Task<UserAgentCatalogReadModelEntry?> GetForCallerAsync(
-            string agentId,
-            ScheduledOwnerScope caller,
-            CancellationToken ct = default) =>
-            Task.FromResult<UserAgentCatalogReadModelEntry?>(new()
-            {
-                AgentId = agentId,
-                OwnerScope = caller.Clone(),
-            });
-
-        public Task<IReadOnlyList<UserAgentCatalogReadModelEntry>> QueryByCallerAsync(
-            ScheduledOwnerScope caller,
-            CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>([]);
-
-        public Task<long?> GetStateVersionForCallerAsync(
-            string agentId,
-            ScheduledOwnerScope caller,
-            CancellationToken ct = default) =>
-            Task.FromResult<long?>(null);
-    }
-
     private sealed class UpdatingRoutePolicyQueryPort(ChatRoutePolicySnapshot initialSnapshot) : IChatRoutePolicyQueryPort
     {
         private ChatRoutePolicySnapshot _snapshot = initialSnapshot;
+        public int LookupCount { get; private set; }
 
         public Task<ChatRoutePolicySnapshot?> LookupForCallerAsync(
             RoutingOwnerScope callerScope,
-            CancellationToken ct = default) =>
-            Task.FromResult<ChatRoutePolicySnapshot?>(_snapshot);
+            CancellationToken ct = default)
+        {
+            LookupCount++;
+            return Task.FromResult<ChatRoutePolicySnapshot?>(_snapshot);
+        }
 
         public void Observe(UpsertChatRoutePolicyRequested command)
         {
             _snapshot = new ChatRoutePolicySnapshot(command.DefaultTarget, command.Rules);
         }
-    }
-
-    private sealed class ReadyVoiceSessionResolver : IVoicePresenceSessionResolver
-    {
-        public Task<VoicePresenceSession?> ResolveAsync(
-            VoicePresenceSessionRequest request,
-            CancellationToken ct = default) =>
-            Task.FromResult<VoicePresenceSession?>(new VoicePresenceSession(
-                isInitialized: static () => true,
-                isTransportAttached: static () => false,
-                attachTransportAsync: static (_, _) => Task.CompletedTask,
-                detachTransportAsync: static (_, _) => Task.CompletedTask));
-    }
-
-    private sealed class StaticFallbackProvider : IChatRouteFallbackProvider
-    {
-        public ChatRouteDecision GetFallbackDecision() =>
-            new()
-            {
-                Action = new ChatRouteAction
-                {
-                    ForwardToModel = new ForwardToModel { ModelName = "fallback" },
-                },
-            };
     }
 }

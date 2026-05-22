@@ -101,6 +101,10 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddStatusDashboard(builder.Configuration);
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IReadmodelFreshnessSource, ChannelBotRegistrationFreshnessSource>());
+        // Refactor (iter34/cluster-004-voice-bootstrap-application-port):
+        //   Old pattern: Voice bootstrap endpoint(VoiceDemoBootstrapEndpoints)同步等待 actor readiness/observation loop;POST 返回前阻塞读取 actor 状态;route-policy mutation 在 Host 内做。
+        //   New principle: Medium-B framing(reflector force-pick): 删除 POST readiness polling;移 voice bootstrap + voice-demo route mutation 到 Application/actor-owned typed command port;无新 bootstrap actor / 新 envelope / 新 projection phase / mandatory status endpoint / shared route-policy command port(留给可能后续 cluster)。POST 返回 honest accepted receipt + stable id;readiness 由 client 显式 readmodel query 获取(或事件 notification,无需 Host 内同步等)。
+        builder.Services.TryAddSingleton<VoiceDemoAgentCommandPort>();
         // Ingress layer v1: registers the ChatRoutePolicy current-state readmodel
         // document store (Elasticsearch in prod, InMemory otherwise — same
         // selection pattern as AddScheduledAgents / AddDeviceRegistration).
