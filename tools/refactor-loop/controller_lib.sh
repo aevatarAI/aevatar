@@ -91,8 +91,9 @@ open_pr_with_label() {
     return 1
   fi
   local pr_url
-  pr_url=$(gh pr create --base "$base" --head "$head" --title "$title" --body-file "$body_file" 2>&1 | tail -1)
-  PR_NUM=$(echo "$pr_url" | grep -oE "pull/[0-9]+" | grep -oE "[0-9]+")
+  # gh pr create 多行 output (warnings + URL),URL 可能不在 last line;grep first occurrence
+  pr_url=$(gh pr create --base "$base" --head "$head" --title "$title" --body-file "$body_file" 2>&1 | grep -oE "https://github.com/[^/]+/[^/]+/pull/[0-9]+" | head -1)
+  PR_NUM=$(echo "$pr_url" | grep -oE "[0-9]+$")
   if [ -z "$PR_NUM" ]; then
     echo "open_pr_with_label: failed to extract PR num from: $pr_url" >&2
     return 1
