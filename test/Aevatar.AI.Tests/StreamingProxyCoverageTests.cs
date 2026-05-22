@@ -126,6 +126,42 @@ public class StreamingProxyCoverageTests
     }
 
     [Fact]
+    public void StreamingProxyEndpointSource_ShouldDelegateRoomCommandsToRoomCommandService()
+    {
+        var root = GetRepositoryRoot();
+        var endpoints = File.ReadAllText(Path.Combine(
+            root,
+            "agents/Aevatar.GAgents.StreamingProxy/StreamingProxyEndpoints.cs"));
+
+        endpoints.Should().NotContain("IActorDispatchPort");
+        endpoints.Should().NotContain("DispatchRoomEnvelopeAsync");
+        endpoints.Should().NotContain("Any.Pack");
+        endpoints.Should().Contain("IStreamingProxyRoomCommandService");
+        endpoints.Should().Contain("StreamingProxyRoomPostMessageCommand");
+        endpoints.Should().Contain("StreamingProxyRoomJoinCommand");
+        endpoints.Should().Contain("StreamingProxyRoomTerminalStateCommand");
+    }
+
+    [Fact]
+    public void StreamingProxyRoomSources_ShouldNotIntroduceParallelRoomInteractionPort()
+    {
+        var root = GetRepositoryRoot();
+        var roomSources = Directory
+            .EnumerateFiles(
+                Path.Combine(root, "agents/Aevatar.GAgents.StreamingProxy"),
+                "*.cs",
+                SearchOption.AllDirectories)
+            .Where(path => path.Contains($"{Path.DirectorySeparatorChar}Application{Path.DirectorySeparatorChar}Rooms{Path.DirectorySeparatorChar}", StringComparison.Ordinal) ||
+                           Path.GetFileName(path).Equals("StreamingProxyEndpoints.cs", StringComparison.Ordinal))
+            .Select(File.ReadAllText);
+
+        roomSources.Should().OnlyContain(source =>
+            !source.Contains("IStreamingProxyRoomInteractionPort", StringComparison.Ordinal));
+        roomSources.Should().OnlyContain(source =>
+            !source.Contains("RoomInteractionPort", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void StreamingProxyRoomAndCoordinatorSource_ShouldNotInlineDispatchActorEvents()
     {
         var root = GetRepositoryRoot();

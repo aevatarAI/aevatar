@@ -1,5 +1,8 @@
 namespace Aevatar.GAgents.StreamingProxy.Application.Rooms;
 
+// Refactor (iter38/cluster-038-streaming-proxy-reuse-existing):
+//   Old pattern: endpoints exposed room actions by composing actor lookup, raw envelopes, and dispatch locally.
+//   New principle: callers use this existing Application command service for typed room create, post, join, and terminal-state commands.
 public interface IStreamingProxyRoomCommandService
 {
     Task<StreamingProxyRoomCreateResult> CreateRoomAsync(
@@ -20,8 +23,8 @@ public interface IStreamingProxyRoomCommandService
 }
 
 // Refactor (iter38/cluster-038-streaming-proxy-reuse-existing):
-//   Old pattern: Streaming proxy endpoint orchestration:Host endpoints do platform selection / scope resolution / post-message / join / terminal directly with raw runtime/dispatch helpers + 无 typed Application port。
-//   New principle: Extend existing IStreamingProxyRoomCommandService with narrow typed post-message/join/terminal-state publication methods。Preserve command lifecycle semantics internally。**禁止** new IStreamingProxyRoomInteractionPort / 新 actor / 新 envelope / full CQRS skeleton。
+//   Old pattern: room create was the only typed command contract while related room actions stayed endpoint-local.
+//   New principle: command, result, and status contracts describe the room command-service boundary explicitly.
 public sealed record StreamingProxyRoomCreateCommand(
     string ScopeId,
     string? RoomName);

@@ -7,8 +7,8 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.GAgents.StreamingProxy.Application.Rooms;
 
 // Refactor (iter38/cluster-038-streaming-proxy-reuse-existing):
-//   Old pattern: Streaming proxy endpoint orchestration:Host endpoints do platform selection / scope resolution / post-message / join / terminal directly with raw runtime/dispatch helpers + 无 typed Application port。
-//   New principle: Extend existing IStreamingProxyRoomCommandService with narrow typed post-message/join/terminal-state publication methods。Preserve command lifecycle semantics internally。**禁止** new IStreamingProxyRoomInteractionPort / 新 actor / 新 envelope / full CQRS skeleton。
+//   Old pattern: endpoints built room envelopes and dispatched post-message, join, and terminal-state events directly.
+//   New principle: the existing room command service owns room command normalization, envelope construction, and dispatch.
 public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomCommandService
 {
     private const string DefaultRoomName = "Group Chat";
@@ -88,9 +88,6 @@ public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomComman
         StreamingProxyRoomPostMessageCommand command,
         CancellationToken cancellationToken = default)
     {
-        // Refactor (iter38/cluster-038-streaming-proxy-reuse-existing):
-        //   Old pattern: Streaming proxy endpoint orchestration:Host endpoints do platform selection / scope resolution / post-message / join / terminal directly with raw runtime/dispatch helpers + 无 typed Application port。
-        //   New principle: Extend existing IStreamingProxyRoomCommandService with narrow typed post-message/join/terminal-state publication methods。Preserve command lifecycle semantics internally。**禁止** new IStreamingProxyRoomInteractionPort / 新 actor / 新 envelope / full CQRS skeleton。
         ArgumentNullException.ThrowIfNull(command);
 
         var actor = await _actorRuntime.GetAsync(command.RoomId.Trim());
@@ -116,9 +113,6 @@ public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomComman
         StreamingProxyRoomJoinCommand command,
         CancellationToken cancellationToken = default)
     {
-        // Refactor (iter38/cluster-038-streaming-proxy-reuse-existing):
-        //   Old pattern: Streaming proxy endpoint orchestration:Host endpoints do platform selection / scope resolution / post-message / join / terminal directly with raw runtime/dispatch helpers + 无 typed Application port。
-        //   New principle: Extend existing IStreamingProxyRoomCommandService with narrow typed post-message/join/terminal-state publication methods。Preserve command lifecycle semantics internally。**禁止** new IStreamingProxyRoomInteractionPort / 新 actor / 新 envelope / full CQRS skeleton。
         ArgumentNullException.ThrowIfNull(command);
 
         var actor = await _actorRuntime.GetAsync(command.RoomId.Trim());
@@ -143,9 +137,6 @@ public sealed class StreamingProxyRoomCommandService : IStreamingProxyRoomComman
         StreamingProxyRoomTerminalStateCommand command,
         CancellationToken cancellationToken = default)
     {
-        // Refactor (iter38/cluster-038-streaming-proxy-reuse-existing):
-        //   Old pattern: Streaming proxy endpoint orchestration:Host endpoints do platform selection / scope resolution / post-message / join / terminal directly with raw runtime/dispatch helpers + 无 typed Application port。
-        //   New principle: Extend existing IStreamingProxyRoomCommandService with narrow typed post-message/join/terminal-state publication methods。Preserve command lifecycle semantics internally。**禁止** new IStreamingProxyRoomInteractionPort / 新 actor / 新 envelope / full CQRS skeleton。
         ArgumentNullException.ThrowIfNull(command);
 
         var roomId = NormalizeRequiredValue(command.RoomId, nameof(command.RoomId));
