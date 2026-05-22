@@ -317,6 +317,36 @@ public sealed class StreamingProxyEndpointsCoverageTests
             Commands.Add(command);
             return Task.FromResult(result);
         }
+
+        public Task<StreamingProxyRoomPostMessageResult> PostMessageAsync(
+            StreamingProxyRoomPostMessageCommand command,
+            CancellationToken cancellationToken = default)
+        {
+            _ = command;
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new StreamingProxyRoomPostMessageResult(
+                StreamingProxyRoomPostMessageStatus.Accepted));
+        }
+
+        public Task<StreamingProxyRoomJoinResult> JoinAsync(
+            StreamingProxyRoomJoinCommand command,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new StreamingProxyRoomJoinResult(
+                StreamingProxyRoomJoinStatus.Joined,
+                command.AgentId?.Trim(),
+                command.DisplayName?.Trim()));
+        }
+
+        public Task PublishTerminalStateAsync(
+            StreamingProxyRoomTerminalStateCommand command,
+            CancellationToken cancellationToken = default)
+        {
+            _ = command;
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecordingParticipantStore : IStreamingProxyParticipantStore
