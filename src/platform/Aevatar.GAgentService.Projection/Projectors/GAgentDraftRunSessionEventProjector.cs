@@ -97,7 +97,7 @@ public sealed class GAgentDraftRunSessionEventProjector
             ? context.SessionId
             : completed.SessionId;
         var content = completed.Content ?? string.Empty;
-        if (string.IsNullOrEmpty(content) || completed.ContentEmitted)
+        if (string.IsNullOrEmpty(content))
         {
             return BuildTerminalEntries(context, messageId);
         }
