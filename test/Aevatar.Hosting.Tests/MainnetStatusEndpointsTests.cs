@@ -75,6 +75,8 @@ public sealed class MainnetStatusEndpointsTests
         var html = await client.GetStringAsync("/status");
         html.Should().Contain("Aevatar Status");
         html.Should().Contain("repeat(120");
+        html.Should().Contain("target-details");
+        html.Should().Contain("aria-expanded");
     }
 
     private static async Task<WebApplication> CreateAppAsync(IReadOnlyList<HealthProbeTargetDocument> documents)
