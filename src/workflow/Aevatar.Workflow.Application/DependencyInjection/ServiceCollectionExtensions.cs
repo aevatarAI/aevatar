@@ -85,9 +85,6 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<ICommandFallbackPolicy<WorkflowChatRunRequest>>(),
                 sp.GetService<Microsoft.Extensions.Logging.ILogger<FallbackCommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>>()));
         services.TryAddSingleton<IWorkflowRunReportExportPort, NoopWorkflowRunReportExporter>();
-        // Refactor (iter33/cluster-035-workflow-report-runtime-topology-sideread):
-        //   Old pattern: Workflow report 用 IActorRuntime.GetAsync(...).GetChildrenIdsAsync() 读 runtime children 当 topology 事实,违反 runtime-shape-not-fact + side-read
-        //   New principle: 删 IWorkflowExecutionTopologyResolver + ActorRuntimeWorkflowExecutionTopologyResolver;topology 从 committed event projection 来(WorkflowRoleActorLinkedEvent + SubWorkflowBindingUpsertedEvent 已 materialize);enum 值 RuntimeSnapshot 改 CommittedProjection;无 proto 改
         // Refactor (iter18/cluster-005):
         //   Old pattern: accepted-only dispatch used a detached live-sink monitor service
         //   New principle: accepted-only target split + NoOp binder default + receipt-only(no live sink acquired)

@@ -14,9 +14,6 @@ public enum WorkflowExecutionProjectionScope
 
 public enum WorkflowExecutionTopologySource
 {
-    // Refactor (iter33/cluster-035-workflow-report-runtime-topology-sideread):
-    //   Old pattern: Workflow report 用 IActorRuntime.GetAsync(...).GetChildrenIdsAsync() 读 runtime children 当 topology 事实,违反 runtime-shape-not-fact + side-read
-    //   New principle: 删 IWorkflowExecutionTopologyResolver + ActorRuntimeWorkflowExecutionTopologyResolver;topology 从 committed event projection 来(WorkflowRoleActorLinkedEvent + SubWorkflowBindingUpsertedEvent 已 materialize);enum 值 RuntimeSnapshot 改 CommittedProjection;无 proto 改
     CommittedProjection = 0,
 }
 
