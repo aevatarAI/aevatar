@@ -55,7 +55,9 @@ internal sealed class ChannelIdentityOAuthCommandDispatch<TCommand, TAgent>(
     }
 }
 
-// refactor helper, no behavior change
+// Refactor (iter27/cluster-028-identity-oauth-endpoint):
+//   Old pattern: IdentityOAuthEndpoints + AevatarOAuthClientBootstrapService 直接构造 EventEnvelope 投递,然后在 endpoint 内同步等 projection readiness / rebuild observation / readmodel polling (3-15s timeout + 50-250ms polling),违反 ACK 协议 + query-time projection priming
+//   New principle: 加 module-local CQRS dispatch adapters(ChannelIdentityOAuthCommandDispatch);endpoint inject typed ICommandDispatchService<...>,返回 accepted/pending + status URL,不再等 projection;删 IProjectionReadinessPort/ExternalIdentityBindingProjectionPort/AevatarOAuthClientProjectionPort/AevatarOAuthClientRebuildCoordinator/ProjectionWaitTimeout 等
 internal sealed class ChannelIdentityOAuthCommandRoute<TCommand>(
     Func<TCommand, ChannelIdentityOAuthCommandTarget> resolveTarget)
 {
@@ -65,18 +67,24 @@ internal sealed class ChannelIdentityOAuthCommandRoute<TCommand>(
     public ChannelIdentityOAuthCommandTarget ResolveTarget(TCommand command) => _resolveTarget(command);
 }
 
-// refactor helper, no behavior change
+// Refactor (iter27/cluster-028-identity-oauth-endpoint):
+//   Old pattern: IdentityOAuthEndpoints + AevatarOAuthClientBootstrapService 直接构造 EventEnvelope 投递,然后在 endpoint 内同步等 projection readiness / rebuild observation / readmodel polling (3-15s timeout + 50-250ms polling),违反 ACK 协议 + query-time projection priming
+//   New principle: 加 module-local CQRS dispatch adapters(ChannelIdentityOAuthCommandDispatch);endpoint inject typed ICommandDispatchService<...>,返回 accepted/pending + status URL,不再等 projection;删 IProjectionReadinessPort/ExternalIdentityBindingProjectionPort/AevatarOAuthClientProjectionPort/AevatarOAuthClientRebuildCoordinator/ProjectionWaitTimeout 等
 internal sealed record ChannelIdentityOAuthCommandTarget(
     string ActorId,
     string PublisherActorId);
 
-// refactor helper, no behavior change
+// Refactor (iter27/cluster-028-identity-oauth-endpoint):
+//   Old pattern: IdentityOAuthEndpoints + AevatarOAuthClientBootstrapService 直接构造 EventEnvelope 投递,然后在 endpoint 内同步等 projection readiness / rebuild observation / readmodel polling (3-15s timeout + 50-250ms polling),违反 ACK 协议 + query-time projection priming
+//   New principle: 加 module-local CQRS dispatch adapters(ChannelIdentityOAuthCommandDispatch);endpoint inject typed ICommandDispatchService<...>,返回 accepted/pending + status URL,不再等 projection;删 IProjectionReadinessPort/ExternalIdentityBindingProjectionPort/AevatarOAuthClientProjectionPort/AevatarOAuthClientRebuildCoordinator/ProjectionWaitTimeout 等
 public sealed record ChannelIdentityOAuthAcceptedReceipt(
     string ActorId,
     string CommandId,
     string CorrelationId);
 
-// refactor helper, no behavior change
+// Refactor (iter27/cluster-028-identity-oauth-endpoint):
+//   Old pattern: IdentityOAuthEndpoints + AevatarOAuthClientBootstrapService 直接构造 EventEnvelope 投递,然后在 endpoint 内同步等 projection readiness / rebuild observation / readmodel polling (3-15s timeout + 50-250ms polling),违反 ACK 协议 + query-time projection priming
+//   New principle: 加 module-local CQRS dispatch adapters(ChannelIdentityOAuthCommandDispatch);endpoint inject typed ICommandDispatchService<...>,返回 accepted/pending + status URL,不再等 projection;删 IProjectionReadinessPort/ExternalIdentityBindingProjectionPort/AevatarOAuthClientProjectionPort/AevatarOAuthClientRebuildCoordinator/ProjectionWaitTimeout 等
 public enum ChannelIdentityOAuthDispatchError
 {
     None = 0,

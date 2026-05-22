@@ -158,7 +158,7 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
         }
     }
 
-    private async Task EnsureProvisionedAsync(CancellationToken ct)
+    internal async Task EnsureProvisionedAsync(CancellationToken ct)
     {
         // Refactor (iter27/cluster-028-identity-oauth-endpoint):
         //   Old pattern: IdentityOAuthEndpoints + AevatarOAuthClientBootstrapService 直接构造 EventEnvelope 投递,然后在 endpoint 内同步等 projection readiness / rebuild observation / readmodel polling (3-15s timeout + 50-250ms polling),违反 ACK 协议 + query-time projection priming

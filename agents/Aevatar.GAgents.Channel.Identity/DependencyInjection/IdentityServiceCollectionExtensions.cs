@@ -6,10 +6,12 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgents.Channel.Identity.Slash;
+using Google.Protobuf;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -102,36 +104,26 @@ public static class IdentityServiceCollectionExtensions
         // callers before model binding/DI resolution kicks in.
         services.TryAddTransient<Endpoints.IdentityOAuthEndpoints.RebuildAuthEndpointFilter>();
 
-        services.TryAddSingleton(new ChannelIdentityOAuthCommandRoute<CommitBindingCommand>(
+        services.AddIdentityOAuthCommandDispatch<CommitBindingCommand, ExternalIdentityBindingGAgent>(
             static command => new ChannelIdentityOAuthCommandTarget(
                 command.ExternalSubject.ToActorId(),
-                "channel-identity.oauth-callback")));
-        services.TryAddSingleton<ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>,
-            ChannelIdentityOAuthCommandDispatch<CommitBindingCommand, ExternalIdentityBindingGAgent>>();
-        services.TryAddSingleton(new ChannelIdentityOAuthCommandRoute<RevokeBindingCommand>(
+                "channel-identity.oauth-callback"));
+        services.AddIdentityOAuthCommandDispatch<RevokeBindingCommand, ExternalIdentityBindingGAgent>(
             static command => new ChannelIdentityOAuthCommandTarget(
                 command.ExternalSubject.ToActorId(),
-                "channel-identity.broker-revocation")));
-        services.TryAddSingleton<ICommandDispatchService<RevokeBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>,
-            ChannelIdentityOAuthCommandDispatch<RevokeBindingCommand, ExternalIdentityBindingGAgent>>();
-        services.TryAddSingleton(new ChannelIdentityOAuthCommandRoute<ObserveBrokerCapabilityCommand>(
+                "channel-identity.broker-revocation"));
+        services.AddIdentityOAuthCommandDispatch<ObserveBrokerCapabilityCommand, AevatarOAuthClientGAgent>(
             static _ => new ChannelIdentityOAuthCommandTarget(
                 AevatarOAuthClientGAgent.WellKnownId,
-                "channel-identity.oauth-callback")));
-        services.TryAddSingleton<ICommandDispatchService<ObserveBrokerCapabilityCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>,
-            ChannelIdentityOAuthCommandDispatch<ObserveBrokerCapabilityCommand, AevatarOAuthClientGAgent>>();
-        services.TryAddSingleton(new ChannelIdentityOAuthCommandRoute<EnsureAevatarOAuthClientProvisionedCommand>(
+                "channel-identity.oauth-callback"));
+        services.AddIdentityOAuthCommandDispatch<EnsureAevatarOAuthClientProvisionedCommand, AevatarOAuthClientGAgent>(
             static _ => new ChannelIdentityOAuthCommandTarget(
                 AevatarOAuthClientGAgent.WellKnownId,
-                "channel-identity.oauth-bootstrap")));
-        services.TryAddSingleton<ICommandDispatchService<EnsureAevatarOAuthClientProvisionedCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>,
-            ChannelIdentityOAuthCommandDispatch<EnsureAevatarOAuthClientProvisionedCommand, AevatarOAuthClientGAgent>>();
-        services.TryAddSingleton(new ChannelIdentityOAuthCommandRoute<ProvisionAevatarOAuthClientCommand>(
+                "channel-identity.oauth-bootstrap"));
+        services.AddIdentityOAuthCommandDispatch<ProvisionAevatarOAuthClientCommand, AevatarOAuthClientGAgent>(
             static _ => new ChannelIdentityOAuthCommandTarget(
                 AevatarOAuthClientGAgent.WellKnownId,
-                "channel-identity.oauth-rebuild")));
-        services.TryAddSingleton<ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>,
-            ChannelIdentityOAuthCommandDispatch<ProvisionAevatarOAuthClientCommand, AevatarOAuthClientGAgent>>();
+                "channel-identity.oauth-rebuild"));
 
         // ─── Operator admin surface (rebuild endpoint, issue #549) ───
         // Bound from configuration when present; absence keeps the rebuild
@@ -179,6 +171,22 @@ public static class IdentityServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelSlashCommandHandler, WhoamiChannelSlashCommandHandler>());
         services.TryAddSingleton<ChannelSlashCommandRegistry>();
 
+        return services;
+    }
+
+    private static IServiceCollection AddIdentityOAuthCommandDispatch<TCommand, TAgent>(
+        this IServiceCollection services,
+        Func<TCommand, ChannelIdentityOAuthCommandTarget> resolveTarget)
+        where TCommand : class, IMessage
+        where TAgent : IAgent
+    {
+        // Refactor (iter27/cluster-028-identity-oauth-endpoint):
+        //   Old pattern: IdentityOAuthEndpoints + AevatarOAuthClientBootstrapService 直接构造 EventEnvelope 投递,然后在 endpoint 内同步等 projection readiness / rebuild observation / readmodel polling (3-15s timeout + 50-250ms polling),违反 ACK 协议 + query-time projection priming
+        //   New principle: 加 module-local CQRS dispatch adapters(ChannelIdentityOAuthCommandDispatch);endpoint inject typed ICommandDispatchService<...>,返回 accepted/pending + status URL,不再等 projection;删 IProjectionReadinessPort/ExternalIdentityBindingProjectionPort/AevatarOAuthClientProjectionPort/AevatarOAuthClientRebuildCoordinator/ProjectionWaitTimeout 等
+        services.TryAddSingleton(new ChannelIdentityOAuthCommandRoute<TCommand>(resolveTarget));
+        services.TryAddSingleton<
+            ICommandDispatchService<TCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>,
+            ChannelIdentityOAuthCommandDispatch<TCommand, TAgent>>();
         return services;
     }
 
