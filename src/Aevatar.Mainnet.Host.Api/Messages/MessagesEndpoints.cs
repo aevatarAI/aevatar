@@ -1,24 +1,14 @@
-using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
-using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.ChatRouting.Core;
-using Aevatar.GAgentService.Abstractions;
-using Aevatar.GAgentService.Abstractions.Ports;
-using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Application.Responses;
-using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Mainnet.Host.Api.Responses;
-using Google.Protobuf.WellKnownTypes;
-using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Mainnet.Host.Api.Messages;
 
-internal static class MessagesApiEndpoints
+internal static partial class MessagesApiEndpoints
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -35,294 +25,64 @@ internal static class MessagesApiEndpoints
         return app;
     }
 
-    [SuppressMessage(
-        "Maintainability",
-        "CA1506:Avoid excessive class coupling",
-        Justification = "Minimal API adapter for one external endpoint; mirrors ResponsesApiEndpoints.")]
+    // Refactor (iter35/cluster-037-mainnet-responses-host-orchestration):
+    //   Old pattern: Mainnet Minimal API handlers (ResponsesEndpoints / MessagesEndpoints) inject long lists of application/runtime collaborators and perform caller resolution / route / session / LLM orchestration inline.
+    //   New principle: Host handlers parse/authenticate HTTP only + delegate to typed Application command/query facade that owns Normalize -> Resolve Target -> Build Context -> Dispatch/Observe lifecycle. SSE rendering stays at the boundary.
     internal static async Task<IResult> HandleCreateMessageAsync(
         HttpContext http,
         MessagesCreateRequest request,
-        [FromServices] ILLMProviderFactory providerFactory,
-        [FromServices] IResponsesCallerScopeResolver callerScopeResolver,
-        [FromServices] IChatRoutePolicyQueryPort chatRoutePolicyQueryPort,
-        [FromServices] ChatRouteResolver chatRouteResolver,
-        [FromServices] IResponsesRouteResolver routeResolver,
-        [FromServices] ILlmSessionRegistrationPort sessionRegistrationPort,
-        [FromServices] IResponsesCompletionApplicationService completionService,
-        [FromServices] ILoggerFactory loggerFactory,
+        [FromServices] IMessagesCommandFacade commandFacade,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(http);
-        ArgumentNullException.ThrowIfNull(providerFactory);
-        ArgumentNullException.ThrowIfNull(callerScopeResolver);
-        ArgumentNullException.ThrowIfNull(chatRoutePolicyQueryPort);
-        ArgumentNullException.ThrowIfNull(chatRouteResolver);
-        ArgumentNullException.ThrowIfNull(routeResolver);
-        ArgumentNullException.ThrowIfNull(sessionRegistrationPort);
-        ArgumentNullException.ThrowIfNull(completionService);
-        ArgumentNullException.ThrowIfNull(loggerFactory);
         ArgumentNullException.ThrowIfNull(request);
-        var logger = loggerFactory.CreateLogger("Aevatar.Mainnet.Host.Api.Messages");
+        ArgumentNullException.ThrowIfNull(commandFacade);
 
         var bearerToken = ExtractBearerToken(http);
         if (string.IsNullOrWhiteSpace(bearerToken))
             return ToErrorResult(StatusCodes.Status401Unauthorized, "authentication_error", "Authorization bearer token is required.");
 
-        var normalizedResult = MessagesRequestNormalizer.Normalize(request);
-        if (!normalizedResult.Succeeded)
+        var commandRequest = MessagesProtocolMapper.ToCommandRequest(request);
+        if (!commandRequest.Succeeded)
         {
             return ToErrorResult(
                 StatusCodes.Status400BadRequest,
-                normalizedResult.ErrorCode ?? "invalid_request_error",
-                normalizedResult.ErrorMessage ?? "Invalid request.");
+                commandRequest.ErrorCode ?? "invalid_request_error",
+                commandRequest.ErrorMessage ?? "Invalid request.");
         }
 
-        var normalized = normalizedResult.Request!;
-        ResponsesCallerScope callerScope;
-        try
-        {
-            callerScope = await callerScopeResolver.ResolveAsync(bearerToken, http, ct);
-        }
-        catch (ResponsesCallerScopeUnavailableException ex)
-        {
-            return ToErrorResult(StatusCodes.Status401Unauthorized, "authentication_error", ex.Message);
-        }
+        var result = await commandFacade.CreateAsync(commandRequest.Request!, bearerToken, ct);
+        if (result.Error is not null)
+            return ToErrorResult(result.Error.StatusCode, result.Error.Code, result.Error.Message);
 
-        // Implement (issue #694):
-        //   Behavior: Anthropic Messages facade applies the same chat-route model override as Responses.
-        //   Why this shape: Messages shares the LlmSession/LLMRequest path, so routing stays protocol-neutral.
-        var routedModel = normalized.Model;
-        var routeDecision = await ResponsesApiEndpoints.ResolveResponsesChatRouteAsync(
-            chatRoutePolicyQueryPort,
-            chatRouteResolver,
-            callerScope,
-            normalized.Model,
-            ResponsesApiEndpoints.ResolveToolMode(normalized.DeclaredTools.Count, inlineToolResultCount: 0),
-            ResponsesApiEndpoints.BuildContentHint(BuildRouteContentHint(normalized)),
-            ct);
-        if (routeDecision.Action.Reject is not null)
-            return ToErrorResult(
-                StatusCodes.Status403Forbidden,
-                "chat_route_rejected",
-                string.IsNullOrWhiteSpace(routeDecision.Action.Reject.Reason)
-                    ? "The chat route policy rejected this request."
-                    : routeDecision.Action.Reject.Reason);
-        if (!string.IsNullOrWhiteSpace(routeDecision.Action.ForwardToModel?.ModelName))
-        {
-            routedModel = routeDecision.Action.ForwardToModel.ModelName.Trim();
-        }
-        else if (routeDecision.Action.ForwardToGagent is not null)
-        {
-            return ToErrorResult(
-                StatusCodes.Status501NotImplemented,
-                "chat_route_action_not_supported",
-                "ForwardToGAgent is not supported by /v1/messages in v1.");
-        }
-
-        // Path B is stateless: register a new LlmSession per request, no
-        // previous_response_id continuation. The session id mirrors the
-        // Anthropic message id so projection/audit can correlate.
-        var createdAt = DateTimeOffset.UtcNow;
-        LlmSessionRegistrationResult session;
-        try
-        {
-            session = await sessionRegistrationPort.RegisterAsync(
-                BuildSessionRecord(normalized, callerScope, createdAt),
-                ct);
-        }
-        catch (OperationCanceledException)
-        {
-            return Results.StatusCode(StatusCodes.Status408RequestTimeout);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            logger.LogError(ex, "Failed to register llm session for message {MessageId}", normalized.MessageId);
-            return ToErrorResult(
-                StatusCodes.Status500InternalServerError,
-                "api_error",
-                "Failed to register session.");
-        }
-
-        // Tools come from the inbound declaration only. Substitute/additive
-        // tool providers (TodoWrite, Task, WebFetch) are intentionally NOT
-        // injected here because Anthropic Messages clients (Claude Code in
-        // particular) ship their own tool harness on top of the response;
-        // injecting Aevatar's substitutes would shadow client tools.
-        var toolProviderContext = ResponsesApiEndpoints.BuildToolProviderContext(
-            callerScope,
-            normalized.MessageId,
-            bearerToken);
-        var toolClassification = await ResponsesToolClassifier.ClassifyAsync(
-            normalized.DeclaredTools,
-            Array.Empty<IResponsesToolProvider>(),
-            toolProviderContext,
-            logger,
-            ct);
-
-        // /v1/messages is the Anthropic Messages facade. Native Anthropic
-        // clients (Claude Code, Cursor's Anthropic mode, Anthropic SDK) send
-        // raw Anthropic model ids without a provider prefix
-        // (e.g. `claude-sonnet-4-5-20250929`). Without normalization those
-        // strings have no `/` so the catalog router treats them as
-        // gateway-default, and NyxID's gateway then rejects them with HTTP 400
-        // because it doesn't know to route a bare `claude-*` to the anthropic
-        // backend. Auto-prefix `anthropic/` so the existing OpenRouter-style
-        // routing below resolves to `/api/v1/llm/anthropic/v1` for any caller
-        // that doesn't hand-prefix the model. If the route resolver doesn't
-        // recognize `anthropic` we fall back to the original bare name (which
-        // was the pre-fix behavior), so this change is strictly additive.
-        var anthropicPrefixed = false;
-        if (!routedModel.Contains('/', StringComparison.Ordinal))
-        {
-            routedModel = $"anthropic/{routedModel}";
-            anthropicPrefixed = true;
-        }
-
-        // Refactor (iter26/cluster-026-responses-route-user-catalog-cache):
-        //   Old pattern: Responses/Messages routes resolve `vendor/model` by reading a singleton per-bearer in-process cache of NyxID user LLM service catalog facts.
-        //   New principle: Resolve model route from the current catalog read in the request flow; do not store user route facts in singleton process memory.
-        // OpenRouter-style vendor prefix routing (same as Path A). If the
-        // model is `vendor/name`, resolve the route value through the catalog;
-        // unknown slugs fall through to gateway default.
-        var modelRoute = ResponsesModelRouteParser.Parse(routedModel);
-        var effectiveModel = routedModel;
-        string? resolvedRouteValue = null;
-        if (modelRoute.RouteSlug is not null)
-        {
-            resolvedRouteValue = await routeResolver
-                .ResolveRouteValueAsync(modelRoute.RouteSlug, bearerToken, ct)
-                .ConfigureAwait(false);
-            if (resolvedRouteValue is not null)
-                effectiveModel = modelRoute.Model;
-            else if (anthropicPrefixed)
-            {
-                // Resolver doesn't know the synthesized "anthropic" slug;
-                // fall back to the original bare model so downstream behavior
-                // matches pre-fix code paths and tests that wire a no-op
-                // resolver keep working.
-                routedModel = modelRoute.Model;
-                effectiveModel = modelRoute.Model;
-            }
-        }
-
-        var llmMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [LLMRequestMetadataKeys.RequestId] = normalized.MessageId,
-            [ChannelMetadataKeys.RegistrationScopeId] = callerScope.ScopeId,
-        };
-        if (resolvedRouteValue is not null)
-            llmMetadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = resolvedRouteValue;
-
-        var toolContextMetadata = toolProviderContext.ToolContextMetadata;
-
-        var llmRequest = new LLMRequest
-        {
-            Messages = [.. normalized.ChatMessages],
-            RequestId = normalized.MessageId,
-            Metadata = llmMetadata,
-            CallerContext = new LLMRequestCallerContext(
-                callerScope.ScopeId,
-                callerScope.OwnerSubject,
-                normalized.MessageId,
-                new LLMRequestCallerCredentials(bearerToken)),
-            Tools = toolClassification.EffectiveTools,
-            Model = effectiveModel,
-            Temperature = normalized.Temperature,
-            MaxTokens = normalized.MaxTokens,
-        };
-
-        if (normalized.DroppedImageContent)
-        {
-            logger.LogWarning(
-                "Image content blocks dropped from Messages request {MessageId}; Path B is text-only in v1.",
-                normalized.MessageId);
-        }
-
-        if (normalized.Stream)
+        if (result.StreamPlan is not null)
         {
             await WriteStreamingMessageAsync(
                 http.Response,
-                providerFactory,
-                completionService,
-                sessionRegistrationPort,
-                logger,
-                session,
-                llmRequest,
-                toolContextMetadata,
-                normalized,
-                toolClassification,
+                commandFacade,
+                result.StreamPlan,
                 ct);
             return Results.Empty;
         }
 
-        try
+        if (result.Completed is not null)
         {
-            var provider = providerFactory.GetDefault();
-            var completion = await completionService.CollectAsync(
-                provider,
-                llmRequest,
-                toolContextMetadata,
-                toolClassification,
-                ct);
-            await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Completed, ct);
             return Results.Json(
-                BuildCompletedMessage(normalized, completion),
+                BuildCompletedMessage(result.Completed.Normalized, result.Completed.Completion),
                 JsonOptions,
                 statusCode: StatusCodes.Status200OK);
         }
-        catch (NyxIdAuthenticationRequiredException ex)
-        {
-            await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Failed, CancellationToken.None);
-            return ToErrorResult(StatusCodes.Status401Unauthorized, "authentication_error", ex.Message);
-        }
-        catch (NyxIdUpstreamException ex)
-        {
-            await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Failed, CancellationToken.None);
-            var statusCode = ex.Status switch
-            {
-                400 => StatusCodes.Status400BadRequest,
-                401 => StatusCodes.Status401Unauthorized,
-                403 => StatusCodes.Status403Forbidden,
-                404 => StatusCodes.Status404NotFound,
-                429 => StatusCodes.Status429TooManyRequests,
-                >= 500 => StatusCodes.Status502BadGateway,
-                _ => StatusCodes.Status502BadGateway,
-            };
-            return ToErrorResult(statusCode, ex.Kind.ToString().ToLowerInvariant(), ex.Message);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Cancelled, CancellationToken.None);
-            return Results.StatusCode(StatusCodes.Status499ClientClosedRequest);
-        }
-        catch (Exception ex)
-        {
-            await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Failed, CancellationToken.None);
-            logger.LogError(ex, "Unexpected error processing /v1/messages {MessageId}", normalized.MessageId);
-            return ToErrorResult(StatusCodes.Status500InternalServerError, "api_error", "Internal server error.");
-        }
-    }
 
-    private static string BuildRouteContentHint(NormalizedMessagesRequest normalized) =>
-        normalized.ChatMessages
-            .LastOrDefault(static message => string.Equals(message.Role, "user", StringComparison.OrdinalIgnoreCase))
-            ?.Content
-        ?? normalized.ChatMessages.LastOrDefault()?.Content
-        ?? string.Empty;
+        throw new InvalidOperationException("Messages command facade returned no result.");
+    }
 
     private static async Task WriteStreamingMessageAsync(
         HttpResponse response,
-        ILLMProviderFactory providerFactory,
-        IResponsesCompletionApplicationService completionService,
-        ILlmSessionRegistrationPort sessionRegistrationPort,
-        ILogger logger,
-        LlmSessionRegistrationResult session,
-        LLMRequest llmRequest,
-        IReadOnlyDictionary<string, string> toolContextMetadata,
-        NormalizedMessagesRequest normalized,
-        ResponsesToolClassification toolClassification,
+        IMessagesCommandFacade commandFacade,
+        MessagesCreateCommandPlan plan,
         CancellationToken ct)
     {
+        var normalized = plan.Normalized;
         response.StatusCode = StatusCodes.Status200OK;
         response.ContentType = "text/event-stream; charset=utf-8";
         response.Headers.CacheControl = "no-store";
@@ -331,153 +91,118 @@ internal static class MessagesApiEndpoints
         await response.StartAsync(ct);
 
         var textStarted = false;
-        TokenUsage? usage = null;
-
-        try
+        await WriteSseFrameAsync(response, "message_start", new
         {
-            var provider = providerFactory.GetDefault();
-            await WriteSseFrameAsync(response, "message_start", new
+            type = "message_start",
+            message = new
             {
-                type = "message_start",
-                message = new
-                {
-                    id = normalized.MessageId,
-                    type = "message",
-                    role = "assistant",
-                    model = normalized.Model,
-                    content = Array.Empty<object>(),
-                    stop_reason = (string?)null,
-                    stop_sequence = (string?)null,
-                    usage = new { input_tokens = 0, output_tokens = 0 },
-                },
-            }, ct);
+                id = normalized.MessageId,
+                type = "message",
+                role = "assistant",
+                model = normalized.Model,
+                content = Array.Empty<object>(),
+                stop_reason = (string?)null,
+                stop_sequence = (string?)null,
+                usage = new { input_tokens = 0, output_tokens = 0 },
+            },
+        }, ct);
 
-            var completion = await completionService.StreamAsync(
-                provider,
-                llmRequest,
-                toolContextMetadata,
-                toolClassification,
-                async (delta, token) =>
+        var completion = await commandFacade.StreamAsync(
+            plan,
+            async (delta, token) =>
+            {
+                if (string.IsNullOrEmpty(delta))
+                    return;
+                if (!textStarted)
                 {
-                    if (string.IsNullOrEmpty(delta))
-                        return;
-                    if (!textStarted)
+                    textStarted = true;
+                    await WriteSseFrameAsync(response, "content_block_start", new
                     {
-                        textStarted = true;
-                        await WriteSseFrameAsync(response, "content_block_start", new
-                        {
-                            type = "content_block_start",
-                            index = 0,
-                            content_block = new { type = "text", text = string.Empty },
-                        }, token);
-                    }
-                    await WriteSseFrameAsync(response, "content_block_delta", new
-                    {
-                        type = "content_block_delta",
+                        type = "content_block_start",
                         index = 0,
-                        delta = new { type = "text_delta", text = delta },
+                        content_block = new { type = "text", text = string.Empty },
                     }, token);
-                },
-                ct);
-            usage = completion.Usage;
-
-            if (textStarted)
-            {
-                await WriteSseFrameAsync(response, "content_block_stop", new
-                {
-                    type = "content_block_stop",
-                    index = 0,
-                }, ct);
-            }
-
-            var nextBlockIndex = textStarted ? 1 : 0;
-            foreach (var toolCall in completion.ForwardedToolCalls)
-            {
-                using var argsDoc = SafeParseJson(toolCall.ArgumentsJson);
-                await WriteSseFrameAsync(response, "content_block_start", new
-                {
-                    type = "content_block_start",
-                    index = nextBlockIndex,
-                    content_block = new
-                    {
-                        type = "tool_use",
-                        id = toolCall.Id,
-                        name = toolCall.Name,
-                        input = new { },
-                    },
-                }, ct);
+                }
                 await WriteSseFrameAsync(response, "content_block_delta", new
                 {
                     type = "content_block_delta",
-                    index = nextBlockIndex,
-                    delta = new
-                    {
-                        type = "input_json_delta",
-                        partial_json = toolCall.ArgumentsJson ?? "{}",
-                    },
-                }, ct);
-                await WriteSseFrameAsync(response, "content_block_stop", new
-                {
-                    type = "content_block_stop",
-                    index = nextBlockIndex,
-                }, ct);
-                nextBlockIndex++;
-            }
+                    index = 0,
+                    delta = new { type = "text_delta", text = delta },
+                }, token);
+            },
+            ct);
 
-            var stopReason = completion.ForwardedToolCalls.Count > 0 ? "tool_use" : "end_turn";
-            await WriteSseFrameAsync(response, "message_delta", new
+        if (completion.Error is not null)
+        {
+            await WriteSseFrameAsync(response, "error", new
             {
-                type = "message_delta",
+                type = "error",
+                error = new { type = completion.Error.Code, message = completion.Error.Message },
+            }, CancellationToken.None);
+            return;
+        }
+
+        if (textStarted)
+        {
+            await WriteSseFrameAsync(response, "content_block_stop", new
+            {
+                type = "content_block_stop",
+                index = 0,
+            }, ct);
+        }
+
+        var nextBlockIndex = textStarted ? 1 : 0;
+        foreach (var toolCall in completion.ForwardedToolCalls)
+        {
+            await WriteSseFrameAsync(response, "content_block_start", new
+            {
+                type = "content_block_start",
+                index = nextBlockIndex,
+                content_block = new
+                {
+                    type = "tool_use",
+                    id = toolCall.Id,
+                    name = toolCall.Name,
+                    input = new { },
+                },
+            }, ct);
+            await WriteSseFrameAsync(response, "content_block_delta", new
+            {
+                type = "content_block_delta",
+                index = nextBlockIndex,
                 delta = new
                 {
-                    stop_reason = stopReason,
-                    stop_sequence = (string?)null,
-                },
-                usage = new
-                {
-                    output_tokens = usage?.CompletionTokens ?? 0,
+                    type = "input_json_delta",
+                    partial_json = toolCall.ArgumentsJson ?? "{}",
                 },
             }, ct);
-
-            await WriteSseFrameAsync(response, "message_stop", new
+            await WriteSseFrameAsync(response, "content_block_stop", new
             {
-                type = "message_stop",
+                type = "content_block_stop",
+                index = nextBlockIndex,
             }, ct);
+            nextBlockIndex++;
+        }
 
-            await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Completed, ct);
-        }
-        catch (NyxIdAuthenticationRequiredException ex)
+        var stopReason = completion.ForwardedToolCalls.Count > 0 ? "tool_use" : "end_turn";
+        await WriteSseFrameAsync(response, "message_delta", new
         {
-            await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Failed, CancellationToken.None);
-            await WriteSseFrameAsync(response, "error", new
+            type = "message_delta",
+            delta = new
             {
-                type = "error",
-                error = new { type = "authentication_error", message = ex.Message },
-            }, CancellationToken.None);
-        }
-        catch (NyxIdUpstreamException ex)
-        {
-            await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Failed, CancellationToken.None);
-            await WriteSseFrameAsync(response, "error", new
+                stop_reason = stopReason,
+                stop_sequence = (string?)null,
+            },
+            usage = new
             {
-                type = "error",
-                error = new { type = ex.Kind.ToString().ToLowerInvariant(), message = ex.Message },
-            }, CancellationToken.None);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                output_tokens = completion.Usage?.CompletionTokens ?? 0,
+            },
+        }, ct);
+
+        await WriteSseFrameAsync(response, "message_stop", new
         {
-            await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Cancelled, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            await TryUpdateSessionStatusAsync(sessionRegistrationPort, logger, session, LlmSessionStatus.Failed, CancellationToken.None);
-            logger.LogError(ex, "Streaming /v1/messages {MessageId} failed", normalized.MessageId);
-            await WriteSseFrameAsync(response, "error", new
-            {
-                type = "error",
-                error = new { type = "api_error", message = "Internal server error." },
-            }, CancellationToken.None);
-        }
+            type = "message_stop",
+        }, ct);
     }
 
     private static object BuildCompletedMessage(
@@ -517,42 +242,6 @@ internal static class MessagesApiEndpoints
                 output_tokens = completion.Usage?.CompletionTokens ?? 0,
             },
         };
-    }
-
-    private static LlmSessionRecord BuildSessionRecord(
-        NormalizedMessagesRequest normalized,
-        ResponsesCallerScope callerScope,
-        DateTimeOffset createdAt)
-    {
-        return new LlmSessionRecord
-        {
-            ResponseId = normalized.MessageId,
-            ScopeId = callerScope.ScopeId,
-            OwnerSubject = callerScope.OwnerSubject,
-            OriginKind = callerScope.OriginKind,
-            PreviousResponseId = string.Empty,
-            Status = LlmSessionStatus.Accepted,
-            CreatedAt = Timestamp.FromDateTime(createdAt.UtcDateTime),
-            UpdatedAt = Timestamp.FromDateTime(createdAt.UtcDateTime),
-            Ttl = Duration.FromTimeSpan(TimeSpan.FromHours(24)),
-        };
-    }
-
-    private static async Task TryUpdateSessionStatusAsync(
-        ILlmSessionRegistrationPort port,
-        ILogger logger,
-        LlmSessionRegistrationResult session,
-        LlmSessionStatus status,
-        CancellationToken ct)
-    {
-        try
-        {
-            await port.UpdateStatusAsync(session.ActorId, session.ResponseId, status, ct);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to update llm session {ResponseId} to {Status}", session.ResponseId, status);
-        }
     }
 
     private static async Task WriteSseFrameAsync(
@@ -602,4 +291,6 @@ internal static class MessagesApiEndpoints
             error = new { type = errorType, message },
         }, JsonOptions, statusCode: statusCode);
     }
+
+
 }

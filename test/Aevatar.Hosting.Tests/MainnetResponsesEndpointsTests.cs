@@ -340,7 +340,7 @@ public sealed class MainnetResponsesEndpointsTests
             [LLMRequestMetadataKeys.ResponseId] = "resp_1",
         };
         var previous = AgentToolRequestContext.CurrentMetadata;
-        var context = ResponsesApiEndpoints.BuildToolProviderContext(
+        var context = BuildToolProviderContext(
             new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey),
             "resp_1",
             "token");
@@ -393,7 +393,7 @@ public sealed class MainnetResponsesEndpointsTests
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token",
         };
         var previous = AgentToolRequestContext.CurrentMetadata;
-        var context = ResponsesApiEndpoints.BuildToolProviderContext(
+        var context = BuildToolProviderContext(
             new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey),
             "resp_1",
             "token");
@@ -437,7 +437,7 @@ public sealed class MainnetResponsesEndpointsTests
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token",
         };
         var previous = AgentToolRequestContext.CurrentMetadata;
-        var context = ResponsesApiEndpoints.BuildToolProviderContext(
+        var context = BuildToolProviderContext(
             new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey),
             "resp_1",
             "token");
@@ -477,7 +477,7 @@ public sealed class MainnetResponsesEndpointsTests
         var toolProvider = provider.GetRequiredService<ResponsesUserSkillsToolProvider>();
 
         var tools = await toolProvider.GetAdditiveToolsAsync(
-            ResponsesApiEndpoints.BuildToolProviderContext(
+            BuildToolProviderContext(
                 new ResponsesCallerScope("scope-1", "owner-1", LlmSessionOriginKind.ApiKey),
                 "resp_1",
                 "token"));
@@ -1098,10 +1098,12 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(sessions);
         builder.Services.AddSingleton<ILlmSessionQueryPort>(sessions);
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
+        builder.Services.AddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
         builder.Services.AddSingleton<IResponsesCallerScopeResolver>(new StubResponsesCallerScopeResolver());
         builder.Services.AddSingleton<IChatRoutePolicyQueryPort>(StaticChatRoutePolicyQueryPort.ForSnapshot(
             new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
         builder.Services.AddSingleton(new ChatRouteResolver(new StaticChatRouteFallbackProvider(string.Empty)));
+        builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.AddSingleton<IResponsesRouteResolver>(new RecordingResponsesRouteResolver());
         builder.Services.AddSingleton<ITeamEntryMemberResolver>(StubTeamEntryMemberResolver.NotFound());
         builder.Services.AddSingleton<IMemberPublishedServiceResolver>(StubMemberPublishedServiceResolver.Identity());
@@ -1164,9 +1166,11 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(sessions);
         builder.Services.AddSingleton<ILlmSessionQueryPort>(sessions);
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
+        builder.Services.AddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
         builder.Services.AddSingleton<IResponsesCallerScopeResolver>(new StubResponsesCallerScopeResolver());
         builder.Services.AddSingleton<IChatRoutePolicyQueryPort>(queryPort);
         builder.Services.AddSingleton(new ChatRouteResolver(new StaticChatRouteFallbackProvider(string.Empty)));
+        builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.AddSingleton<IResponsesRouteResolver>(new RecordingResponsesRouteResolver());
         builder.Services.AddSingleton<ITeamEntryMemberResolver>(StubTeamEntryMemberResolver.NotFound());
         builder.Services.AddSingleton<IMemberPublishedServiceResolver>(memberResolver);
@@ -2111,10 +2115,12 @@ public sealed class MainnetResponsesEndpointsTests
         builder.Services.AddSingleton<ILlmSessionRegistrationPort>(responseSessions);
         builder.Services.AddSingleton<ILlmSessionQueryPort>(responseSessions);
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
+        builder.Services.AddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
         builder.Services.AddSingleton(callerScopeResolver ?? new StubResponsesCallerScopeResolver());
         builder.Services.AddSingleton(chatRoutePolicyQueryPort ?? StaticChatRoutePolicyQueryPort.ForSnapshot(
             new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
         builder.Services.AddSingleton(new ChatRouteResolver(new StaticChatRouteFallbackProvider(string.Empty)));
+        builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.AddSingleton(modelsAggregator ?? new RecordingResponsesModelsAggregator());
         builder.Services.AddSingleton(routeResolver ?? new RecordingResponsesRouteResolver
         {
@@ -2436,7 +2442,6 @@ public sealed class MainnetResponsesEndpointsTests
 
         public Task<ResponsesCallerScope> ResolveAsync(
             string nyxIdAccessToken,
-            HttpContext http,
             CancellationToken ct = default) =>
             Task.FromResult(_scope);
     }
@@ -2477,6 +2482,27 @@ public sealed class MainnetResponsesEndpointsTests
             HttpRequestMessage request,
             CancellationToken cancellationToken) =>
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+    }
+
+    private static ResponsesToolProviderContext BuildToolProviderContext(
+        ResponsesCallerScope callerScope,
+        string responseId,
+        string bearerToken)
+    {
+        return new ResponsesToolProviderContext(
+            new ResponsesToolProviderCallerScope(
+                callerScope.ScopeId,
+                callerScope.OwnerSubject,
+                callerScope.OriginKind.ToString()),
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [LLMRequestMetadataKeys.RequestId] = responseId,
+                [LLMRequestMetadataKeys.ResponseId] = responseId,
+                [LLMRequestMetadataKeys.ScopeId] = callerScope.ScopeId,
+                [LLMRequestMetadataKeys.OwnerSubject] = callerScope.OwnerSubject,
+                ["scope_id"] = callerScope.ScopeId,
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken,
+            });
     }
 
     private sealed class StubAgentTool : IAgentTool

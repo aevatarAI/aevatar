@@ -119,6 +119,9 @@ public static class MainnetHostBuilderExtensions
             });
         });
         builder.Services.TryAddSingleton<IResponsesCallerScopeResolver, NyxIdResponsesCallerScopeResolver>();
+        builder.Services.TryAddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
+        builder.Services.TryAddSingleton<IResponsesCommandFacade, ResponsesCommandFacade>();
+        builder.Services.TryAddSingleton<IMessagesCommandFacade, MessagesCommandFacade>();
         builder.Services.TryAddSingleton<IResponsesModelsAggregator, NyxIdResponsesModelsAggregator>();
         // Refactor (iter26/cluster-026-responses-route-user-catalog-cache):
         //   Old pattern: Responses/Messages routes resolve `vendor/model` by reading a singleton per-bearer in-process cache of NyxID user LLM service catalog facts.
