@@ -643,9 +643,19 @@ public sealed class MainnetMessagesEndpointsTests
     }
 
     [Fact]
-    public async Task PostMessages_WhenChatRouteForwardsToGAgent_ReturnsNotImplementedWithoutLlmCall()
+    public async Task PostMessages_WhenChatRouteForwardsToGAgent_RoutesThroughToolDrivenModelAction()
     {
-        var provider = new MessagesRecordingLLMProvider();
+        var provider = new MessagesRecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = "routed through model",
+                    IsLast = true,
+                },
+            ],
+        };
         var queryPort = MessagesStaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
             ForwardToGAgentAction("target-agent"),
             []));
@@ -667,11 +677,14 @@ public sealed class MainnetMessagesEndpointsTests
         var response = await client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
 
-        response.StatusCode.Should().Be(HttpStatusCode.NotImplemented, body);
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.Tools.Should().BeEmpty(
+            "/v1/messages does not install the Responses workspace tool set yet; legacy ForwardToGAgent is normalized to ForwardToModel instead of bypassing the LLM.");
+        provider.LastRequest.Model.Should().Be("original-claude");
         using var doc = JsonDocument.Parse(body);
-        doc.RootElement.GetProperty("error").GetProperty("type").GetString()
-            .Should().Be("chat_route_action_not_supported");
-        provider.LastRequest.Should().BeNull();
+        doc.RootElement.GetProperty("content")[0].GetProperty("text").GetString()
+            .Should().Be("routed through model");
     }
 
     // ----- Test fixtures -------------------------------------------------------

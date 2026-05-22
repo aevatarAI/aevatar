@@ -70,6 +70,13 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
     // local tool calls; eight rounds matches the bound observed in similar
     // multi-round agent loops in this repo (e.g. SkillRunnerGAgent).
     private const int MaxToolRounds = 8;
+    private readonly ChatRunToolCompletionCoordinator? _chatRunToolCompletionCoordinator;
+
+    public ResponsesCompletionApplicationService(
+        ChatRunToolCompletionCoordinator? chatRunToolCompletionCoordinator = null)
+    {
+        _chatRunToolCompletionCoordinator = chatRunToolCompletionCoordinator;
+    }
 
     public async Task<ResponsesCompletionResult> CollectAsync(
         ILLMProvider provider,
@@ -108,7 +115,14 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
                 Role = "assistant",
                 ToolCalls = localToolCalls,
             });
-            await ExecuteLocalToolCallsAsync(request, toolContextMetadata, localToolCalls, messages, ct);
+            await ExecuteLocalToolCallsAsync(
+                request,
+                toolContextMetadata,
+                localToolCalls,
+                messages,
+                round + 1,
+                _chatRunToolCompletionCoordinator,
+                ct);
         }
 
         return new ResponsesCompletionResult(outputText.ToString(), usage, []);
@@ -158,7 +172,9 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
                 }
             }
 
-            var builtToolCalls = toolCalls.BuildToolCalls();
+            var builtToolCalls = toolCalls.BuildToolCalls()
+                .Select(ResponsesToolContext.ApplyToolChoiceHint)
+                .ToArray();
             var forwardedToolCalls = SelectForwardedToolCalls(builtToolCalls, toolClassification);
             if (forwardedToolCalls.Count > 0)
                 return new ResponsesCompletionResult(outputText.ToString(), usage, forwardedToolCalls);
@@ -172,7 +188,14 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
                 Role = "assistant",
                 ToolCalls = localToolCalls,
             });
-            await ExecuteLocalToolCallsAsync(request, toolContextMetadata, localToolCalls, messages, ct);
+            await ExecuteLocalToolCallsAsync(
+                request,
+                toolContextMetadata,
+                localToolCalls,
+                messages,
+                round + 1,
+                _chatRunToolCompletionCoordinator,
+                ct);
         }
 
         return new ResponsesCompletionResult(outputText.ToString(), usage, []);
@@ -233,6 +256,8 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
         IReadOnlyDictionary<string, string> toolContextMetadata,
         IReadOnlyList<ToolCall> toolCalls,
         List<ChatMessage> messages,
+        int llmRound,
+        ChatRunToolCompletionCoordinator? chatRunToolCompletionCoordinator,
         CancellationToken ct)
     {
         if (request.Tools is not { Count: > 0 })
@@ -245,15 +270,39 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
         {
             foreach (var toolCall in toolCalls)
             {
-                var result = toolsByName.TryGetValue(toolCall.Name, out var tool)
-                    ? await tool.ExecuteAsync(
-                        string.IsNullOrWhiteSpace(toolCall.ArgumentsJson) ? "{}" : toolCall.ArgumentsJson,
-                        ct)
-                    : JsonSerializer.Serialize(new
+                var argumentsJson = string.IsNullOrWhiteSpace(toolCall.ArgumentsJson) ? "{}" : toolCall.ArgumentsJson;
+                string result;
+                if (ResponsesToolChoiceHintPlan.IsStructuredErrorArguments(argumentsJson))
+                {
+                    result = argumentsJson;
+                }
+                else if (toolsByName.TryGetValue(toolCall.Name, out var tool))
+                {
+                    var mapped = AgentToolExecutionContextMapper.FromRequestWithCallId(request, toolCall.Id);
+                    var toolContext = mapped with { ExternalMetadata = toolContextMetadata };
+                    using (AgentToolContextScope.Push(toolContext))
+                    {
+                        result = ChatRunToolCompletionCoordinator.IsWaitCompleteInvocationTool(toolCall) &&
+                             chatRunToolCompletionCoordinator != null
+                            ? await chatRunToolCompletionCoordinator.ExecuteAsync(
+                                request,
+                                toolCall,
+                                argumentsJson,
+                                tool.ExecuteAsync,
+                                llmRound,
+                                ct)
+                            : await tool.ExecuteAsync(argumentsJson, ct);
+                    }
+                }
+                else
+                {
+                    result = JsonSerializer.Serialize(new
                     {
                         error = "aevatar_substitute_tool_not_registered",
                         tool_name = toolCall.Name,
                     });
+                }
+
                 messages.Add(ChatMessage.Tool(toolCall.Id, result));
             }
         }
@@ -288,7 +337,9 @@ public sealed class ResponsesCompletionApplicationService : IResponsesCompletion
             }
         }
 
-        return (outputText.ToString(), usage, toolCalls.BuildToolCalls());
+        return (outputText.ToString(), usage, toolCalls.BuildToolCalls()
+            .Select(ResponsesToolContext.ApplyToolChoiceHint)
+            .ToArray());
     }
 
     private static string? ExtractChunkText(LLMStreamChunk chunk)

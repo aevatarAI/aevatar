@@ -5,6 +5,7 @@ using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Bindings;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Application.ScopeGAgents;
@@ -62,6 +63,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceRuntimeActivator, DefaultServiceRuntimeActivator>();
         services.TryAddSingleton<IServiceRunRegistrationPort, ServiceRunRegistrationAdapter>();
         services.TryAddSingleton<ILlmSessionRegistrationPort, LlmSessionRegistrationAdapter>();
+        services.TryAddSingleton<IChatRunActorPort, ChatRunActorAdapter>();
+        services.TryAddSingleton<ChatRunToolCompletionCoordinator>();
         services.TryAddSingleton<IResponsesAgentToolStateCommandPort, ResponsesAgentToolStateCommandAdapter>();
         services.TryAddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         services.TryAddSingleton<IServiceInvocationDispatcher, DefaultServiceInvocationDispatcher>();

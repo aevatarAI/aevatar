@@ -89,8 +89,7 @@ public sealed class AevatarInvocationDispatcher
             return AevatarInvocationJson.Error(parsed.Error);
 
         var request = parsed.Value!;
-        var error = ProtoToolArguments.RequirePayload(request.Payload, "payload") ??
-                    ValidateWaitIsDispatchable(ResolveWait(request.Wait), "aevatar_invoke_gagent");
+        var error = ProtoToolArguments.RequirePayload(request.Payload, "payload");
         if (error != null)
             return AevatarInvocationJson.Error(error);
 
@@ -192,8 +191,7 @@ public sealed class AevatarInvocationDispatcher
         var request = parsed.Value!;
         var wait = ResolveWait(request.Wait);
         var error = ProtoToolArguments.Require(request.WorkflowId, "workflow_id", "workflow_id is required.") ??
-                    ProtoToolArguments.RequirePayload(request.Inputs, "inputs") ??
-                    ValidateWaitIsDispatchable(wait, "aevatar_start_workflow");
+                    ProtoToolArguments.RequirePayload(request.Inputs, "inputs");
         if (error != null)
             return AevatarInvocationJson.Error(error);
 
@@ -324,14 +322,6 @@ public sealed class AevatarInvocationDispatcher
             }),
         };
     }
-
-    private static InvocationToolError? ValidateWaitIsDispatchable(InvocationWaitMode wait, string toolName) =>
-        wait == InvocationWaitMode.Complete
-            ? Error(
-                "wait_complete_unavailable",
-                $"{toolName} supports wait=ack and wait=stream in Unit 1. wait=complete requires a completion observer.",
-                "wait")
-            : null;
 
     private async Task<string> InvokeTeamToAcceptanceAsync(
         StaticGAgentStreamInvocationRequest invocation,

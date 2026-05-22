@@ -11,6 +11,9 @@ internal sealed record ToolArgumentParseResult<T>(
 
 internal static class ProtoToolArguments
 {
+    private static readonly JsonParser IgnoreUnknownFieldsParser = new(
+        JsonParser.Settings.Default.WithIgnoreUnknownFields(true));
+
     public static ToolArgumentParseResult<T> Parse<T>(string argumentsJson)
         where T : class, IMessage<T>, new()
     {
@@ -20,7 +23,7 @@ internal static class ProtoToolArguments
             var node = JsonNode.Parse(normalized) ?? new JsonObject();
             NormalizeToolEnums(node);
             normalized = node.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
-            var value = JsonParser.Default.Parse<T>(normalized);
+            var value = IgnoreUnknownFieldsParser.Parse<T>(normalized);
             return new ToolArgumentParseResult<T>(value, null);
         }
         catch (JsonException ex)

@@ -2,6 +2,8 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.Foundation.Abstractions.Connectors;
@@ -59,6 +61,7 @@ internal static class ResponsesApiEndpoints
         [FromServices] ILlmSessionQueryPort responseSessionQueryPort,
         [FromServices] IResponsesCompletionApplicationService completionService,
         [FromServices] IEnumerable<IResponsesToolProvider> toolProviders,
+        [FromServices] IToolSetRegistry toolSetRegistry,
         [FromServices] ITeamEntryMemberResolver teamEntryMemberResolver,
         [FromServices] IMemberPublishedServiceResolver memberPublishedServiceResolver,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
@@ -75,6 +78,7 @@ internal static class ResponsesApiEndpoints
         ArgumentNullException.ThrowIfNull(responseSessionQueryPort);
         ArgumentNullException.ThrowIfNull(completionService);
         ArgumentNullException.ThrowIfNull(toolProviders);
+        ArgumentNullException.ThrowIfNull(toolSetRegistry);
         ArgumentNullException.ThrowIfNull(teamEntryMemberResolver);
         ArgumentNullException.ThrowIfNull(memberPublishedServiceResolver);
         ArgumentNullException.ThrowIfNull(staticGAgentStreamInvocationPort);
@@ -228,9 +232,33 @@ internal static class ResponsesApiEndpoints
         }
 
         var toolProviderContext = BuildToolProviderContext(callerScope, normalized.ResponseId, bearerToken);
+        var effectiveToolProviders = toolProviders;
+        var toolChoiceHintPlan = ResponsesToolChoiceHintPlan.Empty;
+        if (routeDecision.Action.ForwardToModel is { } forwardToModel)
+        {
+            if (forwardToModel.ToolSetRef != null && !string.IsNullOrWhiteSpace(forwardToModel.ToolSetRef.Name))
+            {
+                var toolSet = toolSetRegistry.Resolve(forwardToModel.ToolSetRef);
+                if (!toolSet.IsSuccess)
+                {
+                    var error = toolSet.Error!;
+                    return ToErrorResult(
+                        StatusCodes.Status500InternalServerError,
+                        error.Code,
+                        error.Message);
+                }
+
+                effectiveToolProviders = [.. toolProviders, new ToolSetResponsesToolProvider(toolSet.Sources)];
+            }
+
+            toolChoiceHintPlan = ResponsesToolChoiceHints.Create(
+                forwardToModel.ToolChoiceHint?.ToolName,
+                forwardToModel.ToolChoiceHint?.PrefilledArguments);
+        }
+
         var toolClassification = await ResponsesToolClassifier.ClassifyAsync(
             normalized.DeclaredTools.Select(ToApplicationToolDeclaration).ToArray(),
-            toolProviders,
+            effectiveToolProviders,
             toolProviderContext,
             logger,
             ct);
@@ -294,32 +322,40 @@ internal static class ResponsesApiEndpoints
 
         if (normalized.Stream)
         {
-            await WriteStreamResponseAsync(
-                http.Response,
-                providerFactory,
-                completionService,
-                responseSessionRegistrationPort,
-                logger,
-                responseSession,
-                llmRequest,
-                toolContextMetadata,
-                normalized,
-                previousSnapshot,
-                toolClassification,
-                createdAt,
-                ct);
+            using (ResponsesToolContext.Push(toolChoiceHintPlan))
+            {
+                await WriteStreamResponseAsync(
+                    http.Response,
+                    providerFactory,
+                    completionService,
+                    responseSessionRegistrationPort,
+                    logger,
+                    responseSession,
+                    llmRequest,
+                    toolContextMetadata,
+                    normalized,
+                    previousSnapshot,
+                    toolClassification,
+                    createdAt,
+                    ct);
+            }
+
             return Results.Empty;
         }
 
         try
         {
             var provider = providerFactory.GetDefault();
-            var completion = await completionService.CollectAsync(
-                provider,
-                llmRequest,
-                toolContextMetadata,
-                toolClassification,
-                ct);
+            ResponsesCompletionResult completion;
+            using (ResponsesToolContext.Push(toolChoiceHintPlan))
+            {
+                completion = await completionService.CollectAsync(
+                    provider,
+                    llmRequest,
+                    toolContextMetadata,
+                    toolClassification,
+                    ct);
+            }
             var forwardedToolCalls = completion.ForwardedToolCalls;
             await PersistForwardedToolCallsAsync(
                 responseSessionRegistrationPort,
@@ -1690,6 +1726,27 @@ internal static class ResponsesApiEndpoints
                 [ChannelMetadataKeys.RegistrationScopeId] = callerScope.ScopeId,
                 [LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken,
             });
+    }
+
+    private sealed class ToolSetResponsesToolProvider : IResponsesToolProvider
+    {
+        private readonly IReadOnlyList<IAgentToolSource> _sources;
+
+        public ToolSetResponsesToolProvider(IReadOnlyList<IAgentToolSource> sources)
+        {
+            _sources = sources ?? throw new ArgumentNullException(nameof(sources));
+        }
+
+        public async ValueTask<IReadOnlyList<IAgentTool>> GetAdditiveToolsAsync(
+            ResponsesToolProviderContext context,
+            CancellationToken ct = default)
+        {
+            var tools = new List<IAgentTool>();
+            foreach (var source in _sources)
+                tools.AddRange(await source.DiscoverToolsAsync(ct));
+
+            return tools;
+        }
     }
 
     internal static async Task<ChatRouteDecision> ResolveResponsesChatRouteAsync(

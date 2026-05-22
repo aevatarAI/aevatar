@@ -235,6 +235,51 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task InvokeTeam_ShouldIgnoreMigratedScopeIdArgument()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_invoke_team");
+
+        using var _ = PushContext(callId: "call-team-scope-prefill");
+        var output = await tool.ExecuteAsync("""
+            {
+              "team_id": "team-1",
+              "endpoint_id": "entry",
+              "scope_id": "legacy-policy-scope",
+              "payload": { "prompt": "go" },
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.TeamResolver.LastScopeId.Should().Be("scope-1");
+        harness.TeamInvocation.Request!.Identity.TenantId.Should().Be("scope-1");
+        harness.TeamInvocation.Request.Input.Headers.Should().Contain("scope_id", "scope-1");
+    }
+
+    [Fact]
+    public async Task InvokeGAgent_WaitComplete_ShouldDispatchAndReturnCompletionReceipt()
+    {
+        var harness = new Harness();
+        var tool = await harness.DiscoverToolAsync("aevatar_invoke_gagent");
+
+        using var _ = PushContext(callId: "call-gagent-complete");
+        var output = await tool.ExecuteAsync("""
+            {
+              "actor_id": "actor-1",
+              "payload": { "prompt": "hello" },
+              "wait": "complete"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        var result = Read(output);
+        result.GetProperty("run_id").GetString().Should().Be("call-gagent-complete");
+        result.GetProperty("status").GetString().Should().Be("streaming");
+        result.GetProperty("wait").GetString().Should().Be("complete");
+    }
+
+    [Fact]
     public async Task InvokeTeam_ShouldRejectPayloadHeaderCredentialOverrides()
     {
         var harness = new Harness();
