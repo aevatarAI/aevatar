@@ -7,7 +7,7 @@ namespace Aevatar.Interop.A2A.Application;
 // Refactor (iter30/cluster-031-a2a-actor-owned):
 //   Old pattern: task current state lived in IA2ATaskStore process memory.
 //   New principle: current-state readmodel is materialized from committed task actor state.
-public static class A2ATaskCurrentStateProjector
+internal static class A2ATaskCurrentStateProjector
 {
     public static A2ATaskCurrentStateReadModel? TryProject(EventEnvelope envelope)
     {

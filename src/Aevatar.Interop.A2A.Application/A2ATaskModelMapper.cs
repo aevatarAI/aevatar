@@ -1,6 +1,6 @@
-using System.Text.Json;
 using Aevatar.Interop.A2A.Abstractions;
 using Aevatar.Interop.A2A.Abstractions.Models;
+using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Interop.A2A.Application;
@@ -37,7 +37,7 @@ public static class A2ATaskModelMapper
             Status = ToDto(state.Status),
             History = history,
             Artifacts = state.Artifacts.Select(ToDto).ToList(),
-            Metadata = state.Metadata.Count == 0 ? null : new Dictionary<string, string>(state.Metadata),
+            Metadata = ToNullableDictionary(state.Metadata),
         };
 
         return result;
@@ -63,7 +63,7 @@ public static class A2ATaskModelMapper
             Description = string.IsNullOrWhiteSpace(artifact.Description) ? null : artifact.Description,
             Parts = artifact.Parts.Select(ToDto).ToArray(),
             Index = artifact.Index,
-            Metadata = artifact.Metadata.Count == 0 ? null : new Dictionary<string, string>(artifact.Metadata),
+            Metadata = ToNullableDictionary(artifact.Metadata),
         };
     }
 
@@ -106,7 +106,7 @@ public static class A2ATaskModelMapper
                 result.DataEntries.AddRange(data.Data.Select(entry => new A2ATaskPartDataEntry
                 {
                     Key = entry.Key,
-                    ValueJson = JsonSerializer.Serialize(entry.Value),
+                    Value = ToValue(entry.Value),
                 }));
                 break;
         }
@@ -119,7 +119,7 @@ public static class A2ATaskModelMapper
         {
             Role = message.Role,
             Parts = message.Parts.Select(ToDto).ToArray(),
-            Metadata = message.Metadata.Count == 0 ? null : new Dictionary<string, string>(message.Metadata),
+            Metadata = ToNullableDictionary(message.Metadata),
         };
 
     private static Part ToDto(A2ATaskPart part) =>
@@ -128,7 +128,7 @@ public static class A2ATaskModelMapper
             "text" => new TextPart
             {
                 Text = part.Text,
-                Metadata = part.Metadata.Count == 0 ? null : new Dictionary<string, string>(part.Metadata),
+                Metadata = ToNullableDictionary(part.Metadata),
             },
             "file" => new FilePart
             {
@@ -139,19 +139,19 @@ public static class A2ATaskModelMapper
                     Bytes = string.IsNullOrWhiteSpace(part.FileBytes) ? null : part.FileBytes,
                     Uri = string.IsNullOrWhiteSpace(part.FileUri) ? null : part.FileUri,
                 },
-                Metadata = part.Metadata.Count == 0 ? null : new Dictionary<string, string>(part.Metadata),
+                Metadata = ToNullableDictionary(part.Metadata),
             },
             "data" => new DataPart
             {
                 Data = part.DataEntries.ToDictionary(
                     entry => entry.Key,
-                    entry => JsonSerializer.Deserialize<object?>(entry.ValueJson)),
-                Metadata = part.Metadata.Count == 0 ? null : new Dictionary<string, string>(part.Metadata),
+                    entry => ToObject(entry.Value)),
+                Metadata = ToNullableDictionary(part.Metadata),
             },
             _ => new TextPart
             {
                 Text = part.Text,
-                Metadata = part.Metadata.Count == 0 ? null : new Dictionary<string, string>(part.Metadata),
+                Metadata = ToNullableDictionary(part.Metadata),
             },
         };
 
@@ -176,4 +176,47 @@ public static class A2ATaskModelMapper
         foreach (var (key, value) in source)
             target[key] = value;
     }
+
+    private static Dictionary<string, string>? ToNullableDictionary(MapField<string, string> metadata) =>
+        metadata.Count == 0 ? null : new Dictionary<string, string>(metadata);
+
+    private static Value ToValue(object? value) =>
+        value switch
+        {
+            null => Value.ForNull(),
+            Value protobufValue => protobufValue.Clone(),
+            string text => Value.ForString(text),
+            bool boolean => Value.ForBool(boolean),
+            int number => Value.ForNumber(number),
+            long number => Value.ForNumber(number),
+            float number => Value.ForNumber(number),
+            double number => Value.ForNumber(number),
+            decimal number => Value.ForNumber((double)number),
+            IReadOnlyDictionary<string, object?> map => Value.ForStruct(ToStruct(map)),
+            IDictionary<string, object?> map => Value.ForStruct(ToStruct(map.AsReadOnly())),
+            IEnumerable<object?> list => Value.ForList(list.Select(ToValue).ToArray()),
+            _ => Value.ForString(value.ToString() ?? string.Empty),
+        };
+
+    private static Struct ToStruct(IReadOnlyDictionary<string, object?> map)
+    {
+        var result = new Struct();
+        foreach (var (key, value) in map)
+            result.Fields[key] = ToValue(value);
+        return result;
+    }
+
+    private static object? ToObject(Value value) =>
+        value.KindCase switch
+        {
+            Value.KindOneofCase.NullValue => null,
+            Value.KindOneofCase.NumberValue => value.NumberValue,
+            Value.KindOneofCase.StringValue => value.StringValue,
+            Value.KindOneofCase.BoolValue => value.BoolValue,
+            Value.KindOneofCase.StructValue => value.StructValue.Fields.ToDictionary(
+                entry => entry.Key,
+                entry => ToObject(entry.Value)),
+            Value.KindOneofCase.ListValue => value.ListValue.Values.Select(ToObject).ToList(),
+            _ => null,
+        };
 }

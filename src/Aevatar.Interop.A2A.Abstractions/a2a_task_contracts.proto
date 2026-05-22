@@ -3,6 +3,7 @@ package aevatar.interop.a2a;
 option csharp_namespace = "Aevatar.Interop.A2A.Abstractions";
 
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
 
 // Refactor (iter30/cluster-031-a2a-actor-owned):
 //   Old pattern: process-local IA2ATaskStore ledger/subscriber registry owned lifecycle facts.
@@ -21,7 +22,7 @@ enum A2ATaskLifecycleState {
 
 message A2ATaskPartDataEntry {
   string key = 1;
-  string value_json = 2;
+  google.protobuf.Value value = 2;
 }
 
 message A2ATaskPart {
