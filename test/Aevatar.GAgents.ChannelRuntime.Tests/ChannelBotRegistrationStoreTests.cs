@@ -1,7 +1,10 @@
+using System.Reflection;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using Aevatar.GAgents.Channel.Runtime;
@@ -30,6 +33,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
             EventSourcingBehaviorFactory =
                 _serviceProvider.GetRequiredService<IEventSourcingBehaviorFactory<ChannelBotRegistrationStoreState>>(),
         };
+        SetId(_agent, ChannelBotRegistrationGAgent.WellKnownId);
 
         await _agent.ActivateAsync();
     }
@@ -38,6 +42,27 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     {
         _serviceProvider.Dispose();
         return Task.CompletedTask;
+    }
+
+    private ChannelBotRegistrationGAgent CreateAgent()
+    {
+        var agent = new ChannelBotRegistrationGAgent
+        {
+            Services = _serviceProvider,
+            EventSourcingBehaviorFactory =
+                _serviceProvider.GetRequiredService<IEventSourcingBehaviorFactory<ChannelBotRegistrationStoreState>>(),
+        };
+        SetId(agent, ChannelBotRegistrationGAgent.WellKnownId);
+        return agent;
+    }
+
+    private static void SetId(GAgentBase agent, string actorId)
+    {
+        var method = typeof(GAgentBase).GetMethod(
+            "SetId",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        method.Should().NotBeNull("tests replay the well-known registration-store event stream");
+        method!.Invoke(agent, [actorId]);
     }
 
     [Fact]
@@ -177,7 +202,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleRepairScopeId_PreservesCreatedAt_WhenRewritingScope()
+    public async Task ReplayScopeIdRepairedEvent_PreservesCreatedAt_WhenRewritingScope()
     {
         await _agent.HandleRegister(new ChannelBotRegisterCommand
         {
@@ -190,45 +215,19 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
 
         var originalCreatedAt = _agent.State.Registrations[0].CreatedAt;
         originalCreatedAt.Should().NotBeNull();
-        var beforeVersion = _agent.EventSourcing!.CurrentVersion;
+        await AppendScopeIdRepairedEventAsync("reg-1", "scope-original", "scope-repaired");
 
-        await _agent.HandleRepairScopeId(new ChannelBotRepairScopeIdCommand
-        {
-            RegistrationId = "reg-1",
-            ScopeId = "scope-repaired",
-        });
+        var replayed = CreateAgent();
+        await replayed.ActivateAsync();
 
-        _agent.EventSourcing!.CurrentVersion.Should().Be(beforeVersion + 1);
-        var entry = _agent.State.Registrations.Should().ContainSingle().Subject;
+        var entry = replayed.State.Registrations.Should().ContainSingle().Subject;
         entry.ScopeId.Should().Be("scope-repaired");
         entry.CreatedAt.Should().Be(originalCreatedAt);
         entry.Tombstoned.Should().BeFalse();
     }
 
     [Fact]
-    public async Task HandleRepairScopeId_IsIdempotent_WhenScopeUnchanged()
-    {
-        await _agent.HandleRegister(new ChannelBotRegisterCommand
-        {
-            Platform = "lark",
-            NyxProviderSlug = "api-lark-bot",
-            ScopeId = "scope-1",
-            RequestedId = "reg-1",
-        });
-
-        var beforeVersion = _agent.EventSourcing!.CurrentVersion;
-
-        await _agent.HandleRepairScopeId(new ChannelBotRepairScopeIdCommand
-        {
-            RegistrationId = "reg-1",
-            ScopeId = "scope-1",
-        });
-
-        _agent.EventSourcing!.CurrentVersion.Should().Be(beforeVersion);
-    }
-
-    [Fact]
-    public async Task HandleRepairScopeId_IgnoresTombstonedRegistration()
+    public async Task ReplayScopeIdRepairedEvent_IgnoresTombstonedRegistration()
     {
         await _agent.HandleRegister(new ChannelBotRegisterCommand
         {
@@ -241,32 +240,63 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         {
             RegistrationId = "reg-1",
         });
+        await AppendScopeIdRepairedEventAsync("reg-1", "scope-1", "scope-2");
 
-        var beforeVersion = _agent.EventSourcing!.CurrentVersion;
+        var replayed = CreateAgent();
+        await replayed.ActivateAsync();
 
-        await _agent.HandleRepairScopeId(new ChannelBotRepairScopeIdCommand
-        {
-            RegistrationId = "reg-1",
-            ScopeId = "scope-2",
-        });
-
-        _agent.EventSourcing!.CurrentVersion.Should().Be(beforeVersion);
-        _agent.State.Registrations[0].ScopeId.Should().Be("scope-1");
-        _agent.State.Registrations[0].Tombstoned.Should().BeTrue();
+        replayed.State.Registrations[0].ScopeId.Should().Be("scope-1");
+        replayed.State.Registrations[0].Tombstoned.Should().BeTrue();
     }
 
     [Fact]
-    public async Task HandleRepairScopeId_IgnoresMissingRegistration()
+    public async Task ReplayScopeIdRepairedEvent_IgnoresMissingRegistration()
     {
-        var beforeVersion = _agent.EventSourcing!.CurrentVersion;
+        await AppendScopeIdRepairedEventAsync("reg-missing", string.Empty, "scope-1");
 
-        await _agent.HandleRepairScopeId(new ChannelBotRepairScopeIdCommand
-        {
-            RegistrationId = "reg-missing",
-            ScopeId = "scope-1",
-        });
+        var replayed = CreateAgent();
+        await replayed.ActivateAsync();
 
-        _agent.EventSourcing!.CurrentVersion.Should().Be(beforeVersion);
+        replayed.State.Registrations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ScopeIdRepairedEvent_DoesNotExposeLiveRepairCommandHandler()
+    {
+        typeof(ChannelBotRegistrationGAgent)
+            .GetMethods()
+            .Select(static method => method.Name)
+            .Should()
+            .NotContain("HandleRepairScopeId");
+    }
+
+    private async Task AppendScopeIdRepairedEventAsync(
+        string registrationId,
+        string previousScopeId,
+        string scopeId)
+    {
+        var eventStore = _serviceProvider.GetRequiredService<IEventStore>();
+        await eventStore.AppendAsync(
+            ChannelBotRegistrationGAgent.WellKnownId,
+            [
+                new StateEvent
+                {
+                    AgentId = ChannelBotRegistrationGAgent.WellKnownId,
+                    EventId = Guid.NewGuid().ToString("N"),
+                    EventType = ChannelBotScopeIdRepairedEvent.Descriptor.FullName,
+                    EventData = Any.Pack(new ChannelBotScopeIdRepairedEvent
+                    {
+                        RegistrationId = registrationId,
+                        PreviousScopeId = previousScopeId,
+                        ScopeId = scopeId,
+                        RepairedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    }),
+                    Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    Version = _agent.EventSourcing!.CurrentVersion + 1,
+                },
+            ],
+            _agent.EventSourcing!.CurrentVersion,
+            CancellationToken.None);
     }
 
     [Fact]

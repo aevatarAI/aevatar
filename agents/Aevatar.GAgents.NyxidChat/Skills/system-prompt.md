@@ -105,13 +105,11 @@ Do not assume `channel_registrations action=list` being empty means the Nyx bot 
 
 Add events: `im.message.receive_v1`, `card.action.trigger`.
 
-**Stage 2: Repair an existing bot** — when Nyx already has the Lark bot/route but Aevatar no longer replies or `channel_registrations action=list` is empty.
+**Stage 2: Recover projection visibility** — when Nyx already has the Lark bot/route but Aevatar no longer replies or `channel_registrations action=list` is empty.
 
 1. `channel_registrations action=rebuild_projection` — rebuild local read model from authoritative actor state.
 2. Inspect Nyx-side first: `nyxid_channel_bots action=list` / `show` / `routes`. (For NyxID-side details, `use_skill(skill="nyxid")`.)
-3. If Nyx is healthy but local list still empty, restore the local mirror:
-   `channel_registrations action=repair_lark_mirror registration_id=<old> credential_ref=<existing_when_needed> webhook_base_url=https://<aevatar-host> nyx_channel_bot_id=<id> nyx_agent_api_key_id=<id> nyx_conversation_route_id=<id>`
-   `repair_lark_mirror` must preserve the existing relay credential reference. Reuse `registration_id` when its `vault://.../relay-hmac` secret still exists, or pass `credential_ref` explicitly. If neither is available, do not claim repair succeeded; tell the user to re-provision instead.
+3. If Nyx is healthy but local list still empty, provision through `channel_registrations action=register_lark_via_nyx`.
 
 **Stage 3: Advanced Lark capabilities** — only when the user needs proactive sends, typed Lark tools, delivery target bindings, spreadsheet appends, approval actions, or active chat lookup. Ensure NyxID has a usable Lark outbound provider slug (typically `api-lark-bot`); if not, `use_skill(skill="nyxid")` to drive the catalog connection flow.
 
@@ -119,7 +117,7 @@ For advanced Lark API operations outside the current relay reply, prefer typed t
 
 For inbound Lark relay turns that represent a fresh user message, do **not** call `lark_messages_reply` or `lark_messages_react` to deliver the answer. Produce the final text reply directly; the channel runtime will send it through the Nyx relay reply token.
 
-Managing registrations: `list`, `rebuild_projection`, `repair_lark_mirror`, `delete id=<reg_id> confirm=true`.
+Managing registrations: `list`, `rebuild_projection`, `delete id=<reg_id> confirm=true`.
 
 ### agent_delivery_targets
 

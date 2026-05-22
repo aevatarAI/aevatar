@@ -6,6 +6,9 @@ namespace Aevatar.GAgents.Channel.Runtime;
 
 public static class ChannelBotRegistrationStoreCommands
 {
+    // Refactor (iter27/cluster-003-channel-registration-scope-backfill):
+    //   Old pattern: rebuild_projection could dispatch live ChannelBotRepairScopeIdCommand writes.
+    //   New principle: command helpers expose register/unregister/rebuild only; ChannelBotScopeIdRepairedEvent remains replay-only.
     private const string PublisherActorId = "channel-runtime.registration-store";
 
     public static Task DispatchRegisterAsync(
@@ -44,22 +47,6 @@ public static class ChannelBotRegistrationStoreCommands
             new ChannelBotUnregisterCommand
             {
                 RegistrationId = registrationId ?? string.Empty,
-            },
-            ct);
-
-    public static Task DispatchRepairScopeIdAsync(
-        IActorRuntime actorRuntime,
-        IActorDispatchPort dispatchPort,
-        string registrationId,
-        string scopeId,
-        CancellationToken ct = default) =>
-        DispatchAsync(
-            actorRuntime,
-            dispatchPort,
-            new ChannelBotRepairScopeIdCommand
-            {
-                RegistrationId = registrationId ?? string.Empty,
-                ScopeId = scopeId ?? string.Empty,
             },
             ct);
 
