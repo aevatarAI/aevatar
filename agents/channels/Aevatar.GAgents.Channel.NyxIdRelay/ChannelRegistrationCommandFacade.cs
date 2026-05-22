@@ -163,7 +163,9 @@ public sealed record ChannelRelayRegistrationRequest(
 {
     public NyxChannelBotProvisioningRequest ToProvisioningRequest(string platform)
     {
-        // refactor helper, no behavior change
+        // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
+        //   Old pattern: HTTP endpoints rebuilt provisioning DTOs inline while owning platform branching.
+        //   New principle: relay registration request mapping stays typed and local to the application facade boundary.
         return new NyxChannelBotProvisioningRequest(
             Platform: platform,
             AccessToken: AccessToken,
@@ -250,7 +252,9 @@ internal sealed class ChannelRegistrationCommandReceiptFactory
         ChannelBotRegistrationCommandTarget target,
         CommandContext context)
     {
-        // refactor helper, no behavior change
+        // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
+        //   Old pattern: callers treated dispatch success as an untyped helper completion.
+        //   New principle: the command skeleton returns an honest accepted receipt with stable command/correlation ids.
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(context);
 

@@ -10,7 +10,6 @@ internal static class ChannelRegistrationCommandFacadeTestSupport
 {
     public static ChannelRegistrationCommandFacade CreateFacade(IActorRuntime actorRuntime, IActorDispatchPort dispatchPort)
     {
-        // refactor helper, no behavior change
         var contextPolicy = new DefaultCommandContextPolicy();
         var envelopeFactory = new ChannelBotRegistrationCommandEnvelopeFactory();
         var targetDispatcher = new ActorCommandTargetDispatcher<ChannelBotRegistrationCommandTarget>(dispatchPort);
