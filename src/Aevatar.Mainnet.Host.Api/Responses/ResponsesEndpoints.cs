@@ -4,6 +4,7 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -825,11 +826,7 @@ internal static class ResponsesApiEndpoints
         var input = new StaticGAgentStreamInvocationInput(
             Prompt: normalized.Prompt ?? string.Empty,
             SessionId: normalized.ResponseId,
-            Headers: new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [LLMRequestMetadataKeys.RequestId] = normalized.ResponseId,
-                [ChannelMetadataKeys.RegistrationScopeId] = callerScope.ScopeId,
-            });
+            Headers: BuildStaticGAgentInvocationHeaders(http, normalized, callerScope));
         var invocationRequest = new StaticGAgentStreamInvocationRequest(identity, endpointId, input);
         var createdAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
@@ -917,11 +914,7 @@ internal static class ResponsesApiEndpoints
         var input = new StaticGAgentStreamInvocationInput(
             Prompt: normalized.Prompt ?? string.Empty,
             SessionId: normalized.ResponseId,
-            Headers: new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [LLMRequestMetadataKeys.RequestId] = normalized.ResponseId,
-                [ChannelMetadataKeys.RegistrationScopeId] = callerScope.ScopeId,
-            });
+            Headers: BuildStaticGAgentInvocationHeaders(http, normalized, callerScope));
         var invocationRequest = new StaticGAgentStreamInvocationRequest(identity, DefaultGAgentChatEndpointId, input);
         var createdAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
@@ -953,6 +946,27 @@ internal static class ResponsesApiEndpoints
     /// member-first authoring flow expose this as their canonical chat entry.
     /// </summary>
     internal const string DefaultGAgentChatEndpointId = "chat";
+
+    private static Dictionary<string, string> BuildStaticGAgentInvocationHeaders(
+        HttpContext http,
+        NormalizedResponsesRequest normalized,
+        ResponsesCallerScope callerScope)
+    {
+        var headers = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [LLMRequestMetadataKeys.RequestId] = normalized.ResponseId,
+            [ChannelMetadataKeys.RegistrationScopeId] = callerScope.ScopeId,
+        };
+
+        var bearerToken = ExtractBearerToken(http);
+        if (!string.IsNullOrWhiteSpace(bearerToken))
+        {
+            headers[LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken;
+            headers[ConnectorRequest.HttpAuthorizationMetadataKey] = $"Bearer {bearerToken}";
+        }
+
+        return headers;
+    }
 
     private static async Task WriteAGuiBackedResponseStreamAsync(
         HttpResponse response,

@@ -11,6 +11,7 @@ using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Authentication.Hosting;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -1683,6 +1684,10 @@ public sealed class MainnetResponsesEndpointsTests
         staticPort.LastRequest!.EndpointId.Should().Be("chat");
         staticPort.LastRequest.Identity!.ServiceId.Should().Be("published-svc-member-7");
         staticPort.LastRequest.Input.Prompt.Should().Be("hi gagent");
+        var headers = staticPort.LastRequest.Input.Headers;
+        headers.Should().NotBeNull();
+        headers![LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("gagent-secret");
+        headers[ConnectorRequest.HttpAuthorizationMetadataKey].Should().Be("Bearer gagent-secret");
 
         using var doc = JsonDocument.Parse(body);
         var root = doc.RootElement;
@@ -1973,6 +1978,10 @@ public sealed class MainnetResponsesEndpointsTests
         staticPort.LastRequest!.EndpointId.Should().Be("chat");
         staticPort.LastRequest.Identity!.ServiceId.Should().Be("published-svc-1");
         staticPort.LastRequest.Input.Prompt.Should().Be("hi team");
+        var headers = staticPort.LastRequest.Input.Headers;
+        headers.Should().NotBeNull();
+        headers![LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("team-secret");
+        headers[ConnectorRequest.HttpAuthorizationMetadataKey].Should().Be("Bearer team-secret");
 
         using var doc = JsonDocument.Parse(body);
         var root = doc.RootElement;
