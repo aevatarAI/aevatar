@@ -123,6 +123,7 @@ New principle: CLAUDE.md keeps the cross-process architecture and engineering bo
 - `docs/adr/` 只追加新决策，不改写历史决策；被替代的 ADR 通过新 ADR supersede。
 - `docs/history/` 仅放归档快照，正文必须明确非权威，不得被实现或测试当作规范来源。
 - AI 生成的设计文档默认不保留到 `docs/`；需要保留时必须有 `title/status/owner` frontmatter 并放入对应目录。
+- `docs/canon/` 和 `docs/adr/` 文件必须有 YAML frontmatter（`title/status/owner`）；文档 lint 使用 `tools/docs/lint.sh`，已纳入 CI 门禁。
 - 根目录 `.md` 只保留 `CLAUDE.md`、`README.md`、`CHANGELOG.md`、`LICENSE`、`AGENTS.md`；`docs/README.md` 由工具生成，不手动编辑。
 - 项目结构：`src/` 放生产代码，`test/` 放对应测试，`tools/Aevatar.Tools.Cli` 是 CLI 项目，`workflows/` 放 YAML 工作流。
 - `src/` 按能力与分层组织；保持项目名、命名空间、目录语义一致。
