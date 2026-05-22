@@ -185,6 +185,87 @@ public sealed class ServiceProjectionInfrastructureTests
     }
 
     [Fact]
+    public async Task GAgentRunTerminalProjectionPort_ShouldAttachExistingProjection_WhenScopeActorExists()
+    {
+        var activationService = new RecordingProjectionActivationService<GAgentRunTerminalProjectionContext>(
+            static (rootActorId, projectionName) => new GAgentRunTerminalProjectionContext
+            {
+                RootActorId = rootActorId,
+                ProjectionKind = projectionName,
+                CorrelationId = "corr-1",
+                InteractionKind = GAgentRunTerminalProjectionPort.ResolveInteractionKind(projectionName),
+            });
+        var runtime = new RecordingActorRuntime();
+        runtime.ExistingActorIds.Add(ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
+            "actor-1",
+            "gagent-run-terminal-draft-run",
+            ProjectionRuntimeMode.DurableMaterialization,
+            "corr-1")));
+        IGAgentRunTerminalProjectionPort service = new GAgentRunTerminalProjectionPort(
+            new ServiceProjectionOptions(),
+            activationService,
+            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(),
+            runtime);
+
+        var lease = await service.AttachExistingProjectionAsync(
+            "actor-1",
+            "corr-1",
+            GAgentRunTerminalInteractionKind.DraftRun);
+
+        lease.Should().NotBeNull();
+        lease!.ActorId.Should().Be("actor-1");
+        lease.CorrelationId.Should().Be("corr-1");
+        lease.InteractionKind.Should().Be(GAgentRunTerminalInteractionKind.DraftRun);
+        activationService.Requests.Should().BeEmpty();
+        activationService.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GAgentRunTerminalProjectionPort_ShouldReturnNullForAttachExisting_WhenScopeActorIsMissingOrInvalid()
+    {
+        var activationService = new RecordingProjectionActivationService<GAgentRunTerminalProjectionContext>(
+            static (rootActorId, projectionName) => new GAgentRunTerminalProjectionContext
+            {
+                RootActorId = rootActorId,
+                ProjectionKind = projectionName,
+                CorrelationId = "corr-1",
+                InteractionKind = GAgentRunTerminalProjectionPort.ResolveInteractionKind(projectionName),
+            });
+        var runtime = new RecordingActorRuntime();
+        runtime.ExistingActorIds.Add("different-scope");
+        IGAgentRunTerminalProjectionPort disabledService = new GAgentRunTerminalProjectionPort(
+            new ServiceProjectionOptions { Enabled = false },
+            activationService,
+            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(),
+            runtime);
+        IGAgentRunTerminalProjectionPort enabledService = new GAgentRunTerminalProjectionPort(
+            new ServiceProjectionOptions(),
+            activationService,
+            new RecordingProjectionReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>>(),
+            runtime);
+
+        (await disabledService.AttachExistingProjectionAsync(
+            "actor-1",
+            "corr-1",
+            GAgentRunTerminalInteractionKind.DraftRun)).Should().BeNull();
+        (await enabledService.AttachExistingProjectionAsync(
+            "actor-1",
+            "corr-1",
+            GAgentRunTerminalInteractionKind.DraftRun)).Should().BeNull();
+        (await enabledService.AttachExistingProjectionAsync(
+            "",
+            "corr-1",
+            GAgentRunTerminalInteractionKind.DraftRun)).Should().BeNull();
+        (await enabledService.AttachExistingProjectionAsync(
+            "actor-1",
+            " ",
+            GAgentRunTerminalInteractionKind.DraftRun)).Should().BeNull();
+
+        activationService.Requests.Should().BeEmpty();
+        activationService.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task GAgentRunTerminalProjectionPort_ShouldGuardReleaseAndUnknownKinds()
     {
         var activationService = new RecordingProjectionActivationService<GAgentRunTerminalProjectionContext>(
