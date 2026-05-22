@@ -164,9 +164,15 @@ public static class A2AEndpoints
         context.Response.Headers["X-Accel-Buffering"] = "no";
         await context.Response.StartAsync(ct);
 
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var cancellationRegistration = ct.Register(() => completion.TrySetCanceled(ct));
         await using var subscription = await adapter.SubscribeTaskUpdatesAsync(
             taskId,
-            update => WriteTaskUpdateAsync(context.Response, update, ct),
+            async update =>
+            {
+                if (await WriteTaskUpdateAsync(context.Response, update, ct))
+                    completion.TrySetResult();
+            },
             ct);
 
         await WriteSseEventAsync(context.Response, "status", task.Status, ct);
@@ -178,13 +184,11 @@ public static class A2AEndpoints
             return;
         }
 
-        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        await using var cancellationRegistration = ct.Register(() => completion.TrySetCanceled(ct));
         try { await completion.Task; }
         catch (OperationCanceledException) { /* client disconnected */ }
     }
 
-    private static async Task WriteTaskUpdateAsync(HttpResponse response, A2ATaskUpdate update, CancellationToken ct)
+    private static async Task<bool> WriteTaskUpdateAsync(HttpResponse response, A2ATaskUpdate update, CancellationToken ct)
     {
         await WriteSseEventAsync(response, "status", A2ATaskModelMapper.ToDto(update.Status), ct);
 
@@ -192,7 +196,12 @@ public static class A2AEndpoints
             await WriteSseEventAsync(response, "artifact", A2ATaskModelMapper.ToDto(update.Artifact), ct);
 
         if (update.IsFinal)
+        {
             await WriteSseEventAsync(response, "close", new { reason = "terminal_state" }, ct);
+            return true;
+        }
+
+        return false;
     }
 
     private static async Task WriteSseEventAsync(HttpResponse response, string eventType, object data, CancellationToken ct)

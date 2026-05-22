@@ -15,13 +15,15 @@ public class A2AAdapterServiceTests
 {
     private readonly StubActorRuntime _runtime = new();
     private readonly StubDispatchPort _dispatchPort = new();
+    private readonly A2ATaskCommandPort _taskCommandPort;
     private readonly StubProjectionReader _reader = new();
     private readonly StubActorEventSubscriptionProvider _subscriptionProvider = new();
     private readonly A2AAdapterService _adapter;
 
     public A2AAdapterServiceTests()
     {
-        _adapter = new A2AAdapterService(_runtime, _dispatchPort, _reader, _subscriptionProvider);
+        _taskCommandPort = new A2ATaskCommandPort(_runtime, _dispatchPort);
+        _adapter = new A2AAdapterService(_taskCommandPort, _reader, _subscriptionProvider);
     }
 
     [Fact]

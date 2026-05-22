@@ -30,15 +30,18 @@ public class A2AEndpointsTests : IDisposable
     private readonly HttpClient _client;
     private readonly StubActorRuntime _runtime = new();
     private readonly StubDispatchPort _dispatchPort = new();
+    private readonly A2ATaskCommandPort _taskCommandPort;
     private readonly StubProjectionReader _reader = new();
     private readonly StubTaskSubscriptionPort _subscriptionPort = new();
 
     public A2AEndpointsTests()
     {
+        _taskCommandPort = new A2ATaskCommandPort(_runtime, _dispatchPort);
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Services.AddSingleton<IActorRuntime>(_runtime);
         builder.Services.AddSingleton<IActorDispatchPort>(_dispatchPort);
+        builder.Services.AddSingleton<IA2ATaskCommandPort>(_taskCommandPort);
         builder.Services.AddSingleton<IProjectionDocumentReader<A2ATaskCurrentStateReadModel, string>>(_reader);
         builder.Services.AddSingleton<IActorEventSubscriptionProvider>(_subscriptionPort);
         builder.Services.AddLogging();
@@ -268,10 +271,9 @@ public class A2AEndpointsTests : IDisposable
     {
         _reader.Documents[A2ATaskActorId.Build("t-stream")] = MakeDocument("t-stream", TaskState.Working);
 
-        using var cts = new CancellationTokenSource();
         using var request = new HttpRequestMessage(HttpMethod.Get, "/a2a/subscribe/t-stream");
-        var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
-        await using var stream = await response.Content.ReadAsStreamAsync(cts.Token);
+        var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+        await using var stream = await response.Content.ReadAsStreamAsync();
         using var reader = new StreamReader(stream);
 
         var initialEvent = await ReadSseEventAsync(reader);
@@ -290,8 +292,56 @@ public class A2AEndpointsTests : IDisposable
         });
         var finalEvent = await ReadSseEventAsync(reader);
         finalEvent.Should().Contain("canceled");
+        var closeEvent = await ReadSseEventAsync(reader);
+        closeEvent.Should().Contain("event: close");
+        closeEvent.Should().Contain("terminal_state");
+    }
 
-        cts.Cancel();
+    [Fact]
+    public async Task Subscribe_ArtifactUpdate_WritesArtifactEvent()
+    {
+        _reader.Documents[A2ATaskActorId.Build("t-artifact")] = MakeDocument("t-artifact", TaskState.Working);
+
+        using var cts = new CancellationTokenSource();
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/a2a/subscribe/t-artifact");
+        var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+        await using var stream = await response.Content.ReadAsStreamAsync(cts.Token);
+        using var reader = new StreamReader(stream);
+
+        var initialEvent = await ReadSseEventAsync(reader);
+        initialEvent.Should().Contain("event: status");
+        initialEvent.Should().Contain("working");
+
+        var artifact = new A2ATaskArtifact
+        {
+            Name = "answer",
+            Description = "agent output",
+            Index = 0,
+        };
+        artifact.Parts.Add(new A2ATaskPart
+        {
+            Type = "text",
+            Text = "artifact body",
+        });
+
+        await _subscriptionPort.EmitAsync(new A2ATaskUpdate
+        {
+            TaskId = "t-artifact",
+            ActorId = A2ATaskActorId.Build("t-artifact"),
+            Status = A2ATaskModelMapper.BuildStatus(
+                A2ATaskLifecycleState.Working,
+                Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow)),
+            Artifact = artifact,
+        });
+
+        var statusEvent = await ReadSseEventAsync(reader);
+        statusEvent.Should().Contain("event: status");
+        var artifactEvent = await ReadSseEventAsync(reader);
+        artifactEvent.Should().Contain("event: artifact");
+        artifactEvent.Should().Contain("answer");
+        artifactEvent.Should().Contain("artifact body");
+
+        await cts.CancelAsync();
     }
 
     [Fact]

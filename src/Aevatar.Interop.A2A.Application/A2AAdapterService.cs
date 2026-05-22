@@ -1,9 +1,7 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Interop.A2A.Abstractions;
 using Aevatar.Interop.A2A.Abstractions.Models;
-using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -15,21 +13,18 @@ namespace Aevatar.Interop.A2A.Application;
 //   New principle: task-scoped GAgent owns lifecycle; adapter dispatches typed commands and reads materialized facts.
 public sealed class A2AAdapterService : IA2AAdapterService
 {
-    private readonly IActorRuntime _runtime;
-    private readonly IActorDispatchPort _dispatchPort;
+    private readonly IA2ATaskCommandPort _taskCommandPort;
     private readonly IProjectionDocumentReader<A2ATaskCurrentStateReadModel, string> _taskReadModelReader;
     private readonly IActorEventSubscriptionProvider _subscriptionProvider;
     private readonly ILogger _logger;
 
     public A2AAdapterService(
-        IActorRuntime runtime,
-        IActorDispatchPort dispatchPort,
+        IA2ATaskCommandPort taskCommandPort,
         IProjectionDocumentReader<A2ATaskCurrentStateReadModel, string> taskReadModelReader,
         IActorEventSubscriptionProvider subscriptionProvider,
         ILogger<A2AAdapterService>? logger = null)
     {
-        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
-        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _taskCommandPort = taskCommandPort ?? throw new ArgumentNullException(nameof(taskCommandPort));
         _taskReadModelReader = taskReadModelReader ?? throw new ArgumentNullException(nameof(taskReadModelReader));
         _subscriptionProvider = subscriptionProvider ?? throw new ArgumentNullException(nameof(subscriptionProvider));
         _logger = logger ?? NullLogger<A2AAdapterService>.Instance;
@@ -49,9 +44,6 @@ public sealed class A2AAdapterService : IA2AAdapterService
         if (string.IsNullOrWhiteSpace(targetActorId))
             throw new ArgumentException("Target agent ID must be specified in metadata['agentId'] or sessionId.");
 
-        var taskActorId = A2ATaskActorId.Build(sendParams.Id);
-        await _runtime.CreateAsync<A2ATaskGAgent>(taskActorId, ct);
-
         var now = Timestamp.FromDateTime(DateTime.UtcNow);
         var commandId = Guid.NewGuid().ToString("N");
         var command = new A2ATaskSubmitCommand
@@ -67,7 +59,7 @@ public sealed class A2AAdapterService : IA2AAdapterService
         if (sendParams.Metadata != null)
             command.Metadata.Add(sendParams.Metadata);
 
-        await _dispatchPort.DispatchAsync(taskActorId, BuildEnvelope(command, commandId, taskActorId), ct);
+        var taskActorId = await _taskCommandPort.SubmitAsync(command, ct);
         _logger.LogDebug("A2A task {TaskId} submitted to task actor {TaskActorId}", sendParams.Id, taskActorId);
 
         return A2ATaskModelMapper.ToDto(new A2ATaskState
@@ -103,7 +95,6 @@ public sealed class A2AAdapterService : IA2AAdapterService
         if (existing.Status.State is TaskState.Completed or TaskState.Failed or TaskState.Canceled)
             throw new InvalidOperationException($"Task '{idParams.Id}' is in terminal state '{existing.Status.State}' and cannot be canceled.");
 
-        var taskActorId = A2ATaskActorId.Build(idParams.Id);
         var now = Timestamp.FromDateTime(DateTime.UtcNow);
         var commandId = Guid.NewGuid().ToString("N");
         var command = new A2ATaskCancelCommand
@@ -114,7 +105,7 @@ public sealed class A2AAdapterService : IA2AAdapterService
             RequestedAt = now,
         };
 
-        await _dispatchPort.DispatchAsync(taskActorId, BuildEnvelope(command, commandId, taskActorId), ct);
+        await _taskCommandPort.CancelAsync(command, ct);
 
         return new A2ATask
         {
@@ -186,18 +177,4 @@ public sealed class A2AAdapterService : IA2AAdapterService
         return null;
     }
 
-    private static EventEnvelope BuildEnvelope(IMessage payload, string commandId, string targetActorId)
-    {
-        return new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(payload),
-            Route = EnvelopeRouteSemantics.CreateDirect("a2a-adapter", targetActorId),
-            Propagation = new EnvelopePropagation
-            {
-                CorrelationId = commandId,
-            },
-        };
-    }
 }
