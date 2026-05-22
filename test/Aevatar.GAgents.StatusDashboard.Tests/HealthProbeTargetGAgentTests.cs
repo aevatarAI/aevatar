@@ -15,6 +15,8 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
     private HealthProbeTargetGAgent _agent = null!;
     private ServiceProvider _serviceProvider = null!;
     private FakeExecutor _executor = null!;
+    private InMemoryEventStore _eventStore = null!;
+    private TrackingCallbackScheduler _scheduler = null!;
 
     public async Task InitializeAsync()
     {
@@ -22,12 +24,14 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
         var registry = new HealthProbeExecutorRegistry(new IHealthProbeExecutor[] { _executor });
 
         var services = new ServiceCollection();
-        services.AddSingleton<IEventStore, InMemoryEventStore>();
+        _eventStore = new InMemoryEventStore();
+        _scheduler = new TrackingCallbackScheduler();
+        services.AddSingleton<IEventStore>(_eventStore);
         services.AddSingleton<EventSourcingRuntimeOptions>();
         services.AddTransient(
             typeof(IEventSourcingBehaviorFactory<>),
             typeof(DefaultEventSourcingBehaviorFactory<>));
-        services.AddSingleton<IActorRuntimeCallbackScheduler>(NoopCallbackScheduler.Instance);
+        services.AddSingleton<IActorRuntimeCallbackScheduler>(_scheduler);
         services.AddSingleton<IHealthProbeExecutorRegistry>(registry);
         _serviceProvider = services.BuildServiceProvider();
 
@@ -70,11 +74,14 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
     {
         var descriptor = NewDescriptor("nyxid-auth");
         await _agent.HandleConfigureAsync(new HealthProbeConfigureCommand { Spec = descriptor.Clone() });
-        var versionAfterFirst = _agent.EventSourcing.CurrentVersion;
+        var versionAfterFirst = _agent.EventSourcing!.CurrentVersion;
+        var scheduledAfterFirst = _scheduler.ScheduledTimeouts;
         await _agent.HandleConfigureAsync(new HealthProbeConfigureCommand { Spec = descriptor.Clone() });
 
         _agent.EventSourcing.CurrentVersion.Should().Be(versionAfterFirst,
             "identical descriptor should be a no-op — no new event committed");
+        _scheduler.ScheduledTimeouts.Should().Be(scheduledAfterFirst,
+            "OnActivateAsync owns restart re-arming for already-configured probes");
     }
 
     [Fact]
@@ -203,6 +210,29 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Tick_WhenObservedCommitHitsOptimisticConcurrencyConflict_RearmsNextTick()
+    {
+        await _agent.HandleConfigureAsync(new HealthProbeConfigureCommand
+        {
+            Spec = NewDescriptor("nyxid-auth"),
+        });
+
+        var scheduledBeforeTick = _scheduler.ScheduledTimeouts;
+        _eventStore.ThrowOptimisticConcurrencyOnNextAppend = true;
+        _executor.NextOutcome = new HealthProbeOutcome
+        {
+            Status = HealthOutcomeStatus.Ok,
+            Detail = "http_200",
+        };
+
+        await _agent.HandleTickAsync(new HealthProbeTickRequested { Slug = "nyxid-auth" });
+
+        _executor.Invocations.Should().Be(1);
+        _scheduler.ScheduledTimeouts.Should().Be(scheduledBeforeTick + 1,
+            "a transient duplicate tick race must not kill the probe schedule");
+    }
+
+    [Fact]
     public async Task Tick_UnknownProbeKind_PersistsDownOutcome()
     {
         await _agent.HandleConfigureAsync(new HealthProbeConfigureCommand
@@ -261,6 +291,8 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
     {
         private readonly Dictionary<string, List<StateEvent>> _events = new(StringComparer.Ordinal);
 
+        public bool ThrowOptimisticConcurrencyOnNextAppend { get; set; }
+
         public Task<EventStoreCommitResult> AppendAsync(
             string agentId, IEnumerable<StateEvent> events, long expectedVersion, CancellationToken ct = default)
         {
@@ -271,6 +303,11 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
                 _events[agentId] = stream;
             }
             var currentVersion = stream.Count == 0 ? 0 : stream[^1].Version;
+            if (ThrowOptimisticConcurrencyOnNextAppend)
+            {
+                ThrowOptimisticConcurrencyOnNextAppend = false;
+                throw new EventStoreOptimisticConcurrencyException(agentId, expectedVersion, currentVersion + 1);
+            }
             if (currentVersion != expectedVersion)
                 throw new InvalidOperationException($"version conflict: expected {expectedVersion}, actual {currentVersion}");
 
@@ -315,11 +352,20 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
         }
     }
 
-    private sealed class NoopCallbackScheduler : IActorRuntimeCallbackScheduler
+    private sealed class TrackingCallbackScheduler : IActorRuntimeCallbackScheduler
     {
-        public static readonly NoopCallbackScheduler Instance = new();
-        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(RuntimeCallbackTimeoutRequest request, CancellationToken ct = default) =>
-            Task.FromResult(new RuntimeCallbackLease(request.ActorId, request.CallbackId, 1, RuntimeCallbackBackend.InMemory));
+        public int ScheduledTimeouts { get; private set; }
+
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(RuntimeCallbackTimeoutRequest request, CancellationToken ct = default)
+        {
+            ScheduledTimeouts++;
+            return Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                ScheduledTimeouts,
+                RuntimeCallbackBackend.InMemory));
+        }
+
         public Task<RuntimeCallbackLease> ScheduleTimerAsync(RuntimeCallbackTimerRequest request, CancellationToken ct = default) =>
             Task.FromResult(new RuntimeCallbackLease(request.ActorId, request.CallbackId, 1, RuntimeCallbackBackend.InMemory));
         public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) => Task.CompletedTask;

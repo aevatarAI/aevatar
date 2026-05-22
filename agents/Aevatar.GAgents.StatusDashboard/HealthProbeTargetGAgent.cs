@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.StatusDashboard.Executors;
@@ -41,9 +42,10 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
 
         if (DescriptorsEquivalent(State.Spec, command.Spec))
         {
-            // No descriptor change — still ensure the timer is alive in case
-            // a Local-runtime restart cleared scheduler state.
-            await EnsureNextTickAsync(initial: true);
+            // OnActivateAsync re-arms existing probes after a host restart.
+            // Re-arming here as well creates duplicate first ticks during
+            // rolling deploys, which can make the persisted probe stream race
+            // with itself.
             return;
         }
 
@@ -78,7 +80,16 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
 
         var outcome = await ExecuteProbeWithGuardsAsync(descriptor);
 
-        await PersistDomainEventAsync(new HealthProbeObserved { Outcome = outcome });
+        try
+        {
+            await PersistDomainEventAsync(new HealthProbeObserved { Outcome = outcome });
+        }
+        catch (EventStoreOptimisticConcurrencyException ex)
+        {
+            Logger.LogInformation(ex,
+                "Probe {Slug} observed outcome lost a concurrent tick race; next tick will be re-armed",
+                descriptor.Slug);
+        }
 
         await EnsureNextTickAsync(initial: false);
     }
