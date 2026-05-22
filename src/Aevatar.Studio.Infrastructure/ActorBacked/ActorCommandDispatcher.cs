@@ -12,14 +12,17 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 /// direct dispatch (matches the target actor, runs the event handler
 /// pipeline, commits the event). This mirrors every other working write
 /// path in the codebase — <c>GAgentService</c>,
-/// <c>ServiceInvocationDispatcher</c>, <c>A2AAdapterService</c>,
-/// <c>ProjectionScopeActorRuntime</c> — all use <c>CreateDirect</c>.
+/// <c>ServiceInvocationDispatcher</c>, and <c>ProjectionScopeActorRuntime</c>
+/// all use <c>CreateDirect</c>.
 /// The earlier <c>TopologyPublication.Self</c> routing was only reliably
 /// delivered via stream subscription, which does not fire the persistence
 /// pipeline in the current InMemory setup.
 /// </summary>
 internal static class ActorCommandDispatcher
 {
+    // Refactor (iter38/cluster-038-a2a-delete-orphan):
+    //   Old pattern: A2A task facts stored in process-local in-memory storage(IA2ATaskStore 已 #828 删,但仍有 a2a-task-facts-process-local residual surface + orphan code paths)。
+    //   New principle: **删除** A2A task facts process-local surface + related orphan code(reflector r1 评估 evidence:无 production host / package / CLI / demo / sibling repo 依赖,delete 安全)。这是 #812 cluster-031 re-cluster B 选项的 continuation。**不**引入新 actor / 新 envelope。
     private const string PublisherActorId = "aevatar.studio.infrastructure.actor-backed";
 
     public static Task SendAsync<TEvent>(
