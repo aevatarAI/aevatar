@@ -20,6 +20,9 @@ namespace Aevatar.GAgents.StreamingProxy;
 
 public static class StreamingProxyEndpoints
 {
+    // Refactor (iter38/cluster-038-streaming-proxy-reuse-existing):
+    //   Old pattern: Streaming proxy endpoint orchestration:Host endpoints do platform selection / scope resolution / post-message / join / terminal directly with raw runtime/dispatch helpers + 无 typed Application port。
+    //   New principle: Extend existing IStreamingProxyRoomCommandService with narrow typed post-message/join/terminal-state publication methods。Preserve command lifecycle semantics internally。**禁止** new IStreamingProxyRoomInteractionPort / 新 actor / 新 envelope / full CQRS skeleton。
     public static IEndpointRouteBuilder MapStreamingProxyEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/scopes").WithTags("StreamingProxy");
@@ -175,7 +178,7 @@ public static class StreamingProxyEndpoints
         string roomId,
         ChatTopicRequest request,
         [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorDispatchPort actorDispatchPort,
+        [FromServices] IStreamingProxyRoomCommandService roomCommandService,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
         [FromServices] ICommandInteractionService<StreamingProxyRoomChatCommand, StreamingProxyRoomChatAcceptedReceipt, StreamingProxyRoomChatStartError, StreamingProxyRoomSessionEnvelope, StreamingProxyProjectionCompletionStatus> interactionService,
         [FromServices] StreamingProxyChatDurableCompletionResolver durableCompletionResolver,
@@ -259,7 +262,7 @@ public static class StreamingProxyEndpoints
                         participantStore,
                         roomId));
                     await PublishTerminalStateAsync(
-                        actorDispatchPort,
+                        roomCommandService,
                         actor.Id,
                         sessionId,
                         terminalState.Status,
@@ -290,13 +293,13 @@ public static class StreamingProxyEndpoints
         }
         catch (OperationCanceledException)
         {
-            await TryPublishCanceledTerminalStateAsync(actorDispatchPort, actor, sessionId, durableCompletionResolver, logger);
+            await TryPublishCanceledTerminalStateAsync(roomCommandService, actor, sessionId, durableCompletionResolver, logger);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "StreamingProxy chat failed for room {RoomId}", roomId);
             await TryPublishFailedTerminalStateAsync(
-                actorDispatchPort,
+                roomCommandService,
                 actor,
                 sessionId,
                 "StreamingProxy chat failed before completion.",
@@ -318,11 +321,13 @@ public static class StreamingProxyEndpoints
         string scopeId,
         string roomId,
         PostMessageRequest request,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorDispatchPort actorDispatchPort,
+        [FromServices] IStreamingProxyRoomCommandService roomCommandService,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
         CancellationToken ct)
     {
+        // Refactor (iter38/cluster-038-streaming-proxy-reuse-existing):
+        //   Old pattern: Streaming proxy endpoint orchestration:Host endpoints do platform selection / scope resolution / post-message / join / terminal directly with raw runtime/dispatch helpers + 无 typed Application port。
+        //   New principle: Extend existing IStreamingProxyRoomCommandService with narrow typed post-message/join/terminal-state publication methods。Preserve command lifecycle semantics internally。**禁止** new IStreamingProxyRoomInteractionPort / 新 actor / 新 envelope / full CQRS skeleton。
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return denied;
 
@@ -338,26 +343,16 @@ public static class StreamingProxyEndpoints
         if (admissionError != null)
             return admissionError;
 
-        var actor = await actorRuntime.GetAsync(roomId);
-        if (actor is null)
+        var result = await roomCommandService.PostMessageAsync(
+            new StreamingProxyRoomPostMessageCommand(
+                roomId,
+                request.AgentId,
+                request.AgentName,
+                request.Content,
+                request.SessionId),
+            ct);
+        if (result.Status == StreamingProxyRoomPostMessageStatus.RoomNotFound)
             return Results.NotFound(new { error = "Room not found" });
-
-        var messageEvent = new GroupChatMessageEvent
-        {
-            AgentId = request.AgentId.Trim(),
-            AgentName = request.AgentName?.Trim() ?? request.AgentId.Trim(),
-            Content = request.Content.Trim(),
-            SessionId = request.SessionId ?? Guid.NewGuid().ToString("N"),
-        };
-
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(messageEvent),
-            Route = new EnvelopeRoute { Direct = new DirectRoute { TargetActorId = actor.Id } },
-        };
-        await DispatchRoomEnvelopeAsync(actorDispatchPort, actor.Id, envelope, ct);
 
         return Results.Ok(new { status = "accepted" });
     }
@@ -493,13 +488,15 @@ public static class StreamingProxyEndpoints
         string scopeId,
         string roomId,
         JoinRoomRequest request,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorDispatchPort actorDispatchPort,
+        [FromServices] IStreamingProxyRoomCommandService roomCommandService,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
         [FromServices] IStreamingProxyParticipantStore participantStore,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
+        // Refactor (iter38/cluster-038-streaming-proxy-reuse-existing):
+        //   Old pattern: Streaming proxy endpoint orchestration:Host endpoints do platform selection / scope resolution / post-message / join / terminal directly with raw runtime/dispatch helpers + 无 typed Application port。
+        //   New principle: Extend existing IStreamingProxyRoomCommandService with narrow typed post-message/join/terminal-state publication methods。Preserve command lifecycle semantics internally。**禁止** new IStreamingProxyRoomInteractionPort / 新 actor / 新 envelope / full CQRS skeleton。
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return denied;
 
@@ -515,27 +512,14 @@ public static class StreamingProxyEndpoints
         if (admissionError != null)
             return admissionError;
 
-        var actor = await actorRuntime.GetAsync(roomId);
-        if (actor is null)
+        var result = await roomCommandService.JoinAsync(
+            new StreamingProxyRoomJoinCommand(roomId, request.AgentId, request.DisplayName),
+            ct);
+        if (result.Status == StreamingProxyRoomJoinStatus.RoomNotFound)
             return Results.NotFound(new { error = "Room not found" });
 
-        var agentId = request.AgentId.Trim();
+        var agentId = result.AgentId ?? request.AgentId.Trim();
         var displayName = request.DisplayName?.Trim() ?? agentId;
-
-        var joinEvent = new GroupChatParticipantJoinedEvent
-        {
-            AgentId = agentId,
-            DisplayName = displayName,
-        };
-
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(joinEvent),
-            Route = new EnvelopeRoute { Direct = new DirectRoute { TargetActorId = actor.Id } },
-        };
-        await DispatchRoomEnvelopeAsync(actorDispatchPort, actor.Id, envelope, ct);
 
         var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
         try
@@ -656,46 +640,19 @@ public static class StreamingProxyEndpoints
         => StreamingProxyRoomInteractionHelpers.TryGetTerminalEvent(envelope, out terminalEvent);
 
     private static async Task PublishTerminalStateAsync(
-        IActorDispatchPort actorDispatchPort,
+        IStreamingProxyRoomCommandService roomCommandService,
         string actorId,
         string sessionId,
         StreamingProxyChatSessionTerminalStatus status,
         string? errorMessage,
         CancellationToken ct)
     {
-        var terminalEvent = new StreamingProxyChatSessionTerminalStateChanged
-        {
-            SessionId = sessionId,
-            Status = status,
-            TerminalAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            ErrorMessage = errorMessage ?? string.Empty,
-        };
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(terminalEvent),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute
-                {
-                    TargetActorId = actorId,
-                },
-            },
-        };
-        await DispatchRoomEnvelopeAsync(actorDispatchPort, actorId, envelope, ct);
-    }
-
-    private static Task DispatchRoomEnvelopeAsync(
-        IActorDispatchPort actorDispatchPort,
-        string actorId,
-        EventEnvelope envelope,
-        CancellationToken ct)
-    {
-        // Refactor (iter1/cluster-004):
-        //   Old pattern: StreamingProxy endpoints invoked actors inline.
-        //   New principle: endpoints publish commands through IActorDispatchPort with runtime-neutral delivery.
-        return actorDispatchPort.DispatchAsync(actorId, envelope, ct);
+        // Refactor (iter38/cluster-038-streaming-proxy-reuse-existing):
+        //   Old pattern: Streaming proxy endpoint orchestration:Host endpoints do platform selection / scope resolution / post-message / join / terminal directly with raw runtime/dispatch helpers + 无 typed Application port。
+        //   New principle: Extend existing IStreamingProxyRoomCommandService with narrow typed post-message/join/terminal-state publication methods。Preserve command lifecycle semantics internally。**禁止** new IStreamingProxyRoomInteractionPort / 新 actor / 新 envelope / full CQRS skeleton。
+        await roomCommandService.PublishTerminalStateAsync(
+            new StreamingProxyRoomTerminalStateCommand(actorId, sessionId, status, errorMessage),
+            ct);
     }
 
     private static (StreamingProxyChatSessionTerminalStatus Status, string? ErrorMessage) DetermineParticipantTerminalState(
@@ -705,7 +662,7 @@ public static class StreamingProxyEndpoints
             : (StreamingProxyChatSessionTerminalStatus.Failed, "StreamingProxy chat completed without any participant replies.");
 
     private static async Task TryPublishCanceledTerminalStateAsync(
-        IActorDispatchPort actorDispatchPort,
+        IStreamingProxyRoomCommandService roomCommandService,
         IActor? actor,
         string? sessionId,
         StreamingProxyChatDurableCompletionResolver durableCompletionResolver,
@@ -721,7 +678,7 @@ public static class StreamingProxyEndpoints
                 return;
 
             await PublishTerminalStateAsync(
-                actorDispatchPort,
+                roomCommandService,
                 actor.Id,
                 sessionId,
                 StreamingProxyChatSessionTerminalStatus.Failed,
@@ -739,7 +696,7 @@ public static class StreamingProxyEndpoints
     }
 
     private static async Task TryPublishFailedTerminalStateAsync(
-        IActorDispatchPort actorDispatchPort,
+        IStreamingProxyRoomCommandService roomCommandService,
         IActor? actor,
         string? sessionId,
         string errorMessage,
@@ -756,7 +713,7 @@ public static class StreamingProxyEndpoints
                 return;
 
             await PublishTerminalStateAsync(
-                actorDispatchPort,
+                roomCommandService,
                 actor.Id,
                 sessionId,
                 StreamingProxyChatSessionTerminalStatus.Failed,
