@@ -510,6 +510,121 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
+    public async Task Fresh_module_should_hydrate_pending_injection_and_persist_awaiting_fence_after_drain_ack()
+    {
+        var provider = new RecordingVoiceProvider();
+        var module = CreateModule(provider);
+        var roleAgent = new RecordingRoleAgent("voice-agent");
+        roleAgent.State.VoicePresence["voice_presence"] = new VoicePresenceRuntimeState
+        {
+            Status = VoicePresenceRuntimeStatus.AudioDraining,
+            CurrentResponseId = 4,
+            NextResponseId = 5,
+            LastDrainAckResponseId = -1,
+            LastDrainAckPlayoutSequence = -1,
+            PendingInjections =
+            {
+                new VoicePendingEventInjection
+                {
+                    EnvelopeId = "external-1",
+                    PublisherActorId = "external-agent",
+                    EventType = StringValue.Descriptor.FullName,
+                    Payload = Any.Pack(new StringValue { Value = "door opened" }),
+                    ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                },
+            },
+        };
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.InitializeAsync(CancellationToken.None);
+        await module.HandleAsync(CreateEnvelope(new VoiceControlFrame
+        {
+            DrainAcknowledged = new VoiceDrainAcknowledged
+            {
+                ResponseId = 4,
+                PlayoutSequence = 9,
+            },
+        }), ctx, CancellationToken.None);
+
+        provider.InjectedEvents.ShouldHaveSingleItem();
+        provider.InjectedEvents[0].EnvelopeId.ShouldBe("external-1");
+        var persistedState = roleAgent.PersistedStates.ShouldHaveSingleItem().State;
+        persistedState.PendingInjections.ShouldBeEmpty();
+        persistedState.AwaitingInjectedResponseStart.ShouldBeTrue();
+        persistedState.Status.ShouldBe(VoicePresenceRuntimeStatus.Idle);
+        persistedState.LastDrainAckResponseId.ShouldBe(4);
+    }
+
+    [Fact]
+    public async Task Immediate_external_injection_should_persist_and_clear_awaiting_fence_on_response_start()
+    {
+        var provider = new RecordingVoiceProvider();
+        var module = CreateModule(provider);
+        var roleAgent = new RecordingRoleAgent("voice-agent");
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.InitializeAsync(CancellationToken.None);
+        await module.HandleAsync(CreateExternalPublication(new StringValue { Value = "alarm" }), ctx, CancellationToken.None);
+
+        provider.InjectedEvents.ShouldHaveSingleItem();
+        var injectedState = roleAgent.PersistedStates.ShouldHaveSingleItem().State;
+        injectedState.AwaitingInjectedResponseStart.ShouldBeTrue();
+        injectedState.PendingInjections.ShouldBeEmpty();
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            ResponseStarted = new VoiceResponseStarted { ProviderResponseId = "provider-r1" },
+        }), ctx, CancellationToken.None);
+
+        var responseStartedState = roleAgent.PersistedStates.Last().State;
+        responseStartedState.AwaitingInjectedResponseStart.ShouldBeFalse();
+        responseStartedState.Status.ShouldBe(VoicePresenceRuntimeStatus.ResponseInProgress);
+        responseStartedState.ProviderResponseBindings.ShouldHaveSingleItem();
+        responseStartedState.ProviderResponseBindings[0].ProviderResponseId.ShouldBe("provider-r1");
+    }
+
+    [Fact]
+    public async Task Remote_session_open_and_provider_disconnect_should_persist_role_gagent_runtime_state()
+    {
+        var module = CreateModule(new RecordingVoiceProvider());
+        var roleAgent = new RecordingRoleAgent("voice-agent");
+        var ctx = new StubEventHandlerContext(agent: roleAgent);
+
+        await module.InitializeAsync(CancellationToken.None);
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            RemoteSessionOpenRequested = new VoiceRemoteSessionOpenRequested
+            {
+                SessionId = "remote-1",
+            },
+        }), ctx, CancellationToken.None);
+
+        roleAgent.PersistedStates.ShouldHaveSingleItem().State.RemoteSessionId.ShouldBe("remote-1");
+        roleAgent.State.VoicePresence["voice_presence"].ProviderResponseBindings.Add(new VoiceProviderResponseBinding
+        {
+            ProviderResponseId = "provider-r1",
+            ResponseId = 3,
+        });
+        roleAgent.State.VoicePresence["voice_presence"].CancelledProviderResponseIds.Add("provider-r2");
+        roleAgent.State.VoicePresence["voice_presence"].ActiveProviderResponseId = "provider-r1";
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            Disconnected = new VoiceProviderDisconnected { Reason = "network" },
+        }), ctx, CancellationToken.None);
+
+        var disconnectedState = roleAgent.PersistedStates.Last().State;
+        disconnectedState.RemoteSessionId.ShouldBeEmpty();
+        disconnectedState.ProviderResponseBindings.ShouldBeEmpty();
+        disconnectedState.CancelledProviderResponseIds.ShouldBeEmpty();
+        disconnectedState.ActiveProviderResponseId.ShouldBeEmpty();
+        var closed = ctx.PublishedEvents.ShouldHaveSingleItem().ShouldBeOfType<VoiceRemoteTransportOutput>();
+        closed.SessionId.ShouldBe("remote-1");
+        closed.SessionClosed.Reason.ShouldBe("provider_disconnected");
+    }
+
+    [Fact]
     public async Task Remote_session_signals_should_keep_lifecycle_but_not_forward_audio_chunks()
     {
         var provider = new RecordingVoiceProvider();
@@ -1002,6 +1117,17 @@ public class VoicePresenceModuleTests
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(payload),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("voice-agent", TopologyAudience.Self),
+        };
+    }
+
+    private static EventEnvelope CreateExternalPublication(IMessage payload)
+    {
+        return new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(payload),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("external-agent", TopologyAudience.Children),
         };
     }
 

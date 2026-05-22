@@ -324,9 +324,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
 
     // ── State machine dispatch (used by both event pipeline and relay) ──
 
-    // Refactor (iter15/cluster-026-voice-provider-background-state):
-    //   Old pattern: provider callbacks arrived with actor response epochs already assigned in background loops.
-    //   New principle: provider events are normalized to actor response ids inside this actor turn.
+    // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
+    //   Old pattern: provider callbacks normalized ids against process-local dictionaries and volatile module fields.
+    //   New principle: provider turns hydrate and persist the typed RoleGAgent voice runtime sub-state before mutating response/session facts.
     internal async Task HandleProviderEventAsync(
         VoiceProviderEvent providerEvent,
         IEventHandlerContext ctx,
@@ -839,8 +839,13 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
     private static string BuildToolErrorJson(string message) =>
         JsonSerializer.Serialize(new { error = message });
 
+    // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
+    //   Old pattern: drain acks only updated the in-memory module state machine, so queued injections were lost after a fresh turn.
+    //   New principle: control frames first hydrate actor-owned voice runtime state, then persist the post-drain injection fence.
     private async Task HandleControlFrameAsync(VoiceControlFrame frame, IEventHandlerContext ctx, CancellationToken ct)
     {
+        HydrateRuntimeStateFromActor(ctx);
+
         switch (frame.FrameCase)
         {
             case VoiceControlFrame.FrameOneofCase.DrainAcknowledged:
@@ -857,8 +862,13 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         }
     }
 
+    // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
+    //   Old pattern: external publication injection checked only volatile module fields for pending/awaiting state.
+    //   New principle: every injection decision starts from RoleGAgent-owned voice runtime state and persists the updated fence.
     private async Task HandleExternalEventAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
     {
+        HydrateRuntimeStateFromActor(ctx);
+
         if (!ShouldInjectExternalEvent(envelope, ctx.AgentId))
             return;
 
@@ -1058,6 +1068,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         await PersistRuntimeStateAsync(ctx, ct);
     }
 
+    // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
+    //   Old pattern: voice response bindings, remote session id, and pending injections lived only in module memory.
+    //   New principle: synchronize runtime facts into the actor-owned protobuf sub-state through a narrow state-owner contract.
     private async Task PersistRuntimeStateAsync(IEventHandlerContext ctx, CancellationToken ct)
     {
         SyncRuntimeStateFromStateMachine();
