@@ -84,6 +84,10 @@ public sealed class StatusDashboardManifestTests
             d.Parameters["Header.Authorization"] ==
             "Bearer ${configuration:Aevatar:Status:ResponsesForwardToTeam:BearerToken}");
 
+        var nyxService = stages.Single(d => d.Slug == "responses-forward-team-01-nyxid-service");
+        nyxService.Parameters["ExpectedBodyRegex"].Should().Contain("\"proxy_url_slug\"");
+        nyxService.Parameters["ExpectedBodyRegex"].Should().Contain("/s/aevatar/");
+
         var nyxProxy = stages.Single(d => d.Slug == "responses-forward-team-02-nyxid-proxy-models");
         nyxProxy.Parameters["Url"].Should().Be("https://nyx.example/api/v1/proxy/s/aevatar/v1/models");
         nyxProxy.Parameters["ExpectedBodyRegex"].Should().Contain("\"data\"");

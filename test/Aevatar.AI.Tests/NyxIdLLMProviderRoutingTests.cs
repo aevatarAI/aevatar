@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.LLMProviders.NyxId;
 using FluentAssertions;
 
@@ -115,6 +116,26 @@ public sealed class NyxIdLLMProviderRoutingTests
     }
 
     [Fact]
+    public async Task ResolveRouteAsync_ShouldUseAccessTokenFromToolContextCredentials()
+    {
+        var provider = CreateProvider();
+
+        var request = new LLMRequest
+        {
+            Messages = [ChatMessage.User("hi")],
+            Model = "claude-3-7-sonnet",
+            ToolContext = AgentToolExecutionContext.Empty with
+            {
+                Credentials = new AgentToolCredentials("tool-context-bearer", null, null),
+            },
+        };
+
+        var route = await provider.ResolveRouteAsync(request);
+
+        route.AccessToken.Should().Be("tool-context-bearer");
+    }
+
+    [Fact]
     public async Task ResolveRouteAsync_ShouldPreferCallerContextCredentialsOverMetadata()
     {
         // Resolution priority: typed CallerContext.Credentials wins over the legacy
@@ -135,6 +156,31 @@ public sealed class NyxIdLLMProviderRoutingTests
                 "owner-1",
                 "resp_1",
                 new LLMRequestCallerCredentials("typed-bearer")),
+        };
+
+        var route = await provider.ResolveRouteAsync(request);
+
+        route.AccessToken.Should().Be("typed-bearer");
+    }
+
+    [Fact]
+    public async Task ResolveRouteAsync_ShouldPreferCallerContextCredentialsOverToolContext()
+    {
+        var provider = CreateProvider();
+
+        var request = new LLMRequest
+        {
+            Messages = [ChatMessage.User("hi")],
+            Model = "claude-3-7-sonnet",
+            CallerContext = new LLMRequestCallerContext(
+                "scope-1",
+                "owner-1",
+                "resp_1",
+                new LLMRequestCallerCredentials("typed-bearer")),
+            ToolContext = AgentToolExecutionContext.Empty with
+            {
+                Credentials = new AgentToolCredentials("tool-context-bearer", null, null),
+            },
         };
 
         var route = await provider.ResolveRouteAsync(request);
@@ -177,6 +223,57 @@ public sealed class NyxIdLLMProviderRoutingTests
         var route = await provider.ResolveRouteAsync(request);
 
         route.Request.Model.Should().Be("gpt-4-turbo");
+    }
+
+    [Fact]
+    public async Task ResolveRouteAsync_ShouldUseModelOverrideFromRoutingContext()
+    {
+        var provider = CreateProvider();
+
+        var request = new LLMRequest
+        {
+            Messages = [ChatMessage.User("hi")],
+            Model = "claude-3-7-sonnet",
+            Metadata = new Dictionary<string, string>
+            {
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token",
+            },
+            RoutingContext = new LLMRequestRoutingContext(
+                ModelOverride: "gpt-4-turbo",
+                NyxIdRoutePreference: null,
+                MaxToolRoundsOverride: null,
+                UserMemoryPrompt: null),
+        };
+
+        var route = await provider.ResolveRouteAsync(request);
+
+        route.Request.Model.Should().Be("gpt-4-turbo");
+    }
+
+    [Fact]
+    public async Task ResolveRouteAsync_ShouldUseRoutePreferenceFromRoutingContext()
+    {
+        var provider = CreateProvider();
+
+        var request = new LLMRequest
+        {
+            Messages = [ChatMessage.User("hi")],
+            Model = "claude-3-7-sonnet",
+            Metadata = new Dictionary<string, string>
+            {
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token",
+            },
+            RoutingContext = new LLMRequestRoutingContext(
+                ModelOverride: null,
+                NyxIdRoutePreference: "chrono-llm",
+                MaxToolRoundsOverride: null,
+                UserMemoryPrompt: null),
+        };
+
+        var route = await provider.ResolveRouteAsync(request);
+
+        route.RouteName.Should().Be("/api/v1/proxy/s/chrono-llm");
+        route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/proxy/s/chrono-llm"));
     }
 
     [Theory]
