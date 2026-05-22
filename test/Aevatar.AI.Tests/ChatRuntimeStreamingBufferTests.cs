@@ -12,7 +12,7 @@ namespace Aevatar.AI.Tests;
 public sealed class ChatRuntimeStreamingBufferTests
 {
     [Fact]
-    public async Task ChatStreamAsync_WhenBufferIsBounded_ShouldStillStreamAllChunks()
+    public async Task ChatStreamAsync_WhenStreamOwnerHasNoBuffer_ShouldStillStreamAllChunks()
     {
         var provider = new StreamingProvider(["A", "B", "C", "D"]);
         var runtime = CreateRuntime(provider);
@@ -26,6 +26,25 @@ public sealed class ChatRuntimeStreamingBufferTests
 
         output.ToString().Should().Be("ABCD");
         provider.StreamCallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public void ChatRuntimeSource_ShouldNotReintroduceOwnedStreamLoop()
+    {
+        var root = FindRepositoryRoot();
+        var chatRuntimeFile = Path.Combine(
+            root,
+            "src",
+            "Aevatar.AI.Core",
+            "Chat",
+            "ChatRuntime.cs");
+        var source = StripLineComments(File.ReadAllText(chatRuntimeFile));
+
+        source.Should().NotContain("Task.Run");
+        source.Should().NotContain("Channel<LLMStreamChunk>");
+        source.Should().NotContain("ChannelWriter<LLMStreamChunk>");
+        source.Should().NotContain("_streamBufferCapacity");
+        source.Should().NotContain("streamBufferCapacity");
     }
 
     [Fact]
@@ -368,7 +387,8 @@ public sealed class ChatRuntimeStreamingBufferTests
     {
         var provider = new StreamingProvider(["A"]);
         var runtime = CreateRuntime(
-            provider,            requestBuilder: () => new LLMRequest
+            provider,
+            requestBuilder: () => new LLMRequest
             {
                 Messages = [],
                 RequestId = "base-request",
@@ -403,7 +423,8 @@ public sealed class ChatRuntimeStreamingBufferTests
         var provider = new StreamingProvider(["A"]);
         var captureMiddleware = new CaptureLLMMetadataMiddleware();
         var runtime = CreateRuntime(
-            provider,            llmMiddlewares: [captureMiddleware]);
+            provider,
+            llmMiddlewares: [captureMiddleware]);
 
         await foreach (var _ in runtime.ChatStreamAsync("hello", "session-77"))
         {
@@ -417,7 +438,8 @@ public sealed class ChatRuntimeStreamingBufferTests
     {
         var provider = new StreamingProvider(["ignored"]);
         var runtime = CreateRuntime(
-            provider,            agentMiddlewares:
+            provider,
+            agentMiddlewares:
             [
                 new DelegateAgentRunMiddleware((context, _) =>
                 {
@@ -507,7 +529,8 @@ public sealed class ChatRuntimeStreamingBufferTests
     {
         var provider = new StreamingProvider(["ignored"]);
         var runtime = CreateRuntime(
-            provider,            agentMiddlewares:
+            provider,
+            agentMiddlewares:
             [
                 new DelegateAgentRunMiddleware((context, _) =>
                 {
@@ -531,7 +554,8 @@ public sealed class ChatRuntimeStreamingBufferTests
     {
         var provider = new StreamingProvider(["ignored"]);
         var runtime = CreateRuntime(
-            provider,            llmMiddlewares:
+            provider,
+            llmMiddlewares:
             [
                 new DelegateLlmCallMiddleware((context, _) =>
                 {
@@ -568,7 +592,8 @@ public sealed class ChatRuntimeStreamingBufferTests
     {
         var provider = new StreamingProvider(["ignored"]);
         var runtime = CreateRuntime(
-            provider,            llmMiddlewares:
+            provider,
+            llmMiddlewares:
             [
                 new DelegateLlmCallMiddleware((context, _) =>
                 {
@@ -628,6 +653,14 @@ public sealed class ChatRuntimeStreamingBufferTests
             requestBuilder: requestBuilder ?? (() => new LLMRequest { Messages = [] }),
             agentMiddlewares: agentMiddlewares,
             llmMiddlewares: llmMiddlewares);
+    }
+
+    private static string StripLineComments(string source)
+    {
+        var lines = source
+            .Split('\n')
+            .Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal));
+        return string.Join('\n', lines);
     }
 
     private sealed class QueuedStreamingProvider(

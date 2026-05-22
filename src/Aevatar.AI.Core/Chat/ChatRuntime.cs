@@ -228,6 +228,9 @@ public sealed class ChatRuntime
         AgentRunContext runContext,
         [EnumeratorCancellation] CancellationToken runToken)
     {
+        // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+        //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
+        //   New principle: reflector force-pick: 删 Task.Run + Channel/ChannelWriter + _streamBufferCapacity 整个 owned stream 框架;ChatStreamAsync 自己 own stream flow;删 stream_buffer_capacity proto/YAML/config(reserve proto field number);middleware bridge 必须 private/internal adapter-only,不暴露公开 stream middleware 接口
         var pendingHistoryMessages = new List<ChatMessage>();
         var wroteOutput = false;
 
@@ -256,6 +259,9 @@ public sealed class ChatRuntime
         bool wroteOutput,
         [EnumeratorCancellation] CancellationToken runToken)
     {
+        // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+        //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
+        //   New principle: reflector force-pick: 删 Task.Run + Channel/ChannelWriter + _streamBufferCapacity 整个 owned stream 框架;ChatStreamAsync 自己 own stream flow;删 stream_buffer_capacity proto/YAML/config(reserve proto field number);middleware bridge 必须 private/internal adapter-only,不暴露公开 stream middleware 接口
         var userMsg = ChatMessage.User(normalizedUserContent, runContext.UserMessage);
         pendingHistoryMessages.Add(userMsg);
         var baseRequest = ApplyRequestIdentity(_requestBuilder(), requestId, metadata);
@@ -581,6 +587,9 @@ public sealed class ChatRuntime
         [EnumeratorCancellation] CancellationToken ct,
         Action<ToolCall>? onToolCallCompleted = null)
     {
+        // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+        //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
+        //   New principle: reflector force-pick: 删 Task.Run + Channel/ChannelWriter + _streamBufferCapacity 整个 owned stream 框架;ChatStreamAsync 自己 own stream flow;删 stream_buffer_capacity proto/YAML/config(reserve proto field number);middleware bridge 必须 private/internal adapter-only,不暴露公开 stream middleware 接口
         var llmHookContext = new AIGAgentExecutionHookContext { LLMRequest = request };
         if (_hooks != null) await _hooks.RunLLMRequestStartAsync(llmHookContext, ct);
 
@@ -598,12 +607,20 @@ public sealed class ChatRuntime
         TokenUsage? streamedUsage = null;
         IReadOnlyList<ToolCall>? streamedToolCalls = null;
         string? streamedFinishReason = null;
-        var emittedChunks = new List<LLMStreamChunk>();
 
-        await MiddlewarePipeline.RunLLMCallAsync(_llmMiddlewares, llmCallContext, async () =>
+        var llmBridge = new LLMCallMiddlewareBridge();
+        var middlewareTask = MiddlewarePipeline.RunLLMCallAsync(
+            _llmMiddlewares,
+            llmCallContext,
+            llmBridge.WaitForCoreCompletionAsync);
+
+        var coreTurnTask = llmBridge.WaitForCoreTurnAsync(ct);
+        var middlewareWaitTask = middlewareTask.WaitAsync(ct);
+        var readyTask = await Task.WhenAny(coreTurnTask, middlewareWaitTask).ConfigureAwait(false);
+        await readyTask.ConfigureAwait(false);
+
+        if (readyTask == coreTurnTask && !llmCallContext.Terminate)
         {
-            if (llmCallContext.Terminate) return;
-
             var full = new StringBuilder();
             var fullReasoning = new StringBuilder();
             TokenUsage? usage = null;
@@ -612,13 +629,39 @@ public sealed class ChatRuntime
                 ? new StreamingToolCallAccumulator(onToolCallCompleted)
                 : new StreamingToolCallAccumulator();
 
-            await foreach (var chunk in provider.ChatStreamAsync(llmCallContext.Request, ct))
+            await using var providerEnumerator = provider.ChatStreamAsync(llmCallContext.Request, ct)
+                .GetAsyncEnumerator(ct);
+            while (true)
             {
-                var normalizedChunk = NormalizeStreamChunk(chunk, toolCalls, full, fullReasoning, ref usage, ref finishReason);
+                LLMStreamChunk chunk;
+                try
+                {
+                    if (!await providerEnumerator.MoveNextAsync().ConfigureAwait(false))
+                        break;
+
+                    chunk = providerEnumerator.Current;
+                }
+                catch (Exception ex)
+                {
+                    llmBridge.FailCore(ex);
+                    throw;
+                }
+
+                LLMStreamChunk? normalizedChunk;
+                try
+                {
+                    normalizedChunk = NormalizeStreamChunk(chunk, toolCalls, full, fullReasoning, ref usage, ref finishReason);
+                }
+                catch (Exception ex)
+                {
+                    llmBridge.FailCore(ex);
+                    throw;
+                }
+
                 if (normalizedChunk == null)
                     continue;
 
-                emittedChunks.Add(normalizedChunk);
+                yield return normalizedChunk;
             }
 
             streamedContent = full.Length > 0 ? full.ToString() : null;
@@ -635,7 +678,9 @@ public sealed class ChatRuntime
                 ToolCalls = streamedToolCalls,
                 FinishReason = finishReason,
             };
-        });
+            llmBridge.CompleteCore();
+            await middlewareTask.ConfigureAwait(false);
+        }
 
         if (llmCallContext.Terminate)
         {
@@ -647,7 +692,7 @@ public sealed class ChatRuntime
             if (llmCallContext.Response != null)
             {
                 foreach (var chunk in BuildSyntheticChunks(llmCallContext.Response))
-                    emittedChunks.Add(chunk);
+                    yield return chunk;
             }
         }
 
@@ -663,8 +708,6 @@ public sealed class ChatRuntime
         if (_hooks != null) await _hooks.RunLLMRequestEndAsync(llmHookContext, ct);
 
         roundScope.Result = new StreamingRoundResult(response.Content, response.ReasoningContent, response.ToolCalls, llmCallContext.Terminate, response.FinishReason ?? streamedFinishReason);
-        foreach (var chunk in emittedChunks)
-            yield return chunk;
     }
 
     private static void AppendAssistantMessage(
@@ -902,6 +945,9 @@ public sealed class ChatRuntime
         bool Terminated,
         string? FinishReason);
 
+    // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+    //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
+    //   New principle: reflector force-pick: 删 Task.Run + Channel/ChannelWriter + _streamBufferCapacity 整个 owned stream 框架;ChatStreamAsync 自己 own stream flow;删 stream_buffer_capacity proto/YAML/config(reserve proto field number);middleware bridge 必须 private/internal adapter-only,不暴露公开 stream middleware 接口
     // refactor helper, no behavior change: private adapter for legacy Func<Task> agent middleware around the stream-owned core turn.
     private sealed class AgentRunMiddlewareBridge
     {
@@ -925,6 +971,35 @@ public sealed class ChatRuntime
         }
     }
 
+    // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+    //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
+    //   New principle: reflector force-pick: 删 Task.Run + Channel/ChannelWriter + _streamBufferCapacity 整个 owned stream 框架;ChatStreamAsync 自己 own stream flow;删 stream_buffer_capacity proto/YAML/config(reserve proto field number);middleware bridge 必须 private/internal adapter-only,不暴露公开 stream middleware 接口
+    // refactor helper, no behavior change: private adapter lets Task-based LLM middleware wrap the stream-owned provider turn.
+    private sealed class LLMCallMiddlewareBridge
+    {
+        private readonly TaskCompletionSource _coreTurn = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _coreCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task WaitForCoreCompletionAsync()
+        {
+            _coreTurn.TrySetResult();
+            return _coreCompletion.Task;
+        }
+
+        public Task WaitForCoreTurnAsync(CancellationToken ct) => _coreTurn.Task.WaitAsync(ct);
+
+        public void CompleteCore() => _coreCompletion.TrySetResult();
+
+        public void FailCore(Exception ex)
+        {
+            _coreTurn.TrySetException(ex);
+            _coreCompletion.TrySetException(ex);
+        }
+    }
+
+    // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+    //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
+    //   New principle: reflector force-pick: 删 Task.Run + Channel/ChannelWriter + _streamBufferCapacity 整个 owned stream 框架;ChatStreamAsync 自己 own stream flow;删 stream_buffer_capacity proto/YAML/config(reserve proto field number);middleware bridge 必须 private/internal adapter-only,不暴露公开 stream middleware 接口
     // refactor helper, no behavior change: carries the private stream round closeout without exposing a public stream middleware contract.
     private sealed class StreamingRoundScope
     {

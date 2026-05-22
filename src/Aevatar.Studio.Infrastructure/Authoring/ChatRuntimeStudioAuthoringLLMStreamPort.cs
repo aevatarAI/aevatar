@@ -82,7 +82,8 @@ internal sealed class ChatRuntimeStudioAuthoringLLMStreamPort : IStudioAuthoring
             Temperature = 0.1,
             MaxTokens = 4096,
             MaxToolRounds = 1,
-            MaxHistoryMessages = 12,        };
+            MaxHistoryMessages = 12,
+        };
 
         return CloneAndNormalize(config);
     }

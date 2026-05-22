@@ -171,7 +171,8 @@ public class WorkflowGAgentCoverageTests
         initializeEvent.Temperature.Should().BeApproximately(0.2f, 0.0001f);
         initializeEvent.MaxTokens.Should().Be(256);
         initializeEvent.MaxToolRounds.Should().Be(4);
-        initializeEvent.MaxHistoryMessages.Should().Be(30);        initializeEvent.EventModules.Should().Be("llm_handler,tool_handler");
+        initializeEvent.MaxHistoryMessages.Should().Be(30);
+        initializeEvent.EventModules.Should().Be("llm_handler,tool_handler");
         initializeEvent.EventRoutes.Should().Contain("event.type");
     }
 
@@ -1550,7 +1551,8 @@ public class WorkflowGAgentCoverageTests
                    temperature: 0.2
                    max_tokens: 256
                    max_tool_rounds: 4
-                   max_history_messages: 30                   event_modules: "llm_handler,tool_handler"
+                   max_history_messages: 30
+                   event_modules: "llm_handler,tool_handler"
                    event_routes: |
                      event.type == ChatRequestEvent -> llm_handler
                steps:

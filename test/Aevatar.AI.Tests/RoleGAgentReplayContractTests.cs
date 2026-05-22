@@ -52,7 +52,8 @@ public class RoleGAgentReplayContractTests
         agent2.EffectiveConfig.Model.Should().Be("m1");
         agent2.EffectiveConfig.SystemPrompt.Should().Be("be helpful");
         agent2.EffectiveConfig.MaxToolRounds.Should().Be(4);
-        agent2.EffectiveConfig.MaxHistoryMessages.Should().Be(32);    }
+        agent2.EffectiveConfig.MaxHistoryMessages.Should().Be(32);
+    }
 
     [Fact]
     public async Task InitializeRoleEvent_ShouldPreserveExplicitZeroTemperature()
