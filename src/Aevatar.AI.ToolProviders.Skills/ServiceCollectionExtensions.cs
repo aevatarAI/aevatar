@@ -9,6 +9,9 @@ using Aevatar.AI.Abstractions.ToolProviders;
 namespace Aevatar.AI.ToolProviders.Skills;
 
 /// <summary>Skills 选项。</summary>
+// Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
+//   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
+//   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
 public sealed class SkillsOptions
 {
     /// <summary>技能扫描目录列表。</summary>
@@ -23,6 +26,9 @@ public sealed class SkillsOptions
 }
 
 /// <summary>Skills 系统的 DI 注册扩展。</summary>
+// Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
+//   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
+//   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
 public static class ServiceCollectionExtensions
 {
     /// <summary>
@@ -42,7 +48,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(options);
         services.TryAddSingleton<SkillFrontmatterParser>();
         services.TryAddSingleton<SkillDiscovery>();
-        services.TryAddSingleton<SkillRegistry>();
+        services.TryAddSingleton<LocalSkillCatalog>();
         services.TryAddSingleton<SkillsAgentToolSource>();
         services.TryAddAgentToolSourceAlias<SkillsAgentToolSource>(GetSkillsAgentToolSource);
         return services;

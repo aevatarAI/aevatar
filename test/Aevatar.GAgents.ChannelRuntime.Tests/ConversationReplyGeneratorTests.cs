@@ -198,42 +198,40 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_WithSkillRegistryButNoRemoteFetcher_LogsWarningOnlyOnceAcrossTurns()
+    public async Task GenerateReplyAsync_WithLocalSkillCatalog_AddsLocalSkillsWithoutRemoteFetcherWarning()
     {
         var logger = new ListLogger<NyxIdConversationReplyGenerator>();
-        var skillRegistry = new SkillRegistry();
-        skillRegistry.Register(new SkillDefinition
+        var localSkillCatalog = new LocalSkillCatalog();
+        localSkillCatalog.Register(new SkillDefinition
         {
-            Name = "remote-skill",
-            Description = "Remote skill",
-            Instructions = "Does remote work",
-            Source = SkillSource.Remote,
-            RemoteId = "remote-skill-id",
+            Name = "local-skill",
+            Description = "Local skill",
+            Instructions = "Does local work",
+            Source = SkillSource.Local,
         });
+        var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
-            new RecordingProviderFactory(),
-            skillRegistry: skillRegistry,
+            providerFactory,
+            localSkillCatalog: localSkillCatalog,
             remoteSkillFetcher: null,
             logger: logger);
 
-        for (var i = 0; i < 2; i++)
-        {
-            var reply = await generator.GenerateReplyAsync(
-                new ChatActivity
-                {
-                    Id = $"msg-warning-{i}",
-                    Conversation = new ConversationReference { CanonicalKey = $"lark:dm:user-warning-{i}" },
-                    Content = new MessageContent { Text = "hello" },
-                },
-                new Dictionary<string, string>(),
-                streamingSink: null,
-                CancellationToken.None);
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-local-skill",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-local-skill" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
 
-            reply.Text.Should().Be("ok");
-        }
-
-        logger.WarningMessages.Should().ContainSingle(message =>
-            message.Contains("SkillRegistry is registered without IRemoteSkillFetcher", StringComparison.Ordinal));
+        reply.Text.Should().Be("ok");
+        var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.First(message => message.Role == "system").Content;
+        systemPrompt.Should().Contain("local-skill");
+        logger.WarningMessages.Should().BeEmpty();
     }
 
     [Fact]
