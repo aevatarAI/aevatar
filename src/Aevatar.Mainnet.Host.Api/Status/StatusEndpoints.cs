@@ -12,6 +12,8 @@ namespace Aevatar.Mainnet.Host.Api.Status;
 
 public static class StatusEndpoints
 {
+    private const int HistorySampleCount = 120;
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = false,
@@ -64,13 +66,14 @@ public static class StatusEndpoints
                 .ToArray();
 
             var counts = StatusCounts.Tally(targets);
-            var overall = counts.Down > 0
-                ? "down"
-                : counts.Degraded > 0
-                    ? "degraded"
-                    : counts.Unknown > 0 && counts.Ok == 0
-                        ? "unknown"
-                        : "ok";
+            var overall = counts switch
+            {
+                { Total: 0 } => "unknown",
+                { Down: > 0 } => "down",
+                { Degraded: > 0 } => "degraded",
+                { Unknown: > 0, Ok: 0 } => "unknown",
+                _ => "ok",
+            };
 
             return new StatusResponse(DateTimeOffset.UtcNow, overall, counts, targets);
         }
@@ -113,10 +116,14 @@ public static class StatusEndpoints
         [property: JsonPropertyName("error_message")] string? ErrorMessage,
         [property: JsonPropertyName("consecutive_failures")] int ConsecutiveFailures,
         [property: JsonPropertyName("last_check_at")] DateTimeOffset? LastCheckAt,
-        [property: JsonPropertyName("last_success_at")] DateTimeOffset? LastSuccessAt)
+        [property: JsonPropertyName("last_success_at")] DateTimeOffset? LastSuccessAt,
+        [property: JsonPropertyName("availability_percent")] double? AvailabilityPercent,
+        [property: JsonPropertyName("history")] IReadOnlyList<StatusSample> History)
     {
-        public static StatusTarget From(HealthProbeTargetDocument d) =>
-            new(
+        public static StatusTarget From(HealthProbeTargetDocument d)
+        {
+            var history = BuildHistory(d);
+            return new StatusTarget(
                 d.Slug,
                 string.IsNullOrWhiteSpace(d.DisplayName) ? d.Slug : d.DisplayName,
                 string.IsNullOrWhiteSpace(d.Category) ? "upstream" : d.Category,
@@ -129,19 +136,70 @@ public static class StatusEndpoints
                 NullIfBlank(d.ErrorMessage),
                 d.ConsecutiveFailures,
                 ToDateTime(d.LastCheckAt),
-                ToDateTime(d.LastSuccessAt));
+                ToDateTime(d.LastSuccessAt),
+                CalculateAvailability(history),
+                history);
+        }
 
-        private static string MapStatus(HealthOutcomeStatus status) => status switch
+        private static IReadOnlyList<StatusSample> BuildHistory(HealthProbeTargetDocument d)
         {
-            HealthOutcomeStatus.Ok => "ok",
-            HealthOutcomeStatus.Degraded => "degraded",
-            HealthOutcomeStatus.Down => "down",
-            _ => "unknown",
-        };
+            var history = d.RecentOutcomes
+                .Select(StatusSample.From)
+                .TakeLast(HistorySampleCount)
+                .ToArray();
 
-        private static string? NullIfBlank(string? s) => string.IsNullOrWhiteSpace(s) ? null : s;
+            if (history.Length > 0 || ToDateTime(d.LastCheckAt) is not { } lastCheckAt)
+            {
+                return history;
+            }
 
-        private static DateTimeOffset? ToDateTime(Timestamp? t) =>
-            t == null ? null : t.ToDateTimeOffset();
+            return
+            [
+                new StatusSample(
+                    MapStatus(d.Status),
+                    d.LatencyMs,
+                    NullIfBlank(d.Detail),
+                    NullIfBlank(d.ErrorMessage),
+                    lastCheckAt),
+            ];
+        }
+
+        private static double? CalculateAvailability(IReadOnlyList<StatusSample> history)
+        {
+            var known = history.Count(static sample => sample.Status != "unknown");
+            if (known == 0) return null;
+
+            var ok = history.Count(static sample => sample.Status == "ok");
+            return Math.Round(ok * 100d / known, 1, MidpointRounding.AwayFromZero);
+        }
     }
+
+    private sealed record StatusSample(
+        [property: JsonPropertyName("status")] string Status,
+        [property: JsonPropertyName("latency_ms")] int LatencyMs,
+        [property: JsonPropertyName("detail")] string? Detail,
+        [property: JsonPropertyName("error_message")] string? ErrorMessage,
+        [property: JsonPropertyName("observed_at")] DateTimeOffset? ObservedAt)
+    {
+        public static StatusSample From(HealthProbeOutcome outcome) =>
+            new(
+                MapStatus(outcome.Status),
+                outcome.LatencyMs,
+                NullIfBlank(outcome.Detail),
+                NullIfBlank(outcome.ErrorMessage),
+                ToDateTime(outcome.ObservedAt));
+    }
+
+    private static string MapStatus(HealthOutcomeStatus status) => status switch
+    {
+        HealthOutcomeStatus.Ok => "ok",
+        HealthOutcomeStatus.Degraded => "degraded",
+        HealthOutcomeStatus.Down => "down",
+        _ => "unknown",
+    };
+
+    private static string? NullIfBlank(string? s) => string.IsNullOrWhiteSpace(s) ? null : s;
+
+    private static DateTimeOffset? ToDateTime(Timestamp? t) =>
+        t == null ? null : t.ToDateTimeOffset();
 }

@@ -20,6 +20,19 @@ public sealed class StatusDashboardOptions
     public int DefaultTimeoutMs { get; set; } = 5_000;
 
     /// <summary>
+    /// Base URL used by built-in self probes. Production containers usually
+    /// listen on 8080, while local development can override this to 5080.
+    /// </summary>
+    public string SelfBaseUrl { get; set; } = "http://localhost:8080";
+
+    /// <summary>
+    /// Use the built-in mainnet probe set when <see cref="Targets"/> is empty.
+    /// This prevents production config trimming from turning /status into an
+    /// empty board.
+    /// </summary>
+    public bool UseBuiltInTargets { get; set; } = true;
+
+    /// <summary>
     /// Probe target manifest. Order is preserved; the API surfaces targets in
     /// declared order.
     /// </summary>

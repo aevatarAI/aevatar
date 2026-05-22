@@ -72,6 +72,7 @@ public sealed class HealthProbeTargetProjector
             ActorId = context.RootActorId,
             UpdatedAtUtc = Timestamp.FromDateTimeOffset(updatedAt),
         };
+        document.RecentOutcomes.AddRange(state.RecentOutcomes.Select(static outcome => outcome.Clone()));
 
         await _writeDispatcher.UpsertAsync(document, ct);
     }

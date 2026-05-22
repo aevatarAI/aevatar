@@ -99,6 +99,29 @@ public sealed class HealthProbeTargetGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Tick_RetainsRecentTwoHourOutcomeWindow()
+    {
+        await _agent.HandleConfigureAsync(new HealthProbeConfigureCommand
+        {
+            Spec = NewDescriptor("nyxid-auth"),
+        });
+
+        for (var i = 0; i < HealthProbeTargetGAgent.RetainedOutcomeCount + 5; i++)
+        {
+            _executor.NextOutcome = new HealthProbeOutcome
+            {
+                Status = HealthOutcomeStatus.Ok,
+                Detail = $"ok-{i}",
+            };
+            await _agent.HandleTickAsync(new HealthProbeTickRequested { Slug = "nyxid-auth" });
+        }
+
+        _agent.State.RecentOutcomes.Should().HaveCount(HealthProbeTargetGAgent.RetainedOutcomeCount);
+        _agent.State.RecentOutcomes[0].Detail.Should().Be("ok-5");
+        _agent.State.RecentOutcomes[^1].Detail.Should().Be("ok-124");
+    }
+
+    [Fact]
     public async Task Tick_FailureIncrementsConsecutiveFailures_AndKeepsLastSuccess()
     {
         await _agent.HandleConfigureAsync(new HealthProbeConfigureCommand

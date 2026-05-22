@@ -6,6 +6,48 @@ namespace Aevatar.GAgents.StatusDashboard.Tests;
 public sealed class StatusDashboardManifestTests
 {
     [Fact]
+    public void FromOptions_UsesBuiltInTargets_WhenTargetsAreEmpty()
+    {
+        var manifest = StatusDashboardManifest.FromOptions(new StatusDashboardOptions
+        {
+            SelfBaseUrl = "http://127.0.0.1:9999/",
+        });
+
+        manifest.Descriptors.Should().NotBeEmpty();
+        manifest.Descriptors
+            .Single(d => d.Slug == "self-liveness")
+            .Parameters["Url"]
+            .Should()
+            .Be("http://127.0.0.1:9999/health/live");
+        manifest.Descriptors.Select(d => d.Slug).Should().Contain(new[]
+        {
+            "self-liveness",
+            "self-readiness",
+            "responses-api-auth-gate",
+            "messages-api-auth-gate",
+            "models-api-auth-gate",
+            "voice-websocket-auth-gate",
+            "channel-bot-runtime",
+            "nyxid-llm-status",
+            "nyxid-llm-gateway-auth-gate",
+            "nyxid-channel-bots-auth-gate",
+            "nyxid-channel-relay-reply-auth-gate",
+        });
+        manifest.Descriptors.Should().OnlyContain(d => d.IntervalSeconds == 60);
+    }
+
+    [Fact]
+    public void FromOptions_CanDisableBuiltInTargets()
+    {
+        var manifest = StatusDashboardManifest.FromOptions(new StatusDashboardOptions
+        {
+            UseBuiltInTargets = false,
+        });
+
+        manifest.Descriptors.Should().BeEmpty();
+    }
+
+    [Fact]
     public void FromOptions_AppliesDefaults_AndDropsInvalidEntries()
     {
         var options = new StatusDashboardOptions

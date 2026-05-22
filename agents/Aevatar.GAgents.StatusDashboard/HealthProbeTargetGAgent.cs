@@ -24,6 +24,8 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
     public static string ProjectionKind => HealthProbeProjectionPort.ProjectionKind;
 
     internal const string TickCallbackId = "health-probe-tick";
+    internal const int RetainedOutcomeCount = 120;
+    private static readonly TimeSpan RetainedOutcomeWindow = TimeSpan.FromHours(2);
 
     // ─── Commands ───
 
@@ -209,12 +211,19 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
     private static HealthProbeTargetState ApplyObserved(HealthProbeTargetState s, HealthProbeObserved evt)
     {
         var next = s.Clone();
-        next.LastOutcome = evt.Outcome?.Clone();
-        next.LastCheckAt = evt.Outcome?.ObservedAt;
-        if (evt.Outcome?.Status == HealthOutcomeStatus.Ok)
+        var outcome = evt.Outcome?.Clone();
+        next.LastOutcome = outcome;
+        next.LastCheckAt = outcome?.ObservedAt;
+        if (outcome != null)
+        {
+            next.RecentOutcomes.Add(outcome.Clone());
+            TrimRecentOutcomes(next, outcome.ObservedAt);
+        }
+
+        if (outcome?.Status == HealthOutcomeStatus.Ok)
         {
             next.ConsecutiveFailures = 0;
-            next.LastSuccessAt = evt.Outcome.ObservedAt;
+            next.LastSuccessAt = outcome.ObservedAt;
         }
         else
         {
@@ -222,6 +231,27 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
         }
         return next;
     }
+
+    private static void TrimRecentOutcomes(HealthProbeTargetState state, Timestamp? latestObservedAt)
+    {
+        if (latestObservedAt != null)
+        {
+            var cutoff = latestObservedAt.ToDateTimeOffset() - RetainedOutcomeWindow;
+            while (state.RecentOutcomes.Count > 0 &&
+                   IsBefore(state.RecentOutcomes[0].ObservedAt, cutoff))
+            {
+                state.RecentOutcomes.RemoveAt(0);
+            }
+        }
+
+        while (state.RecentOutcomes.Count > RetainedOutcomeCount)
+        {
+            state.RecentOutcomes.RemoveAt(0);
+        }
+    }
+
+    private static bool IsBefore(Timestamp? timestamp, DateTimeOffset cutoff) =>
+        timestamp != null && timestamp.ToDateTimeOffset() < cutoff;
 
     private static bool DescriptorsEquivalent(HealthProbeTargetDescriptor? a, HealthProbeTargetDescriptor? b)
     {

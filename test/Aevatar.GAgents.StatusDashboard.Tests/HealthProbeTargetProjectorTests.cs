@@ -42,6 +42,13 @@ public sealed class HealthProbeTargetProjectorTests
             LastSuccessAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-21T10:00:00+00:00")),
             LastCheckAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-21T10:00:00+00:00")),
         };
+        state.RecentOutcomes.Add(new HealthProbeOutcome
+        {
+            Status = HealthOutcomeStatus.Down,
+            Detail = "http_500",
+            ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-21T09:59:00+00:00")),
+        });
+        state.RecentOutcomes.Add(state.LastOutcome.Clone());
 
         await projector.ProjectAsync(context, BuildEnvelope(7, state));
 
@@ -53,6 +60,9 @@ public sealed class HealthProbeTargetProjectorTests
         doc.LatencyMs.Should().Be(42);
         doc.StateVersion.Should().Be(7);
         doc.ActorId.Should().Be("health-probe::nyxid-auth");
+        doc.RecentOutcomes.Should().HaveCount(2);
+        doc.RecentOutcomes[0].Detail.Should().Be("http_500");
+        doc.RecentOutcomes[1].Detail.Should().Be("http_200");
     }
 
     [Fact]
