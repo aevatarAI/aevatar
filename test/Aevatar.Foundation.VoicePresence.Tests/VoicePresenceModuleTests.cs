@@ -1149,13 +1149,25 @@ public class VoicePresenceModuleTests
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class RecordingRoleAgent(string id) : IAgent
+    private sealed class RecordingRoleAgent(string id) : IAgent, IVoicePresenceRuntimeStateOwner
     {
         public string Id => id;
 
         public RecordingRoleState State { get; } = new();
 
         public List<VoicePresenceRuntimeStateChangedEvent> PersistedStates { get; } = [];
+
+        public bool TryGetVoicePresenceRuntimeState(string moduleName, out VoicePresenceRuntimeState runtimeState)
+        {
+            if (State.VoicePresence.TryGetValue(moduleName, out var stored))
+            {
+                runtimeState = stored.Clone();
+                return true;
+            }
+
+            runtimeState = new VoicePresenceRuntimeState();
+            return false;
+        }
 
         public Task PersistVoicePresenceRuntimeStateAsync(
             string moduleName,

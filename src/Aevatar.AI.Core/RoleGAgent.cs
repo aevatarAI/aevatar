@@ -29,7 +29,7 @@ namespace Aevatar.AI.Core;
 /// <summary>
 /// Role-based AI GAgent. Receives ChatRequestEvent and streams LLM response.
 /// </summary>
-public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
+public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePresenceRuntimeStateOwner
 {
     private const string LlmFailureContentPrefix = "[[AEVATAR_LLM_ERROR]]";
     private const int MaxTrackedSessions = 128;
@@ -67,6 +67,23 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     public string RoleId { get; private set; } = "";
 
     protected IRemoteToolApprovalPort? RemoteToolApprovalPort { get; }
+
+    // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
+    //   Old pattern: VoicePresenceModule 在 module 内持有 process-local background state(unbounded channels / TaskCompletionSource waiters / 静态字段持 lifecycle),还保留 disabled remote voice fallback shell.
+    //   New principle: Reuse existing RoleGAgent state for voice runtime facts(typed protobuf sub-state in RoleGAgent state); transport handles 仅作 volatile process-local lease.
+    public bool TryGetVoicePresenceRuntimeState(string moduleName, out VoicePresenceRuntimeState runtimeState)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
+
+        if (State.VoicePresence.TryGetValue(moduleName, out var stored))
+        {
+            runtimeState = stored.Clone();
+            return true;
+        }
+
+        runtimeState = new VoicePresenceRuntimeState();
+        return false;
+    }
 
     // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
     //   Old pattern: VoicePresenceModule 在 module 内持有 process-local background state(unbounded channels / TaskCompletionSource waiters / 静态字段持 lifecycle),还保留 disabled remote voice fallback shell.

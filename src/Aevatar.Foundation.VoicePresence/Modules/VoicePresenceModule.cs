@@ -1022,35 +1022,13 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         });
 
     // Refactor (iter35/cluster-036-voice-presence-rolegagent-state):
-    //   Old pattern: VoicePresenceModule 在 module 内持有 process-local background state(unbounded channels / TaskCompletionSource waiters / 静态字段持 lifecycle),还保留 disabled remote voice fallback shell.
-    //   New principle: Reuse existing RoleGAgent state for voice runtime facts(typed protobuf sub-state in RoleGAgent state); transport handles 仅作 volatile process-local lease.
+    //   Old pattern: VoicePresenceModule reflected over local actor State/Persist members to find voice runtime facts.
+    //   New principle: hydrate through the explicit actor-owned voice runtime state contract.
     private void HydrateRuntimeStateFromActor(IEventHandlerContext ctx)
     {
-        var stateProperty = ctx.Agent.GetType().GetProperty("State", BindingFlags.Instance | BindingFlags.Public);
-        var state = stateProperty?.GetValue(ctx.Agent);
-        if (state == null)
+        if (ctx.Agent is not IVoicePresenceRuntimeStateOwner stateOwner ||
+            !stateOwner.TryGetVoicePresenceRuntimeState(Name, out var stored))
             return;
-
-        var voicePresenceProperty = state.GetType().GetProperty("VoicePresence", BindingFlags.Instance | BindingFlags.Public);
-        var voicePresence = voicePresenceProperty?.GetValue(state);
-        if (voicePresence == null)
-            return;
-
-        var tryGetValueMethod = voicePresence.GetType().GetMethod(
-            "TryGetValue",
-            BindingFlags.Instance | BindingFlags.Public,
-            binder: null,
-            types: [typeof(string), typeof(VoicePresenceRuntimeState).MakeByRefType()],
-            modifiers: null);
-        if (tryGetValueMethod == null)
-            return;
-
-        object?[] args = [Name, null];
-        if (tryGetValueMethod.Invoke(voicePresence, args) is not true ||
-            args[1] is not VoicePresenceRuntimeState stored)
-        {
-            return;
-        }
 
         _runtimeState = NormalizeRuntimeState(stored);
         RestoreStateMachineFromRuntimeState();
@@ -1071,19 +1049,10 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
     {
         SyncRuntimeStateFromStateMachine();
 
-        var persistMethod = ctx.Agent.GetType().GetMethod(
-            "PersistVoicePresenceRuntimeStateAsync",
-            BindingFlags.Instance | BindingFlags.Public,
-            binder: null,
-            types: [typeof(string), typeof(VoicePresenceRuntimeState), typeof(CancellationToken)],
-            modifiers: null);
-
-        if (persistMethod == null)
+        if (ctx.Agent is not IVoicePresenceRuntimeStateOwner stateOwner)
             return;
 
-        var result = persistMethod.Invoke(ctx.Agent, [Name, _runtimeState.Clone(), ct]);
-        if (result is Task task)
-            await task;
+        await stateOwner.PersistVoicePresenceRuntimeStateAsync(Name, _runtimeState.Clone(), ct);
     }
 
     private void SyncRuntimeStateFromStateMachine()

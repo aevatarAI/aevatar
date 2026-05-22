@@ -11,11 +11,9 @@ public sealed class CompositeVoicePresenceSessionResolver : IVoicePresenceSessio
     private readonly InProcessActorVoicePresenceSessionResolver _inProcessResolver;
 
     public CompositeVoicePresenceSessionResolver(
-        InProcessActorVoicePresenceSessionResolver inProcessResolver,
-        RemoteActorVoicePresenceSessionResolver remoteResolver)
+        InProcessActorVoicePresenceSessionResolver inProcessResolver)
     {
         _inProcessResolver = inProcessResolver ?? throw new ArgumentNullException(nameof(inProcessResolver));
-        _ = remoteResolver ?? throw new ArgumentNullException(nameof(remoteResolver));
     }
 
     public async Task<VoicePresenceSession?> ResolveAsync(VoicePresenceSessionRequest request, CancellationToken ct = default)

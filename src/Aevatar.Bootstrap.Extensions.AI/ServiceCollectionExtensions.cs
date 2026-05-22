@@ -143,7 +143,6 @@ public static class ServiceCollectionExtensions
             return;
 
         services.TryAddSingleton<InProcessActorVoicePresenceSessionResolver>();
-        services.TryAddSingleton<RemoteActorVoicePresenceSessionResolver>();
         services.TryAddSingleton<IVoicePresenceSessionResolver, CompositeVoicePresenceSessionResolver>();
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IEventModuleFactory<IEventHandlerContext>, VoicePresenceModuleFactory>());

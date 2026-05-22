@@ -41,16 +41,7 @@ public class CompositeVoicePresenceSessionResolverTests
     }
 
     private static CompositeVoicePresenceSessionResolver CreateResolver(ServiceProvider services) =>
-        new(
-            new InProcessActorVoicePresenceSessionResolver(services),
-            new RemoteActorVoicePresenceSessionResolver(
-                services,
-            [
-                new VoicePresenceModuleRegistration(
-                    ["voice_presence_openai"],
-                    (_, resolvedName) => CreateModule(resolvedName),
-                    pcmSampleRateHz: 16000),
-            ]));
+        new(new InProcessActorVoicePresenceSessionResolver(services));
 
     private static ServiceProvider BuildServices(IActorRuntime runtime)
     {
