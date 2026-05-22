@@ -151,6 +151,102 @@ public sealed class LocalActorRuntimeCreateTests
     }
 
     [Fact]
+    public async Task CreateByKindAsync_ShouldReturnExistingActor_WhenSameIdAndKindRequestedAgain()
+    {
+        var runtime = CreateRuntime(services =>
+            services.AddAevatarAgentKindRegistry(builder => builder.Register<KindRegisteredAgent>()));
+
+        var first = await runtime.CreateByKindAsync("tests.local-kind", "kind-actor");
+        var second = await runtime.CreateByKindAsync("tests.local-kind", "kind-actor");
+
+        second.Should().BeSameAs(first);
+    }
+
+    [Fact]
+    public async Task CreateByKindAsync_ShouldThrow_WhenSameIdAlreadyUsesDifferentKindImplementation()
+    {
+        var runtime = CreateRuntime(services =>
+            services.AddAevatarAgentKindRegistry(builder => builder
+                .Register<KindRegisteredAgent>()
+                .Register<AlternateKindRegisteredAgent>()));
+        await runtime.CreateByKindAsync("tests.local-kind", "kind-actor");
+
+        var act = () => runtime.CreateByKindAsync("tests.alternate-local-kind", "kind-actor");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*expected kind 'tests.alternate-local-kind'*");
+    }
+
+    [Fact]
+    public async Task CreateByKindAsync_WhenConcurrentRequestsUseDifferentKinds_ShouldRejectMismatchedWinner()
+    {
+        var runtime = CreateRuntime(services =>
+            services.AddAevatarAgentKindRegistry(builder => builder
+                .Register<BlockingKindAAgent>()
+                .Register<BlockingKindBAgent>()));
+        using var gate = new ConstructorGate(expectedParticipants: 2);
+        BlockingAgentGate.Current = gate;
+
+        try
+        {
+            var firstTask = Task.Run(async () => await runtime.CreateByKindAsync("tests.blocking-kind-a", "kind-race-id"));
+            var secondTask = Task.Run(async () => await runtime.CreateByKindAsync("tests.blocking-kind-b", "kind-race-id"));
+
+            gate.WaitUntilReady();
+            gate.Release();
+
+            var outcomes = await Task.WhenAll(CaptureAsync(firstTask), CaptureAsync(secondTask));
+
+            outcomes.Count(outcome => outcome.Actor is not null).Should().Be(1);
+            outcomes.Count(outcome => outcome.Error is InvalidOperationException).Should().Be(1);
+            outcomes.Single(outcome => outcome.Error is InvalidOperationException)
+                .Error!
+                .Message
+                .Should()
+                .Contain("expected kind");
+        }
+        finally
+        {
+            BlockingAgentGate.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task CreateByKindAsync_ShouldRemoveActorAndMarkSpawnActivityError_WhenActivationThrows()
+    {
+        var stopped = new ConcurrentQueue<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == AevatarActivitySource.ActivitySourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            SampleUsingParentId = static (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = stopped.Enqueue,
+        };
+        ActivitySource.AddActivityListener(listener);
+        var runtime = CreateRuntime(services =>
+            services.AddAevatarAgentKindRegistry(builder => builder.Register<ThrowingActivateKindAgent>()));
+
+        var act = () => runtime.CreateByKindAsync("tests.throwing-activate-kind", "kind-spawn-error");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("activate boom");
+        (await runtime.GetAsync("kind-spawn-error")).Should().BeNull();
+        stopped
+            .Where(activity =>
+                activity.DisplayName == AevatarActivitySource.AgentSpawnActivityName &&
+                string.Equals(
+                    activity.GetTagItem(AevatarActivitySource.AgentIdTag) as string,
+                    "kind-spawn-error",
+                    StringComparison.Ordinal))
+            .Should()
+            .ContainSingle()
+            .Which
+            .Status
+            .Should()
+            .Be(ActivityStatusCode.Error);
+    }
+
+    [Fact]
     public async Task CreateAsync_WhenConcurrentRequestsUseSameType_ShouldReturnAuthoritativeActor()
     {
         var runtime = CreateRuntime();
@@ -407,6 +503,84 @@ public sealed class LocalActorRuntimeCreateTests
         public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
 
         public Task<string> GetDescriptionAsync() => Task.FromResult("kind-registered");
+
+        public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    [GAgent("tests.alternate-local-kind")]
+    private sealed class AlternateKindRegisteredAgent : IAgent
+    {
+        public string Id => "alternate-kind-registered";
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult("alternate-kind-registered");
+
+        public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    [GAgent("tests.throwing-activate-kind")]
+    private sealed class ThrowingActivateKindAgent : IAgent
+    {
+        public string Id => "throwing-activate-kind";
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult("throwing-activate-kind");
+
+        public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            throw new InvalidOperationException("activate boom");
+        }
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    [GAgent("tests.blocking-kind-a")]
+    private sealed class BlockingKindAAgent : IAgent
+    {
+        public BlockingKindAAgent()
+        {
+            BlockingAgentGate.Current!.ArriveAndWait();
+        }
+
+        public string Id => "blocking-kind-a";
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult("blocking-kind-a");
+
+        public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    [GAgent("tests.blocking-kind-b")]
+    private sealed class BlockingKindBAgent : IAgent
+    {
+        public BlockingKindBAgent()
+        {
+            BlockingAgentGate.Current!.ArriveAndWait();
+        }
+
+        public string Id => "blocking-kind-b";
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult("blocking-kind-b");
 
         public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
 

@@ -7,7 +7,7 @@ namespace Aevatar.Workflow.Core.Tests.Primitives;
 public sealed class WorkflowStepTargetAgentResolverAdditionalTests
 {
     [Fact]
-    public void ResolveEffectiveTargetRole_WhenLlmCallHasLegacyAgentTypeParameter_ShouldStillUseImplicitAssistant()
+    public void ResolveEffectiveTargetRole_WhenLlmCallOmitsTargetRole_ShouldUseImplicitAssistant()
     {
         var role = WorkflowImplicitLlmRolePolicy.ResolveEffectiveTargetRole(
             workflow: null,

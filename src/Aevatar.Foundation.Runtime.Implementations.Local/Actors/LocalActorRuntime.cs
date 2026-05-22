@@ -173,7 +173,18 @@ public sealed class LocalActorRuntime : IActorRuntime
         {
             var authoritative = _actors.GetValueOrDefault(actorId);
             if (authoritative != null)
+            {
+                if (!string.Equals(
+                        authoritative.Agent.GetType().FullName,
+                        implementation.Metadata.ImplementationClrTypeName,
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"Actor '{actorId}' already exists with agent type '{authoritative.Agent.GetType().FullName}', expected kind '{implementation.Metadata.Kind}'.");
+                }
+
                 return authoritative;
+            }
 
             throw new InvalidOperationException($"Actor '{actorId}' already exists.");
         }
@@ -191,6 +202,7 @@ public sealed class LocalActorRuntime : IActorRuntime
         catch (Exception ex)
         {
             _actors.TryRemove(actorId, out _);
+            await _activationIndexStore.DeleteAsync(actorId, ct);
             AevatarActivitySource.SafeSetStatus(activity, System.Diagnostics.ActivityStatusCode.Error, ex.Message);
             throw;
         }
