@@ -142,6 +142,24 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
         ctx.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
     }
 
+    [Fact]
+    public async Task Returns503_WhenDispatchRejects()
+    {
+        var result = await InvokeRebuildAsync(
+            adminTokenConfigured: AdminToken,
+            adminTokenHeader: AdminToken,
+            body: SampleBody(),
+            dispatch: new RejectingDispatch());
+
+        var ctx = NewHttpContext();
+        await result.ExecuteAsync(ctx);
+        ctx.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        ctx.Response.Body.Position = 0;
+        var text = await new StreamReader(ctx.Response.Body, Encoding.UTF8).ReadToEndAsync();
+        var doc = JsonDocument.Parse(text);
+        doc.RootElement.GetProperty("error").GetString().Should().Be("actor_dispatch_rejected");
+    }
+
     private static IdentityOAuthEndpoints.RebuildAevatarOAuthClientRequest SampleBody() =>
         new(
             client_id: OperatorClientId,
@@ -232,5 +250,15 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
             ProvisionAevatarOAuthClientCommand command,
             CancellationToken ct = default) =>
             throw new InvalidOperationException("dispatch failed");
+    }
+
+    private sealed class RejectingDispatch
+        : ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>
+    {
+        public Task<CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>> DispatchAsync(
+            ProvisionAevatarOAuthClientCommand command,
+            CancellationToken ct = default) =>
+            Task.FromResult(CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>.Failure(
+                ChannelIdentityOAuthDispatchError.InvalidTarget));
     }
 }

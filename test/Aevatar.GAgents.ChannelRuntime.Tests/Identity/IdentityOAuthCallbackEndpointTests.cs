@@ -51,7 +51,36 @@ public sealed class IdentityOAuthCallbackEndpointTests
         var text = await new StreamReader(ctx.Response.Body, Encoding.UTF8).ReadToEndAsync();
         var doc = JsonDocument.Parse(text);
         doc.RootElement.GetProperty("status").GetString().Should().Be("binding_pending");
-        doc.RootElement.GetProperty("status_url").GetString().Should().Be("/api/oauth/aevatar-client/status");
+        doc.RootElement.TryGetProperty("status_url", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DispatchRejected_RevokesIncomingAndReturns503()
+    {
+        const string incoming = "bnd_incoming";
+        var subject = SampleSubject();
+        var broker = NewBroker(subject, incoming);
+        var queryPort = Substitute.For<IExternalIdentityBindingQueryPort>();
+        queryPort.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<BindingId?>(null));
+        var bindingDispatch = new RejectingDispatch<CommitBindingCommand>();
+        var capabilityDispatch = new RecordingDispatch<ObserveBrokerCapabilityCommand>();
+
+        var result = await InvokeCallbackAsync(
+            broker,
+            queryPort,
+            bindingDispatch,
+            capabilityDispatch);
+
+        await broker.Received(1).RevokeBindingByIdAsync(incoming, Arg.Any<CancellationToken>());
+        capabilityDispatch.Commands.Should().BeEmpty();
+        var ctx = NewHttpContext();
+        await result.ExecuteAsync(ctx);
+        ctx.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        ctx.Response.Body.Position = 0;
+        var text = await new StreamReader(ctx.Response.Body, Encoding.UTF8).ReadToEndAsync();
+        var doc = JsonDocument.Parse(text);
+        doc.RootElement.GetProperty("error").GetString().Should().Be("actor_dispatch_rejected");
     }
 
     [Fact]
@@ -228,5 +257,15 @@ public sealed class IdentityOAuthCallbackEndpointTests
             TCommand command,
             CancellationToken ct = default) =>
             throw new InvalidOperationException("dispatch failed");
+    }
+
+    private sealed class RejectingDispatch<TCommand>
+        : ICommandDispatchService<TCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>
+    {
+        public Task<CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>> DispatchAsync(
+            TCommand command,
+            CancellationToken ct = default) =>
+            Task.FromResult(CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>.Failure(
+                ChannelIdentityOAuthDispatchError.InvalidTarget));
     }
 }

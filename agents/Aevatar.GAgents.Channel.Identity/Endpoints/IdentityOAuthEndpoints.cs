@@ -315,10 +315,8 @@ public static class IdentityOAuthEndpoints
             ct);
 
     /// <summary>
-    /// Implementation seam exposed for tests so the readmodel-propagation
-    /// timeout can be tightened without waiting the full operator-grade
-    /// 30-second budget on every assertion. Production routes call the
-    /// thin overload above with the canonical defaults.
+    /// Core method exposed for tests to pass admin options and the typed
+    /// dispatch service directly, without resolving endpoint-bound services.
     /// </summary>
     internal static async Task<IResult> HandleAevatarOAuthClientRebuildCoreAsync(
         HttpContext http,
@@ -692,16 +690,15 @@ public static class IdentityOAuthEndpoints
     {
         if (string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
         {
-            return Results.Accepted(OAuthClientStatusUrl, new
+            return Results.Json(new
             {
                 status = "binding_pending",
                 actor_id = receipt.ActorId,
                 command_id = receipt.CommandId,
                 correlation_id = receipt.CorrelationId,
                 display_name = string.IsNullOrWhiteSpace(displayName) ? null : displayName,
-                status_url = OAuthClientStatusUrl,
                 detail = "Binding command accepted for dispatch. Return to Lark and use /whoami to check once projection materializes.",
-            });
+            }, statusCode: StatusCodes.Status202Accepted);
         }
 
         return RenderBindingAcceptedHtmlInternal(displayName, receipt);
