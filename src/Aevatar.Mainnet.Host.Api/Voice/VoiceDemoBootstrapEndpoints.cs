@@ -1,9 +1,7 @@
 using System.Security.Claims;
-using Aevatar.AI.Abstractions;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
-using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.Scheduled;
 using Microsoft.AspNetCore.Http;
@@ -14,16 +12,13 @@ using ScheduledOwnerScope = Aevatar.GAgents.Scheduled.OwnerScope;
 
 namespace Aevatar.Mainnet.Host.Api.Voice;
 
-// Refactor (iter34/cluster-005-mainnet-host-direct-actor-runtime):
-//   Old pattern: Mainnet Host endpoints inject IActorRuntime/IActorDispatchPort and build EventEnvelope + dispatch directly in Host code.
-//   New principle: Host calls Application command ports that normalize, resolve target, build envelope, dispatch, return honest accepted receipt.
-//   Host endpoint stays minimal (auth + body parsing). NO direct dependency on IActorRuntime/IActorDispatchPort in Host.
+// Refactor (iter34/cluster-004-voice-bootstrap-application-port):
+//   Old pattern: Voice demo bootstrap endpoint owned actor creation, route mutation, and readiness polling in Host/API.
+//   New principle: Host/API resolves the caller, delegates mutations through Application command ports, then returns an honest 202 Accepted receipt.
 internal static class VoiceDemoBootstrapEndpoints
 {
     private const string VoiceModuleName = "voice_presence_openai";
     private const string RouteRuleId = "voice-demo";
-    private static readonly TimeSpan ObservationTimeout = TimeSpan.FromSeconds(12);
-    private static readonly TimeSpan ObservationPollInterval = TimeSpan.FromMilliseconds(150);
 
     public static IEndpointRouteBuilder MapVoiceDemoBootstrapEndpoints(this IEndpointRouteBuilder app)
     {
@@ -39,13 +34,13 @@ internal static class VoiceDemoBootstrapEndpoints
         HttpContext http,
         [FromServices] IVoiceDemoAgentCommandPort voiceDemoAgentCommandPort,
         [FromServices] IUserAgentCatalogCommandPort catalogCommandPort,
-        [FromServices] IUserAgentCatalogQueryPort catalogQueryPort,
         [FromServices] IChatRoutePolicyCommandPort routePolicyCommandPort,
         [FromServices] IChatRoutePolicyQueryPort routePolicyQueryPort,
-        [FromServices] ChatRouteResolver routeResolver,
-        [FromServices] IVoicePresenceSessionResolver voiceSessionResolver,
         CancellationToken ct)
     {
+        // Refactor (iter34/cluster-004-voice-bootstrap-application-port):
+        //   Old pattern: The request path blocked until catalog, route, and voice-session reads looked ready.
+        //   New principle: This POST only admits commands; read-side readiness is queried or observed separately.
         if (!TryResolveScopeId(http.User, out var scopeId))
         {
             return Results.Json(
@@ -58,6 +53,7 @@ internal static class VoiceDemoBootstrapEndpoints
 
         var voiceDemoReceipt = await voiceDemoAgentCommandPort.EnsureAsync(scopeId, VoiceModuleName, ct);
         var actorId = voiceDemoReceipt.ActorId;
+
         await catalogCommandPort.UpsertAsync(new UserAgentCatalogUpsertCommand
         {
             AgentId = actorId,
@@ -66,7 +62,7 @@ internal static class VoiceDemoBootstrapEndpoints
             OwnerScope = scheduledScope.Clone(),
         }, ct);
 
-        await EnsureVoiceRoutePolicyAsync(
+        var routePolicyReceipt = await EnsureVoiceRoutePolicyAsync(
             scopeId,
             actorId,
             routingScope,
@@ -74,53 +70,23 @@ internal static class VoiceDemoBootstrapEndpoints
             routePolicyQueryPort,
             ct);
 
-        var catalogObserved = await WaitUntilAsync(
-            async () => await catalogQueryPort.GetForCallerAsync(actorId, scheduledScope, ct) is not null,
-            ct);
-
-        var routeObserved = await WaitUntilAsync(
-            async () => RouteResolvesToDemoActor(
-                await routePolicyQueryPort.LookupForCallerAsync(routingScope, ct),
-                routingScope,
-                routeResolver,
-                actorId),
-            ct);
-
-        var voiceReady = await WaitUntilAsync(
-            async () =>
-            {
-                var session = await voiceSessionResolver.ResolveAsync(
-                    new VoicePresenceSessionRequest(actorId, VoiceModuleName),
-                    ct);
-                return session?.IsInitialized == true;
-            },
-            ct);
-
-        if (!catalogObserved || !routeObserved || !voiceReady)
+        return Results.Accepted(value: new
         {
-            return Results.Json(
-                new
-                {
-                    error = "voice_demo_not_ready",
-                    actor_id = actorId,
-                    voice_module_name = VoiceModuleName,
-                    catalog_observed = catalogObserved,
-                    route_observed = routeObserved,
-                    voice_session_ready = voiceReady,
-                },
-                statusCode: StatusCodes.Status503ServiceUnavailable);
-        }
-
-        return Results.Json(new
-        {
+            status = "accepted",
             actor_id = actorId,
+            route_policy_actor_id = routePolicyReceipt.ActorId,
             voice_module_name = VoiceModuleName,
             policy_rule_id = RouteRuleId,
+            agent_command_id = voiceDemoReceipt.CommandId,
+            agent_correlation_id = voiceDemoReceipt.CorrelationId,
+            route_policy_command_id = routePolicyReceipt.CommandId,
+            route_policy_correlation_id = routePolicyReceipt.CorrelationId,
             nyxid_proxy = "https://nyx.chrono-ai.fun/api/v1/proxy/s/llm-openai",
+            readiness = "query readmodels or subscribe to events; this POST only confirms dispatch acceptance",
         });
     }
 
-    private static async Task EnsureVoiceRoutePolicyAsync(
+    private static async Task<ChatRoutePolicyCommandAcceptedReceipt> EnsureVoiceRoutePolicyAsync(
         string scopeId,
         string actorId,
         RoutingOwnerScope routingScope,
@@ -158,41 +124,7 @@ internal static class VoiceDemoBootstrapEndpoints
             Description = "route browser voice demo to the current user's mainnet agent",
         });
 
-        await routePolicyCommandPort.UpsertAsync(scopeId, command, ct);
-    }
-
-    private static bool RouteResolvesToDemoActor(
-        ChatRoutePolicySnapshot? snapshot,
-        RoutingOwnerScope routingScope,
-        ChatRouteResolver resolver,
-        string actorId)
-    {
-        if (snapshot is null)
-            return false;
-
-        var decision = resolver.Resolve(snapshot, new ChatRouteInput
-        {
-            SourceKind = ChatSourceKind.Voice,
-            CallerScope = new ChatRouteCallerScope
-            {
-                NyxUserId = routingScope.NyxUserId,
-                Platform = routingScope.Platform,
-                RegistrationScopeId = routingScope.RegistrationScopeId,
-                SenderId = routingScope.SenderId,
-            },
-            Voice = new VoiceInput
-            {
-                Codec = VoiceCodec.Pcm16,
-                SampleRateHz = 24000,
-                Mode = VoiceConversationMode.FullDuplex,
-                VadMode = VadMode.Server,
-                VoiceModuleName = VoiceModuleName,
-            },
-        });
-
-        return decision.Action.ActionCase == ChatRouteAction.ActionOneofCase.ForwardToGagent &&
-               string.Equals(decision.Action.ForwardToGagent.ActorId, actorId, StringComparison.Ordinal) &&
-               string.Equals(decision.Action.ForwardToGagent.VoiceModuleName, VoiceModuleName, StringComparison.Ordinal);
+        return await routePolicyCommandPort.UpsertAsync(scopeId, command, ct);
     }
 
     private static ChatRouteAction ForwardToDemoActor(string actorId) =>
@@ -204,23 +136,6 @@ internal static class VoiceDemoBootstrapEndpoints
                 VoiceModuleName = VoiceModuleName,
             },
         };
-
-    private static async Task<bool> WaitUntilAsync(
-        Func<Task<bool>> predicate,
-        CancellationToken ct)
-    {
-        var deadline = DateTimeOffset.UtcNow + ObservationTimeout;
-        while (DateTimeOffset.UtcNow <= deadline)
-        {
-            ct.ThrowIfCancellationRequested();
-            if (await predicate())
-                return true;
-
-            await Task.Delay(ObservationPollInterval, ct);
-        }
-
-        return false;
-    }
 
     private static bool TryResolveScopeId(ClaimsPrincipal user, out string scopeId)
     {
