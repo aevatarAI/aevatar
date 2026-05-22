@@ -259,6 +259,9 @@ public sealed class ChatRuntime
         bool wroteOutput,
         [EnumeratorCancellation] CancellationToken runToken)
     {
+        // Refactor (iter35/cluster-040-streaming-tool-executor):
+        //   Old pattern: StreamingToolExecutor owns process-local channel coordinator + TaskCompletionSource waiters + List<TrackedTool>/List<TaskCompletionSource> as object fields for tool execution ordering.
+        //   New principle: Tool execution state kept in owning chat/actor turn,或 narrow runtime-neutral tool scheduling abstraction(no process-local progress storage)。Streaming tool progress advanced by owning execution flow;process-local channels 仅作 transport mechanics,不作 business progress 来源。
         // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
         //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
         //   New principle: ChatStreamAsync owns the stream flow directly; the Task.Run + Channel owned-stream loop and stream_buffer_capacity config were removed; middleware wrapping stays inside private bridge adapters.
@@ -280,10 +283,11 @@ public sealed class ChatRuntime
                 yield return new LLMStreamChunk { DeltaContent = "\n\n" };
             }
 
-            using var streamingExecutor = new StreamingToolExecutor(
+            var streamingExecutor = new StreamingToolExecutor(
                 _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
                 requestMetadata: baseRequest.Metadata,
                 toolContext: baseRequest.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest));
+            using var streamingToolState = streamingExecutor.CreateExecutionState();
 
             List<ToolCall>? deferredToolCalls = _hooks != null ? [] : null;
 
@@ -314,7 +318,7 @@ public sealed class ChatRuntime
                                    if (deferredToolCalls != null)
                                        deferredToolCalls.Add(toolCall);
                                    else
-                                       streamingExecutor.AddTool(toolCall);
+                                       streamingExecutor.AddTool(streamingToolState, toolCall);
                                }))
             {
                 wroteOutput = true;
@@ -327,7 +331,7 @@ public sealed class ChatRuntime
 
             if (roundResult.Terminated)
             {
-                streamingExecutor.Discard();
+                streamingExecutor.Discard(streamingToolState);
                 AppendAssistantMessage(messages, pendingHistoryMessages, roundResult.Content, roundResult.ReasoningContent, roundResult.ToolCalls);
                 finalContent = roundResult.Content;
                 break;
@@ -373,13 +377,14 @@ public sealed class ChatRuntime
                             roundResult.ReasoningContent,
                             parsed.ToolCalls);
 
-                        using var textToolExecutor = new StreamingToolExecutor(
+                        var textToolExecutor = new StreamingToolExecutor(
                             _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
                             requestMetadata: baseRequest.Metadata,
                             toolContext: AgentToolExecutionContextMapper.FromRequest(roundRequest));
+                        using var textToolState = textToolExecutor.CreateExecutionState();
                         foreach (var tc in parsed.ToolCalls)
-                            textToolExecutor.AddTool(tc);
-                        await foreach (var result in textToolExecutor.GetRemainingResultsAsync(runToken))
+                            textToolExecutor.AddTool(textToolState, tc);
+                        await foreach (var result in textToolExecutor.GetRemainingResultsAsync(textToolState, runToken))
                         {
                             var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.Result);
                             messages.Add(toolMsg);
@@ -430,7 +435,7 @@ public sealed class ChatRuntime
                 if (deferredToolCalls != null)
                 {
                     foreach (var tc in deferredToolCalls)
-                        streamingExecutor.AddTool(tc);
+                        streamingExecutor.AddTool(streamingToolState, tc);
                 }
             }
 
@@ -444,7 +449,7 @@ public sealed class ChatRuntime
             messages.Add(assistantToolCallMessage);
             pendingHistoryMessages.Add(assistantToolCallMessage);
 
-            await foreach (var result in streamingExecutor.GetRemainingResultsAsync(runToken))
+            await foreach (var result in streamingExecutor.GetRemainingResultsAsync(streamingToolState, runToken))
             {
                 var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.Result);
                 messages.Add(toolMsg);
@@ -496,13 +501,14 @@ public sealed class ChatRuntime
                     finalRound.ReasoningContent,
                     finalParsed.ToolCalls);
 
-                using var finalToolExecutor = new StreamingToolExecutor(
+                var finalToolExecutor = new StreamingToolExecutor(
                     _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
                     requestMetadata: baseRequest.Metadata,
                     toolContext: finalRequest.ToolContext);
+                using var finalToolState = finalToolExecutor.CreateExecutionState();
                 foreach (var tc in finalParsed.ToolCalls)
-                    finalToolExecutor.AddTool(tc);
-                await foreach (var result in finalToolExecutor.GetRemainingResultsAsync(runToken))
+                    finalToolExecutor.AddTool(finalToolState, tc);
+                await foreach (var result in finalToolExecutor.GetRemainingResultsAsync(finalToolState, runToken))
                 {
                     var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.Result);
                     messages.Add(toolMsg);
