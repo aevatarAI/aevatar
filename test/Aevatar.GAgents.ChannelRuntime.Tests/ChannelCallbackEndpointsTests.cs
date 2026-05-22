@@ -67,20 +67,23 @@ public sealed class ChannelCallbackEndpointsTests
     [Fact]
     public async Task HandleRegisterAsync_RejectsUnsupportedPlatform()
     {
-        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
-        provisioningService.Platform.Returns("lark");
+        var registrationFacade = new ChannelRelayRegistrationFacade([]);
+        var http = CreateJsonHttpContext(
+            """{"platform":"telegram","webhook_base_url":"https://aevatar.example.com"}""",
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
         var result = await InvokeAsync(
             "HandleRegisterAsync",
-            CreateJsonHttpContext("""{"platform":"telegram"}"""),
-            new[] { provisioningService },
+            http,
+            registrationFacade,
             NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
         response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
         response.Body.Should().Contain("supported production contract");
-        response.Body.Should().Contain("lark");
-        await provisioningService.DidNotReceive().ProvisionAsync(Arg.Any<NyxChannelBotProvisioningRequest>(), Arg.Any<CancellationToken>());
+        response.Body.Should().Contain("unsupported_platform");
     }
 
     [Fact]
@@ -105,12 +108,7 @@ public sealed class ChannelCallbackEndpointsTests
             "scope-1");
         http.Request.Headers.Authorization = "Bearer test-token";
 
-        var result = await InvokeAsync(
-            "HandleRegisterAsync",
-            http,
-            new[] { provisioningService },
-            NullLoggerFactory.Instance,
-            CancellationToken.None);
+        var result = await InvokeAsync("HandleRegisterAsync", http, CreateRegistrationFacade(provisioningService), NullLoggerFactory.Instance, CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
@@ -139,12 +137,7 @@ public sealed class ChannelCallbackEndpointsTests
             """{"platform":"lark","app_id":"cli_123","app_secret":"secret","webhook_base_url":"https://aevatar.example.com"}""");
         http.Request.Headers.Authorization = "Bearer test-token";
 
-        var result = await InvokeAsync(
-            "HandleRegisterAsync",
-            http,
-            new[] { provisioningService },
-            NullLoggerFactory.Instance,
-            CancellationToken.None);
+        var result = await InvokeAsync("HandleRegisterAsync", http, CreateRegistrationFacade(provisioningService), NullLoggerFactory.Instance, CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
         response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
@@ -169,12 +162,7 @@ public sealed class ChannelCallbackEndpointsTests
             "scope-1");
         http.Request.Headers.Authorization = "Bearer test-token";
 
-        var result = await InvokeAsync(
-            "HandleRegisterAsync",
-            http,
-            new[] { provisioningService },
-            NullLoggerFactory.Instance,
-            CancellationToken.None);
+        var result = await InvokeAsync("HandleRegisterAsync", http, CreateRegistrationFacade(provisioningService), NullLoggerFactory.Instance, CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
         response.StatusCode.Should().Be(StatusCodes.Status502BadGateway);
@@ -199,12 +187,7 @@ public sealed class ChannelCallbackEndpointsTests
             "scope-1");
         http.Request.Headers.Authorization = "Bearer test-token";
 
-        var result = await InvokeAsync(
-            "HandleRegisterAsync",
-            http,
-            new[] { provisioningService },
-            NullLoggerFactory.Instance,
-            CancellationToken.None);
+        var result = await InvokeAsync("HandleRegisterAsync", http, CreateRegistrationFacade(provisioningService), NullLoggerFactory.Instance, CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
         response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
@@ -255,8 +238,7 @@ public sealed class ChannelCallbackEndpointsTests
         var result = await InvokeAsync(
             "HandleRebuildRegistrationsAsync",
             http,
-            actorRuntime,
-            (IActorDispatchPort)actorRuntime,
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
             NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
@@ -280,8 +262,7 @@ public sealed class ChannelCallbackEndpointsTests
         var result = await InvokeAsync(
             "HandleRebuildRegistrationsAsync",
             http,
-            actorRuntime,
-            (IActorDispatchPort)actorRuntime,
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
             NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
@@ -310,8 +291,7 @@ public sealed class ChannelCallbackEndpointsTests
         var result = await InvokeAsync(
             "HandleRebuildRegistrationsAsync",
             CreateJsonHttpContext("""{"scope_id":"scope-2","registration_id":"reg-1"}""", "scope-1"),
-            actorRuntime,
-            (IActorDispatchPort)actorRuntime,
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
             NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
@@ -336,8 +316,7 @@ public sealed class ChannelCallbackEndpointsTests
         var result = await InvokeAsync(
             "HandleRebuildRegistrationsAsync",
             CreateHttpContext("scope-1"),
-            actorRuntime,
-            (IActorDispatchPort)actorRuntime,
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
             NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
@@ -391,7 +370,12 @@ public sealed class ChannelCallbackEndpointsTests
                 Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
 
-        var result = await InvokeAsync("HandleDeleteRegistrationAsync", "reg-1", actorRuntime, (IActorDispatchPort)actorRuntime, queryPort, CancellationToken.None);
+        var result = await InvokeAsync(
+            "HandleDeleteRegistrationAsync",
+            "reg-1",
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
+            queryPort,
+            CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
@@ -408,7 +392,12 @@ public sealed class ChannelCallbackEndpointsTests
             .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
 
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
-        var result = await InvokeAsync("HandleDeleteRegistrationAsync", "missing", actorRuntime, (IActorDispatchPort)actorRuntime, queryPort, CancellationToken.None);
+        var result = await InvokeAsync(
+            "HandleDeleteRegistrationAsync",
+            "missing",
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
+            queryPort,
+            CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
         response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
@@ -488,6 +477,10 @@ public sealed class ChannelCallbackEndpointsTests
         context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(json));
         return context;
     }
+
+    private static ChannelRelayRegistrationFacade CreateRegistrationFacade(
+        params INyxChannelBotProvisioningService[] provisioningServices) =>
+        new(provisioningServices);
 
     private static async Task<IResult> InvokeAsync(string methodName, params object?[] args)
     {

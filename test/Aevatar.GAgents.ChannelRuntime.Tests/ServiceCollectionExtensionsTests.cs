@@ -1,4 +1,5 @@
 using Aevatar.AI.ToolProviders.Channel;
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
@@ -65,6 +66,12 @@ public sealed class ServiceCollectionExtensionsTests
             .Should().Be(0);
         services.Count(descriptor => descriptor.ServiceType == typeof(INyxChannelBotProvisioningService))
             .Should().Be(2);
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ChannelRelayRegistrationFacade));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ChannelRegistrationCommandFacade));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ICommandDispatchService<ChannelBotRegisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>));
         registry.Get(ChannelId.From("telegram")).Should().BeOfType<Aevatar.GAgents.Platform.Telegram.TelegramMessageComposer>();
     }
 

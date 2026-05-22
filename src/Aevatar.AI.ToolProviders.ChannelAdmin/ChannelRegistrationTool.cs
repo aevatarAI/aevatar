@@ -1,7 +1,6 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Google.Protobuf.WellKnownTypes;
@@ -16,9 +15,9 @@ namespace Aevatar.AI.ToolProviders.ChannelAdmin;
 /// </summary>
 public sealed class ChannelRegistrationTool : IAgentTool
 {
-    // Refactor (iter27/cluster-003-channel-registration-scope-backfill):
-    //   Old pattern: tool exposed repair_lark_mirror and rebuild_projection backfilled write candidates from readmodels.
-    //   New principle: tool recovery surface is register_lark_via_nyx plus projection-only rebuild_projection.
+    // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
+    //   Old pattern: Nyx relay registration endpoints + singleton provisioning services 在 Host 内做 platform selection / scope resolution / remote Nyx provisioning / actor creation / envelope construction / dispatch through raw runtime/dispatch helpers。
+    //   New principle: Channel registration 暴露 typed application command facade(reuse existing CQRS command dispatch skeleton);Host 仅 adapt HTTP;provisioning adapters 只调 existing NyxID REST surfaces(**不修改 NyxID 仓库**);local mirror writes 进 standard command skeleton via narrow dispatch port。**不引入新 actor type / 新 envelope / 新 projection phase**(reflector force-pick minimal,排除 structural 的 ChannelRelayRegistrationRunGAgent)。
     private const string DefaultNyxProviderSlug = "api-lark-bot";
     private readonly IServiceProvider _serviceProvider;
 
@@ -103,8 +102,8 @@ public sealed class ChannelRegistrationTool : IAgentTool
         {
             "list" => await ExecuteWithQueryAsync(queryPort => ListAsync(queryPort, ct)),
             "register_lark_via_nyx" => await RegisterLarkViaNyxAsync(token, root, ct),
-            "rebuild_projection" => await ExecuteWithStoreAsync((queryPort, actorRuntime, dispatchPort) => RebuildProjectionAsync(actorRuntime, dispatchPort, root, ct)),
-            "delete" => await ExecuteWithStoreAsync((queryPort, actorRuntime, dispatchPort) => DeleteAsync(queryPort, actorRuntime, dispatchPort, root, ct)),
+            "rebuild_projection" => await ExecuteWithCommandFacadeAsync((queryPort, commandFacade) => RebuildProjectionAsync(commandFacade, root, ct)),
+            "delete" => await ExecuteWithCommandFacadeAsync((queryPort, commandFacade) => DeleteAsync(queryPort, commandFacade, root, ct)),
             "register" => RetiredActionError("Direct callback registration is retired. Use action=register_lark_via_nyx."),
             "update_token" => RetiredActionError("update_token is retired. ChannelRuntime no longer stores or refreshes channel credentials."),
             _ => await ExecuteWithQueryAsync(queryPort => ListAsync(queryPort, ct)),
@@ -120,18 +119,17 @@ public sealed class ChannelRegistrationTool : IAgentTool
         return await operation(queryPort);
     }
 
-    private async Task<string> ExecuteWithStoreAsync(
-        Func<IChannelBotRegistrationQueryPort, IActorRuntime, IActorDispatchPort, Task<string>> operation)
+    private async Task<string> ExecuteWithCommandFacadeAsync(
+        Func<IChannelBotRegistrationQueryPort, ChannelRegistrationCommandFacade, Task<string>> operation)
     {
         var queryPort = _serviceProvider.GetService<IChannelBotRegistrationQueryPort>();
-        var actorRuntime = _serviceProvider.GetService<IActorRuntime>();
-        var dispatchPort = _serviceProvider.GetService<IActorDispatchPort>();
-        if (queryPort is null || actorRuntime is null || dispatchPort is null)
+        var commandFacade = _serviceProvider.GetService<ChannelRegistrationCommandFacade>();
+        if (queryPort is null || commandFacade is null)
         {
-            return """{"error":"Channel runtime not available. IChannelBotRegistrationQueryPort, IActorRuntime, or IActorDispatchPort is not registered in DI."}""";
+            return """{"error":"Channel runtime not available. IChannelBotRegistrationQueryPort or ChannelRegistrationCommandFacade is not registered in DI."}""";
         }
 
-        return await operation(queryPort, actorRuntime, dispatchPort);
+        return await operation(queryPort, commandFacade);
     }
 
     private static string? GetStr(JsonElement element, string propertyName) =>
@@ -268,17 +266,14 @@ public sealed class ChannelRegistrationTool : IAgentTool
     }
 
     private async Task<string> RebuildProjectionAsync(
-        IActorRuntime actorRuntime,
-        IActorDispatchPort dispatchPort,
+        ChannelRegistrationCommandFacade commandFacade,
         JsonElement args,
         CancellationToken ct)
     {
-        // Refactor (iter27/cluster-003-channel-registration-scope-backfill):
-        //   Old pattern: rebuild_projection read query state and dispatched repair writes.
-        //   New principle: dispatch only the rebuild command; readmodel visibility is observed later.
-        await ChannelBotRegistrationStoreCommands.DispatchRebuildProjectionAsync(
-            actorRuntime,
-            dispatchPort,
+        // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
+        //   Old pattern: tool resolved raw runtime/dispatch and called static command helper.
+        //   New principle: tool is an adapter; rebuild goes through typed channel registration command facade.
+        await commandFacade.RebuildProjectionAsync(
             GetStr(args, "reason")?.Trim() ?? "tool_manual_rebuild",
             ct);
 
@@ -292,11 +287,13 @@ public sealed class ChannelRegistrationTool : IAgentTool
 
     private async Task<string> DeleteAsync(
         IChannelBotRegistrationQueryPort queryPort,
-        IActorRuntime actorRuntime,
-        IActorDispatchPort dispatchPort,
+        ChannelRegistrationCommandFacade commandFacade,
         JsonElement args,
         CancellationToken ct)
     {
+        // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
+        //   Old pattern: tool queried then dispatched unregister through raw runtime helper.
+        //   New principle: query is only existence/confirmation; write enters command facade.
         var registrationId = GetStr(args, "registration_id") ?? GetStr(args, "id");
         if (string.IsNullOrWhiteSpace(registrationId))
             return """{"error":"'registration_id' is required for delete"}""";
@@ -323,11 +320,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
             });
         }
 
-        await ChannelBotRegistrationStoreCommands.DispatchUnregisterAsync(
-            actorRuntime,
-            dispatchPort,
-            registrationId,
-            ct);
+        await commandFacade.UnregisterAsync(registrationId, ct);
 
         // Refactor (iter6/cluster-014):
         //   Old pattern: Delete slept and re-read the projection to upgrade accepted into deleted.
