@@ -232,8 +232,7 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         _ = ct;
         var normalizedRequest = NormalizeRequest(request);
         var accessToken = ResolveAccessToken(normalizedRequest);
-        var routePreference = NormalizeRoutePreference(
-            TryGetMetadataValue(normalizedRequest, LLMRequestMetadataKeys.NyxIdRoutePreference));
+        var routePreference = NormalizeRoutePreference(ResolveRoutePreference(normalizedRequest));
         var route = ResolvePreferredRoute(normalizedRequest, accessToken, routePreference);
 
         _logger.LogDebug(
@@ -289,6 +288,8 @@ public sealed class NyxIdLLMProvider : ILLMProvider
             RequestId = request.RequestId,
             Metadata = request.Metadata,
             CallerContext = request.CallerContext,
+            ToolContext = request.ToolContext,
+            RoutingContext = request.RoutingContext,
             Tools = request.Tools,
             Model = model,
             Temperature = NormalizeTemperatureForModel(model, request.Temperature),
@@ -333,7 +334,9 @@ public sealed class NyxIdLLMProvider : ILLMProvider
 
     private string ResolveModel(LLMRequest request)
     {
-        var metadataModel = TryGetMetadataValue(request, LLMRequestMetadataKeys.ModelOverride);
+        var metadataModel = request.RoutingContext?.ModelOverride
+                            ?? request.ToolContext?.Routing.ModelOverride
+                            ?? TryGetMetadataValue(request, LLMRequestMetadataKeys.ModelOverride);
         var requestedModel = request.Model?.Trim();
 
         return !string.IsNullOrWhiteSpace(metadataModel)
@@ -356,6 +359,10 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         if (!string.IsNullOrWhiteSpace(typedToken))
             return typedToken;
 
+        var toolContextToken = request.ToolContext?.Credentials.NyxIdAccessToken?.Trim();
+        if (!string.IsNullOrWhiteSpace(toolContextToken))
+            return toolContextToken;
+
         var metadataToken = TryGetMetadataValue(request, LLMRequestMetadataKeys.NyxIdAccessToken);
         if (!string.IsNullOrWhiteSpace(metadataToken))
             return metadataToken;
@@ -371,6 +378,11 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         request.Metadata != null && request.Metadata.TryGetValue(key, out var value)
             ? value?.Trim()
             : null;
+
+    private static string? ResolveRoutePreference(LLMRequest request) =>
+        request.RoutingContext?.NyxIdRoutePreference
+        ?? request.ToolContext?.Routing.NyxIdRoutePreference
+        ?? TryGetMetadataValue(request, LLMRequestMetadataKeys.NyxIdRoutePreference);
 
     private static string NormalizeRoutePreference(string? value)
     {

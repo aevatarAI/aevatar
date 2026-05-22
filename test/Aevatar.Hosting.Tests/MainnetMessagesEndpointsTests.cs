@@ -5,6 +5,8 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.ChatRouting.Abstractions;
+using Aevatar.ChatRouting.Core;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -434,13 +436,253 @@ public sealed class MainnetMessagesEndpointsTests
         toolNames.Should().NotContain(["use_skill", "ornn_search_skills", "WebSearch"]);
     }
 
+    [Fact]
+    public async Task PostMessages_WhenChatRouteForwardsToModel_RewritesModelBeforeCompletionService()
+    {
+        var provider = new MessagesRecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk { DeltaContent = "Hi", IsLast = true, Usage = new TokenUsage(1, 1, 2) },
+            ],
+        };
+        var queryPort = MessagesStaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
+            ForwardToModelAction("routed-claude"),
+            []));
+        await using var app = await CreateAppAsync(provider, chatRoutePolicyQueryPort: queryPort);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
+        {
+            Content = JsonContent("""
+            {
+              "model": "original-claude",
+              "max_tokens": 32,
+              "messages": [{"role": "user", "content": "ping"}]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "anthropic-bearer");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.Model.Should().Be("routed-claude");
+    }
+
+    [Fact]
+    public async Task PostMessages_WhenChatRouteMatchesModelAndDeclaredTools_UsesRuleAction()
+    {
+        var provider = new MessagesRecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk { DeltaContent = "Hi", IsLast = true, Usage = new TokenUsage(1, 1, 2) },
+            ],
+        };
+        var queryPort = MessagesStaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
+            ForwardToModelAction("default-claude"),
+            [
+                new ChatRouteRule
+                {
+                    RuleId = "messages-model-tools",
+                    Priority = 10,
+                    Match = new ChatRouteMatch
+                    {
+                        SourceKind = ChatSourceKind.NyxResponses,
+                        Model = "original-claude",
+                        ToolMode = ToolMode.Declared,
+                    },
+                    Action = ForwardToModelAction("routed-tool-claude"),
+                },
+            ]));
+        await using var app = await CreateAppAsync(provider, chatRoutePolicyQueryPort: queryPort);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
+        {
+            Content = JsonContent("""
+            {
+              "model": "original-claude",
+              "max_tokens": 32,
+              "messages": [{"role": "user", "content": "ping"}],
+              "tools": [{"name":"do_thing","description":"do a thing","input_schema":{"type":"object","properties":{}}}]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "anthropic-bearer");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.Model.Should().Be("routed-tool-claude");
+    }
+
+    [Fact]
+    public async Task PostMessages_WhenBareClaudeModel_AutoPrefixesAnthropicAndResolvesRoute()
+    {
+        // Regression: cc-switch / Claude Code / Anthropic SDK send raw model
+        // ids without provider prefix (e.g. `claude-sonnet-4-5-20250929`).
+        // Without auto-prefix the catalog router treats them as gateway-default
+        // and NyxID upstream rejects with HTTP 400. /v1/messages must inject
+        // `anthropic/` so the existing route resolver finds the anthropic
+        // backend, then strip the prefix back off before sending to the LLM
+        // provider so the bare model reaches the upstream verbatim.
+        var provider = new MessagesRecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk { DeltaContent = "ok", IsLast = true, Usage = new TokenUsage(1, 1, 2) },
+            ],
+        };
+        var routeResolver = new MessagesRecordingRouteResolver(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["anthropic"] = "/api/v1/llm/anthropic/v1",
+        });
+        await using var app = await CreateAppAsync(provider, routeResolver: routeResolver);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
+        {
+            Content = JsonContent("""
+            {
+              "model": "claude-sonnet-4-5-20250929",
+              "max_tokens": 16,
+              "messages": [{"role": "user", "content": "ping"}]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "anthropic-bearer");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        routeResolver.ResolvedSlugs.Should().ContainSingle()
+            .Which.Should().Be("anthropic", "the synthetic `anthropic/` prefix must reach the route resolver");
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.Model.Should().Be(
+            "claude-sonnet-4-5-20250929",
+            "the prefix is a routing artifact only — the LLM provider must see the bare anthropic model id");
+    }
+
+    [Fact]
+    public async Task PostMessages_WhenBareClaudeModelAndResolverUnknown_FallsBackToOriginalBareModel()
+    {
+        // Defense in depth: when the route resolver doesn't recognize the
+        // synthesized "anthropic" slug (e.g. catalog hasn't loaded yet, or a
+        // future deploy renames the route), the prefix injection must not
+        // make things worse than the pre-fix behavior. Provider should still
+        // see the original bare model so the request reaches the gateway with
+        // the same string the client sent.
+        var provider = new MessagesRecordingLLMProvider
+        {
+            StreamChunks =
+            [
+                new LLMStreamChunk { DeltaContent = "ok", IsLast = true, Usage = new TokenUsage(1, 1, 2) },
+            ],
+        };
+        await using var app = await CreateAppAsync(provider); // MessagesNoopRouteResolver
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
+        {
+            Content = JsonContent("""
+            {
+              "model": "claude-sonnet-4-5-20250929",
+              "max_tokens": 16,
+              "messages": [{"role": "user", "content": "ping"}]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "anthropic-bearer");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        provider.LastRequest!.Model.Should().Be(
+            "claude-sonnet-4-5-20250929",
+            "when the resolver doesn't know `anthropic`, fall back to the pre-fix behavior verbatim");
+    }
+
+    [Fact]
+    public async Task PostMessages_WhenChatRouteRejects_ReturnsForbiddenWithoutLlmCall()
+    {
+        var provider = new MessagesRecordingLLMProvider();
+        var queryPort = MessagesStaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
+            RejectAction("policy_denied", "blocked by policy"),
+            []));
+        await using var app = await CreateAppAsync(provider, chatRoutePolicyQueryPort: queryPort);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
+        {
+            Content = JsonContent("""
+            {
+              "model": "original-claude",
+              "max_tokens": 32,
+              "messages": [{"role": "user", "content": "ping"}]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "anthropic-bearer");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden, body);
+        using var doc = JsonDocument.Parse(body);
+        doc.RootElement.GetProperty("error").GetProperty("type").GetString().Should().Be("chat_route_rejected");
+        doc.RootElement.GetProperty("error").GetProperty("message").GetString().Should().Be("blocked by policy");
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostMessages_WhenChatRouteForwardsToGAgent_ReturnsNotImplementedWithoutLlmCall()
+    {
+        var provider = new MessagesRecordingLLMProvider();
+        var queryPort = MessagesStaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
+            ForwardToGAgentAction("target-agent"),
+            []));
+        await using var app = await CreateAppAsync(provider, chatRoutePolicyQueryPort: queryPort);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
+        {
+            Content = JsonContent("""
+            {
+              "model": "original-claude",
+              "max_tokens": 32,
+              "messages": [{"role": "user", "content": "ping"}]
+            }
+            """),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "anthropic-bearer");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotImplemented, body);
+        using var doc = JsonDocument.Parse(body);
+        doc.RootElement.GetProperty("error").GetProperty("type").GetString()
+            .Should().Be("chat_route_action_not_supported");
+        provider.LastRequest.Should().BeNull();
+    }
+
     // ----- Test fixtures -------------------------------------------------------
 
     private static async Task<WebApplication> CreateAppAsync(
         MessagesRecordingLLMProvider provider,
         MessagesRecordingSessionStore? sessions = null,
         IResponsesCallerScopeResolver? callerScopeResolver = null,
-        IResponsesToolProvider? responsesToolProvider = null)
+        IResponsesToolProvider? responsesToolProvider = null,
+        IChatRoutePolicyQueryPort? chatRoutePolicyQueryPort = null,
+        IResponsesRouteResolver? routeResolver = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -454,7 +696,10 @@ public sealed class MainnetMessagesEndpointsTests
         builder.Services.AddSingleton<ILlmSessionQueryPort>(sessions);
         builder.Services.AddSingleton<IResponsesCompletionApplicationService, ResponsesCompletionApplicationService>();
         builder.Services.AddSingleton(callerScopeResolver ?? new MessagesStubCallerScopeResolver());
-        builder.Services.AddSingleton<IResponsesRouteResolver>(new MessagesNoopRouteResolver());
+        builder.Services.AddSingleton(chatRoutePolicyQueryPort ?? MessagesStaticChatRoutePolicyQueryPort.ForSnapshot(
+            new ChatRoutePolicySnapshot(ForwardToModelAction(string.Empty), [])));
+        builder.Services.AddSingleton(new ChatRouteResolver(new MessagesStaticChatRouteFallbackProvider(string.Empty)));
+        builder.Services.AddSingleton(routeResolver ?? (IResponsesRouteResolver)new MessagesNoopRouteResolver());
         if (responsesToolProvider != null)
             builder.Services.AddSingleton(responsesToolProvider);
 
@@ -512,6 +757,56 @@ public sealed class MainnetMessagesEndpointsTests
         public Task<string?> ResolveRouteValueAsync(string slug, string bearerToken, CancellationToken ct) =>
             Task.FromResult<string?>(null);
     }
+
+    private sealed class MessagesRecordingRouteResolver(IReadOnlyDictionary<string, string> map)
+        : IResponsesRouteResolver
+    {
+        public List<string> ResolvedSlugs { get; } = [];
+
+        public Task<string?> ResolveRouteValueAsync(string slug, string bearerToken, CancellationToken ct)
+        {
+            ResolvedSlugs.Add(slug);
+            return Task.FromResult(map.TryGetValue(slug, out var value) ? value : null);
+        }
+    }
+
+    private sealed class MessagesStaticChatRoutePolicyQueryPort(ChatRoutePolicySnapshot? snapshot)
+        : IChatRoutePolicyQueryPort
+    {
+        public static MessagesStaticChatRoutePolicyQueryPort ForSnapshot(ChatRoutePolicySnapshot? snapshot) =>
+            new(snapshot);
+
+        public Task<ChatRoutePolicySnapshot?> LookupForCallerAsync(
+            OwnerScope callerScope,
+            CancellationToken ct = default) =>
+            Task.FromResult(snapshot);
+    }
+
+    private sealed class MessagesStaticChatRouteFallbackProvider(string modelName) : IChatRouteFallbackProvider
+    {
+        public ChatRouteDecision GetFallbackDecision() => new()
+        {
+            Action = ForwardToModelAction(modelName),
+            UsedFallback = true,
+            MatchedRuleId = string.Empty,
+            ResolvedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+    }
+
+    private static ChatRouteAction ForwardToModelAction(string modelName) => new()
+    {
+        ForwardToModel = new ForwardToModel { ModelName = modelName },
+    };
+
+    private static ChatRouteAction RejectAction(string code, string message) => new()
+    {
+        Reject = new Reject { Reason = message },
+    };
+
+    private static ChatRouteAction ForwardToGAgentAction(string actorId) => new()
+    {
+        ForwardToGagent = new ForwardToGAgent { ActorId = actorId },
+    };
 
     private sealed class MessagesRecordingSessionStore :
         ILlmSessionRegistrationPort,

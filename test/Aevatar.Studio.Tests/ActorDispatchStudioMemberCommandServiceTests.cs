@@ -288,6 +288,44 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
     }
 
     [Fact]
+    public async Task StartBindingRunAsync_ShouldDefaultMissingGAgentEndpointResponseTypeUrl()
+    {
+        var dispatch = new RecordingDispatchPort();
+        var service = new ActorDispatchStudioMemberCommandService(new RecordingBootstrap(), dispatch);
+
+        await service.StartBindingRunAsync(
+            new StudioMemberBindingRunStartRequest(
+                BindingRunId: "bind-gagent",
+                ScopeId: ScopeId,
+                MemberId: "m-1",
+                ImplementationKind: MemberImplementationKindNames.GAgent,
+                Binding: new UpdateStudioMemberBindingRequest(
+                    GAgent: new StudioMemberGAgentBindingSpec(
+                        ActorTypeName: "Aevatar.Studio.Hosting.Endpoints.ScriptGenerateGAgent, Aevatar.Studio.Hosting",
+                        Endpoints: [
+                            new StudioMemberGAgentEndpointSpec(
+                                EndpointId: "run",
+                                DisplayName: "Run",
+                                Kind: "command",
+                                RequestTypeUrl: "type.googleapis.com/google.protobuf.StringValue",
+                                ResponseTypeUrl: null!)
+                            {
+                                Description = "You are the team member gagent."
+                            }
+                        ]))),
+            CancellationToken.None);
+
+        var endpoint = dispatch.Dispatches.Should().ContainSingle().Which
+            .Envelope.Payload.Unpack<StudioMemberBindingRunRequested>()
+            .Request.Gagent.Endpoints.Should().ContainSingle().Which;
+        endpoint.EndpointId.Should().Be("run");
+        endpoint.Kind.Should().Be(StudioMemberGAgentEndpointKind.Command);
+        endpoint.RequestTypeUrl.Should().Be("type.googleapis.com/google.protobuf.StringValue");
+        endpoint.ResponseTypeUrl.Should().BeEmpty();
+        endpoint.Description.Should().Be("You are the team member gagent.");
+    }
+
+    [Fact]
     public async Task StartBindingRunAsync_ShouldRejectMissingGAgentEndpointKind()
     {
         var service = new ActorDispatchStudioMemberCommandService(

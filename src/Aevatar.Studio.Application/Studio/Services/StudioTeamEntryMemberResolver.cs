@@ -1,0 +1,96 @@
+using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Contracts;
+
+namespace Aevatar.Studio.Application.Studio.Services;
+
+public sealed class StudioTeamEntryMemberResolver : ITeamEntryMemberResolver
+{
+    private readonly IStudioTeamQueryPort _teamQueryPort;
+    private readonly IStudioMemberQueryPort _memberQueryPort;
+
+    public StudioTeamEntryMemberResolver(
+        IStudioTeamQueryPort teamQueryPort,
+        IStudioMemberQueryPort memberQueryPort)
+    {
+        _teamQueryPort = teamQueryPort ?? throw new ArgumentNullException(nameof(teamQueryPort));
+        _memberQueryPort = memberQueryPort ?? throw new ArgumentNullException(nameof(memberQueryPort));
+    }
+
+    public async Task<TeamEntryMemberResolution> ResolveAsync(
+        string scopeId,
+        string teamId,
+        CancellationToken ct = default)
+    {
+        var team = await _teamQueryPort.GetAsync(scopeId, teamId, ct);
+        if (team == null)
+        {
+            throw Failure(
+                TeamEntryMemberErrorCodes.TeamNotFound,
+                scopeId,
+                teamId,
+                $"team '{teamId}' not found in scope '{scopeId}'.");
+        }
+
+        if (string.Equals(team.LifecycleStage, TeamLifecycleStageNames.Archived, StringComparison.Ordinal))
+        {
+            throw Failure(
+                TeamEntryMemberErrorCodes.TeamArchived,
+                team.ScopeId,
+                team.TeamId,
+                $"team '{team.TeamId}' is archived.");
+        }
+
+        var entryMemberId = team.EntryMemberId?.Trim() ?? string.Empty;
+        if (entryMemberId.Length == 0)
+        {
+            throw Failure(
+                TeamEntryMemberErrorCodes.EntryMemberNotConfigured,
+                team.ScopeId,
+                team.TeamId,
+                $"team '{team.TeamId}' has no entry member configured.");
+        }
+
+        var member = await _memberQueryPort.GetAsync(team.ScopeId, entryMemberId, ct);
+        if (member == null)
+        {
+            throw Failure(
+                TeamEntryMemberErrorCodes.EntryMemberNotFound,
+                team.ScopeId,
+                team.TeamId,
+                $"entry member '{entryMemberId}' not found in scope '{team.ScopeId}'.");
+        }
+
+        if (!string.Equals(member.Summary.TeamId, team.TeamId, StringComparison.Ordinal))
+        {
+            throw Failure(
+                TeamEntryMemberErrorCodes.EntryMemberMismatch,
+                team.ScopeId,
+                team.TeamId,
+                $"entry member '{entryMemberId}' does not belong to team '{team.TeamId}'.");
+        }
+
+        if (!string.Equals(member.Summary.LifecycleStage, MemberLifecycleStageNames.BindReady, StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(member.Summary.PublishedServiceId))
+        {
+            throw Failure(
+                TeamEntryMemberErrorCodes.EntryMemberNotReady,
+                team.ScopeId,
+                team.TeamId,
+                $"entry member '{entryMemberId}' is not bind-ready.");
+        }
+
+        return new TeamEntryMemberResolution(
+            ScopeId: team.ScopeId,
+            TeamId: team.TeamId,
+            EntryMemberId: entryMemberId,
+            PublishedServiceId: member.Summary.PublishedServiceId);
+    }
+
+    private static TeamEntryMemberResolutionException Failure(
+        string code,
+        string scopeId,
+        string teamId,
+        string message) =>
+        new(code, scopeId, teamId, message);
+}

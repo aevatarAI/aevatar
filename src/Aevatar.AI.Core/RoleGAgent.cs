@@ -558,16 +558,14 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             .On<ClearPendingApprovalEvent>(ApplyClearPendingApproval)
             .OrCurrent();
 
-    protected override Task OnStateChangedAfterConfigAppliedAsync(RoleGAgentState state, CancellationToken ct)
+    protected override async Task OnStateChangedAfterConfigAppliedAsync(RoleGAgentState state, CancellationToken ct)
     {
-        _ = ct;
         // Refactor (iter15/cluster-028):
         //   Old pattern: replay exposed only RoleName and left role identity recoverable only from actor id shape.
         //   New principle: replay restores the typed RoleId from committed RoleGAgent state.
         RoleId = state.RoleId ?? string.Empty;
         RoleName = state.RoleName ?? string.Empty;
-        ApplyModuleExtensionsFromStateIfNeeded(state);
-        return Task.CompletedTask;
+        await ApplyModuleExtensionsFromStateIfNeededAsync(state, ct);
     }
 
     protected override AIAgentConfigStateOverrides ExtractStateConfigOverrides(RoleGAgentState state)
@@ -1222,7 +1220,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         return state.ConfigOverrides;
     }
 
-    private void ApplyModuleExtensionsFromStateIfNeeded(RoleGAgentState state)
+    private async Task ApplyModuleExtensionsFromStateIfNeededAsync(RoleGAgentState state, CancellationToken ct)
     {
         var eventModules = NormalizeModuleExtensionText(state.EventModules);
         var eventRoutes = NormalizeModuleExtensionText(state.EventRoutes);
@@ -1235,11 +1233,11 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
 
         if (string.IsNullOrEmpty(eventModules))
         {
-            SetModules([]);
+            await SetModulesAsync([], ct);
         }
         else
         {
-            RoleGAgentFactory.ApplyModuleExtensions(this, eventModules, eventRoutes, Services);
+            await RoleGAgentFactory.ApplyModuleExtensionsAsync(this, eventModules, eventRoutes, Services, ct);
         }
 
         _appliedEventModules = eventModules;

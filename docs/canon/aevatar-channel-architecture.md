@@ -2150,7 +2150,7 @@ v1 cutover step 2 细化为：
 
 | Modality | 入口 | 为什么不纳入 |
 |---|---|---|
-| **Voice Presence** | `VoicePresenceGAgent` | 语音是独立 modality：wake word / AEC / VAD / ASR / LLM / TTS 链路完全不同于 IM webhook 模型。Voice ↔ Chat 互通接口见 §15.5 open question |
+| **Voice Presence** | `VoicePresence` EventModule capability on a target actor; `/ws/voice` policy-aware Host entry; `/ws/voice/{actorId}` dev/admin bypass | 语音是独立 modality：wake word / AEC / VAD / ASR / LLM / TTS 链路完全不同于 IM webhook 模型。VoicePresence 不是独立 router/session GAgent，Voice ↔ Chat 互通接口见 §15.5 open question |
 | **Aevatar Console Web chat 框** | `apps/aevatar-console-web/` | Console 是 aevatar 自有前端 UI，直接调 HTTP API，不走外部 IM channel 链路 |
 | **CLI** (`aevatar chat`, `aevatar invoke`) | `tools/Aevatar.Tools.Cli/` | 同上，CLI 直接调 HTTP API |
 | **Direct HTTP API** | `/api/scopes/{scopeId}/...` | 同上 |

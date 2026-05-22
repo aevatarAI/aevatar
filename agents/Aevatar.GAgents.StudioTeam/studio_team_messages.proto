@@ -32,6 +32,7 @@ message StudioTeamState {
   repeated string member_ids = 6;
   google.protobuf.Timestamp created_at_utc = 7;
   google.protobuf.Timestamp updated_at_utc = 8;
+  optional string entry_member_id = 20;
   // Reserved for v2: last_activity_at_utc, etc.
 }
 
@@ -82,4 +83,11 @@ message StudioTeamMemberRosterChangedEvent {
   StudioTeamRosterEffect effect = 4;
   int32  member_count = 5;       // size of member_ids after this event
   google.protobuf.Timestamp changed_at_utc = 6;
+}
+
+message StudioTeamEntryMemberChangedEvent {
+  string team_id = 1;
+  string scope_id = 2;
+  optional string entry_member_id = 3;
+  google.protobuf.Timestamp changed_at_utc = 4;
 }

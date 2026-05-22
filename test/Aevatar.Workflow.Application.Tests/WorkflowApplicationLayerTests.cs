@@ -104,6 +104,62 @@ public sealed class WorkflowApplicationLayerTests
     }
 
     [Fact]
+    public async Task CommandInteractionService_ShouldNotifyAcceptedAfterPreparedDispatchBeforePumpingOutput()
+    {
+        var projectionPort = new FakeProjectionPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var target = CreateBoundTarget(projectionPort, actorPort, "actor-1", "direct", "cmd-1", ["definition-1", "actor-1"]);
+        var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
+        var dispatchRelease = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pipeline = new FakeDispatchPipeline
+        {
+            Result = Success(target, receipt),
+            DispatchPreparedRelease = dispatchRelease,
+        };
+        var outputStream = new FakeEventOutputStream
+        {
+            Events = [BuildEvent("done")],
+        };
+        var accepted = new TaskCompletionSource<WorkflowChatRunAcceptedReceipt>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var acceptedRelease = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = CreateInteractionService(
+            pipeline,
+            outputStream,
+            new FakeWorkflowRunCompletionPolicy
+            {
+                TerminalEventCase = WorkflowRunEventEnvelope.EventOneofCase.RunFinished,
+                TerminalStatus = WorkflowProjectionCompletionStatus.Completed,
+            },
+            new FakeFinalizeEmitter(),
+            new FakeDurableCompletionResolver());
+
+        var executeTask = service.ExecuteAsync(
+            new WorkflowChatRunRequest("hello", "direct", null),
+            static (_, _) => ValueTask.CompletedTask,
+            async (acceptedReceipt, _) =>
+            {
+                accepted.SetResult(acceptedReceipt);
+                await acceptedRelease.Task.ConfigureAwait(false);
+            },
+            CancellationToken.None);
+
+        pipeline.DispatchPreparedCalls.Should().Be(1);
+        outputStream.PumpCalls.Should().Be(0);
+
+        dispatchRelease.SetResult(null);
+        (await accepted.Task.WaitAsync(TimeSpan.FromSeconds(5))).Should().Be(receipt);
+        pipeline.DispatchPreparedCalls.Should().Be(1);
+        outputStream.PumpCalls.Should().Be(0);
+
+        acceptedRelease.SetResult(null);
+        var result = await executeTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        result.Succeeded.Should().BeTrue();
+        outputStream.PumpCalls.Should().Be(1);
+    }
+
+    [Fact]
     public async Task CommandInteractionService_ShouldThrow_WhenCleanupFailsAfterSuccess()
     {
         var projectionPort = new FakeProjectionPort();
@@ -338,6 +394,7 @@ public sealed class WorkflowApplicationLayerTests
         public Exception? DispatchPreparedException { get; set; }
         public bool CleanupOnDispatchPreparedFailure { get; set; } = true;
         public Action? AfterDispatchPrepared { get; set; }
+        public TaskCompletionSource<object?>? DispatchPreparedRelease { get; set; }
         public int PrepareCalls { get; private set; }
         public int DispatchPreparedCalls { get; private set; }
         public int DispatchCalls { get; private set; }
@@ -364,6 +421,8 @@ public sealed class WorkflowApplicationLayerTests
             DispatchPreparedCalls++;
             if (DispatchPreparedException == null)
             {
+                if (DispatchPreparedRelease != null)
+                    await DispatchPreparedRelease.Task.ConfigureAwait(false);
                 AfterDispatchPrepared?.Invoke();
                 return;
             }

@@ -90,7 +90,10 @@ public sealed class ProjectionStudioTeamQueryPort : IStudioTeamQueryPort
             LifecycleStage: NormalizeLifecycleStageWire(document.LifecycleStage),
             MemberCount: document.MemberCount,
             CreatedAt: document.CreatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
-            UpdatedAt: document.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue);
+            UpdatedAt: document.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue)
+        {
+            EntryMemberId = document.HasEntryMemberId ? document.EntryMemberId : null,
+        };
     }
 
     private static string NormalizeLifecycleStageWire(string? wire) => wire switch

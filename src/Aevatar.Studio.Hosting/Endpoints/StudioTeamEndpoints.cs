@@ -41,6 +41,14 @@ internal static class StudioTeamEndpoints
                 "/api/scopes/{scopeId}/teams/{teamId}/archive",
                 HandleArchiveAsync)
             .WithTags("StudioTeams");
+        app.MapPut(
+                "/api/scopes/{scopeId}/teams/{teamId}/entry-member",
+                HandleSetEntryMemberAsync)
+            .WithTags("StudioTeams");
+        app.MapDelete(
+                "/api/scopes/{scopeId}/teams/{teamId}/entry-member",
+                HandleClearEntryMemberAsync)
+            .WithTags("StudioTeams");
 
         // Team -> members listing: queries the member read model filtered by
         // team_id (per ADR-0017 §HTTP endpoints — the team read model itself
@@ -229,6 +237,61 @@ internal static class StudioTeamEndpoints
         }
     }
 
+    internal static async Task<IResult> HandleSetEntryMemberAsync(
+        HttpContext http,
+        string scopeId,
+        string teamId,
+        SetStudioTeamEntryMemberRequest request,
+        [FromServices] IStudioTeamService teamService,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
+        try
+        {
+            await teamService.SetEntryMemberAsync(scopeId, teamId, request, ct);
+            return Results.Accepted(BuildTeamLocation(scopeId, teamId));
+        }
+        catch (StudioTeamNotFoundException ex)
+        {
+            return NotFound(ex);
+        }
+        catch (StudioMemberNotFoundException ex)
+        {
+            return MemberNotFound(ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest("INVALID_STUDIO_TEAM_ENTRY_MEMBER_REQUEST", ex.Message);
+        }
+    }
+
+    internal static async Task<IResult> HandleClearEntryMemberAsync(
+        HttpContext http,
+        string scopeId,
+        string teamId,
+        [FromServices] IStudioTeamService teamService,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
+        try
+        {
+            await teamService.ClearEntryMemberAsync(scopeId, teamId, ct);
+            return Results.Accepted(BuildTeamLocation(scopeId, teamId));
+        }
+        catch (StudioTeamNotFoundException ex)
+        {
+            return NotFound(ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest("INVALID_STUDIO_TEAM_ENTRY_MEMBER_REQUEST", ex.Message);
+        }
+    }
+
     /// <summary>
     /// Lists members assigned to a given team. Queries the member read model
     /// filtered by <c>team_id</c> (ADR-0017 §HTTP endpoints) — the team read
@@ -312,6 +375,9 @@ internal static class StudioTeamEndpoints
     private static IResult BadRequest(string code, string message) =>
         Results.BadRequest(new { code, message });
 
+    private static string BuildTeamLocation(string scopeId, string teamId) =>
+        $"/api/scopes/{Uri.EscapeDataString(scopeId)}/teams/{Uri.EscapeDataString(teamId)}";
+
     private static IResult NotFound(StudioTeamNotFoundException ex) =>
         Results.Json(
             new
@@ -322,4 +388,16 @@ internal static class StudioTeamEndpoints
                 teamId = ex.TeamId,
             },
             statusCode: StatusCodes.Status404NotFound);
+
+    private static IResult MemberNotFound(StudioMemberNotFoundException ex) =>
+        Results.Json(
+            new
+            {
+                code = "STUDIO_MEMBER_NOT_FOUND",
+                message = ex.Message,
+                scopeId = ex.ScopeId,
+                memberId = ex.MemberId,
+            },
+            statusCode: StatusCodes.Status404NotFound);
+
 }

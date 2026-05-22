@@ -12,6 +12,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.GAgents.Channel.Abstractions\Aevatar.GAgents.Channel.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.ChatRouting.Core\Aevatar.ChatRouting.Core.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Core\Aevatar.CQRS.Projection.Core.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Core.Abstractions\Aevatar.CQRS.Projection.Core.Abstractions.csproj" />
@@ -40,6 +41,6 @@
     <Protobuf Include="protos\*.proto"
               GrpcServices="None"
               ProtoRoot="protos"
-              AdditionalImportDirs="..\Aevatar.GAgents.Channel.Abstractions\protos;..\..\src\Aevatar.AI.Abstractions" />
+              AdditionalImportDirs="..\Aevatar.GAgents.Channel.Abstractions\protos;..\..\src\Aevatar.ChatRouting.Abstractions;..\..\src\Aevatar.AI.Abstractions" />
   </ItemGroup>
 </Project>

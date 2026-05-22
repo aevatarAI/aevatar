@@ -10,6 +10,7 @@ using Aevatar.AI.ToolProviders.Web;
 using Aevatar.Authentication.Hosting;
 using Aevatar.Authentication.Providers.NyxId;
 using Aevatar.Bootstrap.Hosting;
+using Aevatar.ChatRouting.Core;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.GAgents.Authoring.Lark;
@@ -17,16 +18,23 @@ using Aevatar.GAgents.Channel.Identity.DependencyInjection;
 using Aevatar.GAgents.Channel.Identity.Endpoints;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.ChatRouting;
 using Aevatar.GAgents.ChatbotClassifier;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Platform.Telegram;
 using Aevatar.GAgents.Scheduled;
+using Aevatar.GAgents.StatusDashboard.DependencyInjection;
+using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
+using Aevatar.Foundation.VoicePresence.Hosting;
+using Aevatar.Mainnet.Host.Api.ChatRouting;
 using Aevatar.Mainnet.Host.Api.Messages;
 using Aevatar.Mainnet.Host.Api.Responses;
+using Aevatar.Mainnet.Host.Api.Status;
+using Aevatar.Mainnet.Host.Api.Voice;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
 using Microsoft.AspNetCore.Builder;
@@ -90,6 +98,26 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddChannelIdentityProjectionStores(builder.Configuration);
         builder.Services.AddDeviceRegistration(builder.Configuration);
         builder.Services.AddScheduledAgents(builder.Configuration);
+        builder.Services.AddStatusDashboard(builder.Configuration);
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IReadmodelFreshnessSource, ChannelBotRegistrationFreshnessSource>());
+        // Ingress layer v1: registers the ChatRoutePolicy current-state readmodel
+        // document store (Elasticsearch in prod, InMemory otherwise — same
+        // selection pattern as AddScheduledAgents / AddDeviceRegistration).
+        builder.Services.AddChatRoutingAgents(builder.Configuration);
+        builder.Services.AddChatRoutingCore();
+        // Implement (issue #695):
+        //   Behavior: gate explicit /ws/voice/{actorId} bypass behind voice:bypass or admin.
+        //   Why this shape: policy-aware /ws/voice owns normal routing; actor-id bypass stays dev/admin only.
+        builder.Services.AddAuthorization(options =>
+        {
+            options.AddPolicy("voice-dev", policy =>
+            {
+                policy.RequireAuthenticatedUser();
+                policy.RequireAssertion(context =>
+                    PolicyAwareVoiceEndpoints.IsVoiceDevBypassPrincipal(context.User));
+            });
+        });
         builder.Services.TryAddSingleton<IResponsesCallerScopeResolver, NyxIdResponsesCallerScopeResolver>();
         builder.Services.TryAddSingleton<IResponsesModelsAggregator, NyxIdResponsesModelsAggregator>();
         // Refactor (iter26/cluster-026-responses-route-user-catalog-cache):
@@ -176,14 +204,26 @@ public static class MainnetHostBuilderExtensions
     {
         ArgumentNullException.ThrowIfNull(app);
 
+        // Static files (demo wwwroot) must run before the auth fallback policy so the
+        // voice demo HTML/JS is reachable without a NyxID JWT — the bootstrap POST and
+        // /ws/voice still enforce their own auth. UseDefaultFiles rewrites /demo/voice/
+        // to /demo/voice/index.html before UseStaticFiles serves it.
+        app.UseDefaultFiles();
+        app.UseStaticFiles();
         app.UseAevatarDefaultHost();
         app.MapNyxIdChatEndpoints();
+        app.MapChatRoutePolicyAdminEndpoints();
         app.MapStreamingProxyEndpoints();
         app.MapResponsesApiEndpoints();
         app.MapMessagesApiEndpoints();
         app.MapChannelCallbackEndpoints();
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();
+        app.MapVoiceDemoBootstrapEndpoints();
+        app.MapPolicyAwareVoiceEndpoint();
+        app.MapStatusEndpoints();
+        app.MapVoicePresenceWebSocket("/ws/voice/{actorId}")
+            .RequireAuthorization("voice-dev");
 
         return app;
     }

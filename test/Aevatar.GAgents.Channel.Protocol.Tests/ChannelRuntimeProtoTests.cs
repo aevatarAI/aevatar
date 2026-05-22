@@ -1,4 +1,5 @@
 using System.Linq;
+using Aevatar.ChatRouting.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Scheduled;
@@ -89,6 +90,10 @@ public sealed class ChannelRuntimeProtoTests
                 Conversation = completed.Conversation.Clone(),
                 Content = new MessageContent { Text = "hello" },
             },
+            TargetRef = new ChatRouteAction
+            {
+                ForwardToGagent = new ForwardToGAgent { ActorId = "target-gagent-1" },
+            },
             RequestedAtUnixMs = 42,
         };
         var llmReady = new LlmReplyReadyEvent
@@ -120,6 +125,7 @@ public sealed class ChannelRuntimeProtoTests
         PayloadQuarantineReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(PlatformQuarantineEnvelope));
         llmRequested.Clone().ShouldBe(llmRequested);
+        llmRequested.Clone().TargetRef.ForwardToGagent.ActorId.ShouldBe("target-gagent-1");
         llmReady.Clone().ShouldBe(llmReady);
     }
 }

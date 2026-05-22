@@ -3,3 +3,4 @@ directories:
   - src/Aevatar.AI.Abstractions
   - agents/Aevatar.GAgents.Channel.Abstractions/protos
   - agents/Aevatar.GAgents.Channel.Runtime/protos
+  - src/Aevatar.ChatRouting.Abstractions
