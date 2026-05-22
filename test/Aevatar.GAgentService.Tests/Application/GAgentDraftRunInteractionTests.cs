@@ -105,6 +105,13 @@ public sealed class GAgentDraftRunInteractionTests
             CancellationToken ct = default) =>
             Task.FromResult<IGAgentDraftRunProjectionLease?>(null);
 
+        public Task<EventSinkProjectionAttachment<IGAgentDraftRunProjectionLease>?> AttachExistingActorProjectionAsync(
+            string actorId,
+            string commandId,
+            IEventSink<AGUIEvent> sink,
+            CancellationToken ct = default) =>
+            Task.FromResult<EventSinkProjectionAttachment<IGAgentDraftRunProjectionLease>?>(null);
+
         public Task<IAsyncDisposable?> AttachLiveSinkAsync(
             IGAgentDraftRunProjectionLease lease,
             IEventSink<AGUIEvent> sink,
@@ -125,6 +132,14 @@ public sealed class GAgentDraftRunInteractionTests
     private sealed class NoOpGAgentRunTerminalProjectionPort : IGAgentRunTerminalProjectionPort
     {
         public Task<IGAgentRunTerminalProjectionLease?> EnsureProjectionAsync(
+            string actorId,
+            string correlationId,
+            GAgentRunTerminalInteractionKind interactionKind,
+            CancellationToken ct = default) =>
+            Task.FromResult<IGAgentRunTerminalProjectionLease?>(
+                new NoOpGAgentRunTerminalProjectionLease(actorId, correlationId, interactionKind));
+
+        public Task<IGAgentRunTerminalProjectionLease?> AttachExistingProjectionAsync(
             string actorId,
             string correlationId,
             GAgentRunTerminalInteractionKind interactionKind,

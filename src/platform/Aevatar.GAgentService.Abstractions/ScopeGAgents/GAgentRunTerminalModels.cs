@@ -57,6 +57,16 @@ public interface IGAgentRunTerminalProjectionPort
         GAgentRunTerminalInteractionKind interactionKind,
         CancellationToken ct = default);
 
+    // Refactor (iter37/cluster-037-gagentservice-binders-attach-existing):
+    //   Old pattern: GAgentService interaction binders synchronously prime projection sessions before dispatch(request-path projection activation in BindAsync).
+    //   New principle: Attach-only to existing projection sessions/materialization leases via capability-specific attach-existing ports.
+    //   Cold sessions return ProjectionUnavailable / pending before dispatch; no top-level live-observation exception.
+    Task<IGAgentRunTerminalProjectionLease?> AttachExistingProjectionAsync(
+        string actorId,
+        string correlationId,
+        GAgentRunTerminalInteractionKind interactionKind,
+        CancellationToken ct = default);
+
     Task ReleaseProjectionAsync(
         IGAgentRunTerminalProjectionLease lease,
         CancellationToken ct = default);

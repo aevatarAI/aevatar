@@ -1,6 +1,8 @@
 using System.Runtime.CompilerServices;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.GAgentService.Projection.Orchestration;
 using Aevatar.Presentation.AGUI;
@@ -46,7 +48,8 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
             new ServiceProjectionOptions { Enabled = true },
             activation,
             release,
-            hub);
+            hub,
+            new RecordingActorRuntime());
         var lease = await port.EnsureActorProjectionAsync("actor-1", "cmd-1", CancellationToken.None);
         var sink = new RecordingEventSink();
 
@@ -73,6 +76,96 @@ public sealed class GAgentDraftRunProjectionInfrastructureTests
         hub.LastSessionId.Should().Be("cmd-1");
         sink.Events.Should().ContainSingle();
         release.Leases.Should().ContainSingle().Which.Should().BeSameAs(lease);
+    }
+
+    [Fact]
+    public async Task ProjectionPort_ShouldAttachExistingDraftRunSession_WhenScopeActorExists()
+    {
+        var activation = new RecordingActivationService();
+        var hub = new RecordingSessionEventHub();
+        var runtime = new RecordingActorRuntime();
+        runtime.KnownActorIds.Add(ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
+            "actor-1",
+            "service-draft-run-session",
+            ProjectionRuntimeMode.SessionObservation,
+            "cmd-1")));
+        var port = new GAgentDraftRunProjectionPort(
+            new ServiceProjectionOptions { Enabled = true },
+            activation,
+            new RecordingReleaseService(),
+            hub,
+            runtime);
+        var sink = new RecordingEventSink();
+
+        var attachment = await port.AttachExistingActorProjectionAsync(
+            "actor-1",
+            "cmd-1",
+            sink,
+            CancellationToken.None);
+
+        attachment.Should().NotBeNull();
+        activation.Requests.Should().BeEmpty();
+        var lease = attachment!.ProjectionLease.Should().BeOfType<GAgentDraftRunRuntimeLease>().Subject;
+        lease.ActorId.Should().Be("actor-1");
+        lease.CommandId.Should().Be("cmd-1");
+        hub.SubscribeCalls.Should().Be(1);
+        hub.LastScopeId.Should().Be("actor-1");
+        hub.LastSessionId.Should().Be("cmd-1");
+
+        await hub.Handler!(new AGUIEvent
+        {
+            RunFinished = new RunFinishedEvent
+            {
+                ThreadId = "actor-1",
+                RunId = "cmd-1",
+            },
+        });
+        sink.Events.Should().ContainSingle().Which.RunFinished.RunId.Should().Be("cmd-1");
+    }
+
+    [Fact]
+    public async Task ProjectionPort_ShouldReturnNullForAttachExisting_WhenScopeActorIsMissingOrInvalid()
+    {
+        var activation = new RecordingActivationService();
+        var hub = new RecordingSessionEventHub();
+        var runtime = new RecordingActorRuntime();
+        runtime.KnownActorIds.Add("different-scope");
+        var disabledPort = new GAgentDraftRunProjectionPort(
+            new ServiceProjectionOptions { Enabled = false },
+            activation,
+            new RecordingReleaseService(),
+            hub,
+            runtime);
+        var enabledPort = new GAgentDraftRunProjectionPort(
+            new ServiceProjectionOptions { Enabled = true },
+            activation,
+            new RecordingReleaseService(),
+            hub,
+            runtime);
+
+        (await disabledPort.AttachExistingActorProjectionAsync(
+            "actor-1",
+            "cmd-1",
+            new RecordingEventSink(),
+            CancellationToken.None)).Should().BeNull();
+        (await enabledPort.AttachExistingActorProjectionAsync(
+            "actor-1",
+            "cmd-1",
+            new RecordingEventSink(),
+            CancellationToken.None)).Should().BeNull();
+        (await enabledPort.AttachExistingActorProjectionAsync(
+            "",
+            "cmd-1",
+            new RecordingEventSink(),
+            CancellationToken.None)).Should().BeNull();
+        (await enabledPort.AttachExistingActorProjectionAsync(
+            "actor-1",
+            " ",
+            new RecordingEventSink(),
+            CancellationToken.None)).Should().BeNull();
+
+        activation.Requests.Should().BeEmpty();
+        hub.SubscribeCalls.Should().Be(0);
     }
 
     private sealed class RecordingActivationService : IProjectionScopeActivationService<GAgentDraftRunRuntimeLease>

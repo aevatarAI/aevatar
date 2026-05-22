@@ -1,3 +1,6 @@
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.GAgentService.Projection.Contexts;
@@ -8,12 +11,16 @@ public sealed class GAgentRunTerminalProjectionPort
     : ServiceProjectionPortBase<GAgentRunTerminalProjectionContext>,
       IGAgentRunTerminalProjectionPort
 {
+    private readonly IActorRuntime _runtime;
+
     public GAgentRunTerminalProjectionPort(
         ServiceProjectionOptions options,
         IProjectionScopeActivationService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>> activationService,
-        IProjectionScopeReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>> releaseService)
+        IProjectionScopeReleaseService<ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>> releaseService,
+        IActorRuntime runtime)
         : base(options, activationService, releaseService, ServiceProjectionKinds.GAgentRunTerminalDraftRun)
     {
+        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
     }
 
     public async Task<IGAgentRunTerminalProjectionLease?> EnsureProjectionAsync(
@@ -38,6 +45,45 @@ public sealed class GAgentRunTerminalProjectionPort
         return runtimeLease == null
             ? null
             : new GAgentRunTerminalProjectionLease(runtimeLease);
+    }
+
+    // Refactor (iter37/cluster-037-gagentservice-binders-attach-existing):
+    //   Old pattern: GAgentService interaction binders synchronously prime projection sessions before dispatch(request-path projection activation in BindAsync).
+    //   New principle: Attach-only to existing projection sessions/materialization leases via capability-specific attach-existing ports.
+    //   Cold sessions return ProjectionUnavailable / pending before dispatch; no top-level live-observation exception.
+    public async Task<IGAgentRunTerminalProjectionLease?> AttachExistingProjectionAsync(
+        string actorId,
+        string correlationId,
+        GAgentRunTerminalInteractionKind interactionKind,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        if (!ProjectionEnabled ||
+            string.IsNullOrWhiteSpace(actorId) ||
+            string.IsNullOrWhiteSpace(correlationId))
+        {
+            return null;
+        }
+
+        var projectionKind = ResolveProjectionKind(interactionKind);
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            actorId,
+            projectionKind,
+            ProjectionRuntimeMode.DurableMaterialization,
+            correlationId);
+        if (!await _runtime.ExistsAsync(ProjectionScopeActorId.Build(scopeKey)).ConfigureAwait(false))
+            return null;
+
+        var context = new GAgentRunTerminalProjectionContext
+        {
+            RootActorId = actorId,
+            ProjectionKind = projectionKind,
+            CorrelationId = correlationId.Trim(),
+            InteractionKind = interactionKind,
+        };
+        return new GAgentRunTerminalProjectionLease(
+            new ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>(context.RootActorId, context));
     }
 
     public Task ReleaseProjectionAsync(
