@@ -26,7 +26,7 @@ public sealed class NyxIdChatProjectionSessionTests
         var activation = new RecordingActivationService();
         var release = new RecordingReleaseService();
         var hub = new RecordingSessionEventHub();
-        var port = new NyxIdChatSessionProjectionPort(activation, release, hub);
+        var port = new NyxIdChatSessionProjectionPort(activation, release, hub, new RecordingActorRuntime());
         var sink = new RecordingEventSink();
 
         var lease = await port.EnsureChatProjectionAsync("chat-actor-1", "session-1", CancellationToken.None);
@@ -61,6 +61,58 @@ public sealed class NyxIdChatProjectionSessionTests
         sink.Events.Should().ContainSingle().Which.TextMessageContent.Delta.Should().Be("hello");
         hub.DisposedSubscriptions.Should().Be(1);
         release.Leases.Should().ContainSingle().Which.Should().BeSameAs(lease);
+    }
+
+    [Fact]
+    public async Task AttachExistingChatProjectionAsync_ShouldAttachOnlyWhenProjectionSessionExists()
+    {
+        var runtime = new RecordingActorRuntime();
+        runtime.MarkExists("projection.session.scope:nyxid-chat-session:chat-actor-1:session-1");
+        var hub = new RecordingSessionEventHub();
+        var port = new NyxIdChatSessionProjectionPort(
+            new RecordingActivationService(),
+            new RecordingReleaseService(),
+            hub,
+            runtime);
+        var sink = new RecordingEventSink();
+
+        var attachment = await port.AttachExistingChatProjectionAsync(
+            "chat-actor-1",
+            "session-1",
+            sink,
+            CancellationToken.None);
+
+        attachment.Should().NotBeNull();
+        attachment!.ProjectionLease.ActorId.Should().Be("chat-actor-1");
+        attachment.ProjectionLease.SessionId.Should().Be("session-1");
+        hub.SubscribeCalls.Should().Be(1);
+        hub.LastScopeId.Should().Be("chat-actor-1");
+        hub.LastSessionId.Should().Be("session-1");
+        runtime.ExistsCalls.Should().ContainSingle()
+            .Which.Should().Be("projection.session.scope:nyxid-chat-session:chat-actor-1:session-1");
+    }
+
+    [Fact]
+    public async Task AttachExistingChatProjectionAsync_ShouldReturnNull_WhenProjectionSessionIsCold()
+    {
+        var runtime = new RecordingActorRuntime();
+        var hub = new RecordingSessionEventHub();
+        var port = new NyxIdChatSessionProjectionPort(
+            new RecordingActivationService(),
+            new RecordingReleaseService(),
+            hub,
+            runtime);
+
+        var attachment = await port.AttachExistingChatProjectionAsync(
+            "chat-actor-1",
+            "session-1",
+            new RecordingEventSink(),
+            CancellationToken.None);
+
+        attachment.Should().BeNull();
+        hub.SubscribeCalls.Should().Be(0);
+        runtime.ExistsCalls.Should().ContainSingle()
+            .Which.Should().Be("projection.session.scope:nyxid-chat-session:chat-actor-1:session-1");
     }
 
     [Fact]
@@ -197,6 +249,40 @@ public sealed class NyxIdChatProjectionSessionTests
             Leases.Add(lease);
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class RecordingActorRuntime : IActorRuntime
+    {
+        private readonly HashSet<string> _existingActors = new(StringComparer.Ordinal);
+
+        public List<string> ExistsCalls { get; } = [];
+
+        public void MarkExists(string actorId) => _existingActors.Add(actorId);
+
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+            where TAgent : IAgent =>
+            throw new NotSupportedException();
+
+        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task DestroyAsync(string id, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<IActor?> GetAsync(string id) =>
+            throw new NotSupportedException();
+
+        public Task<bool> ExistsAsync(string id)
+        {
+            ExistsCalls.Add(id);
+            return Task.FromResult(_existingActors.Contains(id));
+        }
+
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class RecordingSessionEventHub : IProjectionSessionEventHub<AGUIEvent>

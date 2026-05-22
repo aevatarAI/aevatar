@@ -29,6 +29,15 @@ public interface INyxIdChatSessionProjectionPort
         string actorId,
         string sessionId,
         CancellationToken ct = default);
+
+    // Refactor (iter37/cluster-037-agent-session-observation-attach-only):
+    //   Old pattern: Agent session observation binders 同步 prime projection lease before dispatch(NyxID/StreamingProxy session paths)。
+    //   New principle: Attach-existing NyxID/StreamingProxy observation ports;cold sessions return ProjectionUnavailable before dispatch;projection activation 移到 projection-owned lifecycle;不引入新 actor / 新 envelope / CLAUDE 例外。
+    Task<EventSinkProjectionAttachment<INyxIdChatSessionProjectionLease>?> AttachExistingChatProjectionAsync(
+        string actorId,
+        string sessionId,
+        IEventSink<AGUIEvent> sink,
+        CancellationToken ct = default);
 }
 
 /// <summary>
@@ -69,16 +78,23 @@ public sealed class NyxIdChatSessionRuntimeLease
 /// Lifecycle adapter for NyxID chat Projection Pipeline sessions. It attaches
 /// typed AGUIEvent sinks to sessions whose projector input is EventEnvelope.
 /// </summary>
+// Refactor (iter37/cluster-037-agent-session-observation-attach-only):
+//   Old pattern: Agent session observation binders 同步 prime projection lease before dispatch(NyxID/StreamingProxy session paths)。
+//   New principle: Attach-existing NyxID/StreamingProxy observation ports;cold sessions return ProjectionUnavailable before dispatch;projection activation 移到 projection-owned lifecycle;不引入新 actor / 新 envelope / CLAUDE 例外。
 public sealed class NyxIdChatSessionProjectionPort
     : EventSinkProjectionLifecyclePortBase<INyxIdChatSessionProjectionLease, NyxIdChatSessionRuntimeLease, AGUIEvent>,
       INyxIdChatSessionProjectionPort
 {
+    private readonly IActorRuntime _runtime;
+
     public NyxIdChatSessionProjectionPort(
         IProjectionScopeActivationService<NyxIdChatSessionRuntimeLease> activationService,
         IProjectionScopeReleaseService<NyxIdChatSessionRuntimeLease> releaseService,
-        IProjectionSessionEventHub<AGUIEvent> sessionEventHub)
+        IProjectionSessionEventHub<AGUIEvent> sessionEventHub,
+        IActorRuntime runtime)
         : base(static () => true, activationService, releaseService, sessionEventHub)
     {
+        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
     }
 
     public Task<INyxIdChatSessionProjectionLease?> EnsureChatProjectionAsync(
@@ -94,6 +110,45 @@ public sealed class NyxIdChatSessionProjectionPort
                 SessionId = sessionId,
             },
             ct);
+
+    // Refactor (iter37/cluster-037-agent-session-observation-attach-only):
+    //   Old pattern: Agent session observation binders 同步 prime projection lease before dispatch(NyxID/StreamingProxy session paths)。
+    //   New principle: Attach-existing NyxID/StreamingProxy observation ports;cold sessions return ProjectionUnavailable before dispatch;projection activation 移到 projection-owned lifecycle;不引入新 actor / 新 envelope / CLAUDE 例外。
+    public async Task<EventSinkProjectionAttachment<INyxIdChatSessionProjectionLease>?> AttachExistingChatProjectionAsync(
+        string actorId,
+        string sessionId,
+        IEventSink<AGUIEvent> sink,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(sink);
+        ct.ThrowIfCancellationRequested();
+
+        if (!ProjectionEnabled ||
+            string.IsNullOrWhiteSpace(actorId) ||
+            string.IsNullOrWhiteSpace(sessionId))
+        {
+            return null;
+        }
+
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            actorId,
+            NyxIdChatProjectionKinds.ChatSession,
+            ProjectionRuntimeMode.SessionObservation,
+            sessionId);
+        if (!await _runtime.ExistsAsync(ProjectionScopeActorId.Build(scopeKey)).ConfigureAwait(false))
+            return null;
+
+        var lease = new NyxIdChatSessionRuntimeLease(new NyxIdChatSessionProjectionContext
+        {
+            RootActorId = actorId,
+            ProjectionKind = NyxIdChatProjectionKinds.ChatSession,
+            SessionId = sessionId,
+        });
+        var liveSinkLease = await AttachLiveSinkAsync(lease, sink, ct).ConfigureAwait(false);
+        return liveSinkLease == null
+            ? null
+            : new EventSinkProjectionAttachment<INyxIdChatSessionProjectionLease>(lease, liveSinkLease);
+    }
 }
 
 /// <summary>
