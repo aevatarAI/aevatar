@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Skills;
 using FluentAssertions;
+using System.Text.RegularExpressions;
 
 namespace Aevatar.AI.ToolProviders.Ornn.Tests;
 
@@ -34,6 +35,25 @@ public sealed class LocalSkillCatalogTests
         catalog.TryGet("nyxid", out var skill).Should().BeFalse();
         skill.Should().BeNull();
         catalog.Count.Should().Be(0);
+    }
+
+    [Fact]
+    public void RegisterRange_MixedSources_KeepsOnlyLocalModelInvocableSkills()
+    {
+        var catalog = new LocalSkillCatalog();
+
+        catalog.RegisterRange([
+            MakeSkill("local", instructions: "local-body"),
+            MakeSkill("remote", instructions: "remote-body", remoteId: "skill-remote")
+        ]);
+
+        catalog.TryGet("local", out var localSkill).Should().BeTrue();
+        localSkill!.Instructions.Should().Be("local-body");
+        catalog.TryGet("remote", out var remoteSkill).Should().BeFalse();
+        remoteSkill.Should().BeNull();
+        catalog.Count.Should().Be(1);
+        catalog.GetModelInvocable().Should().ContainSingle(skill => skill.Name == "local");
+        catalog.BuildSystemPromptSection().Should().Contain("local").And.NotContain("remote");
     }
 
     [Fact]
@@ -74,6 +94,27 @@ public sealed class LocalSkillCatalogTests
 
         result.Should().Contain("local-body");
         fetcher.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void SkillsSource_RemoteCacheRegressionTerms_DoNotAppearInExecutableCode()
+    {
+        var repoRoot = FindRepoRoot();
+        var productionFiles = Directory
+            .EnumerateFiles(Path.Combine(repoRoot, "src", "Aevatar.AI.ToolProviders.Skills"), "*.cs")
+            .OrderBy(static path => path)
+            .ToArray();
+        var executableSource = string.Join("\n", productionFiles.Select(path => StripComments(File.ReadAllText(path))));
+        var useSkillSource = StripComments(File.ReadAllText(
+            Path.Combine(repoRoot, "src", "Aevatar.AI.ToolProviders.Skills", "UseSkillTool.cs")));
+
+        executableSource.Should().NotContain("RemoteSkillCacheTtl");
+        executableSource.Should().NotContain("SkillRegistry");
+        executableSource.Should().NotContain("maxAge");
+        Regex.IsMatch(useSkillSource, @"FetchSkillAsync[\s\S]*?_localCatalog\.Register\s*\(")
+            .Should().BeFalse("remote skill fetch results must not be written into the local process catalog");
+        Regex.IsMatch(useSkillSource, @"FetchSkillAsync[\s\S]*?\.Register\s*\(")
+            .Should().BeFalse("remote skill fetch results must not be cached through any catalog registration path");
     }
 
     // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
@@ -120,6 +161,35 @@ public sealed class LocalSkillCatalogTests
         };
 
         return new RestoreContextScope(previous);
+    }
+
+    private static string FindRepoRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "aevatar.slnx")))
+                return directory.FullName;
+
+            directory = directory.Parent;
+        }
+
+        throw new InvalidOperationException("Repository root not found.");
+    }
+
+    private static string StripComments(string source)
+    {
+        var withoutBlockComments = Regex.Replace(
+            source,
+            @"/\*.*?\*/",
+            "",
+            RegexOptions.Singleline);
+
+        return Regex.Replace(
+            withoutBlockComments,
+            @"//.*?$",
+            "",
+            RegexOptions.Multiline);
     }
 
     // refactor helper, no behavior change

@@ -34,6 +34,9 @@ public sealed class LocalSkillCatalog
     }
 
     /// <summary>批量注册本地技能。</summary>
+    // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
+    //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
+    //   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
     public void RegisterRange(IEnumerable<SkillDefinition> skills)
     {
         ArgumentNullException.ThrowIfNull(skills);
@@ -54,6 +57,9 @@ public sealed class LocalSkillCatalog
     /// <param name="name">技能名称。</param>
     /// <param name="skill">命中时的技能定义。</param>
     /// <returns>命中本地技能返回 true。</returns>
+    // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
+    //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
+    //   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
     public bool TryGet(string name, out SkillDefinition? skill)
     {
         lock (_lock)
@@ -69,14 +75,10 @@ public sealed class LocalSkillCatalog
         }
     }
 
-    /// <summary>获取所有已注册技能。</summary>
-    public IReadOnlyList<SkillDefinition> GetAll()
-    {
-        lock (_lock)
-            return _skills.Values.ToArray();
-    }
-
     /// <summary>获取所有允许 LLM 自动调用的技能。</summary>
+    // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
+    //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
+    //   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
     public IReadOnlyList<SkillDefinition> GetModelInvocable()
     {
         lock (_lock)
@@ -86,6 +88,9 @@ public sealed class LocalSkillCatalog
     }
 
     /// <summary>已注册技能数量。</summary>
+    // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
+    //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
+    //   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
     public int Count
     {
         get { lock (_lock) return _skills.Count; }
@@ -95,6 +100,9 @@ public sealed class LocalSkillCatalog
     /// 生成系统 prompt 中的技能列表段落。
     /// 格式：每个技能一行 "- name: description"。
     /// </summary>
+    // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
+    //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
+    //   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
     public string BuildSystemPromptSection()
     {
         List<SkillDefinition> skills;
