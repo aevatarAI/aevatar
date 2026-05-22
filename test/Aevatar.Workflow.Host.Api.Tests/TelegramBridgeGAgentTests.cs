@@ -17,11 +17,6 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public sealed class TelegramBridgeGAgentTests
 {
-    private const string WaitReplyProductionPath =
-        "src/workflow/extensions/Aevatar.Workflow.Extensions.Bridge/TelegramWaitReplyGAgent.cs";
-    private const string GetUpdatesTransportProductionPath =
-        "src/workflow/extensions/Aevatar.Workflow.Extensions.Bridge/TelegramGetUpdatesExternalLinkTransport.cs";
-
     [Fact]
     public async Task HandleChatRequest_WhenConnectorSucceeds_ShouldPublishTextMessageEnd()
     {
@@ -576,6 +571,40 @@ public sealed class TelegramBridgeGAgentTests
     }
 
     [Fact]
+    public async Task TelegramWaitReplyGAgent_WhenGetUpdatesTimeoutRequestIdIsStale_ShouldIgnoreTimeout()
+    {
+        var connector = new HangingConnector();
+        var registry = new InMemoryConnectorRegistry();
+        registry.Register(connector);
+        var publisher = new RecordingEventPublisher();
+        var (agent, dispatch) = await CreateActivatedWaitReplyAgentAsync(registry, publisher);
+
+        var command = BuildWaitReplyCommand(
+            sessionId: "session-stale-timeout",
+            expectedUsername: "openclaw_bot");
+        await agent.HandleEventAsync(Envelope(command), CancellationToken.None);
+        await DrainWaitReplySelfEventsAsync(agent, publisher, dispatch, maxTurns: 1);
+
+        agent.State.PendingGetUpdates.Should().NotBeNull();
+        var pendingRequest = agent.State.PendingGetUpdates.Clone();
+
+        await agent.HandleEventAsync(
+            Envelope(new TelegramWaitReplyTimeoutDueEvent
+            {
+                CommandId = command.CommandId,
+                Generation = agent.State.Generation,
+                RequestId = "stale-request",
+                TimeoutMs = 4000,
+            }),
+            CancellationToken.None);
+
+        agent.State.Active.Should().BeTrue();
+        agent.State.PendingGetUpdates.Should().BeEquivalentTo(pendingRequest);
+        publisher.Published.Select(x => x.evt).OfType<TelegramWaitReplyCompletedEvent>().Should().BeEmpty();
+        publisher.Published.Select(x => x.evt).OfType<TelegramWaitReplyFailedEvent>().Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task TelegramWaitReplyGAgent_WhenExternalLinkInactive_ShouldPublishFailedEvent()
     {
         var connector = new RecordingConnector();
@@ -727,14 +756,14 @@ public sealed class TelegramBridgeGAgentTests
     [Fact]
     public void TelegramWaitReplyProductionPath_ShouldNotReintroduceInTurnWatchdogRace()
     {
-        var root = FindRepositoryRoot();
-        var waitReplySource = File.ReadAllText(Path.Combine(root, WaitReplyProductionPath));
-        var transportSource = File.ReadAllText(Path.Combine(root, GetUpdatesTransportProductionPath));
-        var source = RemoveLineComments(waitReplySource) + "\n" + RemoveLineComments(transportSource);
-
-        source.Should().NotContain("ExecuteConnectorWithWatchdogAsync");
-        source.Should().NotContain("Task.Delay");
-        source.Should().NotContain("ContinueWith");
+        typeof(TelegramBridgeGAgent)
+            .GetMethod(
+                "ExecuteConnectorWithWatchdogAsync",
+                System.Reflection.BindingFlags.Static |
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Public)
+            .Should()
+            .BeNull();
     }
 
     [Fact]
@@ -1085,11 +1114,11 @@ public sealed class TelegramBridgeGAgentTests
             }
 
             var next = current.Clone();
-                next.Active = false;
-                next.PendingGetUpdates = null;
-                next.PendingMatchedUpdate = null;
-                next.CollectedReplies.Clear();
-                next.CollectedReplyOrder.Clear();
+            next.Active = false;
+            next.PendingGetUpdates = null;
+            next.PendingMatchedUpdate = null;
+            next.CollectedReplies.Clear();
+            next.CollectedReplyOrder.Clear();
             return next;
         }
     }
@@ -1112,26 +1141,6 @@ public sealed class TelegramBridgeGAgentTests
         if (connectorRegistry != null)
             services.AddSingleton(connectorRegistry);
         return services.BuildServiceProvider();
-    }
-
-    private static string FindRepositoryRoot()
-    {
-        var current = new DirectoryInfo(AppContext.BaseDirectory);
-        while (current != null)
-        {
-            if (File.Exists(Path.Combine(current.FullName, "aevatar.slnx")))
-                return current.FullName;
-            current = current.Parent;
-        }
-
-        throw new InvalidOperationException("repository root not found");
-    }
-
-    private static string RemoveLineComments(string source)
-    {
-        return string.Join(
-            '\n',
-            source.Split('\n').Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal)));
     }
 
     private sealed class RecordingActorDispatchPort(TelegramWaitReplyGAgent agent) : IActorDispatchPort

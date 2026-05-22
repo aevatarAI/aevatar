@@ -158,6 +158,9 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
     public async Task HandleTimeoutDue(TelegramWaitReplyTimeoutDueEvent evt)
     {
+        // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+        //   Old pattern: watchdog timeout raced outside the actor-owned getUpdates request identity.
+        //   New principle: timeout is a self-continuation and stale RequestId callbacks cannot complete state.
         ArgumentNullException.ThrowIfNull(evt);
         if (!IsActiveContinuation(evt.CommandId, evt.Generation))
             return;
@@ -250,6 +253,9 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
         int perCallTimeoutMs,
         bool bootstrap)
     {
+        // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+        //   Old pattern: actor turn awaited Telegram /getUpdates connector work behind a Task.Delay watchdog.
+        //   New principle: persist pending request, schedule durable timeout, then hand off to ExternalLink stream.
         if (State.PendingGetUpdates != null)
             return;
 
@@ -322,6 +328,9 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
 
     private async Task HandleGetUpdatesResultAsync(TelegramGetUpdatesResult result)
     {
+        // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+        //   Old pattern: connector completion raced in-turn watchdog callbacks with no request identity guard.
+        //   New principle: only the actor-owned pending RequestId may advance the getUpdates continuation.
         if (!IsActiveContinuation(result.CommandId, result.Generation))
             return;
 
@@ -352,6 +361,9 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
 
     private async Task HandleBootstrapGetUpdatesResultAsync(TelegramGetUpdatesResult result)
     {
+        // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+        //   Old pattern: bootstrap /getUpdates ran inline before the actor turn could yield.
+        //   New principle: bootstrap is a normal ExternalLink result continuation that updates actor state.
         if (!TryParseTelegramUpdates(
                 result.Output,
                 out var bootstrapUpdates,
@@ -393,6 +405,9 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
 
     private async Task HandlePollGetUpdatesResultAsync(TelegramGetUpdatesResult result)
     {
+        // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+        //   Old pattern: long-poll results returned directly to the blocked actor turn.
+        //   New principle: poll results enter as event continuations and either complete or schedule the next turn.
         if (!TryParseTelegramUpdates(result.Output, out var updates, out var maxUpdateId, out var parseError))
         {
             await CompleteFailureAsync($"telegram getUpdates parse failed: {parseError}");
@@ -422,6 +437,9 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
 
     private async Task CompleteTimeoutAsync()
     {
+        // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+        //   Old pattern: Task.Delay watchdog raced connector completion outside actor state.
+        //   New principle: timeout is an actor event reconciled against PendingGetUpdates or matched reply state.
         if (State.PendingGetUpdates != null)
         {
             await CompleteFailureAsync(

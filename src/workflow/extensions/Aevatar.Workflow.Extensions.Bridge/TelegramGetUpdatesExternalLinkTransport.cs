@@ -22,12 +22,18 @@ public sealed class TelegramGetUpdatesExternalLinkTransport(
 
     public async Task ConnectAsync(ExternalLinkDescriptor descriptor, CancellationToken ct)
     {
+        // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+        //   Old pattern: Telegram wait reply had no actor-owned ExternalLink session for /getUpdates.
+        //   New principle: transport participates in the existing ExternalLink lifecycle and reports readiness.
         _ = descriptor;
         await NotifyStateChangedAsync(ExternalLinkStateChange.Connected, null, ct);
     }
 
     public Task SendAsync(ReadOnlyMemory<byte> payload, CancellationToken ct)
     {
+        // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+        //   Old pattern: /getUpdates connector execution could block the Telegram wait actor turn.
+        //   New principle: SendAsync starts the connector and publishes completion back through callbacks.
         var request = TelegramGetUpdatesRequest.Parser.ParseFrom(payload.Span);
         var connectorTask = StartConnectorExecution(request);
         if (connectorTask.IsCompleted)
@@ -47,6 +53,9 @@ public sealed class TelegramGetUpdatesExternalLinkTransport(
 
     private Task<ConnectorResponse> StartConnectorExecution(TelegramGetUpdatesRequest request)
     {
+        // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+        //   Old pattern: TelegramBridgeGAgent owned connector lookup and watchdog execution inline.
+        //   New principle: transport adapts the existing connector as replaceable ExternalLink I/O.
         if (!connectorRegistry.TryGet(request.ConnectorName, out var connector) || connector == null)
             return Task.FromResult(new ConnectorResponse
             {
@@ -74,6 +83,9 @@ public sealed class TelegramGetUpdatesExternalLinkTransport(
         Task<ConnectorResponse> connectorTask,
         CancellationToken ct)
     {
+        // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+        //   Old pattern: connector result raced in-turn watchdog code.
+        //   New principle: every result is serialized as a typed TelegramGetUpdatesResult callback.
         TelegramGetUpdatesResult result;
         try
         {
@@ -101,6 +113,9 @@ public sealed class TelegramGetUpdatesExternalLinkTransport(
 
     private static ConnectorRequest BuildConnectorRequest(TelegramGetUpdatesRequest request)
     {
+        // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+        //   Old pattern: wait actor assembled Telegram connector calls inside the actor turn.
+        //   New principle: transport maps typed getUpdates requests to the connector boundary.
         var parameters = new Dictionary<string, string>(request.Parameters, StringComparer.OrdinalIgnoreCase)
         {
             ["method"] = string.IsNullOrWhiteSpace(request.HttpMethod) ? "POST" : request.HttpMethod,
@@ -121,6 +136,9 @@ public sealed class TelegramGetUpdatesExternalLinkTransport(
 
     private static string BuildGetUpdatesPayload(TelegramGetUpdatesRequest request)
     {
+        // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+        //   Old pattern: /getUpdates payload construction was coupled to actor polling control flow.
+        //   New principle: transport owns Telegram HTTP payload adaptation from the typed request.
         var payload = new Dictionary<string, object?>
         {
             ["timeout"] = Math.Max(0, request.PollTimeoutSeconds),
@@ -136,6 +154,9 @@ public sealed class TelegramGetUpdatesExternalLinkTransport(
 
     private static TelegramGetUpdatesResult BuildResult(TelegramGetUpdatesRequest request, ConnectorResponse response)
     {
+        // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+        //   Old pattern: connector response was consumed directly by the blocked actor call stack.
+        //   New principle: response becomes a typed callback that carries command/generation/request identity.
         var result = new TelegramGetUpdatesResult
         {
             CommandId = request.CommandId,
@@ -165,6 +186,11 @@ public sealed class TelegramGetUpdatesExternalLinkTransportFactory(
     public bool CanCreate(string transportType) =>
         string.Equals(transportType, TelegramGetUpdatesExternalLinkTransport.TransportTypeName, StringComparison.OrdinalIgnoreCase);
 
-    public IExternalLinkTransport Create() =>
-        new TelegramGetUpdatesExternalLinkTransport(connectorRegistry, logger);
+    public IExternalLinkTransport Create()
+    {
+        // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+        //   Old pattern: wait-reply /getUpdates used no ExternalLink transport factory.
+        //   New principle: DI creates the Telegram getUpdates transport through the standard factory contract.
+        return new TelegramGetUpdatesExternalLinkTransport(connectorRegistry, logger);
+    }
 }
