@@ -14,11 +14,16 @@ namespace Aevatar.GAgentService.Tests.Projection;
 public sealed class ServiceCatalogProjectorTests
 {
     [Fact]
-    public async Task ProjectAsync_ShouldUpsertDefinitionThenMutateDeploymentState()
+    public async Task ProjectAsync_ShouldOverwriteDefinitionOnly_FromCommittedStateRoot()
     {
         var store = new RecordingDocumentStore<ServiceCatalogReadModel>(x => x.Id);
-        var projector = new ServiceCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
+        var projector = new ServiceCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
         var identity = GAgentServiceTestKit.CreateIdentity();
+        var state = new ServiceDefinitionState
+        {
+            Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
+            DefaultServingRevisionId = "r-default",
+        };
         var context = new ServiceCatalogProjectionContext
         {
             RootActorId = "tenant:app:default:svc",
@@ -27,26 +32,17 @@ public sealed class ServiceCatalogProjectorTests
 
         await projector.ProjectAsync(
             context,
-            BuildEnvelope(new ServiceDefinitionCreatedEvent
-            {
-                Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
-            }));
-        await projector.ProjectAsync(
-            context,
-            BuildEnvelope(new ServiceDeploymentActivatedEvent
-            {
-                Identity = identity.Clone(),
-                DeploymentId = "dep-1",
-                RevisionId = "r1",
-                PrimaryActorId = "actor-1",
-                Status = ServiceDeploymentStatus.Active,
-            }));
+            BuildCommittedEnvelope(
+                new ServiceDefinitionCreatedEvent { Spec = state.Spec.Clone() },
+                state,
+                eventId: "evt-definition-created",
+                stateVersion: 3,
+                observedAt: DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
 
         var readModel = await store.GetAsync("tenant:app:default:svc");
         readModel.Should().NotBeNull();
         readModel!.DisplayName.Should().Be("Service");
-        readModel.ActiveServingRevisionId.Should().Be("r1");
-        readModel.PrimaryActorId.Should().Be("actor-1");
+        readModel.DefaultServingRevisionId.Should().Be("r-default");
         readModel.Endpoints.Should().ContainSingle(x => x.EndpointId == "run");
     }
 
@@ -54,7 +50,7 @@ public sealed class ServiceCatalogProjectorTests
     public async Task ProjectAsync_ShouldIgnoreUnrelatedPayload()
     {
         var store = new RecordingDocumentStore<ServiceCatalogReadModel>(x => x.Id);
-        var projector = new ServiceCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var projector = new ServiceCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var context = new ServiceCatalogProjectionContext
         {
             RootActorId = "tenant:app:default:svc",
@@ -69,10 +65,10 @@ public sealed class ServiceCatalogProjectorTests
     }
 
     [Fact]
-    public async Task ProjectAsync_ShouldApplyDefinitionMutations_ForExistingReadModel()
+    public async Task ProjectAsync_ShouldOverwriteDefinition_FromLatestStateRoot()
     {
         var store = new RecordingDocumentStore<ServiceCatalogReadModel>(x => x.Id);
-        var projector = new ServiceCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
+        var projector = new ServiceCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
         var identity = GAgentServiceTestKit.CreateIdentity();
         var updatedSpec = GAgentServiceTestKit.CreateDefinitionSpec(
             identity,
@@ -86,45 +82,38 @@ public sealed class ServiceCatalogProjectorTests
 
         await projector.ProjectAsync(
             context,
-            BuildEnvelope(new ServiceDefinitionCreatedEvent
-            {
-                Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
-            }));
+            BuildCommittedEnvelope(
+                new ServiceDefinitionCreatedEvent
+                {
+                    Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
+                },
+                new ServiceDefinitionState
+                {
+                    Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
+                },
+                eventId: "evt-created",
+                stateVersion: 1,
+                observedAt: DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
         await projector.ProjectAsync(
             context,
-            BuildEnvelope(new ServiceDefinitionUpdatedEvent
-            {
-                Spec = updatedSpec,
-            }));
-        await projector.ProjectAsync(
-            context,
-            BuildEnvelope(new DefaultServingRevisionChangedEvent
-            {
-                Identity = identity.Clone(),
-                RevisionId = "r2",
-            }));
-        await projector.ProjectAsync(
-            context,
-            BuildEnvelope(new ServiceDeploymentHealthChangedEvent
-            {
-                Identity = identity.Clone(),
-                DeploymentId = "dep-1",
-                Status = ServiceDeploymentStatus.Active,
-            }));
-        await projector.ProjectAsync(
-            context,
-            BuildEnvelope(new ServiceDeploymentDeactivatedEvent
-            {
-                Identity = identity.Clone(),
-                DeploymentId = "dep-1",
-                RevisionId = "r2",
-            }));
+            BuildCommittedEnvelope(
+                new ServiceDefinitionUpdatedEvent
+                {
+                    Spec = updatedSpec,
+                },
+                new ServiceDefinitionState
+                {
+                    Spec = updatedSpec.Clone(),
+                    DefaultServingRevisionId = "r2",
+                },
+                eventId: "evt-updated",
+                stateVersion: 2,
+                observedAt: DateTimeOffset.Parse("2026-03-14T00:01:00+00:00")));
 
         var readModel = await store.GetAsync("tenant:app:default:svc");
         readModel.Should().NotBeNull();
         readModel!.DisplayName.Should().Be("Updated Service");
         readModel.DefaultServingRevisionId.Should().Be("r2");
-        readModel.DeploymentStatus.Should().Be(ServiceDeploymentStatus.Deactivated.ToString());
         readModel.Endpoints.Should().ContainSingle(x => x.EndpointId == "chat" && x.Kind == ServiceEndpointKind.Chat.ToString());
     }
 
@@ -132,7 +121,7 @@ public sealed class ServiceCatalogProjectorTests
     public async Task ProjectAsync_ShouldIgnoreEnvelopeWithoutPayload()
     {
         var store = new RecordingDocumentStore<ServiceCatalogReadModel>(x => x.Id);
-        var projector = new ServiceCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var projector = new ServiceCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var context = new ServiceCatalogProjectionContext
         {
             RootActorId = "tenant:app:default:svc",
@@ -151,11 +140,16 @@ public sealed class ServiceCatalogProjectorTests
     }
 
     [Fact]
-    public async Task ProjectAsync_ShouldCreateReadModel_WhenDefaultServingChangesBeforeDefinitionProjection()
+    public async Task ProjectAsync_ShouldMaterializeDefaultServingRevision_FromStateRoot()
     {
         var store = new RecordingDocumentStore<ServiceCatalogReadModel>(x => x.Id);
-        var projector = new ServiceCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
+        var projector = new ServiceCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
         var identity = GAgentServiceTestKit.CreateIdentity();
+        var state = new ServiceDefinitionState
+        {
+            Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
+            DefaultServingRevisionId = "r9",
+        };
         var context = new ServiceCatalogProjectionContext
         {
             RootActorId = "tenant:app:default:svc",
@@ -164,11 +158,16 @@ public sealed class ServiceCatalogProjectorTests
 
         await projector.ProjectAsync(
             context,
-            BuildEnvelope(new DefaultServingRevisionChangedEvent
-            {
-                Identity = identity.Clone(),
-                RevisionId = "r9",
-            }));
+            BuildCommittedEnvelope(
+                new DefaultServingRevisionChangedEvent
+                {
+                    Identity = identity.Clone(),
+                    RevisionId = "r9",
+                },
+                state,
+                eventId: "evt-default",
+                stateVersion: 5,
+                observedAt: DateTimeOffset.Parse("2026-03-14T00:02:00+00:00")));
 
         var readModel = await store.GetAsync("tenant:app:default:svc");
         readModel.Should().NotBeNull();
@@ -177,10 +176,10 @@ public sealed class ServiceCatalogProjectorTests
     }
 
     [Fact]
-    public async Task ProjectAsync_ShouldCreateReadModel_WhenHealthEventArrivesFirst()
+    public async Task ProjectAsync_ShouldIgnoreDeploymentStateRoot()
     {
         var store = new RecordingDocumentStore<ServiceCatalogReadModel>(x => x.Id);
-        var projector = new ServiceCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
+        var projector = new ServiceCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceCatalogProjectionContext
         {
@@ -190,16 +189,22 @@ public sealed class ServiceCatalogProjectorTests
 
         await projector.ProjectAsync(
             context,
-            BuildEnvelope(new ServiceDeploymentHealthChangedEvent
-            {
-                Identity = identity.Clone(),
-                DeploymentId = "dep-1",
-                Status = ServiceDeploymentStatus.Active,
-            }));
+            BuildCommittedEnvelope(
+                new ServiceDeploymentHealthChangedEvent
+                {
+                    Identity = identity.Clone(),
+                    DeploymentId = "dep-1",
+                    Status = ServiceDeploymentStatus.Active,
+                },
+                new ServiceDeploymentState
+                {
+                    Identity = identity.Clone(),
+                },
+                eventId: "evt-health",
+                stateVersion: 7,
+                observedAt: DateTimeOffset.Parse("2026-03-14T00:03:00+00:00")));
 
-        var readModel = await store.GetAsync("tenant:app:default:svc");
-        readModel.Should().NotBeNull();
-        readModel!.DeploymentStatus.Should().Be(ServiceDeploymentStatus.Active.ToString());
+        (await store.ReadItemsAsync()).Should().BeEmpty();
     }
 
     [Fact]
@@ -207,7 +212,7 @@ public sealed class ServiceCatalogProjectorTests
     {
         var observedAt = DateTimeOffset.Parse("2026-03-14T09:00:00+00:00");
         var store = new RecordingDocumentStore<ServiceCatalogReadModel>(x => x.Id);
-        var projector = new ServiceCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
+        var projector = new ServiceCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceCatalogProjectionContext
         {
@@ -219,6 +224,10 @@ public sealed class ServiceCatalogProjectorTests
             context,
             BuildCommittedEnvelope(
                 new ServiceDefinitionCreatedEvent
+                {
+                    Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
+                },
+                new ServiceDefinitionState
                 {
                     Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
                 },
@@ -238,7 +247,7 @@ public sealed class ServiceCatalogProjectorTests
     public async Task ProjectAsync_ShouldIgnoreCommittedEnvelope_WhenEventDataIsMissing()
     {
         var store = new RecordingDocumentStore<ServiceCatalogReadModel>(x => x.Id);
-        var projector = new ServiceCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
+        var projector = new ServiceCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
         var context = new ServiceCatalogProjectionContext
         {
             RootActorId = "tenant:app:default:svc",
@@ -268,16 +277,19 @@ public sealed class ServiceCatalogProjectorTests
         where T : Google.Protobuf.IMessage =>
         BuildCommittedEnvelope(
             evt,
+            new StringValue { Value = "not-service-definition-state" },
             Guid.NewGuid().ToString("N"),
             1,
             DateTimeOffset.UtcNow);
 
-    private static EventEnvelope BuildCommittedEnvelope<T>(
-        T evt,
+    private static EventEnvelope BuildCommittedEnvelope<TEvent, TState>(
+        TEvent evt,
+        TState state,
         string eventId,
         long stateVersion,
         DateTimeOffset observedAt)
-        where T : Google.Protobuf.IMessage =>
+        where TEvent : Google.Protobuf.IMessage
+        where TState : Google.Protobuf.IMessage =>
         new()
         {
             Id = $"outer-{eventId}",
@@ -291,6 +303,7 @@ public sealed class ServiceCatalogProjectorTests
                     Timestamp = Timestamp.FromDateTimeOffset(observedAt),
                     EventData = Any.Pack(evt),
                 },
+                StateRoot = Any.Pack(state),
             }),
         };
 }
