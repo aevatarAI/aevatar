@@ -182,7 +182,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
 
         report.ReportVersion.Should().Be("3.0");
         report.ProjectionScope.Should().Be(WorkflowExecutionProjectionScope.RunIsolated);
-        report.TopologySource.Should().Be(WorkflowExecutionTopologySource.RuntimeSnapshot);
+        report.TopologySource.Should().Be(WorkflowExecutionTopologySource.CommittedProjection);
         report.WorkflowName.Should().BeEmpty();
         report.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Unknown);
         report.Success.Should().BeNull();
