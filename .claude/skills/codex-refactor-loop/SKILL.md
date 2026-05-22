@@ -104,6 +104,25 @@ Controller wakeup 处理 markers 后,**必须在同 turn 内派出下一步 code
 
 派出后 ScheduleWakeup;**不允许** "wakeup → sweep → 0 派出 → 下 wakeup" pattern(空 wakeup)。
 
+### Controller 严禁自升 escalate(强制 — 防偷懒标人)
+
+Per Auric 2026-05-22 "大量标记 auto-loop-stuck 的实际并不需要人介入":controller 严格按 judge marker + hardcoded trigger 判 escalate,**不允许**自己以"累了/round 多"等理由直接 label `🆘 human:卡死`。
+
+**判定铁律**:
+
+| Judge marker | Controller 动作 | 不允许 |
+|---|---|---|
+| `converge:round-N` | 派 r-N 三 solver(不管 N 多大) | ❌ "round 多了"自升 escalate |
+| `escalate:stalled` | 派 reflector codex | ❌ 直接 label `🆘 human` |
+| `escalate:philosophy:<reason>` | **必须先 reflector 评估**是否真命中 7 个 hardcoded trigger(top-level CLAUDE.md / new core abstraction / docs/canon / rule exception 扩大 / cross-cluster coupling / perf unverifiable / philosophy keyword);命中才 label 人,不命中走 reflector retry-fix | ❌ judge 一说 philosophy 就 label 人 |
+| `escalate:<其他>` | 派 reflector + PushNotification | ❌ 直接 label |
+| `consensus` | 派 implement | — |
+| 无 judge marker / judge crash | 重派 judge | ❌ 自判 escalate |
+
+**正确"label 人"的唯一路径**:`reflector` 输出 `META_RESOLVED:escalate-human:<reason>` → controller 才允许 label `🆘 human:卡死` + ASCII A/B/C banner。
+
+事故记录:2026-05-22 我把 5 issue 全 label `🆘 human:卡死`,实际只有 #800(new-actor-topology)#801(top-level CLAUDE.md change)真命中 trigger。#779(judge 是 converge,我硬升 escalate)、#796(judge 是 stalled,应 reflector)、#797(judge philosophy 但实际是 organize existing patterns,reflector 应能解)三个标错。3/5 false-positive 率。
+
 ### Spawn / merge / banner 后必须 peek(强制 — 防 maintainer 漏读)
 
 任何 controller turn 派 codex / merge PR / post banner / close issue 之后,**turn 结束前必须 `bash tools/refactor-loop/peek.sh | tail -80` 一次扫 maintainer 评论 + 0-codex 漏洞**。
