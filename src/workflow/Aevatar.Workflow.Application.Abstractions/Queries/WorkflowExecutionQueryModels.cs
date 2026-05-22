@@ -32,7 +32,6 @@ public sealed class WorkflowCatalogRole
     public int? MaxTokens { get; set; }
     public int? MaxToolRounds { get; set; }
     public int? MaxHistoryMessages { get; set; }
-    public int? StreamBufferCapacity { get; set; }
     public List<string> EventModules { get; set; } = [];
     public string EventRoutes { get; set; } = string.Empty;
     public List<string> Connectors { get; set; } = [];

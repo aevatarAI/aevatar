@@ -110,6 +110,9 @@ message RoleChatSessionCompletedEvent {
 }
 
 message InitializeRoleAgentEvent {
+  // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+  //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
+  //   New principle: ChatStreamAsync owns the stream flow directly; the Task.Run + Channel owned-stream loop and stream_buffer_capacity config were removed; middleware wrapping stays inside private bridge adapters.
   string role_name = 1;
   string provider_name = 2;
   string model = 3;
@@ -118,16 +121,20 @@ message InitializeRoleAgentEvent {
   int32 max_tokens = 6;
   int32 max_tool_rounds = 7;
   int32 max_history_messages = 8;
-  int32 stream_buffer_capacity = 9;
   string event_modules = 10;
   string event_routes = 11;
   int32 max_prompt_token_budget = 12;
   double compression_threshold = 13;
   bool enable_summarization = 14;
   string role_id = 15;
+  reserved 9;
+  reserved "stream_buffer_capacity";
 }
 
 message AIAgentConfigOverrides {
+  // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+  //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
+  //   New principle: ChatStreamAsync owns the stream flow directly; the Task.Run + Channel owned-stream loop and stream_buffer_capacity config were removed; middleware wrapping stays inside private bridge adapters.
   optional string provider_name = 1;
   optional string model = 2;
   optional string system_prompt = 3;
@@ -135,10 +142,11 @@ message AIAgentConfigOverrides {
   optional int32 max_tokens = 5;
   optional int32 max_tool_rounds = 6;
   optional int32 max_history_messages = 7;
-  optional int32 stream_buffer_capacity = 8;
   optional int32 max_prompt_token_budget = 9;
   optional double compression_threshold = 10;
   optional bool enable_summarization = 11;
+  reserved 8;
+  reserved "stream_buffer_capacity";
 }
 
 // Agent → 前端：请求工具执行审批

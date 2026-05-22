@@ -178,7 +178,6 @@ public sealed class WorkflowCompatibilityProfile
                 "max_tokens",
                 "max_tool_rounds",
                 "max_history_messages",
-                "stream_buffer_capacity",
                 "event_modules",
                 "event_routes",
                 "connectors",

@@ -149,11 +149,6 @@ public sealed class RoleDefinition
     public int? MaxHistoryMessages { get; init; }
 
     /// <summary>
-    /// 流式缓冲区容量。
-    /// </summary>
-    public int? StreamBufferCapacity { get; init; }
-
-    /// <summary>
     /// 该角色绑定的事件模块列表（逗号分隔）。
     /// </summary>
     public string? EventModules { get; init; }

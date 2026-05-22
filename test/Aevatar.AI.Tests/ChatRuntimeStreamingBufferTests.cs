@@ -12,10 +12,10 @@ namespace Aevatar.AI.Tests;
 public sealed class ChatRuntimeStreamingBufferTests
 {
     [Fact]
-    public async Task ChatStreamAsync_WhenBufferIsBounded_ShouldStillStreamAllChunks()
+    public async Task ChatStreamAsync_WhenStreamOwnerHasNoBuffer_ShouldStillStreamAllChunks()
     {
         var provider = new StreamingProvider(["A", "B", "C", "D"]);
-        var runtime = CreateRuntime(provider, streamBufferCapacity: 1);
+        var runtime = CreateRuntime(provider);
 
         var output = new StringBuilder();
         await foreach (var chunk in runtime.ChatStreamAsync("hello"))
@@ -29,6 +29,25 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
+    public void ChatRuntimeSource_ShouldNotReintroduceOwnedStreamLoop()
+    {
+        var root = FindRepositoryRoot();
+        var chatRuntimeFile = Path.Combine(
+            root,
+            "src",
+            "Aevatar.AI.Core",
+            "Chat",
+            "ChatRuntime.cs");
+        var source = StripLineComments(File.ReadAllText(chatRuntimeFile));
+
+        source.Should().NotContain("Task.Run");
+        source.Should().NotContain("Channel<LLMStreamChunk>");
+        source.Should().NotContain("ChannelWriter<LLMStreamChunk>");
+        source.Should().NotContain("_streamBufferCapacity");
+        source.Should().NotContain("streamBufferCapacity");
+    }
+
+    [Fact]
     public async Task ChatStreamAsync_WhenProviderReturnsToolCallDelta_ShouldSurfaceStructuredChunks()
     {
         var provider = new StreamingProvider(["done"], streamToolCall: new ToolCall
@@ -37,7 +56,7 @@ public sealed class ChatRuntimeStreamingBufferTests
             Name = "search",
             ArgumentsJson = "{\"q\":\"aevatar\"}",
         });
-        var runtime = CreateRuntime(provider, streamBufferCapacity: 2);
+        var runtime = CreateRuntime(provider);
         var chunks = new List<LLMStreamChunk>();
 
         await foreach (var chunk in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
@@ -77,7 +96,7 @@ public sealed class ChatRuntimeStreamingBufferTests
                 },
             ]);
         var captureMiddleware = new CaptureLLMResponseMiddleware();
-        var runtime = CreateRuntime(provider, streamBufferCapacity: 2, llmMiddlewares: [captureMiddleware]);
+        var runtime = CreateRuntime(provider, llmMiddlewares: [captureMiddleware]);
 
         await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
         {
@@ -104,7 +123,7 @@ public sealed class ChatRuntimeStreamingBufferTests
                     DeltaReasoningContent = "thinking step",
                 },
             ]);
-        var runtime = CreateRuntime(provider, streamBufferCapacity: 2);
+        var runtime = CreateRuntime(provider);
         var chunks = new List<LLMStreamChunk>();
 
         await foreach (var chunk in runtime.ChatStreamAsync("hello"))
@@ -135,7 +154,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         ]);
         var tools = new ToolManager();
         tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}"));
-        var runtime = CreateRuntime(provider, streamBufferCapacity: 2, tools: tools);
+        var runtime = CreateRuntime(provider, tools: tools);
         var output = new StringBuilder();
 
         await foreach (var chunk in runtime.ChatStreamAsync("hello", maxToolRounds: 2))
@@ -181,7 +200,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         ]);
         var tools = new ToolManager();
         tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}"));
-        var runtime = CreateRuntime(provider, streamBufferCapacity: 2, tools: tools);
+        var runtime = CreateRuntime(provider, tools: tools);
 
         await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 2))
         {
@@ -221,7 +240,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         ]);
         var tools = new ToolManager();
         tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}"));
-        var runtime = CreateRuntime(provider, streamBufferCapacity: 2, tools: tools);
+        var runtime = CreateRuntime(provider, tools: tools);
 
         await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 2))
         {
@@ -274,7 +293,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         ]);
         var tools = new ToolManager();
         tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}"));
-        var runtime = CreateRuntime(provider, streamBufferCapacity: 2, tools: tools);
+        var runtime = CreateRuntime(provider, tools: tools);
 
         var output = new StringBuilder();
         await foreach (var chunk in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
@@ -337,7 +356,6 @@ public sealed class ChatRuntimeStreamingBufferTests
             AgentToolRequestContext.ChannelMessageId)));
         var runtime = CreateRuntime(
             provider,
-            streamBufferCapacity: 2,
             tools: tools,
             requestBuilder: () => new LLMRequest
             {
@@ -370,7 +388,6 @@ public sealed class ChatRuntimeStreamingBufferTests
         var provider = new StreamingProvider(["A"]);
         var runtime = CreateRuntime(
             provider,
-            streamBufferCapacity: 2,
             requestBuilder: () => new LLMRequest
             {
                 Messages = [],
@@ -407,7 +424,6 @@ public sealed class ChatRuntimeStreamingBufferTests
         var captureMiddleware = new CaptureLLMMetadataMiddleware();
         var runtime = CreateRuntime(
             provider,
-            streamBufferCapacity: 2,
             llmMiddlewares: [captureMiddleware]);
 
         await foreach (var _ in runtime.ChatStreamAsync("hello", "session-77"))
@@ -423,7 +439,6 @@ public sealed class ChatRuntimeStreamingBufferTests
         var provider = new StreamingProvider(["ignored"]);
         var runtime = CreateRuntime(
             provider,
-            streamBufferCapacity: 2,
             agentMiddlewares:
             [
                 new DelegateAgentRunMiddleware((context, _) =>
@@ -441,10 +456,42 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
+    public async Task ChatStreamAsync_WhenAgentMiddlewareAwaitsNext_ShouldObserveResultAndItems()
+    {
+        var provider = new StreamingProvider(["stream-", "answer"]);
+        AgentRunContext? observedContext = null;
+        var runtime = CreateRuntime(
+            provider,
+            agentMiddlewares:
+            [
+                new DelegateAgentRunMiddleware(async (context, next) =>
+                {
+                    context.Items["agent.before_next"] = "seen";
+                    await next();
+                    observedContext = context;
+                }),
+            ]);
+        var output = new StringBuilder();
+
+        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+        {
+            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+                output.Append(chunk.DeltaContent);
+        }
+
+        output.ToString().Should().Be("stream-answer");
+        provider.StreamCallCount.Should().Be(1);
+        observedContext.Should().NotBeNull();
+        observedContext!.Result.Should().Be("stream-answer");
+        observedContext.Items.Should().Contain("agent.before_next", "seen");
+        observedContext.Items.Should().Contain("gen_ai.provider.name", "streaming-provider");
+    }
+
+    [Fact]
     public async Task ChatAsync_WhenProviderStreamsContent_ShouldAggregateWithoutCallingProviderChatAsync()
     {
         var provider = new StreamingProvider(["stream-", "answer"]);
-        var runtime = CreateRuntime(provider, streamBufferCapacity: 2);
+        var runtime = CreateRuntime(provider);
 
         var result = await runtime.ChatAsync("hello");
 
@@ -515,7 +562,6 @@ public sealed class ChatRuntimeStreamingBufferTests
         var provider = new StreamingProvider(["ignored"]);
         var runtime = CreateRuntime(
             provider,
-            streamBufferCapacity: 2,
             agentMiddlewares:
             [
                 new DelegateAgentRunMiddleware((context, _) =>
@@ -541,7 +587,6 @@ public sealed class ChatRuntimeStreamingBufferTests
         var provider = new StreamingProvider(["ignored"]);
         var runtime = CreateRuntime(
             provider,
-            streamBufferCapacity: 2,
             llmMiddlewares:
             [
                 new DelegateLlmCallMiddleware((context, _) =>
@@ -580,7 +625,6 @@ public sealed class ChatRuntimeStreamingBufferTests
         var provider = new StreamingProvider(["ignored"]);
         var runtime = CreateRuntime(
             provider,
-            streamBufferCapacity: 2,
             llmMiddlewares:
             [
                 new DelegateLlmCallMiddleware((context, _) =>
@@ -614,7 +658,7 @@ public sealed class ChatRuntimeStreamingBufferTests
             [
                 new LLMStreamChunk(),
             ]);
-        var runtime = CreateRuntime(provider, streamBufferCapacity: 2);
+        var runtime = CreateRuntime(provider);
         var chunks = new List<LLMStreamChunk>();
 
         await foreach (var chunk in runtime.ChatStreamAsync("hello"))
@@ -623,19 +667,8 @@ public sealed class ChatRuntimeStreamingBufferTests
         chunks.Should().BeEmpty();
     }
 
-    [Fact]
-    public void Constructor_WhenStreamBufferCapacityIsInvalid_ShouldThrow()
-    {
-        var provider = new StreamingProvider([]);
-
-        var act = () => CreateRuntime(provider, streamBufferCapacity: 0);
-
-        act.Should().Throw<ArgumentOutOfRangeException>();
-    }
-
     private static ChatRuntime CreateRuntime(
         ILLMProvider provider,
-        int streamBufferCapacity,
         ToolManager? tools = null,
         IReadOnlyList<IAgentRunMiddleware>? agentMiddlewares = null,
         IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null,
@@ -651,8 +684,15 @@ public sealed class ChatRuntimeStreamingBufferTests
             hooks: null,
             requestBuilder: requestBuilder ?? (() => new LLMRequest { Messages = [] }),
             agentMiddlewares: agentMiddlewares,
-            llmMiddlewares: llmMiddlewares,
-            streamBufferCapacity: streamBufferCapacity);
+            llmMiddlewares: llmMiddlewares);
+    }
+
+    private static string StripLineComments(string source)
+    {
+        var lines = source
+            .Split('\n')
+            .Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal));
+        return string.Join('\n', lines);
     }
 
     private sealed class QueuedStreamingProvider(

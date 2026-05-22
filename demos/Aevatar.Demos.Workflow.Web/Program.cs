@@ -1160,7 +1160,6 @@ static object BuildRoleDto(RoleDefinition role) => new
     maxTokens = role.MaxTokens,
     maxToolRounds = role.MaxToolRounds,
     maxHistoryMessages = role.MaxHistoryMessages,
-    streamBufferCapacity = role.StreamBufferCapacity,
     eventModules = role.EventModules,
     eventRoutes = role.EventRoutes,
     connectors = role.Connectors,

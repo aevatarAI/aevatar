@@ -22,8 +22,6 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
 {
     private const int MaxToolRounds = 40;
     private const int MaxHistoryMessages = 100;
-    private const int StreamBufferCapacity = 256;
-
     private readonly ILLMProviderFactory _llmProviderFactory;
     private readonly IReadOnlyList<IAgentToolSource> _toolSources;
     private readonly IReadOnlyList<IAgentRunMiddleware> _agentMiddlewares;
@@ -184,6 +182,9 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
         IStreamingReplySink? streamingSink,
         CancellationToken ct)
     {
+        // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
+        //   Old pattern: NyxID reply construction passed stream_buffer_capacity into ChatRuntime after the stream loop moved to Task.Run + Channel.
+        //   New principle: ChatRuntime owns the async stream directly; this caller only supplies provider, tools, middleware, and request identity.
         var history = new global::Aevatar.AI.Core.Chat.ChatHistory
         {
             MaxMessages = MaxHistoryMessages,
@@ -209,8 +210,7 @@ public sealed class NyxIdConversationReplyGenerator : IConversationReplyGenerato
             agentMiddlewares: _agentMiddlewares,
             llmMiddlewares: _llmMiddlewares,
             agentId: activity.Conversation?.CanonicalKey,
-            agentName: "NyxIdConversationReply",
-            streamBufferCapacity: StreamBufferCapacity);
+            agentName: "NyxIdConversationReply");
 
         var output = new StringBuilder();
         // ADR-0021 §6 / canon §8 actor-edge closeout: aggregate Usage and track the last
