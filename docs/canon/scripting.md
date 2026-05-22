@@ -58,7 +58,9 @@ owner: eanzhao
 
 1. `IScriptBehaviorRuntimeCapabilities` 不再暴露 `GetReadModelSnapshotAsync(...)` 这类跨 actor readmodel 侧读能力。
 2. scripting behavior 在 actor turn 内只能发布消息、调度 self continuation、调用 AI/definition/provisioning/evolution 等显式应用端口。
-3. 读取其他 actor 的已提交事实必须回到正式 query/readmodel 入口，不能通过 runtime capability 在脚本内部侧读。
+3. `IScriptBehaviorRuntimeCapabilities` 不暴露 raw actor lifecycle/topology 能力：脚本不能用 assembly-qualified type name 和调用方提供的 actor id 直接 create/destroy/link/unlink actor。
+4. 需要定义、provision runtime、执行 runtime、catalog promotion/rollback 时，只能使用现有 typed scripting ports；普通业务交互使用 `PublishAsync` / `SendToAsync` / self durable signal。
+5. 读取其他 actor 的已提交事实必须回到正式 query/readmodel 入口，不能通过 runtime capability 在脚本内部侧读。
 
 当前 runtime semantics 也已经明确收紧：
 

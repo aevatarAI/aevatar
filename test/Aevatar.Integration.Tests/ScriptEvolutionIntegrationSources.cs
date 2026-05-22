@@ -232,14 +232,7 @@ internal static class ScriptEvolutionIntegrationSources
                 var workerBV3Source = input.WorkerBV3Source ?? string.Empty;
                 var generatedSource1 = input.GeneratedSource1 ?? string.Empty;
                 var generatedSource2 = input.GeneratedSource2 ?? string.Empty;
-                var runtimeAgentType = input.RuntimeAgentType ?? string.Empty;
-
-                var lifecycleActorId = await context.RuntimeCapabilities.CreateAgentAsync(
-                    runtimeAgentType,
-                    "script-created-runtime-" + context.RunId,
-                    ct);
-                await context.RuntimeCapabilities.LinkAgentsAsync(context.ActorId, lifecycleActorId, ct);
-                await context.RuntimeCapabilities.UnlinkAgentAsync(lifecycleActorId, ct);
+                var lifecycleActorId = "raw-lifecycle-api-deleted-" + context.RunId;
 
                 var tempARuntimeId = await context.RuntimeCapabilities.SpawnScriptRuntimeAsync(
                     "multi-worker-a-definition",
@@ -411,8 +404,6 @@ internal static class ScriptEvolutionIntegrationSources
                     generatedDefinitionActorId2,
                     "generated.script.2.run",
                     ct);
-
-                await context.RuntimeCapabilities.DestroyAgentAsync(lifecycleActorId, ct);
 
                 context.Emit(new MultiScriptEvolutionCompleted
                 {
@@ -767,18 +758,19 @@ internal static class ScriptEvolutionIntegrationSources
                 ScriptCommandContext<InteractionUpsertState> context,
                 CancellationToken ct)
             {
-                var definitionType = input.DefinitionAgentType ?? string.Empty;
                 var publishSource = input.PublishSource ?? string.Empty;
                 var sendToSource = input.SendtoSource ?? string.Empty;
                 var invokeSource = input.InvokeSource ?? string.Empty;
 
                 var aiResponse = await context.RuntimeCapabilities.AskAIAsync("health-check", ct);
 
-                var publishedDefinitionActorId = await context.RuntimeCapabilities.CreateAgentAsync(
-                    definitionType,
+                var publishedDefinitionActorId = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
+                    "interaction-published-script",
+                    "rev-published-1",
+                    publishSource,
+                    ComputeHash(publishSource),
                     "published-definition-" + context.RunId,
                     ct);
-                await context.RuntimeCapabilities.LinkAgentsAsync(context.ActorId, publishedDefinitionActorId, ct);
                 await context.RuntimeCapabilities.PublishAsync(
                     new InteractionPublishSignal
                     {
@@ -786,10 +778,12 @@ internal static class ScriptEvolutionIntegrationSources
                     },
                     TopologyAudience.Children,
                     ct);
-                await context.RuntimeCapabilities.UnlinkAgentAsync(publishedDefinitionActorId, ct);
 
-                var sendToDefinitionActorId = await context.RuntimeCapabilities.CreateAgentAsync(
-                    definitionType,
+                var sendToDefinitionActorId = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
+                    "interaction-sendto-script",
+                    "rev-sendto-1",
+                    sendToSource,
+                    ComputeHash(sendToSource),
                     "sendto-definition-" + context.RunId,
                     ct);
                 await context.RuntimeCapabilities.SendToAsync(
@@ -803,19 +797,13 @@ internal static class ScriptEvolutionIntegrationSources
                     },
                     ct);
 
-                var upsertDefinitionActorId = await context.RuntimeCapabilities.CreateAgentAsync(
-                    definitionType,
-                    "upsert-definition-" + context.RunId,
-                    ct);
-                upsertDefinitionActorId = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
+                var upsertDefinitionActorId = await context.RuntimeCapabilities.UpsertScriptDefinitionAsync(
                     "interaction-invoke-script",
                     "rev-invoke-1",
                     invokeSource,
                     ComputeHash(invokeSource),
-                    upsertDefinitionActorId,
+                    "upsert-definition-" + context.RunId,
                     ct);
-
-                _ = publishSource;
 
                 context.Emit(new InteractionUpsertCompleted
                 {
