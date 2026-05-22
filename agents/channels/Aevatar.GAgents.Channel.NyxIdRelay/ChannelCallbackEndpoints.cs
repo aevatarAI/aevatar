@@ -15,6 +15,9 @@ namespace Aevatar.GAgents.Channel.NyxIdRelay;
 
 public static class ChannelCallbackEndpoints
 {
+    // Refactor (iter36/cluster-042-channel-diagnostics-readmodel):
+    //   Old pattern: Channel runtime diagnostics 用 singleton in-memory list with retention trimming;diagnostics endpoint 读 process-local list 直接(InMemoryChannelRuntimeDiagnostics 注册为 singleton + ImmutableList 字段 + ImmutableInterlocked mutation)。
+    //   New principle: Channel diagnostics 改为 logs/metrics only(observability path)OR actor/projection-backed diagnostic events with readmodel query。**禁止** public endpoint 读 singleton process memory 作 diagnostic fact source。
     // Refactor (iter27/cluster-003-channel-registration-scope-backfill):
     //   Old pattern: ChannelBotRegistrationScopeBackfill used readmodels to infer write candidates plus live repair_lark_mirror HTTP/tool surface and RepairLocalMirrorAsync.
     //   New principle: remove backfill/repair_lark_mirror live recovery; rebuild_projection is projection-only; keep ChannelBotScopeIdRepairedEvent replay compatibility.
@@ -250,29 +253,12 @@ public static class ChannelCallbackEndpoints
         }, statusCode: StatusCodes.Status410Gone);
     }
 
-    private static Task<IResult> HandleGetDiagnosticErrorsAsync(
-        [FromServices] IChannelRuntimeDiagnostics? diagnostics)
+    private static Task<IResult> HandleGetDiagnosticErrorsAsync()
     {
-        var entries = diagnostics?.GetRecent()
-                      ?? Array.Empty<ChannelRuntimeDiagnosticEntry>();
-
-        return Task.FromResult<IResult>(Results.Ok(new
+        return Task.FromResult<IResult>(Results.Json(new
         {
-            status = new
-            {
-                service_resolved = diagnostics != null,
-                server_time = DateTimeOffset.UtcNow.ToString("O"),
-                entry_count = entries.Count,
-            },
-            entries = entries.Select(entry => new
-            {
-                timestamp = entry.Timestamp.ToString("O"),
-                stage = entry.Stage,
-                platform = entry.Platform,
-                registrationId = entry.RegistrationId,
-                detail = entry.Detail,
-            }),
-        }));
+            error = "Channel runtime process-local diagnostic history is retired. Use logs, metrics, traces, or actor/projection-backed readmodel diagnostics.",
+        }, statusCode: StatusCodes.Status410Gone));
     }
 
     private static int ResolveProvisioningFailureStatusCode(string? error)

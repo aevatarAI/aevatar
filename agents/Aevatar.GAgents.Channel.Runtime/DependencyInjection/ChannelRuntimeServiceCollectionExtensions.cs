@@ -19,9 +19,12 @@ namespace Aevatar.GAgents.Channel.Runtime;
 /// </summary>
 public static class ChannelRuntimeServiceCollectionExtensions
 {
+    // Refactor (iter36/cluster-042-channel-diagnostics-readmodel):
+    //   Old pattern: Channel runtime diagnostics 用 singleton in-memory list with retention trimming;diagnostics endpoint 读 process-local list 直接(InMemoryChannelRuntimeDiagnostics 注册为 singleton + ImmutableList 字段 + ImmutableInterlocked mutation)。
+    //   New principle: Channel diagnostics 改为 logs/metrics only(observability path)OR actor/projection-backed diagnostic events with readmodel query。**禁止** public endpoint 读 singleton process memory 作 diagnostic fact source。
     /// <summary>
     /// Backwards-compat overload — registers the channel runtime middlewares,
-    /// diagnostics, default turn-runner fallback, ChannelBotRegistration projection
+    /// default turn-runner fallback, ChannelBotRegistration projection
     /// pipeline, and pipeline composition without an <see cref="IConfiguration"/>.
     /// Falls back to the InMemory projection store.
     /// </summary>
@@ -29,7 +32,7 @@ public static class ChannelRuntimeServiceCollectionExtensions
         => AddChannelRuntime(services, configuration: null);
 
     /// <summary>
-    /// Registers the channel runtime middlewares, diagnostics, default turn-runner
+    /// Registers the channel runtime middlewares, default turn-runner
     /// fallback, ChannelBotRegistration projection pipeline, and pipeline composition.
     /// Pass <paramref name="configuration"/> so the document projection store matches
     /// the host environment (Elasticsearch in prod, InMemory for local dev / tests).
@@ -50,9 +53,8 @@ public static class ChannelRuntimeServiceCollectionExtensions
         services.TryAddSingleton<IConversationTurnRunner, NullConversationTurnRunner>();
         services.TryAddSingleton<IConversationCardTurnRunner, NullConversationCardTurnRunner>();
 
-        // ─── Tombstone compaction options + diagnostics + materialized watermark ───
+        // ─── Tombstone compaction options + materialized watermark ───
         services.AddOptions<ChannelRuntimeTombstoneCompactionOptions>();
-        services.TryAddSingleton<IChannelRuntimeDiagnostics, InMemoryChannelRuntimeDiagnostics>();
         // Refactor (iter17/cluster-034):
         //   Old pattern: Replay-based projection scope watermark query via IEventStore (EventStoreProjectionScopeWatermarkQueryPort).
         //   New principle: Materialized ProjectionScopeStatusDocument readmodel; ProjectionScopeStatusQueryPort reads document only; never replays IEventStore.
