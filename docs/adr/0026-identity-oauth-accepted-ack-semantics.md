@@ -4,7 +4,7 @@ status: accepted
 owner: eanzhao
 ---
 
-# ADR-0024: Identity OAuth Accepted ACK Semantics
+# ADR-0026: Identity OAuth Accepted ACK Semantics
 
 ## Context
 
