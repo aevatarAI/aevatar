@@ -7,6 +7,9 @@ using Aevatar.Studio.Projection.ReadModels;
 
 namespace Aevatar.Studio.Projection.QueryPorts;
 
+// Refactor (iter38/cluster-038-studio-workspace-reuse-existing):
+//   Old pattern: Studio scoped workflow drafts 通过 ChronoStorage external storage authority + workspace ports routing 不一致(scopeId routing 显式 vs 隐藏)。
+//   New principle: Delete ChronoStorage draft authority。Route scoped workflow drafts through existing IStudioWorkspaceCommandPort / IStudioWorkspaceQueryPort with explicit scopeId。**禁止** new IScopedStudioWorkspacePort / 新 scoped actor / 新 envelope / 新 projection phase / docs/canon change。
 public sealed class ProjectionStudioWorkspaceQueryPort : IStudioWorkspaceQueryPort
 {
     private readonly IProjectionDocumentReader<StudioWorkspaceCurrentStateDocument, string> _documentReader;
@@ -23,21 +26,30 @@ public sealed class ProjectionStudioWorkspaceQueryPort : IStudioWorkspaceQueryPo
     public async Task<StudioWorkspaceSnapshot> GetAsync(CancellationToken ct = default)
     {
         var scopeId = ResolveScopeIdOrDefault();
-        var actorId = StudioWorkspaceConventions.BuildActorId(scopeId);
+        return await GetAsync(scopeId, ct);
+    }
+
+    // Refactor (iter38/cluster-038-studio-workspace-reuse-existing):
+    //   Old pattern: Studio scoped workflow drafts 通过 ChronoStorage external storage authority + workspace ports routing 不一致(scopeId routing 显式 vs 隐藏)。
+    //   New principle: Delete ChronoStorage draft authority。Route scoped workflow drafts through existing IStudioWorkspaceCommandPort / IStudioWorkspaceQueryPort with explicit scopeId。**禁止** new IScopedStudioWorkspacePort / 新 scoped actor / 新 envelope / 新 projection phase / docs/canon change。
+    public async Task<StudioWorkspaceSnapshot> GetAsync(string scopeId, CancellationToken ct = default)
+    {
+        var normalizedScopeId = StudioWorkspaceConventions.NormalizeScopeId(scopeId);
+        var actorId = StudioWorkspaceConventions.BuildActorId(normalizedScopeId);
         var document = await _documentReader.GetAsync(actorId, ct);
         var state = document?.StateRoot?.Is(StudioWorkspaceState.Descriptor) == true
             ? document.StateRoot.Unpack<StudioWorkspaceState>()
             : new StudioWorkspaceState
             {
                 WorkspaceId = actorId,
-                ScopeId = scopeId,
+                ScopeId = normalizedScopeId,
             };
 
         var directories = state.Directories.Select(ToApplicationDirectory).ToList();
         var settings = ToApplicationSettings(state.Settings, directories);
         return new StudioWorkspaceSnapshot(
             WorkspaceId: string.IsNullOrWhiteSpace(state.WorkspaceId) ? actorId : state.WorkspaceId,
-            ScopeId: string.IsNullOrWhiteSpace(state.ScopeId) ? scopeId : state.ScopeId,
+            ScopeId: string.IsNullOrWhiteSpace(state.ScopeId) ? normalizedScopeId : state.ScopeId,
             Settings: settings,
             Directories: directories,
             Drafts: state.Drafts.Values.Select(ToApplicationDraft).ToList(),

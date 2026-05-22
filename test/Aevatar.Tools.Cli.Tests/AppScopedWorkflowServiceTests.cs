@@ -98,14 +98,15 @@ public sealed class AppScopedWorkflowServiceTests
     [Fact]
     public async Task SaveAsync_ShouldRewriteYamlNameFromRequestedWorkflowName()
     {
-        var storagePort = new StubWorkflowDraftStore();
+        var workspacePort = new StubWorkspacePorts();
         var service = new AppScopedWorkflowService(
             new StubHttpClientFactory(new HttpClient(new StubHttpMessageHandler(_ => throw new InvalidOperationException("HTTP backend should not be called.")))
             {
                 BaseAddress = new Uri("https://backend.example"),
             }),
             new StubWorkflowYamlDocumentService(),
-            workflowDraftStore: storagePort);
+            workspaceQueryPort: workspacePort,
+            workspaceCommandPort: workspacePort);
 
         var response = await service.SaveDraftAsync(
             "scope-1",
@@ -116,11 +117,11 @@ public sealed class AppScopedWorkflowServiceTests
                 FileName: null,
                 Yaml: "name: draft\nsteps: []\n"));
 
-        storagePort.LastUpload.Should().NotBeNull();
-        storagePort.LastUpload!.ScopeId.Should().Be("scope-1");
-        storagePort.LastUpload!.WorkflowId.Should().Be("renamed-workflow");
-        storagePort.LastUpload.WorkflowName.Should().Be("renamed-workflow");
-        storagePort.LastUpload.Yaml.Should().StartWith("name: renamed-workflow");
+        workspacePort.LastUpload.Should().NotBeNull();
+        workspacePort.LastUpload!.ScopeId.Should().Be("scope-1");
+        workspacePort.LastUpload!.WorkflowId.Should().Be("renamed-workflow");
+        workspacePort.LastUpload.WorkflowName.Should().Be("renamed-workflow");
+        workspacePort.LastUpload.Yaml.Should().StartWith("name: renamed-workflow");
         response.Name.Should().Be("renamed-workflow");
         response.Yaml.Should().StartWith("name: renamed-workflow");
     }
@@ -135,11 +136,11 @@ public sealed class AppScopedWorkflowServiceTests
             }),
             new StubWorkflowYamlDocumentService(),
             workflowQueryPort: new StubScopeWorkflowQueryPort(),
-            workflowDraftStore: new StubWorkflowDraftStore(new[]
+            workspaceQueryPort: new StubWorkspacePorts(new[]
             {
                 new ScopedDraft(
                     "scope-2",
-                    new WorkflowDraft(
+                    NewDraft(
                         "hello-chat",
                         "hello-chat",
                         "name: hello-chat\ndescription: stored workflow\nsteps: []\n",
@@ -162,11 +163,11 @@ public sealed class AppScopedWorkflowServiceTests
             new StubWorkflowYamlDocumentService(),
             workflowQueryPort: new StubScopeWorkflowQueryPort(),
             workflowActorBindingReader: new StubWorkflowActorBindingReader(null),
-            workflowDraftStore: new StubWorkflowDraftStore(new[]
+            workspaceQueryPort: new StubWorkspacePorts(new[]
             {
                 new ScopedDraft(
                     "scope-2",
-                    new WorkflowDraft(
+                    NewDraft(
                         "hello-chat",
                         "hello-chat",
                         "name: hello-chat\ndescription: restored from storage\nsteps: []\n",
@@ -188,8 +189,8 @@ public sealed class AppScopedWorkflowServiceTests
             }),
             new StubWorkflowYamlDocumentService(),
             workflowQueryPort: new StubScopeWorkflowQueryPort(),
-            workflowDraftStore: new StubWorkflowDraftStore(
-                new WorkflowDraft(
+            workspaceQueryPort: new StubWorkspacePorts(
+                NewDraft(
                     "hello-chat",
                     "hello-chat",
                     "name: hello-chat\ndescription: stored workflow\nsteps: []\n",
@@ -226,8 +227,8 @@ public sealed class AppScopedWorkflowServiceTests
             }),
             new StubWorkflowYamlDocumentService(),
             workflowQueryPort: new StubScopeWorkflowQueryPort(workflow),
-            workflowDraftStore: new StubWorkflowDraftStore(
-                new WorkflowDraft(
+            workspaceQueryPort: new StubWorkspacePorts(
+                NewDraft(
                     "test03",
                     "test03",
                     "name: test03\ndescription: restored from storage\nsteps:\n  - id: llm_call\n",
@@ -253,8 +254,8 @@ public sealed class AppScopedWorkflowServiceTests
             new StubWorkflowYamlDocumentService(),
             workflowQueryPort: new StubScopeWorkflowQueryPort(),
             workflowActorBindingReader: new StubWorkflowActorBindingReader(null),
-            workflowDraftStore: new StubWorkflowDraftStore(
-                new WorkflowDraft(
+            workspaceQueryPort: new StubWorkspacePorts(
+                NewDraft(
                     "hello-chat",
                     "hello-chat",
                     "name: hello-chat\ndescription: restored from storage\nsteps: []\n",
@@ -300,8 +301,8 @@ public sealed class AppScopedWorkflowServiceTests
                     "test03",
                     string.Empty,
                     new Dictionary<string, string>(StringComparer.Ordinal))),
-            workflowDraftStore: new StubWorkflowDraftStore(
-                new WorkflowDraft(
+            workspaceQueryPort: new StubWorkspacePorts(
+                NewDraft(
                     "test03",
                     "test03",
                     "name: test03\ndescription: restored from storage\nsteps:\n  - id: llm_call\n",
@@ -347,8 +348,8 @@ public sealed class AppScopedWorkflowServiceTests
                     "test03",
                     "name: runtime-version\nsteps: []\n",
                     new Dictionary<string, string>(StringComparer.Ordinal))),
-            workflowDraftStore: new StubWorkflowDraftStore(
-                new WorkflowDraft(
+            workspaceQueryPort: new StubWorkspacePorts(
+                NewDraft(
                     "test03",
                     "test03",
                     "name: draft-version\ndescription: prefer stored draft\nsteps:\n  - id: llm_call\n",
@@ -501,73 +502,125 @@ public sealed class AppScopedWorkflowServiceTests
             Task.FromResult<PreparedServiceRevisionArtifact?>(null);
     }
 
-    private sealed class StubWorkflowDraftStore : IWorkflowDraftStore
+    // Refactor (iter38/cluster-038-studio-workspace-reuse-existing):
+    //   Old pattern: Studio scoped workflow drafts 通过 ChronoStorage external storage authority + workspace ports routing 不一致(scopeId routing 显式 vs 隐藏)。
+    //   New principle: Delete ChronoStorage draft authority。Route scoped workflow drafts through existing IStudioWorkspaceCommandPort / IStudioWorkspaceQueryPort with explicit scopeId。**禁止** new IScopedStudioWorkspacePort / 新 scoped actor / 新 envelope / 新 projection phase / docs/canon change。
+    private sealed class StubWorkspacePorts : IStudioWorkspaceQueryPort, IStudioWorkspaceCommandPort
     {
-        private readonly Dictionary<string, Dictionary<string, WorkflowDraft>> _storedWorkflows;
+        private readonly Dictionary<string, Dictionary<string, StudioWorkflowDraftRecord>> _storedWorkflows;
         public UploadedWorkflowYaml? LastUpload { get; private set; }
 
-        public StubWorkflowDraftStore()
+        public StubWorkspacePorts()
         {
-            _storedWorkflows = new Dictionary<string, Dictionary<string, WorkflowDraft>>(StringComparer.Ordinal);
+            _storedWorkflows = new Dictionary<string, Dictionary<string, StudioWorkflowDraftRecord>>(StringComparer.Ordinal);
         }
 
-        public StubWorkflowDraftStore(params WorkflowDraft[] storedWorkflows)
+        public StubWorkspacePorts(params StudioWorkflowDraftRecord[] storedWorkflows)
             : this(storedWorkflows.Select(static workflow => new ScopedDraft("scope-1", workflow)))
         {
         }
 
-        public StubWorkflowDraftStore(IEnumerable<ScopedDraft> storedWorkflows)
+        public StubWorkspacePorts(IEnumerable<ScopedDraft> storedWorkflows)
             : this()
         {
             foreach (var storedWorkflow in storedWorkflows)
             {
-                GetOrCreateScopeStore(storedWorkflow.ScopeId)[storedWorkflow.Workflow.WorkflowId] = storedWorkflow.Workflow;
+                GetOrCreateScopeStore(storedWorkflow.ScopeId)[storedWorkflow.Draft.WorkflowId] = storedWorkflow.Draft;
             }
         }
 
-        public Task SaveDraftAsync(
-            string scopeId,
-            string workflowId,
-            string workflowName,
-            string yaml,
-            WorkflowLayoutDocument? layout,
-            CancellationToken ct)
+        public Task<StudioWorkspaceSnapshot> GetAsync(CancellationToken ct = default) =>
+            GetAsync("scope-1", ct);
+
+        public Task<StudioWorkspaceSnapshot> GetAsync(string scopeId, CancellationToken ct = default)
         {
-            var uploadedAt = DateTimeOffset.UtcNow;
             var normalizedScopeId = scopeId.Trim();
-            LastUpload = new UploadedWorkflowYaml(normalizedScopeId, workflowId, workflowName, yaml, uploadedAt);
-            GetOrCreateScopeStore(normalizedScopeId)[workflowId] = new WorkflowDraft(workflowId, workflowName, yaml, uploadedAt, layout);
-            return Task.CompletedTask;
+            _storedWorkflows.TryGetValue(normalizedScopeId, out var scopeStore);
+            return Task.FromResult(new StudioWorkspaceSnapshot(
+                $"studio-workspace:{normalizedScopeId}",
+                normalizedScopeId,
+                new StudioWorkspaceSettings(
+                    UserConfigRuntimeDefaults.LocalRuntimeBaseUrl,
+                    [new StudioWorkspaceDirectory($"scope:{normalizedScopeId}", normalizedScopeId, $"scope://{normalizedScopeId}", true)],
+                    "blue",
+                    "light"),
+                [new StudioWorkspaceDirectory($"scope:{normalizedScopeId}", normalizedScopeId, $"scope://{normalizedScopeId}", true)],
+                scopeStore?.Values.ToList() ?? [],
+                7,
+                DateTimeOffset.UtcNow));
         }
 
-        public Task<IReadOnlyList<WorkflowDraft>> ListDraftsAsync(string scopeId, CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<WorkflowDraft>>(
-                _storedWorkflows.TryGetValue(scopeId.Trim(), out var scopeStore)
-                    ? scopeStore.Values.ToList()
-                    : []);
+        public Task<StudioWorkspaceCommandReceipt> SaveDraftAsync(
+            StudioWorkflowDraftRecord draft,
+            long? expectedVersion = null,
+            CancellationToken ct = default) =>
+            SaveDraftAsync("scope-1", draft, expectedVersion, ct);
 
-        public Task<WorkflowDraft?> GetDraftAsync(string scopeId, string workflowId, CancellationToken ct) =>
-            Task.FromResult<WorkflowDraft?>(
-                _storedWorkflows.TryGetValue(scopeId.Trim(), out var scopeStore) &&
-                scopeStore.TryGetValue(workflowId, out var storedWorkflow)
-                    ? storedWorkflow
-                    : null);
-
-        public Task DeleteDraftAsync(string scopeId, string workflowId, CancellationToken ct)
+        public Task<StudioWorkspaceCommandReceipt> SaveDraftAsync(
+            string scopeId,
+            StudioWorkflowDraftRecord draft,
+            long? expectedVersion = null,
+            CancellationToken ct = default)
         {
-            if (_storedWorkflows.TryGetValue(scopeId.Trim(), out var scopeStore))
+            var normalizedScopeId = scopeId.Trim();
+            LastUpload = new UploadedWorkflowYaml(normalizedScopeId, draft.WorkflowId, draft.Name, draft.Yaml, draft.UpdatedAtUtc);
+            GetOrCreateScopeStore(normalizedScopeId)[draft.WorkflowId] = draft;
+            return Task.FromResult(new StudioWorkspaceCommandReceipt(
+                $"studio-workspace:{normalizedScopeId}",
+                $"studio-workspace:{normalizedScopeId}",
+                Guid.NewGuid().ToString("N"),
+                expectedVersion));
+        }
+
+        public Task<StudioWorkspaceCommandReceipt> DeleteDraftAsync(
+            string workflowId,
+            long? expectedVersion = null,
+            CancellationToken ct = default) =>
+            DeleteDraftAsync("scope-1", workflowId, expectedVersion, ct);
+
+        public Task<StudioWorkspaceCommandReceipt> DeleteDraftAsync(
+            string scopeId,
+            string workflowId,
+            long? expectedVersion = null,
+            CancellationToken ct = default)
+        {
+            var normalizedScopeId = scopeId.Trim();
+            if (_storedWorkflows.TryGetValue(normalizedScopeId, out var scopeStore))
             {
                 scopeStore.Remove(workflowId);
             }
-            return Task.CompletedTask;
+
+            return Task.FromResult(new StudioWorkspaceCommandReceipt(
+                $"studio-workspace:{normalizedScopeId}",
+                $"studio-workspace:{normalizedScopeId}",
+                Guid.NewGuid().ToString("N"),
+                expectedVersion));
         }
 
-        private Dictionary<string, WorkflowDraft> GetOrCreateScopeStore(string scopeId)
+        public Task<StudioWorkspaceCommandReceipt> UpdateSettingsAsync(
+            StudioWorkspaceSettings settings,
+            long? expectedVersion = null,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioWorkspaceCommandReceipt> AddDirectoryAsync(
+            StudioWorkspaceDirectory directory,
+            long? expectedVersion = null,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioWorkspaceCommandReceipt> RemoveDirectoryAsync(
+            string directoryId,
+            long? expectedVersion = null,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        private Dictionary<string, StudioWorkflowDraftRecord> GetOrCreateScopeStore(string scopeId)
         {
             if (_storedWorkflows.TryGetValue(scopeId, out var scopeStore))
                 return scopeStore;
 
-            scopeStore = new Dictionary<string, WorkflowDraft>(StringComparer.Ordinal);
+            scopeStore = new Dictionary<string, StudioWorkflowDraftRecord>(StringComparer.Ordinal);
             _storedWorkflows[scopeId] = scopeStore;
             return scopeStore;
         }
@@ -582,6 +635,25 @@ public sealed class AppScopedWorkflowServiceTests
 
     private sealed record ScopedDraft(
         string ScopeId,
-        WorkflowDraft Workflow);
+        StudioWorkflowDraftRecord Draft);
+
+    private static StudioWorkflowDraftRecord NewDraft(
+        string workflowId,
+        string name,
+        string yaml,
+        DateTimeOffset updatedAtUtc,
+        WorkflowLayoutDocument? layout = null) =>
+        new(
+            workflowId,
+            name,
+            $"{workflowId}.yaml",
+            $"scope://scope-1/{workflowId}.yaml",
+            "scope:scope-1",
+            "scope-1",
+            yaml,
+            layout,
+            updatedAtUtc,
+            updatedAtUtc,
+            1);
 }
 #pragma warning restore CS0618

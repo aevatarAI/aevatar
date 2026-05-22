@@ -16,24 +16,26 @@ namespace Aevatar.Studio.Tests;
 public sealed class AppScopedWorkflowServiceDeleteDraftTests
 {
     [Fact]
-    public async Task DeleteDraftAsync_ShouldCallWorkflowStorageDelete()
+    public async Task DeleteDraftAsync_ShouldCallWorkspaceCommandPortWithExplicitScope()
     {
         using var environment = new ScopedWorkflowEnvironment();
-        var storagePort = new RecordingWorkflowDraftStore(new[]
+        var workspacePort = new RecordingWorkspacePorts(new[]
         {
             new ScopedDraft(
                 "scope-1",
-                new WorkflowDraft(
+                NewDraft(
                     "workflow-1",
                     "workflow-1",
                     "name: workflow-1\nsteps: []\n",
                     DateTimeOffset.UtcNow)),
         });
-        var service = environment.CreateService(workflowDraftStore: storagePort);
+        var service = environment.CreateService(
+            workspaceQueryPort: workspacePort,
+            workspaceCommandPort: workspacePort);
 
         await service.DeleteDraftAsync("scope-1", "workflow-1");
 
-        storagePort.DeletedWorkflowIds.Should().Equal("workflow-1");
+        workspacePort.DeletedDrafts.Should().ContainSingle().Which.Should().Be(("scope-1", "workflow-1"));
     }
 
     [Fact]
@@ -47,16 +49,17 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
             workflowActorBindingReader: runtimePorts.BindingReader,
             artifactStore: runtimePorts.ArtifactStore,
             serviceLifecycleQueryPort: runtimePorts.ServiceLifecycleQueryPort,
-            workflowDraftStore: new RecordingWorkflowDraftStore(new[]
+            workspaceQueryPort: new RecordingWorkspacePorts(new[]
             {
                 new ScopedDraft(
                     "scope-1",
-                    new WorkflowDraft(
+                    NewDraft(
                         "workflow-1",
                         "workflow-1",
                         "name: workflow-1\nsteps: []\n",
                         DateTimeOffset.UtcNow)),
-            }));
+            }),
+            workspaceCommandPort: new RecordingWorkspacePorts());
 
         await service.DeleteDraftAsync("scope-1", "workflow-1");
 
@@ -68,14 +71,15 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
     {
         using var environment = new ScopedWorkflowEnvironment();
         var runtimePorts = new RuntimePortSpies();
-        var storagePort = new RecordingWorkflowDraftStore();
+        var workspacePort = new RecordingWorkspacePorts();
         var service = environment.CreateService(
             workflowQueryPort: runtimePorts.QueryPort,
             workflowCommandPort: runtimePorts.CommandPort,
             workflowActorBindingReader: runtimePorts.BindingReader,
             artifactStore: runtimePorts.ArtifactStore,
             serviceLifecycleQueryPort: runtimePorts.ServiceLifecycleQueryPort,
-            workflowDraftStore: storagePort);
+            workspaceQueryPort: workspacePort,
+            workspaceCommandPort: workspacePort);
 
         var saved = await service.CreateDraftAsync(
             "scope-1",
@@ -86,8 +90,8 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
                 Yaml: "name: workflow-1\nsteps: []\n"));
 
         runtimePorts.TotalInvocations.Should().Be(0);
-        storagePort.Uploads.Should().ContainSingle();
-        storagePort.Uploads[0].ScopeId.Should().Be("scope-1");
+        workspacePort.SavedDrafts.Should().ContainSingle();
+        workspacePort.SavedDrafts[0].ScopeId.Should().Be("scope-1");
         saved.WorkflowId.Should().Be("workflow-1");
     }
 
@@ -98,11 +102,11 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
         var runtimePorts = new RuntimePortSpies();
         var service = environment.CreateService(
             workflowQueryPort: runtimePorts.QueryPort,
-            workflowDraftStore: new RecordingWorkflowDraftStore(new[]
+            workspaceQueryPort: new RecordingWorkspacePorts(new[]
             {
                 new ScopedDraft(
                     "scope-1",
-                    new WorkflowDraft(
+                    NewDraft(
                         "workflow-1",
                         "workflow-1",
                         "name: workflow-1\nsteps: []\n",
@@ -127,11 +131,11 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
     public async Task DeleteDraftAsync_ShouldDeleteTypedDraftWithoutTouchingLayoutSidecar()
     {
         using var environment = new ScopedWorkflowEnvironment();
-        var storagePort = new RecordingWorkflowDraftStore(new[]
+        var workspacePort = new RecordingWorkspacePorts(new[]
         {
             new ScopedDraft(
                 "scope-1",
-                new WorkflowDraft(
+                NewDraft(
                     "workflow-1",
                     "workflow-1",
                     "name: workflow-1\nsteps: []\n",
@@ -144,34 +148,49 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
                         },
                     })),
         });
-        var service = environment.CreateService(workflowDraftStore: storagePort);
+        var service = environment.CreateService(
+            workspaceQueryPort: workspacePort,
+            workspaceCommandPort: workspacePort);
 
         await service.DeleteDraftAsync("scope-1", "workflow-1");
 
-        storagePort.DeletedWorkflowIds.Should().Equal("workflow-1");
-        (await storagePort.GetDraftAsync("scope-1", "workflow-1", CancellationToken.None)).Should().BeNull();
+        workspacePort.DeletedDrafts.Should().ContainSingle().Which.Should().Be(("scope-1", "workflow-1"));
+        (await workspacePort.GetAsync("scope-1", CancellationToken.None)).Drafts.Should().BeEmpty();
     }
 
     [Fact]
     public async Task DeleteDraftAsync_WhenDraftIsMissing_ShouldThrowWorkflowDraftNotFoundException()
     {
         using var environment = new ScopedWorkflowEnvironment();
-        var storagePort = new RecordingWorkflowDraftStore();
-        var service = environment.CreateService(workflowDraftStore: storagePort);
+        var workspacePort = new RecordingWorkspacePorts();
+        var service = environment.CreateService(
+            workspaceQueryPort: workspacePort,
+            workspaceCommandPort: workspacePort);
 
         var act = () => service.DeleteDraftAsync("scope-1", "missing-workflow");
 
         await act.Should().ThrowAsync<WorkflowDraftNotFoundException>();
-        storagePort.DeletedWorkflowIds.Should().BeEmpty();
+        workspacePort.DeletedDrafts.Should().BeEmpty();
     }
 
     [Fact]
     public async Task DeleteDraftAsync_WhenStoragePortThrows_ShouldPropagateAndLeaveLayoutIntact()
     {
         using var environment = new ScopedWorkflowEnvironment();
-        var storagePort = new ThrowingWorkflowDraftStore(
-            new InvalidOperationException("chrono-storage is unavailable"));
-        var service = environment.CreateService(workflowDraftStore: storagePort);
+        var workspaceQueryPort = new RecordingWorkspacePorts([
+            new ScopedDraft(
+                "scope-1",
+                NewDraft(
+                    "workflow-1",
+                    "workflow-1",
+                    "name: workflow-1\nsteps: []\n",
+                    DateTimeOffset.UtcNow)),
+        ]);
+        var workspaceCommandPort = new ThrowingWorkspaceCommandPort(
+            new InvalidOperationException("workspace command port is unavailable"));
+        var service = environment.CreateService(
+            workspaceQueryPort: workspaceQueryPort,
+            workspaceCommandPort: workspaceCommandPort);
         var layoutPath = environment.BuildLayoutPath("scope-1", "workflow-1");
         Directory.CreateDirectory(Path.GetDirectoryName(layoutPath)!);
         await File.WriteAllTextAsync(layoutPath, "{}");
@@ -179,7 +198,7 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
         var act = () => service.DeleteDraftAsync("scope-1", "workflow-1");
 
         (await act.Should().ThrowAsync<InvalidOperationException>())
-            .WithMessage("chrono-storage is unavailable");
+            .WithMessage("workspace command port is unavailable");
         File.Exists(layoutPath).Should().BeTrue();
     }
 
@@ -187,9 +206,11 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
     public async Task CreateDraftAsync_WhenStoragePortThrows_ShouldPropagateAndNotWriteLayoutSidecar()
     {
         using var environment = new ScopedWorkflowEnvironment();
+        var workspacePort = new ThrowingWorkspaceQueryPort(
+            new InvalidOperationException("workspace query port is unavailable"));
         var service = environment.CreateService(
-            workflowDraftStore: new ThrowingWorkflowDraftStore(
-                new InvalidOperationException("chrono-storage is unavailable")));
+            workspaceQueryPort: workspacePort,
+            workspaceCommandPort: new RecordingWorkspacePorts());
         var layoutPath = environment.BuildLayoutPath("scope-1", "workflow-1");
 
         var act = () => service.CreateDraftAsync(
@@ -201,7 +222,7 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
                 Yaml: "name: workflow-1\nsteps: []\n"));
 
         (await act.Should().ThrowAsync<InvalidOperationException>())
-            .WithMessage("chrono-storage is unavailable");
+            .WithMessage("workspace query port is unavailable");
         File.Exists(layoutPath).Should().BeFalse();
     }
 
@@ -211,8 +232,10 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
         using var environment = new ScopedWorkflowEnvironment();
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
-        var storagePort = new ThrowingWorkflowDraftStore(new OperationCanceledException(cts.Token));
-        var service = environment.CreateService(workflowDraftStore: storagePort);
+        var workspacePort = new ThrowingWorkspaceQueryPort(new OperationCanceledException(cts.Token));
+        var service = environment.CreateService(
+            workspaceQueryPort: workspacePort,
+            workspaceCommandPort: new RecordingWorkspacePorts());
 
         var act = () => service.DeleteDraftAsync("scope-1", "workflow-1", cts.Token);
 
@@ -238,7 +261,8 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
             IWorkflowActorBindingReader? workflowActorBindingReader = null,
             IServiceRevisionArtifactStore? artifactStore = null,
             IServiceLifecycleQueryPort? serviceLifecycleQueryPort = null,
-            IWorkflowDraftStore? workflowDraftStore = null)
+            IStudioWorkspaceQueryPort? workspaceQueryPort = null,
+            IStudioWorkspaceCommandPort? workspaceCommandPort = null)
         {
             return new AppScopedWorkflowService(
                 new StubHttpClientFactory(),
@@ -247,7 +271,8 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
                 workflowActorBindingReader,
                 artifactStore,
                 serviceLifecycleQueryPort,
-                workflowDraftStore);
+                workspaceQueryPort,
+                workspaceCommandPort);
         }
 
         public string BuildLayoutPath(string scopeId, string workflowId) =>
@@ -282,120 +307,161 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
             $"name: {document.Name}\nsteps: []\n";
     }
 
-    private sealed class RecordingWorkflowDraftStore : IWorkflowDraftStore
+    // Refactor (iter38/cluster-038-studio-workspace-reuse-existing):
+    //   Old pattern: Studio scoped workflow drafts 通过 ChronoStorage external storage authority + workspace ports routing 不一致(scopeId routing 显式 vs 隐藏)。
+    //   New principle: Delete ChronoStorage draft authority。Route scoped workflow drafts through existing IStudioWorkspaceCommandPort / IStudioWorkspaceQueryPort with explicit scopeId。**禁止** new IScopedStudioWorkspacePort / 新 scoped actor / 新 envelope / 新 projection phase / docs/canon change。
+    private sealed class RecordingWorkspacePorts : IStudioWorkspaceQueryPort, IStudioWorkspaceCommandPort
     {
-        private readonly Dictionary<string, Dictionary<string, WorkflowDraft>> _storedWorkflows =
+        private readonly Dictionary<string, Dictionary<string, StudioWorkflowDraftRecord>> _storedWorkflows =
             new(StringComparer.Ordinal);
 
-        public List<ScopedWorkflowUpload> Uploads { get; } = [];
-        public List<string> DeletedWorkflowIds { get; } = [];
+        public List<ScopedWorkflowUpload> SavedDrafts { get; } = [];
+        public List<(string ScopeId, string WorkflowId)> DeletedDrafts { get; } = [];
 
-        public RecordingWorkflowDraftStore()
+        public RecordingWorkspacePorts()
         {
         }
 
-        public RecordingWorkflowDraftStore(IEnumerable<ScopedDraft> storedWorkflows)
+        public RecordingWorkspacePorts(IEnumerable<ScopedDraft> storedWorkflows)
         {
             foreach (var storedWorkflow in storedWorkflows)
             {
-                GetOrCreateScopeStore(storedWorkflow.ScopeId)[storedWorkflow.Workflow.WorkflowId] =
-                    storedWorkflow.Workflow;
+                GetOrCreateScopeStore(storedWorkflow.ScopeId)[storedWorkflow.Draft.WorkflowId] =
+                    storedWorkflow.Draft;
             }
         }
 
-        public Task SaveDraftAsync(
+        public Task<StudioWorkspaceSnapshot> GetAsync(CancellationToken ct = default) =>
+            GetAsync("scope-1", ct);
+
+        public Task<StudioWorkspaceSnapshot> GetAsync(string scopeId, CancellationToken ct = default)
+        {
+            _storedWorkflows.TryGetValue(scopeId, out var scopeStore);
+            return Task.FromResult(new StudioWorkspaceSnapshot(
+                $"studio-workspace:{scopeId}",
+                scopeId,
+                new StudioWorkspaceSettings(
+                    UserConfigRuntimeDefaults.LocalRuntimeBaseUrl,
+                    [new StudioWorkspaceDirectory($"scope:{scopeId}", scopeId, $"scope://{scopeId}", true)],
+                    "blue",
+                    "light"),
+                [new StudioWorkspaceDirectory($"scope:{scopeId}", scopeId, $"scope://{scopeId}", true)],
+                scopeStore?.Values.ToList() ?? [],
+                11,
+                DateTimeOffset.UtcNow));
+        }
+
+        public Task<StudioWorkspaceCommandReceipt> SaveDraftAsync(
+            StudioWorkflowDraftRecord draft,
+            long? expectedVersion = null,
+            CancellationToken ct = default) =>
+            SaveDraftAsync("scope-1", draft, expectedVersion, ct);
+
+        public Task<StudioWorkspaceCommandReceipt> SaveDraftAsync(
+            string scopeId,
+            StudioWorkflowDraftRecord draft,
+            long? expectedVersion = null,
+            CancellationToken ct = default)
+        {
+            SavedDrafts.Add(new ScopedWorkflowUpload(scopeId, draft.WorkflowId, draft.Name, draft.Yaml));
+            GetOrCreateScopeStore(scopeId)[draft.WorkflowId] = draft;
+            return Task.FromResult(Receipt(scopeId, expectedVersion));
+        }
+
+        public Task<StudioWorkspaceCommandReceipt> DeleteDraftAsync(
+            string workflowId,
+            long? expectedVersion = null,
+            CancellationToken ct = default) =>
+            DeleteDraftAsync("scope-1", workflowId, expectedVersion, ct);
+
+        public Task<StudioWorkspaceCommandReceipt> DeleteDraftAsync(
             string scopeId,
             string workflowId,
-            string workflowName,
-            string yaml,
-            WorkflowLayoutDocument? layout,
-            CancellationToken ct)
+            long? expectedVersion = null,
+            CancellationToken ct = default)
         {
-            Uploads.Add(new ScopedWorkflowUpload(scopeId, workflowId, workflowName, yaml));
-            GetOrCreateScopeStore(scopeId)[workflowId] = new WorkflowDraft(
-                workflowId,
-                workflowName,
-                yaml,
-                DateTimeOffset.UtcNow,
-                layout);
-            return Task.CompletedTask;
-        }
-
-        public Task<IReadOnlyList<WorkflowDraft>> ListDraftsAsync(string scopeId, CancellationToken ct)
-        {
-            if (_storedWorkflows.TryGetValue(scopeId, out var scopeStore))
-            {
-                return Task.FromResult<IReadOnlyList<WorkflowDraft>>(scopeStore.Values.ToList());
-            }
-
-            return Task.FromResult<IReadOnlyList<WorkflowDraft>>([]);
-        }
-
-        public Task<WorkflowDraft?> GetDraftAsync(string scopeId, string workflowId, CancellationToken ct)
-        {
-            return Task.FromResult<WorkflowDraft?>(
-                _storedWorkflows.TryGetValue(scopeId, out var scopeStore) &&
-                scopeStore.TryGetValue(workflowId, out var storedWorkflow)
-                    ? storedWorkflow
-                    : null);
-        }
-
-        public Task DeleteDraftAsync(string scopeId, string workflowId, CancellationToken ct)
-        {
-            DeletedWorkflowIds.Add(workflowId);
+            DeletedDrafts.Add((scopeId, workflowId));
             if (_storedWorkflows.TryGetValue(scopeId, out var scopeStore))
             {
                 scopeStore.Remove(workflowId);
             }
 
-            return Task.CompletedTask;
+            return Task.FromResult(Receipt(scopeId, expectedVersion));
         }
 
-        private Dictionary<string, WorkflowDraft> GetOrCreateScopeStore(string scopeId)
+        public Task<StudioWorkspaceCommandReceipt> UpdateSettingsAsync(
+            StudioWorkspaceSettings settings,
+            long? expectedVersion = null,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioWorkspaceCommandReceipt> AddDirectoryAsync(
+            StudioWorkspaceDirectory directory,
+            long? expectedVersion = null,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioWorkspaceCommandReceipt> RemoveDirectoryAsync(
+            string directoryId,
+            long? expectedVersion = null,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        private static StudioWorkspaceCommandReceipt Receipt(string scopeId, long? expectedVersion) =>
+            new($"studio-workspace:{scopeId}", $"studio-workspace:{scopeId}", Guid.NewGuid().ToString("N"), expectedVersion);
+
+        private Dictionary<string, StudioWorkflowDraftRecord> GetOrCreateScopeStore(string scopeId)
         {
             if (_storedWorkflows.TryGetValue(scopeId, out var scopeStore))
             {
                 return scopeStore;
             }
 
-            scopeStore = new Dictionary<string, WorkflowDraft>(StringComparer.Ordinal);
+            scopeStore = new Dictionary<string, StudioWorkflowDraftRecord>(StringComparer.Ordinal);
             _storedWorkflows[scopeId] = scopeStore;
             return scopeStore;
         }
     }
 
-    private sealed class ThrowingWorkflowDraftStore : IWorkflowDraftStore
+    private sealed class ThrowingWorkspaceQueryPort : IStudioWorkspaceQueryPort
     {
         private readonly Exception _exception;
 
-        public ThrowingWorkflowDraftStore(Exception exception)
+        public ThrowingWorkspaceQueryPort(Exception exception)
         {
             _exception = exception;
         }
 
-        public Task SaveDraftAsync(
-            string scopeId,
-            string workflowId,
-            string workflowName,
-            string yaml,
-            WorkflowLayoutDocument? layout,
-            CancellationToken ct) =>
-            Task.FromException(_exception);
+        public Task<StudioWorkspaceSnapshot> GetAsync(CancellationToken ct = default) =>
+            Task.FromException<StudioWorkspaceSnapshot>(_exception);
 
-        public Task<IReadOnlyList<WorkflowDraft>> ListDraftsAsync(string scopeId, CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<WorkflowDraft>>([]);
+        public Task<StudioWorkspaceSnapshot> GetAsync(string scopeId, CancellationToken ct = default) =>
+            Task.FromException<StudioWorkspaceSnapshot>(_exception);
+    }
 
-        public Task<WorkflowDraft?> GetDraftAsync(string scopeId, string workflowId, CancellationToken ct) =>
-            _exception is OperationCanceledException
-                ? Task.FromException<WorkflowDraft?>(_exception)
-                : Task.FromResult<WorkflowDraft?>(new WorkflowDraft(
-                    workflowId,
-                    workflowId,
-                    $"name: {workflowId}\nsteps: []\n",
-                    DateTimeOffset.UtcNow));
+    private sealed class ThrowingWorkspaceCommandPort : IStudioWorkspaceCommandPort
+    {
+        private readonly Exception _exception;
 
-        public Task DeleteDraftAsync(string scopeId, string workflowId, CancellationToken ct) =>
-            Task.FromException(_exception);
+        public ThrowingWorkspaceCommandPort(Exception exception)
+        {
+            _exception = exception;
+        }
+
+        public Task<StudioWorkspaceCommandReceipt> UpdateSettingsAsync(StudioWorkspaceSettings settings, long? expectedVersion = null, CancellationToken ct = default) =>
+            Task.FromException<StudioWorkspaceCommandReceipt>(_exception);
+
+        public Task<StudioWorkspaceCommandReceipt> AddDirectoryAsync(StudioWorkspaceDirectory directory, long? expectedVersion = null, CancellationToken ct = default) =>
+            Task.FromException<StudioWorkspaceCommandReceipt>(_exception);
+
+        public Task<StudioWorkspaceCommandReceipt> RemoveDirectoryAsync(string directoryId, long? expectedVersion = null, CancellationToken ct = default) =>
+            Task.FromException<StudioWorkspaceCommandReceipt>(_exception);
+
+        public Task<StudioWorkspaceCommandReceipt> SaveDraftAsync(StudioWorkflowDraftRecord draft, long? expectedVersion = null, CancellationToken ct = default) =>
+            Task.FromException<StudioWorkspaceCommandReceipt>(_exception);
+
+        public Task<StudioWorkspaceCommandReceipt> DeleteDraftAsync(string workflowId, long? expectedVersion = null, CancellationToken ct = default) =>
+            Task.FromException<StudioWorkspaceCommandReceipt>(_exception);
     }
 
     private sealed record ScopedWorkflowUpload(
@@ -406,7 +472,26 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
 
     private sealed record ScopedDraft(
         string ScopeId,
-        WorkflowDraft Workflow);
+        StudioWorkflowDraftRecord Draft);
+
+    private static StudioWorkflowDraftRecord NewDraft(
+        string workflowId,
+        string name,
+        string yaml,
+        DateTimeOffset updatedAtUtc,
+        WorkflowLayoutDocument? layout = null) =>
+        new(
+            workflowId,
+            name,
+            $"{workflowId}.yaml",
+            $"scope://scope-1/{workflowId}.yaml",
+            "scope:scope-1",
+            "scope-1",
+            yaml,
+            layout,
+            updatedAtUtc,
+            updatedAtUtc,
+            1);
 
     private sealed class RuntimePortSpies
     {
