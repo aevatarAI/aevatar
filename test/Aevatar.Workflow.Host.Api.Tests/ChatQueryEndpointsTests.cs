@@ -2,7 +2,12 @@ using System.Text;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
@@ -206,6 +211,82 @@ public sealed class ChatQueryEndpointsTests
         service.Calls.Should().Contain("ListWorkflowRunTimelineExport:actor-1:15");
     }
 
+    [Fact]
+    public async Task WorkflowRunExportRoutes_ShouldBindWorkflowRunIdAndQueryParameters()
+    {
+        var service = new FakeWorkflowExecutionQueryApplicationService
+        {
+            Snapshot = new WorkflowActorSnapshot
+            {
+                ActorId = "run-42",
+                WorkflowName = "direct",
+            },
+            Timeline =
+            [
+                new WorkflowRunTimelineExportItem
+                {
+                    Stage = "completed",
+                    StepId = "step-1",
+                },
+            ],
+            GraphEdges =
+            [
+                new WorkflowRunGraphExportEdge
+                {
+                    EdgeId = "edge-1",
+                    FromNodeId = "run-42",
+                    ToNodeId = "child-1",
+                    EdgeType = "child",
+                },
+            ],
+            GraphSubgraph = new WorkflowRunGraphExportSubgraph
+            {
+                RootNodeId = "run-42",
+                Nodes =
+                {
+                    new WorkflowRunGraphExportNode
+                    {
+                        NodeId = "run-42",
+                        NodeType = "workflow_run",
+                    },
+                },
+                Edges =
+                {
+                    new WorkflowRunGraphExportEdge
+                    {
+                        EdgeId = "edge-1",
+                        FromNodeId = "run-42",
+                        ToNodeId = "child-1",
+                        EdgeType = "child",
+                    },
+                },
+            },
+        };
+
+        await using var app = await CreateRouteAppAsync(service);
+        using var client = CreateClient(app);
+
+        var timeline = await client.GetAsync("/api/workflow-runs/run-42/timeline-export?take=7");
+        var edges = await client.GetAsync("/api/workflow-runs/run-42/graph-export/edges?take=8&direction=outbound&edgeTypes=child&edgeTypes=sibling");
+        var subgraph = await client.GetAsync("/api/workflow-runs/run-42/graph-export/subgraph?depth=3&take=9&direction=inbound&edgeTypes=child");
+        var enriched = await client.GetAsync("/api/workflow-runs/run-42/graph-export/enriched?depth=4&take=10&direction=both&edgeTypes=child");
+
+        timeline.EnsureSuccessStatusCode();
+        edges.EnsureSuccessStatusCode();
+        subgraph.EnsureSuccessStatusCode();
+        enriched.EnsureSuccessStatusCode();
+        (await timeline.Content.ReadAsStringAsync()).Should().Contain("step-1");
+        (await edges.Content.ReadAsStringAsync()).Should().Contain("edge-1");
+        (await subgraph.Content.ReadAsStringAsync()).Should().Contain("run-42");
+        (await enriched.Content.ReadAsStringAsync()).Should().Contain("snapshot");
+        service.Calls.Should().ContainInOrder(
+            "ListWorkflowRunTimelineExport:run-42:7",
+            "ListWorkflowRunGraphExportEdges:run-42:8:Outbound:child,sibling",
+            "GetWorkflowRunGraphExportSubgraph:run-42:3:9:Inbound:child",
+            "GetActorSnapshot:run-42",
+            "GetWorkflowRunGraphExportSubgraph:run-42:4:10:Both:child");
+    }
+
     private static async Task<string> ExecuteAsync(IResult result)
     {
         var http = await ExecuteWithContextAsync(result);
@@ -231,6 +312,35 @@ public sealed class ChatQueryEndpointsTests
         response.Body.Seek(0, SeekOrigin.Begin);
         using var reader = new StreamReader(response.Body, Encoding.UTF8, leaveOpen: true);
         return await reader.ReadToEndAsync();
+    }
+
+    private static async Task<WebApplication> CreateRouteAppAsync(IWorkflowExecutionQueryApplicationService service)
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            Args = [],
+        });
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        builder.Services.AddSingleton(service);
+        var app = builder.Build();
+        ChatQueryEndpoints.Map(app.MapGroup("/api"));
+        await app.StartAsync();
+        return app;
+    }
+
+    private static HttpClient CreateClient(WebApplication app)
+    {
+        var address = app.Services
+            .GetRequiredService<IServer>()
+            .Features
+            .Get<IServerAddressesFeature>()!
+            .Addresses
+            .Single();
+
+        return new HttpClient
+        {
+            BaseAddress = new Uri(address),
+        };
     }
 
     private sealed class FakeWorkflowExecutionQueryApplicationService : IWorkflowExecutionQueryApplicationService

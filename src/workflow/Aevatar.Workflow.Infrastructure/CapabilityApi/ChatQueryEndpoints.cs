@@ -302,6 +302,9 @@ public sealed record WorkflowActorSnapshotHttpResponse(
     int CompletedSteps,
     int RoleReplyCount);
 
+// Refactor (iter29/cluster-029-workflow-history-artifact):
+//   Old pattern: HTTP timeline responses exposed actor timeline readmodel names.
+//   New principle: HTTP timeline responses expose workflow-run artifact export semantics.
 public sealed record WorkflowRunTimelineExportItemHttpResponse(
     DateTimeOffset Timestamp,
     string Stage,
@@ -312,12 +315,18 @@ public sealed record WorkflowRunTimelineExportItemHttpResponse(
     string EventType,
     Dictionary<string, string> Data);
 
+// Refactor (iter29/cluster-029-workflow-history-artifact):
+//   Old pattern: HTTP graph responses exposed actor graph readmodel names.
+//   New principle: HTTP graph responses expose workflow-run graph export artifact semantics.
 public sealed record WorkflowRunGraphExportNodeHttpResponse(
     string NodeId,
     string NodeType,
     DateTimeOffset UpdatedAt,
     Dictionary<string, string> Properties);
 
+// Refactor (iter29/cluster-029-workflow-history-artifact):
+//   Old pattern: HTTP graph responses exposed actor graph readmodel names.
+//   New principle: HTTP graph responses expose workflow-run graph export artifact semantics.
 public sealed record WorkflowRunGraphExportEdgeHttpResponse(
     string EdgeId,
     string FromNodeId,
@@ -326,11 +335,17 @@ public sealed record WorkflowRunGraphExportEdgeHttpResponse(
     DateTimeOffset UpdatedAt,
     Dictionary<string, string> Properties);
 
+// Refactor (iter29/cluster-029-workflow-history-artifact):
+//   Old pattern: HTTP graph responses exposed actor graph readmodel names.
+//   New principle: HTTP graph responses expose workflow-run graph export artifact semantics.
 public sealed record WorkflowRunGraphExportSubgraphHttpResponse(
     string RootNodeId,
     List<WorkflowRunGraphExportNodeHttpResponse> Nodes,
     List<WorkflowRunGraphExportEdgeHttpResponse> Edges);
 
+// Refactor (iter29/cluster-029-workflow-history-artifact):
+//   Old pattern: enriched HTTP graph responses mixed actor current-state naming with graph artifacts.
+//   New principle: enriched HTTP graph responses are workflow-run graph export artifacts plus the current snapshot.
 public sealed record WorkflowRunGraphExportEnrichedHttpResponse(
     WorkflowActorSnapshotHttpResponse Snapshot,
     WorkflowRunGraphExportSubgraphHttpResponse Subgraph);

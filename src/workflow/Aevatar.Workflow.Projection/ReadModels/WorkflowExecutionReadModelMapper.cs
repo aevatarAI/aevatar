@@ -26,32 +26,6 @@ public sealed class WorkflowExecutionReadModelMapper
         };
     }
 
-    public WorkflowActorSnapshot ToActorSnapshot(
-        WorkflowExecutionCurrentStateDocument source,
-        WorkflowRunInsightReportDocument? report)
-    {
-        var snapshot = ToActorSnapshot(source);
-        if (report == null)
-            return snapshot;
-
-        snapshot.WorkflowName = string.IsNullOrWhiteSpace(snapshot.WorkflowName)
-            ? report.WorkflowName
-            : snapshot.WorkflowName;
-        snapshot.CompletionStatus = MapCompletionStatus(report.CompletionStatus);
-        snapshot.LastSuccess = report.Success;
-        snapshot.LastOutput = string.IsNullOrWhiteSpace(snapshot.LastOutput)
-            ? report.FinalOutput
-            : snapshot.LastOutput;
-        snapshot.LastError = string.IsNullOrWhiteSpace(snapshot.LastError)
-            ? report.FinalError
-            : snapshot.LastError;
-        snapshot.TotalSteps = report.Summary.TotalSteps;
-        snapshot.RequestedSteps = report.Summary.RequestedSteps;
-        snapshot.CompletedSteps = report.Summary.CompletedSteps;
-        snapshot.RoleReplyCount = report.Summary.RoleReplyCount;
-        return snapshot;
-    }
-
     public WorkflowActorProjectionState ToActorProjectionState(WorkflowExecutionCurrentStateDocument source)
     {
         return new WorkflowActorProjectionState
@@ -98,6 +72,9 @@ public sealed class WorkflowExecutionReadModelMapper
         };
     }
 
+    // Refactor (iter29/cluster-029-workflow-history-artifact):
+    //   Old pattern: timeline mapper methods produced actor current-state timeline items.
+    //   New principle: timeline mapper methods produce workflow-run export items from the report artifact.
     public WorkflowRunTimelineExportItem ToWorkflowRunTimelineExportItem(WorkflowExecutionTimelineEvent source)
     {
         var item = new WorkflowRunTimelineExportItem
@@ -114,6 +91,9 @@ public sealed class WorkflowExecutionReadModelMapper
         return item;
     }
 
+    // Refactor (iter29/cluster-029-workflow-history-artifact):
+    //   Old pattern: graph mapper methods produced actor graph readmodel nodes.
+    //   New principle: graph mapper methods produce workflow-run graph export nodes.
     public WorkflowRunGraphExportNode ToWorkflowRunGraphExportNode(ProjectionGraphNode source)
     {
         var node = new WorkflowRunGraphExportNode
@@ -126,6 +106,9 @@ public sealed class WorkflowExecutionReadModelMapper
         return node;
     }
 
+    // Refactor (iter29/cluster-029-workflow-history-artifact):
+    //   Old pattern: graph mapper methods produced actor graph readmodel edges.
+    //   New principle: graph mapper methods produce workflow-run graph export edges.
     public WorkflowRunGraphExportEdge ToWorkflowRunGraphExportEdge(ProjectionGraphEdge source)
     {
         var edge = new WorkflowRunGraphExportEdge
@@ -140,6 +123,9 @@ public sealed class WorkflowExecutionReadModelMapper
         return edge;
     }
 
+    // Refactor (iter29/cluster-029-workflow-history-artifact):
+    //   Old pattern: graph mapper methods produced actor graph readmodel subgraphs.
+    //   New principle: graph mapper methods produce workflow-run graph export subgraphs.
     public WorkflowRunGraphExportSubgraph ToWorkflowRunGraphExportSubgraph(
         string rootNodeId,
         ProjectionGraphSubgraph source)

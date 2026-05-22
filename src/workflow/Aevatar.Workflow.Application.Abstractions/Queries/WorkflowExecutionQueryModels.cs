@@ -78,6 +78,10 @@ public sealed class WorkflowCatalogItemDetail
     public WorkflowCatalogDefinition Definition { get; set; } = new();
     public List<WorkflowCatalogEdge> Edges { get; set; } = [];
 }
+
+// Refactor (iter29/cluster-029-workflow-history-artifact):
+//   Old pattern: graph query direction was named as actor current-state graph readmodel control.
+//   New principle: workflow-run graph traversal is an artifact export control, not an actor current-state readmodel contract.
 public enum WorkflowRunGraphExportDirection
 {
     Outbound = 0,
@@ -85,6 +89,9 @@ public enum WorkflowRunGraphExportDirection
     Both = 2,
 }
 
+// Refactor (iter29/cluster-029-workflow-history-artifact):
+//   Old pattern: graph query filters were exposed through actor graph readmodel options.
+//   New principle: graph filters belong to workflow-run graph export requests and preserve artifact/export semantics.
 public sealed class WorkflowRunGraphExportQueryOptions
 {
     public WorkflowRunGraphExportDirection Direction { get; set; } = WorkflowRunGraphExportDirection.Both;

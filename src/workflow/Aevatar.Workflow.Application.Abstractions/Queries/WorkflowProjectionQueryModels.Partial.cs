@@ -32,6 +32,9 @@ public sealed partial class WorkflowActorProjectionState
     }
 }
 
+// Refactor (iter29/cluster-029-workflow-history-artifact):
+//   Old pattern: timeline DTOs were named as actor timeline readmodel items.
+//   New principle: timeline data is exported from the workflow-run artifact, not exposed as an actor current-state readmodel.
 public sealed partial class WorkflowRunTimelineExportItem
 {
     public DateTimeOffset Timestamp
@@ -41,6 +44,9 @@ public sealed partial class WorkflowRunTimelineExportItem
     }
 }
 
+// Refactor (iter29/cluster-029-workflow-history-artifact):
+//   Old pattern: graph nodes were named as actor graph readmodel nodes.
+//   New principle: graph nodes are part of a workflow-run graph export artifact.
 public sealed partial class WorkflowRunGraphExportNode
 {
     public DateTimeOffset UpdatedAt
@@ -50,6 +56,9 @@ public sealed partial class WorkflowRunGraphExportNode
     }
 }
 
+// Refactor (iter29/cluster-029-workflow-history-artifact):
+//   Old pattern: graph edges were named as actor graph readmodel edges.
+//   New principle: graph edges are part of a workflow-run graph export artifact.
 public sealed partial class WorkflowRunGraphExportEdge
 {
     public DateTimeOffset UpdatedAt
