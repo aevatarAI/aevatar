@@ -93,6 +93,9 @@ public sealed class ServiceCatalogQueryReader : IServiceCatalogQueryReader
             .ToList();
     }
 
+    // Refactor (iter34/cluster-006-artifact-projectors-state-root):
+    // Old pattern: catalog snapshots echoed active deployment fields stored on the catalog readmodel.
+    // New principle: catalog readmodels expose definition facts only; application queries compose deployment facts separately.
     private static ServiceCatalogSnapshot Map(ServiceCatalogReadModel readModel)
     {
         return new ServiceCatalogSnapshot(

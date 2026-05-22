@@ -8,7 +8,9 @@ namespace Aevatar.GAgentService.Projection.Internal;
 
 internal static class ServiceCommittedStateSupport
 {
-    // refactor helper, no behavior change: shared committed state_root extraction for service projectors.
+    // Refactor (iter34/cluster-006-artifact-projectors-state-root):
+    // Old pattern: artifact projectors unpacked payloads and then merged changes into prior readmodel documents.
+    // New principle: artifact projectors share state_root extraction and overwrite from the committed actor state.
     public static bool TryGetObservedState<TState>(
         EventEnvelope envelope,
         IProjectionClock clock,
@@ -71,9 +73,4 @@ internal static class ServiceCommittedStateSupport
         return true;
     }
 
-    public static long ResolveNextStateVersion(long currentVersion, long observedStateVersion)
-    {
-        _ = currentVersion;
-        return observedStateVersion;
-    }
 }

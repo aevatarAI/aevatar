@@ -473,10 +473,6 @@ public sealed class ServiceProjectionInfrastructureTests
         var plainResult = (bool)supportType
             .GetMethod("TryGetObservedPayload", BindingFlags.Static | BindingFlags.Public)!
             .Invoke(null, plainArgs)!;
-        var resolvedVersion = (long)supportType
-            .GetMethod("ResolveNextStateVersion", BindingFlags.Static | BindingFlags.Public)!
-            .Invoke(null, [3L, 0L])!;
-
         targetSnapshot.EnabledEndpointIds.Should().Equal("run", "chat");
         targetSnapshot.ServingState.Should().Be(ServiceServingState.Active.ToString());
         trafficSnapshot.ServingState.Should().Be(ServiceServingState.Paused.ToString());
@@ -495,7 +491,6 @@ public sealed class ServiceProjectionInfrastructureTests
         plainArgs[3].Should().Be(string.Empty);
         plainArgs[4].Should().Be(0L);
         plainArgs[5].Should().Be(default(DateTimeOffset));
-        resolvedVersion.Should().Be(0L);
     }
 
     [Fact]

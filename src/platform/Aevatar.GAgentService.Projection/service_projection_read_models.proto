@@ -20,9 +20,10 @@ message ServiceCatalogReadModel {
   string service_id = 8;
   string display_name = 9;
   string default_serving_revision_id = 10;
-  google.protobuf.Timestamp updated_at_utc_value = 11;
-  repeated ServiceCatalogEndpointReadModel endpoint_entries = 12;
-  repeated string policy_id_entries = 13;
+  reserved 11 to 14;
+  google.protobuf.Timestamp updated_at_utc_value = 15;
+  repeated ServiceCatalogEndpointReadModel endpoint_entries = 16;
+  repeated string policy_id_entries = 17;
 }
 
 message ServiceCatalogEndpointReadModel {

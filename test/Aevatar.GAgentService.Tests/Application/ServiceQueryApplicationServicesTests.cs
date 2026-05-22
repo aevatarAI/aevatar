@@ -1,6 +1,7 @@
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
@@ -61,6 +62,70 @@ public sealed class ServiceQueryApplicationServicesTests
 
         catalogReader.ListCalls.Should().ContainSingle();
         catalogReader.ListCalls[0].Should().Be(("tenant", "app", "ns", 42));
+    }
+
+    [Fact]
+    public async Task ListServicesAsync_ShouldComposeActiveDeploymentFromDeploymentReadModels()
+    {
+        var serviceA = CreateServiceCatalogSnapshot("svc-a");
+        var serviceB = CreateServiceCatalogSnapshot("svc-b");
+        var catalogReader = new ConfiguredCatalogReader
+        {
+            QueryByScopeResult = [serviceA, serviceB],
+        };
+        var deploymentReader = new ConfiguredDeploymentReader
+        {
+            Results =
+            {
+                [serviceA.ServiceKey] = new ServiceDeploymentCatalogSnapshot(
+                    serviceA.ServiceKey,
+                    [
+                        new ServiceDeploymentSnapshot(
+                            "dep-old",
+                            "r-old",
+                            "actor-old",
+                            ServiceDeploymentStatus.Active.ToString(),
+                            DateTimeOffset.Parse("2026-03-14T00:10:00+00:00"),
+                            DateTimeOffset.Parse("2026-03-14T00:11:00+00:00")),
+                        new ServiceDeploymentSnapshot(
+                            "dep-active",
+                            "r-active",
+                            "actor-active",
+                            ServiceDeploymentStatus.Active.ToString(),
+                            DateTimeOffset.Parse("2026-03-14T00:20:00+00:00"),
+                            DateTimeOffset.Parse("2026-03-14T00:21:00+00:00")),
+                    ],
+                    DateTimeOffset.Parse("2026-03-14T00:21:00+00:00")),
+                [serviceB.ServiceKey] = new ServiceDeploymentCatalogSnapshot(
+                    serviceB.ServiceKey,
+                    [
+                        new ServiceDeploymentSnapshot(
+                            "dep-inactive",
+                            "r-inactive",
+                            "actor-inactive",
+                            ServiceDeploymentStatus.Deactivated.ToString(),
+                            DateTimeOffset.Parse("2026-03-14T00:30:00+00:00"),
+                            DateTimeOffset.Parse("2026-03-14T00:31:00+00:00")),
+                    ],
+                    DateTimeOffset.Parse("2026-03-14T00:31:00+00:00")),
+            },
+        };
+        var service = new ServiceLifecycleQueryApplicationService(
+            catalogReader,
+            new RecordingRevisionReader(),
+            deploymentReader);
+
+        var result = await service.ListServicesAsync("tenant", "app", "default", take: 10);
+
+        result.Should().HaveCount(2);
+        var enriched = result.Single(x => x.ServiceId == "svc-a");
+        enriched.ActiveServingRevisionId.Should().Be("r-active");
+        enriched.DeploymentId.Should().Be("dep-active");
+        enriched.PrimaryActorId.Should().Be("actor-active");
+        enriched.DeploymentStatus.Should().Be(ServiceDeploymentStatus.Active.ToString());
+        result.Single(x => x.ServiceId == "svc-b")
+            .ActiveServingRevisionId.Should().BeEmpty();
+        deploymentReader.Identities.Select(x => x.ServiceId).Should().Equal("svc-a", "svc-b");
     }
 
     [Fact]
@@ -247,6 +312,7 @@ public sealed class ServiceQueryApplicationServicesTests
     private sealed class ConfiguredCatalogReader : IServiceCatalogQueryReader
     {
         public ServiceCatalogSnapshot? GetResult { get; init; }
+        public IReadOnlyList<ServiceCatalogSnapshot> QueryByScopeResult { get; init; } = [];
 
         public Task<ServiceCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult(GetResult);
@@ -260,15 +326,23 @@ public sealed class ServiceQueryApplicationServicesTests
             string @namespace,
             int take = 200,
             CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
+            Task.FromResult(QueryByScopeResult);
     }
 
     private sealed class ConfiguredDeploymentReader : IServiceDeploymentCatalogQueryReader
     {
         public ServiceDeploymentCatalogSnapshot? GetResult { get; init; }
+        public Dictionary<string, ServiceDeploymentCatalogSnapshot> Results { get; } = [];
 
-        public Task<ServiceDeploymentCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult(GetResult);
+        public List<ServiceIdentity> Identities { get; } = [];
+
+        public Task<ServiceDeploymentCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            Identities.Add(identity.Clone());
+            return Task.FromResult(Results.TryGetValue(ServiceKeys.Build(identity), out var result)
+                ? result
+                : GetResult);
+        }
     }
 
     private sealed class RecordingCatalogReader : IServiceCatalogQueryReader
@@ -365,13 +439,13 @@ public sealed class ServiceQueryApplicationServicesTests
         }
     }
 
-    private static ServiceCatalogSnapshot CreateServiceCatalogSnapshot() =>
+    private static ServiceCatalogSnapshot CreateServiceCatalogSnapshot(string serviceId = "svc") =>
         new(
-            ServiceKey: "tenant:app:default:svc",
+            ServiceKey: $"tenant:app:default:{serviceId}",
             TenantId: "tenant",
             AppId: "app",
             Namespace: "default",
-            ServiceId: "svc",
+            ServiceId: serviceId,
             DisplayName: "Service",
             DefaultServingRevisionId: "r-default",
             ActiveServingRevisionId: string.Empty,
