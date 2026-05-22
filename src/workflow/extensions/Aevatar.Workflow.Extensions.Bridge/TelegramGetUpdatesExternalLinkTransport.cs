@@ -132,6 +132,9 @@ public sealed class TelegramGetUpdatesExternalLinkTransport(
         OnStateChanged?.Invoke(state, reason, ct) ?? Task.CompletedTask;
 }
 
+// Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
+//   Old pattern: TelegramBridgeGAgent.ExecuteConnectorWithWatchdogAsync 用 Task.Delay 兜底超时 + ContinueWith race + actor turn 内同步 await /getUpdates 长轮询
+//   New principle: 复用现有 ExternalLink actor-owned stream pattern(reflector force-pick):TelegramWaitReplyGAgent 实现 IExternalLinkAware + 加 TelegramGetUpdatesExternalLinkTransport;/getUpdates 走 IExternalLinkPort.SendAsync,result 经 ExternalLinkMessageReceivedEvent 回 actor;删 ExecuteConnectorWithWatchdogAsync/Task.Delay/ContinueWith race。**不新增 actor 类型**
 public sealed class TelegramGetUpdatesExternalLinkTransportFactory(
     IConnectorRegistry connectorRegistry,
     ILogger<TelegramGetUpdatesExternalLinkTransport> logger) : IExternalLinkTransportFactory
