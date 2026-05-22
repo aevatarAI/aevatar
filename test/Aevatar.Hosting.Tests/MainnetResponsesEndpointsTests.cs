@@ -5,12 +5,15 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.AevatarInvocation;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Authentication.Hosting;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
+using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -20,6 +23,8 @@ using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Presentation.AGUI;
+using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
@@ -28,6 +33,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using ChatRequestEvent = Aevatar.AI.Abstractions.ChatRequestEvent;
 
 namespace Aevatar.Hosting.Tests;
 
@@ -321,6 +327,148 @@ public sealed class MainnetResponsesEndpointsTests
         doc.RootElement.GetProperty("output").EnumerateArray()
             .Should()
             .NotContain(item => item.GetProperty("type").GetString() == "function_call");
+    }
+
+    [Fact]
+    public async Task PostResponses_StreamWithAevatarInvokeGAgentAdditiveTool_ShouldDispatchActorEnvelope()
+    {
+        var provider = new RecordingLLMProvider
+        {
+            StreamChunkBatches =
+            [
+                [
+                    new LLMStreamChunk
+                    {
+                        DeltaToolCall = new ToolCall
+                        {
+                            Id = "call_invoke_gagent_1",
+                            Name = "aevatar_invoke_gagent",
+                            ArgumentsJson = """
+                            {
+                              "actor_id": "actor-stage1",
+                              "payload": {
+                                "prompt": "dispatch stage 1",
+                                "headers": {
+                                  "nyxid.access_token": "malicious-token",
+                                  "aevatar.scope_id": "malicious-scope",
+                                  "x-test-note": "kept"
+                                },
+                                "input_parts": [
+                                  {
+                                    "kind": "text",
+                                    "text": "typed part"
+                                  }
+                                ]
+                              },
+                              "wait": "ack"
+                            }
+                            """,
+                        },
+                        IsLast = true,
+                    },
+                ],
+                [
+                    new LLMStreamChunk
+                    {
+                        DeltaContent = "dispatched",
+                        Usage = new TokenUsage(9, 3, 12),
+                        IsLast = true,
+                    },
+                ],
+            ],
+        };
+        var sessions = new RecordingResponseSessionStore();
+        var actorDispatch = new RecordingActorDispatchPort();
+        var legacyForwardingSentinel = ThrowingStaticGAgentStreamInvocationPort.Forbidden();
+        await using var app = await CreateAppAsync(
+            provider,
+            sessions,
+            staticGAgentStreamInvocationPort: legacyForwardingSentinel,
+            configureServices: services =>
+            {
+                services.AddSingleton<IActorDispatchPort>(actorDispatch);
+                services.AddSingleton<IGAgentActorRegistryQueryPort>(new EmptyGAgentActorRegistryQueryPort());
+                services.AddSingleton<ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>(
+                    new StubWorkflowDispatchService());
+                services.AddSingleton<IServiceRunQueryPort>(new EmptyServiceRunQueryPort());
+                services.AddSingleton<IGAgentRunTerminalQueryPort>(new EmptyGAgentRunTerminalQueryPort());
+                services.AddSingleton<IWorkflowExecutionQueryApplicationService>(new EmptyWorkflowExecutionQueryService());
+                services.AddAevatarInvocationTools();
+                services.AddSingleton<IResponsesToolProvider, AgentToolSourcesResponsesToolProvider>();
+            });
+
+        var registeredToolSources = app.Services.GetServices<IAgentToolSource>().ToList();
+        registeredToolSources.Should().Contain(source => source is InvokeGAgentToolSource);
+        registeredToolSources.Should().Contain(source => source is InvokeTeamToolSource);
+        registeredToolSources.Should().Contain(source => source is StartWorkflowToolSource);
+        registeredToolSources.Should().Contain(source => source is ObserveRunToolSource);
+        registeredToolSources.Should().Contain(source => source is QueryReadModelToolSource);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""{"model":"gpt-5.4","input":"invoke the target actor","stream":true}"""),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "stage1-secret");
+
+        var response = await app.GetTestClient().SendAsync(request, HttpCompletionOption.ResponseContentRead);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        response.Content.Headers.ContentType!.MediaType.Should().Be("text/event-stream");
+        body.Should().Contain("event: response.created");
+        body.Should().Contain("event: response.output_item.added");
+        body.Should().Contain("event: response.output_text.delta");
+        body.Should().Contain("\"delta\":\"dispatched\"");
+        body.Should().Contain("event: response.output_item.done");
+        body.Should().Contain("event: response.completed");
+        body.Should().NotContain("stage1-secret");
+        body.Should().NotContain("malicious-token");
+
+        provider.StreamCallCount.Should().Be(2);
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.Tools.Should().NotBeNull();
+        provider.LastRequest.Tools.Select(static tool => tool.Name)
+            .Should()
+            .Contain(["aevatar_invoke_gagent", "aevatar_invoke_team", "aevatar_start_workflow",
+                "aevatar_observe_run", "aevatar_query_readmodel"]);
+        provider.LastRequest.Messages.Should().Contain(message =>
+            message.Role == "assistant" &&
+            message.ToolCalls != null &&
+            message.ToolCalls.Count == 1 &&
+            message.ToolCalls[0].Name == "aevatar_invoke_gagent");
+        var toolResult = provider.LastRequest.Messages.Should().ContainSingle(message =>
+            message.Role == "tool" &&
+            message.ToolCallId == "call_invoke_gagent_1").Subject;
+        toolResult.Content.Should().Contain("\"actor_id\":\"actor-stage1\"");
+        toolResult.Content.Should().Contain("\"status\":\"accepted\"");
+        toolResult.Content.Should().NotContain("stage1-secret");
+        sessions.ForwardedToolCalls.Should().BeEmpty();
+
+        actorDispatch.Calls.Should().ContainSingle();
+        var dispatched = actorDispatch.Calls[0];
+        dispatched.ActorId.Should().Be("actor-stage1");
+        dispatched.Envelope.Id.Should().StartWith("resp_");
+        dispatched.Envelope.Route.GetTargetActorId().Should().Be("actor-stage1");
+        dispatched.Envelope.Route.PublisherActorId.Should().Be("aevatar.tools.invoke_gagent");
+        dispatched.Envelope.Propagation.CorrelationId.Should().Be(dispatched.Envelope.Id);
+        dispatched.Envelope.Payload.Is(ChatRequestEvent.Descriptor).Should().BeTrue();
+        var chatRequest = dispatched.Envelope.Payload.Unpack<ChatRequestEvent>();
+        chatRequest.Prompt.Should().Be("dispatch stage 1");
+        chatRequest.SessionId.Should().Be(dispatched.Envelope.Id);
+        chatRequest.ScopeId.Should().Be("user-1");
+        chatRequest.InputParts.Should().ContainSingle().Which.Text.Should().Be("typed part");
+        chatRequest.Headers[LLMRequestMetadataKeys.ScopeId].Should().Be("user-1");
+        chatRequest.Headers["scope_id"].Should().Be("user-1");
+        chatRequest.Headers[LLMRequestMetadataKeys.OwnerSubject].Should().Be("user-1");
+        chatRequest.Headers[LLMRequestMetadataKeys.ResponseId].Should().Be(dispatched.Envelope.Id);
+        chatRequest.Headers[LLMRequestMetadataKeys.RequestId].Should().Be(dispatched.Envelope.Id);
+        chatRequest.Headers[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("stage1-secret");
+        chatRequest.Headers["x-test-note"].Should().Be("kept");
+        chatRequest.ToolContext.Caller.ScopeId.Should().Be("user-1");
+        chatRequest.ToolContext.Caller.OwnerSubject.Should().Be("user-1");
+        chatRequest.ToolContext.Caller.ResponseId.Should().Be(dispatched.Envelope.Id);
+        chatRequest.ToolContext.Credentials.NyxIdAccessToken.Should().Be("stage1-secret");
+        legacyForwardingSentinel.InvocationCount.Should().Be(0);
     }
 
     [Fact]
@@ -2098,7 +2246,8 @@ public sealed class MainnetResponsesEndpointsTests
         IChatRoutePolicyQueryPort? chatRoutePolicyQueryPort = null,
         ITeamEntryMemberResolver? teamEntryMemberResolver = null,
         IMemberPublishedServiceResolver? memberPublishedServiceResolver = null,
-        IStaticGAgentStreamInvocationPort<AGUIEvent>? staticGAgentStreamInvocationPort = null)
+        IStaticGAgentStreamInvocationPort<AGUIEvent>? staticGAgentStreamInvocationPort = null,
+        Action<IServiceCollection>? configureServices = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -2135,6 +2284,7 @@ public sealed class MainnetResponsesEndpointsTests
             ?? StubMemberPublishedServiceResolver.Identity());
         builder.Services.AddSingleton(staticGAgentStreamInvocationPort
             ?? RecordingStaticGAgentStreamInvocationPort.Empty());
+        configureServices?.Invoke(builder.Services);
 
         var app = builder.Build();
         app.MapResponsesApiEndpoints();
@@ -2415,11 +2565,20 @@ public sealed class MainnetResponsesEndpointsTests
         public static ThrowingStaticGAgentStreamInvocationPort ServiceNotFound(string serviceKey) =>
             new(() => new InvalidOperationException($"Service '{serviceKey}' was not found."));
 
+        public static ThrowingStaticGAgentStreamInvocationPort Forbidden() =>
+            new(() => new InvalidOperationException("Legacy ForwardToGAgent/ForwardToTeam static invocation path must not run."));
+
+        public int InvocationCount { get; private set; }
+
         public Task<StaticGAgentStreamInvocationResult> InvokeAsync(
             StaticGAgentStreamInvocationRequest request,
             Func<AGUIEvent, CancellationToken, ValueTask> emitAsync,
             Func<StaticGAgentStreamAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
-            CancellationToken ct = default) => throw _throwFactory();
+            CancellationToken ct = default)
+        {
+            InvocationCount++;
+            throw _throwFactory();
+        }
     }
 
     private sealed class StubResponsesCallerScopeResolver : IResponsesCallerScopeResolver
@@ -2469,6 +2628,133 @@ public sealed class MainnetResponsesEndpointsTests
     {
         public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
             Task.FromResult(tools);
+    }
+
+    private sealed class AgentToolSourcesResponsesToolProvider(IEnumerable<IAgentToolSource> toolSources) : IResponsesToolProvider
+    {
+        private readonly IReadOnlyList<IAgentToolSource> _toolSources = toolSources.ToArray();
+
+        public async ValueTask<IReadOnlyList<IAgentTool>> GetAdditiveToolsAsync(
+            ResponsesToolProviderContext context,
+            CancellationToken ct = default)
+        {
+            var tools = new List<IAgentTool>();
+            foreach (var source in _toolSources)
+                tools.AddRange(await source.DiscoverToolsAsync(ct));
+
+            return tools;
+        }
+    }
+
+    private sealed class RecordingActorDispatchPort : IActorDispatchPort
+    {
+        public List<ActorDispatchRecord> Calls { get; } = [];
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            Calls.Add(new ActorDispatchRecord(actorId, envelope.Clone()));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed record ActorDispatchRecord(string ActorId, EventEnvelope Envelope);
+
+    private sealed class EmptyGAgentActorRegistryQueryPort : IGAgentActorRegistryQueryPort
+    {
+        public Task<GAgentActorRegistrySnapshot> ListActorsAsync(
+            string scopeId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new GAgentActorRegistrySnapshot(scopeId, [], 0, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow));
+    }
+
+    private sealed class StubWorkflowDispatchService
+        : ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+    {
+        public Task<CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>> DispatchAsync(
+            WorkflowChatRunRequest command,
+            CancellationToken ct = default) =>
+            Task.FromResult(CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+                .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "workflow", "workflow-command", "workflow-correlation")));
+    }
+
+    private sealed class EmptyServiceRunQueryPort : IServiceRunQueryPort
+    {
+        public Task<IReadOnlyList<ServiceRunSnapshot>> ListAsync(
+            ServiceRunQuery query,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ServiceRunSnapshot>>([]);
+
+        public Task<ServiceRunSnapshot?> GetByRunIdAsync(
+            string scopeId,
+            string serviceId,
+            string runId,
+            CancellationToken ct = default) =>
+            Task.FromResult<ServiceRunSnapshot?>(null);
+
+        public Task<ServiceRunSnapshot?> GetByCommandIdAsync(
+            string scopeId,
+            string serviceId,
+            string commandId,
+            CancellationToken ct = default) =>
+            Task.FromResult<ServiceRunSnapshot?>(null);
+    }
+
+    private sealed class EmptyGAgentRunTerminalQueryPort : IGAgentRunTerminalQueryPort
+    {
+        public Task<GAgentRunTerminalSnapshot?> GetByCorrelationIdAsync(
+            string actorId,
+            string correlationId,
+            CancellationToken ct = default) =>
+            Task.FromResult<GAgentRunTerminalSnapshot?>(null);
+
+        public Task<GAgentRunTerminalSnapshot?> GetBySessionIdAsync(
+            string actorId,
+            string sessionId,
+            CancellationToken ct = default) =>
+            Task.FromResult<GAgentRunTerminalSnapshot?>(null);
+    }
+
+    private sealed class EmptyWorkflowExecutionQueryService : IWorkflowExecutionQueryApplicationService
+    {
+        public bool ActorQueryEnabled => true;
+
+        public Task<IReadOnlyList<WorkflowAgentSummary>> ListAgentsAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowAgentSummary>>([]);
+
+        public IReadOnlyList<string> ListWorkflows() => [];
+
+        public IReadOnlyList<WorkflowCatalogItem> ListWorkflowCatalog() => [];
+
+        public WorkflowCatalogItemDetail? GetWorkflowDetail(string workflowName) => null;
+
+        public WorkflowCapabilitiesDocument GetCapabilities() => new();
+
+        public Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default) =>
+            Task.FromResult<WorkflowActorSnapshot?>(null);
+
+        public Task<WorkflowRunReport?> GetActorReportAsync(string actorId, CancellationToken ct = default) =>
+            Task.FromResult<WorkflowRunReport?>(null);
+
+        public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(
+            string actorId,
+            int take = 200,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowActorTimelineItem>>([]);
+
+        public Task<IReadOnlyList<WorkflowActorGraphEdge>> ListActorGraphEdgesAsync(
+            string actorId,
+            int take = 200,
+            WorkflowActorGraphQueryOptions? options = null,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowActorGraphEdge>>([]);
+
+        public Task<WorkflowActorGraphSubgraph> GetActorGraphSubgraphAsync(
+            string actorId,
+            int depth = 2,
+            int take = 200,
+            WorkflowActorGraphQueryOptions? options = null,
+            CancellationToken ct = default) =>
+            Task.FromResult(new WorkflowActorGraphSubgraph());
     }
 
     private sealed class NotFoundHttpMessageHandler : HttpMessageHandler
