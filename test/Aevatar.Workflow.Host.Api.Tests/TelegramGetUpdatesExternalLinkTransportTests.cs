@@ -4,6 +4,7 @@ using Aevatar.Workflow.Extensions.Bridge;
 using FluentAssertions;
 using Google.Protobuf;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Text.Json;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -35,8 +36,15 @@ public sealed class TelegramGetUpdatesExternalLinkTransportTests
         connector.Received[0].StepId.Should().Be("session-1");
         connector.Received[0].Connector.Should().Be("telegram");
         connector.Received[0].Operation.Should().Be("/getUpdates");
-        connector.Received[0].Payload.Should().Be("""{"timeout":1}""");
+        var payload = JsonDocument.Parse(connector.Received[0].Payload).RootElement;
+        payload.GetProperty("timeout").GetInt32().Should().Be(1);
+        payload.GetProperty("offset").GetInt64().Should().Be(42);
+        payload.GetProperty("allowed_updates").EnumerateArray()
+            .Select(x => x.GetString())
+            .Should().Equal("message", "channel_post");
         connector.Received[0].Parameters["method"].Should().Be("POST");
+        connector.Received[0].Parameters["content_type"].Should().Be("application/json");
+        connector.Received[0].Parameters["timeout_ms"].Should().Be("4000");
         received.Should().ContainSingle();
         received[0].CommandId.Should().Be("cmd-1");
         received[0].Generation.Should().Be(7);
@@ -151,11 +159,15 @@ public sealed class TelegramGetUpdatesExternalLinkTransportTests
             ConnectorName = "telegram",
             RunId = "cmd-1",
             StepId = "session-1",
-            Payload = """{"timeout":1}""",
+            PollTimeoutSeconds = 1,
+            PerCallTimeoutMs = 4000,
+            HttpMethod = "POST",
+            ContentType = "application/json",
             Bootstrap = true,
             RequestedOffset = 42,
         };
-        request.Parameters["method"] = "POST";
+        request.AllowedUpdates.Add("message");
+        request.AllowedUpdates.Add("channel_post");
         return request;
     }
 

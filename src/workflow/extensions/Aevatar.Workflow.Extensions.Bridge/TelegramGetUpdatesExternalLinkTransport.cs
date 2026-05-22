@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.ExternalLinks;
+using System.Text.Json;
 using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 
@@ -7,7 +8,7 @@ namespace Aevatar.Workflow.Extensions.Bridge;
 
 // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
 //   Old pattern: TelegramBridgeGAgent.ExecuteConnectorWithWatchdogAsync 用 Task.Delay 兜底超时 + ContinueWith race + actor turn 内同步 await /getUpdates 长轮询
-//   New principle: 复用现有 ExternalLink actor-owned stream pattern(reflector force-pick):TelegramWaitReplyGAgent 实现 IExternalLinkAware + 加 TelegramGetUpdatesExternalLinkTransport;/getUpdates 走 IExternalLinkPort.SendAsync,result 经 ExternalLinkMessageReceivedEvent 回 actor;删 ExecuteConnectorWithWatchdogAsync/Task.Delay/ContinueWith race。**不新增 actor 类型**
+//   New principle: TelegramWaitReplyGAgent owns /getUpdates polling through the existing ExternalLink stream; it sends getUpdates requests via IExternalLinkPort and handles ExternalLinkMessageReceivedEvent continuations, so long polling no longer blocks an actor turn and no new actor type is introduced.
 public sealed class TelegramGetUpdatesExternalLinkTransport(
     IConnectorRegistry connectorRegistry,
     ILogger<TelegramGetUpdatesExternalLinkTransport> logger) : IExternalLinkTransport
@@ -100,15 +101,37 @@ public sealed class TelegramGetUpdatesExternalLinkTransport(
 
     private static ConnectorRequest BuildConnectorRequest(TelegramGetUpdatesRequest request)
     {
+        var parameters = new Dictionary<string, string>(request.Parameters, StringComparer.OrdinalIgnoreCase)
+        {
+            ["method"] = string.IsNullOrWhiteSpace(request.HttpMethod) ? "POST" : request.HttpMethod,
+            ["content_type"] = string.IsNullOrWhiteSpace(request.ContentType) ? "application/json" : request.ContentType,
+            ["timeout_ms"] = Math.Max(1, request.PerCallTimeoutMs).ToString(System.Globalization.CultureInfo.InvariantCulture),
+        };
+
         return new ConnectorRequest
         {
             RunId = request.RunId,
             StepId = request.StepId,
             Connector = request.ConnectorName,
             Operation = "/getUpdates",
-            Payload = request.Payload,
-            Parameters = new Dictionary<string, string>(request.Parameters, StringComparer.OrdinalIgnoreCase),
+            Payload = BuildGetUpdatesPayload(request),
+            Parameters = parameters,
         };
+    }
+
+    private static string BuildGetUpdatesPayload(TelegramGetUpdatesRequest request)
+    {
+        var payload = new Dictionary<string, object?>
+        {
+            ["timeout"] = Math.Max(0, request.PollTimeoutSeconds),
+            ["allowed_updates"] = request.AllowedUpdates.Count > 0
+                ? request.AllowedUpdates.ToArray()
+                : ["message", "channel_post"],
+        };
+        if (request.HasRequestedOffset && request.RequestedOffset >= 0)
+            payload["offset"] = request.RequestedOffset;
+
+        return JsonSerializer.Serialize(payload);
     }
 
     private static TelegramGetUpdatesResult BuildResult(TelegramGetUpdatesRequest request, ConnectorResponse response)
@@ -134,7 +157,7 @@ public sealed class TelegramGetUpdatesExternalLinkTransport(
 
 // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
 //   Old pattern: TelegramBridgeGAgent.ExecuteConnectorWithWatchdogAsync 用 Task.Delay 兜底超时 + ContinueWith race + actor turn 内同步 await /getUpdates 长轮询
-//   New principle: 复用现有 ExternalLink actor-owned stream pattern(reflector force-pick):TelegramWaitReplyGAgent 实现 IExternalLinkAware + 加 TelegramGetUpdatesExternalLinkTransport;/getUpdates 走 IExternalLinkPort.SendAsync,result 经 ExternalLinkMessageReceivedEvent 回 actor;删 ExecuteConnectorWithWatchdogAsync/Task.Delay/ContinueWith race。**不新增 actor 类型**
+//   New principle: TelegramWaitReplyGAgent owns /getUpdates polling through the existing ExternalLink stream; it sends getUpdates requests via IExternalLinkPort and handles ExternalLinkMessageReceivedEvent continuations, so long polling no longer blocks an actor turn and no new actor type is introduced.
 public sealed class TelegramGetUpdatesExternalLinkTransportFactory(
     IConnectorRegistry connectorRegistry,
     ILogger<TelegramGetUpdatesExternalLinkTransport> logger) : IExternalLinkTransportFactory

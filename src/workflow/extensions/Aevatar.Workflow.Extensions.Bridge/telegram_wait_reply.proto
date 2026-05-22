@@ -4,7 +4,7 @@ option csharp_namespace = "Aevatar.Workflow.Extensions.Bridge";
 
 // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
 //   Old pattern: TelegramBridgeGAgent.ExecuteConnectorWithWatchdogAsync 用 Task.Delay 兜底超时 + ContinueWith race + actor turn 内同步 await /getUpdates 长轮询
-//   New principle: 复用现有 ExternalLink actor-owned stream pattern(reflector force-pick):TelegramWaitReplyGAgent 实现 IExternalLinkAware + 加 TelegramGetUpdatesExternalLinkTransport;/getUpdates 走 IExternalLinkPort.SendAsync,result 经 ExternalLinkMessageReceivedEvent 回 actor;删 ExecuteConnectorWithWatchdogAsync/Task.Delay/ContinueWith race。**不新增 actor 类型**
+//   New principle: TelegramWaitReplyGAgent owns /getUpdates polling through the existing ExternalLink stream; it sends getUpdates requests via IExternalLinkPort and handles ExternalLinkMessageReceivedEvent continuations, so long polling no longer blocks an actor turn and no new actor type is introduced.
 
 message TelegramWaitForReplyCommand {
   string command_id = 1;
@@ -67,10 +67,14 @@ message TelegramGetUpdatesRequest {
   string connector_name = 4;
   string run_id = 5;
   string step_id = 6;
-  string payload = 7;
   map<string, string> parameters = 8;
   bool bootstrap = 9;
   optional int64 requested_offset = 10;
+  int32 poll_timeout_seconds = 11;
+  int32 per_call_timeout_ms = 12;
+  repeated string allowed_updates = 13;
+  string http_method = 14;
+  string content_type = 15;
 }
 
 message TelegramGetUpdatesResult {

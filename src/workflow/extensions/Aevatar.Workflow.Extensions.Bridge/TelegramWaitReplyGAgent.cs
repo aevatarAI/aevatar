@@ -19,7 +19,7 @@ namespace Aevatar.Workflow.Extensions.Bridge;
 //   New principle: New task-scoped TelegramWaitReplyGAgent owns protobuf wait state; typed self-events advance one bounded poll per actor turn and resume bridge via WaitReplyCompleted/Failed.
 // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
 //   Old pattern: TelegramBridgeGAgent.ExecuteConnectorWithWatchdogAsync 用 Task.Delay 兜底超时 + ContinueWith race + actor turn 内同步 await /getUpdates 长轮询
-//   New principle: 复用现有 ExternalLink actor-owned stream pattern(reflector force-pick):TelegramWaitReplyGAgent 实现 IExternalLinkAware + 加 TelegramGetUpdatesExternalLinkTransport;/getUpdates 走 IExternalLinkPort.SendAsync,result 经 ExternalLinkMessageReceivedEvent 回 actor;删 ExecuteConnectorWithWatchdogAsync/Task.Delay/ContinueWith race。**不新增 actor 类型**
+//   New principle: TelegramWaitReplyGAgent owns /getUpdates polling through the existing ExternalLink stream; it sends getUpdates requests via IExternalLinkPort and handles ExternalLinkMessageReceivedEvent continuations, so long polling no longer blocks an actor turn and no new actor type is introduced.
 [GAgent("workflow.telegram-wait-reply")]
 // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
 //   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
@@ -134,7 +134,7 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
     {
         // Refactor (iter26/cluster-030-telegram-connector-watchdog-blocks-actor-turn):
         //   Old pattern: TelegramBridgeGAgent.ExecuteConnectorWithWatchdogAsync 用 Task.Delay 兜底超时 + ContinueWith race + actor turn 内同步 await /getUpdates 长轮询
-        //   New principle: 复用现有 ExternalLink actor-owned stream pattern(reflector force-pick):TelegramWaitReplyGAgent 实现 IExternalLinkAware + 加 TelegramGetUpdatesExternalLinkTransport;/getUpdates 走 IExternalLinkPort.SendAsync,result 经 ExternalLinkMessageReceivedEvent 回 actor;删 ExecuteConnectorWithWatchdogAsync/Task.Delay/ContinueWith race。**不新增 actor 类型**
+        //   New principle: TelegramWaitReplyGAgent owns /getUpdates polling through the existing ExternalLink stream; it sends getUpdates requests via IExternalLinkPort and handles ExternalLinkMessageReceivedEvent continuations, so long polling no longer blocks an actor turn and no new actor type is introduced.
         ArgumentNullException.ThrowIfNull(evt);
         if (!string.Equals(evt.LinkId, GetUpdatesLinkId, StringComparison.Ordinal))
             return;
@@ -298,13 +298,6 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
         int perCallTimeoutMs,
         bool bootstrap)
     {
-        var parameters = new Dictionary<string, string>(State.ConnectorParameters, StringComparer.OrdinalIgnoreCase)
-        {
-            ["method"] = "POST",
-            ["content_type"] = "application/json",
-            ["timeout_ms"] = perCallTimeoutMs.ToString(System.Globalization.CultureInfo.InvariantCulture),
-        };
-
         var request = new TelegramGetUpdatesRequest
         {
             CommandId = State.CommandId,
@@ -313,10 +306,15 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
             ConnectorName = State.ConnectorName,
             RunId = State.CommandId,
             StepId = State.SessionId,
-            Payload = BuildGetUpdatesPayload(offset, pollTimeoutSeconds),
+            PollTimeoutSeconds = Math.Clamp(pollTimeoutSeconds, 0, MaxPollTimeoutSeconds),
+            PerCallTimeoutMs = perCallTimeoutMs,
+            HttpMethod = "POST",
+            ContentType = "application/json",
             Bootstrap = bootstrap,
         };
-        request.Parameters.Add(parameters);
+        request.AllowedUpdates.Add("message");
+        request.AllowedUpdates.Add("channel_post");
+        request.Parameters.Add(State.ConnectorParameters);
         if (offset.HasValue)
             request.RequestedOffset = offset.Value;
         return request;
@@ -633,19 +631,6 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
         return $"raw:{update.ChatId}:{update.FromUserId}:{update.DateUnix}:{update.Content}";
     }
 
-    private static string BuildGetUpdatesPayload(long? offset, int pollTimeoutSeconds)
-    {
-        var payload = new Dictionary<string, object?>
-        {
-            ["timeout"] = Math.Clamp(pollTimeoutSeconds, 0, MaxPollTimeoutSeconds),
-            ["allowed_updates"] = new[] { "message", "channel_post" },
-        };
-        if (offset.HasValue && offset.Value >= 0)
-            payload["offset"] = offset.Value;
-
-        return JsonSerializer.Serialize(payload);
-    }
-
     private static string BuildGetUpdatesTimeoutCallbackId(TelegramGetUpdatesRequest request) =>
         RuntimeCallbackKeyComposer.BuildCallbackId(
             GetUpdatesTimeoutCallbackPrefix,
@@ -655,11 +640,7 @@ public sealed class TelegramWaitReplyGAgent : GAgentBase<TelegramWaitReplyState>
 
     private static int ResolvePendingGetUpdatesTimeoutMs(TelegramGetUpdatesRequest request)
     {
-        return request.Parameters.TryGetValue("timeout_ms", out var raw) &&
-               int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) &&
-               parsed > 0
-            ? parsed
-            : 1;
+        return request.PerCallTimeoutMs > 0 ? request.PerCallTimeoutMs : 1;
     }
 
     private static bool TryParseTelegramUpdates(
