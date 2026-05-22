@@ -65,7 +65,7 @@ public sealed class ServiceQueryApplicationServicesTests
     }
 
     [Fact]
-    public async Task ListServicesAsync_ShouldComposeActiveDeploymentFromDeploymentReadModels()
+    public async Task ListServicesAsync_ShouldReturnCatalogSnapshotsWithoutQueryTimeDeploymentSelection()
     {
         var serviceA = CreateServiceCatalogSnapshot("svc-a");
         var serviceB = CreateServiceCatalogSnapshot("svc-b");
@@ -117,15 +117,9 @@ public sealed class ServiceQueryApplicationServicesTests
 
         var result = await service.ListServicesAsync("tenant", "app", "default", take: 10);
 
-        result.Should().HaveCount(2);
-        var enriched = result.Single(x => x.ServiceId == "svc-a");
-        enriched.ActiveServingRevisionId.Should().Be("r-active");
-        enriched.DeploymentId.Should().Be("dep-active");
-        enriched.PrimaryActorId.Should().Be("actor-active");
-        enriched.DeploymentStatus.Should().Be(ServiceDeploymentStatus.Active.ToString());
-        result.Single(x => x.ServiceId == "svc-b")
-            .ActiveServingRevisionId.Should().BeEmpty();
-        deploymentReader.Identities.Select(x => x.ServiceId).Should().Equal("svc-a", "svc-b");
+        result.Should().Equal(serviceA, serviceB);
+        result.Select(x => x.ActiveServingRevisionId).Should().OnlyContain(x => string.IsNullOrEmpty(x));
+        deploymentReader.Identities.Should().BeEmpty();
     }
 
     [Fact]
@@ -144,13 +138,11 @@ public sealed class ServiceQueryApplicationServicesTests
     }
 
     [Fact]
-    public async Task GetServiceAsync_ShouldComposeActiveDeploymentFromDeploymentReadModel()
+    public async Task GetServiceAsync_ShouldReturnCatalogSnapshotWithoutQueryTimeDeploymentSelection()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var catalogReader = new ConfiguredCatalogReader
-        {
-            GetResult = CreateServiceCatalogSnapshot(),
-        };
+        var catalogSnapshot = CreateServiceCatalogSnapshot();
+        var catalogReader = new ConfiguredCatalogReader { GetResult = catalogSnapshot };
         var deploymentReader = new ConfiguredDeploymentReader
         {
             GetResult = new ServiceDeploymentCatalogSnapshot(
@@ -180,11 +172,12 @@ public sealed class ServiceQueryApplicationServicesTests
 
         var result = await service.GetServiceAsync(identity);
 
-        result.Should().NotBeNull();
-        result!.ActiveServingRevisionId.Should().Be("r-active");
-        result.DeploymentId.Should().Be("dep-active");
-        result.PrimaryActorId.Should().Be("actor-active");
-        result.DeploymentStatus.Should().Be(ServiceDeploymentStatus.Active.ToString());
+        result.Should().Be(catalogSnapshot);
+        result!.ActiveServingRevisionId.Should().BeEmpty();
+        result.DeploymentId.Should().BeEmpty();
+        result.PrimaryActorId.Should().BeEmpty();
+        result.DeploymentStatus.Should().BeEmpty();
+        deploymentReader.Identities.Should().BeEmpty();
     }
 
     [Fact]

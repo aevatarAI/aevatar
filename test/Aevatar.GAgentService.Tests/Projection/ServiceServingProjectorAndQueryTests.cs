@@ -1,3 +1,6 @@
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Services;
@@ -366,65 +369,11 @@ public sealed class ServiceServingProjectorAndQueryTests
     public async Task RolloutProjector_ShouldOverwriteStaleStagesAndStatus_FromLatestStateRoot()
     {
         var store = new RecordingDocumentStore<ServiceRolloutReadModel>(x => x.Id);
-        await store.UpsertAsync(new ServiceRolloutReadModel
-        {
-            Id = "tenant:app:default:svc",
-            ActorId = "tenant:app:default:svc",
-            StateVersion = 11,
-            LastEventId = "evt-stale",
-            RolloutId = "rollout-stale",
-            Status = ServiceRolloutStatus.Paused.ToString(),
-            CurrentStageIndex = 99,
-            FailureReason = "stale failure",
-            UpdatedAt = DateTimeOffset.Parse("2026-03-15T00:00:00+00:00"),
-            Stages =
-            {
-                new ServiceRolloutStageReadModel
-                {
-                    StageId = "stage-stale",
-                    StageIndex = 99,
-                    Targets =
-                    {
-                        new ServiceServingTargetReadModel
-                        {
-                            DeploymentId = "dep-stale",
-                            RevisionId = "old-revision",
-                            PrimaryActorId = "old-actor",
-                            AllocationWeight = 100,
-                            ServingState = ServiceServingState.Active.ToString(),
-                            EnabledEndpointIds = { "run" },
-                        },
-                    },
-                },
-            },
-        });
+        await UpsertStaleRolloutReadModelAsync(store);
         var projector = new ServiceRolloutProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-15T00:00:00+00:00")));
         var identity = GAgentServiceTestKit.CreateIdentity();
         var observedAt = DateTimeOffset.Parse("2026-03-15T10:00:00+00:00");
-        var state = new ServiceRolloutExecutionState
-        {
-            Identity = identity.Clone(),
-            RolloutId = "rollout-fresh",
-            Plan = new ServiceRolloutPlanSpec
-            {
-                RolloutId = "rollout-fresh",
-                DisplayName = "Fresh rollout",
-                Stages =
-                {
-                    new ServiceRolloutStageSpec
-                    {
-                        StageId = "stage-fresh",
-                        Targets =
-                        {
-                            CreateTarget("dep-fresh", "fresh-revision", "fresh-actor", 100, "run"),
-                        },
-                    },
-                },
-            },
-            Status = ServiceRolloutStatus.InProgress,
-            CurrentStageIndex = 0,
-            UpdatedAt = Timestamp.FromDateTimeOffset(observedAt),
-        };
+        var state = CreateFreshRolloutState(identity, observedAt);
 
         await projector.ProjectAsync(
             new ServiceRolloutProjectionContext
@@ -544,19 +493,11 @@ public sealed class ServiceServingProjectorAndQueryTests
     }
 
     [Fact]
-    public void ServiceArtifactProjectorSources_ShouldNotReadPriorProjectionDocuments()
+    public void ServiceArtifactProjectors_ShouldDependOnlyOnWriteDispatcherAndClock()
     {
-        foreach (var sourcePath in new[]
-                 {
-                     SourcePath("src/platform/Aevatar.GAgentService.Projection/Projectors/ServiceCatalogProjector.cs"),
-                     SourcePath("src/platform/Aevatar.GAgentService.Projection/Projectors/ServiceDeploymentCatalogProjector.cs"),
-                     SourcePath("src/platform/Aevatar.GAgentService.Projection/Projectors/ServiceRolloutProjector.cs"),
-                 })
-        {
-            var source = File.ReadAllText(sourcePath);
-
-            source.Should().NotContain("IProjectionDocumentReader");
-        }
+        AssertStateRootProjectorConstructor<ServiceCatalogProjector, ServiceCatalogReadModel>();
+        AssertStateRootProjectorConstructor<ServiceDeploymentCatalogProjector, ServiceDeploymentCatalogReadModel>();
+        AssertStateRootProjectorConstructor<ServiceRolloutProjector, ServiceRolloutReadModel>();
     }
 
     [Fact]
@@ -793,18 +734,77 @@ public sealed class ServiceServingProjectorAndQueryTests
         };
     }
 
-    private static string SourcePath(string relativePath)
-    {
-        var directory = AppContext.BaseDirectory;
-        while (!string.IsNullOrEmpty(directory))
+    private static Task UpsertStaleRolloutReadModelAsync(
+        RecordingDocumentStore<ServiceRolloutReadModel> store) =>
+        store.UpsertAsync(new ServiceRolloutReadModel
         {
-            var candidate = Path.Combine(directory, relativePath);
-            if (File.Exists(candidate))
-                return candidate;
+            Id = "tenant:app:default:svc",
+            ActorId = "tenant:app:default:svc",
+            StateVersion = 11,
+            LastEventId = "evt-stale",
+            RolloutId = "rollout-stale",
+            Status = ServiceRolloutStatus.Paused.ToString(),
+            CurrentStageIndex = 99,
+            FailureReason = "stale failure",
+            UpdatedAt = DateTimeOffset.Parse("2026-03-15T00:00:00+00:00"),
+            Stages =
+            {
+                new ServiceRolloutStageReadModel
+                {
+                    StageId = "stage-stale",
+                    StageIndex = 99,
+                    Targets =
+                    {
+                        new ServiceServingTargetReadModel
+                        {
+                            DeploymentId = "dep-stale",
+                            RevisionId = "old-revision",
+                            PrimaryActorId = "old-actor",
+                            AllocationWeight = 100,
+                            ServingState = ServiceServingState.Active.ToString(),
+                            EnabledEndpointIds = { "run" },
+                        },
+                    },
+                },
+            },
+        });
 
-            directory = Directory.GetParent(directory)?.FullName;
-        }
+    private static ServiceRolloutExecutionState CreateFreshRolloutState(
+        ServiceIdentity identity,
+        DateTimeOffset observedAt) =>
+        new()
+        {
+            Identity = identity.Clone(),
+            RolloutId = "rollout-fresh",
+            Plan = new ServiceRolloutPlanSpec
+            {
+                RolloutId = "rollout-fresh",
+                DisplayName = "Fresh rollout",
+                Stages =
+                {
+                    new ServiceRolloutStageSpec
+                    {
+                        StageId = "stage-fresh",
+                        Targets =
+                        {
+                            CreateTarget("dep-fresh", "fresh-revision", "fresh-actor", 100, "run"),
+                        },
+                    },
+                },
+            },
+            Status = ServiceRolloutStatus.InProgress,
+            CurrentStageIndex = 0,
+            UpdatedAt = Timestamp.FromDateTimeOffset(observedAt),
+        };
 
-        throw new FileNotFoundException($"Could not locate source file '{relativePath}'.");
+    private static void AssertStateRootProjectorConstructor<TProjector, TReadModel>()
+        where TReadModel : class, IProjectionReadModel
+    {
+        var constructor = typeof(TProjector).GetConstructors().Should().ContainSingle().Subject;
+
+        constructor.GetParameters()
+            .Select(x => x.ParameterType)
+            .Should()
+            .Equal(typeof(IProjectionWriteDispatcher<TReadModel>), typeof(IProjectionClock));
     }
 }
