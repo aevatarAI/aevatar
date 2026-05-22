@@ -348,13 +348,11 @@ public sealed class WorkflowApplicationLayerTests
         string commandId,
         IReadOnlyList<string>? createdActorIds = null)
     {
-        var readModelActivationPort = projectionPort;
         var target = new WorkflowRunCommandTarget(
             new FakeActor(actorId),
             workflowName,
             createdActorIds ?? [],
             projectionPort,
-            readModelActivationPort,
             actorPort,
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         var projectionLease = new FakeProjectionLease(actorId, commandId);
@@ -569,8 +567,7 @@ public sealed class WorkflowApplicationLayerTests
     }
 
     private sealed class FakeProjectionPort
-        : IWorkflowExecutionProjectionPort,
-          IWorkflowExecutionMaterializationActivationPort
+        : IWorkflowExecutionProjectionPort
     {
         public bool ProjectionEnabled => true;
         public List<IAsyncDisposable?> DetachCalls { get; } = [];
@@ -582,13 +579,6 @@ public sealed class WorkflowApplicationLayerTests
         public int DetachFailureCount { get; set; }
         public int ReleaseFailureCount { get; set; }
         public int ReleaseAttemptCount => ReleaseAttempts.Count;
-
-        public Task<bool> ActivateAsync(string actorId, CancellationToken ct = default)
-        {
-            _ = actorId;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(true);
-        }
 
         public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
             string rootActorId,

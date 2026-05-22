@@ -189,7 +189,6 @@ public sealed class WorkflowRunFallbackCoverageTests
             workflowName,
             [actorId],
             projectionPort,
-            projectionPort,
             actorPort,
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         target.BindLiveObservation(
@@ -356,17 +355,9 @@ public sealed class WorkflowRunFallbackCoverageTests
     }
 
     private sealed class FakeProjectionPort
-        : IWorkflowExecutionProjectionPort,
-          IWorkflowExecutionMaterializationActivationPort
+        : IWorkflowExecutionProjectionPort
     {
         public bool ProjectionEnabled => true;
-
-        public Task<bool> ActivateAsync(string actorId, CancellationToken ct = default)
-        {
-            _ = actorId;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(true);
-        }
 
         public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
             string rootActorId,

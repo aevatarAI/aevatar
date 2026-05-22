@@ -16,7 +16,6 @@ internal sealed class WorkflowRunCommandTarget
       ICommandDispatchCleanupAware
 {
     private readonly IWorkflowExecutionProjectionPort _projectionPort;
-    private readonly IWorkflowExecutionMaterializationActivationPort _materializationActivationPort;
     private readonly IWorkflowRunActorPort _actorPort;
     private readonly WorkflowRunDurableCompletionResolver _durableCompletionResolver;
     private bool _createdActorsDestroyed;
@@ -26,7 +25,6 @@ internal sealed class WorkflowRunCommandTarget
         string workflowName,
         IReadOnlyList<string>? createdActorIds,
         IWorkflowExecutionProjectionPort projectionPort,
-        IWorkflowExecutionMaterializationActivationPort materializationActivationPort,
         IWorkflowRunActorPort actorPort,
         WorkflowRunDurableCompletionResolver durableCompletionResolver)
     {
@@ -39,7 +37,6 @@ internal sealed class WorkflowRunCommandTarget
             : workflowName;
         CreatedActorIds = createdActorIds ?? [];
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
-        _materializationActivationPort = materializationActivationPort ?? throw new ArgumentNullException(nameof(materializationActivationPort));
         _actorPort = actorPort ?? throw new ArgumentNullException(nameof(actorPort));
         _durableCompletionResolver = durableCompletionResolver ?? throw new ArgumentNullException(nameof(durableCompletionResolver));
     }
@@ -59,9 +56,10 @@ internal sealed class WorkflowRunCommandTarget
         IAsyncDisposable? liveSinkLease,
         IEventSink<WorkflowRunEventEnvelope> sink)
     {
-        // Refactor (iter25/cluster-002-observation-lifecycle-core):
-        //   Old pattern: command preparation could attach projection/session leases and mix read-side observation into dispatch admission.
-        //   New principle: live observation is an explicit interaction phase that starts before dispatch; PrepareAsync and dispatch-only callers stay free of read-side lifecycle work
+        // Refactor (iter35/cluster-039-observation-binder-attach-only):
+        //   Old pattern: Command observation binders synchronously ensure and attach projection leases before dispatch,让 request/command preparation 拥有 projection lifecycle。
+        //   New principle: Command observation binders 仅 attach 到 pre-existing lease/session;cold session 返回 ProjectionPending / ProjectionUnavailable;projection activation 移到 projection-owned startup / background lifecycle。
+        //   删除 pre-dispatch projection activation from command binders。不新增 top-level CLAUDE.md exception。
         ProjectionLease = lease ?? throw new ArgumentNullException(nameof(lease));
         LiveSinkLease = liveSinkLease;
         LiveSink = sink ?? throw new ArgumentNullException(nameof(sink));
@@ -69,9 +67,6 @@ internal sealed class WorkflowRunCommandTarget
 
     public IEventSink<WorkflowRunEventEnvelope> RequireLiveSink() =>
         LiveSink ?? throw new InvalidOperationException("Workflow run live sink is not bound.");
-
-    public Task<bool> ActivateMaterializationAsync(CancellationToken ct = default) =>
-        _materializationActivationPort.ActivateAsync(ActorId, ct);
 
     public async Task CleanupAfterDispatchFailureAsync(CancellationToken ct = default)
     {

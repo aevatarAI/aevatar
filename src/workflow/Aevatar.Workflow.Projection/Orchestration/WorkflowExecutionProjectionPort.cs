@@ -36,4 +36,21 @@ public sealed class WorkflowExecutionProjectionPort
                 SessionId = commandId,
             },
             ct);
+
+    // Refactor (iter35/cluster-039-observation-binder-attach-only):
+    //   Old pattern: Command observation binders synchronously ensure and attach projection leases before dispatch,让 request/command preparation 拥有 projection lifecycle。
+    //   New principle: Command observation binders 仅 attach 到 pre-existing lease/session;cold session 返回 ProjectionPending / ProjectionUnavailable;projection activation 移到 projection-owned startup / background lifecycle。
+    //   删除 pre-dispatch projection activation from command binders。不新增 top-level CLAUDE.md exception。
+    protected override WorkflowExecutionRuntimeLease ResolveRuntimeLease(IWorkflowExecutionProjectionLease lease)
+    {
+        if (lease is WorkflowExecutionRuntimeLease runtimeLease)
+            return runtimeLease;
+
+        return new WorkflowExecutionRuntimeLease(new WorkflowExecutionProjectionContext
+        {
+            RootActorId = lease.ActorId,
+            ProjectionKind = WorkflowProjectionKinds.ExecutionSession,
+            SessionId = lease.CommandId,
+        });
+    }
 }

@@ -70,8 +70,8 @@ flowchart TB
     CMD --> RES["WorkflowRunCommandTargetResolver"]
     CMD --> BND["WorkflowRunObservationLifecycle"]
     BND --> LIF["IWorkflowExecutionProjectionPort"]
-    LIF --> LEASE["WorkflowExecutionRuntimeLease"]
-    LIF --> SUB["AttachLiveSinkAsync(lease, sink)"]
+    LIF --> LEASE["Deterministic existing lease\nactorId + commandId"]
+    LIF --> SUB["AttachLiveSinkAsync(lease, sink)\n(no ensure/activate)"]
     CMD --> FAC["WorkflowChatRequestEnvelopeFactory"]
     FAC --> DSP["ActorCommandTargetDispatcher / IActorDispatchPort"]
     DSP --> ACT["WorkflowRunGAgent / RoleGAgent"]
@@ -287,7 +287,7 @@ flowchart LR
 
 ### 7.2 运行态约束
 
-1. live sink 订阅通过 `lease + sink` 显式绑定，订阅对象保存在 `WorkflowExecutionRuntimeLease` 的运行态集合。
+1. live sink 订阅通过 `lease + sink` 显式绑定；command binder 只 attach 到 deterministic existing session，不在 dispatch 前 ensure/activate projection。
 2. 会话事件分发按 `scopeId=session actorId` 和 `sessionId=commandId` 二元键，不依赖中间层全局 `actorId->context` 映射。
 3. sink 写入失败会按策略 detach，并尝试发布 run error 遥测事件。
 

@@ -436,19 +436,17 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
         var projectionPort = new FakeProjectionPort();
         var actorPort = new FakeWorkflowRunActorPort();
 
-        var actOnActor = () => new WorkflowRunCommandTarget(null!, "workflow-1", [], projectionPort, projectionPort, actorPort, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
-        var actOnWorkflowName = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), " ", [], projectionPort, projectionPort, actorPort, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
-        var actOnProjectionPort = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], null!, projectionPort, actorPort, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
-        var actOnMaterializationActivationPort = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], projectionPort, null!, actorPort, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
-        var actOnActorPort = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], projectionPort, projectionPort, null!, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
+        var actOnActor = () => new WorkflowRunCommandTarget(null!, "workflow-1", [], projectionPort, actorPort, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
+        var actOnWorkflowName = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), " ", [], projectionPort, actorPort, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
+        var actOnProjectionPort = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], null!, actorPort, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
+        var actOnActorPort = () => new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], projectionPort, null!, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
 
         actOnActor.Should().Throw<ArgumentNullException>();
         actOnWorkflowName.Should().Throw<ArgumentException>();
         actOnProjectionPort.Should().Throw<ArgumentNullException>();
-        actOnMaterializationActivationPort.Should().Throw<ArgumentNullException>();
         actOnActorPort.Should().Throw<ArgumentNullException>();
 
-        var target = new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], projectionPort, projectionPort, actorPort, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
+        var target = new WorkflowRunCommandTarget(new FakeActor("actor-1"), "workflow-1", [], projectionPort, actorPort, new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
         var lease = new FakeProjectionLease("actor-1", "cmd-1");
         var sink = new FakeEventSink();
 
@@ -474,7 +472,6 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             new FakeActor("actor-1"),
             "workflow-1",
             ["definition-1", "run-1"],
-            projectionPort,
             projectionPort,
             actorPort,
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
@@ -508,7 +505,6 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             new FakeActor("actor-1"),
             "workflow-1",
             [],
-            new FakeProjectionPort(),
             new FakeProjectionPort(),
             new FakeWorkflowRunActorPort(),
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
@@ -580,7 +576,6 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             new FakeWorkflowRunActorResolver(
                 new WorkflowActorResolutionResult(null, "auto", WorkflowChatRunStartError.AgentNotFound)),
             new FakeProjectionPort(),
-            new FakeProjectionPort(),
             new FakeWorkflowRunActorPort(),
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
 
@@ -595,7 +590,6 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
     {
         var projectionPort = new FakeProjectionPort
         {
-            EnsureLease = new FakeProjectionLease("actor-1", "cmd-1"),
             AttachException = new InvalidOperationException("attach failed"),
         };
         var actorPort = new FakeWorkflowRunActorPort
@@ -607,7 +601,6 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             new FakeActor("actor-1"),
             "workflow-1",
             ["actor-1"],
-            projectionPort,
             projectionPort,
             actorPort,
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
@@ -627,6 +620,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
         var ex = await act.Should().ThrowAsync<AggregateException>();
         ex.Which.Message.Should().Contain("rollback also failed");
         ex.Which.InnerExceptions.Should().HaveCount(2);
+        projectionPort.EnsureCalls.Should().Be(0);
     }
 
     private static WorkflowRunCommandTarget CreateBoundTarget(
@@ -641,7 +635,6 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             new FakeActor("actor-1"),
             "workflow-1",
             ["definition-1", "run-1"],
-            projectionPort,
             projectionPort,
             actorPort,
             new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
@@ -721,21 +714,14 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
     }
 
     private sealed class FakeProjectionPort
-        : IWorkflowExecutionProjectionPort,
-          IWorkflowExecutionMaterializationActivationPort
+        : IWorkflowExecutionProjectionPort
     {
         public bool ProjectionEnabled { get; set; } = true;
         public FakeProjectionLease? EnsureLease { get; set; }
         public Exception? AttachException { get; set; }
         public Exception? ReleaseException { get; set; }
+        public int EnsureCalls { get; private set; }
         public List<string> Events { get; } = [];
-
-        public Task<bool> ActivateAsync(string actorId, CancellationToken ct = default)
-        {
-            _ = actorId;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(true);
-        }
 
         public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
             string rootActorId,
@@ -745,6 +731,7 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             _ = rootActorId;
             _ = commandId;
             ct.ThrowIfCancellationRequested();
+            EnsureCalls++;
             return Task.FromResult<IWorkflowExecutionProjectionLease?>(EnsureLease);
         }
 
