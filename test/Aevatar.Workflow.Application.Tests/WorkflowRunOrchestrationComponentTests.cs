@@ -256,13 +256,12 @@ public sealed class WorkflowRunOrchestrationComponentTests
             CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
-        target.ProjectionLease.Should().NotBeNull();
-        target.ProjectionLease!.ActorId.Should().Be("actor-1");
-        target.ProjectionLease.CommandId.Should().Be("cmd-1");
+        target.ProjectionLease.Should().BeSameAs(projectionPort.ExistingLease);
         target.LiveSink.Should().NotBeNull();
-        projectionPort.AttachCalls.Should().ContainSingle();
-        projectionPort.AttachCalls[0].Lease.ActorId.Should().Be("actor-1");
-        projectionPort.AttachCalls[0].Lease.CommandId.Should().Be("cmd-1");
+        projectionPort.AttachExistingCalls.Should().ContainSingle()
+            .Which.Should().Be(("actor-1", "cmd-1"));
+        projectionPort.AttachCalls.Should().ContainSingle()
+            .Which.Lease.Should().BeSameAs(projectionPort.ExistingLease);
         projectionPort.EnsureCalls.Should().Be(0);
         actorPort.DestroyCalls.Should().BeEmpty();
     }
@@ -296,6 +295,8 @@ public sealed class WorkflowRunOrchestrationComponentTests
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(WorkflowChatRunStartError.ProjectionDisabled);
+        projectionPort.AttachExistingCalls.Should().ContainSingle()
+            .Which.Should().Be(("actor-1", "cmd-1"));
         projectionPort.EnsureCalls.Should().Be(0);
         actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
     }
@@ -329,6 +330,8 @@ public sealed class WorkflowRunOrchestrationComponentTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("attach failed");
+        projectionPort.AttachExistingCalls.Should().ContainSingle()
+            .Which.Should().Be(("actor-1", "cmd-1"));
         projectionPort.EnsureCalls.Should().Be(0);
         actorPort.DestroyCalls.Should().Equal("actor-1", "definition-1");
     }
@@ -376,6 +379,8 @@ public sealed class WorkflowRunOrchestrationComponentTests
         public bool AttachReturnsNull { get; set; }
         public Exception? AttachException { get; set; }
         public int EnsureCalls { get; private set; }
+        public FakeProjectionLease ExistingLease { get; set; } = new("actor-1", "cmd-1");
+        public List<(string RootActorId, string CommandId)> AttachExistingCalls { get; } = [];
         public List<(IWorkflowExecutionProjectionLease Lease, IEventSink<WorkflowRunEventEnvelope> Sink)> AttachCalls { get; } = [];
 
         public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
@@ -403,6 +408,21 @@ public sealed class WorkflowRunOrchestrationComponentTests
             return Task.FromResult<IAsyncDisposable?>(
                 AttachReturnsNull ? null : new FakeLiveSinkLease());
         }
+
+        public async Task<EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>?> AttachExistingActorProjectionAsync(
+            string rootActorId,
+            string commandId,
+            IEventSink<WorkflowRunEventEnvelope> sink,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            AttachExistingCalls.Add((rootActorId, commandId));
+            var liveSinkLease = await AttachLiveSinkAsync(ExistingLease, sink, ct);
+            return liveSinkLease == null
+                ? null
+                : new EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>(ExistingLease, liveSinkLease);
+        }
+
         public Task DetachLiveSinkAsync(
             IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default) =>

@@ -36,19 +36,16 @@ internal sealed class WorkflowRunObservationLifecycle
 
         try
         {
-            if (!_projectionPort.ProjectionEnabled)
-                return await FailProjectionUnavailableAsync(target, sink);
-
-            var lease = new WorkflowExecutionObservationLease(target.ActorId, context.CommandId);
-            var liveSinkLease = await _projectionPort.AttachLiveSinkAsync(
-                lease,
+            var attachment = await _projectionPort.AttachExistingActorProjectionAsync(
+                target.ActorId,
+                context.CommandId,
                 sink,
                 ct);
 
-            if (liveSinkLease == null)
+            if (attachment == null)
                 return await FailProjectionUnavailableAsync(target, sink);
 
-            target.BindLiveObservation(lease, liveSinkLease, sink);
+            target.BindLiveObservation(attachment.ProjectionLease, attachment.LiveSinkLease, sink);
             return CommandObservationBindingResult<WorkflowChatRunStartError>.Success();
         }
         catch (Exception ex)
@@ -89,11 +86,4 @@ internal sealed class WorkflowRunObservationLifecycle
             WorkflowChatRunStartError.ProjectionDisabled);
     }
 
-    // Refactor (iter35/cluster-039-observation-binder-attach-only):
-    //   Old pattern: Command observation binders synchronously ensure and attach projection leases before dispatch,让 request/command preparation 拥有 projection lifecycle。
-    //   New principle: Command observation binders 仅 attach 到 pre-existing lease/session;cold session 返回 ProjectionPending / ProjectionUnavailable;projection activation 移到 projection-owned startup / background lifecycle。
-    //   删除 pre-dispatch projection activation from command binders。不新增 top-level CLAUDE.md exception。refactor helper, no behavior change。
-    private sealed record WorkflowExecutionObservationLease(
-        string ActorId,
-        string CommandId) : IWorkflowExecutionProjectionLease;
 }

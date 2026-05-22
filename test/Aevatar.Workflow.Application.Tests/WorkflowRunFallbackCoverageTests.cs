@@ -370,6 +370,14 @@ public sealed class WorkflowRunFallbackCoverageTests
             IEventSink<WorkflowRunEventEnvelope> sink,
             CancellationToken ct = default) =>
             Task.FromResult<IAsyncDisposable?>(null);
+
+        public Task<EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>?> AttachExistingActorProjectionAsync(
+            string rootActorId,
+            string commandId,
+            IEventSink<WorkflowRunEventEnvelope> sink,
+            CancellationToken ct = default) =>
+            Task.FromResult<EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>?>(null);
+
         public Task DetachLiveSinkAsync(
             IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default) =>

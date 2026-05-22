@@ -718,9 +718,11 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
     {
         public bool ProjectionEnabled { get; set; } = true;
         public FakeProjectionLease? EnsureLease { get; set; }
+        public FakeProjectionLease ExistingLease { get; set; } = new("actor-1", "cmd-1");
         public Exception? AttachException { get; set; }
         public Exception? ReleaseException { get; set; }
         public int EnsureCalls { get; private set; }
+        public List<(string RootActorId, string CommandId)> AttachExistingCalls { get; } = [];
         public List<string> Events { get; } = [];
 
         public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
@@ -749,6 +751,21 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             Events.Add("attach");
             return Task.FromResult<IAsyncDisposable?>(null);
         }
+
+        public async Task<EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>?> AttachExistingActorProjectionAsync(
+            string rootActorId,
+            string commandId,
+            IEventSink<WorkflowRunEventEnvelope> sink,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            AttachExistingCalls.Add((rootActorId, commandId));
+            var liveSinkLease = await AttachLiveSinkAsync(ExistingLease, sink, ct);
+            return new EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>(
+                ExistingLease,
+                liveSinkLease);
+        }
+
         public Task DetachLiveSinkAsync(
             IAsyncDisposable? liveSinkLease,
             CancellationToken ct = default)
