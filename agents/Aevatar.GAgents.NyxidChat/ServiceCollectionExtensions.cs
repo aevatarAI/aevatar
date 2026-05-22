@@ -74,6 +74,7 @@ public static class ServiceCollectionExtensions
             }));
         }
         services.TryAddSingleton<IConversationReplyGenerator, NyxIdConversationReplyGenerator>();
+        services.TryAddSingleton<IVoiceDemoAgentCommandPort, VoiceDemoAgentCommandPort>();
 
         // ─── LLM-call middleware that injects channel context into LLM requests ───
         // Lives here (not in Channel.Runtime) because it implements ILLMCallMiddleware

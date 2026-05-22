@@ -74,6 +74,7 @@ public static class ChatRoutingServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionActivationPlanProvider,
             ChatRoutePolicyCommittedStateProjectionActivationPlanProvider>());
+        services.TryAddSingleton<IChatRoutePolicyCommandPort, ChatRoutePolicyCommandPort>();
 
         var useElasticsearch = ElasticsearchProjectionConfiguration.IsEnabled(
             configuration,

@@ -5,13 +5,9 @@ using Aevatar.AI.Abstractions;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.VoicePresence.Hosting;
-using Aevatar.GAgents.ChatRouting;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.Scheduled;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
@@ -20,15 +16,14 @@ using ScheduledOwnerScope = Aevatar.GAgents.Scheduled.OwnerScope;
 
 namespace Aevatar.Mainnet.Host.Api.Voice;
 
-// Refactor (iter32/cluster-034-chat-route-policy-request-path-projection-activation):
-//   Old pattern: Chat route policy admin endpoints + voice demo bootstrap 在 request path 调 EnsureProjectionForActorAsync 同步 priming projection,违反 query-time priming forbidden + 命令骨架内聚
-//   New principle: 加 ChatRoutePolicyCommittedStateProjectionActivationPlanProvider(committed-state hook 触发);删 ChatRoutePolicyProjectionPort + request-path activation;DI 注册 dispatcher + hook + provider;query_projection_priming_guard 加 chat route policy endpoint 扫描
+// Refactor (iter34/cluster-005-mainnet-host-direct-actor-runtime):
+//   Old pattern: Mainnet Host endpoints inject IActorRuntime/IActorDispatchPort and build EventEnvelope + dispatch directly in Host code.
+//   New principle: Host calls Application command ports that normalize, resolve target, build envelope, dispatch, return honest accepted receipt.
+//   Host endpoint stays minimal (auth + body parsing). NO direct dependency on IActorRuntime/IActorDispatchPort in Host.
 internal static class VoiceDemoBootstrapEndpoints
 {
     private const string VoiceModuleName = "voice_presence_openai";
     private const string RouteRuleId = "voice-demo";
-    private const string ChatRoutePolicyActorIdPrefix = "chat-route-policy:";
-    private const string PublisherActorId = "voice-demo-bootstrap";
     private static readonly TimeSpan ObservationTimeout = TimeSpan.FromSeconds(12);
     private static readonly TimeSpan ObservationPollInterval = TimeSpan.FromMilliseconds(150);
 
@@ -44,18 +39,19 @@ internal static class VoiceDemoBootstrapEndpoints
 
     private static async Task<IResult> HandleBootstrapAsync(
         HttpContext http,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorDispatchPort actorDispatchPort,
+        [FromServices] IVoiceDemoAgentCommandPort voiceDemoAgentCommandPort,
         [FromServices] IUserAgentCatalogCommandPort catalogCommandPort,
         [FromServices] IUserAgentCatalogQueryPort catalogQueryPort,
+        [FromServices] IChatRoutePolicyCommandPort routePolicyCommandPort,
         [FromServices] IChatRoutePolicyQueryPort routePolicyQueryPort,
         [FromServices] ChatRouteResolver routeResolver,
         [FromServices] IVoicePresenceSessionResolver voiceSessionResolver,
         CancellationToken ct)
     {
-        // Refactor (iter32/cluster-034-chat-route-policy-request-path-projection-activation):
-        //   Old pattern: bootstrap request path injected ChatRoutePolicyProjectionPort and primed projection.
-        //   New principle: bootstrap dispatches accepted commands; committed-state hook activates route-policy projection.
+        // Refactor (iter34/cluster-005-mainnet-host-direct-actor-runtime):
+        //   Old pattern: Mainnet Host endpoints inject IActorRuntime/IActorDispatchPort and build EventEnvelope + dispatch directly in Host code.
+        //   New principle: Host calls Application command ports that normalize, resolve target, build envelope, dispatch, return honest accepted receipt.
+        //   Host endpoint stays minimal (auth + body parsing). NO direct dependency on IActorRuntime/IActorDispatchPort in Host.
         if (!TryResolveScopeId(http.User, out var scopeId))
         {
             return Results.Json(
@@ -67,7 +63,7 @@ internal static class VoiceDemoBootstrapEndpoints
         var scheduledScope = ScheduledOwnerScope.ForNyxIdNative(scopeId);
         var actorId = BuildDemoActorId(scopeId);
 
-        await EnsureDemoAgentAsync(actorId, actorRuntime, actorDispatchPort, ct);
+        await voiceDemoAgentCommandPort.EnsureAsync(actorId, VoiceModuleName, ct);
         await catalogCommandPort.UpsertAsync(new UserAgentCatalogUpsertCommand
         {
             AgentId = actorId,
@@ -76,14 +72,11 @@ internal static class VoiceDemoBootstrapEndpoints
             OwnerScope = scheduledScope.Clone(),
         }, ct);
 
-        var routePolicyActorId = $"{ChatRoutePolicyActorIdPrefix}{scopeId}";
         await EnsureVoiceRoutePolicyAsync(
-            routePolicyActorId,
             scopeId,
             actorId,
             routingScope,
-            actorRuntime,
-            actorDispatchPort,
+            routePolicyCommandPort,
             routePolicyQueryPort,
             ct);
 
@@ -133,39 +126,18 @@ internal static class VoiceDemoBootstrapEndpoints
         });
     }
 
-    private static async Task EnsureDemoAgentAsync(
-        string actorId,
-        IActorRuntime actorRuntime,
-        IActorDispatchPort actorDispatchPort,
-        CancellationToken ct)
-    {
-        var actor = await actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);
-        var initialize = new InitializeRoleAgentEvent
-        {
-            RoleId = "voice-demo",
-            RoleName = "Voice Demo Agent",
-            ProviderName = NyxIdChatServiceDefaults.ProviderName,
-            SystemPrompt = "You are the Aevatar voice demo agent. Reply conversationally and keep spoken answers concise.",
-            MaxHistoryMessages = 16,
-            EventModules = VoiceModuleName,
-        };
-
-        await DispatchAsync(actor.Id, initialize, actorDispatchPort, ct);
-    }
-
     private static async Task EnsureVoiceRoutePolicyAsync(
-        string routePolicyActorId,
         string scopeId,
         string actorId,
         RoutingOwnerScope routingScope,
-        IActorRuntime actorRuntime,
-        IActorDispatchPort actorDispatchPort,
+        IChatRoutePolicyCommandPort routePolicyCommandPort,
         IChatRoutePolicyQueryPort routePolicyQueryPort,
         CancellationToken ct)
     {
-        // Refactor (iter32/cluster-034-chat-route-policy-request-path-projection-activation):
-        //   Old pattern: Chat route policy admin endpoints + voice demo bootstrap 在 request path 调 EnsureProjectionForActorAsync 同步 priming projection,违反 query-time priming forbidden + 命令骨架内聚
-        //   New principle: 加 ChatRoutePolicyCommittedStateProjectionActivationPlanProvider(committed-state hook 触发);删 ChatRoutePolicyProjectionPort + request-path activation;DI 注册 dispatcher + hook + provider;query_projection_priming_guard 加 chat route policy endpoint 扫描
+        // Refactor (iter34/cluster-005-mainnet-host-direct-actor-runtime):
+        //   Old pattern: Mainnet Host endpoints inject IActorRuntime/IActorDispatchPort and build EventEnvelope + dispatch directly in Host code.
+        //   New principle: Host calls Application command ports that normalize, resolve target, build envelope, dispatch, return honest accepted receipt.
+        //   Host endpoint stays minimal (auth + body parsing). NO direct dependency on IActorRuntime/IActorDispatchPort in Host.
         var existing = await routePolicyQueryPort.LookupForCallerAsync(routingScope, ct);
         var command = new UpsertChatRoutePolicyRequested
         {
@@ -196,8 +168,7 @@ internal static class VoiceDemoBootstrapEndpoints
             Description = "route browser voice demo to the current user's mainnet agent",
         });
 
-        var actor = await actorRuntime.CreateAsync<ChatRoutePolicyGAgent>(routePolicyActorId, ct);
-        await DispatchAsync(actor.Id, command, actorDispatchPort, ct);
+        await routePolicyCommandPort.UpsertAsync(scopeId, command, ct);
     }
 
     private static bool RouteResolvesToDemoActor(
@@ -243,35 +214,6 @@ internal static class VoiceDemoBootstrapEndpoints
                 VoiceModuleName = VoiceModuleName,
             },
         };
-
-    private static async Task DispatchAsync(
-        string actorId,
-        IMessage command,
-        IActorDispatchPort actorDispatchPort,
-        CancellationToken ct)
-    {
-        var commandId = Guid.NewGuid().ToString("N");
-        var envelope = new EventEnvelope
-        {
-            Id = commandId,
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(command),
-            Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, actorId),
-            Propagation = new EnvelopePropagation
-            {
-                CorrelationId = commandId,
-            },
-            Runtime = new EnvelopeRuntime
-            {
-                Deduplication = new DeliveryDeduplication
-                {
-                    OperationId = commandId,
-                },
-            },
-        };
-
-        await actorDispatchPort.DispatchAsync(actorId, envelope, ct);
-    }
 
     private static async Task<bool> WaitUntilAsync(
         Func<Task<bool>> predicate,
