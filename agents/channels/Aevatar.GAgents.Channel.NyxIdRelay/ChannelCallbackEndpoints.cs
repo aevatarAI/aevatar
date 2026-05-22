@@ -1,7 +1,5 @@
 using System.Text.Json;
-using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.AI.ToolProviders.NyxId;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf.WellKnownTypes;
@@ -15,8 +13,11 @@ namespace Aevatar.GAgents.Channel.NyxIdRelay;
 
 public static class ChannelCallbackEndpoints
 {
+    // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
+    //   Old pattern: Nyx relay registration endpoints + singleton provisioning services 在 Host 内做 platform selection / scope resolution / remote Nyx provisioning / actor creation / envelope construction / dispatch through raw runtime/dispatch helpers。
+    //   New principle: Channel registration 暴露 typed application command facade(reuse existing CQRS command dispatch skeleton);Host 仅 adapt HTTP;provisioning adapters 只调 existing NyxID REST surfaces(**不修改 NyxID 仓库**);local mirror writes 进 standard command skeleton via narrow dispatch port。**不引入新 actor type / 新 envelope / 新 projection phase**(reflector force-pick minimal,排除 structural 的 ChannelRelayRegistrationRunGAgent)。
     // Refactor (iter36/cluster-042-channel-diagnostics-readmodel):
-    //   Old pattern: Channel runtime diagnostics 用 singleton in-memory list with retention trimming;diagnostics endpoint 读 process-local list 直接(InMemoryChannelRuntimeDiagnostics 注册为 singleton + ImmutableList 字段 + ImmutableInterlocked mutation)。
+    //   Old pattern: Channel runtime diagnostics 用 singleton in-memory list with retention trimming;diagnostics endpoint 直接读 process-local list。
     //   New principle: Channel diagnostics 改为 logs/metrics only(observability path)OR actor/projection-backed diagnostic events with readmodel query。**禁止** public endpoint 读 singleton process memory 作 diagnostic fact source。
     // Refactor (iter27/cluster-003-channel-registration-scope-backfill):
     //   Old pattern: ChannelBotRegistrationScopeBackfill used readmodels to infer write candidates plus live repair_lark_mirror HTTP/tool surface and RepairLocalMirrorAsync.
@@ -47,10 +48,13 @@ public static class ChannelCallbackEndpoints
 
     private static async Task<IResult> HandleRegisterAsync(
         HttpContext http,
-        [FromServices] IEnumerable<INyxChannelBotProvisioningService> provisioningServices,
+        [FromServices] ChannelRelayRegistrationFacade registrationFacade,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
+        // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
+        //   Old pattern: endpoint selected platform service and invoked provisioning directly.
+        //   New principle: Host adapts HTTP only; typed application facade owns registration command flow.
         var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Registration");
 
         RegistrationRequest? request;
@@ -70,16 +74,6 @@ public static class ChannelCallbackEndpoints
             return Results.BadRequest(new { error = "platform is required" });
         }
 
-        var platformNormalized = request.Platform.Trim().ToLowerInvariant();
-        var provisioningServiceMap = BuildProvisioningServiceMap(provisioningServices);
-        if (!provisioningServiceMap.TryGetValue(platformNormalized, out var provisioningService))
-        {
-            return Results.Conflict(new
-            {
-                error = $"Platform '{platformNormalized}' is not in the supported production contract. ChannelRuntime currently provisions relay registrations for: {string.Join(", ", provisioningServiceMap.Keys.OrderBy(static key => key, StringComparer.OrdinalIgnoreCase))}.",
-            });
-        }
-
         var accessToken = ResolveBearerAccessToken(http);
         if (string.IsNullOrWhiteSpace(accessToken))
             return Results.Unauthorized();
@@ -93,8 +87,9 @@ public static class ChannelCallbackEndpoints
         if (scopeResolution.Error is not null)
             return Results.BadRequest(new { error = scopeResolution.Error });
 
-        var result = await provisioningService.ProvisionAsync(
-            new NyxChannelBotProvisioningRequest(
+        var platformNormalized = request.Platform.Trim().ToLowerInvariant();
+        var result = await registrationFacade.RegisterAsync(
+            new ChannelRelayRegistrationRequest(
                 Platform: platformNormalized,
                 AccessToken: accessToken,
                 WebhookBaseUrl: request.WebhookBaseUrl.Trim(),
@@ -131,7 +126,7 @@ public static class ChannelCallbackEndpoints
         var statusCode = ResolveProvisioningFailureStatusCode(result.Error);
         logger.LogWarning(
             "Nyx-backed channel provisioning rejected: platform={Platform}, statusCode={StatusCode}, error={Error}",
-            result.Platform,
+                result.Platform,
             statusCode,
             result.Error);
         return Results.Json(payload, statusCode: statusCode);
@@ -160,11 +155,13 @@ public static class ChannelCallbackEndpoints
 
     private static async Task<IResult> HandleRebuildRegistrationsAsync(
         HttpContext http,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorDispatchPort dispatchPort,
+        [FromServices] ChannelRegistrationCommandFacade commandFacade,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
+        // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
+        //   Old pattern: rebuild endpoint called raw runtime/dispatch helper.
+        //   New principle: rebuild enters the channel registration command facade; Host only maps HTTP.
         var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Registration");
         ChannelRegistrationRebuildRequest? request;
         try
@@ -182,12 +179,7 @@ public static class ChannelCallbackEndpoints
             return Results.BadRequest(new { error = "Unsupported content type. Use application/json for rebuild request payloads." });
         }
 
-        // Refactor (iter27/cluster-003-channel-registration-scope-backfill):
-        //   Old pattern: rebuild_projection read the readmodel and dispatched scope repair writes.
-        //   New principle: rebuild_projection only asks the authoritative actor to republish projection input.
-        await ChannelBotRegistrationStoreCommands.DispatchRebuildProjectionAsync(
-            actorRuntime,
-            dispatchPort,
+        await commandFacade.RebuildProjectionAsync(
             string.IsNullOrWhiteSpace(request?.Reason)
                 ? "http_api_manual_rebuild"
                 : request.Reason.Trim(),
@@ -213,20 +205,18 @@ public static class ChannelCallbackEndpoints
 
     private static async Task<IResult> HandleDeleteRegistrationAsync(
         string registrationId,
-        [FromServices] IActorRuntime actorRuntime,
-        [FromServices] IActorDispatchPort dispatchPort,
+        [FromServices] ChannelRegistrationCommandFacade commandFacade,
         [FromServices] IChannelBotRegistrationQueryPort queryPort,
         CancellationToken ct)
     {
+        // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
+        //   Old pattern: delete endpoint queried then dispatched unregister through raw helpers.
+        //   New principle: query remains readmodel existence check; write enters typed command facade.
         var exists = await queryPort.GetAsync(registrationId, ct);
         if (exists is null)
             return Results.NotFound(new { error = "Registration not found" });
 
-        await ChannelBotRegistrationStoreCommands.DispatchUnregisterAsync(
-            actorRuntime,
-            dispatchPort,
-            registrationId,
-            ct);
+        await commandFacade.UnregisterAsync(registrationId, ct);
         return Results.Ok(new { status = "deleted" });
     }
 
@@ -271,31 +261,6 @@ public static class ChannelCallbackEndpoints
             "nyx_base_url_not_configured" => StatusCodes.Status500InternalServerError,
             _ => StatusCodes.Status502BadGateway,
         };
-    }
-
-    private static IReadOnlyDictionary<string, INyxChannelBotProvisioningService> BuildProvisioningServiceMap(
-        IEnumerable<INyxChannelBotProvisioningService> provisioningServices)
-    {
-        ArgumentNullException.ThrowIfNull(provisioningServices);
-
-        var serviceMap = new Dictionary<string, INyxChannelBotProvisioningService>(StringComparer.OrdinalIgnoreCase);
-        foreach (var provisioningService in provisioningServices)
-        {
-            if (provisioningService is null)
-                continue;
-
-            var platformKey = provisioningService.Platform?.Trim().ToLowerInvariant();
-            if (string.IsNullOrWhiteSpace(platformKey))
-                continue;
-
-            if (!serviceMap.TryAdd(platformKey, provisioningService))
-            {
-                throw new InvalidOperationException(
-                    $"Multiple Nyx channel provisioning services are registered for platform '{platformKey}'.");
-            }
-        }
-
-        return serviceMap;
     }
 
     private static async Task<ChannelRegistrationRebuildRequest?> ReadOptionalRebuildRequestAsync(

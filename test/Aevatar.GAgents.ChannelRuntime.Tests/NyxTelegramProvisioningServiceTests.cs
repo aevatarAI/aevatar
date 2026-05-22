@@ -34,12 +34,12 @@ public class NyxTelegramProvisioningServiceTests
                 Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
                 Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
+        var commandFacade = ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime);
 
         var service = new NyxTelegramProvisioningService(
             nyxClient,
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            actorRuntime,
-            (IActorDispatchPort)actorRuntime,
+            commandFacade,
             Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxTelegramProvisioningService>>());
 
         var result = await service.ProvisionAsync(
@@ -226,8 +226,7 @@ public class NyxTelegramProvisioningServiceTests
         return new NyxTelegramProvisioningService(
             nyxClient,
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            actorRuntime,
-            (IActorDispatchPort)actorRuntime,
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
             Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxTelegramProvisioningService>>());
     }
 

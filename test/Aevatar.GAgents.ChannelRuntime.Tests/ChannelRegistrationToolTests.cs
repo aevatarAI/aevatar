@@ -143,8 +143,7 @@ public sealed class ChannelRegistrationToolTests
 
         using var serviceProvider = new ServiceCollection()
             .AddSingleton(queryPort)
-            .AddSingleton(actorRuntime)
-            .AddSingleton((IActorDispatchPort)actorRuntime)
+            .AddSingleton(ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime))
             .BuildServiceProvider();
         var tool = new ChannelRegistrationTool(serviceProvider);
 
@@ -166,10 +165,10 @@ public sealed class ChannelRegistrationToolTests
         queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromException<IReadOnlyList<ChannelBotRegistrationEntry>>(new InvalidOperationException("projection reader unavailable")));
 
-        EventEnvelope? capturedEnvelope = null;
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
         actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
             .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+        EventEnvelope? capturedEnvelope = null;
         ((IActorDispatchPort)actorRuntime).DispatchAsync(
                 ChannelBotRegistrationGAgent.WellKnownId,
                 Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
@@ -178,8 +177,7 @@ public sealed class ChannelRegistrationToolTests
 
         using var serviceProvider = new ServiceCollection()
             .AddSingleton(queryPort)
-            .AddSingleton(actorRuntime)
-            .AddSingleton((IActorDispatchPort)actorRuntime)
+            .AddSingleton(ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime))
             .BuildServiceProvider();
         var tool = new ChannelRegistrationTool(serviceProvider);
 
@@ -240,8 +238,7 @@ public sealed class ChannelRegistrationToolTests
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
         using var serviceProvider = new ServiceCollection()
             .AddSingleton(queryPort)
-            .AddSingleton(actorRuntime)
-            .AddSingleton((IActorDispatchPort)actorRuntime)
+            .AddSingleton(ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime))
             .BuildServiceProvider();
         var tool = new ChannelRegistrationTool(serviceProvider);
 
@@ -251,6 +248,10 @@ public sealed class ChannelRegistrationToolTests
 
         doc.RootElement.GetProperty("status").GetString().Should().Be("confirm_required");
         doc.RootElement.GetProperty("registration_mode").GetString().Should().Be("nyx_relay_webhook");
+        await ((IActorDispatchPort)actorRuntime).DidNotReceive().DispatchAsync(
+            Arg.Any<string>(),
+            Arg.Any<EventEnvelope>(),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -277,8 +278,7 @@ public sealed class ChannelRegistrationToolTests
 
         using var serviceProvider = new ServiceCollection()
             .AddSingleton(queryPort)
-            .AddSingleton(actorRuntime)
-            .AddSingleton((IActorDispatchPort)actorRuntime)
+            .AddSingleton(ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime))
             .BuildServiceProvider();
         var tool = new ChannelRegistrationTool(serviceProvider);
 
@@ -298,7 +298,7 @@ public sealed class ChannelRegistrationToolTests
     public void DeleteSource_ShouldNotPollReadModelAfterDispatchUnregister()
     {
         var source = File.ReadAllText(GetChannelRegistrationToolSourcePath());
-        var dispatchIndex = source.IndexOf("DispatchUnregisterAsync", StringComparison.Ordinal);
+        var dispatchIndex = source.IndexOf("UnregisterAsync", StringComparison.Ordinal);
         dispatchIndex.Should().BeGreaterThanOrEqualTo(0);
         var afterDispatch = source[dispatchIndex..];
 

@@ -35,12 +35,12 @@ public class NyxLarkProvisioningServiceTests
                 Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
                 Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
+        var commandFacade = ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime);
 
         var service = new NyxLarkProvisioningService(
             nyxClient,
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            actorRuntime,
-            (IActorDispatchPort)actorRuntime,
+            commandFacade,
             Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
 
         var result = await service.ProvisionAsync(
@@ -120,12 +120,11 @@ public class NyxLarkProvisioningServiceTests
     {
         var handler = new RecordingHandler();
         var nyxClient = new NyxIdApiClient(new NyxIdToolOptions(), new HttpClient(handler));
-        var actorRuntime = Substitute.For<IActorRuntime>();
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
         var service = new NyxLarkProvisioningService(
             nyxClient,
             new NyxIdToolOptions(),
-            actorRuntime,
-            Substitute.For<IActorDispatchPort>(),
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
             Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
 
         var result = await service.ProvisionAsync(BuildRequest(), CancellationToken.None);
@@ -156,14 +155,14 @@ public class NyxLarkProvisioningServiceTests
                 Arg.Any<EventEnvelope>(),
                 Arg.Any<CancellationToken>())
             .Returns(_ => throw new InvalidOperationException("mirror failed"));
+        var commandFacade = ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime);
 
         var service = new NyxLarkProvisioningService(
             new NyxIdApiClient(
                 new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
                 new HttpClient(handler)),
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            actorRuntime,
-            (IActorDispatchPort)actorRuntime,
+            commandFacade,
             Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
 
         var result = await service.ProvisionAsync(BuildRequest(), CancellationToken.None);
@@ -206,11 +205,12 @@ public class NyxLarkProvisioningServiceTests
             new HttpClient(handler));
 
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
         return new NyxLarkProvisioningService(
             nyxClient,
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            actorRuntime,
-            (IActorDispatchPort)actorRuntime,
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
             Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
     }
 
