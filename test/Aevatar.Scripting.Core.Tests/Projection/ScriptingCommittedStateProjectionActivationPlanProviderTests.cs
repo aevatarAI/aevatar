@@ -101,20 +101,35 @@ public sealed class ScriptingCommittedStateProjectionActivationPlanProviderTests
     {
         var provider = new ScriptingCommittedStateProjectionActivationPlanProvider();
 
-        var plans = provider.GetPlans(BuildContext(
-            typeof(ScriptEvolutionSessionGAgent),
-            new ScriptEvolutionSessionCompletedEvent
-            {
-                ProposalId = "proposal-1",
-                Status = "promoted",
-            },
-            "script-evolution-session:scope-1:proposal-1")).ToArray();
+        IMessage[] mutationEvents =
+        [
+            new ScriptEvolutionSessionStartedEvent { ProposalId = "proposal-1" },
+            new ScriptEvolutionProposedEvent { ProposalId = "proposal-1" },
+            new ScriptEvolutionBuildRequestedEvent { ProposalId = "proposal-1" },
+            new ScriptEvolutionValidatedEvent { ProposalId = "proposal-1" },
+            new ScriptEvolutionRejectedEvent { ProposalId = "proposal-1" },
+            new ScriptEvolutionPromotedEvent { ProposalId = "proposal-1" },
+            new ScriptEvolutionRollbackRequestedEvent { ProposalId = "proposal-1" },
+            new ScriptEvolutionRolledBackEvent { ProposalId = "proposal-1" },
+            new ScriptEvolutionSessionCompletedEvent { ProposalId = "proposal-1", Status = "promoted" },
+        ];
 
-        plans.Should().ContainSingle();
-        plans[0].LeaseType.Should().Be(typeof(ScriptEvolutionMaterializationRuntimeLease));
-        plans[0].StartRequest.RootActorId.Should().Be("script-evolution-session:scope-1:proposal-1");
-        plans[0].StartRequest.ProjectionKind.Should().Be("script-evolution-read-model");
-        plans[0].StartRequest.Mode.Should().Be(ProjectionRuntimeMode.DurableMaterialization);
+        var plans = mutationEvents
+            .Select(evt => provider.GetPlans(BuildContext(
+                typeof(ScriptEvolutionSessionGAgent),
+                evt,
+                "script-evolution-session:scope-1:proposal-1")).ToArray())
+            .ToArray();
+
+        plans.Should().OnlyContain(plan => plan.Length == 1);
+        plans.Select(plan => plan[0].LeaseType)
+            .Should().OnlyContain(leaseType => leaseType == typeof(ScriptEvolutionMaterializationRuntimeLease));
+        plans.Select(plan => plan[0].StartRequest.RootActorId)
+            .Should().OnlyContain(actorId => actorId == "script-evolution-session:scope-1:proposal-1");
+        plans.Select(plan => plan[0].StartRequest.ProjectionKind)
+            .Should().OnlyContain(kind => kind == "script-evolution-read-model");
+        plans.Select(plan => plan[0].StartRequest.Mode)
+            .Should().OnlyContain(mode => mode == ProjectionRuntimeMode.DurableMaterialization);
     }
 
     [Fact]
@@ -174,6 +189,11 @@ public sealed class ScriptingCommittedStateProjectionActivationPlanProviderTests
                 typeof(ScriptCatalogGAgent),
                 new StringValue { Value = "not-catalog-authority-mutation" },
                 "user-script-catalog:scope-1"))
+            .Should().BeEmpty();
+        provider.GetPlans(BuildContext(
+                typeof(ScriptEvolutionSessionGAgent),
+                new StringValue { Value = "not-evolution-mutation" },
+                "script-evolution-session:scope-1:proposal-1"))
             .Should().BeEmpty();
     }
 

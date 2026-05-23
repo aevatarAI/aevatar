@@ -9,6 +9,7 @@ using Aevatar.GAgentService.Projection.Orchestration;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using System.Reflection;
 
 namespace Aevatar.GAgentService.Tests.Projection;
 
@@ -93,19 +94,57 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProviderTests
     {
         var provider = new ServiceCommittedStateProjectionActivationPlanProvider();
 
-        var plan = provider.GetPlans(BuildContext(
-                typeof(TestRoleGAgent),
-                new RoleChatSessionCompletedEvent
-                {
-                    SessionId = "session-1",
-                    Content = "[[AEVATAR_LLM_ERROR]] approval_denied: denied",
-                },
-                sourceCorrelationId: "corr-approval"))
-            .Should().ContainSingle().Subject;
+        var plans = new[]
+        {
+            "[[AEVATAR_LLM_ERROR]] approval_continuation_failed: missing reply",
+            "[[AEVATAR_LLM_ERROR]] approval_denied: denied",
+            "[[AEVATAR_LLM_ERROR]] approval_timeout: timed out",
+        }.Select(content => provider.GetPlans(BuildContext(
+                    typeof(TestRoleGAgent),
+                    new RoleChatSessionCompletedEvent
+                    {
+                        SessionId = "session-1",
+                        Content = content,
+                    },
+                    sourceCorrelationId: " corr-approval "))
+                .Should().ContainSingle().Subject)
+            .ToArray();
 
-        plan.LeaseType.Should().Be(typeof(ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>));
-        plan.StartRequest.ProjectionKind.Should().Be("gagent-run-terminal-approval");
-        plan.StartRequest.SessionId.Should().Be("corr-approval");
+        plans.Should().OnlyContain(plan =>
+            plan.LeaseType == typeof(ServiceProjectionRuntimeLease<GAgentRunTerminalProjectionContext>) &&
+            plan.StartRequest.ProjectionKind == "gagent-run-terminal-approval" &&
+            plan.StartRequest.SessionId == "corr-approval");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void GetPlans_ShouldIgnoreRoleChatSessionCompletedWithoutCorrelationId(string? correlationId)
+    {
+        var provider = new ServiceCommittedStateProjectionActivationPlanProvider();
+
+        provider.GetPlans(BuildContext(
+                typeof(TestRoleGAgent),
+                new RoleChatSessionCompletedEvent { SessionId = "session-1", Content = "done" },
+                sourceCorrelationId: correlationId))
+            .Should().BeEmpty();
+    }
+
+    [Fact]
+    public void GAgentRunTerminalPlans_ShouldDefensivelyIgnoreNonCompletedPayload()
+    {
+        var method = typeof(ServiceCommittedStateProjectionActivationPlanProvider)
+            .GetMethod("GAgentRunTerminalPlans", BindingFlags.NonPublic | BindingFlags.Static)
+            .Should().NotBeNull().And.Subject!;
+
+        var plans = method.Invoke(null, [BuildContext(
+            typeof(TestRoleGAgent),
+            new StringValue { Value = "not-completed" },
+            sourceCorrelationId: "corr-1")]);
+
+        plans.Should().BeAssignableTo<IEnumerable<ProjectionActivationPlan>>()
+            .Which.Should().BeEmpty();
     }
 
     [Fact]
@@ -122,7 +161,7 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProviderTests
     private static CommittedStatePublicationContext BuildContext(
         System.Type actorType,
         IMessage evt,
-        string sourceCorrelationId = "") =>
+        string? sourceCorrelationId = "") =>
         new()
         {
             ActorId = "service-actor",
@@ -137,7 +176,7 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProviderTests
                 },
                 StateRoot = Any.Pack(new StringValue { Value = "state" }),
             },
-            SourceEnvelope = string.IsNullOrWhiteSpace(sourceCorrelationId)
+            SourceEnvelope = sourceCorrelationId == null
                 ? null
                 : new EventEnvelope
                 {
